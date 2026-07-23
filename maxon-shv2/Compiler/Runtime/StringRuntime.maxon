@@ -293,6 +293,15 @@ export type RuntimeUsage
 	// backing record and its element buffer inside their Std bodies, which this Maxon-module scan cannot
 	// see. It drives `installArrayRuntime` (all the array helpers, appended already-lowered).
 	export var usesArray as bool
+	// The program DROPS a single opaque type-parameter value (`__drop_type_param`, P1.7 slice 3b-v /
+	// Finding A) — a consumed feed binding left live at a scope exit, an opaque array element moved out
+	// (`.pop()`), OR a bare opaque `T` field reassignment (`self.saved = next`). Its OWN bit, decoupled from
+	// `usesArray`: a bare-field reassign in an ARRAY-FREE generic struct emits `__drop_type_param` yet touches
+	// no `__arr_*`, so gating its install on `usesArray` would leave the call unlinked. `__drop_type_param` is
+	// `__`-prefixed but NOT `__mm_`/`__arr_`-prefixed, so a call to it sets no other usage bit; its body only
+	// reads the descriptor's `destroyFunc@40` and `callIndirect`s it (no direct alloc/free), so this bit alone
+	// drives `installDropTypeParamRuntime` and pulls in no transitive floor of its own.
+	export var usesDropTypeParam as bool
 	// The program takes a SECOND owner of a heap box (`__mm_incref`). Two producers: the array runtime's
 	// zero-copy slice (a view increfs the parent's element buffer — implied by `usesArray`, since the call
 	// lives in a Std body this scan cannot see), and the PARSER's `try … otherwise` reconciliation, which
@@ -316,7 +325,7 @@ export type RuntimeUsage
 	export var neededDestructors as DestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -455,6 +464,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesArray = true
 		usage.usesHeap = true
 	end 'array'
+	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesArray` so an
+	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so
+	// none of the arms above sees it. Its body only reads the descriptor and `callIndirect`s the destructor
+	// (no direct `__mm_alloc`/`__mm_free`), so it declares no other bit — see `usesDropTypeParam`.
+	if callee.equals(DropTypeParamName) 'droptypeparam'
+		usage.usesDropTypeParam = true
+	end 'droptypeparam'
 	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)
 	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
 	// cannot see, so the symbol is recorded and its transitive needs are declared by

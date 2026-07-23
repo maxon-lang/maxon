@@ -224,7 +224,10 @@ export let ArrAppendName = b"__arr_append"
 // shared generic body owns the value (a `push`/forward feed parameter left live on some path), but the
 // destructor lives in the enclosing instance's layout descriptor. NOT `__arr_`-prefixed (it is a single value,
 // not an array operation), but `__`-prefixed so `isCompilerInternalCallee` routes its call and the golden skip
-// (`isRuntimeFunction`) hides its body. Installed under `usesArray` (an opaque feed always feeds an array).
+// (`isRuntimeFunction`) hides its body. Installed under its OWN `usesDropTypeParam` bit (`installDropTypeParamRuntime`),
+// NOT `usesArray`: a bare opaque `T` FIELD reassignment (P1.7 Finding A) emits it in an ARRAY-FREE generic struct,
+// so gating its install on the array floor would leave that call unlinked. An opaque-array program sets the bit too
+// (its move-out / feed drops route through it), so ONE install covers both, exactly once.
 export let DropTypeParamName = b"__drop_type_param"
 
 // Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit,
@@ -304,8 +307,20 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrAppend(module)
 	buildArrDecref(module)
 	verifyThrowingAccessorsMatchPredicate(module)
-	buildDropTypeParam(module)
 end 'installArrayRuntime'
+
+// ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED DROP** (`__drop_type_param`, P1.7 slice 3b-v / Finding A) —
+// its OWN install, gated on `usesDropTypeParam` rather than `usesArray`. Both an opaque-ARRAY program (a
+// `.pop()` move-out / a consumed feed left live) and an array-FREE bare-field reassign (`self.saved = next`)
+// set the bit through `recordCallUsage`, so this installs the ONE `__drop_type_param` for either — exactly
+// once, since the flag is a single bool and this is its sole install site. Appended already-lowered after the
+// pipeline, like the rest of the runtime floor.
+export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesDropTypeParam 'noDrop'
+		return
+	end 'noDrop'
+	buildDropTypeParam(module)
+end 'installDropTypeParamRuntime'
 
 // ⭐ **THE DRIFT GUARD for "which array callee throws".** `isThrowingArrayRuntimeCallee` names seven
 // accessors, and exactly seven builders above stamp a `throws ArrayError` clause; those two facts must stay

@@ -2970,6 +2970,31 @@ export type ProgramSignatures
 		return false
 	end 'genericTypeFieldHasManagedInstantiation'
 
+	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
+	// instantiation (P1.7 Finding A)** — a `typeParameter`-tagged field (`export var saved as Element` on
+	// `type Box uses Element`) that at least one interned instance makes owned (`Box with String`). This is the
+	// ONE fact the descriptor-need scan reserves a reassigning method's layout descriptor by: only such a
+	// reassignment DROPS the field's old opaque value through the descriptor-gated `__drop_type_param`, so only
+	// it needs the descriptor. Read off the SAME raw `fieldTypes` column and the SAME `typeArgIsOwned` managed
+	// boundary the emitted drop (`emitOpaqueFieldReassign`) and the box's own destructor branch on, so the
+	// reserved slot and the emitted drop decide off ONE fact. False for a non-generic type, an unknown field, a
+	// concrete/direct field, or an all-trivial instantiation (`Box with SmallInt` — inert, no drop, no descriptor).
+	export function isManagedOpaqueTypeParamField(structName ByteArray, fieldName ByteArray) returns bool
+		if not self.structTypes.contains(structName) 'notStruct'
+			return false
+		end 'notStruct'
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.isManagedOpaqueTypeParamField: structTypes.contains({String.from(structName)}) is true but get failed")
+		let index = layout.indexOfField(fieldName)
+		if index >= layout.fieldCount() 'noField'
+			return false
+		end 'noField'
+		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.isManagedOpaqueTypeParamField: fieldTypes.get OOB at {index} despite index < fieldCount")
+		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notOpaque'
+			return false
+		end 'notOpaque'
+		return self.genericTypeFieldHasManagedInstantiation(structName, position: typeNameIdOf(fieldType))
+	end 'isManagedOpaqueTypeParamField'
+
 	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
 	// A type-PARAMETER field is dropped iff its substituted argument OWNS managed heap (`typeArgIsOwned` — a
 	// trivial `Box with Point` borrows its `Point`); a DIRECT field (a base struct's own `tag as String`) is
@@ -3217,10 +3242,16 @@ export type ProgramSignatures
 		end 'element'
 	end 'managedOpaqueArrayElementDropCallee'
 
-	// The SUBSTITUTED element type of `id`'s managed opaque-`T` `Array` field — the ONE walk both the
-	// reloc-need predicate and the reloc's destructor read, so neither can drift to a different field. The
-	// descriptor carries a SINGLE `destroyFunc@40` slot and an opaque array's element is a type parameter, so
-	// the first such field's substituted element (bound to an OWNED argument) is the destructor the slot needs.
+	// The SUBSTITUTED type whose destructor a managed opaque type-parameter instance bakes into its descriptor
+	// `destroyFunc@40` — the ONE walk both the reloc-need predicate (`genericInstanceHasManagedOpaqueArrayField`)
+	// and the reloc's destructor (`managedOpaqueArrayElementDropCallee`) read, so neither can drift to a
+	// different field. The descriptor carries a SINGLE `destroyFunc@40` slot (one type parameter), and the shared
+	// body drops the sole substituted argument through it in TWO field shapes, both resolved here so ONE stamp
+	// serves both: an opaque `Array with T` ELEMENT — dropped on `.pop()`/scope-exit (P1.7 slice 3b-ii) — and a
+	// BARE opaque `T` field — dropped on reassignment (`self.saved = next`, P1.7 Finding A). Both carry the sole
+	// type parameter, so the first managed opaque field of either shape is the destructor the slot needs. (The
+	// public predicates keep their "Array" names for their out-of-tree call sites; the mechanism now spans array
+	// elements AND bare fields.)
 	function managedOpaqueArrayElementOf(id GenericInstanceId) returns ManagedOpaqueArrayElement
 		if self.isArrayInstance(id) 'notStruct'
 			return ManagedOpaqueArrayElement.absent
@@ -3228,17 +3259,19 @@ export type ProgramSignatures
 		let layout = self.baseLayoutOf(id)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.managedOpaqueArrayElementOf: fieldTypes.get OOB at {i}")
-			if not self.fieldTypeIsArray(fieldType) 'notArray'
+			// An opaque `Array with T` field: the descriptor drops each ELEMENT (P1.7 slice 3b-ii).
+			if self.fieldTypeIsArray(fieldType) 'arrayField'
+				let element = self.arrayElementType(self.arrayInstanceOfFieldType(fieldType))
+				if maxonTypeTag(element) == ValueTypeTag.typeParameter and self.genericInstanceArgIsOwned(id, position: typeNameIdOf(element)) 'managedArrayElement'
+					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: typeNameIdOf(element)))
+				end 'managedArrayElement'
 				continue
-			end 'notArray'
-			let element = self.arrayElementType(self.arrayInstanceOfFieldType(fieldType))
-			if maxonTypeTag(element) != ValueTypeTag.typeParameter 'notOpaque'
-				continue
-			end 'notOpaque'
-			let position = typeNameIdOf(element)
-			if self.genericInstanceArgIsOwned(id, position: position) 'managedArg'
-				return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: position))
-			end 'managedArg'
+			end 'arrayField'
+			// A BARE opaque `T` field (`saved as Element`): a reassignment drops the field ITSELF through the SAME
+			// descriptor `destroyFunc@40` (P1.7 Finding A) — the sole type argument's destructor, exactly as above.
+			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter and self.genericInstanceArgIsOwned(id, position: typeNameIdOf(fieldType)) 'managedBareField'
+				return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: typeNameIdOf(fieldType)))
+			end 'managedBareField'
 		end 'eachField'
 		return ManagedOpaqueArrayElement.absent
 	end 'managedOpaqueArrayElementOf'

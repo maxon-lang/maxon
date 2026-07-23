@@ -480,11 +480,13 @@ end 'main'
 0
 ```
 
-<!-- test: error.reassign-managed-opaque-field-in-generic-method -->
-Reassigning a bare opaque `T` field INSIDE a shared generic method body (`self.saved = next`) is rejected
-cleanly when an instantiation makes it MANAGED (`Box with String`): dropping the field's old opaque value
-would need the descriptor-gated single-value drop runtime, which currently installs only off the array floor,
-so an array-free generic struct cannot yet emit it. This was a reachable `0xC0000005` fault before the check.
+<!-- test: reassign-managed-opaque-field-in-generic-method -->
+<!-- targets: x64-windows, x64-linux -->
+Reassigning a bare opaque `T` field INSIDE a shared generic method body (`self.saved = next`) WORKS when an
+instantiation makes it MANAGED (`Box with String`): the field's old opaque value is dropped through the
+descriptor-gated single-value drop (`__drop_type_param`), whose install is now decoupled from the array floor,
+and the new value transfers in. Old `"alpha"` is freed exactly once — leak-free under `__mm_free` poisoning.
+This was a reachable `0xC0000005` fault before P1.7 Finding A.
 ```maxon
 type Box uses Element
 	export var saved as Element
@@ -502,14 +504,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:8:8: Unsupported: reassigning the bare opaque type-parameter field 'saved' of 'Box', whose element type owns managed heap — dropping its old value needs the descriptor-gated single-value drop runtime (installed only for programs that use an `Array`) or the concrete managed-field drop path (which currently leaks a managed struct field). A trivial element type is reassignable; hold a managed value in an `Array`-typed field instead
+```exitcode
+0
 ```
 
-<!-- test: error.reassign-managed-opaque-field-concrete-instance -->
-The same reassignment on a CONCRETE instance (`b.saved = "beta"` where `b` is `Box with String`) is rejected
-too: its old String would drop through the concrete managed-field path, which currently leaks. This was a
-reachable `0xC0000005` fault at the call site before the check.
+<!-- test: reassign-managed-opaque-field-concrete-instance -->
+<!-- targets: x64-windows, x64-linux -->
+The same reassignment on a CONCRETE instance (`b.saved = "beta"` where `b` is `Box with String`) WORKS too:
+the field retypes to the instance's substituted `String`, so the old String drops through `__str_decref`
+(Finding B's concrete-field fix) and the new one moves in — no descriptor needed, the field is concrete here.
+Leak-free under `__mm_free` poisoning.
 ```maxon
 type Box uses Element
 	export var saved as Element
@@ -524,6 +528,70 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:11:4: Unsupported: reassigning the bare opaque type-parameter field 'saved' of 'Box', whose element type owns managed heap — dropping its old value needs the descriptor-gated single-value drop runtime (installed only for programs that use an `Array`) or the concrete managed-field drop path (which currently leaks a managed struct field). A trivial element type is reassignable; hold a managed value in an `Array`-typed field instead
+```exitcode
+0
+```
+
+<!-- test: reassign-opaque-managed-field-in-loop -->
+<!-- targets: x64-windows, x64-linux -->
+Reassigning a managed opaque `T` field REPEATEDLY (a loop of `b.replace(...)`) drops each previous value
+before storing the next: every iteration frees the old String exactly once and stores a fresh one, and the
+final value drops at the container's own scope exit — a balanced drop-per-store, leak-free under `__mm_free`
+poisoning.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+typealias StringBox = Box with String
+function main() returns ExitCode
+	var b = StringBox.create("start")
+	var i = 0
+	while i < 3 'loop'
+		b.replace("iter")
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: reassign-opaque-field-struct-element -->
+<!-- targets: x64-windows, x64-linux -->
+The opaque `T` need not be a String: a `Box with Holder` whose `Holder` owns a `String` field drops the old
+struct through the descriptor's `destroyFunc@40` (`__destruct_<Holder>`, which frees the Holder's String),
+then moves the new struct in. Both the shared-body reassign (`self.saved = next`) and the container's own
+scope-exit drop free each Holder exactly once — leak-free under `__mm_free` poisoning.
+```maxon
+type Holder
+	export var text as String
+	export static function create(t String) returns Self
+		return Self{ text: t }
+	end 'create'
+end 'Holder'
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+typealias HolderBox = Box with Holder
+function main() returns ExitCode
+	var b = HolderBox.create(Holder.create("alpha"))
+	b.replace(Holder.create("beta"))
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```
