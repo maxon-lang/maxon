@@ -1745,12 +1745,7 @@ type WasmFuncEmitter
 	// exposes each landing's code at a loop depth one shallower than the last: default at `loopDepth + m`,
 	// then `t_{m-1}` … `t_0` down to `loopDepth`.
 	function emitDispatchSwitch(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
-		var distinct = BlockIdArray.create()
-		for target in caseTargets 'collectDistinct'
-			if target != defaultTarget and not blockIdArrayContains(distinct, value: target) 'fresh'
-				distinct.push(target)
-			end 'fresh'
-		end 'collectDistinct'
+		let distinct = distinctSwitchTargets(caseTargets, exclude: defaultTarget)
 		let m = distinct.count()
 
 		// Open `m + 1` nested landing blocks (one per distinct target, plus the default). The loop is now at
@@ -1764,14 +1759,10 @@ type WasmFuncEmitter
 		// `subtract` mints an `integer`, and a zero-based match's enum/int subject is i64 too.
 		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count())
 
-		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). `br_table` to the slot's
+		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). `br_table` to each slot's
 		// landing depth; its own default is the default landing (unreachable after the guard, correct anyway).
 		self.emitSwitchIndex(subjectId)
-		var targets = Wasm32IndexArray.create()
-		for target in caseTargets 'eachSlot'
-			targets.push(self.switchLandingDepth(target, distinct: distinct, defaultTarget: defaultTarget, m: m))
-		end 'eachSlot'
-		self.body.brTable(targets, defaultTarget: 0 as Wasm32Index)
+		self.body.brTable(self.slotLandingDepths(caseTargets, distinct: distinct), defaultTarget: 0 as Wasm32Index)
 
 		// Close each landing and emit its target's dispatch. `end` #1 exposes the default landing; `end` #(k+1)
 		// exposes `distinct[m − k]`. The loop is `loopDepth + m − k` deep at the k-th code point.
@@ -1808,20 +1799,55 @@ type WasmFuncEmitter
 		end 'wide'
 	end 'emitSwitchIndex'
 
-	// The `br_table` branch depth for a slot whose target is `target`: the default landing (depth 0) for the
-	// default or a hole slot, else the distinct target's landing at depth `m − j` (landings opened
-	// outermost-first, so the innermost — default — is 0 and `t_j` is `m − j` from it).
-	function switchLandingDepth(target BlockId, distinct BlockIdArray, defaultTarget BlockId, m ElementCount) returns Wasm32Index
-		if target == defaultTarget 'toDefault'
-			return 0 as Wasm32Index
-		end 'toDefault'
-		for j in 0 upto distinct.count() 'find'
-			if (try distinct.get(j) otherwise panic("switchLandingDepth: distinct.get OOB at {j}")) == target 'hit'
-				return (m - j) as Wasm32Index
-			end 'hit'
-		end 'find'
-		panic("switchLandingDepth: case target block {target} is neither the default nor a collected distinct target — the distinct set is built from the same case-target array")
-	end 'switchLandingDepth'
+	// The per-slot `br_table` landing depths for a dense switch: for each of the `span` slots, the landing
+	// depth of that slot's target — the default (and any hole slot) at depth 0, and `distinct[j]` at depth
+	// `m − j` (landings open outermost-first, so the innermost default is 0). Each distinct target's depth is
+	// stashed in a dense array indexed by its block id OFFSET FROM THE SMALLEST distinct target id, so both
+	// the fill and the per-slot read are O(1). Keying on the distinct-target id RANGE (not absolute block id)
+	// keeps the array O(distinct) wide — the arm bodies are minted together, so the range tracks the arm
+	// count no matter where the match or its default block sit in the function; an absolute-id array would be
+	// O(maxBlockId), reintroducing superlinearity for a function with many dense matches. A per-slot linear
+	// scan of `distinct` would instead be O(slots × distinct), quadratic in an all-distinct dense match's arm
+	// count. Depth 0 doubles as "not a distinct target": every distinct depth `m − j` is ≥ 1, so a hole or
+	// default slot (its target absent from the range, or a 0 in it) correctly reads 0.
+	function slotLandingDepths(caseTargets BlockIdArray, distinct BlockIdArray) returns Wasm32IndexArray
+		let m = distinct.count()
+		var out = Wasm32IndexArray.create()
+		if m == 0 'onlyDefault'
+			for _ in caseTargets 'allDefault'
+				out.push(0 as Wasm32Index)
+			end 'allDefault'
+			return out
+		end 'onlyDefault'
+
+		var minTarget = try distinct.get(0) otherwise panic("slotLandingDepths: distinct.get(0) OOB with m={m}")
+		var maxTarget = minTarget
+		for target in distinct 'range'
+			if target < minTarget 'lower'
+				minTarget = target
+			end 'lower'
+			if target > maxTarget 'upper'
+				maxTarget = target
+			end 'upper'
+		end 'range'
+
+		var depthByOffset = Wasm32IndexArray.create()
+		depthByOffset.growFilled((maxTarget - minTarget + 1) as ElementCount, value: 0 as Wasm32Index)
+		var j = 0 as ElementCount
+		for target in distinct 'depths'
+			try depthByOffset.set((target - minTarget) as ElementCount, value: (m - j) as Wasm32Index) otherwise panic("slotLandingDepths: depth set OOB at block {target}")
+			j = j + 1
+		end 'depths'
+
+		for target in caseTargets 'eachSlot'
+			var depth = 0 as Wasm32Index
+			if target >= minTarget and target <= maxTarget 'inRange'
+				depth = try depthByOffset.get((target - minTarget) as ElementCount) otherwise panic("slotLandingDepths: depth get OOB at block {target}")
+			end 'inRange'
+			out.push(depth)
+		end 'eachSlot'
+		return out
+	end 'slotLandingDepths'
 
 	function dispatchIndexOf(blockId BlockId) returns Wasm32Index
 		return try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")

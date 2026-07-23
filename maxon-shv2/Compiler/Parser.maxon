@@ -2320,12 +2320,6 @@ typealias DispatchIndexArray = Array with ElementCount
 // only thing asked of it (add, and "have I seen this?"), which is exactly a set's contract.
 typealias SeenPatternValues = Set with ParsedInt
 
-// The distinct arm-body block ids a jump table has already recorded a phi edge for — so an or-arm or a
-// split range, which reaches ONE body through several intervals all carrying the SAME carried-var
-// snapshot, records that body's dispatch edge ONCE (a second edge would double-apply the copy at SSA
-// destruction). Membership is the only question asked, which is a set's contract.
-typealias SeenBlockIdSet = Set with BlockId
-
 export type Parser
 	var tokens as TokenArray
 	var pos as TokenIndex
@@ -11338,7 +11332,7 @@ export type Parser
 		// several intervals, all carrying the SAME snapshot, so a second edge to it would double-apply the
 		// copy at SSA destruction.
 		self.recordBranchEdge(block, targetId: missTarget, argIds: missArgs)
-		var seen = SeenBlockIdSet.create()
+		var seen = BlockIdSet.create()
 		for i in from upto to 'eachEdge'
 			let interval = try intervals.get(i) otherwise panic("emitDispatchTable: intervals.get OOB at {i}")
 			if not seen.contains(interval.targetBlockId) 'firstEdge'

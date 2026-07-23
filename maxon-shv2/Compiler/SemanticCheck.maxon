@@ -480,16 +480,15 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 	end 'term'
 end 'collectAwaitSuccessors'
 
-// Push a Maxon `switch`'s distinct successor block ids into `into`: the default plus each case target that
-// has not already appeared. A dense table repeats a block across many slots, so a linear membership scan
-// (the set is bounded by the arm count) keeps one edge per distinct successor.
+// Push a Maxon `switch`'s distinct successor block ids into `into`: the default plus each distinct case
+// target in first-appearance order, one edge per distinct successor (a dense table repeats a block across
+// many slots). The distinct set comes from the shared O(slots) `distinctSwitchTargets` — a per-slot linear
+// membership scan here was O(slots × distinct), quadratic in the arm count of an all-distinct dense match.
 function pushMaxonSwitchSuccessors(into BlockIdArray, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId)
 	into.push(defaultBlockId)
-	for target in denseTargetBlockIds 'eachSlot'
-		if not blockIdArrayContains(into, value: target) 'fresh'
-			into.push(target)
-		end 'fresh'
-	end 'eachSlot'
+	for target in distinctSwitchTargets(denseTargetBlockIds, exclude: defaultBlockId) 'eachDistinct'
+		into.push(target)
+	end 'eachDistinct'
 end 'pushMaxonSwitchSuccessors'
 
 // Append a conditional branch's two successors — factored out so the `condBranch` arm above is one statement.

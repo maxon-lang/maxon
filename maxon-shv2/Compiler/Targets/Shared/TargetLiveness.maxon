@@ -1371,16 +1371,14 @@ end 'collectBlockSuccessorIds'
 // dense table repeats a block across many slots (a range/`or` arm fills several), but the CFG has ONE edge
 // per distinct successor — pushing a block per slot would inflate its predecessor degree and wrongly
 // classify every fall-through edge into it as critical. The default is pushed first (it is always a
-// successor — an out-of-range value reaches it), then each fresh case target. O(slots × distinct) with a
-// linear membership scan, which is fine: the distinct set is bounded by the arm count, and this runs once
-// per switch block per CFG build.
+// successor — an out-of-range value reaches it), then each fresh case target in first-appearance order via
+// the shared O(slots) `distinctSwitchTargets` (a per-slot linear membership scan here was O(slots ×
+// distinct) — quadratic in the arm count of an all-distinct dense match, and this runs on every CFG build).
 function pushJumpTableSuccessors(out BlockIdArray, defaultTarget BlockId, caseTargets BlockIdArray)
 	out.push(defaultTarget)
-	for target in caseTargets 'eachSlot'
-		if not blockIdArrayContains(out, value: target) 'fresh'
-			out.push(target)
-		end 'fresh'
-	end 'eachSlot'
+	for target in distinctSwitchTargets(caseTargets, exclude: defaultTarget) 'eachDistinct'
+		out.push(target)
+	end 'eachDistinct'
 end 'pushJumpTableSuccessors'
 
 // The then-target of the op a block's `condBranch` names. Panics if it is not a `jcc`: the

@@ -30,12 +30,37 @@ export typealias VarSlot = int(0 to u64.max)
 export typealias BlockId = int(0 to u64.max)
 export typealias BlockIdArray = Array with BlockId
 
-// Linear membership over a BlockId list — the "have I already seen this successor?" question the
-// jump table's distinct-successor dedup asks at every tier (parser edge recording, Maxon await-CFG
-// walk, Target CFG build, wasm landing structure, critical-edge retarget). The list is a switch's
-// distinct-successor set, bounded by the arm count, so a scan is cheaper than a hash set's allocation
-// and hashing on these once-per-switch paths. Shared here — beside `BlockIdArray` — so the four tiers
-// that need it call ONE implementation rather than each spelling the same loop.
+export typealias BlockIdSet = Set with BlockId
+
+// The DISTINCT case targets of a dense `switch`'s block-id table, in FIRST-APPEARANCE order, with
+// `exclude` (the default) removed — the "which successors does this table actually have?" question the
+// CFG asks at every tier (Maxon await-CFG walk, Target CFG build, wasm landing structure). A dense table
+// REPEATS a block across many slots (a range/`or` arm fills several), so the distinct set is small — but
+// the array is `span` slots long (up to 4096), and deduping it with a per-slot linear membership scan is
+// O(span × distinct), which is QUADRATIC in the arm count of an all-distinct dense match (span ≈ distinct
+// ≈ N — the bytecode/keyword-dispatch shape a jump table is FOR). The hash set makes it O(span): one pass,
+// O(1) membership. Shared here — beside `BlockIdArray` — so the three tiers that need it call ONE
+// implementation rather than each spelling the same quadratic loop.
+export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId) returns BlockIdArray
+	var out = BlockIdArray.create()
+	var seen = BlockIdSet.create()
+	// Seeding the set with `exclude` drops every default/hole slot in the same membership test that
+	// dedups the real targets — no separate `!= exclude` compare per slot.
+	seen.insert(exclude)
+	for target in caseTargets 'eachSlot'
+		if not seen.contains(target) 'fresh'
+			seen.insert(target)
+			out.push(target)
+		end 'fresh'
+	end 'eachSlot'
+	return out
+end 'distinctSwitchTargets'
+
+// Linear membership over a BlockId list — the "does this list already hold this id?" question. Used for a
+// ONE-SHOT scan over a bounded list (the critical-edge retarget asks whether a switch's table names the
+// split edge's old target, once per split), NOT inside a per-slot loop: `distinctSwitchTargets` is the
+// linear-total answer wherever the question is asked once per slot of a dense table. Shared here so the
+// callers that need a single membership test call ONE implementation rather than spelling the loop.
 export function blockIdArrayContains(list BlockIdArray, value BlockId) returns bool
 	for id in list 'each'
 		if id == value 'hit'
