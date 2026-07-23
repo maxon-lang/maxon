@@ -1,0 +1,22 @@
+// Test: float-straddling-zero-in-range
+typealias Unit = float(-1.0 to 1.0)
+
+function main() returns ExitCode
+	let u = -0.5 as Unit
+	return trunc(-u * 100.0)
+end 'main'
+---
+ExitCode: 50
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fsub d0, d1, d0
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,182 @@
+// Test: slice-of-a-dead-slice-still-reads
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function build() returns IntArray
+	var a = IntArray.create()
+	var i = 0
+	while i < 10 'fill'
+		a.push(i * 10)
+		i = i + 1
+	end 'fill'
+	return a
+end 'build'
+
+function innerOf(a IntArray) returns IntArray
+	let mid = try a.slice(2, endIndex: 8) otherwise IntArray.create()
+	return try mid.slice(1, endIndex: 4) otherwise IntArray.create()
+end 'innerOf'
+
+function main() returns ExitCode
+	let inner = innerOf(build())
+	let a = try inner.get(0) otherwise 0
+	let b = try inner.get(1) otherwise 0
+	let c = try inner.get(2) otherwise 0
+	return (a + b + c) / 10
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @build {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 10
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b whileexit
+  fill:
+    arm64.movImm x16, 10
+    arm64.mul x1, x20, x16
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @innerOf {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 2
+    arm64.movImm x2, 8
+    arm64.bl __arr_slice
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_slice
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x20, x0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x20, x0
+    arm64.b trycont
+  trycont:
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl build
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl innerOf
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x19, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x21, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x21, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.add x1, x19, x21
+    arm64.add x0, x1, x0
+    arm64.movImm x1, 10
+    arm64.sdiv x19, x0, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

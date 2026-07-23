@@ -1,0 +1,88 @@
+// Test: recursion
+
+typealias Integer = int(i64.min to i64.max)
+
+type Rec
+	export var seed as Integer
+
+	static function create() returns Self
+		return Self{seed: 0}
+	end 'create'
+
+	function sumTo(k Integer) returns Integer
+		if k <= 0 'base'
+			return 0
+		end 'base'
+		return k + sumTo(k - 1)
+	end 'sumTo'
+end 'Rec'
+
+function main() returns ExitCode
+	let r = Rec.create()
+	return r.sumTo(3)
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Rec.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Rec.sumTo {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x1
+    arm64.cmp x19, 0
+    arm64.cset x1, le
+    arm64.cbnz x1, base
+    arm64.b ifcont
+  base:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.sub x1, x19, 1
+    arm64.bl Rec.sumTo
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Rec.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl Rec.sumTo
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

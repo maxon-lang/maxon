@@ -1,0 +1,417 @@
+// Test: many-views-detach-one-by-one
+function main() returns ExitCode
+	var arr = [1, 2, 3, 4, 5, 6]
+	var a = try arr.slice(0, endIndex: 3) otherwise return 1
+	var b = try arr.slice(3, endIndex: 6) otherwise return 2
+	var c = try a.slice(0, endIndex: 2) otherwise return 3
+	try arr.set(0, value: 100) otherwise panic("index 0 is in bounds")
+	try b.set(0, value: 200) otherwise panic("index 0 is in bounds")
+	try c.set(0, value: 300) otherwise panic("index 0 is in bounds")
+	try a.set(1, value: 400) otherwise panic("index 1 is in bounds")
+	let ok = (try arr.get(0) otherwise 0) == 100 and (try arr.get(3) otherwise 0) == 4 and (try b.get(0) otherwise 0) == 200 and (try b.get(1) otherwise 0) == 5 and (try c.get(0) otherwise 0) == 300 and (try c.get(1) otherwise 0) == 2 and (try a.get(0) otherwise 0) == 1 and (try a.get(1) otherwise 0) == 400
+	return 0 if ok else 9
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 6
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 0
+    arm64.movImm x2, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_slice
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 3
+    arm64.movImm x2, 6
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_slice
+    arm64.movRegReg x21, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x21, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 2
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_slice
+    arm64.movRegReg x22, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x22, 3
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 100
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x0, 134
+    arm64.syscall 94
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 200
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x0, 134
+    arm64.syscall 94
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 300
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x0, 134
+    arm64.syscall 94
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 1
+    arm64.movImm x2, 400
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.movImm x0, 134
+    arm64.syscall 94
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 100
+    arm64.cset x0, eq
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 4
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 200
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 5
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 300
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x0, 400
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x23, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x23, 9
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}

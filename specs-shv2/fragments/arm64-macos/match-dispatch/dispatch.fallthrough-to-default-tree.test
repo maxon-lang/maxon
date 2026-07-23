@@ -1,0 +1,138 @@
+// Test: dispatch.fallthrough-to-default-tree
+typealias N = int(0 to 1000)
+
+function ftd(x N) returns N
+	var r = 0 as N
+	match x 'c'
+		1 then r = r + 1 and fallthrough
+		2 then r = r + 2 and fallthrough
+		3 then r = r + 4 and fallthrough
+		4 then r = r + 8 and fallthrough
+		default then r = r + 100
+	end 'c'
+	return r
+end 'ftd'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if ftd(1) == 115 'a' n = n + 1 end 'a'
+	if ftd(3) == 112 'b' n = n + 1 end 'b'
+	if ftd(4) == 108 'c' n = n + 1 end 'c'
+	if ftd(9) == 100 'd' n = n + 1 end 'd'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @ftd {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.sub x0, x0, 1
+    arm64.jumpTable x0, default=critsplit [[0]=matcharm, [1]=critsplit, [2]=critsplit, [3]=critsplit] @__jumptable_1
+  critsplit:
+    arm64.b matchdefault
+  matcharm:
+    arm64.add x0, x1, 1
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 2
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 4
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 8
+    arm64.movRegReg x1, x0
+    arm64.b matchdefault
+  matchdefault:
+    arm64.add x0, x1, 100
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 1000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 1
+    arm64.bl ftd
+    arm64.cmp x0, 115
+    arm64.cset x0, eq
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.bl ftd
+    arm64.cmp x0, 112
+    arm64.cset x0, eq
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 4
+    arm64.bl ftd
+    arm64.cmp x0, 108
+    arm64.cset x0, eq
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 9
+    arm64.bl ftd
+    arm64.cmp x0, 100
+    arm64.cset x0, eq
+    arm64.cbnz x0, d
+    arm64.b critsplit
+  d:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

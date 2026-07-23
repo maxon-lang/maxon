@@ -1,0 +1,644 @@
+// Test: dispatch.span-4096-boundary
+function bucket(x int) returns int
+	// 128 width-32 range arms cover [0, 4095] exactly -- span 4096, the WIDEST table admitted (and the arm64
+	// bounds-check imm12 boundary: 4096 does not fit a CMP immediate, so the count is materialised into a
+	// scratch register). A `cmp idx, #4096` that spilled into the LSL#12 bit would compare against 0 and
+	// send every value to the default; the register form is correct.
+	return match x 'm'
+		0 to 31 gives 1
+		32 to 63 gives 2
+		64 to 95 gives 3
+		96 to 127 gives 4
+		128 to 159 gives 5
+		160 to 191 gives 6
+		192 to 223 gives 7
+		224 to 255 gives 8
+		256 to 287 gives 9
+		288 to 319 gives 10
+		320 to 351 gives 11
+		352 to 383 gives 12
+		384 to 415 gives 13
+		416 to 447 gives 14
+		448 to 479 gives 15
+		480 to 511 gives 16
+		512 to 543 gives 17
+		544 to 575 gives 18
+		576 to 607 gives 19
+		608 to 639 gives 20
+		640 to 671 gives 21
+		672 to 703 gives 22
+		704 to 735 gives 23
+		736 to 767 gives 24
+		768 to 799 gives 25
+		800 to 831 gives 26
+		832 to 863 gives 27
+		864 to 895 gives 28
+		896 to 927 gives 29
+		928 to 959 gives 30
+		960 to 991 gives 31
+		992 to 1023 gives 32
+		1024 to 1055 gives 33
+		1056 to 1087 gives 34
+		1088 to 1119 gives 35
+		1120 to 1151 gives 36
+		1152 to 1183 gives 37
+		1184 to 1215 gives 38
+		1216 to 1247 gives 39
+		1248 to 1279 gives 40
+		1280 to 1311 gives 41
+		1312 to 1343 gives 42
+		1344 to 1375 gives 43
+		1376 to 1407 gives 44
+		1408 to 1439 gives 45
+		1440 to 1471 gives 46
+		1472 to 1503 gives 47
+		1504 to 1535 gives 48
+		1536 to 1567 gives 49
+		1568 to 1599 gives 50
+		1600 to 1631 gives 51
+		1632 to 1663 gives 52
+		1664 to 1695 gives 53
+		1696 to 1727 gives 54
+		1728 to 1759 gives 55
+		1760 to 1791 gives 56
+		1792 to 1823 gives 57
+		1824 to 1855 gives 58
+		1856 to 1887 gives 59
+		1888 to 1919 gives 60
+		1920 to 1951 gives 61
+		1952 to 1983 gives 62
+		1984 to 2015 gives 63
+		2016 to 2047 gives 64
+		2048 to 2079 gives 65
+		2080 to 2111 gives 66
+		2112 to 2143 gives 67
+		2144 to 2175 gives 68
+		2176 to 2207 gives 69
+		2208 to 2239 gives 70
+		2240 to 2271 gives 71
+		2272 to 2303 gives 72
+		2304 to 2335 gives 73
+		2336 to 2367 gives 74
+		2368 to 2399 gives 75
+		2400 to 2431 gives 76
+		2432 to 2463 gives 77
+		2464 to 2495 gives 78
+		2496 to 2527 gives 79
+		2528 to 2559 gives 80
+		2560 to 2591 gives 81
+		2592 to 2623 gives 82
+		2624 to 2655 gives 83
+		2656 to 2687 gives 84
+		2688 to 2719 gives 85
+		2720 to 2751 gives 86
+		2752 to 2783 gives 87
+		2784 to 2815 gives 88
+		2816 to 2847 gives 89
+		2848 to 2879 gives 90
+		2880 to 2911 gives 91
+		2912 to 2943 gives 92
+		2944 to 2975 gives 93
+		2976 to 3007 gives 94
+		3008 to 3039 gives 95
+		3040 to 3071 gives 96
+		3072 to 3103 gives 97
+		3104 to 3135 gives 98
+		3136 to 3167 gives 99
+		3168 to 3199 gives 100
+		3200 to 3231 gives 101
+		3232 to 3263 gives 102
+		3264 to 3295 gives 103
+		3296 to 3327 gives 104
+		3328 to 3359 gives 105
+		3360 to 3391 gives 106
+		3392 to 3423 gives 107
+		3424 to 3455 gives 108
+		3456 to 3487 gives 109
+		3488 to 3519 gives 110
+		3520 to 3551 gives 111
+		3552 to 3583 gives 112
+		3584 to 3615 gives 113
+		3616 to 3647 gives 114
+		3648 to 3679 gives 115
+		3680 to 3711 gives 116
+		3712 to 3743 gives 117
+		3744 to 3775 gives 118
+		3776 to 3807 gives 119
+		3808 to 3839 gives 120
+		3840 to 3871 gives 121
+		3872 to 3903 gives 122
+		3904 to 3935 gives 123
+		3936 to 3967 gives 124
+		3968 to 3999 gives 125
+		4000 to 4031 gives 126
+		4032 to 4063 gives 127
+		4064 to 4095 gives 128
+		default gives 0
+	end 'm'
+end 'bucket'
+
+function main() returns ExitCode
+	// value v in [0,4095] routes to bucket (v/32)+1; 4096 and -1 are just outside the span, so the default.
+	var n = 0 as ExitCode
+	if bucket(0) == 1 'a' n = n + 1 end 'a'
+	if bucket(31) == 1 'b' n = n + 1 end 'b'
+	if bucket(32) == 2 'c' n = n + 1 end 'c'
+	if bucket(2047) == 64 'd' n = n + 1 end 'd'
+	if bucket(4095) == 128 'e' n = n + 1 end 'e'
+	if bucket(4096) == 0 'f' n = n + 1 end 'f'
+	if bucket(-1) == 0 'g' n = n + 1 end 'g'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @bucket {
+  entry:
+    arm64.prologue 16
+    arm64.jumpTable x0, default=matchdefault [[0..31]=matcharm, [32..63]=matcharm, [64..95]=matcharm, [96..127]=matcharm, [128..159]=matcharm, [160..191]=matcharm, [192..223]=matcharm, [224..255]=matcharm, [256..287]=matcharm, [288..319]=matcharm, [320..351]=matcharm, [352..383]=matcharm, [384..415]=matcharm, [416..447]=matcharm, [448..479]=matcharm, [480..511]=matcharm, [512..543]=matcharm, [544..575]=matcharm, [576..607]=matcharm, [608..639]=matcharm, [640..671]=matcharm, [672..703]=matcharm, [704..735]=matcharm, [736..767]=matcharm, [768..799]=matcharm, [800..831]=matcharm, [832..863]=matcharm, [864..895]=matcharm, [896..927]=matcharm, [928..959]=matcharm, [960..991]=matcharm, [992..1023]=matcharm, [1024..1055]=matcharm, [1056..1087]=matcharm, [1088..1119]=matcharm, [1120..1151]=matcharm, [1152..1183]=matcharm, [1184..1215]=matcharm, [1216..1247]=matcharm, [1248..1279]=matcharm, [1280..1311]=matcharm, [1312..1343]=matcharm, [1344..1375]=matcharm, [1376..1407]=matcharm, [1408..1439]=matcharm, [1440..1471]=matcharm, [1472..1503]=matcharm, [1504..1535]=matcharm, [1536..1567]=matcharm, [1568..1599]=matcharm, [1600..1631]=matcharm, [1632..1663]=matcharm, [1664..1695]=matcharm, [1696..1727]=matcharm, [1728..1759]=matcharm, [1760..1791]=matcharm, [1792..1823]=matcharm, [1824..1855]=matcharm, [1856..1887]=matcharm, [1888..1919]=matcharm, [1920..1951]=matcharm, [1952..1983]=matcharm, [1984..2015]=matcharm, [2016..2047]=matcharm, [2048..2079]=matcharm, [2080..2111]=matcharm, [2112..2143]=matcharm, [2144..2175]=matcharm, [2176..2207]=matcharm, [2208..2239]=matcharm, [2240..2271]=matcharm, [2272..2303]=matcharm, [2304..2335]=matcharm, [2336..2367]=matcharm, [2368..2399]=matcharm, [2400..2431]=matcharm, [2432..2463]=matcharm, [2464..2495]=matcharm, [2496..2527]=matcharm, [2528..2559]=matcharm, [2560..2591]=matcharm, [2592..2623]=matcharm, [2624..2655]=matcharm, [2656..2687]=matcharm, [2688..2719]=matcharm, [2720..2751]=matcharm, [2752..2783]=matcharm, [2784..2815]=matcharm, [2816..2847]=matcharm, [2848..2879]=matcharm, [2880..2911]=matcharm, [2912..2943]=matcharm, [2944..2975]=matcharm, [2976..3007]=matcharm, [3008..3039]=matcharm, [3040..3071]=matcharm, [3072..3103]=matcharm, [3104..3135]=matcharm, [3136..3167]=matcharm, [3168..3199]=matcharm, [3200..3231]=matcharm, [3232..3263]=matcharm, [3264..3295]=matcharm, [3296..3327]=matcharm, [3328..3359]=matcharm, [3360..3391]=matcharm, [3392..3423]=matcharm, [3424..3455]=matcharm, [3456..3487]=matcharm, [3488..3519]=matcharm, [3520..3551]=matcharm, [3552..3583]=matcharm, [3584..3615]=matcharm, [3616..3647]=matcharm, [3648..3679]=matcharm, [3680..3711]=matcharm, [3712..3743]=matcharm, [3744..3775]=matcharm, [3776..3807]=matcharm, [3808..3839]=matcharm, [3840..3871]=matcharm, [3872..3903]=matcharm, [3904..3935]=matcharm, [3936..3967]=matcharm, [3968..3999]=matcharm, [4000..4031]=matcharm, [4032..4063]=matcharm, [4064..4095]=matcharm] @__jumptable_0
+  matchdefault:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 6
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 7
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 8
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 9
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 11
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 12
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 13
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 14
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 15
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 16
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 17
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 18
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 19
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 21
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 22
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 23
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 24
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 25
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 26
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 27
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 28
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 29
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 30
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 31
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 32
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 33
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 34
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 35
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 36
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 37
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 38
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 39
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 40
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 41
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 42
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 43
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 44
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 45
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 46
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 47
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 48
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 49
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 50
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 51
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 52
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 53
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 54
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 55
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 56
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 57
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 58
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 59
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 60
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 61
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 62
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 63
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 64
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 65
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 66
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 67
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 68
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 69
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 70
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 71
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 72
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 73
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 74
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 75
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 76
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 77
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 78
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 79
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 80
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 81
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 82
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 83
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 84
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 85
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 86
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 87
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 88
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 89
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 90
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 91
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 92
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 93
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 94
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 95
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 96
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 97
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 98
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 99
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 100
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 101
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 102
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 103
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 104
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 105
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 106
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 107
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 108
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 109
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 110
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 111
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 112
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 113
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 114
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 115
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 116
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 117
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 118
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 119
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 120
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 121
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 122
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 123
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 124
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 125
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 126
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 127
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 128
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 0
+    arm64.bl bucket
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 31
+    arm64.bl bucket
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 32
+    arm64.bl bucket
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 2047
+    arm64.bl bucket
+    arm64.cmp x0, 64
+    arm64.cset x0, eq
+    arm64.cbnz x0, d
+    arm64.b critsplit
+  d:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 4095
+    arm64.bl bucket
+    arm64.cmp x0, 128
+    arm64.cset x0, eq
+    arm64.cbnz x0, e
+    arm64.b critsplit
+  e:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 4096
+    arm64.bl bucket
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, f
+    arm64.b critsplit
+  f:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.bl bucket
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, g
+    arm64.b critsplit
+  g:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

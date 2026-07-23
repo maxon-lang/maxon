@@ -1,0 +1,20 @@
+// Test: i64-min-literal
+typealias Big = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let lo = -9223372036854775808 as Big
+	let back = lo - i64.min
+	return back as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, -9223372036854775808
+    arm64.movImm x1, -9223372036854775808
+    arm64.sub x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}

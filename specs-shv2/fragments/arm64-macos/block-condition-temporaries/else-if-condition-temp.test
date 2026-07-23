@@ -1,0 +1,79 @@
+// Test: else-if-condition-temp
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var flag = 0 as Integer
+	if [1].count() == 99 'a'
+		flag = 1
+	end 'a' else if [1, 2].count() == 99 'b'
+		flag = 2
+	end 'b' else 'c'
+		flag = 3
+	end 'c'
+	return flag
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_count
+    arm64.cmp x0, 99
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.cbnz x20, a
+    arm64.b ifelse
+  a:
+    arm64.movImm x0, 1
+    arm64.b ifcont
+  ifelse:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_count
+    arm64.cmp x0, 99
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.cbnz x20, b
+    arm64.b ifelse
+  b:
+    arm64.movImm x0, 2
+    arm64.b ifcont
+  ifelse:
+    arm64.movImm x0, 3
+    arm64.b ifcont
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

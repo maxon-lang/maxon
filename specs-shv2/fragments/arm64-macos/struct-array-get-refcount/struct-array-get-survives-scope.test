@@ -1,0 +1,206 @@
+// Test: struct-array-get-survives-scope
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+		export var value as Integer
+		export var next as Integer
+
+		static function create(value Integer, next Integer) returns Self
+			return Self{value: value, next: next}
+		end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+type List
+		export var nodes as NodeArray
+		export var head as Integer
+
+		function pushFront(value Integer)
+				let node = Node.create(value, next: self.head)
+				self.nodes.push(node)
+				self.head = self.nodes.count() - 1
+		end 'pushFront'
+
+		function walk()
+				var current = self.head
+				while current != -1 'w'
+						let node = try self.nodes.get(current) otherwise Node.create(0, next: -1)
+						current = node.next
+				end 'w'
+		end 'walk'
+
+		static function create(nodes NodeArray, head Integer) returns Self
+			return Self{nodes: nodes, head: head}
+		end 'create'
+end 'List'
+
+function main() returns ExitCode
+		var list = List.create(NodeArray.create(), head: -1)
+		list.pushFront(10)
+		list.pushFront(20)
+		list.walk()
+		list.pushFront(30)
+		let n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
+		return n1.value
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Node.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @List.pushFront {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl Node.create
+    arm64.movRegReg x1, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __arr_push
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __arr_count
+    arm64.sub x0, x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @List.walk {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, w
+    arm64.b whileexit
+  w:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.bl __arr_get
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.movImm x1, -1
+    arm64.bl Node.create
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x20
+    arm64.b whilehdr
+  whileexit:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @List.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __mm_decref
+    arm64.bl __arr_create
+    arm64.movImm x1, -1
+    arm64.bl List.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 10
+    arm64.movRegReg x0, x19
+    arm64.bl List.pushFront
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl List.pushFront
+    arm64.movRegReg x0, x19
+    arm64.bl List.walk
+    arm64.movImm x1, 30
+    arm64.movRegReg x0, x19
+    arm64.bl List.pushFront
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movImm x1, 1
+    arm64.bl __arr_get
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.movImm x1, -1
+    arm64.bl Node.create
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_List
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

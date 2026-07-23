@@ -1,0 +1,127 @@
+// Test: dispatch.dense-nonzero-enum
+enum Priority
+	p0 = 10
+	p1 = 11
+	p2 = 12
+	p3 = 13
+	p4 = 14
+end 'Priority'
+
+function rank(p Priority) returns ExitCode
+	return match p 'm'
+		p0 gives 1
+		p1 gives 2
+		p2 gives 3
+		p3 gives 4
+		p4 gives 5
+	end 'm'
+end 'rank'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	if rank(Priority.p0) == 1 'a' n = n + 1 end 'a'
+	if rank(Priority.p1) == 2 'b' n = n + 1 end 'b'
+	if rank(Priority.p2) == 3 'c' n = n + 1 end 'c'
+	if rank(Priority.p3) == 4 'd' n = n + 1 end 'd'
+	if rank(Priority.p4) == 5 'e' n = n + 1 end 'e'
+	return n
+end 'main'
+---
+ExitCode: 5
+---
+func @rank {
+  entry:
+    arm64.prologue 16
+    arm64.sub x0, x0, 10
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 10
+    arm64.bl rank
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 11
+    arm64.bl rank
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 12
+    arm64.bl rank
+    arm64.cmp x0, 3
+    arm64.cset x0, eq
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 13
+    arm64.bl rank
+    arm64.cmp x0, 4
+    arm64.cset x0, eq
+    arm64.cbnz x0, d
+    arm64.b critsplit
+  d:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 14
+    arm64.bl rank
+    arm64.cmp x0, 5
+    arm64.cset x0, eq
+    arm64.cbnz x0, e
+    arm64.b critsplit
+  e:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

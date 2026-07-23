@@ -1,0 +1,18 @@
+// Test: math-intrinsic-int-promotion
+function main() returns ExitCode
+	let result = sqrt(16)
+	return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 16
+    arm64.scvtf d0, x0
+    arm64.fsqrt d0, d0
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}

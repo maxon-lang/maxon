@@ -1,0 +1,162 @@
+// Test: struct-with-multiple-managed-fields
+
+typealias Integer = int(i64.min to i64.max)
+
+type MultiField
+	export var a as String
+	export var b as Integer
+	export var c as String
+	export var d as Integer
+	export var e as String
+
+	static function create(a String, b Integer, c String, d Integer, e String) returns Self
+		return Self{a: a, b: b, c: c, d: d, e: e}
+	end 'create'
+end 'MultiField'
+
+typealias MultiArray = Array with MultiField
+
+function main() returns ExitCode
+	var items = MultiArray.create()
+	items.push(MultiField.create("string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"))
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @MultiField.create {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.movRegReg x22, x3
+    arm64.movRegReg x23, x4
+    arm64.movImm x0, 40
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.storeBaseDispReg.word64 [x0 + 16], x21
+    arm64.storeBaseDispReg.word64 [x0 + 24], x22
+    arm64.storeBaseDispReg.word64 [x0 + 32], x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_MultiField
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x20, 1
+    arm64.leaRdata x21, __str_rec_3
+    arm64.movImm x22, 2
+    arm64.leaRdata x23, __str_rec_5
+    arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.add x0, x25, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x26, x0
+    arm64.add x27, x26, 48
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x0, x27, x25
+    arm64.storeBaseDispReg.word64 [x26 + 0], x27
+    arm64.storeBaseDispReg.word64 [x26 + 8], x25
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x26 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x26 + 24], x0
+    arm64.loadRegBaseDisp.word64 x24, [x21 + 0]
+    arm64.loadRegBaseDisp.word64 x21, [x21 + 8]
+    arm64.add x0, x21, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x25, x0
+    arm64.add x27, x25, 48
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x24
+    arm64.movRegReg x2, x21
+    arm64.bl __str_copy
+    arm64.add x0, x27, x21
+    arm64.storeBaseDispReg.word64 [x25 + 0], x27
+    arm64.storeBaseDispReg.word64 [x25 + 8], x21
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x25 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x25 + 24], x0
+    arm64.loadRegBaseDisp.word64 x21, [x23 + 0]
+    arm64.loadRegBaseDisp.word64 x23, [x23 + 8]
+    arm64.add x0, x23, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x24, x0
+    arm64.add x27, x24, 48
+    arm64.movRegReg x0, x27
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x23
+    arm64.bl __str_copy
+    arm64.add x0, x27, x23
+    arm64.storeBaseDispReg.word64 [x24 + 0], x27
+    arm64.storeBaseDispReg.word64 [x24 + 8], x23
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x24 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x24 + 24], x0
+    arm64.movRegReg x0, x26
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x25
+    arm64.movRegReg x3, x22
+    arm64.movRegReg x4, x24
+    arm64.bl MultiField.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.epilogue 96
+    arm64.ret
+}

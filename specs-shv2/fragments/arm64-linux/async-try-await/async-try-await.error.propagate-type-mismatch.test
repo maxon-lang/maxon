@@ -1,0 +1,27 @@
+// Test: async-try-await.error.propagate-type-mismatch
+enum AError implements Error
+	alpha
+end 'AError'
+
+enum BError implements Error
+	beta
+	gamma
+end 'BError'
+
+function throwsA() returns int throws AError
+	throw AError.alpha
+end 'throwsA'
+
+function caller() returns int throws BError
+	let p = async throwsA()
+	let r = try await p
+	return r
+end 'caller'
+
+function main() returns ExitCode
+	let v = try caller() otherwise 0
+	return v as ExitCode
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert

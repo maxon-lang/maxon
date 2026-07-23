@@ -1,0 +1,142 @@
+// Test: dispatch.fallthrough-tree-carried
+typealias N = int(0 to 1000000)
+
+function perms(role N) returns N
+	var p = 0 as N
+	match role 'auth'
+		1 then p = p + 1 and fallthrough
+		2 then p = p + 2 and fallthrough
+		3 then p = p + 4 and fallthrough
+		4 then p = p + 8 and fallthrough
+		5 then p = p + 16
+		default then p = 0
+	end 'auth'
+	return p
+end 'perms'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if perms(1) == 31 'a' n = n + 1 end 'a'
+	if perms(3) == 28 'b' n = n + 1 end 'b'
+	if perms(5) == 16 'c' n = n + 1 end 'c'
+	if perms(6) == 0 'd' n = n + 1 end 'd'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @perms {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 0
+    arm64.sub x0, x0, 1
+    arm64.jumpTable x0, default=matchdefault [[0]=matcharm, [1]=critsplit, [2]=critsplit, [3]=critsplit, [4]=critsplit] @__jumptable_1
+  matchdefault:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm:
+    arm64.add x0, x1, 1
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 2
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 4
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 8
+    arm64.b matcharm
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 16
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x0, 1000000
+    arm64.cset x1, gt
+    arm64.cbnz x1, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.syscall 94
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 1
+    arm64.bl perms
+    arm64.cmp x0, 31
+    arm64.cset x0, eq
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.bl perms
+    arm64.cmp x0, 28
+    arm64.cset x0, eq
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 5
+    arm64.bl perms
+    arm64.cmp x0, 16
+    arm64.cset x0, eq
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 6
+    arm64.bl perms
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, d
+    arm64.b critsplit
+  d:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

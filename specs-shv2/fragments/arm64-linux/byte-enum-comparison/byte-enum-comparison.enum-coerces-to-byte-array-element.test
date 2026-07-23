@@ -1,0 +1,107 @@
+// Test: byte-enum-comparison.enum-coerces-to-byte-array-element
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function main() returns ExitCode
+	var out = ByteArray.create()
+	out.push(Ascii.space)
+	out.push(Ascii.zero)
+	let first = try out.get(0) otherwise 99
+	let second = try out.get(1) otherwise 99
+	if first == 32 and second == 48 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 32
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 48
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 99
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x20, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 99
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x20, 32
+    arm64.cset x1, eq
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x0, 48
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

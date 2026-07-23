@@ -1,0 +1,90 @@
+// Test: correctly-rounded-past-eighteen-digits
+function main() returns ExitCode
+	var r = 0
+	if 7.46658662666203984963311900685e13 == 74665866266620.4 'thirtyDigits'
+		r = r + 1
+	end 'thirtyDigits'
+	if 2.3744998132743940991053240e-19 == 2.3744998132743943e-19 'twentyFiveDigits'
+		r = r + 2
+	end 'twentyFiveDigits'
+	if 2.755371525302782724e-4 == 0.0002755371525302783 'nineteenDigits'
+		r = r + 4
+	end 'nineteenDigits'
+	if 3.14159265358979323846 == 3.141592653589793 'piAsWrittenInTheTree'
+		r = r + 8
+	end 'piAsWrittenInTheTree'
+	if 2.71828182845904523536 == 2.718281828459045 'eAsWrittenInTheTree'
+		r = r + 16
+	end 'eAsWrittenInTheTree'
+	return r
+end 'main'
+---
+ExitCode: 31
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, thirtyDigits
+    arm64.b critsplit
+  thirtyDigits:
+    arm64.add x0, x0, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, twentyFiveDigits
+    arm64.b critsplit
+  twentyFiveDigits:
+    arm64.add x0, x0, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.fpLoadRdata d0, [rdata + __fconst_2]
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, nineteenDigits
+    arm64.b critsplit
+  nineteenDigits:
+    arm64.add x0, x0, 4
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.fpLoadRdata d0, [rdata + __fconst_3]
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, piAsWrittenInTheTree
+    arm64.b critsplit
+  piAsWrittenInTheTree:
+    arm64.add x0, x0, 8
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, eAsWrittenInTheTree
+    arm64.b critsplit
+  eAsWrittenInTheTree:
+    arm64.add x0, x0, 16
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}

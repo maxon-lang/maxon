@@ -1,0 +1,32 @@
+// Test: int-and-float-arms
+function main() returns ExitCode
+	let x = 1
+	let r = match x 'a'
+		1 gives 5
+		default gives 7.5
+	end 'a'
+	return trunc(r)
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.movImm x0, 5
+    arm64.scvtf d0, x0
+    arm64.b matchcont
+  matchdefault:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.b matchcont
+  matchcont:
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}

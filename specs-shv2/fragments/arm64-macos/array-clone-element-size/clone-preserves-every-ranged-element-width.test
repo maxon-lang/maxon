@@ -1,0 +1,299 @@
+// Test: clone-preserves-every-ranged-element-width
+typealias Narrow = int(0 to 16)
+typealias Mid = int(0 to 100000)
+typealias Wide = int(0 to u64.max)
+typealias NarrowCol = Array with Narrow
+typealias MidCol = Array with Mid
+typealias WideCol = Array with Wide
+
+function main() returns ExitCode
+	var n = NarrowCol.create()
+	n.push(1)
+	n.push(2)
+	var m = MidCol.create()
+	m.push(3)
+	m.push(4)
+	var w = WideCol.create()
+	w.push(5)
+	w.push(6)
+
+	var nc = n.clone()
+	var mc = m.clone()
+	var wc = w.clone()
+
+	let n0 = try nc.get(0) otherwise 0
+	let m0 = try mc.get(0) otherwise 0
+	let w0 = try wc.get(0) otherwise 0
+
+	// Mutating a clone must not disturb the original (COW at the element's own stride).
+	try nc.set(0, value: 15) otherwise panic("index 0 is in bounds")
+	let nOrig = try n.get(0) otherwise 0
+	let nClone = try nc.get(0) otherwise 0
+	let nNeighbour = try nc.get(1) otherwise 0
+
+	let ok = n0 == 1 and m0 == 3 and w0 == 5 and nOrig == 1 and nClone == 15 and nNeighbour == 2
+	return 0 if ok else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_push
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_push
+    arm64.movImm x1, 6
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_push
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_clone
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_clone
+    arm64.movRegReg x23, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_clone
+    arm64.movRegReg x24, x0
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x25, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x25, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x23
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x26, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x26, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x24
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x27, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x27, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 0
+    arm64.movImm x2, 15
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_set
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x0, 134
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x19, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x28, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x28, x0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.cmp x25, 1
+    arm64.cset x1, eq
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x26, 3
+    arm64.cset x1, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x1, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x27, 5
+    arm64.cset x1, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x1, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x19, 1
+    arm64.cset x1, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x1, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x28, 15
+    arm64.cset x1, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x1, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x2, 0
+    arm64.cbnz x1, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x2
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x19, 0
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x19, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x24
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x23
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x22
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.loadRegSlot x0, slot0
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+}

@@ -1,0 +1,64 @@
+// Test: short-circuit-in-if-condition
+typealias Integer = int(0 to u64.max)
+
+var trace = 0 as Integer
+
+function setFlag(bit Integer) returns bool
+	trace = trace or bit
+	return false
+end 'setFlag'
+
+function main() returns ExitCode
+	if setFlag(1) and setFlag(2) 'never'
+		return 99
+	end 'never'
+	return trace as ExitCode
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __data_trace@0 = i64 0
+}
+
+func @setFlag {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x1, __data_trace
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.orr x0, x1, x0
+    arm64.leaGlobal x1, __data_trace
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl setFlag
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.movImm x0, 2
+    arm64.bl setFlag
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, never
+    arm64.b ifcont
+  never:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.leaGlobal x0, __data_trace
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}

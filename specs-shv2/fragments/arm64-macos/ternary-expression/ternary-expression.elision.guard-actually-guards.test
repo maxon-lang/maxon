@@ -1,0 +1,66 @@
+// Test: ternary-expression.elision.guard-actually-guards
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+
+function clampOrGuard(useDefault bool, big Integer) returns Integer
+	// `big as Small` range-check-panics for big > 10; it sits in the arm that
+	// `useDefault` does NOT select, so it must never run.
+	return 5 if useDefault else (big as Small)
+end 'clampOrGuard'
+
+function main() returns ExitCode
+	let guarded = clampOrGuard(true, big: 1000) // the cast is in the arm NOT selected
+	let direct = clampOrGuard(false, big: 7)
+	return (guarded + direct) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+func @clampOrGuard {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.cmp x1, 10
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.movRegReg x0, x1
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 1000
+    arm64.bl clampOrGuard
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 0
+    arm64.movImm x1, 7
+    arm64.bl clampOrGuard
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

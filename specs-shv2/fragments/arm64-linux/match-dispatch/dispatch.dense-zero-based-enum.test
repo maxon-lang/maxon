@@ -1,0 +1,117 @@
+// Test: dispatch.dense-zero-based-enum
+enum Color
+	c0
+	c1
+	c2
+	c3
+	c4
+	c5
+	c6
+	c7
+end 'Color'
+
+function classify(c Color) returns ExitCode
+	return match c 'k'
+		c0 gives 10
+		c1 gives 11
+		c2 gives 12
+		c3 gives 13
+		c4 gives 14
+		c5 gives 15
+		c6 gives 16
+		c7 gives 17
+	end 'k'
+end 'classify'
+
+function main() returns ExitCode
+	// A zero-based dense enum (span 8, covered 8/8) lowers to an O(1) jump table with NO bias subtract --
+	// the enum value IS the index. Every ordinal routes to its own arm.
+	var n = 0 as ExitCode
+	if classify(Color.c0) == 10 'a' n = n + 1 end 'a'
+	if classify(Color.c5) == 15 'b' n = n + 1 end 'b'
+	if classify(Color.c7) == 17 'c' n = n + 1 end 'c'
+	return n
+end 'main'
+---
+ExitCode: 3
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm, [5]=matcharm, [6]=matcharm, [7]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 11
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 12
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 13
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 14
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 15
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 16
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 17
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 0
+    arm64.bl classify
+    arm64.cmp x0, 10
+    arm64.cset x0, eq
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 5
+    arm64.bl classify
+    arm64.cmp x0, 15
+    arm64.cset x0, eq
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 7
+    arm64.bl classify
+    arm64.cmp x0, 17
+    arm64.cset x0, eq
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

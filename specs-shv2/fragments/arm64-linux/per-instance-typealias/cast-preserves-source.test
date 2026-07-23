@@ -1,0 +1,144 @@
+// Test: cast-preserves-source
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function setTag(t Idx)
+		self.tag = t
+	end 'setTag'
+end 'Wrapper'
+
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Integer
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 5)
+	let aTag = a.getTag()
+	let bTag = aTag as WB.Idx
+	var a2 = WA.create(9, tag: 0)
+	a2.setTag(aTag)
+	let check = a2.getTag()
+	if bTag == 5 'converted'
+		if check == 5 'preserved'
+			return 0
+		end 'preserved'
+	end 'converted'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Wrapper.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Wrapper.getTag {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Wrapper.setTag {
+  entry:
+    arm64.prologue 16
+    arm64.storeBaseDispReg.word64 [x0 + 8], x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 5
+    arm64.bl Wrapper.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Wrapper.getTag
+    arm64.movRegReg x20, x0
+    arm64.add x21, x20, 0
+    arm64.movImm x0, 9
+    arm64.movImm x1, 0
+    arm64.bl Wrapper.create
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x20
+    arm64.bl Wrapper.setTag
+    arm64.movRegReg x0, x22
+    arm64.bl Wrapper.getTag
+    arm64.cmp x21, 5
+    arm64.cset x1, eq
+    arm64.cbnz x1, converted
+    arm64.b ifcont
+  converted:
+    arm64.cmp x0, 5
+    arm64.cset x0, eq
+    arm64.cbnz x0, preserved
+    arm64.b ifcont
+  preserved:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x22
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

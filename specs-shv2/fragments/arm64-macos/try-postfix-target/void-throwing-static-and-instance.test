@@ -1,0 +1,162 @@
+// Test: void-throwing-static-and-instance
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function check(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+	end 'check'
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+	end 'bump'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	try Gate.check(1) otherwise return 9
+	try g.bump(1) otherwise return 8
+	try Gate.check(-1) otherwise return 5
+	return 0
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Gate.check {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, neg
+    arm64.b ifcont
+  neg:
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Gate.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Gate.bump {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x1, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, neg
+    arm64.b ifcont
+  neg:
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Gate.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.bl Gate.check
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl Gate.bump
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 8
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x0, -1
+    arm64.bl Gate.check
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  tryok:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

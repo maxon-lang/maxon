@@ -1,0 +1,37 @@
+// Test: byte-enum-comparison.byte-ne-enum
+
+typealias Byte = int(0 to u8.max)
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function main() returns ExitCode
+	let b = 95 as Byte
+	if b == Ascii.space 'noMatch'
+		return 1
+	end 'noMatch'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 95
+    arm64.cmp x0, 32
+    arm64.cset x0, eq
+    arm64.cbnz x0, noMatch
+    arm64.b ifcont
+  noMatch:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

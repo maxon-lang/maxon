@@ -1,0 +1,38 @@
+// Test: ternary-expression.as-match-scrutinee
+function main() returns ExitCode
+	let c = true
+	match (1 if c else 2) 'm'
+		1 then return 11
+		default then return 22
+	end 'm'
+end 'main'
+---
+ExitCode: 11
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matchcont:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdefault
+  matcharm:
+    arm64.movImm x0, 11
+    arm64.epilogue 16
+    arm64.ret
+  matchdefault:
+    arm64.movImm x0, 22
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+}

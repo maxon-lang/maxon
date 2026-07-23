@@ -1,0 +1,116 @@
+// Test: struct-enum-field-nested-array-push
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export union Instruction
+		load(slot Integer)
+		store(slot Integer)
+		nop
+end 'Instruction'
+
+export type Function
+		export var name as Integer
+		export var body as IntArray
+		export var terminator as Instruction
+		export var hasTerminator as bool
+
+		static function create(name Integer, body IntArray, terminator Instruction, hasTerminator bool) returns Self
+			return Self{name: name, body: body, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'Function'
+
+function main() returns ExitCode
+		var f = Function.create(1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
+		var i = 0
+		while i < 20 'fill'
+				f.body.push(i)
+				i = i + 1
+		end 'fill'
+		return f.body.count()
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Function.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.movRegReg x22, x3
+    arm64.movImm x0, 32
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.storeBaseDispReg.word64 [x0 + 16], x21
+    arm64.storeBaseDispReg.byte [x0 + 24], x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 1
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x21, 99
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x2, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x2 + 0], x0
+    arm64.storeBaseDispReg.word64 [x2 + 8], x21
+    arm64.movImm x6, 1
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x3, x6
+    arm64.bl Function.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 20
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b whileexit
+  fill:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.movRegReg x1, x20
+    arm64.bl __arr_push
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.bl __arr_count
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Function
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

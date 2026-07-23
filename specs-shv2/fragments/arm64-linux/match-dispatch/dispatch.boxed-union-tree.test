@@ -1,0 +1,189 @@
+// Test: dispatch.boxed-union-tree
+typealias N = int(0 to 1000)
+
+union Shape
+	circle(r N)
+	square(s N)
+	tri(a N)
+	pent(b N)
+	hex(c N)
+end 'Shape'
+
+function sides(sh Shape) returns ExitCode
+	return match sh 'm'
+		circle gives 0
+		square gives 44
+		tri gives 33
+		pent gives 55
+		hex gives 66
+	end 'm'
+end 'sides'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	if sides(Shape.circle(1)) == 0 'a' n = n + 1 end 'a'
+	if sides(Shape.square(2)) == 44 'b' n = n + 1 end 'b'
+	if sides(Shape.tri(3)) == 33 'c' n = n + 1 end 'c'
+	if sides(Shape.pent(4)) == 55 'd' n = n + 1 end 'd'
+	if sides(Shape.hex(5)) == 66 'e' n = n + 1 end 'e'
+	return n
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @sides {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 44
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 33
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 55
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 66
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x21
+    arm64.bl sides
+    arm64.cmp x0, 0
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.cbnz x20, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x20, 2
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x21
+    arm64.bl sides
+    arm64.cmp x0, 44
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.cbnz x20, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x20, 3
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 2
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x21
+    arm64.bl sides
+    arm64.cmp x0, 33
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.cbnz x20, c
+    arm64.b critsplit
+  c:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x20, 4
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 3
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x21
+    arm64.bl sides
+    arm64.cmp x0, 55
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.cbnz x20, d
+    arm64.b critsplit
+  d:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x20, 5
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 4
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movRegReg x0, x21
+    arm64.bl sides
+    arm64.cmp x0, 66
+    arm64.cset x20, eq
+    arm64.movRegReg x0, x21
+    arm64.bl __mm_decref
+    arm64.cbnz x20, e
+    arm64.b critsplit
+  e:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

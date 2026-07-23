@@ -1,0 +1,111 @@
+// Test: nested-short-circuit
+var calls = 0
+
+function a() returns bool
+	calls = calls + 1
+	return true
+end 'a'
+
+function b() returns bool
+	calls = calls + 10
+	return false
+end 'b'
+
+function c() returns bool
+	calls = calls + 100
+	return true
+end 'c'
+
+function main() returns ExitCode
+	let inner = b() or c()
+	let result = a() and inner
+	if result 'r'
+		return calls as ExitCode
+	end 'r'
+	return 99
+end 'main'
+---
+ExitCode: 111
+---
+data {
+  __data_calls@0 = i64 0
+}
+
+func @a {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_calls
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_calls
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @b {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_calls
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 10
+    arm64.leaGlobal x1, __data_calls
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @c {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_calls
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 100
+    arm64.leaGlobal x1, __data_calls
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl b
+    arm64.movImm x19, 1
+    arm64.cbnz x0, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.b scmerge
+  orrhs:
+    arm64.bl c
+    arm64.movRegReg x19, x0
+    arm64.b scmerge
+  scmerge:
+    arm64.bl a
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x19, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x19, r
+    arm64.b ifcont
+  r:
+    arm64.leaGlobal x0, __data_calls
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

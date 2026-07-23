@@ -1,0 +1,55 @@
+// Test: negative-zero-literal-keeps-its-sign
+typealias Wide = float(f64.min to f64.max)
+
+function reciprocal(x Wide) returns Wide
+	return 1.0 / x
+end 'reciprocal'
+
+function main() returns ExitCode
+	let negZero = -0.0
+	let posZero = 0.0
+	if reciprocal(negZero) < reciprocal(posZero) 'signed'
+		return 42
+	end 'signed'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+func @reciprocal {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fdiv d0, d1, d0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, d9
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.fpLoadRdata d8, [rdata + __fconst_2]
+    arm64.bl reciprocal
+    arm64.movRegReg d9, d0
+    arm64.movRegReg d0, d8
+    arm64.bl reciprocal
+    arm64.fcmp d9, d0
+    arm64.cset x0, mi
+    arm64.cbnz x0, signed
+    arm64.b ifcont
+  signed:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

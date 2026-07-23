@@ -1,0 +1,144 @@
+// Test: dispatch.exhaustive-enum-no-default
+enum Color
+	red
+	green
+	blue
+	cyan
+	magenta
+	yellow
+end 'Color'
+
+function idx(c Color) returns ExitCode
+	return match c 'm'
+		red gives 1
+		green gives 2
+		blue gives 3
+		cyan gives 4
+		magenta gives 5
+		yellow gives 6
+	end 'm'
+end 'idx'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	if idx(Color.red) == 1 'a' n = n + 1 end 'a'
+	if idx(Color.green) == 2 'b' n = n + 1 end 'b'
+	if idx(Color.blue) == 3 'c' n = n + 1 end 'c'
+	if idx(Color.cyan) == 4 'd' n = n + 1 end 'd'
+	if idx(Color.magenta) == 5 'e' n = n + 1 end 'e'
+	if idx(Color.yellow) == 6 'f' n = n + 1 end 'f'
+	return n
+end 'main'
+---
+ExitCode: 6
+---
+func @idx {
+  entry:
+    arm64.prologue 16
+    arm64.jumpTable x0, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm, [5]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 5
+    arm64.b matchcont
+  matcharm:
+    arm64.movImm x0, 6
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 0
+    arm64.bl idx
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.bl idx
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 2
+    arm64.bl idx
+    arm64.cmp x0, 3
+    arm64.cset x0, eq
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 3
+    arm64.bl idx
+    arm64.cmp x0, 4
+    arm64.cset x0, eq
+    arm64.cbnz x0, d
+    arm64.b critsplit
+  d:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 4
+    arm64.bl idx
+    arm64.cmp x0, 5
+    arm64.cset x0, eq
+    arm64.cbnz x0, e
+    arm64.b critsplit
+  e:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 5
+    arm64.bl idx
+    arm64.cmp x0, 6
+    arm64.cset x0, eq
+    arm64.cbnz x0, f
+    arm64.b critsplit
+  f:
+    arm64.add x0, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
