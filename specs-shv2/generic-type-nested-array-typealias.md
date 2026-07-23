@@ -863,3 +863,412 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:18:3: Unsupported: returning an OWNED opaque type-parameter value — an element moved out of an `Array with <type parameter>` field by `pop`/`remove` inside a generic body. The caller cannot resolve the opaque `T` return to the instantiation's concrete type, so it would neither adopt nor drop the moved-out element and the value would leak. Returning an opaque `T` is a distinct future slice; drop the moved-out element in the method body, or move it back into the array with `push` (P1.7 slice 3b-vi-a).
 ```
+
+### Clone a managed opaque array field (deep, source freed)
+
+`.clone()` on an opaque `Array with <type parameter>` field DEEP-CLONES each element through the enclosing
+instance's descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): the shared body compiles once and reads the
+element cloner at run time, so the ONE compiled `duplicate` serves every managed instantiation. `makeDuplicate`
+builds a `StringContainer`, pushes two heap Strings, clones the field into a FRESH container and returns it; the
+source container `a` drops at `makeDuplicate` exit, freeing ITS two Strings. If the clone were shallow (a shared
+buffer or shared String pointers), the returned container's Strings would now be freed — reading its count and
+then dropping it would double-free (exit 101 / a poison fault). The exit-0 run proves the clone is an
+independent deep copy that outlives its source.
+
+<!-- test: opaque-clone-source-freed -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function makeDuplicate() returns StringContainer
+	var a = StringContainer.create()
+	a.push("alpha string long enough to force a heap allocation")
+	a.push("beta string long enough to force a heap allocation")
+	return a.duplicate()
+end 'makeDuplicate'
+
+function main() returns ExitCode
+	var b = makeDuplicate()
+	let c = b.count()
+	if c == 2 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Clone a managed opaque array field with the source AND clone both live
+
+The deep clone and its source are fully independent: both may live at once and both drop at scope exit, each
+freeing its own two Strings exactly once. A shallow clone (shared element pointers) would double-free at the
+second container's drop — under the always-on free-poison this is a fault or an exit-101 leak, which the exit-0
+run rules out.
+
+<!-- test: opaque-clone-both-live -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var a = StringContainer.create()
+	a.push("alpha string long enough to force a heap allocation")
+	a.push("beta string long enough to force a heap allocation")
+	var b = a.duplicate()
+	let ca = a.count()
+	let cb = b.count()
+	if ca == 2 'aok'
+		if cb == 2 'bok'
+			return 0
+		end 'bok'
+	end 'aok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Slice a managed opaque array field (deep)
+
+`.slice(start, endIndex: end)` on an opaque array field is the THROWING copy: it forwards the inner slice's
+bounds check and deep-clones the sub-range through the descriptor's `copyFunc@32`. `sliceFirst` slices `[0, 1)`
+into a fresh container and returns it; the source `a` (two Strings) drops at `buildSliced` exit. The one sliced
+String is an independent deep copy — the exit-0 run with the source freed proves it.
+
+<!-- test: opaque-slice-managed -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function sliceFirst() returns Self
+		let s = try self.items.slice(0, endIndex: 1) otherwise panic("in bounds")
+		return Self{ items: s }
+	end 'sliceFirst'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function buildSliced() returns StringContainer
+	var a = StringContainer.create()
+	a.push("slice one long enough to force a heap allocation")
+	a.push("slice two long enough to force a heap allocation")
+	return a.sliceFirst()
+end 'buildSliced'
+
+function main() returns ExitCode
+	var sliced = buildSliced()
+	let c = sliced.count()
+	if c == 1 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Append into a managed opaque array field (deep, source preserved)
+
+`.append(other)` on an opaque array field DEEP-CLONES `other`'s elements into the receiver, leaving `other`
+untouched — so both end up sole owners of independent elements. `mergeExtra` appends the container's `extra`
+field (two Strings) into its `items` field (one String); the container then owns 1 + 2 = 3 items, and both
+fields drop at container drop, each freeing its own Strings exactly once. A shallow append (the appended tail
+sharing `extra`'s pointers) would double-free at drop — the exit-0 run rules it out.
+
+<!-- test: opaque-append-managed -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+	export var extra as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create(), extra: ElementArray.create() }
+	end 'create'
+
+	export function pushItem(item Element)
+		self.items.push(item)
+	end 'pushItem'
+
+	export function pushExtra(item Element)
+		self.extra.push(item)
+	end 'pushExtra'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function mergeExtra()
+		self.items.append(self.extra)
+	end 'mergeExtra'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function buildAppended() returns StringContainer
+	var dest = StringContainer.create()
+	dest.pushItem("dest string long enough to force a heap allocation")
+	dest.pushExtra("extra one long enough to force a heap allocation")
+	dest.pushExtra("extra two long enough to force a heap allocation")
+	dest.mergeExtra()
+	return dest
+end 'buildAppended'
+
+function main() returns ExitCode
+	var appended = buildAppended()
+	let c = appended.count()
+	if c == 3 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Clone a managed opaque array of struct-with-String elements
+
+The element cloner reached through `copyFunc@32` may itself cascade: a `Container with Item` (where `Item` owns
+a String) clones each element through the synthesized `__clone_Item`, which deep-clones the `name` String. The
+struct cloner is referenced ONLY by the descriptor `copyFunc@32` relocation (the shared body names it nowhere),
+so this exercises the cloner DCE-root. Source freed, clone survives — exit 0.
+
+<!-- test: opaque-clone-struct-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Item
+	export var name as String
+
+	export static function create(name String) returns Self
+		return Self{ name: name }
+	end 'create'
+end 'Item'
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias ItemContainer = Container with Item
+
+function makeDuplicate() returns ItemContainer
+	var a = ItemContainer.create()
+	a.push(Item.create("first item name long enough to force a heap allocation"))
+	a.push(Item.create("second item name long enough to force a heap allocation"))
+	return a.duplicate()
+end 'makeDuplicate'
+
+function main() returns ExitCode
+	var b = makeDuplicate()
+	let c = b.count()
+	if c == 2 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### A trivial opaque instantiation copy is inert
+
+A TRIVIAL instantiation (`Container with SmallInt`) has a `copyFunc@32` of 0, so the opaque-copy wrapper takes
+the byte-blit / COW path — a scalar element copies correctly with no cloner. The clone is inert (a plain array
+copy) and leak-free on EVERY target, so this case is unrestricted (it runs on wasm too, where the managed cases
+are x64-only).
+
+<!-- test: opaque-copy-trivial-inert -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+typealias SmallInt = int(0 to 100)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias IntContainer = Container with SmallInt
+
+function makeDuplicate() returns IntContainer
+	var a = IntContainer.create()
+	a.push(10)
+	a.push(20)
+	return a.duplicate()
+end 'makeDuplicate'
+
+function main() returns ExitCode
+	var b = makeDuplicate()
+	let c = b.count()
+	if c == 2 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Copying an opaque array of a non-deep-cloneable instantiation is rejected
+
+The descriptor `copyFunc@32` can hold only a SINGLE `(box) -> newBox` cloner, so an instantiation whose managed
+element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with
+String)`), whose clone needs the two-argument `__arr_clone_managed` — has no single `copyFunc`. Copying such an
+opaque array in the shared body would byte-blit a managed pointer and double-free it, so the enclosing generic
+type's copy method is rejected with a positioned E2015 when SOME instantiation is not single-function-cloneable.
+(A DROP-only instantiation of the same shape is fine — it needs no `copyFunc` — and is covered above.)
+
+<!-- test: opaque-copy-uncopyable-instantiation-rejected -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias StringArray = Array with String
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias NestedContainer = Container with StringArray
+
+function main() returns ExitCode
+	var sa = StringArray.create()
+	sa.push("a string long enough to force a heap allocation")
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	var dup = nc.duplicate()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:34: Unsupported: `clone` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+```

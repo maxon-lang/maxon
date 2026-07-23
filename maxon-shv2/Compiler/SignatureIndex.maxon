@@ -1117,6 +1117,28 @@ function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceI
 	end 'element'
 end 'instanceCloneStrategy'
 
+// Is a managed field's clone STRATEGY a single `(box) -> newBox` callee (`direct`) — the shape a descriptor
+// `copyFunc@32` slot and an array element cloner can hold (P1.7 slice 3b-vi-b-β)? A `managedArray` (a
+// managed-element-array field, cloned through a 2-arg `__arr_clone_managed`) or an `unsupported` type is not.
+export function managedCloneStrategyIsDirect(strategy ManagedCloneStrategy) returns bool
+	match strategy 'strategy'
+		direct then return true
+		managedArray then return false
+		unsupported then return false
+	end 'strategy'
+end 'managedCloneStrategyIsDirect'
+
+// The single `(box) -> newBox` clone callee of a `direct` strategy. Precondition:
+// `managedCloneStrategyIsDirect` — a `managedArray`/`unsupported` strategy panics as an invariant break (its
+// caller has already gated the field to `direct`).
+export function directCloneCalleeOf(strategy ManagedCloneStrategy) returns ByteArray
+	match strategy 'strategy'
+		direct(callee) then return callee
+		managedArray then panic("directCloneCalleeOf: a `managedArray` strategy has no single-function clone callee — the caller must gate on managedCloneStrategyIsDirect")
+		unsupported then panic("directCloneCalleeOf: an `unsupported` strategy has no clone callee — the caller must gate on managedCloneStrategyIsDirect")
+	end 'strategy'
+end 'directCloneCalleeOf'
+
 // --- Generic instances (P1.6-A) ---
 
 // The name of the builtin `Array` generic type (`Array with Integer`). Shared by the parser's
@@ -3060,6 +3082,31 @@ export type ProgramSignatures
 		return false
 	end 'genericTypeFieldHasManagedInstantiation'
 
+	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS OPAQUE ARRAY ELEMENT AT `position`
+	// UNCOPYABLE (P1.7 slice 3b-vi-b-β)?** The FRONT-END gate for an opaque `slice`/`clone`/`append`: the shared
+	// body copies each element through the descriptor's single `copyFunc@32`, which can hold a cloner only for a
+	// `direct`-clonable element (String / struct / boxed union / trivial-element array — a byte-blit copies a
+	// TRIVIAL element correctly with no cloner at all). An instantiation whose argument is a MANAGED type this
+	// rung cannot deep-clone as a single-function element — a managed-element array (`Array with (Array with
+	// String)`) or a non-Array generic instance (`Box with String`, a later slice) — has no single `copyFunc`,
+	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
+	// with a positioned E2015 at the copy site rather than crash at descriptor emit. Enumerates the whole
+	// instance registry, matching base NAME and reading each instance's argument at `position` through the SAME
+	// `typeSupportsDeepClone(asElement: true)` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
+	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
+	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
+	export function genericTypeFieldHasUncopyableInstantiation(baseName ByteArray, position TypeParamId) returns bool
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
+				let args = self.genericInstances.instanceArgs(id)
+				if position < args.count() and not self.typeSupportsDeepClone(try args.get(position) otherwise panic("ProgramSignatures.genericTypeFieldHasUncopyableInstantiation: instanceArgs.get OOB at {position} despite the range guard"), asElement: true, visited: ClonerSet.create()) 'uncopyable'
+					return true
+				end 'uncopyable'
+			end 'sameBase'
+		end 'eachInstance'
+		return false
+	end 'genericTypeFieldHasUncopyableInstantiation'
+
 	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
 	// instantiation (P1.7 Finding A)** — a `typeParameter`-tagged field (`export var saved as Element` on
 	// `type Box uses Element`) that at least one interned instance makes owned (`Box with String`). This is the
@@ -3331,6 +3378,41 @@ export type ProgramSignatures
 			absent then panic("ProgramSignatures.managedOpaqueArrayElementDropCallee: instance {id} holds no managed opaque-`T` `Array` field — every caller gates on genericInstanceHasManagedOpaqueArrayField")
 		end 'element'
 	end 'managedOpaqueArrayElementDropCallee'
+
+	// ⭐ **DOES A MANAGED-OPAQUE-ARRAY-HOLDING INSTANCE HAVE A DIRECT-CLONEABLE ELEMENT (P1.7 slice 3b-vi-b-β)?**
+	// The GATE on the descriptor `copyFunc@32` stamp — the CLONE dual of the reloc-need predicate
+	// `genericInstanceHasManagedOpaqueArrayField`. `copyFunc@32` is stamped only when it can hold a single
+	// `(box) -> newBox` cloner: a String / struct / boxed-union / trivial-element-array element (`direct`). A
+	// managed-element-array element (`Array with (Array with String)`, a `managedArray` strategy — not a single
+	// function pointer) or a non-Array generic instance (a later slice, `unsupported`) is NOT direct, so its
+	// `copyFunc@32` stays 0 — and such an instance is NEVER copied (a base that copies its opaque array with a
+	// non-direct instantiation is rejected at the front end, `genericTypeFieldHasUncopyableInstantiation`), so
+	// the 0 slot is never read. A DROP-only instance of this shape (`Container with (Array with String)`, dropped
+	// but never copied) thus stamps `destroyFunc@40` but not `copyFunc@32`, exactly right — its element still
+	// DROPs through `__arr_decref`, which needs no single-function-pointer form. Reads the SAME
+	// `managedOpaqueArrayElementOf` walk as the drop stamp, so the two agree on which element they mean.
+	export function genericInstanceOpaqueArrayElementIsCopyable(id GenericInstanceId) returns bool
+		match self.managedOpaqueArrayElementOf(id) 'element'
+			present(element) then return managedCloneStrategyIsDirect(managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: element))
+			absent then return false
+		end 'element'
+	end 'genericInstanceOpaqueArrayElementIsCopyable'
+
+	// ⭐ **THE `.text` ELEMENT CLONER to bake into a managed-opaque-array-holding instance's descriptor
+	// `copyFunc@32` (P1.7 slice 3b-vi-b-β)** — the exact CLONE dual of `managedOpaqueArrayElementDropCallee`. The
+	// direct `(box) -> newBox` clone callee of the array's SUBSTITUTED element (a String → `__str_clone`, a
+	// managed struct/union → its `__clone_<T>`, a trivial-element nested Array → `__arr_clone`), which the shared
+	// opaque-copy wrapper reads back and `callIndirect`s per element. Routed through the SAME
+	// `managedFieldCloneStrategy` a concrete `Array with String` element uses (`arrayElementCloneStrategy`), so
+	// the opaque stamp and the concrete stamp name the identical cloner. Precondition:
+	// `genericInstanceOpaqueArrayElementIsCopyable(id)` — a `managedArray`/`unsupported` element panics as an
+	// invariant break, exactly as `Parser.arrayElementCloneValue` does for the concrete top-level element.
+	export function managedOpaqueArrayElementCloneCallee(id GenericInstanceId) returns ByteArray
+		match self.managedOpaqueArrayElementOf(id) 'element'
+			present(element) then return directCloneCalleeOf(managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: element))
+			absent then panic("ProgramSignatures.managedOpaqueArrayElementCloneCallee: instance {id} holds no managed opaque-`T` `Array` field — every caller gates on genericInstanceOpaqueArrayElementIsCopyable")
+		end 'element'
+	end 'managedOpaqueArrayElementCloneCallee'
 
 	// The SUBSTITUTED type whose destructor a managed opaque type-parameter instance bakes into its descriptor
 	// `destroyFunc@40` — the ONE walk both the reloc-need predicate (`genericInstanceHasManagedOpaqueArrayField`)

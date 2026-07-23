@@ -348,6 +348,12 @@ export type RuntimeUsage
 	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
 	// `usesHeap` (the helpers are `__arr_`-prefixed). Drives the managed-copy install in `installArrayRuntime`.
 	export var usesManagedArrayCopy as bool
+	// The program copies an OPAQUE-`T` array (`__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`,
+	// P1.7 slice 3b-vi-b-β) — a `slice`/`clone`/`append` on an `Array with <type parameter>` field in a generic
+	// body. Its OWN bit, DECOUPLED from `usesArray`, so a program that touches no opaque-array copy does not carry
+	// the three wrappers. Set alongside `usesManagedArrayCopy` (`recordCallUsage`), because each wrapper's managed
+	// branch calls the α `__arr_*_managed` helpers. Drives the opaque-copy install in `installArrayRuntime`.
+	export var usesOpaqueArrayCopy as bool
 	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
 	// `neededDestructors`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over
 	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
@@ -355,7 +361,7 @@ export type RuntimeUsage
 	export var neededCloners as ClonerSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, neededCloners: ClonerSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -523,6 +529,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isManagedArrayCopyCallee(callee) 'managedcopy'
 		usage.usesManagedArrayCopy = true
 	end 'managedcopy'
+	// The three OPAQUE-`T` array copies (`__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`, P1.7
+	// slice 3b-vi-b-β). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
+	// prefixed); THIS turns on the opaque-copy install AND `usesManagedArrayCopy`, because each wrapper's managed
+	// branch calls the α `__arr_*_managed` helpers whose own install is gated on that bit.
+	if isOpaqueArrayCopyCallee(callee) 'opaquecopy'
+		usage.usesOpaqueArrayCopy = true
+		usage.usesManagedArrayCopy = true
+	end 'opaquecopy'
 	// A per-type CLONER (`__clone_<T>`, P1.7 slice 3b-vi-b) — the CLONE twin of the `__destruct_<T>` arm above,
 	// referenced through a `funcAddr(__clone_<T>)` element-cloner stamp. It frees no memory but ALLOCATES a box
 	// (`usesHeap`), and its transitive `__str_clone`/`__arr_clone`/nested-cloner needs close through

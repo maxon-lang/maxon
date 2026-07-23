@@ -866,6 +866,20 @@ type MaxonToStdLowering
 			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementDropCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
 		end 'managedOpaqueElement'
 
+		// ⭐ **THE `copyFunc@32` STAMP — the exact CLONE dual of the `destroyFunc@40` stamp above (P1.7 slice
+		// 3b-vi-b-β).** When the instance's managed opaque-`T` `Array` element is DIRECT-clonable (a String /
+		// struct / boxed-union / trivial-element-array element — the only shape a single `(box) -> newBox` cloner
+		// can hold), a second `funcAbs64InRdata` relocation fills `copyFunc@32` with the element CLONER's `.text`
+		// VA, the value the shared opaque-copy wrappers read back and `callIndirect` per element. A TRIVIAL element
+		// records nothing (its wrapper takes the byte-blit/COW path), and a MANAGED but non-direct element
+		// (`Array with (Array with String)`) records nothing either — it is never copied (the front end rejects a
+		// base that copies with such an instantiation), so its 0 slot is never read. The cloner is DCE-rooted on
+		// the SAME `genericInstanceOpaqueArrayElementIsCopyable` predicate (`rootManagedOpaqueArrayElementClones`),
+		// so the reloc never names a `.text` VA that was not installed.
+		if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid) 'copyableOpaqueElement'
+			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_COPY_FUNC)
+		end 'copyableOpaqueElement'
+
 		return label
 	end 'ensureLayoutDescriptor'
 
@@ -937,8 +951,30 @@ type MaxonToStdLowering
 			self.appendDropTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'dropTypeParam'
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
 	end 'lowerRuntimeCall'
+
+	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments (P1.7 slice
+	// 3b-vi-b-β) — the LAST argument the `__arr_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
+	// exactly as `appendOpaqueArrayCreate` appends the `destroyFunc@40` read for an opaque `__arr_create`. A
+	// non-opaque-copy callee passes through UNCHANGED, so this is a safe wrapper over every runtime call's args.
+	// Shared by the non-throwing (`lowerRuntimeCall`) and throwing (`lowerTryCall`, the throwing `slice`) paths so
+	// they cannot drift on whether — or where — the descriptor is appended. The descriptor is guaranteed by the
+	// parser's copy-descriptor-need seed (a method that copies an opaque array reserves it, exactly as an opaque
+	// `X.create()` or a `sizeof(T)` method does), so its absence here is a parser/lowering divergence — a loud
+	// bug, not a silent wrong load, matching `appendOpaqueArrayCreate`.
+	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray) returns ValueIdArray
+		if not isOpaqueArrayCopyCallee(callee) 'notOpaqueCopy'
+			return args
+		end 'notOpaqueCopy'
+		if not self.hasImplicitLayout 'noLayout'
+			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
+		end 'noLayout'
+		var fullArgs = ValueIdArray.create()
+		fullArgs.append(args)
+		fullArgs.push(self.implicitLayoutValueId)
+		return fullArgs
+	end 'opaqueCopyArgsWithDescriptor'
 
 	// Emit `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v): prepend the CURRENT function's layout
 	// descriptor to the single `value` argument the parser emitted. The descriptor parameter is guaranteed by
@@ -1461,7 +1497,9 @@ type MaxonToStdLowering
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		if isCompilerInternalCallee(callee) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
-			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: args))
+			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
+			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
 			return
 		end 'compilerOwnTryCall'
 

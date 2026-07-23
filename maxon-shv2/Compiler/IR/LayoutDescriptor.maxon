@@ -39,6 +39,17 @@ export let LAYOUT_DESCRIPTOR_BYTE_SIZE = 64 as ByteOffset
 // when the drop path reads it.
 export let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 
+// The byte offset of the `copyFunc` slot — the DEEP-CLONE function for the instance's single type
+// argument (the "dictionary" entry a shared generic body reads to COPY an opaque `T`). It is the exact
+// dual of `destroyFunc@40`: an opaque-`T` `Array with T` field copied inside a generic body
+// (`Container with String`, `.clone()`/`.slice()`/`.append()`, P1.7 slice 3b-vi-b) reads this slot at run
+// time and `callIndirect`s it per element, so the ONE compiled copy serves every concrete instance. The
+// slot is 0 on disk for a TRIVIAL type argument (no cloner — the opaque-copy wrapper then takes the
+// byte-blit/COW path, never `callIndirect(0)`); a `funcAbs64InRdata` relocation fills it with the element
+// cloner's `.text` VA for a MANAGED, direct-clonable argument (`__str_clone` / `__clone_<T>` / `__arr_clone`),
+// exactly as the drop stamp fills `destroyFunc@40`. `encodeLayoutDescriptor` already zero-fills it.
+export let LAYOUT_OFFSET_COPY_FUNC = 32 as ByteOffset
+
 // The byte offset of the `destroyFunc` slot — the destroy function for the instance's single type
 // argument (the "dictionary" entry a shared generic body reads to release an opaque `T`). An opaque-`T`
 // `Array with T` created inside a generic body stamps its record's `element_destroy@40` from a runtime

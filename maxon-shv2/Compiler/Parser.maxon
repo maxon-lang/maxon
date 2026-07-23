@@ -734,17 +734,22 @@ let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
 // of `self` that some instantiation makes MANAGED (`self.saved = next` on `Box with String`): that write DROPS
 // the field's old value through the descriptor-gated `__drop_type_param`, so the method needs the layout
 // descriptor — the same class as the array move-out, reached through a field STORE rather than a move-out call.
-// Returned by `Parser.scanOneMethodDescriptorSignals`.
+// `hasArrayCopy` (P1.7 slice 3b-vi-b-β) records whether the body calls `.slice()`/`.clone()`/`.append()` on ANY
+// receiver: a copy of an OPAQUE array lowers to `__arr_{slice,clone,append}_opaque(arr, …, descriptor)`, which
+// reads the enclosing instance's `copyFunc@32` — so, like the move-out, a receiver-blind copy in a generic body
+// reserves the layout descriptor (over-reserving for a concrete-array copy is sound). Returned by
+// `Parser.scanOneMethodDescriptorSignals`.
 type MethodDescriptorScan
 	export let direct as bool
 	export let callees as ByteArrayArray
 	export let hasControlFlow as bool
 	export let hasArrayMoveOut as bool
 	export let reassignsOpaqueField as bool
+	export let hasArrayCopy as bool
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -3350,6 +3355,12 @@ export type Parser
 				// descriptor for a move-out that turns out concrete is sound; seeded like a direct `sizeof(T)` so the
 				// fixpoint gives every self-caller a descriptor to forward.
 				let movesOutArrayElement = scan.hasArrayMoveOut and not self.functionDeclIsStatic(q)
+				// ⭐ A method that COPIES an opaque array element (`.slice()`/`.clone()`/`.append()`) lowers to an
+				// `__arr_*_opaque(arr, …, descriptor)` wrapper reading `copyFunc@32`, so it needs the descriptor too
+				// (P1.7 slice 3b-vi-b-β). `not isStatic` mirrors the sibling opaque signals — a static generic method
+				// has no `self`-threaded instance descriptor to source. Over-reserving for a concrete-array copy in a
+				// generic body is sound; seeded like a direct `sizeof(T)` so the fixpoint forwards it to self-callers.
+				let copiesArrayElement = scan.hasArrayCopy and not self.functionDeclIsStatic(q)
 				// ⭐ A method that REASSIGNS a bare opaque MANAGED type-parameter field (`self.saved = next`, P1.7
 				// Finding A) drops the field's OLD value through the descriptor-gated `__drop_type_param`, so it needs
 				// the descriptor too. `not isStatic` mirrors the sibling signals — a static has no `self` to reach a
@@ -3358,7 +3369,7 @@ export type Parser
 				// so a trivial-only instantiation reserves nothing and stays byte-identical; seeded like a direct
 				// `sizeof(T)` so the fixpoint gives every self-caller a descriptor to forward.
 				let reassignsOpaqueManagedField = scan.reassignsOpaqueField and not self.functionDeclIsStatic(q)
-				directSizeof.upsert(methodName, value: scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField)
+				directSizeof.upsert(methodName, value: scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement)
 				selfCallees.upsert(methodName, value: scan.callees)
 				methodNames.push(methodName)
 				q = scan.endPos
@@ -3383,6 +3394,7 @@ export type Parser
 		var hasControlFlow = false
 		var hasArrayMoveOut = false
 		var reassignsOpaqueField = false
+		var hasArrayCopy = false
 		var depth = 1 as BlockDepth
 		var q = bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
@@ -3413,6 +3425,14 @@ export type Parser
 			if kind == TokenKind.identifier and self.arrayMoveOutMethodAt(q) 'arrayMoveOut'
 				hasArrayMoveOut = true
 			end 'arrayMoveOut'
+			// A `.slice()`/`.clone()`/`.append()` array COPY lowers, on an OPAQUE array, to an
+			// `__arr_{slice,clone,append}_opaque(arr, …, descriptor)` wrapper that reads the enclosing instance's
+			// `copyFunc@32` (P1.7 slice 3b-vi-b-β), so — like the move-out — the method needs the descriptor param.
+			// The receiver is NOT resolved here, so ANY copy is recorded and the caller decides; over-reserving an
+			// unused descriptor for a concrete-array copy is sound.
+			if kind == TokenKind.identifier and self.arrayCopyMethodAt(q) 'arrayCopy'
+				hasArrayCopy = true
+			end 'arrayCopy'
 			// A `self.<opaqueManagedField> = …` REASSIGNMENT drops the field's OLD opaque value through the
 			// descriptor-gated `__drop_type_param` (P1.7 Finding A), so — like an opaque array move-out — the
 			// method needs the descriptor. `opaqueFieldReassignAt` reads the field's opacity AND managed-ness off
@@ -3444,14 +3464,14 @@ export type Parser
 				if kind == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
 					depth = depth - 1
 					if depth == 0 'methodEnd'
-						return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, endPos: (q + 1) as TokenIndex)
+						return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, endPos: (q + 1) as TokenIndex)
 					end 'methodEnd'
 				end 'closes'
 			end 'notOpener'
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, endPos: q)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, endPos: q)
 	end 'scanOneMethodDescriptorSignals'
 
 	// Is the token at `selfPos` the start of a `self.<method>(` call — the self-call the descriptor-need
@@ -3499,20 +3519,41 @@ export type Parser
 		return self.signatures.isArrayInstance(giid) and self.signatures.arrayElementIsOpaque(giid)
 	end 'opaqueArrayCreateAt'
 
+	// Is the token at `q` a `<receiver> . <method> (` call HEAD — a preceding `.` and a following `(`? The shared
+	// shape of the receiver-blind array-method descriptor signals (`arrayMoveOutMethodAt` / `arrayCopyMethodAt`):
+	// it distinguishes an array method from a bare free call `pop(…)` without resolving the receiver, which the
+	// pre-scan (running before the body is parsed) cannot do. Each caller pairs this shape with its own
+	// method-name set.
+	function isDotMethodCallHeadAt(q TokenIndex) returns bool
+		return q != 0 and self.kindAt((q - 1) as TokenIndex) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.leftParen
+	end 'isDotMethodCallHeadAt'
+
 	// Is the identifier at `q` the method name of a `<receiver> . pop/remove (` array MOVE-OUT — the descriptor
-	// signal for an opaque element drop (P1.7 slice 3b-vi-a)? A preceding `.` and a following `(` distinguish the
-	// array method from a bare free call `pop(…)`; the RECEIVER is deliberately NOT resolved. The pre-scan runs
-	// before the body is parsed, so it cannot tell whether the receiver is `self.<opaque-field>`, a local bound to
-	// it, or an opaque array parameter — every one of which reaches the same descriptor-gated `__drop_type_param`
-	// drop — so ANY move-out is signalled and the caller reserves an (at worst unused, always sound) descriptor.
-	// `get`/`first`/`last` BORROW and drop nothing, so they are not move-outs and are not matched.
+	// signal for an opaque element drop (P1.7 slice 3b-vi-a)? The RECEIVER is deliberately NOT resolved: the
+	// pre-scan cannot tell whether it is `self.<opaque-field>`, a local bound to it, or an opaque array parameter
+	// — every one of which reaches the same descriptor-gated `__drop_type_param` drop — so ANY move-out is
+	// signalled and the caller reserves an (at worst unused, always sound) descriptor. `get`/`first`/`last` BORROW
+	// and drop nothing, so they are not move-outs and are not matched.
 	function arrayMoveOutMethodAt(q TokenIndex) returns bool
-		if q == 0 or self.kindAt((q - 1) as TokenIndex) != TokenKind.dot or self.kindAt(q + 1) != TokenKind.leftParen 'notMethodCall'
+		if not self.isDotMethodCallHeadAt(q) 'notMethodCall'
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
 		return name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
 	end 'arrayMoveOutMethodAt'
+
+	// Is the identifier at `q` the method name of a `<receiver> . slice/clone/append (` array COPY — the
+	// descriptor signal for an OPAQUE array copy (P1.7 slice 3b-vi-b-β)? A preceding `.` and a following `(`
+	// distinguish the array method from a bare free call; the RECEIVER is deliberately NOT resolved (the pre-scan
+	// runs before the body is parsed), so ANY copy is signalled and the caller reserves an (at worst unused,
+	// always sound) descriptor. Shares `isDotMethodCallHeadAt` with `arrayMoveOutMethodAt`, over the COPY names.
+	function arrayCopyMethodAt(q TokenIndex) returns bool
+		if not self.isDotMethodCallHeadAt(q) 'notMethodCall'
+			return false
+		end 'notMethodCall'
+		let name = self.tokenAt(q).value
+		return name.equals(ArraySliceMethod) or name.equals(ArrayCloneMethod) or name.equals(ArrayAppendMethod)
+	end 'arrayCopyMethodAt'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
 	// descriptor-need scan (`opaqueFieldReassignAt`, real parse) and the sweep feed (`markOpaqueFieldReassignFeed`,
@@ -15408,8 +15449,8 @@ export type Parser
 	// a CONCRETE instance (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body, P1.7
 	// slice 3b) alike — `emitArrayCreateOp` branches on the element. A MANAGED opaque element is fully created
 	// here (`emitOpaqueArrayCreateOp` stamps its `element_destroy@40` from the threaded descriptor, P1.7 slice
-	// 3b-iii); it is the element READ / MOVE-OUT / COPY that the opaque array cannot serve, rejected earlier in
-	// `dispatchArrayMethod` (`requireOpaqueArraySupportsMethod`), never creation.
+	// 3b-iii); the element READ (borrow), MOVE-OUT (`__drop_type_param`) and COPY (`__arr_*_opaque` via the
+	// descriptor `copyFunc@32`, P1.7 slice 3b-vi-b-β) are all served through the descriptor, never creation.
 	function parseArrayStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
@@ -15499,14 +15540,14 @@ export type Parser
 	// the call-site consume promotes a managed argument, P1.7 slice 3b-iii), for the metadata methods, for drop,
 	// for READING (`get`/`first`/`last` hand back a BORROW) and for MOVING OUT (`pop`/`remove` hand back an OWNED
 	// word dropped through the descriptor-gated `__drop_type_param`, P1.7 slice 3b-vi-a) — the word is only
-	// carried and dropped, never interpreted. What it is NOT enough for is a per-element COPY (`slice`/`clone`/
-	// `append`), which would byte-blit a managed pointer and double-free it (`requireOpaqueArraySupportsMethod`
-	// rejects those on an opaque array).
+	// carried and dropped, never interpreted. A per-element COPY (`slice`/`clone`/`append`) is served too, through
+	// the descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): `__arr_*_opaque` byte-blits a trivial element and
+	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
+	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
+	// `requireOpaqueArrayCopyable` rejects.
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
-
-		try self.requireOpaqueArraySupportsMethod(giid, methodTok: methodTok)
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
@@ -15536,7 +15577,7 @@ export type Parser
 			return self.emitArrayElementAccessor(ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, range: range)
 		end 'remove'
 		if methodTok.value.equals(ArraySliceMethod) 'slice'
-			try self.requireArrayElementCopyable(giid, methodTok: methodTok)
+			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArraySlice(func, arr: arr, giid: giid, range: range)
 		end 'slice'
 
@@ -15554,8 +15595,11 @@ export type Parser
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
 		if methodTok.value.equals(ArrayCloneMethod) 'clone'
-			try self.requireArrayElementCopyable(giid, methodTok: methodTok)
+			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			try self.parseArrayNoArgs()
+			if self.signatures.arrayElementIsOpaque(giid) 'opaqueClone'
+				return self.emitArrayInstanceAccessor(ArrCloneOpaqueName, args: singletonArgs(arr), giid: giid, range: range)
+			end 'opaqueClone'
 			if self.signatures.arrayElementIsManaged(giid) 'managedClone'
 				return self.emitArrayInstanceAccessor(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), giid: giid, range: range)
 			end 'managedClone'
@@ -15584,44 +15628,42 @@ export type Parser
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, throwing: false, range: range)
 		end 'insert'
 		if methodTok.value.equals(ArrayAppendMethod) 'append'
-			try self.requireArrayElementCopyable(giid, methodTok: methodTok)
+			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
 		end 'append'
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
 
-	// ⭐ **REJECT A per-element COPY OF AN OPAQUE-`T` ARRAY ELEMENT (P1.7 slice 3b-vi-b).** An opaque
-	// `Array with <type parameter>` inside a generic body serves both a MANAGED (`Container with String`) and a
-	// TRIVIAL (`Container with SmallInt`) instantiation from ONE shared body, so the body has no static type for
-	// its element — it can only see an 8-byte word. That word is enough to MOVE IN (`push`/`set`/`insert`, whose
-	// managed argument the call site promotes and consumes, P1.7 slice 3b-iii), to read METADATA, to DROP (the
-	// array's `__arr_decref` walk uses the runtime `element_destroy@40`), to READ (`get`/`first`/`last` hand back
-	// a BORROW) and to MOVE OUT (`pop`/`remove` hand back an OWNED word the caller drops through the descriptor-
-	// gated `__drop_type_param`) — all leak-free, because the word never has to be interpreted, only carried and
-	// dropped by the runtime descriptor (P1.7 slice 3b-vi-a). What the word is NOT enough for is a per-element
-	// COPY: `slice`/`clone`/`append` deep-clone each element through the element's own `funcAddr(__clone_<E>)`,
-	// but an OPAQUE `T`'s cloner is NOT known at the shared-body site — it is descriptor-gated, like its
-	// destructor — so there is no concrete address to stamp. A CONCRETE-element array (`Array with String`) DOES
-	// know its cloner statically and now takes the deep-clone path (P1.7 slice 3b-vi-b), so this is a no-op there
-	// (`arrayElementIsOpaque` is false) — its managed copy is gated separately by `requireArrayElementCopyable`.
-	// The opaque descriptor-cloner is a distinct later slice; until then these three are a clean E2015.
-	function requireOpaqueArraySupportsMethod(giid GenericInstanceId, methodTok Token) throws ParseError
-		if not self.signatures.arrayElementIsOpaque(giid) 'concreteElement'
+	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
+	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`
+	// (`requireOpaqueArrayCopyable`); a CONCRETE element copies through its statically-known cloner
+	// (`requireArrayElementCopyable`). One home so the three copy methods pick the right gate identically.
+	function requireArrayCopyMethodSupported(giid GenericInstanceId, methodTok Token) throws ParseError
+		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
+			try self.requireOpaqueArrayCopyable(giid, methodTok: methodTok)
 			return
-		end 'concreteElement'
-		if self.isOpaqueArrayCopyMethod(methodTok.value) 'copy'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field inside a generic body — a byte-blit that would duplicate a managed pointer and then double-free it. An independent per-element copy needs a deep-clone primitive (`__str_clone`/`__struct_clone`) shv2 does not have yet (move-only, no refcount — P1.2-deferred `.clone` for managed values), a distinct future rung (P1.7 slice 3b-vi-b). READING (get/first/last, a borrow) and MOVING OUT (pop/remove, an owned move) an opaque element ARE supported (slice 3b-vi-a); or use a CONCRETE-element array (`Array with String`) for the copy.", line: methodTok.line, column: methodTok.column)
-		end 'copy'
-	end 'requireOpaqueArraySupportsMethod'
+		end 'opaque'
+		try self.requireArrayElementCopyable(giid, methodTok: methodTok)
+	end 'requireArrayCopyMethodSupported'
 
-	// The `Array` methods that per-element COPY (`slice`/`clone`/`append`) — the byte-blitting ones an OPAQUE-`T`
-	// array cannot serve without a deep-clone primitive (see `requireOpaqueArraySupportsMethod`). READ
-	// (`get`/`first`/`last`), MOVE-OUT (`pop`/`remove`), move-in, metadata and drop all treat the element as an
-	// opaque word the runtime descriptor carries and drops, and are served correctly on an opaque array.
-	function isOpaqueArrayCopyMethod(name ByteArray) returns bool
-		return name.equals(ArraySliceMethod) or name.equals(ArrayCloneMethod) or name.equals(ArrayAppendMethod)
-	end 'isOpaqueArrayCopyMethod'
+	// ⭐ **THE COPY GATE for an OPAQUE-`T` array (P1.7 slice 3b-vi-b-β).** An opaque `Array with <type parameter>`
+	// inside a generic body copies each element through the enclosing instance's descriptor `copyFunc@32`, which
+	// can hold only a SINGLE `(box) -> newBox` cloner — so a String / struct / boxed-union / trivial-element-array
+	// / trivial-scalar instantiation is served (`__arr_*_opaque` branches on `copyFunc@32`: a byte-blit for a
+	// trivial element, a deep clone for a direct-clonable managed one). It REJECTS (E2015) only when SOME
+	// instantiation of the enclosing generic type substitutes a managed type this rung cannot deep-clone as a
+	// single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic
+	// instance (`Box with String`, a later slice) — because that element has no single `copyFunc` and its copy
+	// would byte-blit a managed pointer and double-free it. The reject is per-INSTANTIATION (the shared body's
+	// element is opaque), so it enumerates the enclosing type's instances through
+	// `genericTypeFieldHasUncopyableInstantiation`, mirroring the concrete gate's `arrayElementSupportsDeepClone`.
+	function requireOpaqueArrayCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
+		let elementPosition = typeNameIdOf(self.signatures.arrayElementType(giid))
+		if self.signatures.genericTypeFieldHasUncopyableInstantiation(self.enclosingType, position: elementPosition) 'uncopyable'
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).", line: methodTok.line, column: methodTok.column)
+		end 'uncopyable'
+	end 'requireOpaqueArrayCopyable'
 
 	// Emit a VOID array mutator call; return the receiver (what the statement still denotes, like
 	// `parseStringAppend`).
@@ -15697,6 +15739,9 @@ export type Parser
 		try self.consumeArrayArgLabel(ArrayEndIndexLabel)
 		let endIndex = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.rightParen)
+		if self.signatures.arrayElementIsOpaque(giid) 'opaqueSlice'
+			return self.emitArrayInstanceAccessor(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), giid: giid, range: range)
+		end 'opaqueSlice'
 		if self.signatures.arrayElementIsManaged(giid) 'managedSlice'
 			return self.emitArrayInstanceAccessor(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), giid: giid, range: range)
 		end 'managedSlice'
@@ -15715,6 +15760,9 @@ export type Parser
 		let other = try self.parseExpression(func, block: self.currentBlock)
 		try self.requireArrayAppendArg(other, giid: giid, otherTok: otherTok)
 		try self.consume(TokenKind.rightParen)
+		if self.signatures.arrayElementIsOpaque(giid) 'opaqueAppend'
+			return self.emitArrayVoidCall(ArrAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
+		end 'opaqueAppend'
 		if self.signatures.arrayElementIsManaged(giid) 'managedAppend'
 			return self.emitArrayVoidCall(ArrAppendManagedName, args: tripleArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
 		end 'managedAppend'
@@ -15732,6 +15780,15 @@ export type Parser
 			throw ParseError.unsupported("`append` takes another `Array` of the same element type — got '{typeTagName(self.tagOf(other))}'", line: otherTok.line, column: otherTok.column)
 		end 'notArray'
 		let otherGiid = self.valueNameId(other)
+		// An OPAQUE receiver (`self.items.append(other)` in a generic body) deep-clones `other`'s elements through
+		// the RECEIVER's descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β), which is correct only when `other` shares
+		// the receiver's opaque element type — so, like the managed receiver, `other` must be the IDENTICAL giid.
+		if self.signatures.arrayElementIsOpaque(giid) 'opaqueReceiver'
+			if not self.signatures.arrayElementIsOpaque(otherGiid) or otherGiid != giid 'opaqueMismatch'
+				throw ParseError.unsupported("`append` on an opaque `Array with <type parameter>` field requires an `Array` of the same type-parameter element as the receiver", line: otherTok.line, column: otherTok.column)
+			end 'opaqueMismatch'
+			return
+		end 'opaqueReceiver'
 		if self.signatures.arrayElementIsManaged(giid) 'managedReceiver'
 			if not self.signatures.arrayElementIsManaged(otherGiid) or otherGiid != giid 'managedMismatch'
 				throw ParseError.unsupported("`append` requires an `Array` with the same MANAGED element type as the receiver", line: otherTok.line, column: otherTok.column)
@@ -15749,8 +15806,8 @@ export type Parser
 	// the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call), shv2's move-only answer to the
 	// reference compilers' incref. What still REJECTS (E2015) is a managed element whose nested type this rung's
 	// cloner cannot reach: a `Box with T` generic-instance field/element (a per-instance cloner is a later slice)
-	// or an array-of-managed-arrays. An OPAQUE-`T` element (a generic body) was already rejected upstream by
-	// `requireOpaqueArraySupportsMethod`, so only concrete elements reach here.
+	// or an array-of-managed-arrays. An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
+	// by `requireArrayCopyMethodSupported` instead, so only CONCRETE elements reach here.
 	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
 		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
 			return
