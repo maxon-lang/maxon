@@ -29,8 +29,8 @@ and the no-binding `otherwise` form decrefs once to release the transfer.
 
 ## Tests
 
-<!-- disabled-test: propagate-throw-through-local-struct -->
-<!-- P1.4b wave 2c DELIVERED the boxed-union struct FIELD this test builds on — construct (`Self{pendingError: OuterErr…}`), reassign (`pendingError = …`), scope-exit drop, and the OWNED-LOCAL throw-of-field MOVE-OUT (see boxed-union-field-throw-owned-local). The bare method call `bump()` (implicit self) in `run()` now resolves (#65 implicit-self method resolution landed), so the E3004 that once blocked this is gone. It stays disabled on ONE remaining later blocker: `run()` throws its own `pendingError` through a BORROWED `self`, and a borrowed-container field throw is REFUSED (E2015) until cross-call move tracking / escape analysis (P1.5) — nulling the field through the borrow writes the caller's box, unsound if the caller catches and re-reads (see error.boxed-union-field-throw-borrowed-self below). That is a distinct later rung. -->
+<!-- test: propagate-throw-through-local-struct -->
+<!-- ENABLED by #64 (P1.5, 2026-07-23): `run()` throws its own `pendingError` through a BORROWED `self`. The throw now transfers the box by RETAIN (`retainThrownField` increfs it, leaving the field slot intact) rather than the nulling MOVE an OWNED-LOCAL container uses — so the caller's box stays live and the refcount balances at one free, with no cross-call move tracking. Applies the #40 retain-promotion thesis to the throw error channel; see `boxed-union-field-throw-borrowed-self` below for the property that distinguishes it from a move (the caller re-reads the field after catching). Predecessors that had to land first: P1.4b wave 2c (the boxed-union struct FIELD — construct/reassign/scope-exit-drop/owned-local move-out) and #65 implicit-self (the bare `bump()` call in `run()`). -->
 ### Propagating a heap-allocated error through a function holding a local struct
 
 A function creates a local struct, calls a method that throws an
@@ -174,19 +174,20 @@ end 'main'
 20
 ```
 
-<!-- test: error.boxed-union-field-throw-borrowed-self -->
-### Throwing a boxed-union self-field through a BORROWED receiver is refused
+<!-- test: boxed-union-field-throw-borrowed-self -->
+### Throwing a boxed-union self-field through a BORROWED receiver RETAINS the box (#64)
 
-An instance method throws its own boxed-union `self`-field. `self` is BORROWED — its
-owner is the caller's local — and shv2 has no `__mm_incref`, so the only transfer is a
-MOVE: nulling the field slot. Through the borrow that nulls the CALLER's box, which is
-sound when the caller then tears the container down (propagation, `return try lex.run()`)
-but a use-after-move when the caller CATCHES and re-reads the field — and nothing at the
-throw site can tell those two callers apart. Until cross-call move tracking (escape
-analysis, P1.5) can, a borrowed-container field throw is refused, the same conservative
-reject `moveOutManagedPayload` makes for a borrowed match-scrutinee. Throwing a boxed-union
-field of an OWNED LOCAL (see `boxed-union-field-throw-owned-local`) IS supported — that
-container dies with its frame, so no surviving caller can read the nulled slot.
+An instance method throws its own boxed-union `self`-field. `self` is BORROWED — its owner
+is the caller's local — so the throw cannot MOVE the box out by nulling the field slot the
+way an OWNED LOCAL container does (see `boxed-union-field-throw-owned-local`): that would
+null the CALLER's box, a use-after-move if the caller CATCHES and re-reads the field.
+Instead the throw RETAINS — `__mm_incref` makes the thrown reference a SECOND owner and
+leaves the slot intact — so the caller's box stays live. This test proves exactly that:
+after catching the thrown error, `main` RE-READS `lex.pendingError` and sees the same live
+value (a move-out would have left a nulled slot, which under the always-on poison-free
+`__mm_free` would fault or return `0x3F…`). The caller's container keeps its own reference,
+the catch consumes the thrown one, and the refcount balances at one free — no leak, no
+double-free. This applies the #40 retain-promotion thesis to the throw error channel.
 
 ```maxon
 typealias N = int(0 to i64.max)
@@ -209,9 +210,21 @@ type Lex
 end 'Lex'
 
 function main() returns ExitCode
-	return 0
+	var lex = Lex.create()
+	var caught = 0
+	try lex.run() otherwise (e) 'fail'
+		match e 'k'
+			unterminatedString(line, column) then caught = (line + column)
+			unexpectedEof(line, column) then caught = 900
+		end 'k'
+	end 'fail'
+	let again = lex.pendingError
+	match again 'k2'
+		unterminatedString(line, column) then return (caught + line + column)
+		unexpectedEof(line, column) then return (caught + 500)
+	end 'k2'
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/throw-transfers-ownership/error.boxed-union-field-throw-borrowed-self.test:17:3: Unsupported: throwing a boxed-union FIELD of a BORROWED container — a `self`-field in an instance method, whose receiver the CALLER owns. shv2 has no `__mm_incref`, so the throw would MOVE the box out by nulling the field slot, but through the borrow that nulls the CALLER's box: sound if the caller tears the container down, a use-after-move if it CATCHES and re-reads the field. Refused until cross-call move tracking (escape analysis, P1.5) — throw a boxed-union field of an OWNED LOCAL, or a fresh `throw U.case(x)` / caught `(e)` binding
+```exitcode
+40
 ```

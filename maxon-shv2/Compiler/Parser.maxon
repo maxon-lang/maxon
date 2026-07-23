@@ -7847,33 +7847,38 @@ export type Parser
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
 		let errorIsBoxed = self.throwsTypeIsBoxedUnion(self.typeOf(errValue))
 
-		// ⭐ **A THROWN BOX MUST BE OWNED BY THIS FRAME — a box owned elsewhere is either MOVED OUT of an
-		// OWNED-LOCAL container, or refused.** A boxed error is handed to the caller through the flag register,
-		// which ADOPTS and drops it once. An OWNED box (a fresh `throw U.case(x)` or a caught `(e)` binding)
-		// carries the provenance bit and is moved out below. A box that is NOT owned here splits two ways:
+		// ⭐ **A THROWN BOX MUST BE OWNED BY THIS FRAME — a box owned elsewhere is MOVED OUT of an OWNED-LOCAL
+		// container, RETAINED out of a BORROWED one, or refused.** A boxed error is handed to the caller through
+		// the flag register, which ADOPTS and drops it once. An OWNED box (a fresh `throw U.case(x)` or a caught
+		// `(e)` binding) carries the provenance bit and is moved out below. A box that is NOT owned here splits
+		// three ways:
 		//   • a boxed-union FIELD read whose CONTAINER is an OWNED LOCAL of THIS function — the throw TRANSFERS
 		//     it out by MOVE: `moveOutThrownField` nulls the field slot (so the container's `__destruct_<T>`
 		//     cascade skips it) and marks the value owned, so the same owned hand-off below transfers it. Sound
 		//     because the owned-local container dies with this frame — no surviving caller can read the nulled
-		//     slot. shv2 has no `__mm_incref` (MmRuntime's ⛔ note), so this MOVE is the only transfer (wave 2c).
-		//   • anything else NOT owned here — a `throw <union param>` (or a re-borrow of one), OR a boxed-union
-		//     FIELD of a BORROWED container (a `self`-field in an instance method, whose receiver the CALLER
-		//     owns). Two owners would free one box (a double free), and a borrowed-container move-out would null
-		//     a slot the caller may still read after catching (the cross-call move-tracking gap
-		//     `moveOutManagedPayload` refuses a borrowed scrutinee for — a caller that CATCHES and re-reads the
-		//     field observes the hole). A clean reject (the throw twin of `parseReturnStatement`'s
-		//     borrowed-aggregate refusal) until cross-call consume / escape analysis (P1.5).
+		//     slot, and the null is cheaper than an incref that the container's own drop would only cancel (#64).
+		//   • a boxed-union FIELD of a BORROWED container (a `self`-field in an instance method, or a borrowed
+		//     struct/union PARAM's field, whose owner is the CALLER's local) — the throw TRANSFERS it out by
+		//     RETAIN (#64): `retainThrownField` increfs the box so the thrown reference is a SECOND owner, and
+		//     the slot is LEFT INTACT so a caller that catches and re-reads the field still sees a live box. The
+		//     caller's container keeps its own reference; the catch consumes the thrown one; the refcount
+		//     balances at one free. This applies the #40 retain-promotion thesis to the throw error channel,
+		//     sidestepping the cross-call move-tracking a null-move would have needed to tell a re-reading caller
+		//     from a tearing-down one.
+		//   • anything else NOT owned here — a `throw <union param>` (or a re-borrow of one), a WHOLE borrowed
+		//     union value with no owned home in this frame. Two owners would free one box (a double free); throw
+		//     an OWNED value instead. Refused until cross-call consume.
 		if errorIsBoxed and not self.valueIsOwnedHeap(errValue) 'borrowedThrow'
 			let thrownIsFieldRead = self.lastFieldReadValid and self.lastFieldReadValue == errValue
 			if thrownIsFieldRead and self.valueIsOwnedHeap(self.lastFieldReadBox) 'fieldThrow'
 				self.moveOutThrownField(errValue, anchor: anchor)
-			end 'fieldThrow' else 'borrowedReject'
+			end 'fieldThrow' else 'borrowedFieldOrValue'
 				if thrownIsFieldRead 'borrowedField'
-					throw ParseError.unsupported("throwing a boxed-union FIELD of a BORROWED container — a `self`-field in an instance method, whose receiver the CALLER owns. shv2 has no `__mm_incref`, so the throw would MOVE the box out by nulling the field slot, but through the borrow that nulls the CALLER's box: sound if the caller tears the container down, a use-after-move if it CATCHES and re-reads the field. Refused until cross-call move tracking (escape analysis, P1.5) — throw a boxed-union field of an OWNED LOCAL, or a fresh `throw U.case(x)` / caught `(e)` binding", line: anchor.line, column: anchor.column)
+					self.retainThrownField(errValue, anchor: anchor)
 				end 'borrowedField' else 'borrowedNonField'
-					throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out); consuming a borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
+					throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out or retains); consuming a whole borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
 				end 'borrowedNonField'
-			end 'borrowedReject'
+			end 'borrowedFieldOrValue'
 		end 'borrowedThrow'
 
 		// ⭐ **THROW TRANSFERS THE BOX OUT OF THE LOCAL DROP SETS — BEFORE the scope drops.** The box is
@@ -7889,17 +7894,17 @@ export type Parser
 	end 'emitThrowError'
 
 	// ⭐ **MOVE A THROWN BOXED-UNION FIELD OUT OF ITS OWNED-LOCAL CONTAINER.** The field READ borrowed the
-	// box (its container owns it); throwing it transfers ownership to the caller. shv2 has no `__mm_incref`,
-	// so the transfer is a MOVE: NULL the slot the value was loaded from (recorded by `emitFieldLoad` in the
+	// box (its container owns it); throwing it transfers ownership to the caller. The transfer is a MOVE:
+	// NULL the slot the value was loaded from (recorded by `emitFieldLoad` in the
 	// `lastFieldRead*` fields), so the container's `__destruct_<T>` cascade's null-guard SKIPS it — else the
 	// container would free the box the caller has just adopted (a double free). Marking the value OWNED then
 	// routes it through the SAME hand-off + `throwError` transfer a fresh `throw U.case(x)` takes. This is the
 	// throw twin of match's `moveOutManagedPayload`, one field-load out. **The caller GATES this on an OWNED
 	// LOCAL container** (`valueIsOwnedHeap(lastFieldReadBox)`): such a container dies with this frame, so its
-	// own scope-exit drop honours the null and no surviving caller can read the nulled slot. A BORROWED
-	// container (a `self`-field) is refused at the `borrowedThrow` split above — nulling through the borrow
-	// writes the caller's box, and a caller that catches and re-reads would observe the hole, the cross-call
-	// move-tracking gap resolved at P1.5.
+	// own scope-exit drop honours the null and no surviving caller can read the nulled slot — and the null is
+	// cheaper than an incref its own drop would only cancel. A BORROWED container (a `self`-field, a borrowed
+	// param's field) instead RETAINS (`retainThrownField`, #64): its owner is the CALLER's local, which may
+	// re-read the field after catching, so the slot is left intact and the box increfed rather than nulled.
 	//
 	// The null store is an i64 pointer write — a boxed-union field slot holds a machine-word box address
 	// (`fieldStorageType` gives a boxed-union field `integer`), the same width `moveOutManagedPayload` nulls
@@ -7910,6 +7915,26 @@ export type Parser
 		self.emitIndirectStore(self.lastFieldReadBox, offset: self.lastFieldReadOffset, value: zero, storageType: MaxonType.integer, range: range)
 		self.markValueOwnsHeap(value)
 	end 'moveOutThrownField'
+
+	// ⭐ **RETAIN A THROWN BOXED-UNION FIELD OF A BORROWED CONTAINER (#64).** The field READ borrowed the box
+	// (the container — a borrowed `self`, or a borrowed struct/union PARAM — owns it, and that owner is the
+	// CALLER's local). Throwing it transfers an owned reference to the caller, but unlike `moveOutThrownField`
+	// the slot must NOT be nulled: the caller still owns the container and may re-read the field after
+	// catching. So instead of a MOVE this RETAINS — `__mm_incref` raises the box's refcount so the thrown
+	// reference is a SECOND owner while the field keeps pointing at a live box. The caller's container keeps
+	// its own reference (dropped when the container dies), the thrown box is consumed by the catch (`otherwise
+	// (e)` skips its incref, no-binding `otherwise` decrefs once), and the refcount balances at exactly one
+	// free. Marking the value OWNED then routes it through the SAME hand-off + `throwError` transfer the
+	// move-out and a fresh `throw U.case(x)` take, so the box the retain produces is indistinguishable
+	// downstream from any other owned thrown box. The RETAIN twin of `moveOutThrownField`, applying the #40
+	// retain-promotion thesis (`retainBorrowedAggregate`) to the throw error channel — a bounded refcount
+	// exception that sidesteps the cross-call move-tracking a null-move would have needed to tell a re-reading
+	// caller from a tearing-down one.
+	function retainThrownField(value ValueId, anchor Token)
+		let range = SourceRange.ofToken(anchor)
+		_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.markValueOwnsHeap(value)
+	end 'retainThrownField'
 
 	// `panic("message")` — abort the process after printing the message. Emits a `panicAbort` body op
 	// (expanded to `osWriteStdout` + `osExit` in lowering) followed by a dead return terminator (control
