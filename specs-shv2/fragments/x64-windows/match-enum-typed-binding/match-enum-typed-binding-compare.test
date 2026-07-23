@@ -57,13 +57,13 @@ func @isGreen {
   matchnext:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchdead:
   matchcont:
 }
 
@@ -71,13 +71,6 @@ func @checkColor {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 1
-    x64.jmp matchcont
-  matchnext:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, matcharm
     x64.jmp matchnext
@@ -85,16 +78,23 @@ func @checkColor {
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchnext:
-    x64.cmpRegImm32 rcx, 2
+    x64.cmpRegImm32 rcx, 1
     x64.jcc equal, matcharm
     x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchcont:
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchdead:
 }
 
 func @main {

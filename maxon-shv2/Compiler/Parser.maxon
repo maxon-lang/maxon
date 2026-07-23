@@ -2210,19 +2210,41 @@ typealias PayloadBindingArray = Array with PayloadBinding
 // A pattern arm's parse result: the boolean CONDITION (`subject == tag`, or the OR/range fold) and
 // the payload BINDINGS the arm body declares. A scalar match, and every enum pattern that is not a
 // single case (an or-chain, a range), carries no bindings.
-type EnumPatternResult
-	export let cond as ValueId
-	export let bindings as PayloadBindingArray
+// ⭐ **THE STRATEGY THRESHOLD — below this many disjoint intervals a `match` dispatches by a linear
+// compare chain, at or above it by a balanced binary search.** Three intervals is at most three
+// compare-and-branch pairs, cheaper than the compare-per-level a search spends before it reaches a
+// leaf; past that the search's logarithmic depth wins. The value is the bootstrap's
+// `MinIntervalsForDispatch` (`MaxonToStandardConversion.SwitchDispatch.cs`), shared deliberately so the
+// two compilers pick the same strategy for the same match. (The bootstrap's jump-TABLE tier — a fourth
+// strategy above a density threshold — is Slice 2 here: it needs an `.rdata` table and an indirect
+// jump, neither of which this rung emits.)
+let MinIntervalsForDispatch = 4 as ElementCount
 
-	export static function create(cond ValueId, bindings PayloadBindingArray) returns EnumPatternResult
-		return Self{cond: cond, bindings: bindings}
+// ⭐ **ONE NORMALIZED DISPATCH KEY — a closed value interval `[lo, hi]` and the arm body it selects.**
+// A `match` over an integer-like scrutinee (an enum/union tag, a scalar `int`/`char`/`bool`, a
+// ranged-int alias) is lowered by first reducing every arm to a list of these: a single value is
+// `[v, v]`, a range is `[lo, hi]`, an `or`-list contributes one interval per alternative, and an open
+// bound is `i64.min`/`i64.max`. `targetBlockId` is the arm body the interval selects; `edgeArgs` are the
+// carried-variable phi arguments the dispatch's test→body edge passes (empty when the body has no phis).
+// `normalizeDispatchIntervals` sorts these and clips overlaps so earlier arms win, and the strategy
+// chooser (`emitDispatchRange`) reads nothing else — so the shape of a `match` is written down ONCE
+// (this list) rather than recognised back out of an already-emitted compare chain, which is the seam the
+// bootstrap's own `DispatchEmitter` header calls out as the bug this design removes.
+type DispatchInterval
+	export var lo as ParsedInt
+	export var hi as ParsedInt
+	export var targetBlockId as BlockId
+	// Mutable because the arm loop knows an interval's body before it knows the carried-var phi args
+	// that ride the edge into it: the intervals are collected as the pattern is parsed, then the whole
+	// arm's edge args are stamped across them once `setupFallthroughTargetPhis`/`restoreBindings` has run.
+	export var edgeArgs as ValueIdArray
+
+	export static function create(lo ParsedInt, hi ParsedInt, targetBlockId BlockId, edgeArgs ValueIdArray) returns DispatchInterval
+		return Self{lo: lo, hi: hi, targetBlockId: targetBlockId, edgeArgs: edgeArgs}
 	end 'create'
+end 'DispatchInterval'
 
-	// The common case: a condition with nothing to bind (a scalar pattern, an or-chain, a range).
-	export static function noBindings(cond ValueId) returns EnumPatternResult
-		return Self{cond: cond, bindings: PayloadBindingArray.create()}
-	end 'noBindings'
-end 'EnumPatternResult'
+typealias DispatchIntervalArray = Array with DispatchInterval
 
 export type Parser
 	var tokens as TokenArray
@@ -9107,6 +9129,26 @@ export type Parser
 		// merge reconciliation. A `and fallthrough` arm does NOT restore — it inherits the prior arm's state.
 		let entryMoveMark = self.captureMoveMark()
 
+		// ⭐ **DISPATCH STRATEGY (match-dispatch Slice 1).** An integer-like scrutinee builds a normalized
+		// interval PLAN and dispatches by a balanced binary search (or a chain when small); a `String`/
+		// `float` scrutinee keeps the per-arm compare chain (`emitPatternCondition`). Under the plan the arm
+		// loop emits NO test blocks or branches — it only collects `DispatchInterval`s and parses bodies —
+		// and the whole dispatch is emitted after the loop, into `dispatchEntry` (the block holding
+		// `dispatchSubject`, which every compare then reads). `planMissBlock`/`planMissArgs` name where a
+		// value in no interval goes: the `default` body (set when the default arm is parsed) or a `dead`
+		// block for an exhaustive enum (created after the loop).
+		let usePlan = self.matchUsesIntervalPlan(isEnumMatch, scrut: scrut)
+		// `var` because the dispatch is emitted INTO this block after the loop (`emitMatchDispatch` sets its
+		// terminator), so the whole-program mutating-parameter analysis sees `entry` mutated — the same
+		// let/var sensitivity `finalizeMatchMerge` documents at its edge-recording site.
+		var dispatchEntry = currentTestBlock
+		var dispatchIntervals = DispatchIntervalArray.create()
+		// The block a value in no interval branches to. Seeded to the entry only as a placeholder — it is
+		// always overwritten before the dispatch is emitted (a `default` body, or an exhaustive enum's dead
+		// block), and a scalar match with no default throws E2026 before then.
+		var planMissBlockId = dispatchEntry.id
+		var planMissArgs = ValueIdArray.create()
+
 		while true 'arms'
 			self.skipNewlines()
 			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
@@ -9125,21 +9167,32 @@ export type Parser
 
 				let defTok = self.current()
 				try self.consume(TokenKind.default)
-				// The default's body IS the last real arm's `else` target (or the entry block when the
-				// match is default-only): there is no pattern to test. `var` because `parseArmBody`
-				// mutates the block it fills.
+				// The default's body: for a PLANNED match its own block (the dispatch's miss edges branch
+				// here); for the linear chain the last real arm's `else` target (`currentTestBlock`), or the
+				// entry block when the match is default-only. `var` because `parseArmBody` mutates it.
 				var defaultBody = currentTestBlock
+				if usePlan 'planDefaultBlock'
+					defaultBody = self.newBlock(func, label: b"matchdefault", line: defTok.line)
+				end 'planDefaultBlock'
 				if prevFallthrough 'defaultIsFtTarget'
 					let matchEdgeArgs = self.setupFallthroughTargetPhis(defaultBody, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
-					// The fail edge into the default body — the last real arm's `condBranch` else,
-					// already emitted; only its phi args are recorded now.
-					if hasRealArm 'defaultFailEdge'
+					if usePlan 'planDefaultArgs'
+						// The dispatch's miss edges into the default body carry these phi args — recorded when
+						// the dispatch is emitted after the loop, not here.
+						planMissArgs = matchEdgeArgs
+					end 'planDefaultArgs' else if hasRealArm 'defaultFailEdge'
+						// The fail edge into the default body — the last real arm's `condBranch` else, already
+						// emitted; only its phi args are recorded now.
 						self.recordBranchEdge(prevTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
 					end 'defaultFailEdge'
 				end 'defaultIsFtTarget' else 'defaultFresh'
 					self.restoreBindings(carried, snapshot: entryVals)
 					self.restoreMoveMark(entryMoveMark)
 				end 'defaultFresh'
+
+				if usePlan 'planMissTarget'
+					planMissBlockId = defaultBody.id
+				end 'planMissTarget'
 
 				// ⭐ **`default throws E.case` / `default panic("…")`** (P1.4b) — a DIVERGING catch-all that
 				// covers every unmatched case (so the match is exhaustive). It is the ONLY legal enum
@@ -9176,24 +9229,30 @@ export type Parser
 				end 'armAfterDefault'
 
 				let patternTok = self.current()
-				// `var` because both blocks are forwarded to functions that fill them (the pattern's
-				// phis, the arm body, the next arm's test) — a `let` cannot back a mutating parameter.
+				// `var` because the body block is forwarded to functions that fill it (payload phis, the arm
+				// body) — a `let` cannot back a mutating parameter.
 				var bodyBlock = self.newBlock(func, label: b"matcharm", line: patternTok.line)
-				let nextTest = self.newBlock(func, label: b"matchnext", line: patternTok.line)
+				// The linear chain's next test block. A planned match emits its dispatch after the loop and
+				// mints its own test blocks there, so it creates none here (an unused block would be dead).
+				var nextTest = bodyBlock
+				if not usePlan 'chainNextTest'
+					nextTest = self.newBlock(func, label: b"matchnext", line: patternTok.line)
+				end 'chainNextTest'
 
-				// Emit the pattern condition into the current test block. A pattern never
-				// short-circuits (eager bitwise fold), so `currentBlock` does not move. Enum patterns
-				// are case names + the #21 range rule; scalar patterns are literals + ranges (Wave A).
+				// The pattern's facts: an interval PLAN (enum tags, or ordered-scalar values — collected, no
+				// compare emitted) or an emitted per-arm CONDITION (a `String`/`float` chain). A pattern never
+				// short-circuits, so `currentBlock` does not move; it matters only for the emitted-cond path.
 				self.currentBlock = currentTestBlock
 				var cond = 0 as ValueId
 				var payloadBindings = PayloadBindingArray.create()
+				let intervalMark = dispatchIntervals.count()
 				if isEnumMatch 'enumPattern'
-					let patternResult = try self.emitEnumPatternCondition(dispatchSubject, layout: requireEnumLayout(enumMatch), covered: enumCovered)
-					cond = patternResult.cond
-					payloadBindings = patternResult.bindings
-				end 'enumPattern' else 'scalarPattern'
+					payloadBindings = try self.collectEnumPatternIntervals(requireEnumLayout(enumMatch), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
+				end 'enumPattern' else if usePlan 'scalarPlanPattern'
+					try self.collectScalarPatternIntervals(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
+				end 'scalarPlanPattern' else 'scalarChainPattern'
 					cond = try self.emitPatternCondition(scrut, scrutTag: scrutTag, seenValues: seenValues)
-				end 'scalarPattern'
+				end 'scalarChainPattern'
 
 				var matchEdgeArgs = ValueIdArray.create()
 				if prevFallthrough 'armIsFtTarget'
@@ -9203,8 +9262,18 @@ export type Parser
 					self.restoreMoveMark(entryMoveMark)
 				end 'armFresh'
 
-				self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
-				self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTest.id, ifTok: patternTok)
+				if usePlan 'planEdgeArgs'
+					// Stamp the carried-var phi args across every interval this arm contributed (an or-arm or a
+					// split range reaches one body through several intervals); the dispatch records the
+					// test→body edge with them. No `condBranch` here — the dispatch emits all of them later.
+					for k in intervalMark upto dispatchIntervals.count() 'stampArgs'
+						var interval = try dispatchIntervals.get(k) otherwise panic("parseMatchCommon: dispatchIntervals.get OOB at {k}")
+						interval.edgeArgs = matchEdgeArgs
+					end 'stampArgs'
+				end 'planEdgeArgs' else 'chainEdge'
+					self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
+					self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTest.id, ifTok: patternTok)
+				end 'chainEdge'
 
 				// A `walk(dir)` arm's payload bindings are declared at the HEAD of the arm body, in a
 				// scope frame that closes at the arm's `end` so they cannot leak into the next arm. Each
@@ -9255,7 +9324,9 @@ export type Parser
 
 				prevTestBlock = currentTestBlock
 				hasRealArm = true
-				currentTestBlock = nextTest
+				if not usePlan 'chainAdvance'
+					currentTestBlock = nextTest
+				end 'chainAdvance'
 			end 'patternArm'
 		end 'arms'
 
@@ -9268,7 +9339,16 @@ export type Parser
 		// default's body, already given a real terminator above — overwriting it with `dead` would orphan
 		// the throw/panic and silently drop it.
 		if isEnumMatch and not sawDefault 'enumFallOffUnreachable'
-			currentTestBlock.terminator = Terminator.dead
+			// The dispatch's miss target. A planned match routes misses to a fresh `dead` block; the linear
+			// chain's final `else` target IS that block (`currentTestBlock`). Either way the miss is
+			// unreachable (every value matches some arm).
+			if usePlan 'planDeadMiss'
+				var deadBlock = self.newBlock(func, label: b"matchdead", line: matchTok.line)
+				deadBlock.terminator = Terminator.dead
+				planMissBlockId = deadBlock.id
+			end 'planDeadMiss' else 'chainDeadMiss'
+				currentTestBlock.terminator = Terminator.dead
+			end 'chainDeadMiss'
 
 			// A trailing `and fallthrough` on the LAST arm has no following arm or `default` to fall
 			// INTO (a pattern arm cannot follow a default, and an enum match has no legal default at
@@ -9320,6 +9400,16 @@ export type Parser
 		if matchMovedManaged 'consumeScrut'
 			self.markScrutineePartiallyMoved(scrut)
 		end 'consumeScrut'
+
+		// ⭐ **EMIT THE PLANNED DISPATCH** — after every arm body and the default/dead miss target are in
+		// hand, and after exhaustiveness has run (so a non-exhaustive scalar match threw before this).
+		// `planMissBlock` is always set for a planned match by here: a `default` set it, an exhaustive enum's
+		// dead block set it, and a scalar match with no default cannot reach here. The chain path already
+		// wired its dispatch inline, so this runs only for a planned match.
+		if usePlan 'emitPlan'
+			let normalized = self.normalizeDispatchIntervals(dispatchIntervals)
+			try self.emitMatchDispatch(func, entry: dispatchEntry, subject: dispatchSubject, intervals: normalized, missTarget: planMissBlockId, missArgs: planMissArgs, opTok: matchTok)
+		end 'emitPlan'
 
 		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.matchExpression if isExpression else MergeConstruct.matchStatement)
 		self.currentBlock = outcome.cont
@@ -10075,15 +10165,20 @@ export type Parser
 			return
 		end 'notConst'
 
-		let folded = self.constOf(value)
+		try self.recordDuplicateInt(self.constOf(value), seenValues: seenValues, patternTok: patternTok)
+	end 'checkAndRecordDuplicate'
+
+	// The integer core of duplicate detection, shared by the compare-emitting scalar path (`value` read
+	// off a known constant) and the interval-plan path (`value` decoded straight from the pattern token).
+	function recordDuplicateInt(value ParsedInt, seenValues ParsedIntArray, patternTok Token) throws ParseError
 		for i in 0 upto seenValues.count() 'seen'
-			let prev = try seenValues.get(i) otherwise panic("checkAndRecordDuplicate: seenValues.get OOB at {i}")
-			if prev == folded 'duplicate'
-				throw ParseError.matchDuplicatePattern("{folded}", line: patternTok.line, column: patternTok.column)
+			let prev = try seenValues.get(i) otherwise panic("recordDuplicateInt: seenValues.get OOB at {i}")
+			if prev == value 'duplicate'
+				throw ParseError.matchDuplicatePattern("{value}", line: patternTok.line, column: patternTok.column)
 			end 'duplicate'
 		end 'seen'
-		seenValues.push(folded)
-	end 'checkAndRecordDuplicate'
+		seenValues.push(value)
+	end 'recordDuplicateInt'
 
 	// Does `tok` name an open range bound (`min` / `max`) — an identifier whose text is the marker?
 	// `min`/`max` lex as identifiers (they are not keywords), and appear only in a range, so their
@@ -10092,6 +10187,165 @@ export type Parser
 	function isOpenBoundIdentifier(tok Token, marker ByteArray) returns bool
 		return tok.kind == TokenKind.identifier and tok.value.equals(marker)
 	end 'isOpenBoundIdentifier'
+
+	// ============================================================================================
+	// The match DISPATCH PLAN — normalized `[lo, hi]` intervals + strategy (chain vs binary search).
+	//
+	// A `match` over an integer-like scrutinee reduces every arm to `DispatchInterval`s here rather than
+	// emitting a per-arm compare chain inline: the arm loop collects the intervals, `normalizeDispatchIntervals`
+	// sorts and clips them, and `emitMatchDispatch` chooses the strategy and emits ALL the compares in one
+	// place. A `String`/`float` match keeps `emitPatternCondition` (the linear chain), which is why that
+	// path is untouched. NO new IR op — every compare is the same `compare`/`condBranch` the chain used.
+	// ============================================================================================
+
+	// Does this `match` build a binary-search DISPATCH PLAN, or keep the linear compare chain? An
+	// enum/union tag is always an i64, so every enum match plans. A scalar match plans only when the
+	// scrutinee is orderable as one signed i64 — `int`, `char` (a byte value), `bool`, `ExitCode`, or a
+	// ranged-INT alias (`named`, told from a ranged-FLOAT alias by its declared backing, exactly as
+	// `valueIsUnsigned` reads the alias registry). A `String` (no interval — its only comparison is a
+	// runtime byte `==`) and a `float` (whose IEEE bits are not monotonic in value) keep the chain.
+	function matchUsesIntervalPlan(isEnumMatch bool, scrut ValueId) returns bool
+		if isEnumMatch 'enum'
+			return true
+		end 'enum'
+
+		let scrutTag = self.tagOf(scrut)
+		if tagIsInteger(scrutTag) or scrutTag == ValueTypeTag.boolean or scrutTag == ValueTypeTag.exitCode 'plainInteger'
+			return true
+		end 'plainInteger'
+
+		if scrutTag == ValueTypeTag.named 'aliasScrutinee'
+			let name = self.internedName(self.valueNameId(scrut))
+			return match self.signatures.aliasOf(name) 'a'
+				declared(alias) gives not tagIsFloat(maxonTypeTag(alias.underlying))
+				undeclared gives false
+			end 'a'
+		end 'aliasScrutinee'
+
+		return false
+	end 'matchUsesIntervalPlan'
+
+	// One arm's SCALAR pattern (an integer-like scrutinee), reduced to DISPATCH INTERVALS. Mirrors
+	// `emitPatternCondition`'s grammar — `or`-separated alternatives, each a value, a range, or an
+	// open-ended range — but yields intervals over the pattern CONSTANTS rather than an emitted `or`-fold
+	// of compares. The float/String path keeps `emitPatternCondition`, so this handles only what
+	// `matchUsesIntervalPlan` gates in.
+	function collectScalarPatternIntervals(scrutTag ValueTypeTag, seenValues ParsedIntArray, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
+		try self.collectScalarPatternAtom(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlockId, into: into)
+		while self.at(TokenKind.or) 'orChain'
+			try self.consume(TokenKind.or)
+			try self.collectScalarPatternAtom(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlockId, into: into)
+		end 'orChain'
+	end 'collectScalarPatternIntervals'
+
+	// One alternative: an open-lower range (`min to/upto hi`), a closed/open-upper range (`lo to/upto hi`,
+	// `lo to max`), or a single value. Appends exactly one interval.
+	function collectScalarPatternAtom(scrutTag ValueTypeTag, seenValues ParsedIntArray, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
+		let startTok = self.current()
+
+		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
+			self.advance()
+			let hi = try self.collectScalarRangeUpper(scrutTag)
+			into.push(DispatchInterval.create(I64MinBound, hi: hi, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+			return
+		end 'openLower'
+
+		let lo = try self.decodeScalarPatternBound(scrutTag)
+
+		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
+			let hi = try self.collectScalarRangeUpper(scrutTag)
+			into.push(DispatchInterval.create(lo, hi: hi, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+			return
+		end 'rangeArm'
+
+		try self.recordDuplicateInt(lo, seenValues: seenValues, patternTok: startTok)
+		into.push(DispatchInterval.create(lo, hi: lo, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+	end 'collectScalarPatternAtom'
+
+	// The upper bound of a range pattern, with the cursor at `to`/`upto`: consume the keyword, read `max`
+	// (→ `i64.max`, inclusive whichever keyword — matching `emitClosedRange`'s open-upper arm, which drops
+	// the keyword) or a literal, and for `upto` return the inclusive form one below it.
+	function collectScalarRangeUpper(scrutTag ValueTypeTag) returns ParsedInt throws ParseError
+		let isUpto = self.at(TokenKind.upto)
+		self.advance()
+
+		if self.isOpenBoundIdentifier(self.current(), marker: MaxBoundField) 'openUpper'
+			self.advance()
+			return I64MaxBound
+		end 'openUpper'
+
+		let hi = try self.decodeScalarPatternBound(scrutTag)
+		if isUpto 'exclusive'
+			return hi - 1
+		end 'exclusive'
+		return hi
+	end 'collectScalarRangeUpper'
+
+	// Decode a single scalar pattern LITERAL — an int (optionally negated), a character, or a bool — to
+	// its integer value, validating it is comparable to the scrutinee (E2028), WITHOUT emitting a
+	// `literal` op: the dispatch materialises the constant later, once, as an immediate compare. The
+	// float/String literal cases stay E2028 exactly as `emitPatternValue`'s do (only an integer-like
+	// scrutinee reaches here); a `min`/`max` bound is the caller's, and any other identifier is the
+	// enum-case-pattern error `emitPatternValue` raises.
+	function decodeScalarPatternBound(scrutTag ValueTypeTag) returns ParsedInt throws ParseError
+		let firstTok = self.current()
+
+		if self.at(TokenKind.stringLiteral) 'stringPattern'
+			throw ParseError.matchPatternTypeMismatch("String", scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+		end 'stringPattern'
+
+		if self.at(TokenKind.floatLiteral) 'floatPattern'
+			throw ParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.float), scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+		end 'floatPattern'
+
+		if self.at(TokenKind.minus) 'negated'
+			try self.consume(TokenKind.minus)
+			if self.at(TokenKind.floatLiteral) 'negFloat'
+				throw ParseError.matchPatternTypeMismatch(typeTagName(ValueTypeTag.float), scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+			end 'negFloat'
+			if not self.at(TokenKind.intLiteral) 'nonNumeric'
+				let operandTok = self.current()
+				throw ParseError.nonNumericNegation(operandTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
+			end 'nonNumeric'
+			let intTok = try self.consume(TokenKind.intLiteral)
+			let value = try self.intLiteralValue(intTok, negated: true)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
+		end 'negated'
+
+		if self.at(TokenKind.intLiteral) 'intPattern'
+			let intTok = try self.consume(TokenKind.intLiteral)
+			let value = try self.intLiteralValue(intTok, negated: false)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
+		end 'intPattern'
+
+		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolPattern'
+			let value = 1 as ParsedInt if self.at(TokenKind.true) else 0 as ParsedInt
+			self.advance()
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.boolean, scrutTag: scrutTag, patternTok: firstTok)
+		end 'boolPattern'
+
+		if self.at(TokenKind.charLiteral) 'charPattern'
+			let charTok = try self.consume(TokenKind.charLiteral)
+			let value = try self.decodeCharPatternValue(charTok)
+			return try self.checkScalarPatternBound(value, valTag: ValueTypeTag.integer, scrutTag: scrutTag, patternTok: firstTok)
+		end 'charPattern'
+
+		if self.at(TokenKind.identifier) 'enumCasePattern'
+			throw ParseError.unsupported("a match pattern naming '{String.from(firstTok.value)}' (only literal, range, and 'or' patterns over a scalar are supported; enum-case patterns arrive in a later wave)", line: firstTok.line, column: firstTok.column)
+		end 'enumCasePattern'
+
+		throw ParseError.expectedExpression(firstTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
+	end 'decodeScalarPatternBound'
+
+	// A pattern bound must be comparable to the scrutinee — the interval twin of `checkPatternType`,
+	// asked over a decoded value + its tag rather than an emitted ValueId, so the failure is the same
+	// match-specific E2028.
+	function checkScalarPatternBound(value ParsedInt, valTag ValueTypeTag, scrutTag ValueTypeTag, patternTok Token) returns ParsedInt throws ParseError
+		if not comparableOperands(scrutTag, right: valTag) 'mismatch'
+			throw ParseError.matchPatternTypeMismatch(typeTagName(valTag), scrutineeType: typeTagName(scrutTag), line: patternTok.line, column: patternTok.column)
+		end 'mismatch'
+		return value
+	end 'checkScalarPatternBound'
 
 	// ============================================================================================
 	// ENUM `match` — case-name patterns + the OPEN #21 range rule (P1.1b wave B).
@@ -10157,30 +10411,31 @@ export type Parser
 		return requireEnumLayout(decl).isBoxed()
 	end 'valueIsBoxedUnion'
 
-	// One arm's enum pattern: the boolean condition plus any payload bindings the arm body declares.
-	// Alternatives are OR-folded (`red or blue`) exactly as the scalar path does — a bitwise `or` over
-	// the `bool`s, eager because a pattern has no side effects. A payload BINDING is legal only on a
-	// SINGLE case (`walk(dir)`); a binding on an or-alternative (`stay or walk(dir)`) is a later rung.
-	function emitEnumPatternCondition(subject ValueId, layout EnumLayout, covered BoolArray) returns EnumPatternResult throws ParseError
-		let first = try self.emitEnumPatternAtom(subject, layout: layout, covered: covered)
+	// One arm's enum pattern, reduced to DISPATCH INTERVALS over the case tags (P1.1b + match-dispatch).
+	// Alternatives (`red or blue`) each contribute their interval(s); a payload BINDING is legal only on
+	// a SINGLE case (`walk(dir)`), never on an or-alternative. Returns the payload bindings the arm body
+	// declares (empty for a bare case, an or-chain, or a range). Replaces the old compare-emitting
+	// `emitEnumPatternCondition`: an enum/union tag is an i64, so an enum arm ALWAYS feeds the interval
+	// plan, and the per-case `== tag` compare is emitted later — once — by the dispatch itself.
+	function collectEnumPatternIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns PayloadBindingArray throws ParseError
+		let first = try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into)
 		if not self.at(TokenKind.or) 'single'
 			return first
 		end 'single'
 
 		try self.rejectOrPatternBinding(first)
-		var cond = first.cond
 		while self.at(TokenKind.or) 'orChain'
-			let orTok = try self.consume(TokenKind.or)
-			let rhs = try self.emitEnumPatternAtom(subject, layout: layout, covered: covered)
+			try self.consume(TokenKind.or)
+			let rhs = try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into)
 			try self.rejectOrPatternBinding(rhs)
-			cond = try self.emitBinOp(cond, rhs: rhs.cond, op: MaxonBinOp.bitOr, opTok: orTok)
 		end 'orChain'
-		return EnumPatternResult.noBindings(cond)
-	end 'emitEnumPatternCondition'
+		return PayloadBindingArray.create()
+	end 'collectEnumPatternIntervals'
 
 	// One alternative: a single case (`red`, or `walk(dir)` binding its payload) or a case-name range
-	// (`low to high`, `low upto high`). Only the single-case form may carry payload bindings.
-	function emitEnumPatternAtom(subject ValueId, layout EnumLayout, covered BoolArray) returns EnumPatternResult throws ParseError
+	// (`low to high`, `low upto high`). Only the single-case form may carry payload bindings. Appends the
+	// covered case tag(s) as point/range intervals into `into` and returns the payload bindings.
+	function collectEnumPatternAtomIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns PayloadBindingArray throws ParseError
 		let patternTok = self.current()
 		let lowIndex = try self.resolveEnumArmCase(layout)
 
@@ -10188,8 +10443,8 @@ export type Parser
 			let isUpto = self.at(TokenKind.upto)
 			self.advance()
 			let highIndex = try self.resolveEnumArmCase(layout)
-			let rangeCond = try self.emitEnumRange(subject, layout: layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok)
-			return EnumPatternResult.noBindings(rangeCond)
+			try self.collectEnumRangeIntervals(layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok, bodyBlockId: bodyBlockId, into: into)
+			return PayloadBindingArray.create()
 		end 'rangeArm'
 
 		var bindings = PayloadBindingArray.create()
@@ -10198,17 +10453,19 @@ export type Parser
 		end 'payloadBind'
 
 		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
-		return EnumPatternResult.create(self.emitEnumTagCompare(subject, layout: layout, index: lowIndex, opTok: patternTok), bindings: bindings)
-	end 'emitEnumPatternAtom'
+		let tag = layout.tagOfIndex(lowIndex)
+		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+		return bindings
+	end 'collectEnumPatternAtomIntervals'
 
 	// A payload binding is meaningful only where exactly one case matched — refuse it on an
 	// or-alternative (`stay or walk(dir)`), whose alternatives may be different cases of different
 	// arity. Positioned at the binding name.
-	function rejectOrPatternBinding(atom EnumPatternResult) throws ParseError
-		if atom.bindings.count() == 0 'noBinding'
+	function rejectOrPatternBinding(atomBindings PayloadBindingArray) throws ParseError
+		if atomBindings.count() == 0 'noBinding'
 			return
 		end 'noBinding'
-		let binding = try atom.bindings.get(0) otherwise panic("rejectOrPatternBinding: bindings.count() > 0 but get(0) failed")
+		let binding = try atomBindings.get(0) otherwise panic("rejectOrPatternBinding: bindings.count() > 0 but get(0) failed")
 		throw ParseError.unsupported("a payload binding '{String.from(binding.nameTok.value)}' on an `or`-pattern (a binding shared across the alternatives of an or-arm arrives at a later rung)", line: binding.nameTok.line, column: binding.nameTok.column)
 	end 'rejectOrPatternBinding'
 
@@ -10348,46 +10605,28 @@ export type Parser
 		try covered.set(index, value: true) otherwise panic("markEnumCovered: covered.set OOB at {index}")
 	end 'markEnumCovered'
 
-	// `subject == tag(index)` — one case's compare. The `subject` is the DISPATCH SUBJECT: a scalar
-	// enum's value IS its tag (a `named` value), a boxed union's is its loaded i64 tag.
-	function emitEnumTagCompare(subject ValueId, layout EnumLayout, index CaseIndex, opTok Token) returns ValueId
-		return self.emitDispatchCompare(subject, tag: layout.tagOfIndex(index), op: MaxonCmpOp.eq, opTok: opTok)
-	end 'emitEnumTagCompare'
-
-	// ⭐ **THE MATCH DISPATCH COMPARE** — `subject <op> tag`, emitting `MaxonOp.compare` DIRECTLY
-	// rather than through `emitCompare`, and that bypass is load-bearing. `emitCompare` refuses a
-	// `union` operand (E3066), and a PAYLOAD-FREE union match dispatches on the scrutinee itself (a
-	// `named(union)` value) — so routing through it would reject `match u`. Both the subject (a scalar
-	// enum's `named` value, or a boxed union's loaded i64 tag) and the tag literal collapse to i64, so
-	// this is a plain i64 comparison with no operand type to check. It emits the SAME `compare` op
-	// `emitCompare` did for a payload-free match, so no committed golden moves.
+	// ⭐ **THE MATCH DISPATCH COMPARE** — `subject <op> tag`, emitting `MaxonOp.compare` DIRECTLY rather
+	// than through `emitCompare`, and that bypass is load-bearing. `emitCompare` refuses a `union` operand
+	// (E3066), and a PAYLOAD-FREE union match dispatches on the scrutinee itself (a `named(union)` value)
+	// — so routing through it would reject `match u`. Both the subject (a scalar enum's `named` value, a
+	// boxed union's loaded i64 tag, or a scalar int/char/bool) and the tag literal collapse to i64, so this
+	// is a plain i64 comparison with no operand type to check. It is the ONE compare every dispatch node
+	// emits: a point leaf's `==`, a range leaf's `>=`/`<=`, and an internal node's `<` pivot test.
 	function emitDispatchCompare(subject ValueId, tag ParsedInt, op MaxonCmpOp, opTok Token) returns ValueId
 		let tagLit = self.emitLiteral(tag, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
-		return self.emitDispatchCompareWith(subject, tagLit: tagLit, op: op, opTok: opTok)
-	end 'emitDispatchCompare'
-
-	// The compare over an ALREADY-EMITTED tag literal — split from `emitDispatchCompare` so the range
-	// path can emit BOTH bound literals before EITHER compare, which is the op ORDER the committed
-	// range goldens pin (fusing the literal into each compare would interleave them and move every
-	// golden without changing a single op).
-	function emitDispatchCompareWith(subject ValueId, tagLit ValueId, op MaxonCmpOp, opTok Token) returns ValueId
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: subject, rhs: tagLit, op: op), range: SourceRange.ofToken(opTok))
 		return result
-	end 'emitDispatchCompareWith'
+	end 'emitDispatchCompare'
 
-	// ⭐⭐⭐ THE OPEN #21 RANGE RULE. A range arm `low to high` MEANS the OR of the cases it covers,
-	// selected BY DECLARATION INDEX — the slice `[indexOfCase(low), indexOfCase(high)]` (`upto` drops
-	// the upper). It is NOT a raw-value range over the tags.
-	//
-	// The optimization (and the trap): emit a two-compare TAG range `[min tag, max tag]` over the
-	// covered set ONLY where no UNCOVERED case's tag falls inside that closed interval; otherwise the
-	// OR of the covered cases (one `== tag` each). For an auto-increment enum the tags equal the
-	// indices, so the covered span is contiguous and the range always fits; explicit out-of-order
-	// tags (`ok = 500  notFound = 200` spanning [200,500] over an uncovered `serverError = 404`) are
-	// where the OR is forced. The synthesized bounds are the real min/max TAGS, so they are inclusive
-	// and `upto` is already accounted for by which cases the slice covers.
-	function emitEnumRange(scrut ValueId, layout EnumLayout, lowIndex CaseIndex, highIndex CaseIndex, isUpto bool, covered BoolArray, patternTok Token) returns ValueId throws ParseError
+	// The OPEN #21 range rule, reduced to DISPATCH INTERVALS. A range arm `low to high` MEANS the cases in
+	// the declaration-index slice `[low, lastCovered]` (`upto` drops the upper). Where the covered cases'
+	// tags form a closed interval `[minTag, maxTag]` containing NO uncovered case's tag (`tagRangeCovers`),
+	// the whole slice is ONE interval; otherwise each covered case is its own point interval, so an
+	// uncovered case whose tag falls between them cannot slip in. Same coverage bookkeeping and same
+	// `tagRangeCovers` predicate the old compare-emitting `emitEnumRange` used — only the OUTPUT is an
+	// interval list, from which the dispatch emits the range/point compares once.
+	function collectEnumRangeIntervals(layout EnumLayout, lowIndex CaseIndex, highIndex CaseIndex, isUpto bool, covered BoolArray, patternTok Token, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		// An empty range: `upto` whose upper is at or before the lower, or a reversed `to` (upper
 		// declared before lower). Computed before `lastCovered` so its subtraction cannot underflow.
 		let coversNothing = (isUpto and highIndex <= lowIndex) or ((not isUpto) and highIndex < lowIndex)
@@ -10414,24 +10653,18 @@ export type Parser
 		end 'coverEach'
 
 		if self.tagRangeCovers(layout, lowIndex: lowIndex, lastCovered: lastCovered, loTag: loTag, hiTag: hiTag) 'expressibleAsRange'
-			// Both bound literals BEFORE either compare — the op order the range goldens pin.
-			let loLit = self.emitLiteral(loTag, valueType: MaxonType.integer, range: SourceRange.ofToken(patternTok))
-			let hiLit = self.emitLiteral(hiTag, valueType: MaxonType.integer, range: SourceRange.ofToken(patternTok))
-			let loCmp = self.emitDispatchCompareWith(scrut, tagLit: loLit, op: MaxonCmpOp.ge, opTok: patternTok)
-			let hiCmp = self.emitDispatchCompareWith(scrut, tagLit: hiLit, op: MaxonCmpOp.le, opTok: patternTok)
-			return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: patternTok)
+			into.push(DispatchInterval.create(loTag, hi: hiTag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+			return
 		end 'expressibleAsRange'
 
-		// The OR of the covered cases — the same path a bare case name takes, one compare each.
-		var cond = self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
-		var j = lowIndex + 1
-		while j <= lastCovered 'orEach'
-			let rhs = self.emitEnumTagCompare(scrut, layout: layout, index: j, opTok: patternTok)
-			cond = try self.emitBinOp(cond, rhs: rhs, op: MaxonBinOp.bitOr, opTok: patternTok)
+		// The covered cases as individual point intervals — the interval twin of the old per-case OR.
+		var j = lowIndex
+		while j <= lastCovered 'pointEach'
+			let tag = layout.tagOfIndex(j)
+			into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
 			j = j + 1
-		end 'orEach'
-		return cond
-	end 'emitEnumRange'
+		end 'pointEach'
+	end 'collectEnumRangeIntervals'
 
 	// Is a two-compare tag range `[loTag, hiTag]` faithful to the covered slice — i.e. does NO
 	// uncovered case's tag fall inside that closed interval? The predicate at the heart of OPEN #21:
@@ -10473,6 +10706,173 @@ export type Parser
 			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: missing, line: endTok.line, column: endTok.column)
 		end 'incomplete'
 	end 'checkEnumExhaustive'
+
+	// ⭐ **CLIP the raw arm intervals into a SORTED, DISJOINT set where EARLIER ARMS WIN.** Overlaps are
+	// legal on a scalar match (two ranges may overlap, or a later single value fall inside an earlier
+	// range) and the FIRST arm claims the overlap — exactly the order the linear chain gave by testing
+	// arms top to bottom. A binary search cannot rely on arm order, so the overlap is resolved HERE: each
+	// raw interval, in arm order, claims only the value space not already claimed, which may split it into
+	// several disjoint pieces or drop it entirely. The result is sorted by `lo`, which is what makes the
+	// median-split search correct. (Enum/union intervals are already disjoint — `markEnumCovered` rejects
+	// overlap — so for them this only sorts.)
+	function normalizeDispatchIntervals(raw DispatchIntervalArray) returns DispatchIntervalArray
+		var claimed = DispatchIntervalArray.create()
+		for r in raw 'each'
+			self.addFreeSubIntervals(claimed, lo: r.lo, hi: r.hi, targetBlockId: r.targetBlockId, edgeArgs: r.edgeArgs)
+		end 'each'
+		return claimed
+	end 'normalizeDispatchIntervals'
+
+	// Insert `[lo, hi]`'s free sub-intervals (those not covered by any already-`claimed` interval) into
+	// `claimed`, tagged with this arm's body + edge args, keeping `claimed` sorted by `lo` and disjoint.
+	// The `- 1` / `+ 1` cannot overflow: `c.lo - 1` runs only when `c.lo > cursor >= lo >= i64.min`, and
+	// `c.hi + 1` only when `c.hi < hi <= i64.max` (the `c.hi >= hi` case broke out first).
+	function addFreeSubIntervals(claimed DispatchIntervalArray, lo ParsedInt, hi ParsedInt, targetBlockId BlockId, edgeArgs ValueIdArray)
+		var cursor = lo
+		var reachedEnd = false
+		var pieces = DispatchIntervalArray.create()
+		for i in 0 upto claimed.count() 'scan'
+			let c = try claimed.get(i) otherwise panic("addFreeSubIntervals: claimed.get OOB at {i}")
+			if c.hi < cursor 'before'
+				continue
+			end 'before'
+			if c.lo > hi 'after'
+				break
+			end 'after'
+			if c.lo > cursor 'gapBefore'
+				pieces.push(DispatchInterval.create(cursor, hi: c.lo - 1, targetBlockId: targetBlockId, edgeArgs: edgeArgs))
+			end 'gapBefore'
+			if c.hi >= hi 'consumedToEnd'
+				reachedEnd = true
+				break
+			end 'consumedToEnd'
+			cursor = c.hi + 1
+		end 'scan'
+
+		if not reachedEnd 'trailingGap'
+			pieces.push(DispatchInterval.create(cursor, hi: hi, targetBlockId: targetBlockId, edgeArgs: edgeArgs))
+		end 'trailingGap'
+
+		for p in pieces 'insert'
+			self.insertSortedInterval(claimed, piece: p)
+		end 'insert'
+	end 'addFreeSubIntervals'
+
+	// Insert `piece` into `claimed` (sorted by `lo`, disjoint) at the position that keeps it sorted.
+	function insertSortedInterval(claimed DispatchIntervalArray, piece DispatchInterval)
+		var idx = claimed.count()
+		for i in 0 upto claimed.count() 'find'
+			let c = try claimed.get(i) otherwise panic("insertSortedInterval: claimed.get OOB at {i}")
+			if c.lo > piece.lo 'here'
+				idx = i
+				break
+			end 'here'
+		end 'find'
+		claimed.insert(idx, value: piece)
+	end 'insertSortedInterval'
+
+	// ⭐ **EMIT A `match`'s DISPATCH from its normalized interval plan** — the ONE place the strategy is
+	// chosen. Below `MinIntervalsForDispatch` intervals it is a linear compare chain; at or above it a
+	// balanced binary search over the sorted disjoint intervals. Every compare reads `subject` (loaded
+	// once, in `entry`, and left in a register across the whole tree); a value in NO interval reaches
+	// `missTarget` (the `default` body, or a `dead` block for an exhaustive enum). NO new IR op — internal
+	// nodes compare `subject < pivot` and leaves test their interval, all with the same `compare`/
+	// `condBranch` the chain used, so the backend and every later pass are untouched (a jump table is Slice 2).
+	function emitMatchDispatch(func IrFunction, entry IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+		try self.emitDispatchRange(func, from: 0, to: intervals.count(), block: entry, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+	end 'emitMatchDispatch'
+
+	// The recursion. `[from, to)` is a contiguous slice of the sorted disjoint intervals. A short slice is
+	// a chain; a long one splits on the median interval's lower bound — every interval below the pivot lies
+	// in the left half and every one at or above it in the right (sorted + disjoint), so both halves are
+	// non-empty (the count is at least `MinIntervalsForDispatch`) and the recursion terminates.
+	function emitDispatchRange(func IrFunction, from ElementCount, to ElementCount, block IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+		let count = to -from
+		if count < MinIntervalsForDispatch 'chain'
+			try self.emitDispatchChain(func, from: from, to: to, block: block, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+			return
+		end 'chain'
+
+		let mid = from +count / 2
+		let pivot = (try intervals.get(mid) otherwise panic("emitDispatchRange: intervals.get OOB at pivot {mid}")).lo
+		self.currentBlock = block
+		let cond = self.emitDispatchCompare(subject, tag: pivot, op: MaxonCmpOp.lt, opTok: opTok)
+		// `var` because each half is emitted INTO its block by the recursive call, which mutates it — the
+		// same mutating-parameter sensitivity `dispatchEntry` carries.
+		var lowerBlock = self.newBlock(func, label: b"matchlo", line: opTok.line)
+		var upperBlock = self.newBlock(func, label: b"matchhi", line: opTok.line)
+		// The internal branch routes between two sub-TESTS, not to an arm body — neither target carries a
+		// carried-var phi (both are dominated by `entry`, where the pre-match values still hold), so the
+		// branch records no edge args.
+		self.emitCondBranch(block, cond: cond, thenId: lowerBlock.id, elseId: upperBlock.id, ifTok: opTok)
+		try self.emitDispatchRange(func, from: from, to: mid, block: lowerBlock, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+		try self.emitDispatchRange(func, from: mid, to: to, block: upperBlock, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+	end 'emitDispatchRange'
+
+	// A leaf region: test each interval in turn, branching to its arm body on a hit and to the next test
+	// (or `missTarget` after the last) on a miss. `recordBranchEdge` is a no-op for an empty arg list, so
+	// the internal chain edges (no phis) and a phi-less body/miss cost nothing.
+	function emitDispatchChain(func IrFunction, from ElementCount, to ElementCount, block IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+		// A default-only planned match (`match x 'c' default gives … end`) collects NO intervals — every
+		// value is a miss — so the entry unconditionally branches to the default, with no compare. The
+		// tree recursion never reaches here empty (it splits only at count >= 4 into two non-empty halves),
+		// so this is the top-level empty plan alone, but handling it here keeps the terminator obligation in
+		// one place.
+		if from == to 'noIntervals'
+			self.recordBranchEdge(block, targetId: missTarget, argIds: missArgs)
+			self.emitBranch(block, targetId: missTarget)
+			return
+		end 'noIntervals'
+
+		var current = block
+		for i in from upto to 'each'
+			let interval = try intervals.get(i) otherwise panic("emitDispatchChain: intervals.get OOB at {i}")
+			self.currentBlock = current
+			let cond = try self.emitIntervalHitTest(subject, lo: interval.lo, hi: interval.hi, opTok: opTok)
+
+			let isLast = i == to -1
+			var elseTarget = missTarget
+			var elseArgs = missArgs
+			var nextBlock = current
+			if not isLast 'moreTests'
+				nextBlock = self.newBlock(func, label: b"matchnext", line: opTok.line)
+				elseTarget = nextBlock.id
+				elseArgs = ValueIdArray.create()
+			end 'moreTests'
+
+			self.recordBranchEdge(current, targetId: interval.targetBlockId, argIds: interval.edgeArgs)
+			self.recordBranchEdge(current, targetId: elseTarget, argIds: elseArgs)
+			self.emitCondBranch(current, cond: cond, thenId: interval.targetBlockId, elseId: elseTarget, ifTok: opTok)
+			current = nextBlock
+		end 'each'
+	end 'emitDispatchChain'
+
+	// The boolean "does `subject` fall in `[lo, hi]`?": an `==` for a point, a two-sided `>=`/`<=` `and`
+	// for a range, one open compare when a bound is `i64.min`/`i64.max` (the redundant side elided, exactly
+	// as `emitOpenLowerRange`/`emitClosedRange` treat an open bound), and a constant `true` for a
+	// min-to-max interval that covers everything (a sole all-covering arm — after clipping it can only be
+	// the whole plan, since it would subsume any later arm).
+	function emitIntervalHitTest(subject ValueId, lo ParsedInt, hi ParsedInt, opTok Token) returns ValueId throws ParseError
+		if lo == hi 'point'
+			return self.emitDispatchCompare(subject, tag: lo, op: MaxonCmpOp.eq, opTok: opTok)
+		end 'point'
+
+		let needLo = lo > I64MinBound
+		let needHi = hi < I64MaxBound
+		if needLo and needHi 'closed'
+			let loCmp = self.emitDispatchCompare(subject, tag: lo, op: MaxonCmpOp.ge, opTok: opTok)
+			let hiCmp = self.emitDispatchCompare(subject, tag: hi, op: MaxonCmpOp.le, opTok: opTok)
+			return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: opTok)
+		end 'closed'
+		if needLo 'openUpper'
+			return self.emitDispatchCompare(subject, tag: lo, op: MaxonCmpOp.ge, opTok: opTok)
+		end 'openUpper'
+		if needHi 'openLower'
+			return self.emitDispatchCompare(subject, tag: hi, op: MaxonCmpOp.le, opTok: opTok)
+		end 'openLower'
+
+		return self.emitLiteral(BoolTrueValue, valueType: MaxonType.boolean, range: SourceRange.ofToken(opTok))
+	end 'emitIntervalHitTest'
 
 	// Mint a phi (block-arg) on `block` and return its fresh ValueId. The ONE mint site for
 	// every merge phi the parser makes — if-continuation, loop header, loop exit, and (new
@@ -11690,8 +12090,8 @@ export type Parser
 		// `==`/`!=` have no synthesized equality; `<`/`>`/`<=`/`>=` a fortiori have no meaning either, so
 		// ALL of them reject here (the message names whichever operator the author wrote). An ENUM's value
 		// IS its i64 tag, so `Color.red == c` is a real tag compare and stays legal; only a `union`
-		// (`isUnion`) is rejected. The pattern-condition path (`emitEnumTagCompare`) builds its tag compare
-		// with its own `MaxonOp.compare` and never routes through here, so a `match` arm is unaffected.
+		// (`isUnion`) is rejected. The match dispatch (`emitDispatchCompare`) builds its tag compare with
+		// its own `MaxonOp.compare` and never routes through here, so a `match` arm is unaffected.
 		if self.valueIsUnion(lhs) or self.valueIsUnion(rhs) 'unionCompare'
 			throw ParseError.unionNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'unionCompare'
@@ -11977,13 +12377,21 @@ export type Parser
 	// ("report them as a diagnostic instead of silently producing the wrong byte").
 	function parseCharLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.charLiteral)
+		let value = try self.decodeCharPatternValue(tok)
+		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+	end 'parseCharLiteral'
+
+	// Decode a single-byte character literal to its byte value, or the same positioned diagnostic
+	// `parseCharLiteral` gives for an empty/multi-byte/bad-escape literal. Shared with the match interval
+	// plan, which needs the byte VALUE (a pattern bound) rather than an emitted `literal` op.
+	function decodeCharPatternValue(tok Token) returns ParsedInt throws ParseError
 		match decodeCharLiteral(tok.value) 'decoded'
-			byte(value) then return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+			byte(value) then return value
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
 			multiByte then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' (a character wider than one byte is a `Character` — a heap value with `.bytes()` and `.asciiValue()` — which arrives with String; a single-byte literal materializes as its byte value)", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 		end 'decoded'
-	end 'parseCharLiteral'
+	end 'decodeCharPatternValue'
 
 	// `"hello"`, `""`, `"Use \{expr\} for interpolation"` — a `String` LITERAL in operand position (P1.2
 	// wave A). It materializes as a `stringLiteral` op carrying the DECODED bytes, typed `string`;

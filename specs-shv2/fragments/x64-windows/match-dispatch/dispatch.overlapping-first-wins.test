@@ -1,0 +1,181 @@
+// Test: dispatch.overlapping-first-wins
+typealias N = int(i64.min to i64.max)
+
+function over(x N) returns N
+	return match x 'c'
+		1 to 100 gives 1
+		50 to 60 gives 2
+		200 gives 3
+		300 gives 4
+		400 gives 5
+		default gives 9
+	end 'c'
+end 'over'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if over(55) == 1 'a' n = n + 1 end 'a'
+	if over(50) == 1 'b' n = n + 1 end 'b'
+	if over(60) == 1 'c' n = n + 1 end 'c'
+	if over(1) == 1 'd' n = n + 1 end 'd'
+	if over(100) == 1 'e' n = n + 1 end 'e'
+	if over(200) == 3 'f' n = n + 1 end 'f'
+	if over(400) == 5 'g' n = n + 1 end 'g'
+	if over(150) == 9 'h' n = n + 1 end 'h'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 8
+---
+func @over {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 300
+    x64.jcc less, matchlo
+    x64.jmp matchhi
+  matchlo:
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 100
+    x64.setccReg lessEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 200
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchhi:
+    x64.cmpRegImm32 rcx, 300
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 400
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.movRegImm32 r8, 5
+    x64.jmp matchcont
+  matchdefault:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 55
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 50
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 60
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 100
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, e
+    x64.jmp critsplit
+  e:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 200
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, f
+    x64.jmp critsplit
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 400
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 5
+    x64.jcc equal, g
+    x64.jmp critsplit
+  g:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 150
+    x64.callDirect over
+    x64.cmpRegImm32 r8, 9
+    x64.jcc equal, h
+    x64.jmp critsplit
+  h:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

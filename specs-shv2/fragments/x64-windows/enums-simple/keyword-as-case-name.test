@@ -32,6 +32,14 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 4
+    x64.jcc less, matchlo
+    x64.jmp matchhi
+  matchlo:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc less, matchlo
+    x64.jmp matchhi
+  matchlo:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, matcharm
     x64.jmp matchnext
@@ -41,11 +49,11 @@ func @main {
   matchnext:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
-  matchnext:
+  matchhi:
     x64.cmpRegImm32 rax, 2
     x64.jcc equal, matcharm
     x64.jmp matchnext
@@ -55,11 +63,15 @@ func @main {
   matchnext:
     x64.cmpRegImm32 rax, 3
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
-  matchnext:
+  matchhi:
+    x64.cmpRegImm32 rax, 6
+    x64.jcc less, matchlo
+    x64.jmp matchhi
+  matchlo:
     x64.cmpRegImm32 rax, 4
     x64.jcc equal, matcharm
     x64.jmp matchnext
@@ -69,11 +81,11 @@ func @main {
   matchnext:
     x64.cmpRegImm32 rax, 5
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
-  matchnext:
+  matchhi:
     x64.cmpRegImm32 rax, 6
     x64.jcc equal, matcharm
     x64.jmp matchnext
@@ -83,12 +95,12 @@ func @main {
   matchnext:
     x64.cmpRegImm32 rax, 7
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchcont:
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchdead:
 }

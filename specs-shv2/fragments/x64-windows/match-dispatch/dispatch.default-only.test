@@ -1,0 +1,83 @@
+// Test: dispatch.default-only
+typealias N = int(0 to 100)
+
+function only(x N) returns N
+	return match x 'c'
+		default gives 7
+	end 'c'
+end 'only'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if only(5) == 7 'a' n = n + 1 end 'a'
+	if only(0) == 7 'b' n = n + 1 end 'b'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @only {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.jmp matchdefault
+  matchdefault:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 5
+    x64.callDirect only
+    x64.cmpRegImm32 r8, 7
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect only
+    x64.cmpRegImm32 r8, 7
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

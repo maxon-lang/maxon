@@ -23,17 +23,9 @@ func @classify {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 500
-    x64.setccReg equal, rax
     x64.cmpRegImm32 rcx, 200
-    x64.setccReg equal, rdx
-    x64.orRegReg rax, rax, rdx
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, matcharm
+    x64.jcc equal, matcharm
     x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 41
-    x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rcx, 404
     x64.jcc equal, matcharm
@@ -41,10 +33,17 @@ func @classify {
   matcharm:
     x64.movRegImm32 r8, 42
     x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 500
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 41
+    x64.jmp matchcont
   matchcont:
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchdead:
 }
 
 func @main {
