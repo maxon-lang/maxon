@@ -235,7 +235,7 @@ export let ArrAppendManagedName = b"__arr_append_managed"
 // <type parameter>` field inside a GENERIC body serves both a MANAGED (`Container with String`) and a TRIVIAL
 // (`Container with SmallInt`) instantiation from ONE shared body, so the shared body cannot pick the trivial
 // byte-blit or the managed deep-clone statically. Each is a thin RUNTIME wrapper that takes the enclosing
-// instance's layout DESCRIPTOR (appended by `LowerMaxonToStd.appendOpaqueArrayCopyDescriptor`, exactly as an
+// instance's layout DESCRIPTOR (appended by `LowerMaxonToStd.opaqueCopyArgsWithDescriptor`, exactly as an
 // opaque `__arr_create` appends its `destroyFunc@40`), reads the descriptor's `copyFunc@32`, and BRANCHES: a
 // 0 slot (a trivial instantiation — a scalar element byte-copies correctly, or a non-copied managed element
 // whose base the front end rejected) routes to the trivial `__arr_{slice,clone,append}` (the COW/block-copy);
@@ -1991,7 +1991,7 @@ end 'buildArrAppendManaged'
 // --- The OPAQUE-`T` copy wrappers (P1.7 slice 3b-vi-b-β) ---
 //
 // Each takes the enclosing instance's layout DESCRIPTOR as its LAST parameter (appended by
-// `LowerMaxonToStd.appendOpaqueArrayCopyDescriptor`), reads `copyFunc@32`, and branches ONCE on it: a 0 slot
+// `LowerMaxonToStd.opaqueCopyArgsWithDescriptor`), reads `copyFunc@32`, and branches ONCE on it: a 0 slot
 // (a TRIVIAL instantiation — a scalar element byte-copies correctly) routes to the trivial COW/block-copy
 // helper; a non-zero slot (a MANAGED instantiation) routes to the α deep-clone helper with the descriptor's
 // cloner as `elemCloneFn`. The branch is the run-time analogue of `emitDestroyRangeIfManaged`'s
