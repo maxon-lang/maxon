@@ -57,7 +57,8 @@ class Program {
     Console.WriteLine("  --literal-coverage       Report static-eligibility of managed literal sites to stderr (measurement only)");
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
     Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
-    Console.WriteLine("  --debug-info             Also write a <output>.mxdbg debug-info sidecar (exe stays byte-identical)");
+    Console.WriteLine("  --debug-info             Force-write the <output>.mxdbg debug-info sidecar (on by default; exe stays byte-identical)");
+    Console.WriteLine("  --no-debug-info          Do not write the <output>.mxdbg debug-info sidecar");
     Console.WriteLine("  --timing                 Print per-stage compile timings to stderr");
     Console.WriteLine("  --timing-functions=N     Also print top-N hottest functions per heavy pass (implies --timing)");
     Console.WriteLine();
@@ -217,9 +218,16 @@ class Program {
     return uint.TryParse(s, out offset);
   }
 
+  // The `maxon build` debug-info tri-state: null = not mentioned on the CLI (fall back to the
+  // build.maxon config, then the on-by-default), true = --debug-info, false = --no-debug-info.
+  // Only `maxon build` acts on it (RunBuild); other commands leave the compiler's own default (off),
+  // so spec-test and internal run/build-runner compiles never pay for or emit a sidecar.
+  static bool? _debugInfoOverride;
+
   static (bool emitIr, bool dumpStages, bool valid) ParseOptions(string[] args, HashSet<string>? additionalOptions = null) {
     var emitIr = false;
     var dumpStages = false;
+    _debugInfoOverride = null;
 
     foreach (var arg in args) {
       if (arg == "--emit-ir") {
@@ -240,7 +248,9 @@ class Program {
       } else if (arg == "--debugstream") {
         Compiler.Compiler.DebugStream = true;
       } else if (arg == "--debug-info") {
-        Compiler.Compiler.DebugInfo = true;
+        _debugInfoOverride = true;
+      } else if (arg == "--no-debug-info") {
+        _debugInfoOverride = false;
       } else if (arg == "--timing") {
         Compiler.StageTimer.Enabled = true;
       } else if (arg.StartsWith("--timing-functions=")) {
@@ -314,10 +324,15 @@ class Program {
 
     var target = ParseTarget(args);
     var path = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
-    // --debug-info is not part of the build-cache key, so a warm cache would otherwise skip
-    // compilation and never write the sidecar. Bypass the cache when it is set, exactly as
-    // --emit-ir/--dump-stages do for their extra artifacts.
-    var useCache = !emitIr && !dumpStages && !Compiler.Compiler.DebugInfo;
+
+    // The debug-info sidecar is ON BY DEFAULT for `maxon build`; --no-debug-info opts out, and a
+    // project's build.maxon can opt out via debug_info:false (resolved below in the build.maxon
+    // path, once its config is known). Because the exe is byte-identical whether or not the sidecar
+    // is written, this never changes generated code — and the sidecar does NOT bypass the build
+    // cache: BuildCache treats an existing sidecar as valid and only misses when one is wanted but
+    // absent. So the cache is disabled only for the IR/stage-dump artifacts, as before.
+    var useCache = !emitIr && !dumpStages;
+    Compiler.Compiler.DebugInfo = _debugInfoOverride ?? true;
 
     if (File.Exists(path)) {
       // Single file: compile directly
@@ -371,16 +386,12 @@ class Program {
         var registryGateResult = CheckErrorCodeRegistryFor(path);
         if (registryGateResult != 0) return registryGateResult;
 
-        // Check project cache (includes build.maxon to detect config changes).
         // The buildFile sits at the project root, so its RootPath is `path`.
         var allSources = new SourceFile[] { new(buildFile, buildContent, path) }.Concat(projectSources).ToArray();
-        if (useCache && BuildCache.IsCacheValid(path, allSources, null, target)) {
-          var cachedOutput = BuildCache.GetCachedOutputPath(path);
-          if (cachedOutput != null) {
-            Console.WriteLine($"Compiled -> {cachedOutput}");
-            return 0;
-          }
-        }
+        // The project cache is probed BELOW, once the build-runner yields the config: the effective
+        // debug-info state (and thus whether a sidecar must be present for a hit) depends on
+        // config.debug_info, unknown until then. Running the separately-cached build-runner first
+        // costs one fast exe spawn on a warm build.
 
         // Cache build.maxon → .maxon-run.exe separately (only depends on build.maxon + compiler).
         // build.maxon is at the project root; pass `path` as its RootPath.
@@ -430,9 +441,10 @@ class Program {
           return 1;
         }
 
-        // build.maxon can request the debug-info sidecar (debug_info: true), the same as the
-        // --debug-info CLI flag. Either source turns it on for the project compile below.
-        if (config.Debug_info) Compiler.Compiler.DebugInfo = true;
+        // Debug-info precedence: an explicit CLI flag wins; otherwise the project's build.maxon
+        // decides (debug_info); otherwise on by default. Only governs whether a <output>.mxdbg is
+        // written — the exe is byte-identical regardless.
+        Compiler.Compiler.DebugInfo = _debugInfoOverride ?? config.Debug_info;
 
         // If build.maxon supplied an output path with no extension, append the
         // host-target executable extension (".exe" on Windows, none elsewhere)
@@ -452,6 +464,13 @@ class Program {
         var outputDir = Path.GetDirectoryName(outputPath);
         if (outputDir != null && !Directory.Exists(outputDir))
           Directory.CreateDirectory(outputDir);
+
+        // Output path and effective debug-info state are now both known — probe the project cache.
+        // A hit means the binary (and, when a sidecar is wanted, that sidecar) is already current.
+        if (useCache && BuildCache.IsCacheValid(path, allSources, outputPath, target)) {
+          Console.WriteLine($"Compiled -> {outputPath}");
+          return 0;
+        }
 
         var (irOut, dumpBase) = GetOutputPaths(outputPath, emitIr, dumpStages);
         var result = CompileAndReportResult(projectSources, outputPath, irOut,
@@ -586,10 +605,9 @@ class Program {
     var sources = new SourceFile[] { new(buildFile, content, directory) };
 
     var ext = GetOutputExtension(target);
-    // --debug-info is not part of the build-cache key, so a warm cache would otherwise skip
-    // compilation and never write the sidecar. Bypass the cache when it is set, exactly as
-    // --emit-ir/--dump-stages do for their extra artifacts.
-    var useCache = !emitIr && !dumpStages && !Compiler.Compiler.DebugInfo;
+    // The `maxon run` artifact is internal, so no debug-info sidecar is produced here (only
+    // `maxon build` turns it on). The cache is disabled only for the IR/stage-dump artifacts.
+    var useCache = !emitIr && !dumpStages;
     BuildCache.EnsureCacheDir(directory);
     var outputPath = Path.Combine(BuildCache.GetCacheDir(directory), $".maxon-run-{functionName}{ext}");
     var cacheName = $"run-{functionName}";

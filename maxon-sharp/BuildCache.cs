@@ -64,6 +64,14 @@ static class BuildCache {
     if (outputPath != null && manifest.OutputPath != Path.GetFullPath(outputPath)) return false;
     if (!File.Exists(manifest.OutputPath)) return false;
 
+    // A debug-info build must also have its sidecar next to the binary. Because the exe is
+    // byte-identical whether or not the sidecar is written, an EXISTING sidecar from any prior
+    // build of the same source is still valid for the cached binary — so the only cache miss a
+    // sidecar forces is "wanted but ABSENT" (it cannot be regenerated without a recompile). This
+    // is what lets the sidecar be on by default without ever bypassing the build cache.
+    if (Compiler.Compiler.DebugInfo
+        && !File.Exists(manifest.OutputPath + Debug.MxdbgFormat.SidecarExtension)) return false;
+
     var allSources = WithStdlibSources(sources);
     if (manifest.Sources.Count != allSources.Length) return false;
     foreach (var source in allSources) {
