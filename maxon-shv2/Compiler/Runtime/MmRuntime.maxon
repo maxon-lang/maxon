@@ -285,6 +285,52 @@ export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, p
 	return v
 end 'emitCmp'
 
+// ⭐ **THE ONE BYTE-GRANULAR FILL LOOP.** Overwrite `byteCount` bytes at `dest` with the low byte of
+// `fillValue`, one byte at a time (fill widths are not all 8-multiples — a `b"hi"` buffer is 2 bytes, a
+// `pop`'s vacated slot is one ranged element). `byteCount == 0` exits on the first compare, writing nothing.
+// Creates its own header/body/done blocks off `cur` and returns the continuation (`done`), so the caller
+// threads it like any other loop-emitting helper.
+//
+// ⚠ **IT IS SHARED ACROSS A FILE BOUNDARY ON PURPOSE, WHICH IS WHY IT LIVES HERE IN THE BASE LAYER.** Two
+// call sites fill a contiguous byte range with a constant: `__mm_free`'s poison (fill `PoisonByte`) and the
+// array capacity-slot zeroer (`ArrayRuntime`'s `clear`/`resize`-shrink/`pop`/`remove`, fill 0, which restore
+// the `[length, capacity)`-reads-zero invariant the element walk depends on). They were two independent copies
+// of the same loop in two files — nothing making them agree, so a future edit to one (a wider store, a changed
+// bound) would silently diverge from the other and corrupt exactly one of freed-payload poison / vacated-slot
+// zeroing. `MmRuntime` is the runtime's base layer — installed whenever the program touches the heap, and
+// already the home of the single-op emit helpers above that `ArrayRuntime` draws on — so homing the loop here
+// single-sources it without any new cross-layer dependency (the array runtime already depends on this file).
+export function emitFillRange(module StdModule, func IrFunction, cur IrBlock, dest ValueId, byteCount ValueId, fillValue ParsedInt, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"fillh")
+	var body = module.addBlock(func, label: b"fillb")
+	let done = module.addBlock(func, label: b"filld")
+
+	let zero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: byteCount, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let fillByte = ids.mint()
+	module.appendOp(body, op: StdOp.const(fillByte, value: fillValue, valueType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: fillByte, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitFillRange'
+
 // `__slab_alloc(size) -> ptr` — the bump allocator.
 //
 // ⭐ IT ALWAYS RETURNS ZEROED MEMORY, AND IT PAYS NOTHING FOR IT. `VirtualAlloc(MEM_COMMIT)` hands
@@ -604,9 +650,6 @@ function buildMmFree(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var poisonHeader = module.addBlock(func, label: b"psnh")
-	var poisonBody = module.addBlock(func, label: b"psnb")
-	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
@@ -622,37 +665,14 @@ function buildMmFree(module StdModule)
 	module.appendOp(entry, op: StdOp.binOp(lowered, lhs: count, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: lowered, valueType: StdType.i64))
 
-	// The payload size the alloc recorded in the header; the range to poison is `[ptr, ptr + size)`.
+	// The payload size the alloc recorded in the header; the range to poison is exactly `[ptr, ptr + size)`.
+	// The fill itself is the shared `emitFillRange` (the array capacity-slot zeroer is its other caller) — a
+	// `size == 0` empty allocation poisons nothing.
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
 	let size = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(size, addrId: header, offset: HeaderSizeOffset, valueType: StdType.i64))
-
-	// A byte-granular fill loop (payload sizes are not all 8-multiples — a `b"hi"` buffer is 2 bytes).
-	// `size == 0` (an empty allocation) exits on the first compare, poisoning nothing.
-	let zero = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(poisonHeader.id))
-
-	let i = ids.mint()
-	poisonHeader.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(poisonHeader.id, argIds: argsOf(zero)))
-	let atEnd = ids.mint()
-	module.appendOp(poisonHeader, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(poisonHeader, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: poisonBody.id))
-
-	let dstAddr = ids.mint()
-	module.appendOp(poisonBody, op: StdOp.binOp(dstAddr, lhs: ptr, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let poisonVal = ids.mint()
-	module.appendOp(poisonBody, op: StdOp.const(poisonVal, value: PoisonByte, valueType: StdType.i64))
-	module.appendOp(poisonBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: poisonVal, valueType: StdType.u8))
-	let one = ids.mint()
-	module.appendOp(poisonBody, op: StdOp.const(one, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(poisonBody, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(poisonBody, op: StdOp.branch(poisonHeader.id))
-	poisonBody.branchEdges.push(BranchEdge.create(poisonHeader.id, argIds: argsOf(iNext)))
-
-	module.setTerminator(done, op: StdOp.retVoid)
+	var afterPoison = emitFillRange(module, func: func, cur: entry, dest: ptr, byteCount: size, fillValue: PoisonByte, ids: ids)
+	module.setTerminator(afterPoison, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmFree'

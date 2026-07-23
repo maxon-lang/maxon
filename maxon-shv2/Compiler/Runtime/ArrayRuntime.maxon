@@ -367,40 +367,6 @@ function emitBackwardCopy(module StdModule, func IrFunction, cur IrBlock, dest V
 	return done
 end 'emitBackwardCopy'
 
-// Zero `byteCount` bytes at `dest` — the capacity-slot invariant enforcer: `clear`, a `resize` shrink and
-// `pop`/`remove`'s vacated slot all restore `[length, capacity)` to zero so the future element walk stays
-// safe. `byteCount == 0` writes nothing.
-function emitZeroRange(module StdModule, func IrFunction, cur IrBlock, dest ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"zroh")
-	var body = module.addBlock(func, label: b"zrob")
-	let done = module.addBlock(func, label: b"zrod")
-
-	let zero = ids.mint()
-	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-	let atEnd = ids.mint()
-	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: byteCount, pred: StdCmpPred.ge, operandType: StdType.i64))
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	let dstAddr = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let zByte = ids.mint()
-	module.appendOp(body, op: StdOp.const(zByte, value: 0, valueType: StdType.i64))
-	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: zByte, valueType: StdType.u8))
-	let one = ids.mint()
-	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
-	let iNext = ids.mint()
-	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
-
-	return done
-end 'emitZeroRange'
-
 // ⭐ **THE MANAGED-ELEMENT DESTROY WALK (P1.7 slice 3).** Walk `[start, end)` of `buffer` (stride
 // `elementSize`, always 8 for a managed element — a heap pointer) and DESTROY each NON-NULL slot by calling
 // the `destroy` function pointer on it through a `callIndirect`. ONE home for the null-guarded per-slot
@@ -1204,7 +1170,7 @@ function buildArrResize(module StdModule)
 	let endOff = emitBin(module, block: afterDestroy, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	let zeroBytes = emitBin(module, block: afterDestroy, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
 	let startAddr = emitBin(module, block: afterDestroy, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
-	var afterZero = emitZeroRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, ids: ids)
+	var afterZero = emitFillRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, fillValue: 0, ids: ids)
 	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
 
 	emitStoreField(module, block: setLen, record: arr, offset: ArrLengthOffset, value: n)
@@ -1298,7 +1264,7 @@ function buildArrPop(module StdModule)
 	let slot = emitSlotAddr(module, block: pop, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
 	var afterLoad = module.addBlock(func, label: b"poploaded")
 	let value = emitLoadElem(module, func: func, cur: pop, exit: afterLoad, addr: slot, size: es, ids: ids)
-	var afterZero = emitZeroRange(module, func: func, cur: afterLoad, dest: slot, byteCount: es, ids: ids)
+	var afterZero = emitFillRange(module, func: func, cur: afterLoad, dest: slot, byteCount: es, fillValue: 0, ids: ids)
 	emitStoreField(module, block: afterZero, record: arr, offset: ArrLengthOffset, value: lastIdx)
 	emitOkReturn(module, block: afterZero, value: value, ids: ids)
 
@@ -1327,7 +1293,7 @@ function buildArrClear(module StdModule)
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
 	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
 	let byteCount = emitBin(module, block: afterDestroy, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterZero = emitZeroRange(module, func: func, cur: afterDestroy, dest: buffer, byteCount: byteCount, ids: ids)
+	var afterZero = emitFillRange(module, func: func, cur: afterDestroy, dest: buffer, byteCount: byteCount, fillValue: 0, ids: ids)
 	let zero = emitConst(module, block: afterZero, value: 0, ids: ids)
 	emitStoreField(module, block: afterZero, record: arr, offset: ArrLengthOffset, value: zero)
 	module.setTerminator(afterZero, op: StdOp.retVoid)
@@ -1444,7 +1410,7 @@ function buildArrRemove(module StdModule)
 	let newLen = emitBin(module, block: afterShift, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: afterShift, record: arr, offset: ArrLengthOffset, value: newLen)
 	let vacAddr = emitSlotAddr(module, block: afterShift, buffer: buffer, index: newLen, elementSize: es, ids: ids)
-	var afterZero = emitZeroRange(module, func: func, cur: afterShift, dest: vacAddr, byteCount: es, ids: ids)
+	var afterZero = emitFillRange(module, func: func, cur: afterShift, dest: vacAddr, byteCount: es, fillValue: 0, ids: ids)
 	emitOkReturn(module, block: afterZero, value: value, ids: ids)
 
 	module.functions.push(func)
