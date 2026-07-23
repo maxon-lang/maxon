@@ -239,7 +239,9 @@ let ProcInfoHProcessOffset = 0
 let ProcInfoHThreadOffset = 8
 
 // The 8-byte slab slot `GetExitCodeProcess` writes the child's DWORD exit code into; the runtime reads it back
-// as a zero-extended u32 (a 4-byte read that ignores the high dword, so a dirty high half cannot corrupt it).
+// with a full i64 load, so the high dword must be clean. `GetExitCodeProcess` writes only the low DWORD, so the
+// `reap` block STORES 0 to the whole slot before the call (P1.5-B1c #92 makes this pre-zero load-bearing: the
+// slot is now REUSED across calls, so a prior call's exit code could dirty the high half without it).
 let ExitCodeSlotBytes = 8
 let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
@@ -328,24 +330,22 @@ export let GtSystemStackTopLabel = b"__gt_system_stack_top"
 // to a later pass.)
 //
 // ⭐ THE GT STRUCT free-list (P1.5-B1c #87). The struct — unlike the variable-sized stack — is a FIXED GtStructSize,
-// so a free-list is size-safe: `__gt_drive_until` PUSHES a completed struct onto `__gt_free_list_head` (a `.data`
-// LIFO, linked through the now-idle `GtOffNext` run-queue slot) and `__gt_spawn` POPS one before falling back to a
-// fresh `__slab_alloc` — so a spawn/await loop reuses ONE struct rather than bump-leaking one per iteration (the slab
-// has no free path). This is v1's `next`-linked LIFO recycle (`Arm64MacosGreenThread.maxon:2364-2410`/`:2987-3005`)
-// MINUS its per-P sharding (single-M ⇒ ONE global head) and its 64-cap-then-`__slab_free` overflow (shv2 has no
-// `__slab_free` ⇒ an uncapped free-list that never frees is the natural fit). The never-awaited GT still leaks its
-// seed stack (OPEN #88 — a never-run GT never completes, so it never reaches the recycle path); this rung closes
-// only the awaited-GT struct+arg-buffer leak (#87).
+// so a free-list is size-safe: `__gt_await`/`__gt_try_await` PUSH the AWAITED promise's struct onto
+// `__gt_free_list_head` (a `.data` LIFO, linked through the now-idle `GtOffNext` run-queue slot) once its result is
+// read, and `__gt_spawn` POPS one before falling back to a fresh `__slab_alloc` — so a spawn/await loop reuses ONE
+// struct rather than bump-leaking one per iteration (the slab has no free path).
+//
+// ⭐ RECLAIM AT THE AWAITER, NOT AT COMPLETION. A GT can complete as a SIDE EFFECT of driving a DIFFERENT await
+// (`__gt_drive_until` runs whatever is on the run queue), yet its struct still holds its result and is still
+// referenced by a live, un-awaited promise. Reclaiming at completion would recycle that struct out from under the
+// pending `await`, so an out-of-order await would read a REUSED struct (a wrong answer, not a crash). So only the
+// AWAITER reclaims, exactly as v1 (`Arm64MacosGreenThread.maxon`) and the bootstrap do — the awaited reclaim is then
+// unconditional and structural, and per-await linearity (double-await is a compile error) makes it exactly once.
+// This is v1's `next`-linked LIFO recycle MINUS its per-P sharding (single-M ⇒ ONE global head) and its
+// 64-cap-then-`__slab_free` overflow (shv2 has no `__slab_free` ⇒ an uncapped free-list that never frees is the
+// natural fit). A run-but-never-AWAITED GT's struct is never reclaimed (OPEN #88 — its family also leaks the
+// never-run GT's seed stack); this rung closes the AWAITED-GT struct+arg-buffer leak (#87).
 let GtFreeListHeadLabel = b"__gt_free_list_head"
-
-// ⭐ THE COMPLETION-BASED LIVE-STRUCT COUNTER (P1.5-B1c #87) — what makes the struct leak a GATED invariant.
-// Incremented when `__gt_drive_until` observes a GT `completed`, decremented when that struct is pushed onto the
-// free-list; the exit leak gate (`MmRuntime.buildMmLeakCheck`, under `usesGt`) ORs it into its `!= 0` verdict, so a
-// completed-but-unreclaimed struct exits 101 exactly as an unfreed heap object does. EXPORTED because that gate (a
-// separate subsystem) reads it. It is COMPLETION-based, NOT alloc-based, on purpose: a never-awaited GT (spawned,
-// never run — `spawn-not-awaited`, `store-overflow-aborts`) must exit with its OWN code, and an alloc-time counter
-// would make it 101 (that never-run-GT leak is OPEN #88, out of scope). A completion counter never counts one.
-export let GtLiveCountLabel = b"__gt_live_count"
 
 // P1.5 mid-body-yield timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap
 // region (both 0 until `__gt_init` allocates the region and seeds the base).
@@ -415,9 +415,8 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtProcCountLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtProcHandlesBaseLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtProcGtsBaseLabel), valueType: StdType.i64, value: 0))
-	// P1.5-B1c #87: the GT-struct free-list head + the completion-based live-struct counter the leak gate reads.
+	// P1.5-B1c #87: the GT-struct free-list head (push at await, pop at spawn).
 	out.push(DataSectionEntry.create(String.from(GtFreeListHeadLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(GtLiveCountLabel), valueType: StdType.i64, value: 0))
 	// P1.5-B1c #92: the reusable subprocess scratch bases (startup/procInfo/exit-code) + the grow-on-demand
 	// cmdline-copy buffer's base and capacity.
 	out.push(DataSectionEntry.create(String.from(GtStartupBaseLabel), valueType: StdType.i64, value: 0))
@@ -1143,7 +1142,6 @@ function buildGtDriveUntil(module StdModule)
 	var run = module.addBlock(func, label: b"run")
 	var recycle = module.addBlock(func, label: b"recycle")
 	var freeStack = module.addBlock(func, label: b"freestack")
-	var pushFree = module.addBlock(func, label: b"pushfree")
 	var netpoll = module.addBlock(func, label: b"netpoll")
 	var timerOnly = module.addBlock(func, label: b"timeronly")
 	var timerDecide = module.addBlock(func, label: b"timerdecide")
@@ -1201,56 +1199,20 @@ function buildGtDriveUntil(module StdModule)
 	// syscall shim wraps it onto the system stack automatically — the `VirtualFree` runs off the driver's own GT
 	// stack, and it releases g's stack (a different region), which g has already switched off of.
 	//
-	// ⭐ P1.5-B1c #87: g's struct is now LIVE-UNTIL-RECLAIMED — count it. This block is entered EXACTLY when g is
-	// `completed`, so the increment is per-completion (never for a never-run/never-awaited GT, which is why the
-	// counter is completion-based, not alloc-based). It is decremented in `pushFree` when g goes onto the free-list;
-	// the exit leak gate (`MmRuntime.buildMmLeakCheck`, under usesGt) ORs `__gt_live_count` into its `!= 0` verdict,
-	// so a completed-but-unreclaimed struct exits 101 exactly as an unfreed heap object does.
-	let liveIncAddr = ids.mint()
-	module.appendOp(recycle, op: StdOp.globalAddr(liveIncAddr, label: GtLiveCountLabel))
-	let liveIncOld = ids.mint()
-	module.appendOp(recycle, op: StdOp.loadIndirect(liveIncOld, addrId: liveIncAddr, offset: 0, valueType: StdType.i64))
-	let liveIncOne = ids.mint()
-	module.appendOp(recycle, op: StdOp.const(liveIncOne, value: 1, valueType: StdType.i64))
-	let liveIncNew = ids.mint()
-	module.appendOp(recycle, op: StdOp.binOp(liveIncNew, lhs: liveIncOld, rhs: liveIncOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(recycle, op: StdOp.storeIndirect(liveIncAddr, offset: 0, valueId: liveIncNew, valueType: StdType.i64))
+	// ⭐ P1.5-B1c #87: ONLY the STACK is freed here, NOT the struct. A GT can complete as a side effect of driving
+	// a DIFFERENT await, and its struct still holds its result for a live, un-awaited promise — so the STRUCT is
+	// reclaimed by the AWAITER (`__gt_await`/`__gt_try_await`), never at completion. The stack, by contrast, is dead
+	// once the GT completes (it has switched off it), so freeing it here is safe and bounds the loop's stack churn.
 	let gStackBase = ids.mint()
 	module.appendOp(recycle, op: StdOp.loadIndirect(gStackBase, addrId: g, offset: GtOffStackBase, valueType: StdType.i64))
 	let gStackNull = ids.mint()
 	module.appendOp(recycle, op: StdOp.cmp(gStackNull, lhs: gStackBase, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	// GT0 (stackBase 0) skips the stack free but STILL recycles its struct — `pushFree` reclaims it (correctness:
-	// GT0 never completes, so this arm is unreached today, but the recycle path stays whole either way).
-	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: pushFree.id, elseBlockId: freeStack.id))
+	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: loopHdr.id, elseBlockId: freeStack.id))
 
 	// freeStack: release g's completed stack (whatever size the morestack grew it to — `VirtualFree(MEM_RELEASE)`
-	// frees the whole reservation from its base). This bounds a spawn/await loop by alloc+free churn. Then the
-	// struct is reclaimed onto the free-list in `pushFree`.
+	// frees the whole reservation from its base). This bounds a spawn/await loop's stacks by alloc+free churn.
 	module.appendOp(freeStack, op: StdOp.osFreePages(gStackBase))
-	module.setTerminator(freeStack, op: StdOp.branch(pushFree.id))
-
-	// ⭐ pushFree: RECLAIM g's completed struct onto the free-list (P1.5-B1c #87) — `g.next = __gt_free_list_head`;
-	// `__gt_free_list_head = g` (a LIFO push through the now-idle run-queue link, since a completed g is off the run
-	// queue). `__gt_spawn` pops it before falling back to a fresh `__slab_alloc`, so a spawn/await loop reuses ONE
-	// struct rather than bump-leaking one per iteration. Single-owner: only this driver reclaims a GT in single-M
-	// (there is no competing drain path), so the push races nothing. Decrement `__gt_live_count` here — the struct
-	// is now reclaimed, balancing the increment `recycle` made on completion, so a clean spawn/await loop nets zero.
-	let freeHeadAddr = ids.mint()
-	module.appendOp(pushFree, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
-	let oldFreeHead = ids.mint()
-	module.appendOp(pushFree, op: StdOp.loadIndirect(oldFreeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(pushFree, op: StdOp.storeIndirect(g, offset: GtOffNext, valueId: oldFreeHead, valueType: StdType.i64))
-	module.appendOp(pushFree, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: g, valueType: StdType.i64))
-	let liveDecAddr = ids.mint()
-	module.appendOp(pushFree, op: StdOp.globalAddr(liveDecAddr, label: GtLiveCountLabel))
-	let liveDecOld = ids.mint()
-	module.appendOp(pushFree, op: StdOp.loadIndirect(liveDecOld, addrId: liveDecAddr, offset: 0, valueType: StdType.i64))
-	let liveDecOne = ids.mint()
-	module.appendOp(pushFree, op: StdOp.const(liveDecOne, value: 1, valueType: StdType.i64))
-	let liveDecNew = ids.mint()
-	module.appendOp(pushFree, op: StdOp.binOp(liveDecNew, lhs: liveDecOld, rhs: liveDecOne, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(pushFree, op: StdOp.storeIndirect(liveDecAddr, offset: 0, valueId: liveDecNew, valueType: StdType.i64))
-	module.setTerminator(pushFree, op: StdOp.branch(loopHdr.id))
+	module.setTerminator(freeStack, op: StdOp.branch(loopHdr.id))
 
 	// netpoll: the run queue is empty. Block the single M until something becomes ready — a parked TIMER fires or a
 	// parked CHILD exits. `pc` = parked children, `earliest` = the nearest timer deadline (0 = none). When BOTH are
@@ -1353,6 +1315,25 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool)
 	// garbage R10 never reaches a reader.
 	let result = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(result, addrId: promise, offset: GtOffResult, valueType: StdType.i64))
+	// ⭐ P1.5-B1c #87 — RECLAIM the awaited promise's struct HERE, in the awaiter, NOT at completion. The struct
+	// holds `result`/`threw` until this await reads them (result loaded above; threw below), so it is dead only
+	// AFTER an await — and an await is the one point that proves the promise is finished with. Reclaiming at
+	// COMPLETION (in `__gt_drive_until`) was wrong: a GT can complete as a side effect of driving a DIFFERENT await
+	// (out-of-order await), and its struct is then still owned by a live, un-awaited promise — pushing it early let
+	// the next `async` pop-and-alias it (a silent wrong answer). This is v1's discipline: the awaiter recycles the
+	// GT (`Arm64MacosGreenThread.maxon:2987-3005`), not the completing thread. The STACK is a separate lifetime,
+	// freed at completion in `__gt_drive_until` (the GT has already switched off it), which stays correct. Linearity
+	// (E3100) forbids a second await of the same promise, so a struct is pushed at most once — no double-free. Push
+	// is LIFO through the idle `GtOffNext` slot (a completed GT is off every run/timer/proc queue): `promise.next =
+	// __gt_free_list_head ; __gt_free_list_head = promise`. It writes `GtOffNext` (0x38) only — disjoint from
+	// `result`@0x28 and `threw`@0x58 — so doing it before the throwing branch reads `threw` is safe.
+	let freeHeadAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
+	let oldFreeHead = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(oldFreeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(promise, offset: GtOffNext, valueId: oldFreeHead, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: promise, valueType: StdType.i64))
+
 	if throwing 'throwingExit'
 		let threw = ids.mint()
 		module.appendOp(entry, op: StdOp.loadIndirect(threw, addrId: promise, offset: GtOffThrew, valueType: StdType.i64))

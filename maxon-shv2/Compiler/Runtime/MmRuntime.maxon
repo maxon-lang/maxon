@@ -195,7 +195,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	buildMmAlloc(module)
 	buildMmDecref(module)
 	buildMmFree(module)
-	buildMmLeakCheck(module, usage: usage)
+	buildMmLeakCheck(module)
 	if usage.usesIncref or usage.usesArray 'incref'
 		buildMmIncref(module)
 	end 'incref'
@@ -1182,14 +1182,7 @@ end 'emitNullGuardedDrop'
 // It is a Std function and not hand-assembled bytes because it needs nothing a Std function lacks:
 // a load, a compare, and two returns. It notably does NOT need to call `ExitProcess` — returning
 // the code to `mrt_start`, which already makes that call, keeps the one OS-exit path in one place.
-//
-// ⭐ P1.5-B1c #87 — UNDER `usesGt` IT ALSO GATES `__gt_live_count`. A green-thread program's completed-but-
-// unreclaimed GT structs are slab allocations invisible to `__mm_alloc_count`, so the GT runtime keeps its own
-// completion-based counter; this single OS-exit gate is the one home for every "must be reclaimed before a clean
-// exit" check, so it ORs that counter into its verdict (101 if EITHER count is non-zero). The extra load is gated
-// on `usage.usesGt` because `__gt_live_count` only exists when the GT runtime is installed — and since
-// `usesGt ⟹ usesHeap`, this gate is always present for a GT program, so no GT leak can slip past it.
-function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
+function buildMmLeakCheck(module StdModule)
 	var func = IrFunction.createFromStd(MmLeakCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1211,24 +1204,7 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 	// dangerous of the two bugs, since it is a use-after-free waiting for a free list to exist.
 	let isLeaked = ids.mint()
 	module.appendOp(entry, op: StdOp.cmp(isLeaked, lhs: count, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-
-	// A heap leak short-circuits to `leaked` either way. When the GT runtime is present, a clean HEAP count falls
-	// through to a SECOND check on `__gt_live_count` — two INDEPENDENT `!= 0` tests, never a summed/OR'd single
-	// count, so a GT over-recycle driving `__gt_live_count` negative can never cancel a heap under-release (the
-	// same reasoning the `!= 0` above rests on). Without the GT runtime, the clean count goes straight to `clean`.
-	if usage.usesGt 'gtGate'
-		var checkGt = module.addBlock(func, label: b"checkgt")
-		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: checkGt.id))
-		let gtCountAddr = ids.mint()
-		module.appendOp(checkGt, op: StdOp.globalAddr(gtCountAddr, label: GtLiveCountLabel))
-		let gtCount = ids.mint()
-		module.appendOp(checkGt, op: StdOp.loadIndirect(gtCount, addrId: gtCountAddr, offset: 0, valueType: StdType.i64))
-		let gtLeaked = ids.mint()
-		module.appendOp(checkGt, op: StdOp.cmp(gtLeaked, lhs: gtCount, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-		module.setTerminator(checkGt, op: StdOp.condBranch(gtLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
-	end 'gtGate' else 'noGt'
-		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
-	end 'noGt'
+	module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
 
 	// The exit code a leaked program reports lives in `RuntimeAbort` with every other abort code the
 	// emitted runtime spends, so the number space has one home and one duplicate check. ⚠ It is ALSO

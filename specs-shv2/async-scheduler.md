@@ -264,6 +264,35 @@ end 'main'
 30
 ```
 
+<!-- test: async-scheduler.out-of-order-await -->
+<!-- targets: x64-windows -->
+A promise's struct must survive until ITS OWN `await`, even when the thread completes early as a side effect of
+driving a DIFFERENT await (P1.5-B1c #87). `await p2` drives the FIFO run queue and completes `p1` first; `p1` is
+now a completed-but-un-awaited handle. Two intervening `async` spawns must NOT recycle `p1`'s struct — only `p1`'s
+own `await` may. `p4` therefore gets a distinct struct, and `await p1` reads `p1`'s real result (10), not `p4`'s
+(40). `10+20+30+40 = 100`. Reclaiming at completion instead of at await returned 130 here (a silent wrong answer).
+```maxon
+
+function w(x int) returns int
+	return x * 10
+end 'w'
+
+function main() returns ExitCode
+	let p1 = async w(1)
+	let p2 = async w(2)
+	let r2 = await p2
+	let p3 = async w(3)
+	let p4 = async w(4)
+	let r3 = await p3
+	let r4 = await p4
+	let r1 = await p1
+	return (r1 + r2 + r3 + r4) as ExitCode
+end 'main'
+```
+```exitcode
+100
+```
+
 <!-- test: async-scheduler.managed-result-refused -->
 <!-- targets: x64-windows -->
 An async function returning a managed `String` result is refused — the runtime captures the result through
