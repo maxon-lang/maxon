@@ -52,7 +52,7 @@ ladder tables further down. When a status here and the detail below disagree, th
 | **P1.3** | owned payloads in enums/unions (slices 1–2) | ✅ | →641 | owned-local done; #46 (bootstrap fixpoint bypass) residual; cross-call param/return = P1.4 |
 | **P1.4a** | cross-call ownership (waves 1–2) | ✅ | →670 | #48 (`.spec-tmp` race) + loop-exit-reconcile follow-up |
 | **P1.4b** | errors — `throws`/`try`/`otherwise` | ⬜ | — | the remaining half of P1.4 (~201 corpus + 36 harness sites) |
-| **P1.5** | closures + `async` + escape → `shared` | ◑ | A1 →813 | A1 core landed (#67 arm64 open); async R3 substrate landed; residuals #64/#65/#73/#74/#75/#79 (front-end) + #87/#88/#89/#92/#93 (runtime); B1c/B2c/C remain |
+| **P1.5** | closures + `async` + escape → `shared` | ◑ | A1 →813 | A1 core landed (#67 arm64 open); async R3 substrate landed; residuals #64/#73/#74/#75/#79 (front-end; ✅ #65 implicit-self CLOSED 2026-07-23 `55cafda11`) + #87/#88/#89/#92/#93 (runtime); B1c/B2c/C remain |
 | **P1.6** | generics + layout descriptors (A/B1/B2/C) | ✅ | →1011 | #94 (generic-instance union payload match-bind) → Future rungs |
 | **P1.7** | `Array` (slices 1/2/3a/**3b-i**/4 + COW A/B) | ◑ | →1335 | ✅ Slice **3b-i** — opaque-`T` TRIVIAL-element arrays (nested generic-instance typealias + opaque-`T` field + static/receiverless descriptor threading; `2dda47a3c`, +1); managed opaque cleanly rejected E2015 until **3b-ii** = the `funcAbs64InRdata` reloc (the ONE remaining P1.7 build item). Borrow-on-get UAF **RESOLVED** on main (incref-on-get, `936b22ab3`). + named element/index residuals |
 | **P1.7a** | interfaces + witness tables (⬆ from P2.1) | ⬜ | — | forced into Phase 1 by P1.0c measurement |
