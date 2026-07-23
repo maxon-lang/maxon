@@ -833,9 +833,10 @@ end 'aliasIsFloat'
 // in `[0, i64.min + 1]`.
 //
 // NaN has no place in this order and none can reach it: a literal that overflows is E2011 before it
-// becomes one, and no writable bound names one. shv2 documents the same trap for the constant folder
-// (`Parser.requireConstNotFloat`), the Std dialect (`StdDialect`'s `binOpImm`) and `FoldConstOperands`
-// — this is the fourth party that has to know it, and the first that can actually answer it.
+// becomes one, and no writable bound names one. shv2 faces the same trap in the constant folder's float
+// comparison (`foldFloatCompare`, which compares as real f64 for exactly this reason), the Std dialect
+// (`StdDialect`'s `binOpImm`) and `FoldConstOperands` — this is the fourth party that has to know it,
+// and it answers it as an order-preserving KEY where `foldFloatCompare` answers it as a comparison.
 export function floatOrderKey(bits ParsedInt) returns ParsedInt
 	if bits >= 0 'positive'
 		return bits
