@@ -154,9 +154,7 @@ public class ARM64CodeEmitterStage {
       }
 
       foreach (var op in block.Operations) {
-        if (dbg != null && func.TryGetDebugSpan(op, out var span)) {
-          dbg.NoteLine(emitter.CurrentCodeOffset, func.SourceFilePath, span.Line, span.Col);
-        }
+        dbg?.NoteOp(emitter.CurrentCodeOffset, func, op);
         emitter.Emit(op);
       }
     }

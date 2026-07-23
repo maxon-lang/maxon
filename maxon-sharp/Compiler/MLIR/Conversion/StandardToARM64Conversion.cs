@@ -172,8 +172,7 @@ public static class StandardToARM64Conversion {
       }
 
       foreach (var op in srcBlock.Operations) {
-        if (spanMarks != null && func.TryGetDebugSpan(op, out var opSpan))
-          spanMarks.Add((armBlock.Operations.Count, opSpan));
+        DebugSpanFlow.Mark(spanMarks, func, op, armBlock);
 
         if (deadStoreOps.Contains(op)) { currentOpIndex++; continue; }
         if (op is StdParamOp && blockIdx == 0) { currentOpIndex++; continue; }

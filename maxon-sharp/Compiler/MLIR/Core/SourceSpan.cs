@@ -27,6 +27,23 @@ public readonly record struct SourceSpan(int Line, int Col);
 /// </summary>
 public static class DebugSpanFlow {
   /// <summary>
+  /// Record, into <paramref name="marks"/>, that the source op about to be lowered carries a span —
+  /// paired with the destination block's CURRENT size, i.e. the index at which this op's output will
+  /// begin. Call it at the top of a lowering pass's per-op loop, before the op is lowered. A null
+  /// <paramref name="marks"/> (debug info off) or a span-less op records nothing.
+  ///
+  /// One home for "which source ops seed a line row", shared by all three lowering passes so a change
+  /// to that rule cannot land in one pass and silently not the others.
+  /// </summary>
+  public static void Mark<TSrc, TDst>(List<(int Start, SourceSpan Span)>? marks,
+      IrFunction<TSrc> srcFunc, TSrc srcOp, IrBlock<TDst> destBlock)
+      where TSrc : IPrintableOp where TDst : IPrintableOp {
+    if (marks != null && srcFunc.TryGetDebugSpan(srcOp, out var span)) {
+      marks.Add((destBlock.Operations.Count, span));
+    }
+  }
+
+  /// <summary>
   /// Stamp every op in <paramref name="destBlock"/> with the span of the source op that produced it.
   /// <paramref name="marks"/> holds `(destOpIndex, span)` pairs in ascending destOpIndex order — one
   /// per source op that carried a span. Each mark's span covers the destination ops in

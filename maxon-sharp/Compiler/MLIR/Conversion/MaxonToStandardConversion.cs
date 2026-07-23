@@ -452,8 +452,7 @@ public static partial class MaxonToStandardConversion {
         }
 
         foreach (var op in block.Operations) {
-          if (spanMarks != null && func.TryGetDebugSpan(op, out var opSpan))
-            spanMarks.Add((newBlock.Operations.Count, opSpan));
+          DebugSpanFlow.Mark(spanMarks, func, op, newBlock);
 
           if (bulkZeroSkipOps.Contains(op)) {
             if (bulkZeroEmitPoints.TryGetValue(op, out var bzInfo))

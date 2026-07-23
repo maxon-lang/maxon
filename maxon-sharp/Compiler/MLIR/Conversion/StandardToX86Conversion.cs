@@ -377,8 +377,7 @@ public static class StandardToX86Conversion {
       }
 
       foreach (var op in srcBlock.Operations) {
-        if (spanMarks != null && func.TryGetDebugSpan(op, out var opSpan))
-          spanMarks.Add((x86Block.Operations.Count, opSpan));
+        DebugSpanFlow.Mark(spanMarks, func, op, x86Block);
 
         if (preHandledOps.Contains(op) || twoJumpSkipOps.Contains(op)) { currentOpIndex++; continue; }
         // If there's a pending comparison result and this op is NOT a condBr

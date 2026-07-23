@@ -31,6 +31,14 @@ public sealed class DebugInfoBuilder {
   /// (otherwise that function's line window would be empty and PC->line would miss it).
   public void BeginFunction() => _haveLast = false;
 
+  /// Note the op about to be emitted at <paramref name="codeOffset"/>: if it carries a span, record a
+  /// line row at its source position. One home for the emit-side capture, shared by both code emitters.
+  public void NoteOp<TOp>(int codeOffset, IrFunction<TOp> func, TOp op) where TOp : IPrintableOp {
+    if (func.TryGetDebugSpan(op, out var span)) {
+      NoteLine(codeOffset, func.SourceFilePath, span.Line, span.Col);
+    }
+  }
+
   /// Register a function's `.text` range. frameSize is 0 until P2 (frame-relative locals live there).
   public void AddFunction(string name, int codeStart, int codeEnd, int paramCount) =>
     _writer.AddFunction(name, (uint)codeStart, (uint)codeEnd, frameSize: 0, (uint)paramCount);
@@ -56,7 +64,7 @@ public sealed class DebugInfoBuilder {
   /// Record that execution at <paramref name="codeOffset"/> is at <paramref name="filePath"/>:line:col.
   /// A row is emitted only when the position differs from the previous op's. A null/empty file path
   /// (runtime helpers, synthetic functions with no source) records nothing.
-  public void NoteLine(int codeOffset, string? filePath, int line, int col) {
+  private void NoteLine(int codeOffset, string? filePath, int line, int col) {
     if (!TryFileId(filePath, out var fileId)) return;
 
     uint l = (uint)line;
