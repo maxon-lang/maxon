@@ -470,3 +470,76 @@ end 'main'
 ```exitcode
 3
 ```
+
+<!-- test: dispatch.upto-i64min-empty -->
+```maxon
+function classify(x int) returns int
+	return match x 'm'
+		0 upto -9223372036854775808 gives 1
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `0 upto i64.min` is the empty range — nothing is below i64.min. A prior bug decremented
+	// the exclusive upper to `i64.min - 1`, which wrapped to `i64.max` and matched every value >= 0.
+	var n = 0 as ExitCode
+	if classify(5) == 0 'a' n = n + 1 end 'a'
+	if classify(0) == 0 'b' n = n + 1 end 'b'
+	if classify(-1) == 0 'c' n = n + 1 end 'c'
+	if classify(9223372036854775807) == 0 'd' n = n + 1 end 'd'
+	return n
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: dispatch.upto-min-upto-min-empty -->
+```maxon
+function classify(x int) returns int
+	return match x 'm'
+		-9223372036854775808 upto -9223372036854775808 gives 1
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `min upto min` is also empty. The wrap bug turned it into `[i64.min, i64.max]`, matching every
+	// value; that the ordinary values below still fall to default proves the arm is dead.
+	var n = 0 as ExitCode
+	if classify(5) == 0 'a' n = n + 1 end 'a'
+	if classify(0) == 0 'b' n = n + 1 end 'b'
+	if classify(-1) == 0 'c' n = n + 1 end 'c'
+	return n
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: dispatch.upto-exclusive-boundary -->
+```maxon
+function classify(x int) returns int
+	return match x 'm'
+		10 upto 20 gives 1
+		20 upto 30 gives 2
+		30 gives 3
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `upto` excludes its upper: 10..20 covers 10..19, 20..30 covers 20..29, and 30 is its own arm.
+	var n = 0 as ExitCode
+	if classify(19) == 1 'a' n = n + 1 end 'a'
+	if classify(20) == 2 'b' n = n + 1 end 'b'
+	if classify(29) == 2 'c' n = n + 1 end 'c'
+	if classify(30) == 3 'd' n = n + 1 end 'd'
+	if classify(9) == 0 'e' n = n + 1 end 'e'
+	return n
+end 'main'
+```
+```exitcode
+5
+```

@@ -1,0 +1,95 @@
+// Test: dispatch.upto-i64min-empty
+function classify(x int) returns int
+	return match x 'm'
+		0 upto -9223372036854775808 gives 1
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `0 upto i64.min` is the empty range — nothing is below i64.min. A prior bug decremented
+	// the exclusive upper to `i64.min - 1`, which wrapped to `i64.max` and matched every value >= 0.
+	var n = 0 as ExitCode
+	if classify(5) == 0 'a' n = n + 1 end 'a'
+	if classify(0) == 0 'b' n = n + 1 end 'b'
+	if classify(-1) == 0 'c' n = n + 1 end 'c'
+	if classify(9223372036854775807) == 0 'd' n = n + 1 end 'd'
+	return n
+end 'main'
+---
+ExitCode: 4
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.jmp matchdefault
+  matchdefault:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 5
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 1
+    x64.negReg rcx, rcx
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm rcx, 9223372036854775807
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

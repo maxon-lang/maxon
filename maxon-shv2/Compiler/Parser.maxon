@@ -10256,16 +10256,14 @@ export type Parser
 
 		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
 			self.advance()
-			let hi = try self.collectScalarRangeUpper(scrutTag)
-			into.push(DispatchInterval.create(I64MinBound, hi: hi, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+			try self.collectScalarRangeInterval(I64MinBound, scrutTag: scrutTag, bodyBlockId: bodyBlockId, into: into)
 			return
 		end 'openLower'
 
 		let lo = try self.decodeScalarPatternBound(scrutTag)
 
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
-			let hi = try self.collectScalarRangeUpper(scrutTag)
-			into.push(DispatchInterval.create(lo, hi: hi, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+			try self.collectScalarRangeInterval(lo, scrutTag: scrutTag, bodyBlockId: bodyBlockId, into: into)
 			return
 		end 'rangeArm'
 
@@ -10273,24 +10271,38 @@ export type Parser
 		into.push(DispatchInterval.create(lo, hi: lo, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
 	end 'collectScalarPatternAtom'
 
-	// The upper bound of a range pattern, with the cursor at `to`/`upto`: consume the keyword, read `max`
-	// (→ `i64.max`, inclusive whichever keyword — matching `emitClosedRange`'s open-upper arm, which drops
-	// the keyword) or a literal, and for `upto` return the inclusive form one below it.
-	function collectScalarRangeUpper(scrutTag ValueTypeTag) returns ParsedInt throws ParseError
+	// Consume a range upper (`to`/`upto <literal|max>`) with the cursor at the keyword, and push the arm's
+	// interval `[lo, hi]` — UNLESS the range is empty, in which case the arm matches nothing and NO interval
+	// is pushed (its twin `collectEnumRangeIntervals` throws `matchEmptyRange`; a scalar range has always
+	// been silently empty, matching the always-false compare the old chain emitted). `upto` is exclusive, so
+	// its inclusive upper is `hi - 1` — computed ONLY once the range is known non-empty, because `upto
+	// i64.min` is ALWAYS empty (nothing is below `i64.min`) and `i64.min - 1` would wrap to `i64.max`,
+	// turning the empty range into a near-universal one. That underflow was a real miscompile: `0 upto
+	// i64.min` matched every value ≥ 0 instead of nothing.
+	function collectScalarRangeInterval(lo ParsedInt, scrutTag ValueTypeTag, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		let isUpto = self.at(TokenKind.upto)
 		self.advance()
 
+		// `max` reads as `i64.max` inclusive under EITHER keyword (as `emitClosedRange`'s open-upper arm drops
+		// the keyword), so `lo to/upto max` covers `[lo, i64.max]` and is never empty.
 		if self.isOpenBoundIdentifier(self.current(), marker: MaxBoundField) 'openUpper'
 			self.advance()
-			return I64MaxBound
+			into.push(DispatchInterval.create(lo, hi: I64MaxBound, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+			return
 		end 'openUpper'
 
-		let hi = try self.decodeScalarPatternBound(scrutTag)
-		if isUpto 'exclusive'
-			return hi - 1
-		end 'exclusive'
-		return hi
-	end 'collectScalarRangeUpper'
+		let rawHi = try self.decodeScalarPatternBound(scrutTag)
+
+		// `upto` excludes `rawHi`, so it is empty when `lo >= rawHi`; inclusive `to` when `lo > rawHi`. An
+		// empty range (as before this rung) contributes no interval — the arm body is left unreachable.
+		let isEmpty = (isUpto and lo >= rawHi) or ((not isUpto) and lo > rawHi)
+		if isEmpty 'emptyRange'
+			return
+		end 'emptyRange'
+
+		let hi = (rawHi - 1) if isUpto else rawHi
+		into.push(DispatchInterval.create(lo, hi: hi, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+	end 'collectScalarRangeInterval'
 
 	// Decode a single scalar pattern LITERAL — an int (optionally negated), a character, or a bool — to
 	// its integer value, validating it is comparable to the scrutinee (E2028), WITHOUT emitting a

@@ -1,0 +1,133 @@
+// Test: dispatch.upto-exclusive-boundary
+function classify(x int) returns int
+	return match x 'm'
+		10 upto 20 gives 1
+		20 upto 30 gives 2
+		30 gives 3
+		default gives 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// `upto` excludes its upper: 10..20 covers 10..19, 20..30 covers 20..29, and 30 is its own arm.
+	var n = 0 as ExitCode
+	if classify(19) == 1 'a' n = n + 1 end 'a'
+	if classify(20) == 2 'b' n = n + 1 end 'b'
+	if classify(29) == 2 'c' n = n + 1 end 'c'
+	if classify(30) == 3 'd' n = n + 1 end 'd'
+	if classify(9) == 0 'e' n = n + 1 end 'e'
+	return n
+end 'main'
+---
+ExitCode: 5
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 10
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 19
+    x64.setccReg lessEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 20
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 29
+    x64.setccReg lessEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 30
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchdefault:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 19
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 20
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 29
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 30
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 9
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, e
+    x64.jmp critsplit
+  e:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
