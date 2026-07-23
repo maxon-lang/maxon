@@ -227,8 +227,8 @@ end 'main'
 ```
 
 <!-- test: float-arithmetic-in-constant -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-Top-level float constants fold `+`, `*`, and `/` with the host's f64 (oracle-verified: X=3.0, Y=6.0, Z=2.5). Native targets only: the exit code 362 exceeds the 8-bit WASI exit-code range (362 mod 256 = 106), a wasm limitation orthogonal to the fold — a bare-integer `return 362` wraps identically. The wasm suite still exercises float const folding via the three sibling tests below, whose codes are <= 255.
+<!-- targets: x64-windows -->
+Top-level float constants fold `+`, `*`, and `/` with the host's f64 (oracle-verified: X=3.0, Y=6.0, Z=2.5). x64-windows only: the exit code 362 exceeds the 8-bit process exit-status range, and only Windows preserves a full 32-bit exit code. Every POSIX target (macOS, Linux) AND WASI mask the status to its low 8 bits (362 mod 256 = 106) — a bare-integer `return 362` wraps identically on all of them. The three sibling tests below (codes <= 255) exercise float const folding on every other target.
 ```maxon
 let X = 1.0 + 2.0
 let Y = X * 2.0
