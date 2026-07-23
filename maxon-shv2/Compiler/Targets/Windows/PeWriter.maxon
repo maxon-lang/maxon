@@ -284,10 +284,11 @@ end 'patchRelocationsX86'
 //
 // The two arms differ ONLY in which section RVA they measure from, which is exactly what the kind
 // discriminates — `reloc.rdataOffset` was already resolved within its own section by the backend.
-// Every other kind still panics: arm64's four are the arm64 milestone's, `covdata`'s are coverage's,
-// and `funcAbs64InRdata` (which patches a slot INSIDE rdata rather than inside code) is the layout
-// descriptors'. Naming them one by one rather than defaulting is what makes the day one is emitted
-// a loud failure instead of a silently unpatched zero displacement.
+// Every other kind still panics: arm64's four are the arm64 milestone's, and `covdata`'s are coverage's.
+// (The `.rdata`-INTERNAL descriptor slot — patched with a `.text` VA, not a disp32 in code — is not an
+// `RdataRelocKind`: it rides `GlobalDataTable.pendingRdataRelocs` and is baked by `bakeFuncAbs64Relocs`.)
+// Naming the kinds one by one rather than defaulting is what makes the day one is emitted a loud failure
+// instead of a silently unpatched zero displacement.
 function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, dataRva Rva)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
@@ -298,7 +299,6 @@ function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArr
 			covdataRipRelDisp32 then panic("PeWriter: covdata relocations arrive with the coverage milestone")
 			arm64Adr to arm64LdrLiteral then panic("PeWriter: arm64 relocations arrive with the arm64 milestone — this writer is x64-only")
 			symdataArm64Adr to covdataArm64PageOff then panic("PeWriter: arm64 relocations arrive with the arm64 milestone — this writer is x64-only")
-			funcAbs64InRdata then panic("PeWriter: funcAbs64InRdata patches a slot INSIDE rdata (a layout descriptor's function-pointer slot), not a disp32 in code — it arrives with layout descriptors")
 		end 'kind'
 	end 'patch'
 end 'patchRdataRelocationsX86'
@@ -612,6 +612,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// Patch each dense-`match` jump table's `.rdata` slots to `targetBlockRva − tableBaseRva` now that both
 	// sections' RVAs are fixed (the image is fixed-base, so an RVA delta IS the runtime address delta).
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva)
+	// Bake each managed-opaque descriptor's `destroyFunc@40` with the element destructor's absolute `.text` VA
+	// — a fixed-base image, so `ImageBase + textRva + funcOffset` IS the runtime address (P1.7 slice 3b-ii).
+	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, target: target, textBaseVa: ImageBase + textRva)
 
 	// AddressOfEntryPoint = the entry stub's RVA. `mainCallFixupOffset` carries
 	// mrt_start's `.text` offset (0, since augmentWithRuntime lays it out first).

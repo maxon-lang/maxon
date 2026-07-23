@@ -840,10 +840,14 @@ type MaxonToStdLowering
 		return self.implicitLayoutValueId
 	end 'forwardCallerLayout'
 
-	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA
-	// — box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
-	// `sizeof(T)` reads; every function-pointer slot is 0, so no relocation is emitted. Idempotent: a gid
-	// referenced at several call sites registers one blob and shares the label.
+	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
+	// box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
+	// `sizeof(T)` reads. `destroyFunc@40` is 0 on disk; when `gid` holds a MANAGED opaque-`T` `Array` field
+	// (`Container with String`, P1.7 slice 3b-ii), a `funcAbs64InRdata` relocation is recorded so the x64
+	// writer patches that slot with the element destructor's `.text` VA — the value the shared opaque
+	// `__arr_create` reads back into its record's `element_destroy@40`. A TRIVIAL argument records nothing and
+	// the slot stays 0 (no element walk). Idempotent: a gid referenced at several call sites registers one blob
+	// and one reloc and shares the label.
 	function ensureLayoutDescriptor(gid GenericInstanceId) returns String
 		if self.layoutDescriptors.contains(gid) 'cached'
 			return self.layoutDescriptors.labelFor(gid)
@@ -852,6 +856,16 @@ type MaxonToStdLowering
 		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: self.signatures.genericInstanceSoleArgLogicalSize(gid))
 		let label = self.globalData.registerRdataConstantLabeled("__layout_{self.signatures.mangleGenericInstance(gid)}", bytes: encodeLayoutDescriptor(descriptor))
 		self.layoutDescriptors.record(gid, label: label)
+
+		// A MANAGED opaque-`T` `Array` field's `destroyFunc@40` is the ONLY compile-time reference to the
+		// element destructor — the shared body's `loadIndirect(descriptor, +40)` is a runtime read the usage
+		// scan cannot see — so the relocation both fills the slot AND is what the writer resolves the
+		// destructor's `.text` VA against. The destructor is DCE-rooted where the enclosing instance's own
+		// `__destruct_<mangled>` is noted (`noteDestructorUsage`), so it is installed for the writer to resolve.
+		if self.signatures.genericInstanceHasManagedOpaqueArrayField(gid) 'managedOpaqueElement'
+			self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementDropCallee(gid), rdataLabel: label, offsetInLabel: LAYOUT_OFFSET_DESTROY_FUNC)
+		end 'managedOpaqueElement'
+
 		return label
 	end 'ensureLayoutDescriptor'
 

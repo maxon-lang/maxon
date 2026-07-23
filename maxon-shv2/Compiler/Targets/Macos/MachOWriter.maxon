@@ -12,9 +12,10 @@
 // literal records) in __const, top-level `var` globals in __data, GOT imports, and
 // — since P1.2 string buffers (M2b) — the DYLD_CHAINED_PTR_64_OFFSET *rebases* a PIE
 // image needs for the one absolute pointer the scalar/string core bakes: a String
-// literal's `buffer@0`. The witness/layout function-pointer rebases (`funcAbs64InRdata`)
-// arrive at P1.6 and reuse the same chain machinery; until then their relocation arm
-// panics rather than silently emit an unpatched pointer. `symdata`/`covdata` are empty
+// literal's `buffer@0`. A managed-opaque-`T` descriptor's `destroyFunc@40` function-pointer
+// (P1.7 slice 3b-ii) would reuse the same chain machinery, but arm64-macOS managed-opaque
+// arrays are deferred — so `writeMachO` REFUSES a non-empty `pendingRdataRelocs`
+// (`requireNoFuncAbs64Relocs`) rather than ship a zero slot. `symdata`/`covdata` are empty
 // and their arms panic too — the day one is emitted is a loud failure, not a wrong
 // address.
 //
@@ -650,6 +651,12 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	if codeResult.covDataSectionBytes.count() > 0 'hasCovdata'
 		panic("writeMachO: covdata is non-empty but the arm64-macos writer emits no coverage section yet")
 	end 'hasCovdata'
+
+	// A managed-opaque-`T` `Array` descriptor's `destroyFunc@40` reloc is wired for x64 only (P1.7 slice
+	// 3b-ii). arm64-macOS managed-opaque arrays are deferred and the target boundary keeps such programs off
+	// this writer, so a non-empty list here is a boundary bug — refuse loudly rather than ship a zero slot
+	// (a per-element leak). On macOS the slot would additionally need a dyld chained REBASE, not a bake.
+	requireNoFuncAbs64Relocs(codeResult.globalData, backend: "writeMachO (arm64-macos)")
 
 	let hasRdata = rdataSize > 0
 	let hasPrelude = preludeSize > 0

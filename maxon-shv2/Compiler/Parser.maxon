@@ -14209,13 +14209,18 @@ export type Parser
 		end 'innerAlias'
 
 		// ⛔ **REJECT CONSTRUCTING A GENERIC INSTANCE WHOSE OPAQUE-`T` ARRAY ELEMENT IS MANAGED (P1.7 slice
-		// 3b-i).** `Container with String`'s `create()` would stamp its array's `element_destroy@40` from the
-		// instance descriptor's `destroyFunc@40`, which is 0 until the reloc that fills it for a managed argument
-		// (P1.7 slice 3b-ii) lands — so the String elements would leak (a wrong answer / exit 101), silently. A
-		// TRIVIAL argument (`Container with SmallInt`) reads 0 correctly (no destructor) and is the whole of this
-		// sub-slice, so it passes. Gated on the generic-alias constructor path so a plain static call is untouched.
+		// 3b).** The `funcAbs64InRdata` relocation that fills the descriptor's `destroyFunc@40` (P1.7 slice 3b-ii)
+		// is IMPLEMENTED and verified, but it is not sufficient: making `Container with String` actually work
+		// needs the opaque-`T`-managed-element OWNERSHIP mechanism, which is UNBUILT. A generic METHOD (`push`)
+		// does not thread its receiver's instance into the consume decision (`argIsConsumedAt`/`instanceFeedConsumes`
+		// carry a `ConstructorInstance` only for constructors), and `scanConsumeBits` recognises a type-parameter
+		// FEED only through a `Self{field: v}` store — not `self.items.push(item)`. So the opaque `T` element is
+		// BORROWED, the caller drops its temp, and the array's decref walk frees it again → a double-free (heap) /
+		// a write to a read-only `.rdata` literal record (`__str_decref` decrements a refcount) → segfault. A
+		// TRIVIAL argument (`Container with SmallInt`) owns nothing and is supported. This gate stays until the
+		// opaque-managed-element ownership slice lands (a distinct mechanism — the coordinator's to schedule).
 		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.genericInstanceHasManagedOpaqueArrayField(self.signatures.genericAliasInstance(typeTok.value)) 'managedOpaqueElement'
-			throw ParseError.unsupported("constructing `{String.from(typeTok.value)}` — its opaque-type-parameter `Array` field has a MANAGED element (String / struct / enum), whose per-element destructor lives in the layout descriptor's `destroyFunc@40` slot reached by the rdata relocation (P1.7 slice 3b-ii); a TRIVIAL element (int / Byte / ranged-int) is supported", line: typeTok.line, column: typeTok.column)
+			throw ParseError.unsupported("constructing `{String.from(typeTok.value)}` — its opaque-type-parameter `Array` field has a MANAGED element (String / struct / enum). The descriptor `destroyFunc@40` relocation is in place, but the array cannot yet OWN a managed opaque element: a generic method borrows its `T` argument, so the element would be freed by both the caller and the array's decref walk (a double-free). A TRIVIAL element (int / Byte / ranged-int) is supported.", line: typeTok.line, column: typeTok.column)
 		end 'managedOpaqueElement'
 
 		try self.consume(TokenKind.dot)

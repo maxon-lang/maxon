@@ -207,8 +207,9 @@ end 'patchArm64ElfRelocations'
 //
 // `ripRelDisp32` targets `.rodata` (a String literal or f64 island); `dataSectionRipRelDisp32` targets
 // `.data` (a top-level `var`'s `lea`). Every other kind PANICS rather than defaulting: symdata/covdata
-// are not emitted this rung, the arm64 pairs never appear in an x64 module, and `funcAbs64InRdata`
-// patches a slot INSIDE rdata (a layout descriptor's), not a disp32 in code. This is duplicated from
+// are not emitted this rung, and the arm64 pairs never appear in an x64 module. (The `.rdata`-INTERNAL
+// descriptor slot — patched with a `.text` VA, not a disp32 in code — is not an `RdataRelocKind`: it rides
+// `GlobalDataTable.pendingRdataRelocs` and is baked by `bakeFuncAbs64Relocs`.) This is duplicated from
 // PeWriter rather than shared because consolidating would mean editing PeWriter, outside this rung's
 // file set — the same reason `bakeElfStringBufferAddresses` duplicates `patchStringBufferFixups`; see
 // the report's follow-up note.
@@ -222,7 +223,6 @@ function patchX64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationA
 			covdataRipRelDisp32 then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' is a `.covdata` reference, and shv2's backend emits none — coverage grows back at its own milestone")
 			arm64Adr to arm64LdrLiteral then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 ELF writer")
 			symdataArm64Adr to covdataArm64PageOff then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 ELF writer")
-			funcAbs64InRdata then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' is a function-pointer slot INSIDE rdata (a layout descriptor's), patched with a `.text` VA rather than a disp32 in code — layout descriptors arrive with generics")
 		end 'kind'
 	end 'patch'
 end 'patchX64SectionRelocations'
@@ -335,6 +335,11 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// format is target-neutral, so ONE call serves both the x64 and arm64 ELF paths — the ELF is static
 	// (fixed load address), so a VA delta IS the runtime delta.
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textVAddr, rdataAddr: rodataVAddr)
+	// Bake each managed-opaque descriptor's `destroyFunc@40` with the element destructor's absolute `.text` VA
+	// (`textVAddr + funcOffset`) — the ELF twin of PeWriter's fixed-base bake. `bakeFuncAbs64Relocs` is wired
+	// for x64 only, so an arm64-linux image with a non-empty reloc list refuses loudly rather than shipping a
+	// zero slot (P1.7 slice 3b-ii — arm64 managed-opaque arrays are deferred); empty is a no-op for both CPUs.
+	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, target: target, textBaseVa: textVAddr)
 
 	var elf = ByteArray.create()
 	elf.reserve(dataFileOffset + dataSegmentSize)

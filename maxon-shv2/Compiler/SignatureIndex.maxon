@@ -426,6 +426,16 @@ union TopLevelDeclLookup
 	notFound
 end 'TopLevelDeclLookup'
 
+// The result of the managed-opaque-`T`-`Array`-field walk (P1.7 slice 3b-ii): `present(element)` carries the
+// field's SUBSTITUTED element type (the destructor the descriptor `destroyFunc@40` needs), `absent` when the
+// instance holds no such field. A union for its reason — "this instance owns no managed opaque array" is an
+// ANSWER (most instances do not), not a failure — and so both the reloc-need predicate and the reloc's
+// destructor resolve from ONE walk. See `managedOpaqueArrayElementOf`.
+union ManagedOpaqueArrayElement
+	present(element MaxonType)
+	absent
+end 'ManagedOpaqueArrayElement'
+
 // What a constant expression evaluates to: the PAYLOAD, and the TAG that says what the payload
 // means. A bool's payload is its 0/1 (TypeRules' `BoolTrueValue`), which is why one integer field
 // serves both — and why the tag is not optional: a `boolean` 1 and an `integer` 1 are the same
@@ -3108,19 +3118,47 @@ export type ProgramSignatures
 	end 'arrayInstanceOfFieldType'
 
 	// ⭐ **DOES A CONCRETE INSTANCE HOLD AN OPAQUE-`T` `Array` FIELD WHOSE ELEMENT IS MANAGED (P1.7 slice
-	// 3b-i)?** — `Container with String`'s `items as Array with typeParameter(0)` field, where the substituted
-	// argument (`String`) owns managed heap. Such a field's array would need its `element_destroy@40` stamped
-	// with the element's destructor, but at this sub-slice the enclosing instance's descriptor carries `0` in
-	// `destroyFunc@40` (the relocation that fills it for a managed argument is slice 3b-ii), so the elements
-	// would leak. The parser rejects constructing such an instance (`parseQualifiedCall`). A TRIVIAL argument
-	// answers false and is supported. An `Array` instance has no base struct and is never the subject.
+	// 3b)?** — `Container with String`'s `items as Array with typeParameter(0)` field, where the substituted
+	// argument (`String`) owns managed heap. Such a field's array needs its `element_destroy@40` stamped with
+	// the element's destructor, which the shared opaque `__arr_create` reads at run time from the enclosing
+	// instance's descriptor `destroyFunc@40` — a slot filled by the `funcAbs64InRdata` relocation
+	// `ensureLayoutDescriptor` records when this answers true (P1.7 slice 3b-ii). A TRIVIAL argument answers
+	// false (its `destroyFunc@40` stays 0, no walk). An `Array` instance has no base struct and is never the
+	// subject. The reloc CONDITION and the reloc's DESTRUCTOR (`managedOpaqueArrayElementDropCallee`) read the
+	// same walk (`managedOpaqueArrayElementOf`), so "is there such a field?" and "what destructor?" cannot
+	// disagree about which field they mean.
 	export function genericInstanceHasManagedOpaqueArrayField(id GenericInstanceId) returns bool
+		match self.managedOpaqueArrayElementOf(id) 'has'
+			present then return true
+			absent then return false
+		end 'has'
+	end 'genericInstanceHasManagedOpaqueArrayField'
+
+	// ⭐ **THE `.text` DESTRUCTOR to bake into a managed-opaque-array-holding instance's descriptor
+	// `destroyFunc@40` (P1.7 slice 3b-ii)** — the drop callee of the array's SUBSTITUTED element (a String →
+	// `__str_decref`, a managed struct/union → its `__destruct_<T>`, a nested Array → `__arr_decref`), which
+	// the shared opaque `__arr_create` reads back to stamp its record's `element_destroy@40`. Routed through
+	// the SAME `managedFieldDropCallee` a concrete `Array with String` element uses (`arrayElementDropCallee`),
+	// so the opaque stamp and the concrete stamp name the identical destructor. Precondition:
+	// `genericInstanceHasManagedOpaqueArrayField(id)`.
+	export function managedOpaqueArrayElementDropCallee(id GenericInstanceId) returns ByteArray
+		match self.managedOpaqueArrayElementOf(id) 'element'
+			present(element) then return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: element)
+			absent then panic("ProgramSignatures.managedOpaqueArrayElementDropCallee: instance {id} holds no managed opaque-`T` `Array` field — every caller gates on genericInstanceHasManagedOpaqueArrayField")
+		end 'element'
+	end 'managedOpaqueArrayElementDropCallee'
+
+	// The SUBSTITUTED element type of `id`'s managed opaque-`T` `Array` field — the ONE walk both the
+	// reloc-need predicate and the reloc's destructor read, so neither can drift to a different field. The
+	// descriptor carries a SINGLE `destroyFunc@40` slot and an opaque array's element is a type parameter, so
+	// the first such field's substituted element (bound to an OWNED argument) is the destructor the slot needs.
+	function managedOpaqueArrayElementOf(id GenericInstanceId) returns ManagedOpaqueArrayElement
 		if self.isArrayInstance(id) 'notStruct'
-			return false
+			return ManagedOpaqueArrayElement.absent
 		end 'notStruct'
 		let layout = self.baseLayoutOf(id)
 		for i in 0 upto layout.fieldCount() 'eachField'
-			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.genericInstanceHasManagedOpaqueArrayField: fieldTypes.get OOB at {i}")
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.managedOpaqueArrayElementOf: fieldTypes.get OOB at {i}")
 			if not self.fieldTypeIsArray(fieldType) 'notArray'
 				continue
 			end 'notArray'
@@ -3128,12 +3166,13 @@ export type ProgramSignatures
 			if maxonTypeTag(element) != ValueTypeTag.typeParameter 'notOpaque'
 				continue
 			end 'notOpaque'
-			if self.genericInstanceArgIsOwned(id, position: typeNameIdOf(element)) 'managedArg'
-				return true
+			let position = typeNameIdOf(element)
+			if self.genericInstanceArgIsOwned(id, position: position) 'managedArg'
+				return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: position))
 			end 'managedArg'
 		end 'eachField'
-		return false
-	end 'genericInstanceHasManagedOpaqueArrayField'
+		return ManagedOpaqueArrayElement.absent
+	end 'managedOpaqueArrayElementOf'
 
 	// ⭐ **THE ONE "does this type own droppable heap?" CLASSIFIER**, over `self.typeNames` — the interner
 	// every field/arg/payload id this index stores lives in. A String (`__str_decref`), a struct box (a

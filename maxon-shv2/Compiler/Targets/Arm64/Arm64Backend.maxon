@@ -1343,7 +1343,6 @@ function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataReloca
 		ripRelDisp32 to covdataRipRelDisp32 panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' carries an x64 RIP-relative reloc kind in the arm64 backend")
 		arm64Adr to covdataArm64Adr panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a single-ADR reloc kind, which the arm64 encoder does not file (it uses the ADRP+ADD pair — M1 trap)")
 		covdataArm64Adrp to covdataArm64PageOff panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a `.covdata` reference, and the scalar-core backend emits no coverage — covdata grows back at its milestone")
-		funcAbs64InRdata panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a function-pointer slot inside rdata — layout descriptors arrive with generics")
 	end 'kind'
 end 'arm64SectionOffsetOfReloc'
 
@@ -1351,11 +1350,12 @@ end 'arm64SectionOffsetOfReloc'
 // section addresses — the WRITER-side twin of `arm64SectionOffsetOfReloc` above, which answers
 // which section a kind names; this one applies it. `arm64*` kinds reach the read-only constant
 // section (float islands, String literal records); `dataSection*` kinds reach the top-level `var`
-// globals. Every other arm is named and PANICS: the x64 kinds cannot appear in an arm64 image,
-// `symdata`/`covdata` are not emitted at this milestone, and `funcAbs64InRdata` patches a slot
-// INSIDE the constant section rather than a field in code. Naming them one by one makes the day
-// one is emitted a loud failure rather than a silently unpatched displacement — PeWriter's
-// discipline.
+// globals. Every other arm is named and PANICS: the x64 kinds cannot appear in an arm64 image, and
+// `symdata`/`covdata` are not emitted at this milestone. (A managed-opaque descriptor's `.rdata`-internal
+// `destroyFunc@40` slot is not an `RdataRelocKind` — it rides `GlobalDataTable.pendingRdataRelocs`, and
+// arm64 refuses it loudly via `requireNoFuncAbs64Relocs`, since arm64 managed-opaque arrays are deferred.)
+// Naming them one by one makes the day one is emitted a loud failure rather than a silently unpatched
+// displacement — PeWriter's discipline.
 //
 // SHARED BY BOTH arm64 OBJECT WRITERS. `writeMachO` (`__const`/`__data` vmaddrs) and `writeElf`
 // (`.rodata`/`.data` vaddrs) differ only in what they pass as the three addresses; the patch
@@ -1380,7 +1380,6 @@ export function patchArm64SectionRelocations(code ByteArray, rdataRelocs RdataRe
 			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataVmAddr + reloc.rdataOffset)
 			covdataArm64Adrp then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
 			covdataArm64PageOff then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
-			funcAbs64InRdata then panic("patchArm64SectionRelocations: funcAbs64InRdata patches a function-pointer slot INSIDE the constant section (a layout descriptor's), not a field in code — it arrives with witness/layout descriptors (P1.6)")
 		end 'kind'
 	end 'patch'
 end 'patchArm64SectionRelocations'

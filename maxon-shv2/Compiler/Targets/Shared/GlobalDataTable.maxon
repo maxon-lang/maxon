@@ -54,6 +54,28 @@ end 'StringBufferFixup'
 
 export typealias StringBufferFixupArray = Array with StringBufferFixup
 
+// ⭐ THE DATA→TEXT SIBLING of `StringBufferFixup` (P1.7 slice 3b-ii): a slot INSIDE a `.rdata` layout
+// descriptor — a managed-opaque-`T` instance's `destroyFunc@40` — must hold the ABSOLUTE VA of a `.text`
+// function (the element's destructor, `__str_decref`/`__destruct_<T>`/`__arr_decref`), and no `.text` VA
+// exists until the writer lays out the code section. So `ensureLayoutDescriptor` emits the descriptor blob
+// with `destroyFunc@40 = 0` and records this triple; the x64 writers patch the 8 bytes at
+// `rdataOffsetOf(rdataLabel) + offsetInLabel` with `funcName`'s runtime address once `.text`'s base is
+// known. `funcName` is a `.text` function this table's writer resolves through the debug-symbol map (as
+// `Arm64FuncAdrpReloc.funcName` resolves to `textOffset`); `rdataLabel` is a `.rdata` label this same table
+// minted (offset via `rdataOffsetOf`). It is carried on the DATA TABLE, not the code-relocation list,
+// because it patches the rdata IMAGE, not the `.text` bytes — the exact reason its String-buffer sibling is.
+export type PendingRdataReloc
+	export let funcName as ByteArray
+	export let rdataLabel as String
+	export let offsetInLabel as ByteOffset
+
+	export static function create(funcName ByteArray, rdataLabel String, offsetInLabel ByteOffset) returns PendingRdataReloc
+		return Self{funcName: funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel}
+	end 'create'
+end 'PendingRdataReloc'
+
+export typealias PendingRdataRelocArray = Array with PendingRdataReloc
+
 // The rdata payloads themselves — one raw byte blob per registered global.
 export typealias ByteArrayArray = Array with ByteArray
 
@@ -130,9 +152,13 @@ export type GlobalDataTable
 	// The `(record, blob)` pairs the PE writer patches to bake each String literal's `buffer@0` — see
 	// StringBufferFixup. Empty for a program with no string literal, which is most of the corpus.
 	export var stringBufferFixups as StringBufferFixupArray
+	// The `(funcName, rdataLabel, offsetInLabel)` triples the x64 writers patch to bake a managed-opaque-`T`
+	// instance's descriptor `destroyFunc@40` with its element destructor's `.text` VA — see PendingRdataReloc.
+	// Empty for a program with no managed-opaque-`T` array (all but the P1.7-generics corpus).
+	export var pendingRdataRelocs as PendingRdataRelocArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create()}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -219,6 +245,13 @@ export type GlobalDataTable
 	export function recordStringBufferFixup(recordLabel String, blobLabel String)
 		self.stringBufferFixups.push(StringBufferFixup.create(recordLabel, blobLabel: blobLabel))
 	end 'recordStringBufferFixup'
+
+	// Record that `rdataLabel`'s slot at `offsetInLabel` must be patched with `funcName`'s absolute `.text`
+	// VA — see PendingRdataReloc. `rdataLabel` is a `.rdata` label this table minted (offset via
+	// `rdataOffsetOf`); `funcName` is a `.text` function the writer resolves through the debug-symbol map.
+	export function recordFuncAbs64InRdata(funcName ByteArray, rdataLabel String, offsetInLabel ByteOffset)
+		self.pendingRdataRelocs.push(PendingRdataReloc.create(funcName, rdataLabel: rdataLabel, offsetInLabel: offsetInLabel))
+	end 'recordFuncAbs64InRdata'
 
 	// The byte image of `.rdata` — the payloads concatenated in registration order.
 	//

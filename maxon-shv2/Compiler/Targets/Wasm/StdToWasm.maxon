@@ -184,6 +184,12 @@ let WasmRdataAlignment = 8 as ByteCount
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
 export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable) returns ByteArray
+	// A managed-opaque-`T` `Array` descriptor's `destroyFunc@40` reloc is wired for x64 only (P1.7 slice
+	// 3b-ii); the wasm backend has no `.text` VA to bake, and wasm managed-opaque arrays are deferred. The
+	// target boundary keeps such programs off wasm, so a non-empty list here is a boundary bug — refuse loudly
+	// rather than leave the descriptor slot 0 (a per-element leak). Empty is a no-op (every other program).
+	requireNoFuncAbs64Relocs(globalData, backend: "buildWasmCoreModule (wasm32-wasi)")
+
 	let calleeFuncIdx = buildCalleeFuncIdxMap(module)
 	let calleeReturnType = buildCalleeReturnTypeMap(module)
 	let calleeParamTypes = buildCalleeParamTypesMap(module)
