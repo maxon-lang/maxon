@@ -2246,6 +2246,18 @@ end 'DispatchInterval'
 
 typealias DispatchIntervalArray = Array with DispatchInterval
 
+// A permutation of `raw` interval positions — the sort order and the min-heap `normalizeDispatchIntervals`
+// sweeps with. An entry is an index into the arm-order `raw` array, and because the raw array is built in
+// arm order that index IS the arm PRIORITY (lower = earlier arm = wins an overlap), so the heap orders by
+// the stored value directly.
+typealias DispatchIndexArray = Array with ElementCount
+
+// The single-value patterns a `match` has already seen, for the duplicate-pattern check (E2027). A hash
+// set, not a list: the check tests membership once per point arm, so a list makes a match of K distinct
+// point arms — a keyword or bytecode dispatch table, the shape a big `match` IS — Θ(K²). Membership is the
+// only thing asked of it (add, and "have I seen this?"), which is exactly a set's contract.
+typealias SeenPatternValues = Set with ParsedInt
+
 export type Parser
 	var tokens as TokenArray
 	var pos as TokenIndex
@@ -9057,7 +9069,7 @@ export type Parser
 		var prevFallthrough = false
 		var prevExitBlock = self.currentBlock
 		var prevExitVals = ValueIdArray.create()
-		var seenValues = ParsedIntArray.create()
+		var seenValues = SeenPatternValues.create()
 		var reachingArms = MatchArmExitArray.create()
 
 		// ⭐ ENUM vs SCALAR is decided ONCE, from the scrutinee's type. A `named(X)` scrutinee whose
@@ -9993,7 +10005,7 @@ export type Parser
 	// Emit one arm's pattern as a single boolean condition, OR-folding the alternatives (`1 or 2 or
 	// 3`). Records single-value patterns for the duplicate check and rejects a pattern whose type
 	// cannot be compared to the scrutinee (E2028). Emits into `currentBlock`.
-	function emitPatternCondition(scrut ValueId, scrutTag ValueTypeTag, seenValues ParsedIntArray) returns ValueId throws ParseError
+	function emitPatternCondition(scrut ValueId, scrutTag ValueTypeTag, seenValues SeenPatternValues) returns ValueId throws ParseError
 		var cond = try self.emitPatternAtom(scrut, scrutTag: scrutTag, seenValues: seenValues)
 		while self.at(TokenKind.or) 'orChain'
 			let orTok = try self.consume(TokenKind.or)
@@ -10005,7 +10017,7 @@ export type Parser
 
 	// One alternative of a pattern: an open-lower range (`min to/upto hi`), a closed/open-upper
 	// range (`lo to/upto hi`, `lo to max`), or a single value.
-	function emitPatternAtom(scrut ValueId, scrutTag ValueTypeTag, seenValues ParsedIntArray) returns ValueId throws ParseError
+	function emitPatternAtom(scrut ValueId, scrutTag ValueTypeTag, seenValues SeenPatternValues) returns ValueId throws ParseError
 		let startTok = self.current()
 
 		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
@@ -10160,7 +10172,7 @@ export type Parser
 	// Record a single-value pattern for duplicate detection, or raise E2027 if it repeats one. Only
 	// KNOWN-constant patterns (integer literals) participate; a float literal's bits are not tracked
 	// as a constant (see `parseFloatLiteral`), and no corpus case tests a duplicate float.
-	function checkAndRecordDuplicate(value ValueId, seenValues ParsedIntArray, patternTok Token) throws ParseError
+	function checkAndRecordDuplicate(value ValueId, seenValues SeenPatternValues, patternTok Token) throws ParseError
 		if not self.constIsKnown(value) 'notConst'
 			return
 		end 'notConst'
@@ -10170,14 +10182,13 @@ export type Parser
 
 	// The integer core of duplicate detection, shared by the compare-emitting scalar path (`value` read
 	// off a known constant) and the interval-plan path (`value` decoded straight from the pattern token).
-	function recordDuplicateInt(value ParsedInt, seenValues ParsedIntArray, patternTok Token) throws ParseError
-		for i in 0 upto seenValues.count() 'seen'
-			let prev = try seenValues.get(i) otherwise panic("recordDuplicateInt: seenValues.get OOB at {i}")
-			if prev == value 'duplicate'
-				throw ParseError.matchDuplicatePattern("{value}", line: patternTok.line, column: patternTok.column)
-			end 'duplicate'
-		end 'seen'
-		seenValues.push(value)
+	// The set membership test throws on the FIRST repeat in arm order — the same value, the same arm, the
+	// linear scan reported — in O(1) rather than O(seen).
+	function recordDuplicateInt(value ParsedInt, seenValues SeenPatternValues, patternTok Token) throws ParseError
+		if seenValues.contains(value) 'duplicate'
+			throw ParseError.matchDuplicatePattern("{value}", line: patternTok.line, column: patternTok.column)
+		end 'duplicate'
+		seenValues.insert(value)
 	end 'recordDuplicateInt'
 
 	// Does `tok` name an open range bound (`min` / `max`) — an identifier whose text is the marker?
@@ -10230,7 +10241,7 @@ export type Parser
 	// open-ended range — but yields intervals over the pattern CONSTANTS rather than an emitted `or`-fold
 	// of compares. The float/String path keeps `emitPatternCondition`, so this handles only what
 	// `matchUsesIntervalPlan` gates in.
-	function collectScalarPatternIntervals(scrutTag ValueTypeTag, seenValues ParsedIntArray, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
+	function collectScalarPatternIntervals(scrutTag ValueTypeTag, seenValues SeenPatternValues, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		try self.collectScalarPatternAtom(scrutTag, seenValues: seenValues, bodyBlockId: bodyBlockId, into: into)
 		while self.at(TokenKind.or) 'orChain'
 			try self.consume(TokenKind.or)
@@ -10240,7 +10251,7 @@ export type Parser
 
 	// One alternative: an open-lower range (`min to/upto hi`), a closed/open-upper range (`lo to/upto hi`,
 	// `lo to max`), or a single value. Appends exactly one interval.
-	function collectScalarPatternAtom(scrutTag ValueTypeTag, seenValues ParsedIntArray, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
+	function collectScalarPatternAtom(scrutTag ValueTypeTag, seenValues SeenPatternValues, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		let startTok = self.current()
 
 		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
@@ -10710,66 +10721,246 @@ export type Parser
 	// ⭐ **CLIP the raw arm intervals into a SORTED, DISJOINT set where EARLIER ARMS WIN.** Overlaps are
 	// legal on a scalar match (two ranges may overlap, or a later single value fall inside an earlier
 	// range) and the FIRST arm claims the overlap — exactly the order the linear chain gave by testing
-	// arms top to bottom. A binary search cannot rely on arm order, so the overlap is resolved HERE: each
-	// raw interval, in arm order, claims only the value space not already claimed, which may split it into
-	// several disjoint pieces or drop it entirely. The result is sorted by `lo`, which is what makes the
-	// median-split search correct. (Enum/union intervals are already disjoint — `markEnumCovered` rejects
-	// overlap — so for them this only sorts.)
+	// arms top to bottom. A binary search cannot rely on arm order, so the overlap is resolved HERE. The
+	// result is the partition of the value line into maximal runs each OWNED by one arm, where a point's
+	// owner is the EARLIEST (lowest-index) raw interval covering it — the "earlier wins" a top-to-bottom
+	// chain gave for free. It is sorted by `lo`, which is what makes the median-split search correct.
+	// (Enum/union intervals are already disjoint — `markEnumCovered` rejects overlap — so for them this is
+	// only the sort.)
+	//
+	// ⚠ THIS IS O(n log n) IN THE ARM COUNT, AND IT USED TO BE Θ(n²) — a subtract-and-insert that, per raw
+	// interval, scanned the whole claimed set and inserted into the middle of a sorted array. MEASURED at
+	// 256→2048 distinct scalar arms, the parse phase read x2.3→x2.7→x3.0 per doubling (linear reads x2.0):
+	// a 2048-arm dispatch table — a bytecode/keyword switch, the very shape a `match` is FOR — spent ~47 ms
+	// of a 70 ms parse in this one function. The scale-test corpus has no `match`, so it never saw it.
+	//
+	// The replacement is an offline left-to-right sweep: sort the interval indices by `lo` once, then walk
+	// the value line, keeping the started-but-not-ended intervals in a min-heap KEYED BY ARM PRIORITY so
+	// the current owner is the heap minimum. A segment closes and a new one opens exactly when that owner
+	// changes — an earlier-arm interval activating (at its `lo`) or the current owner ending (at its `hi`),
+	// the only two coordinates where ownership can change — which coalesces same-owner runs and reproduces
+	// the old partition segment-for-segment.
 	function normalizeDispatchIntervals(raw DispatchIntervalArray) returns DispatchIntervalArray
-		var claimed = DispatchIntervalArray.create()
-		for r in raw 'each'
-			self.addFreeSubIntervals(claimed, lo: r.lo, hi: r.hi, targetBlockId: r.targetBlockId, edgeArgs: r.edgeArgs)
-		end 'each'
-		return claimed
+		var result = DispatchIntervalArray.create()
+		let n = raw.count()
+		if n == 0 'empty'
+			return result
+		end 'empty'
+
+		let order = self.dispatchIntervalsSortedByLo(raw)
+		var heap = DispatchIndexArray.create()
+
+		// `si` is the next not-yet-activated interval in `lo` order; `sweepPos` the coordinate whose owner we
+		// are currently deciding. A segment for `segOwner` is open over `[segStart, sweepPos-1]` while
+		// `segOpen`. (`sweepPos`, not `pos` — that name is the Parser's token cursor.)
+		var si = 0 as ElementCount
+		var sweepPos = (try raw.get(try order.get(0) otherwise panic("normalizeDispatchIntervals: order.get(0) on n>0")) otherwise panic("normalizeDispatchIntervals: raw.get(order[0]) OOB")).lo
+		var segOpen = false
+		var segStart = sweepPos
+		var segOwner = 0 as ElementCount
+
+		while true 'sweep'
+			// Activate every interval that has started by `sweepPos` (its `lo <= sweepPos`); they are
+			// contiguous in `order`, so this consumes a prefix. All same-`lo` intervals activate together, so
+			// the heap minimum is the earliest arm among them regardless of their order within the run.
+			while si < n and self.dispatchLoOf(raw, index: try order.get(si) otherwise panic("normalizeDispatchIntervals: order.get OOB at {si}")) <= sweepPos 'activate'
+				self.dispatchHeapPush(heap, value: try order.get(si) otherwise panic("normalizeDispatchIntervals: order.get OOB at {si}"))
+				si = si + 1
+			end 'activate'
+
+			// Drop intervals that ended before `sweepPos` (their `hi < sweepPos`); they no longer cover it.
+			// Lazy: only the heap minima are checked, so each interval is discarded once, when it surfaces.
+			while heap.count() > 0 and self.dispatchHiOf(raw, index: try heap.get(0) otherwise panic("normalizeDispatchIntervals: heap.get(0) on non-empty")) < sweepPos 'expire'
+				_ = self.dispatchHeapPopMin(heap)
+			end 'expire'
+
+			if heap.count() == 0 'gap'
+				// No interval covers `sweepPos`. A segment can only have closed at an owner change (below), so
+				// none is open here; the next covered region begins at the next interval's `lo`.
+				if segOpen 'lostSegment'
+					panic("normalizeDispatchIntervals: a segment was left open crossing an uncovered gap")
+				end 'lostSegment'
+				if si >= n 'done'
+					break
+				end 'done'
+				sweepPos = self.dispatchLoOf(raw, index: try order.get(si) otherwise panic("normalizeDispatchIntervals: order.get OOB at {si}"))
+				continue
+			end 'gap'
+
+			let owner = try heap.get(0) otherwise panic("normalizeDispatchIntervals: heap.get(0) on non-empty")
+			if not segOpen 'openSegment'
+				segOpen = true
+				segStart = sweepPos
+				segOwner = owner
+			end 'openSegment' else if owner != segOwner 'ownerChanged'
+				// A new interval activated at `sweepPos` outranks the running owner, which therefore owned only
+				// up to `sweepPos - 1` (no underflow: `sweepPos > segStart >= i64.min` since it opened earlier).
+				self.pushNormalizedSegment(result, raw: raw, owner: segOwner, lo: segStart, hi: sweepPos - 1)
+				segStart = sweepPos
+				segOwner = owner
+			end 'ownerChanged'
+
+			// The owner holds `sweepPos` until either a new interval starts inside its span (re-decide there)
+			// or it ends at its own `hi`.
+			let ownerHi = self.dispatchHiOf(raw, index: owner)
+			var ownerEnds = true
+			if si < n 'hasNextStart'
+				let nextLo = self.dispatchLoOf(raw, index: try order.get(si) otherwise panic("normalizeDispatchIntervals: order.get OOB at {si}"))
+				if nextLo <= ownerHi 'startsInsideOwner'
+					sweepPos = nextLo
+					ownerEnds = false
+				end 'startsInsideOwner'
+			end 'hasNextStart'
+
+			if ownerEnds 'closeSegment'
+				self.pushNormalizedSegment(result, raw: raw, owner: segOwner, lo: segStart, hi: ownerHi)
+				segOpen = false
+				if ownerHi == I64MaxBound 'atCeiling'
+					// Nothing lies past i64.max, and no interval's `lo` can either, so the sweep is done —
+					// and `ownerHi + 1` would overflow, so it is never computed.
+					break
+				end 'atCeiling'
+				sweepPos = ownerHi + 1
+			end 'closeSegment'
+		end 'sweep'
+
+		return result
 	end 'normalizeDispatchIntervals'
 
-	// Insert `[lo, hi]`'s free sub-intervals (those not covered by any already-`claimed` interval) into
-	// `claimed`, tagged with this arm's body + edge args, keeping `claimed` sorted by `lo` and disjoint.
-	// The `- 1` / `+ 1` cannot overflow: `c.lo - 1` runs only when `c.lo > cursor >= lo >= i64.min`, and
-	// `c.hi + 1` only when `c.hi < hi <= i64.max` (the `c.hi >= hi` case broke out first).
-	function addFreeSubIntervals(claimed DispatchIntervalArray, lo ParsedInt, hi ParsedInt, targetBlockId BlockId, edgeArgs ValueIdArray)
-		var cursor = lo
-		var reachedEnd = false
-		var pieces = DispatchIntervalArray.create()
-		for i in 0 upto claimed.count() 'scan'
-			let c = try claimed.get(i) otherwise panic("addFreeSubIntervals: claimed.get OOB at {i}")
-			if c.hi < cursor 'before'
-				continue
-			end 'before'
-			if c.lo > hi 'after'
-				break
-			end 'after'
-			if c.lo > cursor 'gapBefore'
-				pieces.push(DispatchInterval.create(cursor, hi: c.lo - 1, targetBlockId: targetBlockId, edgeArgs: edgeArgs))
-			end 'gapBefore'
-			if c.hi >= hi 'consumedToEnd'
-				reachedEnd = true
-				break
-			end 'consumedToEnd'
-			cursor = c.hi + 1
-		end 'scan'
+	// `raw[index].lo` / `raw[index].hi` — the sweep reads these coordinates far more often than it needs
+	// the whole interval, and going through one accessor keeps the `try … otherwise panic` off the sweep.
+	function dispatchLoOf(raw DispatchIntervalArray, index ElementCount) returns ParsedInt
+		return (try raw.get(index) otherwise panic("dispatchLoOf: raw.get OOB at {index}")).lo
+	end 'dispatchLoOf'
 
-		if not reachedEnd 'trailingGap'
-			pieces.push(DispatchInterval.create(cursor, hi: hi, targetBlockId: targetBlockId, edgeArgs: edgeArgs))
-		end 'trailingGap'
+	function dispatchHiOf(raw DispatchIntervalArray, index ElementCount) returns ParsedInt
+		return (try raw.get(index) otherwise panic("dispatchHiOf: raw.get OOB at {index}")).hi
+	end 'dispatchHiOf'
 
-		for p in pieces 'insert'
-			self.insertSortedInterval(claimed, piece: p)
-		end 'insert'
-	end 'addFreeSubIntervals'
+	// Append the segment `[lo, hi]` owned by raw interval `owner`, carrying that arm's body and edge args.
+	// A single owner can yield several segments (an interior higher-priority arm splits it), each sharing
+	// the same `edgeArgs` — the same reuse the old piece-splitter made, so the retained count is unchanged.
+	function pushNormalizedSegment(result DispatchIntervalArray, raw DispatchIntervalArray, owner ElementCount, lo ParsedInt, hi ParsedInt)
+		let src = try raw.get(owner) otherwise panic("pushNormalizedSegment: raw.get OOB at owner {owner}")
+		result.push(DispatchInterval.create(lo, hi: hi, targetBlockId: src.targetBlockId, edgeArgs: src.edgeArgs))
+	end 'pushNormalizedSegment'
 
-	// Insert `piece` into `claimed` (sorted by `lo`, disjoint) at the position that keeps it sorted.
-	function insertSortedInterval(claimed DispatchIntervalArray, piece DispatchInterval)
-		var idx = claimed.count()
-		for i in 0 upto claimed.count() 'find'
-			let c = try claimed.get(i) otherwise panic("insertSortedInterval: claimed.get OOB at {i}")
-			if c.lo > piece.lo 'here'
-				idx = i
+	// The interval positions `[0, n)` sorted ascending by `raw[i].lo`. A stable merge sort — O(n log n) in
+	// the arm count, the property this whole path exists to hold — over an index permutation, so the raw
+	// intervals never move. Ties (equal `lo`) keep ascending index order; the sweep does not depend on that
+	// (it activates a whole equal-`lo` run before picking an owner), but it costs nothing and is tidy.
+	function dispatchIntervalsSortedByLo(raw DispatchIntervalArray) returns DispatchIndexArray
+		let n = raw.count()
+		var order = DispatchIndexArray.create()
+		for i in 0 upto n 'seed'
+			order.push(i)
+		end 'seed'
+
+		var scratch = DispatchIndexArray.create()
+		scratch.growFilled(n, value: 0 as ElementCount)
+		self.mergeSortDispatchIndices(raw, order: order, scratch: scratch, lo: 0, hi: n)
+		return order
+	end 'dispatchIntervalsSortedByLo'
+
+	// Merge-sort `order[lo, hi)` by `raw[·].lo`, using `scratch` as the merge buffer. Recursion depth is
+	// log n and each level touches each slot once, so O(n log n).
+	function mergeSortDispatchIndices(raw DispatchIntervalArray, order DispatchIndexArray, scratch DispatchIndexArray, lo ElementCount, hi ElementCount)
+		if hi - lo <= 1 'base'
+			return
+		end 'base'
+
+		let mid = lo + (hi - lo) / 2
+		self.mergeSortDispatchIndices(raw, order: order, scratch: scratch, lo: lo, hi: mid)
+		self.mergeSortDispatchIndices(raw, order: order, scratch: scratch, lo: mid, hi: hi)
+
+		var i = lo
+		var j = mid
+		var k = lo
+		while i < mid and j < hi 'merge'
+			let leftIdx = try order.get(i) otherwise panic("mergeSortDispatchIndices: order.get OOB at {i}")
+			let rightIdx = try order.get(j) otherwise panic("mergeSortDispatchIndices: order.get OOB at {j}")
+			// `<=` takes the left (lower-index) element on a tie, which is what makes the sort stable.
+			if self.dispatchLoOf(raw, index: leftIdx) <= self.dispatchLoOf(raw, index: rightIdx) 'takeLeft'
+				try scratch.set(k, value: leftIdx) otherwise panic("mergeSortDispatchIndices: scratch.set OOB at {k}")
+				i = i + 1
+			end 'takeLeft' else 'takeRight'
+				try scratch.set(k, value: rightIdx) otherwise panic("mergeSortDispatchIndices: scratch.set OOB at {k}")
+				j = j + 1
+			end 'takeRight'
+			k = k + 1
+		end 'merge'
+
+		while i < mid 'drainLeft'
+			try scratch.set(k, value: try order.get(i) otherwise panic("mergeSortDispatchIndices: order.get OOB at {i}")) otherwise panic("mergeSortDispatchIndices: scratch.set OOB at {k}")
+			i = i + 1
+			k = k + 1
+		end 'drainLeft'
+		while j < hi 'drainRight'
+			try scratch.set(k, value: try order.get(j) otherwise panic("mergeSortDispatchIndices: order.get OOB at {j}")) otherwise panic("mergeSortDispatchIndices: scratch.set OOB at {k}")
+			j = j + 1
+			k = k + 1
+		end 'drainRight'
+
+		for t in lo upto hi 'copyBack'
+			try order.set(t, value: try scratch.get(t) otherwise panic("mergeSortDispatchIndices: scratch.get OOB at {t}")) otherwise panic("mergeSortDispatchIndices: order.set OOB at {t}")
+		end 'copyBack'
+	end 'mergeSortDispatchIndices'
+
+	// Push `value` (an interval index, and thereby its arm priority) onto the min-heap, sifting it up until
+	// its parent is no larger. O(log heap).
+	function dispatchHeapPush(heap DispatchIndexArray, value ElementCount)
+		heap.push(value)
+		var child = heap.count() - 1
+		while child > 0 'siftUp'
+			let parent = (child - 1) / 2
+			let parentVal = try heap.get(parent) otherwise panic("dispatchHeapPush: heap.get OOB at parent {parent}")
+			let childVal = try heap.get(child) otherwise panic("dispatchHeapPush: heap.get OOB at child {child}")
+			if parentVal <= childVal 'ordered'
 				break
-			end 'here'
-		end 'find'
-		claimed.insert(idx, value: piece)
-	end 'insertSortedInterval'
+			end 'ordered'
+			try heap.set(parent, value: childVal) otherwise panic("dispatchHeapPush: heap.set OOB at parent {parent}")
+			try heap.set(child, value: parentVal) otherwise panic("dispatchHeapPush: heap.set OOB at child {child}")
+			child = parent
+		end 'siftUp'
+	end 'dispatchHeapPush'
+
+	// Remove and return the smallest interval index (earliest arm) on the heap, re-heaping the tail. O(log
+	// heap). The caller guarantees the heap is non-empty.
+	function dispatchHeapPopMin(heap DispatchIndexArray) returns ElementCount
+		let top = try heap.get(0) otherwise panic("dispatchHeapPopMin: heap.get(0) on empty heap")
+		let tail = try heap.pop() otherwise panic("dispatchHeapPopMin: pop on empty heap")
+		let count = heap.count()
+		if count == 0 'wasLast'
+			return top
+		end 'wasLast'
+
+		try heap.set(0, value: tail) otherwise panic("dispatchHeapPopMin: heap.set(0) after refill")
+		var parent = 0 as ElementCount
+		while true 'siftDown'
+			let left = parent * 2 + 1
+			if left >= count 'leaf'
+				break
+			end 'leaf'
+			var smaller = left
+			let right = left + 1
+			if right < count 'hasRight'
+				let leftVal = try heap.get(left) otherwise panic("dispatchHeapPopMin: heap.get OOB at left {left}")
+				let rightVal = try heap.get(right) otherwise panic("dispatchHeapPopMin: heap.get OOB at right {right}")
+				if rightVal < leftVal 'rightSmaller'
+					smaller = right
+				end 'rightSmaller'
+			end 'hasRight'
+			let parentVal = try heap.get(parent) otherwise panic("dispatchHeapPopMin: heap.get OOB at parent {parent}")
+			let smallerVal = try heap.get(smaller) otherwise panic("dispatchHeapPopMin: heap.get OOB at smaller {smaller}")
+			if parentVal <= smallerVal 'ordered'
+				break
+			end 'ordered'
+			try heap.set(parent, value: smallerVal) otherwise panic("dispatchHeapPopMin: heap.set OOB at parent {parent}")
+			try heap.set(smaller, value: parentVal) otherwise panic("dispatchHeapPopMin: heap.set OOB at smaller {smaller}")
+			parent = smaller
+		end 'siftDown'
+		return top
+	end 'dispatchHeapPopMin'
 
 	// ⭐ **EMIT A `match`'s DISPATCH from its normalized interval plan** — the ONE place the strategy is
 	// chosen. Below `MinIntervalsForDispatch` intervals it is a linear compare chain; at or above it a
