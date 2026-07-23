@@ -2789,6 +2789,15 @@ export type ProgramSignatures
 		if tag == ValueTypeTag.genericInstance 'nested'
 			return self.mangleGenericInstance(typeNameIdOf(t))
 		end 'nested'
+		// An OPAQUE type-parameter argument (`Array with T` inside a generic body, P1.7 slice 3b-i) — its
+		// instance `Array with typeParameter(pos)` is interned like any other, so its structural mangling names
+		// the parameter by POSITION (`T0`), stable across cold and warm builds (a position is source-derived).
+		// It is only ever a LOOKUP key (the opaque array never gets a synthesized `__destruct_<mangled>` nor its
+		// own descriptor — it drops through `__arr_decref` and reads the enclosing instance's descriptor), so
+		// this spelling need only be distinct and stable; unlike a concrete arg it names no emitted symbol.
+		if tag == ValueTypeTag.typeParameter 'opaqueParam'
+			return "T{typeNameIdOf(t)}"
+		end 'opaqueParam'
 		return primitiveTypeTagName(tag)
 	end 'mangleTypeArg'
 
@@ -3087,6 +3096,44 @@ export type ProgramSignatures
 		let name = self.nameOfId(typeNameIdOf(fieldType))
 		return self.genericAliases.contains(name) and self.isArrayInstance(self.genericAliasInstance(name))
 	end 'fieldTypeIsArray'
+
+	// The `Array` instance a field type denotes — a directly-tagged `genericInstance`, or a `named`
+	// generic-alias field (the sweep recorded the layout before interning) resolved to its instance.
+	// Precondition: `fieldTypeIsArray(fieldType)`, so exactly these two shapes reach here.
+	function arrayInstanceOfFieldType(fieldType MaxonType) returns GenericInstanceId
+		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance 'instance'
+			return typeNameIdOf(fieldType)
+		end 'instance'
+		return self.genericAliasInstance(self.nameOfId(typeNameIdOf(fieldType)))
+	end 'arrayInstanceOfFieldType'
+
+	// ⭐ **DOES A CONCRETE INSTANCE HOLD AN OPAQUE-`T` `Array` FIELD WHOSE ELEMENT IS MANAGED (P1.7 slice
+	// 3b-i)?** — `Container with String`'s `items as Array with typeParameter(0)` field, where the substituted
+	// argument (`String`) owns managed heap. Such a field's array would need its `element_destroy@40` stamped
+	// with the element's destructor, but at this sub-slice the enclosing instance's descriptor carries `0` in
+	// `destroyFunc@40` (the relocation that fills it for a managed argument is slice 3b-ii), so the elements
+	// would leak. The parser rejects constructing such an instance (`parseQualifiedCall`). A TRIVIAL argument
+	// answers false and is supported. An `Array` instance has no base struct and is never the subject.
+	export function genericInstanceHasManagedOpaqueArrayField(id GenericInstanceId) returns bool
+		if self.isArrayInstance(id) 'notStruct'
+			return false
+		end 'notStruct'
+		let layout = self.baseLayoutOf(id)
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.genericInstanceHasManagedOpaqueArrayField: fieldTypes.get OOB at {i}")
+			if not self.fieldTypeIsArray(fieldType) 'notArray'
+				continue
+			end 'notArray'
+			let element = self.arrayElementType(self.arrayInstanceOfFieldType(fieldType))
+			if maxonTypeTag(element) != ValueTypeTag.typeParameter 'notOpaque'
+				continue
+			end 'notOpaque'
+			if self.genericInstanceArgIsOwned(id, position: typeNameIdOf(element)) 'managedArg'
+				return true
+			end 'managedArg'
+		end 'eachField'
+		return false
+	end 'genericInstanceHasManagedOpaqueArrayField'
 
 	// ⭐ **THE ONE "does this type own droppable heap?" CLASSIFIER**, over `self.typeNames` — the interner
 	// every field/arg/payload id this index stores lives in. A String (`__str_decref`), a struct box (a

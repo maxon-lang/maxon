@@ -750,6 +750,18 @@ union ConstructorInstance
 	none
 end 'ConstructorInstance'
 
+// ⭐ **THE TWO SHAPES A NESTED (inner) TYPEALIAS TAKES (P1.6-C / P1.7 slice 3b-i).** A `typealias Idx =
+// int(0 to N)` is a RANGED per-instance alias; a `typealias ElementArray = Array with T` is a
+// GENERIC-INSTANCE alias whose instance (`Array with typeParameter(pos)`) is partially opaque. Both record
+// their bare member into `enclosingInnerAliases` (so a later bare reference resolves), but they fold into
+// DIFFERENT whole-program registries — the ranged one into `innerAliases`, the generic one into
+// `genericAliases` under its base-qualified name — so `readNestedTypeAlias` hands the caller the shape it
+// read and the caller routes it to the right collection.
+union NestedAliasResult
+	ranged(alias RangedTypeAlias)
+	genericInstance(entry GenericAliasEntry)
+end 'NestedAliasResult'
+
 // The BOX a field access goes through, paired with the LAYOUT that says what is inside it.
 //
 // ⭐ **ONE ANSWER, BECAUSE IT IS ONE QUESTION** — and because the two halves drifting apart is a
@@ -2796,7 +2808,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, innerAliasOut: innerAliases, methodInnerAliasParamOut: methodInnerAliasParams)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, methodInnerAliasParamOut: methodInnerAliasParams)
 				continue
 			end 'isTypeDecl'
 
@@ -3120,6 +3132,12 @@ export type Parser
 		var selfCallees = SelfCalleesMap.create()
 		var methodNames = ByteArrayArray.create()
 
+		// The nested `typealias X = Array with T` aliases whose `X.create()` construction needs the descriptor
+		// (P1.7 slice 3b-i) — collected in a FIRST pass, because a method that constructs one may textually
+		// precede its declaration, and `enclosingInnerAliases` is not yet populated here (members are parsed
+		// after this peek-scan). The construction is the descriptor seed, exactly as `sizeof(T)` is.
+		let opaqueArrayAliases = self.collectOpaqueArrayAliasNames()
+
 		var q = self.pos
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
@@ -3130,7 +3148,7 @@ export type Parser
 			// `end` — so this outer loop only ever sees member-level tokens.
 			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
 				let methodName = self.tokenAt(q + 1).value
-				let scan = self.scanOneMethodDescriptorSignals(q + 2)
+				let scan = self.scanOneMethodDescriptorSignals(q + 2, opaqueArrayAliases: opaqueArrayAliases)
 				directSizeof.upsert(methodName, value: scan.direct)
 				selfCallees.upsert(methodName, value: scan.callees)
 				methodNames.push(methodName)
@@ -3143,11 +3161,49 @@ export type Parser
 		self.solveDescriptorNeedFixpoint(methodNames, directSizeof: directSizeof, selfCallees: selfCallees)
 	end 'computeTypeDescriptorNeeds'
 
+	// Collect the member-level nested `typealias X = Array with <typeParam>` alias NAMES of the type body the
+	// cursor sits at (P1.7 slice 3b-i) — the opaque-`T` arrays whose `X.create()` construction reads the
+	// enclosing instance's layout descriptor. A peek-only walk from `self.pos`; the token shape is exactly the
+	// six the grammar produces (`typealias` `X` `=` `Array` `with` `<typeParam>`), and the arg is required to
+	// name an enclosing type parameter so a `typealias X = Array with Integer` (a concrete instance, no
+	// descriptor) is not collected. `SelfCalleesMap`/name-set allocation is paid only inside a generic type.
+	function collectOpaqueArrayAliasNames() returns InnerAliasNameSet
+		var names = InnerAliasNameSet.create()
+		var q = self.pos
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
+				break
+			end 'typeEnd'
+			if self.opaqueArrayAliasDeclAt(q) 'opaqueAlias'
+				names.insert(self.tokenAt(q + 1).value)
+			end 'opaqueAlias'
+			q = q + 1
+		end 'walk'
+		return names
+	end 'collectOpaqueArrayAliasNames'
+
+	// Is the token at `q` the start of a `typealias X = Array with <typeParam>` declaration — the six
+	// contiguous tokens `typealias` `<ident>` `=` `Array` `with` `<typeParam>` whose final identifier names an
+	// enclosing type parameter (P1.7 slice 3b-i). A concrete `Array with Integer` element fails the last test
+	// (it is not a type parameter), so only the OPAQUE form is recognized.
+	function opaqueArrayAliasDeclAt(q TokenIndex) returns bool
+		if self.kindAt(q) != TokenKind.typealias or self.kindAt(q + 1) != TokenKind.identifier 'notAlias'
+			return false
+		end 'notAlias'
+		if self.kindAt(q + 2) != TokenKind.equals or self.kindAt(q + 3) != TokenKind.identifier 'notAssignedType'
+			return false
+		end 'notAssignedType'
+		if not self.tokenAt(q + 3).value.equals(ArrayBuiltinBaseName) or self.kindAt(q + 4) != TokenKind.with or self.kindAt(q + 5) != TokenKind.identifier 'notArrayWith'
+			return false
+		end 'notArrayWith'
+		return self.typeParamPositionOf(self.tokenAt(q + 5).value) < self.enclosingTypeParams.count()
+	end 'opaqueArrayAliasDeclAt'
+
 	// Scan ONE method's body — from `bodyStart` (just past `function <name>`) to its own `end` — for the two
 	// descriptor signals: a direct `sizeof(T)`, and the sibling methods it calls on `self`. `depth` starts at 1
 	// because the method's own block is already open. Split into its own function so the accumulators are simple
 	// straight-line locals (no loop-carried array reassignment across the outer type walk).
-	function scanOneMethodDescriptorSignals(bodyStart TokenIndex) returns MethodDescriptorScan
+	function scanOneMethodDescriptorSignals(bodyStart TokenIndex, opaqueArrayAliases InnerAliasNameSet) returns MethodDescriptorScan
 		var direct = false
 		var callees = ByteArrayArray.create()
 		var depth = 1 as BlockDepth
@@ -3157,6 +3213,12 @@ export type Parser
 			if kind == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'directSizeof'
 				direct = true
 			end 'directSizeof'
+			// Constructing an opaque-`T` array (`ElementArray.create()`) stamps its `element_destroy@40` from the
+			// enclosing instance's threaded descriptor, so — like `sizeof(T)` — it needs the descriptor param
+			// (P1.7 slice 3b-i). `X` `.` `create` `(`, four contiguous tokens with `X` a collected opaque-array alias.
+			if kind == TokenKind.identifier and self.opaqueArrayCreateAt(q, opaqueArrayAliases: opaqueArrayAliases) 'opaqueArrayCreate'
+				direct = true
+			end 'opaqueArrayCreate'
 			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
 				callees.push(self.tokenAt(q + 2).value)
 			end 'selfCall'
@@ -3182,6 +3244,14 @@ export type Parser
 	function isSelfMethodCallAt(selfPos TokenIndex) returns bool
 		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.leftParen
 	end 'isSelfMethodCallAt'
+
+	// Is the identifier at `aliasPos` an opaque-array alias followed by `.create(` — the construction that
+	// seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous tokens with `X` in the
+	// collected opaque-array-alias set. It detects exactly the site `emitOpaqueArrayCreateOp` emits the
+	// descriptor-reading create at, so the reserved slot and the emitted read cannot diverge.
+	function opaqueArrayCreateAt(aliasPos TokenIndex, opaqueArrayAliases InnerAliasNameSet) returns bool
+		return opaqueArrayAliases.contains(self.tokenAt(aliasPos).value) and self.kindAt(aliasPos + 1) == TokenKind.dot and self.kindAt(aliasPos + 2) == TokenKind.identifier and self.tokenAt(aliasPos + 2).value.equals(ArrayCreateMethod) and self.kindAt(aliasPos + 3) == TokenKind.leftParen
+	end 'opaqueArrayCreateAt'
 
 	// Solve the descriptor-need relation to its least fixpoint: a method needs the descriptor iff it directly
 	// reads sizeof(T) (a seed) OR self-calls a method that needs one — equivalently, iff it can REACH a seed
@@ -3506,7 +3576,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enclosingType = nameTok.value
 
@@ -3524,17 +3594,23 @@ export type Parser
 				break
 			end 'closesType'
 
-			// A NESTED (inner) ranged typealias (P1.6-C). Gated on depth 0 so a `typealias` inside a method
-			// body is left to the outer walk. Read into `enclosingInnerAliases` (so the rest of the body's bare
-			// `Idx` references resolve while the sweep is still building the whole-program index) AND keyed
-			// whole-program by `base.member`. Tolerant, like `readStructFieldInto`: a malformed nested alias is
-			// the real parse's to report, and stopping here leaves the remaining tokens to the robust outer walk.
+			// A NESTED (inner) typealias (P1.6-C / P1.7 slice 3b-i). Gated on depth 0 so a `typealias` inside a
+			// method body is left to the outer walk. Read into `enclosingInnerAliases` (so the rest of the body's
+			// bare references resolve while the sweep is still building the whole-program index) AND keyed
+			// whole-program — a RANGED alias by `base.member` into `innerAliases`, a GENERIC-INSTANCE alias
+			// (`Array with T`) under its base-qualified name into `genericAliases` (so `Container.ElementArray`
+			// resolves the way a top-level `IntBox` does, and stays distinct from another type's `ElementArray`).
+			// Tolerant, like `readStructFieldInto`: a malformed nested alias is the real parse's to report, and
+			// stopping here leaves the remaining tokens to the robust outer walk.
 			if depth == 0 and self.atNestedTypeAlias() 'isInnerAlias'
 				if self.at(TokenKind.export) 'exportedInnerAlias'
 					self.advance()
 				end 'exportedInnerAlias'
-				let inner = try self.readNestedRangedAlias() otherwise break
-				innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: inner))
+				let nested = try self.readNestedTypeAlias() otherwise break
+				match nested 'nested'
+					ranged(alias) then innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: alias))
+					genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
+				end 'nested'
 				continue
 			end 'isInnerAlias'
 
@@ -4094,33 +4170,60 @@ export type Parser
 		return self.at(TokenKind.typealias)
 	end 'atNestedTypeAlias'
 
-	// ⭐ **READ ONE NESTED (INNER) RANGED TYPEALIAS (P1.6-C)** — `typealias Idx = int(0 to u64.max)` inside a
-	// generic type body. The cursor sits at `typealias` (any `export` is consumed by the caller). It reuses
-	// `readTypeAliasDeclaration` — the ONE typealias grammar the sweep and the real parse share — and requires
-	// the RANGED form: only a ranged inner alias is a per-instance alias at this rung, so a nested function or
-	// generic-instance alias is rejected cleanly (a struct-shaped nested alias stays plain, and per-instance
-	// nesting of those is a later slice). It records the bare member into `enclosingInnerAliases` so the rest
-	// of the body's bare `Idx` references resolve, and returns the alias so the sweep can key it whole-program.
-	function readNestedRangedAlias() returns RangedTypeAlias throws ParseError
+	// ⭐ **READ ONE NESTED (INNER) TYPEALIAS (P1.6-C / P1.7 slice 3b-i)** — `typealias Idx = int(0 to u64.max)`
+	// OR `typealias ElementArray = Array with T` inside a generic type body. The cursor sits at `typealias`
+	// (any `export` is consumed by the caller). It reuses `readTypeAliasDeclaration` — the ONE typealias
+	// grammar the sweep and the real parse share — which routes a `Base with Args` RHS into `genericOut` and a
+	// ranged RHS into `rangedOut`. A nested FUNCTION alias has neither form and is rejected cleanly (a later
+	// slice). Both supported forms record their bare member into `enclosingInnerAliases` so the rest of the
+	// body's bare references resolve; the caller keys the returned shape whole-program.
+	function readNestedTypeAlias() returns NestedAliasResult throws ParseError
 		let aliasTok = self.current()
 		var ranged = RangedTypeAliasArray.create()
 		var functionAliases = FunctionTypeAliasArray.create()
 		var generics = GenericAliasEntryArray.create()
 		try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, buildFunctionDisplay: false)
 
-		if ranged.count() != 1 'notRanged'
-			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) to gain per-instance identity; a nested function or generic-instance alias is a later slice", line: aliasTok.line, column: aliasTok.column)
-		end 'notRanged'
+		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
+		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(pos)`), keyed whole-program by
+		// the caller under its base-qualified name so a same-named inner alias of another generic type stays
+		// distinct, exactly as a ranged inner alias is.
+		if generics.count() == 1 'genericInstance'
+			let entry = try generics.get(0) otherwise panic("readNestedTypeAlias: generics.count() == 1 but get(0) failed")
+			self.recordInnerAliasName(entry.aliasName)
+			return NestedAliasResult.genericInstance(entry)
+		end 'genericInstance'
 
-		let alias = try ranged.get(0) otherwise panic("readNestedRangedAlias: ranged.count() == 1 but get(0) failed")
-		// COPY-ON-WRITE off the shared empty set: only a type that actually declares a nested typealias gets its
-		// own set here, so the generics-free corpus never allocates one (the reset points at the shared one).
+		if ranged.count() != 1 'notSupported'
+			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) or a generic-instance alias (`typealias ElementArray = Array with T`); a nested function alias is a later slice", line: aliasTok.line, column: aliasTok.column)
+		end 'notSupported'
+
+		let alias = try ranged.get(0) otherwise panic("readNestedTypeAlias: ranged.count() == 1 but get(0) failed")
+		self.recordInnerAliasName(alias.name)
+		return NestedAliasResult.ranged(alias)
+	end 'readNestedTypeAlias'
+
+	// Record a nested alias's bare member into `enclosingInnerAliases` so the rest of the body's bare
+	// references resolve. COPY-ON-WRITE off the shared empty set: only a type that actually declares a nested
+	// typealias gets its own set here, so the generics-free corpus never allocates one (the reset points at
+	// the shared one). Shared by both nested-alias shapes, so ranged and generic aliases enter the set the
+	// same way.
+	function recordInnerAliasName(name ByteArray)
 		if self.enclosingInnerAliases is sharedEmptyInnerAliases 'stillShared'
 			self.enclosingInnerAliases = InnerAliasNameSet.create()
 		end 'stillShared'
-		self.enclosingInnerAliases.insert(alias.name)
-		return alias
-	end 'readNestedRangedAlias'
+		self.enclosingInnerAliases.insert(name)
+	end 'recordInnerAliasName'
+
+	// Re-key a nested generic-instance alias entry under its BASE-QUALIFIED name (`Container.ElementArray`)
+	// before the sweep folds it whole-program (P1.7 slice 3b-i). `readGenericInstanceAlias` records the BARE
+	// member (`ElementArray`), but a bare member collides with a same-named inner alias of another generic
+	// type, so it is qualified with the enclosing type — the SAME name `parseTypeReference`'s inner-alias arm
+	// stamps the field type with (`joinQualifiedName`), so the field's stored `named("Container.ElementArray")`
+	// and this `genericAliases` key are one string.
+	function qualifiedInnerGenericAlias(entry GenericAliasEntry) returns GenericAliasEntry
+		return GenericAliasEntry.create(joinQualifiedName(self.enclosingType, member: entry.aliasName), baseName: entry.baseName, argCount: entry.argCount, args: entry.args)
+	end 'qualifiedInnerGenericAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
 	// sits on the base identifier. It RECORDS the instance into `genericOut` (which `foldFile` interns
@@ -4860,7 +4963,10 @@ export type Parser
 				let tok = self.current()
 				throw ParseError.unsupported("a nested typealias cannot be `static` — it is a per-type declaration, not a member function", line: tok.line, column: tok.column)
 			end 'staticInnerAlias'
-			_ = try self.readNestedRangedAlias()
+			// The whole-program recording (into `innerAliases`/`genericAliases`) is the sweep's; the real parse
+			// needs only the local `enclosingInnerAliases` population that `readNestedTypeAlias` performs, so the
+			// returned shape is discarded here.
+			_ = try self.readNestedTypeAlias()
 			return
 		end 'nestedTypeAlias'
 
@@ -5493,15 +5599,23 @@ export type Parser
 				return MaxonType.typeParameter(paramPos)
 			end 'typeParam'
 
-			// A BARE INNER ALIAS (P1.6-C) — `Idx` inside `type Wrapper` where `typealias Idx = int(0 to
-			// u64.max)`. Recognized by NAME against `enclosingInnerAliases` (populated while THIS type's body is
-			// parsed, so the sweep and the real parse agree without the whole-program `innerAliases`, which the
-			// sweep has not folded yet). It resolves to the BASE-QUALIFIED `named("Wrapper.Idx")` — the
-			// shared-body form a method return/parameter carries; TypeResolution erases it to `integer`, and the
-			// method-return retype re-qualifies it to a concrete instance at the call site. NEVER bare
-			// `named("Idx")`: a bare member name collides with a same-named inner alias of another generic type.
+			// A BARE INNER ALIAS (P1.6-C / P1.7 slice 3b-i) — `Idx` OR `ElementArray` inside `type Wrapper`.
+			// Recognized by NAME against `enclosingInnerAliases` (populated while THIS type's body is parsed, so
+			// the sweep and the real parse agree without the whole-program registries, which the sweep has not
+			// folded yet). It resolves under its BASE-QUALIFIED name (`Wrapper.Idx`), NEVER the bare member (which
+			// collides with a same-named inner alias of another generic type). Two shapes: a GENERIC-INSTANCE
+			// inner alias (`ElementArray = Array with T`) resolves to `genericInstance(gid)` in the REAL parse
+			// (the index is complete), the read-side twin of the top-level generic-alias arm below — so the field
+			// type is a genericInstance TypeResolution leaves concrete, not a `named` it would reject as E3011. A
+			// RANGED inner alias stays `named("Wrapper.Idx")` (TypeResolution erases it to `integer`, and the
+			// method-return retype re-qualifies it at the call site). During the SWEEP `isGenericAlias` answers no
+			// for both, so both stay `named` — harmless, as the sweep's field type is re-tagged at every read.
 			if self.enclosingInnerAliases.contains(tok.value) 'innerAlias'
-				return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(self.enclosingType, member: tok.value)))
+				let qualifiedInner = joinQualifiedName(self.enclosingType, member: tok.value)
+				if self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
+					return MaxonType.genericInstance(self.signatures.genericAliasInstance(qualifiedInner))
+				end 'genericInnerAlias'
+				return MaxonType.named(self.artifact.typeNames.intern(qualifiedInner))
 			end 'innerAlias'
 
 			// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
@@ -13008,6 +13122,11 @@ export type Parser
 	// labels rather than reusing the call's, and `slotCallArgs` is not involved — there is nothing
 	// to reorder, because the label IS the destination.
 	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray) throws ParseError
+		// A struct literal may span lines — `Self{` then one `field: value` per line (the spec writes big
+		// constructors this way). Newlines are skipped at each field boundary: after the `{` (here), after a
+		// field's value (before the `,`/`}` test), and after the `,` (before the next field name). A single-line
+		// literal has no newline to skip, so its token stream — and its codegen — is unchanged.
+		self.skipNewlines()
 		if self.at(TokenKind.rightBrace) 'noFields'
 			return
 		end 'noFields'
@@ -13052,10 +13171,14 @@ export type Parser
 			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
 			try fieldBareLocal.set(index, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parseStructLiteralFields: fieldBareLocal.set OOB at {index} — the columns are sized to the layout's field count")
 
+			// AFTER `rhsWasBareLocalReference` reads `[valueStart, self.pos)` — skipping here first would widen
+			// that window past the single-identifier value and silently mis-decide a managed field's move-in.
+			self.skipNewlines()
 			if not self.at(TokenKind.comma) 'endFields'
 				break
 			end 'endFields'
 			try self.consume(TokenKind.comma)
+			self.skipNewlines()
 		end 'fieldLoop'
 	end 'parseStructLiteralFields'
 
@@ -13779,6 +13902,28 @@ export type Parser
 			return try self.parseArrayStaticCall(typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
 		end 'arrayStatic'
 
+		// `ElementArray.create()` — a static call on a NESTED generic-instance alias inside the enclosing
+		// generic body (P1.7 slice 3b-i). The bare member is recognized against `enclosingInnerAliases` and
+		// qualified to the whole-program `Container.ElementArray` key (the same name the field type carries),
+		// which resolves to the OPAQUE array instance `Array with typeParameter(pos)`. Intercepted here for the
+		// same reason the top-level `arrayStatic` case is: `Array` has no base struct to mangle a `.create` onto.
+		if self.enclosingInnerAliases.contains(typeTok.value) 'innerAlias'
+			let qualified = joinQualifiedName(self.enclosingType, member: typeTok.value)
+			if self.signatures.isGenericAlias(qualified) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(qualified)) 'innerArrayStatic'
+				return try self.parseArrayStaticCall(typeTok, giid: self.signatures.genericAliasInstance(qualified))
+			end 'innerArrayStatic'
+		end 'innerAlias'
+
+		// ⛔ **REJECT CONSTRUCTING A GENERIC INSTANCE WHOSE OPAQUE-`T` ARRAY ELEMENT IS MANAGED (P1.7 slice
+		// 3b-i).** `Container with String`'s `create()` would stamp its array's `element_destroy@40` from the
+		// instance descriptor's `destroyFunc@40`, which is 0 until the reloc that fills it for a managed argument
+		// (P1.7 slice 3b-ii) lands — so the String elements would leak (a wrong answer / exit 101), silently. A
+		// TRIVIAL argument (`Container with SmallInt`) reads 0 correctly (no destructor) and is the whole of this
+		// sub-slice, so it passes. Gated on the generic-alias constructor path so a plain static call is untouched.
+		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.genericInstanceHasManagedOpaqueArrayField(self.signatures.genericAliasInstance(typeTok.value)) 'managedOpaqueElement'
+			throw ParseError.unsupported("constructing `{String.from(typeTok.value)}` — its opaque-type-parameter `Array` field has a MANAGED element (String / struct / enum), whose per-element destructor lives in the layout descriptor's `destroyFunc@40` slot reached by the rdata relocation (P1.7 slice 3b-ii); a TRIVIAL element (int / Byte / ranged-int) is supported", line: typeTok.line, column: typeTok.column)
+		end 'managedOpaqueElement'
+
 		try self.consume(TokenKind.dot)
 		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value))
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
@@ -14204,10 +14349,29 @@ export type Parser
 	// stores it inside its body, so it is set at birth); 0 for a trivial element. NOT tracked owned — the caller
 	// decides that (a literal tracks after its pushes, a `create()` immediately).
 	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
+			return self.emitOpaqueArrayCreateOp(giid, range: range)
+		end 'opaque'
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as ParsedInt, valueType: MaxonType.integer, range: range)
 		let destroyVal = self.arrayElementDestroyValue(giid, range: range)
 		return self.emitRuntimeCall(ArrCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitArrayCreateOp'
+
+	// ⭐ **CREATE AN OPAQUE-`T` ARRAY inside a shared generic body (P1.7 slice 3b-i).** `ElementArray.create()`
+	// where `ElementArray = Array with typeParameter(pos)`. Two things differ from a concrete create, both
+	// because the element type is opaque here (the shared body compiles ONCE and serves every concrete
+	// instance through dictionary-passing):
+	//   • element_size is the fixed machine-word slot every opaque `T` occupies (`LAYOUT_TYPE_PARAM_SLOT_BYTES`),
+	//     NOT a source-`sizeof` — a managed element is a pointer and a trivial one an inline word, both 8 bytes.
+	//   • element_destroy@40 is not known statically, so it is READ from the enclosing instance's threaded
+	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a ONE-argument `__arr_create`
+	//     (element_size only); LowerMaxonToStd supplies the descriptor-read second argument, so the tier that
+	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
+	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
+	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as ParsedInt, valueType: MaxonType.integer, range: range)
+		return self.emitRuntimeCall(ArrCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitOpaqueArrayCreateOp'
 
 	// ⭐ **THE `element_destroy@40` STAMP VALUE (P1.7 slice 3).** For a MANAGED-element array it is the RAW
 	// `.text` ADDRESS of the element's drop callee (`__str_decref` / `__destruct_<T>` / `__mm_decref` / nested
@@ -14236,9 +14400,12 @@ export type Parser
 		return result
 	end 'emitRuntimeFuncAddr'
 
-	// `IntArray.create()` — the one `Array` static factory at this slice. Yields an OWNED empty array.
+	// `IntArray.create()` — the one `Array` static factory at this slice. Yields an OWNED empty array. Serves
+	// a CONCRETE instance (`Array with Integer`) and an OPAQUE one (`Array with T` inside a generic body, P1.7
+	// slice 3b-i) alike — `emitArrayCreateOp` branches on the element, and a MANAGED opaque element was already
+	// rejected at the enclosing instance's construction site (`parseQualifiedCall`), so the shared body only
+	// ever creates a trivial-element opaque array here.
 	function parseArrayStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
-		try self.requireConcreteArrayElement(giid, tok: aliasTok)
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 		if not methodTok.value.equals(ArrayCreateMethod) 'unknownStatic'
@@ -14321,9 +14488,12 @@ export type Parser
 	end 'parseFieldChainCall'
 
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
-	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`).
+	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
+	// (`self.items.push(x)` in a generic body, P1.7 slice 3b-i) dispatches here too: the shared body treats the
+	// opaque element as TRIVIAL (an 8-byte word — `push` moves it by value, an accessor yields an `integer`),
+	// which is correct for every instantiation the body serves, because a MANAGED opaque element was rejected
+	// at the enclosing instance's construction site.
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
-		try self.requireConcreteArrayElement(giid, tok: self.current())
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -14620,18 +14790,6 @@ export type Parser
 			throw ParseError.voidCallResultUsed(String.from(methodTok.value), line: methodTok.line, column: methodTok.column)
 		end 'valueUsed'
 	end 'requireArrayVoidStatement'
-
-	// A managed-element array must have a CONCRETE element type at this slice (P1.7 slice 3a): the construction
-	// site stamps `element_destroy@40` with the ADDRESS of the element's destructor (`funcAddr`), which needs
-	// the concrete element type known statically. An OPAQUE type parameter (`Array with T` inside a generic
-	// type's shared body) does not know its element destructor statically — it lives in the layout descriptor
-	// (`destroyFunc@40`, reached by the rdata reloc), which is slice 3b — so it is rejected with a positioned
-	// E2015 until then. A trivial or concrete-managed element passes.
-	function requireConcreteArrayElement(giid GenericInstanceId, tok Token) throws ParseError
-		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
-			throw ParseError.unsupported("an `Array` with an opaque type-parameter element (`Array with T` inside a generic type's body) — P1.7 slice 3a supports an array with a CONCRETE element type; an opaque `T` element needs the layout-descriptor element destructor (P1.7 slice 3b)", line: tok.line, column: tok.column)
-		end 'opaque'
-	end 'requireConcreteArrayElement'
 
 	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
 	// own; it names the receiver parameter, which is bound under `SelfParamName`. Every other base

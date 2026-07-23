@@ -745,24 +745,67 @@ type MaxonToStdLowering
 	// when the callee needs one. The descriptor rides LAST — after the user args and any env companions —
 	// matching the `[user][env][layout]` parameter order the parser reserved it at, so the caller's
 	// argument register and the callee's `param` op meet.
-	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
+	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock) returns ValueIdArray
 		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)
 		if not self.layoutNeedingFuncs.contains(callee) 'noLayout'
 			return baseArgs
 		end 'noLayout'
 
-		// The receiver is the first slotted argument (`self` at position 0) — the value of the concrete
-		// generic instance whose descriptor the callee reads. Read from `argIds` (the ORIGINAL receiver),
-		// never from `baseArgs`, which may hold widened/env-derived values.
-		let receiver = try argIds.get(0) otherwise panic("finalizeCallArgsWithLayout: layout-needing callee '{String.from(callee)}' has no receiver argument — an instance method's receiver is its first parameter")
 		// A FRESH array — `baseArgs` may BE the slotted `argIds` verbatim (finalizeCallArgs's fast path
 		// returns them unchanged), so pushing into it would mutate a possibly-shared array. Only the rare
 		// layout-needing call pays this copy; the common path already returned `baseArgs` above.
 		var out = ValueIdArray.create()
 		out.append(baseArgs)
-		out.push(self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock))
+		out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		return out
 	end 'finalizeCallArgsWithLayout'
+
+	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source (P1.6-B1 / P1.7
+	// slice 3b-i). An INSTANCE method reads it from its RECEIVER (`self` at slotted position 0 — the value of
+	// the concrete generic instance). A receiverless STATIC constructor (`IntContainer.create(…)`) has no
+	// receiver — its first argument is an ordinary user value — but its RESULT is the concrete instance it
+	// builds, and the parser has already retyped that result to `genericInstance(gid)`, so the concrete gid is
+	// read off the result. The discriminator is the callee's own parameter list (`__self` at position 0), not
+	// the shape of `argIds`, so a static whose first argument happens to be a generic instance is unambiguous.
+	function materializeLayoutArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		if self.signatureTakesReceiver(sig) 'instanceMethod'
+			// Read from `argIds` (the ORIGINAL receiver), never from the widened/env-derived `baseArgs`.
+			let receiver = try argIds.get(0) otherwise panic("materializeLayoutArgFor: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+			return self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock)
+		end 'instanceMethod'
+		return self.materializeStaticConstructorLayout(result, callee: callee, dstBlock: dstBlock)
+	end 'materializeLayoutArgFor'
+
+	// The descriptor address for a layout-needing STATIC generic constructor (P1.7 slice 3b-i) — the RIP-relative
+	// address of its RESULT instance's descriptor blob. The result was retyped to `genericInstance(gid)` by the
+	// parser (`retypeGenericAliasConstructorResult`), so the concrete gid — `Container with SmallInt` — is read
+	// off the result's name column, exactly as an instance-method receiver's is. A receiverless layout-needing
+	// callee is always such a constructor (a static that returns its own instance), so a non-instance result is
+	// an internal invariant break.
+	function materializeStaticConstructorLayout(result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
+			panic("materializeStaticConstructorLayout: layout-needing static callee '{String.from(callee)}' returns a {self.valueTagOf(result).name}, not a generic instance — a receiverless layout-needing callee is a generic constructor whose result carries the concrete gid")
+		end 'notInstance'
+		return self.emitInstanceDescriptorAddr(result, dstBlock: dstBlock)
+	end 'materializeStaticConstructorLayout'
+
+	// Emit the RIP-relative address of the descriptor blob for a CONCRETE generic-instance value (`rdataAddr`
+	// of `ensureLayoutDescriptor`), the shared core of the two ways a layout-needing call finds its descriptor
+	// source — an instance-method RECEIVER and a static-constructor RESULT (P1.6-B1 / P1.7 slice 3b-i). One home
+	// so the gid read, the descriptor emission and the address op cannot drift between the two.
+	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
+		let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitInstanceDescriptorAddr: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+		let descId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
+		return descId
+	end 'emitInstanceDescriptorAddr'
+
+	// Does `sig`'s first parameter name the receiver (`__self`) — an INSTANCE method, whose descriptor comes
+	// from its receiver rather than its result. The lowering twin of SemanticCheck's `signatureTakesSelf`,
+	// inlined here (that one is file-private) so the descriptor-threading decision reads the same fact.
+	function signatureTakesReceiver(sig FuncSignature) returns bool
+		return sig.paramNames.count() > 0 and (try sig.paramNames.get(0) otherwise panic("signatureTakesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
+	end 'signatureTakesReceiver'
 
 	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A CONCRETE generic
 	// instance receiver → the RIP-relative address of its descriptor blob (`rdataAddr`); a receiver that is
@@ -772,10 +815,7 @@ type MaxonToStdLowering
 	function materializeLayoutArg(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(receiver)
 		if tag == ValueTypeTag.genericInstance 'concrete'
-			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeLayoutArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
-			let descId = self.mintStdValueId()
-			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
-			return descId
+			return self.emitInstanceDescriptorAddr(receiver, dstBlock: dstBlock)
 		end 'concrete'
 		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
 		// descriptor to pass is the caller's own, FORWARDED. A `typeParameter` receiver (a value of the caller's
@@ -850,7 +890,7 @@ type MaxonToStdLowering
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, dstBlock: dstBlock)))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -867,8 +907,47 @@ type MaxonToStdLowering
 	// one place that could still see it.
 	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		requireRuntimeCallPositional(callee, argLabels: argLabels)
+		// An OPAQUE-`T` `__arr_create` (P1.7 slice 3b-i) arrives with ONE argument (element_size); its
+		// `element_destroy@40` is not known statically, so it is READ from the enclosing instance's threaded
+		// layout descriptor (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended
+		// as the second argument, mirroring how `sizeof(T)` reads `elementLogicalSize@56`.
+		if self.isOpaqueArrayCreateCall(callee, result: result) 'opaqueArrayCreate'
+			self.appendOpaqueArrayCreate(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'opaqueArrayCreate'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
 	end 'lowerRuntimeCall'
+
+	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__arr_create` whose result instance's element
+	// is a type parameter (P1.7 slice 3b-i)? The parser emits such a create with only `element_size`; the
+	// `element_destroy@40` argument is supplied by `appendOpaqueArrayCreate`. A concrete `__arr_create` (its
+	// element known) already carries both arguments and takes the plain path.
+	function isOpaqueArrayCreateCall(callee ByteArray, result ValueId) returns bool
+		if not callee.equals(ArrCreateName) 'notCreate'
+			return false
+		end 'notCreate'
+		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
+			return false
+		end 'notInstance'
+		return self.signatures.arrayElementIsOpaque(try self.valueNameIds.get(result) otherwise panic("isOpaqueArrayCreateCall: genericInstance __arr_create result v{result} has no name-id (its GenericInstanceId)"))
+	end 'isOpaqueArrayCreateCall'
+
+	// Emit an opaque-`T` `__arr_create` (P1.7 slice 3b-i): load the element destructor from the enclosing
+	// instance's layout descriptor `destroyFunc@40` slot, then call `__arr_create(element_size, element_destroy)`.
+	// The reserved descriptor param is guaranteed by the parser's descriptor-need seed (an opaque `X.create()`
+	// seeds it exactly as `sizeof(T)` does), so its absence here is a parser/lowering divergence — a loud bug,
+	// not a silent wrong load, matching `lowerSizeofType`.
+	function appendOpaqueArrayCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if not self.hasImplicitLayout 'noLayout'
+			panic("appendOpaqueArrayCreate: opaque `Array.create()` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
+		end 'noLayout'
+		let destroyId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+		var fullArgs = ValueIdArray.create()
+		fullArgs.append(args)
+		fullArgs.push(destroyId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
+	end 'appendOpaqueArrayCreate'
 
 	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to SLOT
 	// against — a function TYPE has no parameter names, so the arguments are already in call order (the
@@ -1343,7 +1422,7 @@ type MaxonToStdLowering
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, dstBlock: dstBlock)))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")

@@ -15,8 +15,7 @@ When a generic type declares a typealias that references its type parameter (e.g
 
 ### Basic generic type with nested array typealias
 
-<!-- disabled-test: basic-nested-array -->
-<!-- P1.7 generic-body: nested Array-with-type-parameter typealias inside a generic type -->
+<!-- test: basic-nested-array -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -64,7 +63,7 @@ end 'main'
 ### Generic type with string element
 
 <!-- disabled-test: string-element -->
-<!-- P1.7-s3 String element -->
+<!-- P1.7 slice 3b-ii: opaque-T Array with a MANAGED element needs the descriptor destroyFunc@40 funcAbs64InRdata reloc -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)

@@ -39,6 +39,16 @@ export let LAYOUT_DESCRIPTOR_BYTE_SIZE = 64 as ByteOffset
 // when the drop path reads it.
 export let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 
+// The byte offset of the `destroyFunc` slot — the destroy function for the instance's single type
+// argument (the "dictionary" entry a shared generic body reads to release an opaque `T`). An opaque-`T`
+// `Array with T` created inside a generic body stamps its record's `element_destroy@40` from a runtime
+// load of `[descriptor + this]` (P1.7 slice 3b-i): the shared body compiles ONCE and reads the element's
+// destructor at run time, so the ONE compiled create serves every concrete instance. The slot is 0 on
+// disk for every instance at this slice (a TRIVIAL type argument has no destructor, and a relocation
+// filling it for a MANAGED argument is P1.7 slice 3b-ii), so the load yields 0 and the array's drop walk
+// is skipped — exactly the trivial-element behaviour. `encodeLayoutDescriptor` already zero-fills it.
+export let LAYOUT_OFFSET_DESTROY_FUNC = 40 as ByteOffset
+
 // The number of little-endian bytes in one descriptor field.
 let LAYOUT_FIELD_BYTES = 8 as ByteOffset
 
