@@ -219,6 +219,36 @@ export let ArrSliceName = b"__arr_slice"
 export let ArrCloneName = b"__arr_clone"
 export let ArrAppendName = b"__arr_append"
 
+// ⭐ **THE MANAGED-ELEMENT copy operations (P1.7 slice 3b-vi-b).** The DEEP-CLONE twins of the three above: an
+// array whose element is MANAGED (String / struct / boxed union) cannot byte-blit its elements — that would
+// duplicate a heap pointer and double-free it — so each element is DEEP-CLONED into a FRESH OWNED buffer through
+// the per-element clone function the call site passes (`funcAddr(__str_clone)` / `funcAddr(__clone_<T>)` /
+// `funcAddr(__arr_clone)`). shv2 is move-only, so this is a per-element deep clone, NOT the incref both
+// reference compilers use. `__arr_slice_managed` is THROWING (same bounds as `__arr_slice`); the new array is a
+// full OWNER (its own buffer, `parent@32 = 0`), NEVER a COW view — a managed view would let `__arr_decref`
+// double-destroy the shared elements, which is exactly the trap deep-clone sidesteps.
+export let ArrSliceManagedName = b"__arr_slice_managed"
+export let ArrCloneManagedName = b"__arr_clone_managed"
+export let ArrAppendManagedName = b"__arr_append_managed"
+
+// ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
+// `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
+// call/`funcAddr` past the user-function checks and no file declares it. ONE speller, so the STAMP site
+// (`Parser.arrayElementCloneValue` / the struct/union field cascade), the USAGE scan (`recordCallUsage`) and
+// the SYNTHESIS (`installStructCloners`/`installUnionCloners`) name it identically and cannot drift — exactly as
+// `DestructorPrefix`/`destructorSymbol` pair for the drop family.
+export let ClonerPrefix = b"__clone_"
+
+export function clonerSymbol(typeName ByteArray) returns ByteArray
+	return "{String.from(ClonerPrefix)}{String.from(typeName)}".toByteArray()
+end 'clonerSymbol'
+
+// Is `callee` one of the three MANAGED-element array copies — the `usesManagedArrayCopy` gate. Their install is
+// decoupled from `usesArray` so a program that only touches TRIVIAL arrays does not carry them.
+export function isManagedArrayCopyCallee(callee ByteArray) returns bool
+	return callee.equals(ArrSliceManagedName) or callee.equals(ArrCloneManagedName) or callee.equals(ArrAppendManagedName)
+end 'isManagedArrayCopyCallee'
+
 // ⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED DROP (P1.7 slice 3b-v).** `__drop_type_param(descriptor, value)`
 // drops ONE consumed opaque type-parameter binding whose element destructor is not known statically: the
 // shared generic body owns the value (a `push`/forward feed parameter left live on some path), but the
@@ -263,7 +293,7 @@ end 'isArrayRuntimeCallee'
 // two lists name the same seven `Arr*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
 // an out-of-bounds or inverted range.
 export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName)
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName) or callee.equals(ArrSliceManagedName)
 end 'isThrowingArrayRuntimeCallee'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
@@ -306,6 +336,14 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrClone(module)
 	buildArrAppend(module)
 	buildArrDecref(module)
+	// The MANAGED-element copies (P1.7 slice 3b-vi-b) — installed under their OWN bit, so a trivial-array
+	// program (the common one) does not carry them. `usesManagedArrayCopy` implies `usesArray` (they are
+	// `__arr_`-prefixed), so this install is always reached when the bit is set.
+	if usage.usesManagedArrayCopy 'managedCopy'
+		buildArrSliceManaged(module)
+		buildArrCloneManaged(module)
+		buildArrAppendManaged(module)
+	end 'managedCopy'
 	verifyThrowingAccessorsMatchPredicate(module)
 end 'installArrayRuntime'
 
@@ -686,6 +724,24 @@ function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, len
 	return emitBin(module, block: block, a: negative, b: atOrOver, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitIndexOutOfRange'
 
+// The `slice(start, end)` RANGE-violated boolean (0/1) — `end > length OR start > end OR start < 0 OR end < 0`,
+// the ONE home of the slice bounds rule shared by `__arr_slice` (trivial, COW) and `__arr_slice_managed`
+// (deep-clone). See `buildArrSlice`'s header for WHY each disjunct is present (the negative guards are what stop
+// a signed compare letting a negative index address before the buffer). The caller wires its own oob/ok branch
+// off the returned flag, so the two slice builders cannot drift on what "out of bounds" means.
+function emitSliceRangeViolated(module StdModule, block IrBlock, arr ValueId, start ValueId, endIndex ValueId, ids ValueMinter) returns ValueId
+	let length = emitLoadField(module, block: block, record: arr, offset: ArrLengthOffset, ids: ids)
+	let endTooLarge = emitCmp(module, block: block, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
+	let startPastEnd = emitCmp(module, block: block, a: start, b: endIndex, pred: StdCmpPred.gt, ids: ids)
+	let startNegative = emitIsNegative(module, block: block, value: start, ids: ids)
+	let endNegative = emitIsNegative(module, block: block, value: endIndex, ids: ids)
+	let badRange = emitBin(module, block: block, a: endTooLarge, b: startPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	let negativeIndex = emitBin(module, block: block, a: startNegative, b: endNegative, opcode: StdBinOpcode.bitOr, ids: ids)
+	let anyErr = emitBin(module, block: block, a: badRange, b: negativeIndex, opcode: StdBinOpcode.bitOr, ids: ids)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: anyErr, b: zero, pred: StdCmpPred.ne, ids: ids)
+end 'emitSliceRangeViolated'
+
 // The out-of-bounds throw: `errorReturn(0, indexOutOfBounds)`. The primary value is unread on the throw
 // edge (the desugar's phi takes the `otherwise` value there), so a plain 0 is honest.
 function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
@@ -724,8 +780,10 @@ end 'emitOkReturn'
 // what a view over an immortal `.rdata` blob, or over an array that never allocated a buffer, correctly has.
 //
 // TRIVIAL elements only — the view duplicates heap POINTERS without a per-element retain, so a managed
-// element would be destroyed twice; `requireTrivialArrayElementForCopy` rejects the managed cases (E2015).
-// `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`, which
+// element would be destroyed twice. A CONCRETE managed array never reaches here: `Parser.parseArraySlice`/
+// `parseArrayAppend`/the clone branch route a managed element to the deep-cloning `__arr_slice_managed`/
+// `__arr_clone_managed` (a fresh OWNER, not a view) instead, so `emitArrayView` stays trivial-only (P1.7 slice
+// 3b-vi-b). `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`, which
 // dominates `exit`, so it is live there for the caller's `ret`/`errorReturn`. Threads `cur` and returns the
 // new record value.
 function emitArrayView(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
@@ -1552,16 +1610,7 @@ function buildArrSlice(module StdModule)
 	let start = 1 as ValueId
 	let endIndex = 2 as ValueId
 
-	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
-	let endTooLarge = emitCmp(module, block: entry, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
-	let startPastEnd = emitCmp(module, block: entry, a: start, b: endIndex, pred: StdCmpPred.gt, ids: ids)
-	let startNegative = emitIsNegative(module, block: entry, value: start, ids: ids)
-	let endNegative = emitIsNegative(module, block: entry, value: endIndex, ids: ids)
-	let badRange = emitBin(module, block: entry, a: endTooLarge, b: startPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
-	let negativeIndex = emitBin(module, block: entry, a: startNegative, b: endNegative, opcode: StdBinOpcode.bitOr, ids: ids)
-	let anyErr = emitBin(module, block: entry, a: badRange, b: negativeIndex, opcode: StdBinOpcode.bitOr, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let violated = emitCmp(module, block: entry, a: anyErr, b: zero, pred: StdCmpPred.ne, ids: ids)
+	let violated = emitSliceRangeViolated(module, block: entry, arr: arr, start: start, endIndex: endIndex, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: view.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
@@ -1681,20 +1730,21 @@ end 'buildArrAppend'
 //
 // ⚠ The managed-element walk runs UNCONDITIONALLY (behind its own `element_destroy@40` gate) rather than
 // only for the last owner of the buffer, and that is sound rather than lucky: a managed-element array can
-// never be SHARED, because `requireTrivialArrayElementForCopy` rejects `slice`/`clone`/`append` on one
-// (E2015) and those are the only operations that mint a view. Its buffer's refcount is therefore always 0
-// here. Gating the walk on that would be a branch no program can execute, which is the one thing this
-// runtime consistently refuses to emit; the day managed elements can be viewed, this is the note that says
-// what has to change.
+// never be SHARED. `slice`/`clone`/`append` are the only operations that could give two records the same
+// element buffer, and on a MANAGED-element array they take the DEEP-CLONE path (`__arr_slice_managed`/
+// `__arr_clone_managed`/`__arr_append_managed`, P1.7 slice 3b-vi-b) — which build a FRESH OWNER over
+// independent per-element clones, never a COW view over the source's buffer. So a managed record's buffer
+// refcount is always 0 here, and this walk destroys each element exactly once. Gating the walk on the
+// refcount would be a branch no program can execute, which is the one thing this runtime consistently refuses
+// to emit.
 //
-// ⭐ **AND THE TWO HALVES OF THAT ARGUMENT ARE ONE FACT, NOT TWO THAT HAPPEN TO AGREE** — which is the only
-// reason it may rest on a comment. The runtime gate here fires on `element_destroy@40 != 0`, and the parser
-// gate rejects `slice`/`clone`/`append`; BOTH are `SignatureIndex.arrayElementIsManaged(giid)`, read at
-// `Parser.arrayElementDestroyValue` (which stamps the field) and at `requireTrivialArrayElementForCopy`
-// (which raises E2015). There is no third spelling to drift. ⚠ So the thing that would break this is NOT
-// someone editing one copy — it is LIFTING the E2015 restriction (P1.7 slice 3b's deep-clone primitive)
-// without also teaching the walk to run only for the buffer's last owner. Failure mode: a double destroy of
-// every element under the shorter of two windows. Wrong answer, not an error.
+// ⭐ **AND THAT DEEP-CLONE CHOICE IS EXACTLY WHY A MANAGED COPY MUST NOT ROUTE THROUGH `emitArrayView`.** A
+// managed view would give two records the same element pointers, and both `__arr_decref` walks would destroy
+// them — a double destroy of every shared element. The deep clone sidesteps that trap: each array is the sole
+// owner of its own element boxes. The runtime gate here (`element_destroy@40 != 0`) and the parser's managed
+// route (`Parser.requireArrayElementCopyable` → the `_managed` builders) are BOTH
+// `SignatureIndex.arrayElementIsManaged(giid)`, so "this array's elements are managed" is one fact read at the
+// drop and at the copy — there is no third spelling to drift.
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1731,3 +1781,439 @@ function buildArrDecref(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrDecref'
+
+// --- The MANAGED-element deep-clone copies (P1.7 slice 3b-vi-b) ---
+
+// `__arr_slice_managed(arr, start, end, cloneFn)`'s four-i64 signature — the FIRST 4-parameter runtime
+// function, so it lives beside its sole user rather than in `MmRuntime`'s 1/2/3-param base helpers.
+function fourI64Params() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	return types
+end 'fourI64Params'
+
+// ⭐ **DEEP-CLONE `count` ELEMENTS from `srcBase` into `destBase` (P1.7 slice 3b-vi-b).** Walk `[0, count)`
+// (stride `elementSize`, always 8 for a managed element — a heap pointer), load each source slot and, when it
+// is NON-NULL, `callIndirect` the per-element `cloneFn` on it (a `(box) -> newBox`) and store the fresh clone
+// into the destination slot. The DUAL of `emitElementDestroyRange`: where the destroy walk calls the element's
+// DESTROY function on each slot, this calls its CLONE function into a fresh buffer, so the copy is an
+// INDEPENDENT single owner. A NULL source slot (a resize-created empty) leaves the destination slot at its
+// zeroed value — the caller's fresh/grown buffer is zero there — so it is skipped, exactly as the destroy walk
+// skips a null. `srcBase`/`destBase` are already offset to the first element of their respective windows.
+// Threads `cur` (sets its terminator) and returns the continuation block.
+function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, srcBase ValueId, destBase ValueId, count ValueId, elementSize ValueId, cloneFn ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"clnh")
+	var body = module.addBlock(func, label: b"clnb")
+	var doClone = module.addBlock(func, label: b"clndo")
+	var step = module.addBlock(func, label: b"clnstep")
+	let done = module.addBlock(func, label: b"clndone")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let srcSlot = emitSlotAddr(module, block: body, buffer: srcBase, index: i, elementSize: elementSize, ids: ids)
+	let elem = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: srcSlot, offset: 0, valueType: StdType.i64))
+	let zeroElem = emitConst(module, block: body, value: 0, ids: ids)
+	let nonNull = emitCmp(module, block: body, a: elem, b: zeroElem, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doClone.id, elseBlockId: step.id))
+
+	let cloned = ids.mint()
+	module.appendOp(doClone, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
+	let destSlot = emitSlotAddr(module, block: doClone, buffer: destBase, index: i, elementSize: elementSize, ids: ids)
+	module.appendOp(doClone, op: StdOp.storeIndirect(destSlot, offset: 0, valueId: cloned, valueType: StdType.i64))
+	module.setTerminator(doClone, op: StdOp.branch(step.id))
+
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitElementCloneRange'
+
+// `__arr_clone_managed(arr, cloneFn) -> newArr` — a deep, independent copy of a MANAGED-element array. A fresh
+// `__arr_create` record carrying the SAME `element_size@24`/`element_destroy@40` as the source (so the clone
+// drops through the same per-element walk), a buffer `reserve`d to the source length, then each element
+// deep-cloned in. The result is a full OWNER (`parent@32 = 0`), NOT a COW view — a managed view would let both
+// arrays' `__arr_decref` walks destroy the shared elements, which is the whole reason a managed copy deep-clones.
+function buildArrCloneManaged(module StdModule)
+	var func = IrFunction.createFromStd(ArrCloneManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let cloneFn = 1 as ValueId
+
+	let es = emitLoadField(module, block: entry, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let dtor = emitLoadField(module, block: entry, record: arr, offset: ArrElementDestroyOffset, ids: ids)
+	let newRec = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: dtor)))
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
+	let reserved = ids.mint()
+	module.appendOp(entry, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(newRec, second: length)))
+
+	let srcBuf = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
+	let destBuf = emitLoadField(module, block: entry, record: newRec, offset: ArrBufferOffset, ids: ids)
+	var afterClone = emitElementCloneRange(module, func: func, cur: entry, srcBase: srcBuf, destBase: destBuf, count: length, elementSize: es, cloneFn: cloneFn, ids: ids)
+
+	emitStoreField(module, block: afterClone, record: newRec, offset: ArrLengthOffset, value: length)
+	module.setTerminator(afterClone, op: StdOp.ret(newRec))
+
+	module.functions.push(func)
+end 'buildArrCloneManaged'
+
+// `__arr_slice_managed(arr, start, end, cloneFn) -> (newArr, flag)` — the throwing managed slice: the SAME
+// bounds check as `__arr_slice` (out of bounds / inverted range / negative index → `ArrayError`), then a fresh
+// OWNER over deep clones of `arr[start, end)`. The source window's first element is `srcBuf + start·es`; the
+// clones land at `[0, sliceLen)` of the new buffer.
+function buildArrSliceManaged(module StdModule)
+	var func = IrFunction.createFromStd(ArrSliceManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(ArrayErrorTypeName))
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var doSlice = module.addBlock(func, label: b"slice")
+
+	emitParams(module, block: entry, count: 4)
+	let arr = 0 as ValueId
+	let start = 1 as ValueId
+	let endIndex = 2 as ValueId
+	let cloneFn = 3 as ValueId
+
+	let violated = emitSliceRangeViolated(module, block: entry, arr: arr, start: start, endIndex: endIndex, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: doSlice.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let sliceLen = emitBin(module, block: doSlice, a: endIndex, b: start, opcode: StdBinOpcode.sub, ids: ids)
+	let es = emitLoadField(module, block: doSlice, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let dtor = emitLoadField(module, block: doSlice, record: arr, offset: ArrElementDestroyOffset, ids: ids)
+	let newRec = ids.mint()
+	module.appendOp(doSlice, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: dtor)))
+	let reserved = ids.mint()
+	module.appendOp(doSlice, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(newRec, second: sliceLen)))
+
+	let srcBuf = emitLoadField(module, block: doSlice, record: arr, offset: ArrBufferOffset, ids: ids)
+	let srcBase = emitSlotAddr(module, block: doSlice, buffer: srcBuf, index: start, elementSize: es, ids: ids)
+	let destBuf = emitLoadField(module, block: doSlice, record: newRec, offset: ArrBufferOffset, ids: ids)
+	var afterClone = emitElementCloneRange(module, func: func, cur: doSlice, srcBase: srcBase, destBase: destBuf, count: sliceLen, elementSize: es, cloneFn: cloneFn, ids: ids)
+
+	emitStoreField(module, block: afterClone, record: newRec, offset: ArrLengthOffset, value: sliceLen)
+	emitOkReturn(module, block: afterClone, value: newRec, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSliceManaged'
+
+// `__arr_append_managed(dest, src, cloneFn)` — append DEEP CLONES of `src`'s elements to `dest`; `dest` grows,
+// `src` is BORROWED and PRESERVED (its elements are cloned, never moved out). Reserve `dest.length + src.length`
+// up front (one grow), then clone each `src` element into the freshly-grown tail `[destLen, destLen+srcLen)`.
+// The element-size seam is guarded exactly as `__arr_append`'s is (a cross-stride blit must never proceed).
+function buildArrAppendManaged(module StdModule)
+	var func = IrFunction.createFromStd(ArrAppendManagedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var mismatch = module.addBlock(func, label: b"esmismatch")
+	var append = module.addBlock(func, label: b"append")
+
+	emitParams(module, block: entry, count: 3)
+	let dest = 0 as ValueId
+	let src = 1 as ValueId
+	let cloneFn = 2 as ValueId
+
+	let destEs = emitLoadField(module, block: entry, record: dest, offset: ArrElementSizeOffset, ids: ids)
+	let srcEs = emitLoadField(module, block: entry, record: src, offset: ArrElementSizeOffset, ids: ids)
+	let esDiffers = emitCmp(module, block: entry, a: destEs, b: srcEs, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(esDiffers, thenBlockId: mismatch.id, elseBlockId: append.id))
+
+	emitRuntimeAbort(module, func: func, block: mismatch, abort: RuntimeAbort.arrayAppendElementSizeMismatch, ids: ids)
+
+	let destLen = emitLoadField(module, block: append, record: dest, offset: ArrLengthOffset, ids: ids)
+	let srcLen = emitLoadField(module, block: append, record: src, offset: ArrLengthOffset, ids: ids)
+	let newLen = emitBin(module, block: append, a: destLen, b: srcLen, opcode: StdBinOpcode.add, ids: ids)
+	let reserved = ids.mint()
+	module.appendOp(append, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(dest, second: newLen)))
+
+	let es = emitLoadField(module, block: append, record: dest, offset: ArrElementSizeOffset, ids: ids)
+	let destBuf = emitLoadField(module, block: append, record: dest, offset: ArrBufferOffset, ids: ids)
+	let srcBuf = emitLoadField(module, block: append, record: src, offset: ArrBufferOffset, ids: ids)
+	let destBase = emitSlotAddr(module, block: append, buffer: destBuf, index: destLen, elementSize: es, ids: ids)
+	var afterClone = emitElementCloneRange(module, func: func, cur: append, srcBase: srcBuf, destBase: destBase, count: srcLen, elementSize: es, cloneFn: cloneFn, ids: ids)
+
+	emitStoreField(module, block: afterClone, record: dest, offset: ArrLengthOffset, value: newLen)
+	module.setTerminator(afterClone, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrAppendManaged'
+
+// --- The per-type deep-cloner cascade (P1.7 slice 3b-vi-b): the DUAL of the destructor cascade ---
+
+// ⭐ **NOTE WHAT THE REFERENCED CLONERS TRANSITIVELY NEED**, the clone twin of `noteDestructorUsage`. A
+// `__clone_<Struct>` whose field is a String calls `__str_clone`, whose field is a nested struct/union calls
+// that field's OWN `__clone_<T>`, whose field is a trivial/managed Array calls `__arr_clone`/`__arr_clone_managed`
+// — all inside the SYNTHESIZED body the Maxon-module scan cannot see. So this closes `neededCloners` over that
+// nesting (a fixpoint, monotonic → terminates) and turns on the transitive `usesStrClone`/`usesArray`/
+// `usesManagedArrayCopy`/`usesHeap` bits. Called after `scanRuntimeUsage` (which seeds `neededCloners` from the
+// `funcAddr(__clone_<T>)` element-cloner stamps), before `.data` layout reads `usesHeap` and `installStringRuntime`
+// reads `usesStrClone`.
+export function noteClonerUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references no cloner,
+	// so its `neededCloners` is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
+	// the per-type `clonerSymbol` allocations in the fixpoint below are paid only by a program that deep-clones —
+	// a managed-copy-gated cost, not a per-compile one on every struct/enum in the program.
+	if usage.neededCloners.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for (_, layout) in project.structTypes 'eachStruct'
+			if usage.neededCloners.contains(clonerSymbol(layout.name)) 'referenced'
+				usage.usesHeap = true
+				if noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures) 'grew'
+					changed = true
+				end 'grew'
+			end 'referenced'
+		end 'eachStruct'
+		for (_, layout) in project.enumTypes 'eachUnion'
+			if usage.neededCloners.contains(clonerSymbol(layout.name)) 'referenced'
+				usage.usesHeap = true
+				if noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures) 'grew'
+					changed = true
+				end 'grew'
+			end 'referenced'
+		end 'eachUnion'
+	end 'fixpoint'
+end 'noteClonerUsage'
+
+// Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner;
+// return whether the set grew.
+function noteStructClonerNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures) returns bool
+	var grew = false
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
+			continue
+		end 'scalar'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructClonerNeeds: fieldTypes.get OOB at {i}")
+		if noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)) 'added'
+			grew = true
+		end 'added'
+	end 'eachField'
+	return grew
+end 'noteStructClonerNeeds'
+
+// The union twin of `noteStructClonerNeeds` — over each managed payload of each case.
+function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures) returns bool
+	var grew = false
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		let payloads = layout.payloadsAt(ci)
+		for fi in 0 upto payloads.count() 'eachField'
+			let field = try payloads.get(fi) otherwise panic("noteUnionClonerNeeds: payloadsAt count disagrees with get at {fi}")
+			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'scalar'
+				continue
+			end 'scalar'
+			if noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'added'
+				grew = true
+			end 'added'
+		end 'eachField'
+	end 'eachCase'
+	return grew
+end 'noteUnionClonerNeeds'
+
+// Turn on the bits a managed field's clone STRATEGY needs, inserting a nested cloner into `neededCloners`;
+// return whether the set grew.
+function noteFieldCloneNeeds(usage RuntimeUsage, strategy ManagedCloneStrategy) returns bool
+	match strategy 'strategy'
+		direct(callee) then return noteCloneCalleeNeeds(usage, callee: callee)
+		managedArray(elementClone) then return noteManagedArrayFieldNeeds(usage, elementClone: elementClone)
+		unsupported then panic("noteFieldCloneNeeds: an unsupported managed field strategy reached the cloner-needs closure — arrayElementSupportsDeepClone gates the front end")
+	end 'strategy'
+end 'noteFieldCloneNeeds'
+
+// A managed-element array FIELD clones through `__arr_clone_managed(field, funcAddr(elementClone))` — route
+// BOTH callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a
+// direct scan of those calls (no second spelling of "__arr_clone_managed → usesManagedArrayCopy").
+function noteManagedArrayFieldNeeds(usage RuntimeUsage, elementClone ByteArray) returns bool
+	recordCallUsage(ArrCloneManagedName, usage: usage)
+	return noteCloneCalleeNeeds(usage, callee: elementClone)
+end 'noteManagedArrayFieldNeeds'
+
+// A single `(box) -> newBox` clone callee the synthesized cloner will CALL: its usage bits are exactly what a
+// direct scan of that call records, so route through `recordCallUsage` — THE ONE callee→bit map — rather than
+// restating "__str_clone → usesStrClone+copy, __arr_clone → usesArray, __clone_<T> → neededCloners". Returns
+// whether a nested `__clone_<T>` was NEWLY joined to `neededCloners` (the fixpoint's growth signal); the leaf
+// callees never grow the set.
+function noteCloneCalleeNeeds(usage RuntimeUsage, callee ByteArray) returns bool
+	let grew = bytesStartWith(callee, prefix: ClonerPrefix) and not usage.neededCloners.contains(callee)
+	recordCallUsage(callee, usage: usage)
+	return grew
+end 'noteCloneCalleeNeeds'
+
+// ⭐ **THE PER-STRUCT DEEP-CLONER INSTALLER (P1.7 slice 3b-vi-b)** — the clone twin of `installStructDestructors`.
+// Synthesize `__clone_<Struct>` for every struct whose cloner is REFERENCED (directly by an element-cloner
+// stamp, or through a nested cascade `noteClonerUsage` grew the set over). Unlike the destructor installer there
+// is NO managed-field gate: a scalar-only struct box still needs a fresh-box clone (the drop side's
+// `__mm_decref` has no clone analogue). Appended already-lowered after the pipeline, like the destructor cascades.
+export function installStructCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
+	if needed.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+	for (_, layout) in project.structTypes 'each'
+		if needed.contains(clonerSymbol(layout.name)) 'referenced'
+			synthesizeStructCloner(module, layout: layout, project: project, signatures: signatures)
+		end 'referenced'
+	end 'each'
+end 'installStructCloners'
+
+// The union twin of `installStructCloners`.
+export function installUnionCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
+	if needed.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+	for (_, layout) in project.enumTypes 'each'
+		if needed.contains(clonerSymbol(layout.name)) 'referenced'
+			synthesizeUnionCloner(module, layout: layout, project: project, signatures: signatures)
+		end 'referenced'
+	end 'each'
+end 'installUnionCloners'
+
+// Emit `__clone_<Struct>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole struct (every scalar field
+// copied for free), then DEEP-CLONE each managed field in place — the blit's shallow pointer is replaced by an
+// independent copy through the field's `managedFieldCloneStrategy`. A struct has no tag, so every field is
+// always present; the per-field null-guard (`emitManagedFieldClone`) skips a moved-out (null) slot exactly as
+// the destructor cascade's null-guard does.
+function synthesizeStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	let size = emitConst(module, block: entry, value: layout.sizeBytes() as ParsedInt, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let newBox = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newBox, callee: MmAllocName, args: twoArgs(size, second: zeroDtor)))
+	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
+
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
+			continue
+		end 'scalar'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructCloner: fieldTypes.get OOB at {i}")
+		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)
+		cur = emitManagedFieldClone(module, func: func, cur: cur, box: newBox, offset: layout.offsetOfField(i), strategy: strategy, ids: ids)
+	end 'eachField'
+
+	module.setTerminator(cur, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'synthesizeStructCloner'
+
+// Emit `__clone_<Union>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole box (the tag and every payload
+// slot copied for free), then — behind a per-managed-case tag guard chain (the same shape
+// `synthesizeUnionDestructor` uses) — DEEP-CLONE the LIVE case's managed payloads in place. A scalar-only union
+// (no case owns a managed payload) is a pure blit, which is exactly the fresh independent box its element copy
+// needs.
+function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let done = module.addBlock(func, label: b"done")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let newBox = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newBox, callee: MmAllocName, args: twoArgs(size, second: zeroDtor)))
+	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
+
+	let tag = emitLoadField(module, block: cur, record: newBox, offset: UnionTagOffset, ids: ids)
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci, wantStringOnly: false) 'scalarCase'
+			continue
+		end 'scalarCase'
+		let caseBlock = module.addBlock(func, label: b"case")
+		let nextTest = module.addBlock(func, label: b"casetest")
+		let tagConst = emitConst(module, block: cur, value: layout.tagOfIndex(ci), ids: ids)
+		let isCase = emitCmp(module, block: cur, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
+		module.setTerminator(cur, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
+		emitManagedFieldClones(module, func: func, startBlock: caseBlock, box: newBox, layout: layout, ci: ci, dest: done, project: project, signatures: signatures, ids: ids)
+		cur = nextTest
+	end 'eachCase'
+
+	module.setTerminator(cur, op: StdOp.branch(done.id))
+	module.setTerminator(done, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'synthesizeUnionCloner'
+
+// Deep-clone every MANAGED payload of case `ci` in place (its blit-copied shallow pointer replaced by an
+// independent copy), then branch to `dest`. The clone twin of `emitManagedFieldDrops`.
+function emitManagedFieldClones(module StdModule, func IrFunction, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, ids ValueMinter)
+	let payloads = layout.payloadsAt(ci)
+	var cur = startBlock
+	for fi in 0 upto payloads.count() 'eachField'
+		let field = try payloads.get(fi) otherwise panic("emitManagedFieldClones: payloadsAt count disagrees with get at {fi}")
+		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'scalar'
+			continue
+		end 'scalar'
+		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+		cur = emitManagedFieldClone(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, ids: ids)
+	end 'eachField'
+	module.setTerminator(cur, op: StdOp.branch(dest.id))
+end 'emitManagedFieldClones'
+
+// Load the blit-copied shallow pointer at `box + offset` and, when it is NON-NULL, replace it with an
+// independent deep clone (via the field's `strategy`); a moved-out (null) slot is left as-is (the blit already
+// copied its 0). The one null-guarded field-clone shape both the struct cascade and the union tag-case cascade
+// emit, so the load/clone/store geometry lives in ONE place. Returns the CONTINUATION block.
+function emitManagedFieldClone(module StdModule, func IrFunction, cur IrBlock, box ValueId, offset ByteOffset, strategy ManagedCloneStrategy, ids ValueMinter) returns IrBlock
+	let oldPtr = emitLoadField(module, block: cur, record: box, offset: offset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let nonNull = emitCmp(module, block: cur, a: oldPtr, b: zero, pred: StdCmpPred.ne, ids: ids)
+	var cloneBlock = module.addBlock(func, label: b"clonefld")
+	let contBlock = module.addBlock(func, label: b"cont")
+	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: cloneBlock.id, elseBlockId: contBlock.id))
+
+	let newPtr = emitCloneCall(module, block: cloneBlock, oldPtr: oldPtr, strategy: strategy, ids: ids)
+	emitStoreField(module, block: cloneBlock, record: box, offset: offset, value: newPtr)
+	module.setTerminator(cloneBlock, op: StdOp.branch(contBlock.id))
+
+	return contBlock
+end 'emitManagedFieldClone'
+
+// Emit the clone call for a managed field's `strategy` and return the fresh pointer. A `direct` callee is a
+// plain 1-arg call; a `managedArray` field takes the element's `funcAddr` and calls `__arr_clone_managed`.
+function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy ManagedCloneStrategy, ids ValueMinter) returns ValueId
+	match strategy 'strategy'
+		direct(callee) then return emitDirectClone(module, block: block, oldPtr: oldPtr, callee: callee, ids: ids)
+		managedArray(elementClone) then return emitManagedArrayFieldClone(module, block: block, oldPtr: oldPtr, elementClone: elementClone, ids: ids)
+		unsupported then panic("emitCloneCall: an unsupported managed field strategy reached the cloner synthesis — arrayElementSupportsDeepClone gates the front end")
+	end 'strategy'
+end 'emitCloneCall'
+
+function emitDirectClone(module StdModule, block IrBlock, oldPtr ValueId, callee ByteArray, ids ValueMinter) returns ValueId
+	let newPtr = ids.mint()
+	module.appendOp(block, op: StdOp.call(newPtr, callee: callee, args: argsOf(oldPtr)))
+	return newPtr
+end 'emitDirectClone'
+
+function emitManagedArrayFieldClone(module StdModule, block IrBlock, oldPtr ValueId, elementClone ByteArray, ids ValueMinter) returns ValueId
+	let elemFn = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(elemFn, funcName: elementClone))
+	let newPtr = ids.mint()
+	module.appendOp(block, op: StdOp.call(newPtr, callee: ArrCloneManagedName, args: twoArgs(oldPtr, second: elemFn)))
+	return newPtr
+end 'emitManagedArrayFieldClone'

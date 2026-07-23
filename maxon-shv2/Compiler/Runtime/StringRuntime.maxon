@@ -146,6 +146,14 @@ export let BoolToStringName = b"__bool_to_string"
 export let StrAppendName = b"__str_append"
 export let StrDecrefName = b"__str_decref"
 
+// `__str_clone(src) -> newStr` — a String's DEEP CLONE (P1.7 slice 3b-vi-b): a fresh OWNED heap String, an
+// independent copy of `src` that is droppable through `__str_decref` without touching `src`. The `(box) ->
+// newBox` DUAL of `__str_decref`, so a managed array/struct that clones a String field through this drops it
+// through `__str_decref`. `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT
+// `__mm_`-prefixed; it calls `__mm_alloc`/`__str_copy` inside its Std body, which `scanRuntimeUsage` cannot
+// see, so a reference to it turns on `usesHeap`/`usesStrCopy` explicitly (`recordCallUsage`).
+export let StrCloneName = b"__str_clone"
+
 // ⭐ **WHERE A STRING RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
 // its predicates read, built from THIS file's offsets. All three provenances the record format admits are
 // ordinary values of that encoding, and no String-only branch stands in front of it:
@@ -274,6 +282,13 @@ end 'registerStringRecord'
 // its one symbol once, not D copies.
 export typealias DestructorSet = Set with ByteArray
 
+// The set of `__clone_<T>` symbols a module references (P1.7 slice 3b-vi-b) — the CLONE twin of
+// `DestructorSet`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over nesting by
+// `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the referenced cloners.
+// The SAME `Set with ByteArray` type is reused by `typeSupportsDeepClone` as its VISITED-name set (a
+// cycle-breaker over struct/union names), since both are membership sets of `ByteArray` names.
+export typealias ClonerSet = Set with ByteArray
+
 export type RuntimeUsage
 	export var usesHeap as bool
 	// The program spawns a green thread (`async`/`await`). Drives `installGtRuntime` + the GT `.data`
@@ -323,9 +338,24 @@ export type RuntimeUsage
 	// consumers query them against `destructorSymbol(name)`, avoiding a byte-substring extract. A
 	// SET so that per-union query is O(1) — see `DestructorSet`.
 	export var neededDestructors as DestructorSet
+	// The program DEEP-CLONES a String (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy that
+	// clones a String element/field. Its OWN bit, like `usesStrDecref`: `__str_clone` calls `__mm_alloc`/
+	// `__str_copy` inside its Std body this scan cannot see, so a reference turns on `usesHeap`/`usesStrCopy`
+	// too (`recordCallUsage`). Drives `installStringRuntime` to build `__str_clone`.
+	export var usesStrClone as bool
+	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
+	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
+	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
+	// `usesHeap` (the helpers are `__arr_`-prefixed). Drives the managed-copy install in `installArrayRuntime`.
+	export var usesManagedArrayCopy as bool
+	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
+	// `neededDestructors`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over
+	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
+	// referenced cloners. `usesHeap` follows any cloner (the box it allocates).
+	export var neededCloners as ClonerSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, neededCloners: ClonerSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -479,6 +509,28 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.neededDestructors.insert(callee)
 	end 'uniondtor'
+	// A String DEEP-CLONE (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy cloning a String
+	// element/field. It `__mm_alloc`s a fresh fused record and `__str_copy`s the bytes in, inside its SYNTHESIZED
+	// body this scan cannot see, so those transitive bits are declared here (the `__str_append` shape).
+	if callee.equals(StrCloneName) 'strclone'
+		usage.usesStrClone = true
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'strclone'
+	// The three MANAGED-element array copies (`__arr_slice_managed`/`__arr_clone_managed`/`__arr_append_managed`,
+	// P1.7 slice 3b-vi-b). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
+	// prefixed); THIS bit gates their install so a trivial-array program does not carry them.
+	if isManagedArrayCopyCallee(callee) 'managedcopy'
+		usage.usesManagedArrayCopy = true
+	end 'managedcopy'
+	// A per-type CLONER (`__clone_<T>`, P1.7 slice 3b-vi-b) — the CLONE twin of the `__destruct_<T>` arm above,
+	// referenced through a `funcAddr(__clone_<T>)` element-cloner stamp. It frees no memory but ALLOCATES a box
+	// (`usesHeap`), and its transitive `__str_clone`/`__arr_clone`/nested-cloner needs close through
+	// `noteClonerUsage` (which has the signatures/interner to classify the fields).
+	if bytesStartWith(callee, prefix: ClonerPrefix) 'structcloner'
+		usage.usesHeap = true
+		usage.neededCloners.insert(callee)
+	end 'structcloner'
 end 'recordCallUsage'
 
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the
@@ -506,6 +558,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrDecref 'strdecref'
 		buildStrDecref(module)
 	end 'strdecref'
+	if usage.usesStrClone 'strclone'
+		buildStrClone(module)
+	end 'strclone'
 end 'installStringRuntime'
 
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
@@ -1022,6 +1077,57 @@ function buildStrDecref(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrDecref'
+
+// ⭐ **`__str_clone(src) -> newStr` — A STRING'S DEEP CLONE (P1.7 slice 3b-vi-b).** A fresh OWNED heap String,
+// an independent copy of `src` that `__str_decref` reclaims without touching `src`. It is the SAME single-
+// `__mm_alloc` fused-record path an interpolation builds (`Parser.emitStringInterp` / `promoteToOwnedString`,
+// with the source as its one part), packaged as a runtime function so the managed array/struct clone walk can
+// take its `funcAddr` and `callIndirect` it per element/field.
+//
+// ⭐ **THE RESULT IS INLINE, so it is INDEPENDENTLY DROPPABLE with no double-free of the source's bytes.** One
+// `__mm_alloc` holds the 48-byte record with the bytes right behind it (`buffer@0 = newRec + StringRecordBytes`),
+// `capacity@16 = InlineBufferCapacity` and `parent@32 = NoOwedAllocation` (the slab's zeroing supplies the 0) —
+// the same encoding `emitStringInterp` publishes — so `__str_decref` reclaims record and bytes together and owes
+// nothing to anyone. A LITERAL source (immortal `.rdata`, `capacity == RdataBufferCapacity`) clones through this
+// identical path: its bytes are COPIED into the new inline box, so the clone frees its own copy and never the
+// immortal blob. `isAscii@40` is carried over from the source, an accurate copy at no extra cost.
+function buildStrClone(module StdModule)
+	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	// One `__mm_alloc` for the record + the bytes + a trailing NUL (the slab zeroes it), sized exactly as an
+	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
+	let srcLen = emitLoadField(module, block: entry, record: src, offset: StringLengthOffset, ids: ids)
+	let srcBuf = emitLoadField(module, block: entry, record: src, offset: StringBufferOffset, ids: ids)
+	let srcAscii = emitLoadField(module, block: entry, record: src, offset: StringIsAsciiOffset, ids: ids)
+	let overhead = emitConst(module, block: entry, value: StringInterpOverheadBytes, ids: ids)
+	let allocSize = emitBin(module, block: entry, a: srcLen, b: overhead, opcode: StdBinOpcode.add, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: 0, ids: ids)
+	let newRec = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newRec, callee: MmAllocName, args: twoArgs(allocSize, second: zeroDtor)))
+
+	// The inline byte region begins right after the record; blit the source's live bytes into it.
+	let recordBytes = emitConst(module, block: entry, value: StringRecordBytes as ParsedInt, ids: ids)
+	let inlineBuf = emitBin(module, block: entry, a: newRec, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
+	let copied = ids.mint()
+	module.appendOp(entry, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(inlineBuf, second: srcBuf, third: srcLen)))
+
+	emitStoreField(module, block: entry, record: newRec, offset: StringBufferOffset, value: inlineBuf)
+	emitStoreField(module, block: entry, record: newRec, offset: StringLengthOffset, value: srcLen)
+	let capacity = emitConst(module, block: entry, value: InlineBufferCapacity as ParsedInt, ids: ids)
+	emitStoreField(module, block: entry, record: newRec, offset: StringCapacityOffset, value: capacity)
+	let elementSize = emitConst(module, block: entry, value: StringElementSize, ids: ids)
+	emitStoreField(module, block: entry, record: newRec, offset: StringElementSizeOffset, value: elementSize)
+	emitStoreField(module, block: entry, record: newRec, offset: StringIsAsciiOffset, value: srcAscii)
+
+	module.setTerminator(entry, op: StdOp.ret(newRec))
+
+	module.functions.push(func)
+end 'buildStrClone'
 
 // Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
 // each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).

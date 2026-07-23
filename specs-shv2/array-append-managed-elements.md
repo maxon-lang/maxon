@@ -16,8 +16,7 @@ refcount — potentially freeing elements that the destination array still refer
 
 ## Tests
 
-<!-- disabled-test: append-struct-source-freed -->
-<!-- P1.8 managed deep-clone primitive -->
+<!-- test: append-struct-source-freed -->
 ### Append structs with managed fields, source freed before access
 The helper function creates a source array and appends it into dest. When the
 helper returns, the source array is freed. If append didn't incref, the
@@ -63,8 +62,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: append-enum-source-freed -->
-<!-- P1.8 managed deep-clone primitive -->
+<!-- test: append-enum-source-freed -->
 ### Append enums, source freed before access
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -106,8 +104,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: merge-modules-source-freed -->
-<!-- P1.8 managed deep-clone primitive -->
+<!-- test: merge-modules-source-freed -->
 ### Merge pattern: source module freed, access merged elements
 Mirrors the self-hosted compiler pattern. A helper merges a parsed module
 into an accumulator. The parsed module is freed when the helper returns.
@@ -156,6 +153,65 @@ function main() returns ExitCode
 
 		let first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create())
 		if first.name == "func_a_with_long_name_for_heap" 'correct'
+				return 0
+		end 'correct'
+		return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: append-managed-nested-array -->
+### Append structs whose field is itself a MANAGED-element array
+The deepest recursion: `Record` owns a `String tag` AND a nested `StringArray lines` (an array whose own
+elements are managed Strings). Cloning a `Record` must recursively deep-clone its String and every String
+inside its nested managed array — so appending exercises struct→(String + managed-element-array→String).
+The source is freed when the helper returns; the appended clones must survive independently.
+```maxon
+typealias StringArray = Array with String
+
+type Record
+		export var tag as String
+		export var lines as StringArray
+
+		static function create(tag String, lines StringArray) returns Self
+			return Self{tag: tag, lines: lines}
+		end 'create'
+end 'Record'
+
+typealias RecordArray = Array with Record
+
+function buildLines() returns StringArray
+		var ls = StringArray.create()
+		ls.push("line one long enough for heap allocation")
+		ls.push("line two long enough for heap allocation")
+		return ls
+end 'buildLines'
+
+function appendRecords(dest RecordArray)
+		var src = RecordArray.create()
+		src.push(Record.create("source tag long enough for the heap", lines: buildLines()))
+		dest.append(src)
+		// src is freed when this function returns
+end 'appendRecords'
+
+function main() returns ExitCode
+		var dest = RecordArray.create()
+		dest.push(Record.create("dest tag long enough for the heapp", lines: buildLines()))
+		appendRecords(dest)
+
+		if dest.count() != 2 'badCount'
+				return 99
+		end 'badCount'
+
+		let rec = try dest.get(1) otherwise Record.create("", lines: StringArray.create())
+		if rec.lines.count() != 2 'badLines'
+				return 98
+		end 'badLines'
+
+		let line = try rec.lines.get(0) otherwise "?"
+		if line == "line one long enough for heap allocation" 'correct'
 				return 0
 		end 'correct'
 		return 1

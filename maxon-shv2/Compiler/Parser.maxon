@@ -1397,6 +1397,17 @@ function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueI
 	return args
 end 'tripleArgs'
 
+// A four-element call argument list — `__arr_slice_managed(arr, start, end, cloneFn)`'s quad (P1.7 slice
+// 3b-vi-b). `tripleArgs`' sibling.
+function quadArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	args.push(third)
+	args.push(fourth)
+	return args
+end 'quadArgs'
+
 // **THE BUILTIN `Array` METHODS** (P1.7 slice 1). `create` is a static factory; the rest are instance
 // methods dispatched by name in `parseArrayMethodCall` off an `Array`-instance receiver. `get`/`set`/
 // `first`/`last`/`pop`/`remove` are THROWING (they ride `try … otherwise`); the rest are non-throwing.
@@ -15525,7 +15536,7 @@ export type Parser
 			return self.emitArrayElementAccessor(ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, range: range)
 		end 'remove'
 		if methodTok.value.equals(ArraySliceMethod) 'slice'
-			try self.requireTrivialArrayElementForCopy(giid, methodTok: methodTok)
+			try self.requireArrayElementCopyable(giid, methodTok: methodTok)
 			return try self.parseArraySlice(func, arr: arr, giid: giid, range: range)
 		end 'slice'
 
@@ -15543,8 +15554,11 @@ export type Parser
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
 		if methodTok.value.equals(ArrayCloneMethod) 'clone'
-			try self.requireTrivialArrayElementForCopy(giid, methodTok: methodTok)
+			try self.requireArrayElementCopyable(giid, methodTok: methodTok)
 			try self.parseArrayNoArgs()
+			if self.signatures.arrayElementIsManaged(giid) 'managedClone'
+				return self.emitArrayInstanceAccessor(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), giid: giid, range: range)
+			end 'managedClone'
 			return self.emitArrayInstanceAccessor(ArrCloneName, args: singletonArgs(arr), giid: giid, range: range)
 		end 'clone'
 
@@ -15570,7 +15584,7 @@ export type Parser
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, throwing: false, range: range)
 		end 'insert'
 		if methodTok.value.equals(ArrayAppendMethod) 'append'
-			try self.requireTrivialArrayElementForCopy(giid, methodTok: methodTok)
+			try self.requireArrayElementCopyable(giid, methodTok: methodTok)
 			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
 		end 'append'
 
@@ -15586,12 +15600,12 @@ export type Parser
 	// a BORROW) and to MOVE OUT (`pop`/`remove` hand back an OWNED word the caller drops through the descriptor-
 	// gated `__drop_type_param`) — all leak-free, because the word never has to be interpreted, only carried and
 	// dropped by the runtime descriptor (P1.7 slice 3b-vi-a). What the word is NOT enough for is a per-element
-	// COPY: `slice`/`clone`/`append` byte-blit the element, which DUPLICATES a managed pointer and then double-
-	// frees it. An independent copy needs a per-element deep-clone primitive (`__str_clone`/`__struct_clone`)
-	// shv2 deliberately does not have (P1.2-deferred `.clone` for managed values), so on an opaque array these
-	// three are a clean E2015 until that primitive lands (P1.7 slice 3b-vi-b). A CONCRETE-element array
-	// (`Array with String`) is unaffected (`arrayElementIsOpaque` is false, so this is a no-op there) — its own
-	// managed slice/clone/append are gated separately by `requireTrivialArrayElementForCopy`.
+	// COPY: `slice`/`clone`/`append` deep-clone each element through the element's own `funcAddr(__clone_<E>)`,
+	// but an OPAQUE `T`'s cloner is NOT known at the shared-body site — it is descriptor-gated, like its
+	// destructor — so there is no concrete address to stamp. A CONCRETE-element array (`Array with String`) DOES
+	// know its cloner statically and now takes the deep-clone path (P1.7 slice 3b-vi-b), so this is a no-op there
+	// (`arrayElementIsOpaque` is false) — its managed copy is gated separately by `requireArrayElementCopyable`.
+	// The opaque descriptor-cloner is a distinct later slice; until then these three are a clean E2015.
 	function requireOpaqueArraySupportsMethod(giid GenericInstanceId, methodTok Token) throws ParseError
 		if not self.signatures.arrayElementIsOpaque(giid) 'concreteElement'
 			return
@@ -15683,53 +15697,82 @@ export type Parser
 		try self.consumeArrayArgLabel(ArrayEndIndexLabel)
 		let endIndex = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.rightParen)
+		if self.signatures.arrayElementIsManaged(giid) 'managedSlice'
+			return self.emitArrayInstanceAccessor(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), giid: giid, range: range)
+		end 'managedSlice'
 		return self.emitArrayInstanceAccessor(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), giid: giid, range: range)
 	end 'parseArraySlice'
 
-	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved): it is a
-	// live array whose elements `__arr_append` copies out by value, so it stays owned by its own binding and is
-	// preserved (`append-preserves-originals`). Its element type must match the receiver's (same array instance),
-	// which `requireArrayAppendArg` enforces. Emits the void `__arr_append(self, other)` and returns the receiver
-	// (what the statement still denotes).
+	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
+	// PRESERVED (`append-preserves-originals`). Its element type must match the receiver's, which
+	// `requireArrayAppendArg` enforces. A TRIVIAL receiver block-copies `other`'s bytes (`__arr_append`); a
+	// CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b) DEEP-CLONES each `other` element into `self` via
+	// `__arr_append_managed`, stamped with the element's `funcAddr(__clone_<E>)`, so both arrays end up sole
+	// owners of independent elements. Returns the receiver (what the statement still denotes).
 	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let otherTok = self.current()
 		let other = try self.parseExpression(func, block: self.currentBlock)
 		try self.requireArrayAppendArg(other, giid: giid, otherTok: otherTok)
 		try self.consume(TokenKind.rightParen)
+		if self.signatures.arrayElementIsManaged(giid) 'managedAppend'
+			return self.emitArrayVoidCall(ArrAppendManagedName, args: tripleArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
+		end 'managedAppend'
 		return self.emitArrayVoidCall(ArrAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 	end 'parseArrayAppend'
 
-	// The argument to `append` must be an `Array` instance of the SAME element type as the receiver — the copy is a
-	// raw byte blit sized by the receiver's `element_size`, so a mismatched element width would splice bytes. Same
-	// element-managedness + element size is exactly "same array shape" for the trivial-element cases slice 4 covers
-	// (a managed receiver was already rejected by `requireTrivialArrayElementForCopy`, so `other` is required trivial
-	// too). `[1,2,3]` and an `Array with Integer` binding share this shape even when their giids differ by how the
-	// element interned, so this is the honest compatibility test rather than a strict giid identity.
+	// The argument to `append` must be an `Array` instance of the SAME element type as the receiver. A TRIVIAL
+	// receiver copies raw bytes sized by its `element_size`, so same-managedness + same element size is the honest
+	// "same array shape" (`[1,2,3]` and an `Array with Integer` binding share it even when their giids differ by
+	// how the element interned). A MANAGED receiver deep-clones each element through the RECEIVER's own element
+	// cloner, which only fits `other`'s elements when `other` IS the same array instance — so a managed receiver
+	// requires `other` to be the identical giid (strict, since the element cloner is receiver-specific).
 	function requireArrayAppendArg(other ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
 		if self.tagOf(other) != ValueTypeTag.genericInstance or not self.signatures.isArrayInstance(self.valueNameId(other)) 'notArray'
 			throw ParseError.unsupported("`append` takes another `Array` of the same element type — got '{typeTagName(self.tagOf(other))}'", line: otherTok.line, column: otherTok.column)
 		end 'notArray'
 		let otherGiid = self.valueNameId(other)
+		if self.signatures.arrayElementIsManaged(giid) 'managedReceiver'
+			if not self.signatures.arrayElementIsManaged(otherGiid) or otherGiid != giid 'managedMismatch'
+				throw ParseError.unsupported("`append` requires an `Array` with the same MANAGED element type as the receiver", line: otherTok.line, column: otherTok.column)
+			end 'managedMismatch'
+			return
+		end 'managedReceiver'
 		if self.signatures.arrayElementIsManaged(otherGiid) or self.signatures.arrayElementSize(otherGiid) != self.signatures.arrayElementSize(giid) 'mismatch'
 			throw ParseError.unsupported("`append` requires an `Array` with the same element type as the receiver", line: otherTok.line, column: otherTok.column)
 		end 'mismatch'
 	end 'requireArrayAppendArg'
 
-	// ⭐ **REJECT `slice`/`clone`/`append` ON A MANAGED-ELEMENT ARRAY (P1.7 slice 4 — the deferred half).** An
-	// INDEPENDENT slice/clone/append of a managed-element array needs an independent COPY of each element (the
-	// reference compiler increfs; `append-preserves-originals` forbids MOVING them out of the source). Under
-	// shv2's move-only model with no refcount, that requires a per-element DEEP-CLONE primitive (`__str_clone` /
-	// `__struct_clone`) that shv2 deliberately does NOT have (P1.2 deferred `.clone` for managed values). A raw
-	// byte copy would duplicate heap pointers and double-free. So a managed-element `slice`/`clone`/`append` is
-	// a positioned E2015 until that primitive exists (a distinct mechanism — the coordinator's to schedule).
-	// TRIVIAL / ranged-int elements (`element_destroy@40 == 0`, self-owning ≤8-byte words) pass — a byte copy is
-	// correct for them, which is the whole of slice 4.
-	function requireTrivialArrayElementForCopy(giid GenericInstanceId, methodTok Token) throws ParseError
-		if self.signatures.arrayElementIsManaged(giid) 'managed'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array with a MANAGED element type (String / struct / enum) needs a per-element deep-clone primitive shv2 does not have yet (move-only, no refcount); slice 4 supports slice/clone/append over TRIVIAL elements (int / Byte / ranged-int)", line: methodTok.line, column: methodTok.column)
-		end 'managed'
-	end 'requireTrivialArrayElementForCopy'
+	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array (P1.7 slice 3b-vi-b).** A
+	// TRIVIAL element passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String /
+	// struct / boxed union) now passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue` stamps
+	// the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call), shv2's move-only answer to the
+	// reference compilers' incref. What still REJECTS (E2015) is a managed element whose nested type this rung's
+	// cloner cannot reach: a `Box with T` generic-instance field/element (a per-instance cloner is a later slice)
+	// or an array-of-managed-arrays. An OPAQUE-`T` element (a generic body) was already rejected upstream by
+	// `requireOpaqueArraySupportsMethod`, so only concrete elements reach here.
+	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
+		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+			return
+		end 'trivial'
+		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone yet — a `Box with T` generic-instance field/element (its per-instance cloner is a later slice) or an array-of-managed-arrays. String / struct / boxed-union elements, including nested String, struct, union and Array fields, ARE supported.", line: methodTok.line, column: methodTok.column)
+		end 'unsupportedNested'
+	end 'requireArrayElementCopyable'
+
+	// ⭐ **THE ELEMENT-CLONER `funcAddr` STAMP (P1.7 slice 3b-vi-b)** — the DUAL of `arrayElementDestroyValue`. A
+	// CONCRETE managed element knows its `(box) -> newBox` clone callee at this site (`__str_clone` / `__clone_<T>`
+	// / `__arr_clone` for a trivial-element nested array), so the address rides the P1.5-A1 `funcAddr` code→register
+	// path — the `_managed` runtime helper `callIndirect`s it per element. `requireArrayElementCopyable` has already
+	// guaranteed the strategy is `direct` (an element cloner must satisfy `callIndirect(fn, elem)`); a `managedArray`/
+	// `unsupported` strategy at the TOP element is a gate drift, not a valid program.
+	function arrayElementCloneValue(giid GenericInstanceId, range SourceRange) returns ValueId
+		match self.signatures.arrayElementCloneStrategy(giid) 'strategy'
+			direct(callee) then return self.emitRuntimeFuncAddr(callee, range: range)
+			managedArray then panic("arrayElementCloneValue: a top-level managed array element resolved to `managedArray` — requireArrayElementCopyable gates this to a `direct` element cloner")
+			unsupported then panic("arrayElementCloneValue: a top-level managed array element resolved to `unsupported` — requireArrayElementCopyable rejects it at the front end")
+		end 'strategy'
+	end 'arrayElementCloneValue'
 
 	// The VALUE type a managed element is loaded as — the element's declared type retyped to its usable value
 	// form (a struct → `structRef`, a boxed union → its `named(<union>)`, a String → text, a nested Array /

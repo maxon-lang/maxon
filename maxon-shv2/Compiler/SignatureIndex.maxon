@@ -1038,6 +1038,85 @@ function unionNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInt
 	return MmDecrefName
 end 'unionNameDropCallee'
 
+// ⭐ **HOW A MANAGED FIELD OF DECLARED TYPE `fieldType` IS DEEP-CLONED (P1.7 slice 3b-vi-b).** The exact
+// STRUCTURAL DUAL of `managedFieldDropCallee`: a value cloned through the strategy this returns is dropped
+// through the callee `managedFieldDropCallee` returns for the SAME type, so the cloned set and the dropped set
+// agree by construction (a clone leaks if it is not dropped, double-frees if it is dropped twice — one
+// classifier decides both). shv2 is move-only, so an independent copy is a per-element DEEP CLONE, never an
+// incref.
+export union ManagedCloneStrategy
+	// A `(box) -> newBox` clone callee invocable by a plain 1-arg call OR through `callIndirect(fn, box)` (a
+	// `funcAddr`): a String → `__str_clone`; a struct / boxed union → its `__clone_<T>` (managed OR scalar-only
+	// — a fresh box is needed either way, where the drop side takes `__mm_decref` for a scalar-only box); a
+	// TRIVIAL-element Array → `__arr_clone` (its COW clone is an independently-droppable copy). This is the ONLY
+	// strategy an ARRAY ELEMENT may carry, because an element cloner is invoked through `callIndirect(fn, elem)`.
+	direct(callee ByteArray)
+	// A MANAGED-element Array FIELD: `__arr_clone_managed(field, funcAddr(elementClone))`, where `elementClone`
+	// is the element's own `direct` clone callee. A 2-arg call, so it is reachable only as a struct/union FIELD
+	// (the synthesizer emits the funcAddr), never as a top-level array element (which must be `direct`).
+	managedArray(elementClone ByteArray)
+	// Not deep-cloneable by this rung's mechanism — a non-Array generic instance (`Box with String`, whose
+	// per-instance cloner is a later slice) or a managed-element Array whose element is not itself `direct`
+	// (an array-of-managed-arrays). The front end rejects such an element with a positioned E2015.
+	unsupported
+end 'ManagedCloneStrategy'
+
+// The clone strategy for a managed field of declared type `fieldType`. Mirrors `managedFieldDropCallee`'s
+// dispatch exactly: `typeNames` resolves a `named`/`structRef` id to a NAME; pass the interner the field
+// type's ids live in (the file artifact interner at a call site, `project.typeNames` at the synthesis site).
+// The field is a precondition MANAGED one, so a scalar reaching here is a classification drift and panics.
+export function managedFieldCloneStrategy(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns ManagedCloneStrategy
+	let tag = maxonTypeTag(fieldType)
+	if tagIsText(tag) 'string'
+		return ManagedCloneStrategy.direct(StrCloneName)
+	end 'string'
+	if tag == ValueTypeTag.genericInstance 'instance'
+		return instanceCloneStrategy(signatures, id: typeNameIdOf(fieldType))
+	end 'instance'
+	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
+		panic("managedFieldCloneStrategy: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
+	end 'notManagedRef'
+	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldCloneStrategy: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in")
+	if signatures.isGenericAlias(name) 'genericAlias'
+		return instanceCloneStrategy(signatures, id: signatures.genericAliasInstance(name))
+	end 'genericAlias'
+	return managedNameCloneStrategy(signatures, name: name)
+end 'managedFieldCloneStrategy'
+
+// The clone strategy for a managed field NAMED `name` — a declared struct or boxed union clones through its
+// per-type `__clone_<T>`. A scalar-only box still takes `__clone_<T>` (not the drop side's `__mm_decref`): the
+// clone MUST allocate a fresh independent box, which only a synthesized cloner does.
+function managedNameCloneStrategy(signatures ProgramSignatures, name ByteArray) returns ManagedCloneStrategy
+	if signatures.containsStruct(name) 'struct'
+		return ManagedCloneStrategy.direct(clonerSymbol(name))
+	end 'struct'
+	match signatures.enumOf(name) 'union'
+		declared then return ManagedCloneStrategy.direct(clonerSymbol(name))
+		undeclared then panic("managedNameCloneStrategy: managed field '{String.from(name)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
+	end 'union'
+end 'managedNameCloneStrategy'
+
+// The clone strategy for a generic-INSTANCE field — an `Array` (`__arr_clone` for a trivial element,
+// `__arr_clone_managed` for a managed one) or, for any other instance (`Box with String`), `unsupported` (its
+// per-instance cloner is a later slice). The managed element's own strategy comes back through the METHOD
+// `arrayElementCloneStrategy` (which resolves the element in the index's own interner), so this free function
+// never has to reach the index's private `typeNames`.
+function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceId) returns ManagedCloneStrategy
+	if not signatures.isArrayInstance(id) 'notArray'
+		return ManagedCloneStrategy.unsupported
+	end 'notArray'
+	if not signatures.arrayElementIsManaged(id) 'trivialElement'
+		return ManagedCloneStrategy.direct(ArrCloneName)
+	end 'trivialElement'
+	// A managed-element array field clones each element through the element's OWN `(box) -> newBox` callee; if
+	// that element is not itself `direct` (an array-of-managed-arrays), the whole field is unsupported here.
+	match signatures.arrayElementCloneStrategy(id) 'element'
+		direct(elementClone) then return ManagedCloneStrategy.managedArray(elementClone)
+		managedArray then return ManagedCloneStrategy.unsupported
+		unsupported then return ManagedCloneStrategy.unsupported
+	end 'element'
+end 'instanceCloneStrategy'
+
 // --- Generic instances (P1.6-A) ---
 
 // The name of the builtin `Array` generic type (`Array with Integer`). Shared by the parser's
@@ -2700,6 +2779,17 @@ export type ProgramSignatures
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
 	end 'arrayElementDropCallee'
 
+	// The element CLONE strategy for a managed-element `Array with T` (P1.7 slice 3b-vi-b) — the DUAL of
+	// `arrayElementDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`
+	// array-copy call, exactly as it stamps `funcAddr(<the drop callee>)` into `element_destroy@40`. Routed
+	// through the SAME `managedFieldCloneStrategy` a managed FIELD of the element's type uses, so the element's
+	// clone matches its own field-clone by construction. Precondition: `arrayElementSupportsDeepClone`, which
+	// guarantees the result is `direct` (an element cloner is invoked through `callIndirect`, a `(box) -> box`
+	// shape a `managedArray`/`unsupported` strategy cannot satisfy).
+	export function arrayElementCloneStrategy(id GenericInstanceId) returns ManagedCloneStrategy
+		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
+	end 'arrayElementCloneStrategy'
+
 	// ⭐ **THE `Array with integer` INSTANCE FOR A BARE `[…]` ARRAY LITERAL (P1.7 slice 1).** A literal has
 	// no typealias to intern from, so the SWEEP interns this ONE well-known instance whenever a file's tokens
 	// contain a `[` (`Parser.foldDeclaredSignaturesInto`), and the parser reads the same giid back at literal
@@ -3332,6 +3422,104 @@ export type ProgramSignatures
 		end 'eachField'
 		return false
 	end 'structHasManagedField'
+
+	// ⭐ **CAN A MANAGED-ELEMENT `Array with T` BE DEEP-CLONED by this rung's mechanism (P1.7 slice 3b-vi-b)?**
+	// The FRONT-END gate for a managed `slice`/`clone`/`append`, and the exact envelope the cloner synthesis
+	// handles — the two agree so the synthesizer never meets an `unsupported` field on a program the front end
+	// accepted (else it would panic, a compiler crash on valid input). The element is invoked through
+	// `callIndirect` (`asElement: true`), so it must be `direct`-cloneable (String / struct / union / trivial-
+	// element array), and its whole reachable type graph must be clonable too. Precondition:
+	// `arrayElementIsManaged` (a trivial-element array never needs this — its copy is a byte blit).
+	export function arrayElementSupportsDeepClone(id GenericInstanceId) returns bool
+		return self.typeSupportsDeepClone(self.arrayElementType(id), asElement: true, visited: ClonerSet.create())
+	end 'arrayElementSupportsDeepClone'
+
+	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a
+	// `direct` leaf; a struct/union is clonable iff every managed field/payload is; a trivial-element Array is a
+	// `direct` leaf; a managed-element Array is clonable iff its element is itself `direct`-clonable AND clonable
+	// (an array-of-managed-arrays is not, this rung); a non-Array generic instance (`Box with String`) is not (a
+	// later slice). `asElement` is true when `type` is reached as an ARRAY ELEMENT (invoked through
+	// `callIndirect`), which a `managedArray`-strategy type — a managed-element array — cannot satisfy. `visited`
+	// (struct/union NAMES) breaks a recursive type (`type Node { var next as Node }`): a name already in flight
+	// is assumed clonable, so the walk terminates, and the synthesized cloner recurses at RUN time through the
+	// same field, which is correct.
+	export function typeSupportsDeepClone(type MaxonType, asElement bool, visited ClonerSet) returns bool
+		let tag = maxonTypeTag(type)
+		if not self.typeIsManaged(type) 'trivialLeaf'
+			return true
+		end 'trivialLeaf'
+		if tagIsText(tag) 'string'
+			return true
+		end 'string'
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.instanceSupportsDeepClone(typeNameIdOf(type), asElement: asElement, visited: visited)
+		end 'instance'
+		if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
+			return false
+		end 'notManagedRef'
+		let name = try self.typeNames.nameOf(typeNameIdOf(type)) otherwise panic("ProgramSignatures.typeSupportsDeepClone: a managed type's id is not in this index's interner")
+		if self.isGenericAlias(name) 'genericAlias'
+			return self.instanceSupportsDeepClone(self.genericAliasInstance(name), asElement: asElement, visited: visited)
+		end 'genericAlias'
+		if visited.contains(name) 'cycle'
+			return true
+		end 'cycle'
+		visited.insert(name)
+		if self.containsStruct(name) 'struct'
+			return self.structFieldsSupportDeepClone(name, visited: visited)
+		end 'struct'
+		match self.enumOf(name) 'union'
+			declared(layout) then return self.unionPayloadsSupportDeepClone(layout, visited: visited)
+			undeclared then return false
+		end 'union'
+	end 'typeSupportsDeepClone'
+
+	// An `Array` instance recurses into its element (a trivial one is a clonable leaf; a managed one must be a
+	// `direct`-clonable element via `asElement: true`); any other instance (`Box with String`) is a later slice.
+	function instanceSupportsDeepClone(id GenericInstanceId, asElement bool, visited ClonerSet) returns bool
+		if not self.isArrayInstance(id) 'notArray'
+			return false
+		end 'notArray'
+		if not self.arrayElementIsManaged(id) 'trivialElement'
+			return true
+		end 'trivialElement'
+		// A managed-element array clones its elements through `__arr_clone_managed(field, funcAddr(elementClone))`
+		// — a 2-arg call, so it cannot itself be an outer array element (invoked through `callIndirect`).
+		if asElement 'nestedManagedArrayElement'
+			return false
+		end 'nestedManagedArrayElement'
+		return self.typeSupportsDeepClone(self.arrayElementType(id), asElement: true, visited: visited)
+	end 'instanceSupportsDeepClone'
+
+	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet) returns bool
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldsSupportDeepClone: no `type {String.from(structName)}` is declared — the caller reached here through a declared struct name")
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if not self.structFieldIsManaged(structName, index: i) 'scalar'
+				continue
+			end 'scalar'
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structFieldsSupportDeepClone: fieldTypes.get OOB at {i}")
+			if not self.typeSupportsDeepClone(fieldType, asElement: false, visited: visited) 'unsupportedField'
+				return false
+			end 'unsupportedField'
+		end 'eachField'
+		return true
+	end 'structFieldsSupportDeepClone'
+
+	function unionPayloadsSupportDeepClone(layout EnumLayout, visited ClonerSet) returns bool
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+			for fi in 0 upto payloads.count() 'eachField'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsSupportDeepClone: payloadsAt count disagrees with get at {fi}")
+				if not payloadClassIsManaged(classifyUnionPayload(self, typeNames: self.typeNames, fieldType: field.declaredType)) 'scalar'
+					continue
+				end 'scalar'
+				if not self.typeSupportsDeepClone(field.declaredType, asElement: false, visited: visited) 'unsupportedPayload'
+					return false
+				end 'unsupportedPayload'
+			end 'eachField'
+		end 'eachCase'
+		return true
+	end 'unionPayloadsSupportDeepClone'
 
 	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
 	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and
