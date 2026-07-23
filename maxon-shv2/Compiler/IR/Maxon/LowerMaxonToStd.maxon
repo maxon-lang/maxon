@@ -768,7 +768,7 @@ type MaxonToStdLowering
 	// read off the result. The discriminator is the callee's own parameter list (`__self` at position 0), not
 	// the shape of `argIds`, so a static whose first argument happens to be a generic instance is unambiguous.
 	function materializeLayoutArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		if self.signatureTakesReceiver(sig) 'instanceMethod'
+		if sig.takesReceiver() 'instanceMethod'
 			// Read from `argIds` (the ORIGINAL receiver), never from the widened/env-derived `baseArgs`.
 			let receiver = try argIds.get(0) otherwise panic("materializeLayoutArgFor: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 			return self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock)
@@ -799,13 +799,6 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
 		return descId
 	end 'emitInstanceDescriptorAddr'
-
-	// Does `sig`'s first parameter name the receiver (`__self`) — an INSTANCE method, whose descriptor comes
-	// from its receiver rather than its result. The lowering twin of SemanticCheck's `signatureTakesSelf`,
-	// inlined here (that one is file-private) so the descriptor-threading decision reads the same fact.
-	function signatureTakesReceiver(sig FuncSignature) returns bool
-		return sig.paramNames.count() > 0 and (try sig.paramNames.get(0) otherwise panic("signatureTakesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
-	end 'signatureTakesReceiver'
 
 	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A CONCRETE generic
 	// instance receiver → the RIP-relative address of its descriptor blob (`rdataAddr`); a receiver that is

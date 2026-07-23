@@ -3132,12 +3132,6 @@ export type Parser
 		var selfCallees = SelfCalleesMap.create()
 		var methodNames = ByteArrayArray.create()
 
-		// The nested `typealias X = Array with T` aliases whose `X.create()` construction needs the descriptor
-		// (P1.7 slice 3b-i) — collected in a FIRST pass, because a method that constructs one may textually
-		// precede its declaration, and `enclosingInnerAliases` is not yet populated here (members are parsed
-		// after this peek-scan). The construction is the descriptor seed, exactly as `sizeof(T)` is.
-		let opaqueArrayAliases = self.collectOpaqueArrayAliasNames()
-
 		var q = self.pos
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
@@ -3148,7 +3142,7 @@ export type Parser
 			// `end` — so this outer loop only ever sees member-level tokens.
 			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
 				let methodName = self.tokenAt(q + 1).value
-				let scan = self.scanOneMethodDescriptorSignals(q + 2, opaqueArrayAliases: opaqueArrayAliases)
+				let scan = self.scanOneMethodDescriptorSignals(q + 2)
 				directSizeof.upsert(methodName, value: scan.direct)
 				selfCallees.upsert(methodName, value: scan.callees)
 				methodNames.push(methodName)
@@ -3161,49 +3155,11 @@ export type Parser
 		self.solveDescriptorNeedFixpoint(methodNames, directSizeof: directSizeof, selfCallees: selfCallees)
 	end 'computeTypeDescriptorNeeds'
 
-	// Collect the member-level nested `typealias X = Array with <typeParam>` alias NAMES of the type body the
-	// cursor sits at (P1.7 slice 3b-i) — the opaque-`T` arrays whose `X.create()` construction reads the
-	// enclosing instance's layout descriptor. A peek-only walk from `self.pos`; the token shape is exactly the
-	// six the grammar produces (`typealias` `X` `=` `Array` `with` `<typeParam>`), and the arg is required to
-	// name an enclosing type parameter so a `typealias X = Array with Integer` (a concrete instance, no
-	// descriptor) is not collected. `SelfCalleesMap`/name-set allocation is paid only inside a generic type.
-	function collectOpaqueArrayAliasNames() returns InnerAliasNameSet
-		var names = InnerAliasNameSet.create()
-		var q = self.pos
-		while self.kindAt(q) != TokenKind.eof 'walk'
-			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
-				break
-			end 'typeEnd'
-			if self.opaqueArrayAliasDeclAt(q) 'opaqueAlias'
-				names.insert(self.tokenAt(q + 1).value)
-			end 'opaqueAlias'
-			q = q + 1
-		end 'walk'
-		return names
-	end 'collectOpaqueArrayAliasNames'
-
-	// Is the token at `q` the start of a `typealias X = Array with <typeParam>` declaration — the six
-	// contiguous tokens `typealias` `<ident>` `=` `Array` `with` `<typeParam>` whose final identifier names an
-	// enclosing type parameter (P1.7 slice 3b-i). A concrete `Array with Integer` element fails the last test
-	// (it is not a type parameter), so only the OPAQUE form is recognized.
-	function opaqueArrayAliasDeclAt(q TokenIndex) returns bool
-		if self.kindAt(q) != TokenKind.typealias or self.kindAt(q + 1) != TokenKind.identifier 'notAlias'
-			return false
-		end 'notAlias'
-		if self.kindAt(q + 2) != TokenKind.equals or self.kindAt(q + 3) != TokenKind.identifier 'notAssignedType'
-			return false
-		end 'notAssignedType'
-		if not self.tokenAt(q + 3).value.equals(ArrayBuiltinBaseName) or self.kindAt(q + 4) != TokenKind.with or self.kindAt(q + 5) != TokenKind.identifier 'notArrayWith'
-			return false
-		end 'notArrayWith'
-		return self.typeParamPositionOf(self.tokenAt(q + 5).value) < self.enclosingTypeParams.count()
-	end 'opaqueArrayAliasDeclAt'
-
 	// Scan ONE method's body — from `bodyStart` (just past `function <name>`) to its own `end` — for the two
 	// descriptor signals: a direct `sizeof(T)`, and the sibling methods it calls on `self`. `depth` starts at 1
 	// because the method's own block is already open. Split into its own function so the accumulators are simple
 	// straight-line locals (no loop-carried array reassignment across the outer type walk).
-	function scanOneMethodDescriptorSignals(bodyStart TokenIndex, opaqueArrayAliases InnerAliasNameSet) returns MethodDescriptorScan
+	function scanOneMethodDescriptorSignals(bodyStart TokenIndex) returns MethodDescriptorScan
 		var direct = false
 		var callees = ByteArrayArray.create()
 		var depth = 1 as BlockDepth
@@ -3215,8 +3171,8 @@ export type Parser
 			end 'directSizeof'
 			// Constructing an opaque-`T` array (`ElementArray.create()`) stamps its `element_destroy@40` from the
 			// enclosing instance's threaded descriptor, so — like `sizeof(T)` — it needs the descriptor param
-			// (P1.7 slice 3b-i). `X` `.` `create` `(`, four contiguous tokens with `X` a collected opaque-array alias.
-			if kind == TokenKind.identifier and self.opaqueArrayCreateAt(q, opaqueArrayAliases: opaqueArrayAliases) 'opaqueArrayCreate'
+			// (P1.7 slice 3b-i). `X` `.` `create` `(`, four contiguous tokens with `X` an opaque-array alias.
+			if kind == TokenKind.identifier and self.opaqueArrayCreateAt(q) 'opaqueArrayCreate'
 				direct = true
 			end 'opaqueArrayCreate'
 			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
@@ -3245,12 +3201,24 @@ export type Parser
 		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.leftParen
 	end 'isSelfMethodCallAt'
 
-	// Is the identifier at `aliasPos` an opaque-array alias followed by `.create(` — the construction that
-	// seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous tokens with `X` in the
-	// collected opaque-array-alias set. It detects exactly the site `emitOpaqueArrayCreateOp` emits the
-	// descriptor-reading create at, so the reserved slot and the emitted read cannot diverge.
-	function opaqueArrayCreateAt(aliasPos TokenIndex, opaqueArrayAliases InnerAliasNameSet) returns bool
-		return opaqueArrayAliases.contains(self.tokenAt(aliasPos).value) and self.kindAt(aliasPos + 1) == TokenKind.dot and self.kindAt(aliasPos + 2) == TokenKind.identifier and self.tokenAt(aliasPos + 2).value.equals(ArrayCreateMethod) and self.kindAt(aliasPos + 3) == TokenKind.leftParen
+	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias followed by `.create(` — the
+	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous
+	// tokens whose `X` qualifies (`Container.X`) to a whole-program generic alias naming an OPAQUE `Array`
+	// instance. The opacity is read straight off `self.signatures` — the SAME index and the SAME
+	// `arrayElementIsOpaque` predicate `emitArrayCreateOp` branches the descriptor-reading create on — so the
+	// reserved slot and the emitted read decide off ONE fact and cannot diverge, whatever their token distance.
+	// The sweep has folded every inner alias before the real parse reaches here, so the lookup is complete
+	// regardless of where the alias sits in the body (a constructing method may textually precede it).
+	function opaqueArrayCreateAt(aliasPos TokenIndex) returns bool
+		if self.kindAt(aliasPos + 1) != TokenKind.dot or self.kindAt(aliasPos + 2) != TokenKind.identifier or not self.tokenAt(aliasPos + 2).value.equals(ArrayCreateMethod) or self.kindAt(aliasPos + 3) != TokenKind.leftParen 'notCreateShape'
+			return false
+		end 'notCreateShape'
+		let qualified = joinQualifiedName(self.enclosingType, member: self.tokenAt(aliasPos).value)
+		if not self.signatures.isGenericAlias(qualified) 'notAlias'
+			return false
+		end 'notAlias'
+		let giid = self.signatures.genericAliasInstance(qualified)
+		return self.signatures.isArrayInstance(giid) and self.signatures.arrayElementIsOpaque(giid)
 	end 'opaqueArrayCreateAt'
 
 	// Solve the descriptor-need relation to its least fixpoint: a method needs the descriptor iff it directly
@@ -4940,7 +4908,7 @@ export type Parser
 	//
 	// The receiver is passed down as a flag and NOT recorded as one: `parseFunction` turns it into
 	// a parameter named `SelfParamName` at position 0, and every later reader asks
-	// `signatureTakesReceiver`, which reads that name back. See there — one fact, one home.
+	// `FuncSignature.takesReceiver`, which reads that name back. See there — one fact, one home.
 	function parseTypeMember() throws ParseError
 		var visibility = Visibility.file
 		if self.at(TokenKind.export) 'exported'
@@ -5077,6 +5045,19 @@ export type Parser
 		if not self.enclosingTypeParams.isEmpty() 'genericMethod'
 			needsLayoutParam = try self.typeDescriptorNeeds.get(nameTok.value) otherwise false
 		end 'genericMethod'
+
+		// ⛔ **A RECEIVERLESS (static) LAYOUT-NEEDING function must RETURN `Self` (P1.7 slice 3b-i).** A `static`
+		// has no `self` to carry the type parameter's layout descriptor; a caller sources it instead from the
+		// call's RESULT, which is the concrete instance ONLY when the static returns the enclosing type
+		// (`create() returns Self`, retyped by `retypeGenericAliasConstructorResult`). A static that constructs an
+		// opaque `Array` (or reads `sizeof(T)`) but returns some other type leaves the caller no descriptor
+		// source, so `materializeStaticConstructorLayout` would panic on the non-instance result — reject it here
+		// cleanly, the way a receiverless `sizeof(T)` body is. An instance method sources it from `self`, so this
+		// is gated on `not takesReceiver`.
+		if needsLayoutParam and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
+			throw ParseError.unsupported("a `static function` that needs the type parameter's layout descriptor — it constructs an opaque type-parameter `Array` (`ElementArray.create()`) or reads `sizeof` of the type parameter — must return `Self` so the caller can source the descriptor from the instance the static builds; a static returning any other type has no descriptor source (build the array or read the size through an instance method on `self`, or return `Self`). Threading a descriptor from a static call site's alias is a later slice", line: nameTok.line, column: nameTok.column)
+		end 'staticLayoutNeedsSelfReturn'
+
 		let layoutParamCount = 1 if needsLayoutParam else 0
 		let paramCount = userParamCount + self.countFunctionParams(paramTypes) + layoutParamCount
 		if paramCount > MaxRegisterParams 'tooManyAbiParams'
@@ -5773,6 +5754,19 @@ export type Parser
 			value(inner) gives MaxonReturnType.value(self.resolveNamedStruct(inner))
 		end 'r'
 	end 'resolveNamedStructReturn'
+
+	// Does `returnType` name the ENCLOSING type — `Self`, the base struct, `structRef` after
+	// `resolveNamedStructReturn` (P1.7 slice 3b-i)? It is the return a receiverless layout-needing constructor
+	// must have: only then does the call's RESULT get retyped to the concrete instance
+	// (`retypeGenericAliasConstructorResult`) the caller reads the layout descriptor off. Compared by interned
+	// id in `self.artifact.typeNames` — the interner both the resolved return type and `self.enclosingType`
+	// live in — so no `nameOf` round-trip is needed.
+	function returnsEnclosingType(returnType MaxonReturnType) returns bool
+		return match returnType 'r'
+			void gives false
+			value(inner) gives maxonTypeTag(inner) == ValueTypeTag.structRef and typeNameIdOf(inner) == self.artifact.typeNames.intern(self.enclosingType)
+		end 'r'
+	end 'returnsEnclosingType'
 
 	// Statement list until the closing `end`, emitting into `block`. Returns the block
 	// the LAST statement left control in — the same `block` for straight-line code, but

@@ -737,6 +737,15 @@ export type FuncSignature
 		end 'each'
 		return self.paramNames.count()
 	end 'indexOfParam'
+
+	// Does parameter 0 name the receiver (`__self`) — i.e. is this an INSTANCE method rather than a free
+	// function or a receiverless static? THE one home of that fact (`parseTypeMember` records the receiver as
+	// this name; see there): SemanticCheck reads it to self-offset a call's arguments from the source
+	// parameter list, and LowerMaxonToStd reads it to source a layout descriptor from the receiver rather than
+	// the constructor result. Two decisions that must agree on where the receiver is, so they read one bit.
+	export function takesReceiver() returns bool
+		return self.paramNames.count() > 0 and (try self.paramNames.get(0) otherwise panic("FuncSignature.takesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
+	end 'takesReceiver'
 end 'FuncSignature'
 
 // Registry: qualified function name -> its parameter signature. Populated by

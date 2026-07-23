@@ -678,7 +678,7 @@ function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSign
 	// A method prepends `__self` at real position 0; the sweep records inner-alias members over the SOURCE
 	// parameters (no `__self`), so a method's real position i maps to source i - 1. A static factory has no
 	// receiver here — its inner-alias arguments decay — so only a method is checked.
-	if not signatureTakesSelf(sig) 'noReceiver'
+	if not sig.takesReceiver() 'noReceiver'
 		return
 	end 'noReceiver'
 
@@ -707,16 +707,6 @@ function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSign
 		end 'wrongInstance'
 	end 'eachArg'
 end 'checkPerInstanceArgsWith'
-
-// Does `sig`'s parameter 0 name the receiver (`__self`)? — i.e. is this an instance method, whose call-site
-// arguments are self-offset from its source parameter list.
-function signatureTakesSelf(sig FuncSignature) returns bool
-	if sig.paramCount() == 0 'noParams'
-		return false
-	end 'noParams'
-	let first = try sig.paramNames.get(0) otherwise panic("signatureTakesSelf: paramCount() > 0 but paramNames.get(0) failed")
-	return first.equals(SelfParamName)
-end 'signatureTakesSelf'
 
 // The instance alias the RECEIVER argument (`argIds[0]`) came from, read off the caller function's delivered
 // per-value provenance (`FunctionRangeChecks.valueInstanceAliases`). Empty when the receiver has none — a
