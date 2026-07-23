@@ -51,6 +51,13 @@ export enum RuntimeAbort
 	// `processStoreOverflow`; it is the one that moved because the other is spec-pinned and this is
 	// unreachable from any source program.
 	arrayElementSizeZero = 74
+	// `__mm_leak_check` (the ONE OS-exit gate): a green thread was spawned but neither AWAITED nor DROPPED —
+	// `__gt_live_count` was non-zero at exit (or, negative, an over-reclaim). A GT struct + its seed stack are
+	// `__slab_alloc`/`osAllocPages` allocations INVISIBLE to `__mm_alloc_count`, so this leak is its own class
+	// and its own code — DISTINCT from `leakDetected` (101, the heap gate) so a debugger reading the exit code
+	// goes to the green-thread counter, not the heap one (this file's founding rule: an abort must not report
+	// another abort's number). Pinned by `async-promise-drop`'s never-ran/completed/parked cases.
+	greenThreadLeak = 75
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

@@ -6810,6 +6810,22 @@ export type Parser
 			// what moves its drop from statement-end to scope-exit.
 			self.removeFromPendingTemps(boundValue)
 		end 'trackOwned'
+
+		// ⭐ **A PROMISE BINDING OWNS A GREEN THREAD (P1.5-B2 #88), the dual of the E3100 linear-await check.**
+		// `let/var p = async f()` enrols the spawn as an owned value, so the SAME scope-exit / re-arm / branch-
+		// reconciliation machinery that drops an owned heap box (`emitScopeDrops`, `reconcileMovesAtMerge`,
+		// `reassignBindingValue`) drops (and cancels) the thread — through `__gt_promise_drop` — on every path
+		// that does not `await` it. `await` marks it moved (`consumePromiseThread`), so an awaited path skips it.
+		//
+		// ⚠ **AN ALIAS (`let q = p`, `boundBareLocal`) IS NOT A SECOND OWNER.** A promise ALIASES rather than
+		// moves (linearity keys on the shared thread ValueId — `await p; await q` is one thread awaited twice),
+		// so `q` binds `p`'s value verbatim and is NOT enrolled: exactly the spawn binding drops the one thread
+		// once. This is why promises are enrolled separately from `valueIsOwnedHeap` (which move-poisons a bare-
+		// local RHS) rather than folded into it. A promise is never `valueIsOwnedHeap`, so the two are disjoint.
+		if self.valueIsPromise(boundValue) and not boundBareLocal 'trackPromise'
+			self.ownedBindings.push(binding)
+			self.removeFromPendingTemps(boundValue)
+		end 'trackPromise'
 	end 'parseBinding'
 
 	// Open a lexical block — an `if` / `else` / `while` body. THREE things are scoped to
@@ -7034,6 +7050,36 @@ export type Parser
 			self.scope.setValue(nameTok.value, value: value)
 			return
 		end 'selfAssign'
+
+		// ⭐ **RE-ARM A PROMISE BINDING (P1.5-B2 #88).** A promise is a scalar green-thread handle with a
+		// bespoke drop (`__gt_promise_drop`), never COW-promoted — so a binding that owns (or receives) a
+		// thread MUST be handled here, before the heap move/promotion path below (which would `promoteBorrowed`
+		// a scalar and panic). Only a fresh `async` spawn may (re-)arm it: an alias rebind (`p = q`) or a
+		// non-promise (`p = 5`) would orphan or mis-own the thread, so both are refused — a positioned E2015,
+		// not a miscompile. The OLD thread is dropped (cancelled) iff this binding still owns a LIVE one (an
+		// `await` already marked a consumed one moved); the binding then owns the new thread.
+		let oldIsPromise = self.valueIsPromise(oldValue)
+		let newIsPromise = self.valueIsPromise(value)
+		if oldIsPromise or newIsPromise 'promiseReassign'
+			if not newIsPromise or rhsWasBareLocal 'unsupportedPromiseReassign'
+				throw ParseError.unsupported("a promise binding ('{String.from(nameTok.value)}') can only be re-armed with a fresh `async` spawn; reassigning it to an alias or a non-promise value would orphan its green thread — `await` it or restructure instead", line: nameTok.line, column: nameTok.column)
+			end 'unsupportedPromiseReassign'
+			if oldIsPromise and not binding.movedFrom and self.bindingIsOwned(binding) 'dropOldThread'
+				self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
+			end 'dropOldThread'
+			// The binding owns the new thread. Enrol once — a promise re-armed after an `await` is already in
+			// the set as a moved ghost; a non-promise binding first taking a promise (`var x = 5; x = async f()`)
+			// joins it now. A WRITE revives the binding, so both move flags clear.
+			let alreadyInSet = self.bindingIsOwned(binding) or binding.movedFrom
+			self.scope.setValue(nameTok.value, value: value)
+			binding.movedFrom = false
+			binding.partiallyMoved = false
+			if not alreadyInSet 'enrolPromise'
+				self.ownedBindings.push(binding)
+			end 'enrolPromise'
+			self.removeFromPendingTemps(value)
+			return
+		end 'promiseReassign'
 
 		// ⭐ **MOVE-ON-ASSIGN.** A bare reference to an ALREADY-owned binding as the RHS (`s = t`) MOVES
 		// that value: poison the source so a later read of it is use-after-move and only the new owner
@@ -8593,6 +8639,14 @@ export type Parser
 	// which wrap the SAME predicates the destructor synthesis (and `noteDestructorUsage`) emit from, so a
 	// box routed to a cascade here always has one built for it.
 	function decrefCalleeFor(value ValueId) returns ByteArray
+		// ⭐ **A PROMISE IS A GREEN-THREAD HANDLE, NOT A REFCOUNTED HEAP BOX (P1.5-B2 #88).** An un-awaited
+		// `async` spawn dropped at scope exit / a re-arm routes to `__gt_promise_drop`, which reclaims AND
+		// cancels the thread — NOT `__mm_decref` (a promise owns no `__mm_alloc` box; the handle is the GT
+		// struct pointer). Checked FIRST, off the promise mark column, because a promise's TAG is `integer`
+		// (its awaited scalar type), so the tag-based routing below cannot tell it from a bare int.
+		if self.valueIsPromise(value) 'promise'
+			return GtPromiseDropName
+		end 'promise'
 		let tag = self.tagOf(value)
 		if tag == ValueTypeTag.string 'string'
 			return StrDecrefName
@@ -9012,6 +9066,29 @@ export type Parser
 	// boundary, a later wave; until then a move that escapes the innermost loop is refused rather than
 	// miscompiled. A binding declared INSIDE the loop body (index at or above the loop's owned floor) is
 	// reconciled within the body, once per iteration, and is unaffected.
+	// ⭐ **`await`/`try await` CONSUMES a promise's green thread (P1.5-B2 #88) — the DUAL of the E3100 linear-
+	// await check.** The runtime driver (`__gt_await`/`__gt_try_await`) reclaims the GT struct AT the await, so
+	// the thread must NOT also be dropped at scope exit — mark its owning binding `movedFrom` (the scope-exit
+	// drop then skips it, exactly as an owned box moved by `let u = t` is skipped), and clear it from the
+	// pending-temp list (an UNBOUND awaited spawn, `await async f()`). Keyed on the thread's ValueId — its
+	// identity — so awaiting through ANY alias consumes the one thread (`let q = p; await q` consumes `p`'s
+	// thread). An unbound-and-unowned promise has no owner to mark, so the scan quietly finds nothing, which is
+	// correct — the pending-temp clear is all it needs. Unlike `poisonMoveSource`, it does NOT reject a move
+	// that escapes a loop: a promise spawned outside a loop and awaited inside is already E3100 (double-await
+	// across the back-edge), so it never reaches lowering, and marking its (outer) owner here is harmless.
+	function consumePromiseThread(promise ValueId)
+		self.removeFromPendingTemps(promise)
+		var i = 0
+		while i < self.ownedBindings.count() 'each'
+			var owned = try self.ownedBindings.get(i) otherwise panic("consumePromiseThread: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			if self.isLiveOwnerOf(owned, value: promise) 'owner'
+				owned.movedFrom = true
+				return
+			end 'owner'
+			i = i + 1
+		end 'each'
+	end 'consumePromiseThread'
+
 	function poisonMoveSource(value ValueId, anchor Token) throws ParseError
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
@@ -16558,6 +16635,17 @@ export type Parser
 			return
 		end 'selfFieldAlias'
 
+		// ⭐ **A CONSUMED (AWAITED) PROMISE STAYS READABLE (P1.5-B2 #88).** For a promise binding, `movedFrom`
+		// means "an `await` consumed the green thread" and gates ONLY its scope-exit drop-skip — never its
+		// readability. A SECOND use of an awaited promise is caught by the more specific LINEAR-AWAIT check
+		// (E3100 at SemanticCheck), which needs the second `await p` to PARSE so it can see it; blocking the
+		// read here with use-after-move (E3102) would preempt E3100 and change the diagnostic. A re-arm
+		// (`p = async g()`) revives the binding. This restores the pre-#88 read behaviour for promises (which
+		// were untracked, hence never `movedFrom`), so the linear-await goldens are unchanged.
+		if self.valueIsPromise(binding.boundValue) 'promiseBinding'
+			return
+		end 'promiseBinding'
+
 		// Both move states are dead at every read. `movedFrom` (a `let u = t` / `s = t` handed the value
 		// to another binding) and `partiallyMoved` (a binding-match moved a managed payload OUT of this
 		// union, nulling its slot) differ only in whether the binding still owes a DROP — a use is
@@ -18414,6 +18502,12 @@ export type Parser
 		try self.requireAsyncResult(callee, anchor: anchor)
 		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.markValuePromise(result)
+		// ⭐ P1.5-B2 #88: the spawn OWNS a green thread. Enrol it as a statement-scoped pending temporary,
+		// exactly as `trackOwnedTemp` enrols an interpolation result: `parseBinding` transfers it to
+		// `ownedBindings` when bound (`let p = …`), `emitAwaitOp` clears it when consumed (`await async f()`),
+		// and an UNBOUND, UNAWAITED spawn (`async f()` as a bare statement) is dropped at statement end
+		// through `drainPendingTemps` — so no spawn path can leak its thread.
+		self.pendingTempDrops.push(result)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitAsyncCall'
@@ -18481,6 +18575,10 @@ export type Parser
 		end 'notPromise'
 		let result = self.mintValue(self.awaitedResultTag(func, promise: promise), nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
+		// The await consumes the thread — the runtime reclaims its struct here — so its owning binding must not
+		// also drop it at scope exit (P1.5-B2 #88). Covers `try await` too: `parseTryCallTarget` emits its target
+		// through this same `emitAwaitOp`, then rewrites the op to `tryAwait` (the consume is independent).
+		self.consumePromiseThread(promise)
 		return result
 	end 'emitAwaitOp'
 

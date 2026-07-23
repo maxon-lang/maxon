@@ -286,6 +286,14 @@ export let GtDequeueName = b"__gt_dequeue"
 export let GtAwaitName = b"__gt_await"
 export let GtTryAwaitName = b"__gt_try_await"
 
+// ⭐ **THE UN-AWAITED-PROMISE DROP (P1.5-B2 #88).** `__gt_promise_drop(gt)` reclaims + CANCELS a green
+// thread whose promise reached scope exit (or a re-arm) WITHOUT being awaited — the ownership DUAL of the
+// `__gt_await` reclaim. The front-end enrols an `async` spawn's Promise as an owned value and emits this
+// call on every path that neither `await`s nor re-arms it (Parser's scope-exit drop machinery). Named in
+// the `__gt_` band so `isGtRuntimeCallee` catches it and `TargetPrinter.isRuntimeFunction` keeps it out of
+// the goldens.
+export let GtPromiseDropName = b"__gt_promise_drop"
+
 // P1.5 mid-body-yield entry points. `__gt_sleep` is the front-end target for `sleep(ms)`; the rest are the
 // scheduler internals it and the await drivers share.
 export let GtSleepName = b"__gt_sleep"
@@ -346,6 +354,17 @@ export let GtSystemStackTopLabel = b"__gt_system_stack_top"
 // natural fit). A run-but-never-AWAITED GT's struct is never reclaimed (OPEN #88 — its family also leaks the
 // never-run GT's seed stack); this rung closes the AWAITED-GT struct+arg-buffer leak (#87).
 let GtFreeListHeadLabel = b"__gt_free_list_head"
+
+// ⭐ **THE GREEN-THREAD LIVE COUNT — the leak gate for slab-invisible GT structs (P1.5-B2 #88).** A GT
+// struct + its seed stack are `__slab_alloc`/`osAllocPages` allocations, INVISIBLE to `__mm_alloc_count`,
+// so a spawned-but-never-reclaimed green thread leaks past the `__mm` gate silently. `__gt_spawn`
+// increments this (SPAWNED GTs only — GT0 from `__gt_init` is never counted); every reclaim decrements it
+// — the `__gt_await`/`__gt_try_await` tail (an awaited GT) AND `__gt_promise_drop` (an un-awaited, dropped
+// GT). At program exit the leak gate (`MmRuntime.buildMmLeakCheck`, the ONE OS-exit check) asserts it is
+// zero: a non-zero count means a green thread was neither awaited nor dropped — a leak (or, negative, an
+// over-reclaim). EXPORTED because that gate lives in `MmRuntime` and reads this slot directly, exactly as
+// the prior counter did. Its zero image is the initial state — no GT spawned yet.
+export let GtLiveCountLabel = b"__gt_live_count"
 
 // P1.5 mid-body-yield timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap
 // region (both 0 until `__gt_init` allocates the region and seeds the base).
@@ -417,6 +436,8 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtProcGtsBaseLabel), valueType: StdType.i64, value: 0))
 	// P1.5-B1c #87: the GT-struct free-list head (push at await, pop at spawn).
 	out.push(DataSectionEntry.create(String.from(GtFreeListHeadLabel), valueType: StdType.i64, value: 0))
+	// P1.5-B2 #88: the green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit.
+	out.push(DataSectionEntry.create(String.from(GtLiveCountLabel), valueType: StdType.i64, value: 0))
 	// P1.5-B1c #92: the reusable subprocess scratch bases (startup/procInfo/exit-code) + the grow-on-demand
 	// cmdline-copy buffer's base and capacity.
 	out.push(DataSectionEntry.create(String.from(GtStartupBaseLabel), valueType: StdType.i64, value: 0))
@@ -442,6 +463,7 @@ export function installGtRuntime(module StdModule)
 	buildGtDriveUntil(module)
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true)
+	buildGtPromiseDrop(module)
 	buildGtSleep(module)
 	buildGtProcAdd(module)
 	buildGtProcCount(module)
@@ -706,6 +728,19 @@ function buildGtSpawn(module StdModule)
 	let spVal = ids.mint()
 	module.appendOp(initBlock, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
+
+	// ⭐ P1.5-B2 #88: this spawn adds one green thread to the live count (GT0 is not counted — it is
+	// created by `__gt_init` via `__slab_alloc`, never through here). Every reclaim — the `__gt_await`
+	// tail and `__gt_promise_drop` — lowers it by one, so a clean exit balances it to zero.
+	let liveCountAddr = ids.mint()
+	module.appendOp(initBlock, op: StdOp.globalAddr(liveCountAddr, label: GtLiveCountLabel))
+	let liveCount = ids.mint()
+	module.appendOp(initBlock, op: StdOp.loadIndirect(liveCount, addrId: liveCountAddr, offset: 0, valueType: StdType.i64))
+	let liveOneConst = ids.mint()
+	module.appendOp(initBlock, op: StdOp.const(liveOneConst, value: 1, valueType: StdType.i64))
+	let liveRaised = ids.mint()
+	module.appendOp(initBlock, op: StdOp.binOp(liveRaised, lhs: liveCount, rhs: liveOneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(liveCountAddr, offset: 0, valueId: liveRaised, valueType: StdType.i64))
 
 	// Enqueue as ready and return the GT as the promise handle.
 	let enqResult = ids.mint()
@@ -1323,16 +1358,13 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool)
 	// the next `async` pop-and-alias it (a silent wrong answer). This is v1's discipline: the awaiter recycles the
 	// GT (`Arm64MacosGreenThread.maxon:2987-3005`), not the completing thread. The STACK is a separate lifetime,
 	// freed at completion in `__gt_drive_until` (the GT has already switched off it), which stays correct. Linearity
-	// (E3100) forbids a second await of the same promise, so a struct is pushed at most once — no double-free. Push
-	// is LIFO through the idle `GtOffNext` slot (a completed GT is off every run/timer/proc queue): `promise.next =
-	// __gt_free_list_head ; __gt_free_list_head = promise`. It writes `GtOffNext` (0x38) only — disjoint from
-	// `result`@0x28 and `threw`@0x58 — so doing it before the throwing branch reads `threw` is safe.
-	let freeHeadAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
-	let oldFreeHead = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(oldFreeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(promise, offset: GtOffNext, valueId: oldFreeHead, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: promise, valueType: StdType.i64))
+	// (E3100) forbids a second await of the same promise, so a struct is pushed at most once — no double-free. The
+	// reclaim (P1.5-B2 #88: decrement `__gt_live_count`, then push the struct LIFO through the idle `GtOffNext`
+	// slot) is the SHARED `emitGtStructReclaim`, one home for "a finished GT's struct returns to the pool" across
+	// this awaited reclaim and `__gt_promise_drop`'s un-awaited one. It writes `GtOffNext` (0x38) and the count
+	// only — disjoint from `result`@0x28 and `threw`@0x58 — so doing it before the throwing branch reads `threw`
+	// is safe. A completed GT is off every run/timer/proc queue, so the idle `next` slot is free for the LIFO link.
+	emitGtStructReclaim(module, block: entry, ids: ids, gt: promise)
 
 	if throwing 'throwingExit'
 		let threw = ids.mint()
@@ -1344,6 +1376,356 @@ function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool)
 
 	module.functions.push(func)
 end 'buildGtAwaitDriver'
+
+// ⭐ **RETURN A FINISHED GT'S STRUCT TO THE POOL — the ONE home of the reclaim (P1.5-B1c #87 / B2 #88).**
+// Decrement the live count (`__gt_live_count`) and push the struct onto the free-list LIFO through the now-
+// idle `GtOffNext` slot (a finished GT is off every run/timer/proc queue). Shared by the `__gt_await` tail
+// (an AWAITED GT) and every arm of `__gt_promise_drop` (an UN-AWAITED, dropped GT), so "how a GT struct is
+// recycled AND how the leak count is balanced" is one fact, not one per reclaim site. The caller has
+// already freed (or intentionally kept, for a `completed` GT) the STACK — this touches only the struct.
+function emitGtStructReclaim(module StdModule, block IrBlock, ids ValueMinter, gt ValueId)
+	// __gt_live_count -= 1 (the leak gate's balance — one down per reclaim, matching `__gt_spawn`'s +1).
+	let countAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(countAddr, label: GtLiveCountLabel))
+	let count = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let oneConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let lowered = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(lowered, lhs: count, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: lowered, valueType: StdType.i64))
+	// gt.next = __gt_free_list_head ; __gt_free_list_head = gt.
+	let freeHeadAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
+	let oldFreeHead = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(oldFreeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(gt, offset: GtOffNext, valueId: oldFreeHead, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: gt, valueType: StdType.i64))
+end 'emitGtStructReclaim'
+
+// ⭐ **`__gt_promise_drop(gt)` — RECLAIM + CANCEL AN UN-AWAITED GREEN THREAD (P1.5-B2 #88).** The ownership
+// DUAL of the `__gt_await` reclaim: the front-end enrols an `async` spawn's Promise as an owned value and
+// emits this call on every path to scope exit / a re-arm that neither `await`s nor re-arms it. It branches
+// on `gt.status` — the THREE states a droppable GT can be in — and, crucially, DEREGISTERS the GT from every
+// store it sits in BEFORE freeing its stack/struct (the survey's central UAF lesson):
+//
+//   • `completed` (2): the thread ran to completion (possibly as a side effect of driving a DIFFERENT
+//     await) and `__gt_drive_until` ALREADY freed its stack (the recycle/freestack blocks). So reclaim the
+//     STRUCT ONLY — freeing the stack again here would be a double free.
+//   • `ready` (0): the thread was spawned but NEVER dequeued — it is still on the FIFO run queue. It MUST be
+//     unlinked: a never-ran GT left on the queue would be dequeued and RUN by a LATER `await`'s drive loop,
+//     reading the freed struct (a use-after-free, not merely a leak). Then free the untouched seed stack.
+//   • `waiting` (3): the thread ran up to a `sleep`/`runProcess` and parked in the timer store and/or the
+//     process store. Remove it from BOTH (a parked GT is on exactly one, but both scans are cheap and safe;
+//     the process scan `CloseHandle`s the child handle — abandon the WAIT, do not kill the child). Then free
+//     the (possibly morestack-grown) stack.
+//
+// Every arm ends at the shared struct reclaim (`emitGtStructReclaim` — decrement the live count, push onto
+// the free-list). shv2's polling scheduler has no in-flight OVERLAPPED I/O to abort, so "deregister" reduces
+// to the array/queue splice, and the ordering trap reduces to store-remove → free.
+function buildGtPromiseDrop(module StdModule)
+	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkReady = module.addBlock(func, label: b"checkready")
+	var readyArm = module.addBlock(func, label: b"readyarm")
+	var waitingArm = module.addBlock(func, label: b"waitingarm")
+	var waitingProc = module.addBlock(func, label: b"waitingproc")
+	var freeStack = module.addBlock(func, label: b"freestack")
+	var doFree = module.addBlock(func, label: b"dofree")
+	var reclaim = module.addBlock(func, label: b"reclaim")
+
+	emitParams(module, block: entry, count: 1)
+	let gt = 0 as ValueId
+
+	// entry: completed → reclaim (struct only, stack already freed); else decide ready vs waiting.
+	let status = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(status, addrId: gt, offset: GtOffStatus, valueType: StdType.i64))
+	let completedConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(completedConst, value: GtStatusCompleted, valueType: StdType.i64))
+	let isCompleted = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isCompleted, lhs: status, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isCompleted, thenBlockId: reclaim.id, elseBlockId: checkReady.id))
+
+	// checkReady: ready → unlink from the run queue; else (waiting) → remove from the timer/proc stores.
+	let readyConst = ids.mint()
+	module.appendOp(checkReady, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
+	let isReady = ids.mint()
+	module.appendOp(checkReady, op: StdOp.cmp(isReady, lhs: status, rhs: readyConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(checkReady, op: StdOp.condBranch(isReady, thenBlockId: readyArm.id, elseBlockId: waitingArm.id))
+
+	// ready arm: splice the never-run GT out of the FIFO run queue, then free its seed stack.
+	emitGtRunQueueRemove(module, func: func, ids: ids, startBlock: readyArm, gt: gt, cont: freeStack)
+
+	// waiting arm: remove from the timer store, then the process store (CloseHandle-on-cancel), then free.
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingArm, gt: gt, cont: waitingProc)
+	emitGtProcStoreRemove(module, func: func, ids: ids, startBlock: waitingProc, gt: gt, cont: freeStack)
+
+	// freeStack: release the GT's stack unless it has none (GT0's stackBase is 0 — but GT0 is never dropped;
+	// the null-guard mirrors `__gt_drive_until`'s recycle gate for safety). `osFreePages` is an `iatCall`
+	// inside a `__gt_` function, so the syscall shim wraps it onto the system stack automatically.
+	let stackBase = ids.mint()
+	module.appendOp(freeStack, op: StdOp.loadIndirect(stackBase, addrId: gt, offset: GtOffStackBase, valueType: StdType.i64))
+	let stackZero = ids.mint()
+	module.appendOp(freeStack, op: StdOp.const(stackZero, value: 0, valueType: StdType.i64))
+	let stackNull = ids.mint()
+	module.appendOp(freeStack, op: StdOp.cmp(stackNull, lhs: stackBase, rhs: stackZero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(freeStack, op: StdOp.condBranch(stackNull, thenBlockId: reclaim.id, elseBlockId: doFree.id))
+
+	module.appendOp(doFree, op: StdOp.osFreePages(stackBase))
+	module.setTerminator(doFree, op: StdOp.branch(reclaim.id))
+
+	// reclaim: struct back to the free-list + one off the live count, shared by every arm.
+	emitGtStructReclaim(module, block: reclaim, ids: ids, gt: gt)
+	module.setTerminator(reclaim, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtPromiseDrop'
+
+// Splice `gt` out of the FIFO run queue (head/tail linked through `GtOffNext`), then branch to `cont`. Used
+// by `__gt_promise_drop`'s ready arm. Mirrors `__gt_enqueue`/`__gt_dequeue`'s head/tail/next discipline: if
+// `gt` is the head, advance the head (clearing the tail when the queue empties); else predecessor-walk to the
+// node whose `next == gt` and splice it out (fixing the tail when `gt` was the last). A `gt` not on the queue
+// (cur walks to null) falls through to `cont` untouched — safe, though a `ready` GT is always on the queue.
+function emitGtRunQueueRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
+	var unlinkHead = module.addBlock(func, label: b"rqunlinkhead")
+	var clearTail = module.addBlock(func, label: b"rqcleartail")
+	var walkHdr = module.addBlock(func, label: b"rqwalkhdr")
+	var walkBody = module.addBlock(func, label: b"rqwalkbody")
+	var walkNext = module.addBlock(func, label: b"rqwalknext")
+	var unlinkMid = module.addBlock(func, label: b"rqunlinkmid")
+	var fixTail = module.addBlock(func, label: b"rqfixtail")
+
+	let headAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
+	let head = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(head, addrId: headAddr, offset: 0, valueType: StdType.i64))
+	let isHead = ids.mint()
+	module.appendOp(startBlock, op: StdOp.cmp(isHead, lhs: head, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	// The predecessor-walk starts at cur = head; `walkHdr` carries it. `unlinkHead` reads only from memory.
+	module.setTerminator(startBlock, op: StdOp.condBranch(isHead, thenBlockId: unlinkHead.id, elseBlockId: walkHdr.id))
+	startBlock.branchEdges.push(BranchEdge.create(walkHdr.id, argIds: argsOf(head)))
+
+	// unlinkHead: head = gt.next; if the queue is now empty, clear the tail too.
+	let zeroConst = ids.mint()
+	module.appendOp(unlinkHead, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let gtNextH = ids.mint()
+	module.appendOp(unlinkHead, op: StdOp.loadIndirect(gtNextH, addrId: gt, offset: GtOffNext, valueType: StdType.i64))
+	module.appendOp(unlinkHead, op: StdOp.storeIndirect(headAddr, offset: 0, valueId: gtNextH, valueType: StdType.i64))
+	let nowEmpty = ids.mint()
+	module.appendOp(unlinkHead, op: StdOp.cmp(nowEmpty, lhs: gtNextH, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(unlinkHead, op: StdOp.condBranch(nowEmpty, thenBlockId: clearTail.id, elseBlockId: cont.id))
+
+	let tailAddrH = ids.mint()
+	module.appendOp(clearTail, op: StdOp.globalAddr(tailAddrH, label: GtRunQueueTailLabel))
+	let tailZero = ids.mint()
+	module.appendOp(clearTail, op: StdOp.const(tailZero, value: 0, valueType: StdType.i64))
+	module.appendOp(clearTail, op: StdOp.storeIndirect(tailAddrH, offset: 0, valueId: tailZero, valueType: StdType.i64))
+	module.setTerminator(clearTail, op: StdOp.branch(cont.id))
+
+	// walkHdr(cur): if cur == 0 the node is not on the queue → cont; else inspect cur.next.
+	let cur = ids.mint()
+	walkHdr.blockArgs.push(IrBlockArg.create(cur, argType: StdType.i64))
+	let curZero = ids.mint()
+	module.appendOp(walkHdr, op: StdOp.const(curZero, value: 0, valueType: StdType.i64))
+	let curNull = ids.mint()
+	module.appendOp(walkHdr, op: StdOp.cmp(curNull, lhs: cur, rhs: curZero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(walkHdr, op: StdOp.condBranch(curNull, thenBlockId: cont.id, elseBlockId: walkBody.id))
+
+	// walkBody: curNext = cur.next; if curNext == gt, cur is the predecessor → unlinkMid; else advance.
+	let curNext = ids.mint()
+	module.appendOp(walkBody, op: StdOp.loadIndirect(curNext, addrId: cur, offset: GtOffNext, valueType: StdType.i64))
+	let isPred = ids.mint()
+	module.appendOp(walkBody, op: StdOp.cmp(isPred, lhs: curNext, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(walkBody, op: StdOp.condBranch(isPred, thenBlockId: unlinkMid.id, elseBlockId: walkNext.id))
+
+	// walkNext: cur = curNext → walkHdr.
+	module.setTerminator(walkNext, op: StdOp.branch(walkHdr.id))
+	walkNext.branchEdges.push(BranchEdge.create(walkHdr.id, argIds: argsOf(curNext)))
+
+	// unlinkMid: cur.next = gt.next; if gt was the tail, the tail becomes cur.
+	let gtNextM = ids.mint()
+	module.appendOp(unlinkMid, op: StdOp.loadIndirect(gtNextM, addrId: gt, offset: GtOffNext, valueType: StdType.i64))
+	module.appendOp(unlinkMid, op: StdOp.storeIndirect(cur, offset: GtOffNext, valueId: gtNextM, valueType: StdType.i64))
+	let tailAddrM = ids.mint()
+	module.appendOp(unlinkMid, op: StdOp.globalAddr(tailAddrM, label: GtRunQueueTailLabel))
+	let tailM = ids.mint()
+	module.appendOp(unlinkMid, op: StdOp.loadIndirect(tailM, addrId: tailAddrM, offset: 0, valueType: StdType.i64))
+	let gtIsTail = ids.mint()
+	module.appendOp(unlinkMid, op: StdOp.cmp(gtIsTail, lhs: tailM, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(unlinkMid, op: StdOp.condBranch(gtIsTail, thenBlockId: fixTail.id, elseBlockId: cont.id))
+
+	module.appendOp(fixTail, op: StdOp.storeIndirect(tailAddrM, offset: 0, valueId: cur, valueType: StdType.i64))
+	module.setTerminator(fixTail, op: StdOp.branch(cont.id))
+end 'emitGtRunQueueRemove'
+
+// Remove `gt`'s entry from the UNSORTED timer store (swap the last live entry into the hole, count--), then
+// branch to `cont`. Used by `__gt_promise_drop`'s waiting arm. Mirrors `__gt_timer_check`'s afterFire
+// swap-remove, but keyed on `gt == entry.gt` rather than a due deadline. A GT is on the timer at most once,
+// so the first match removes and stops; a GT NOT on the timer (parked on a process instead) scans to the end
+// and branches to `cont` untouched.
+function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
+	var scanHdr = module.addBlock(func, label: b"tmscanhdr")
+	var scanBody = module.addBlock(func, label: b"tmscanbody")
+	var advance = module.addBlock(func, label: b"tmadvance")
+	var removeAt = module.addBlock(func, label: b"tmremoveat")
+
+	let countAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(countAddr, label: GtTimerCountLabel))
+	let count = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let heapBaseAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
+	let heapBase = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(heapBase, addrId: heapBaseAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(startBlock, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	module.setTerminator(startBlock, op: StdOp.branch(scanHdr.id))
+	startBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
+
+	// scanHdr(i): if i >= count → cont; else inspect entry i.
+	let i = ids.mint()
+	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let atEnd = ids.mint()
+	module.appendOp(scanHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: scanBody.id))
+
+	// scanBody: entryGt = heap[i].gt; if it is our GT → removeAt, else → advance.
+	let entrySizeConst = ids.mint()
+	module.appendOp(scanBody, op: StdOp.const(entrySizeConst, value: TimerEntrySize, valueType: StdType.i64))
+	let iOff = ids.mint()
+	module.appendOp(scanBody, op: StdOp.binOp(iOff, lhs: i, rhs: entrySizeConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let entryAddr = ids.mint()
+	module.appendOp(scanBody, op: StdOp.binOp(entryAddr, lhs: heapBase, rhs: iOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let entryGt = ids.mint()
+	module.appendOp(scanBody, op: StdOp.loadIndirect(entryGt, addrId: entryAddr, offset: TimerOffGt, valueType: StdType.i64))
+	let isMatch = ids.mint()
+	module.appendOp(scanBody, op: StdOp.cmp(isMatch, lhs: entryGt, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(scanBody, op: StdOp.condBranch(isMatch, thenBlockId: removeAt.id, elseBlockId: advance.id))
+
+	// advance: i + 1 → scanHdr.
+	let oneAdv = ids.mint()
+	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
+	let iAdv = ids.mint()
+	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
+	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(iAdv)))
+
+	// removeAt: copy the last live entry (deadline, gt) into slot i, count--. A self-copy when i == last is
+	// harmless. Then stop (a GT is on the timer at most once) → cont.
+	let oneRem = ids.mint()
+	module.appendOp(removeAt, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
+	let newCount = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let remEntrySize = ids.mint()
+	module.appendOp(removeAt, op: StdOp.const(remEntrySize, value: TimerEntrySize, valueType: StdType.i64))
+	let lastOff = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(lastOff, lhs: newCount, rhs: remEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let lastAddr = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(lastAddr, lhs: heapBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let curOff = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(curOff, lhs: i, rhs: remEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let holeAddr = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(holeAddr, lhs: heapBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedDeadline = ids.mint()
+	module.appendOp(removeAt, op: StdOp.loadIndirect(movedDeadline, addrId: lastAddr, offset: TimerOffDeadline, valueType: StdType.i64))
+	let movedGt = ids.mint()
+	module.appendOp(removeAt, op: StdOp.loadIndirect(movedGt, addrId: lastAddr, offset: TimerOffGt, valueType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.storeIndirect(holeAddr, offset: TimerOffDeadline, valueId: movedDeadline, valueType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.storeIndirect(holeAddr, offset: TimerOffGt, valueId: movedGt, valueType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
+	module.setTerminator(removeAt, op: StdOp.branch(cont.id))
+end 'emitGtTimerStoreRemove'
+
+// Remove `gt`'s entry from the process store (parallel `procHandles`/`procGts` arrays), CLOSING the child's
+// handle to abandon the wait (NOT killing the child — a dropped promise cancels the WAIT, not the process),
+// then branch to `cont`. Used by `__gt_promise_drop`'s waiting arm. Mirrors `__gt_proc_check`'s afterFire
+// swap-remove across BOTH arrays in lockstep, keyed on `gt == procGts[i]`. A GT not on a process (parked on a
+// timer instead) scans to the end and branches to `cont` untouched.
+function emitGtProcStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
+	var scanHdr = module.addBlock(func, label: b"pcscanhdr")
+	var scanBody = module.addBlock(func, label: b"pcscanbody")
+	var advance = module.addBlock(func, label: b"pcadvance")
+	var removeAt = module.addBlock(func, label: b"pcremoveat")
+
+	let countAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
+	let count = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let handlesBaseAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
+	let handlesBase = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
+	let gtsBaseAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
+	let gtsBase = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
+	let slotBytesConst = ids.mint()
+	module.appendOp(startBlock, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(startBlock, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	module.setTerminator(startBlock, op: StdOp.branch(scanHdr.id))
+	startBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
+
+	// scanHdr(i): if i >= count → cont; else inspect procGts[i].
+	let i = ids.mint()
+	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let atEnd = ids.mint()
+	module.appendOp(scanHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: scanBody.id))
+
+	// scanBody: off = i * ProcSlotBytes; entryGt = procGts[i]; if it is our GT → removeAt, else → advance.
+	let off = ids.mint()
+	module.appendOp(scanBody, op: StdOp.binOp(off, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let gtSlot = ids.mint()
+	module.appendOp(scanBody, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: off, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let entryGt = ids.mint()
+	module.appendOp(scanBody, op: StdOp.loadIndirect(entryGt, addrId: gtSlot, offset: 0, valueType: StdType.i64))
+	let isMatch = ids.mint()
+	module.appendOp(scanBody, op: StdOp.cmp(isMatch, lhs: entryGt, rhs: gt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(scanBody, op: StdOp.condBranch(isMatch, thenBlockId: removeAt.id, elseBlockId: advance.id))
+
+	// advance: i + 1 → scanHdr.
+	let oneAdv = ids.mint()
+	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
+	let iAdv = ids.mint()
+	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(advance, op: StdOp.branch(scanHdr.id))
+	advance.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(iAdv)))
+
+	// removeAt: CloseHandle(procHandles[i]) to abandon the wait, then swap the last entry into slot i across
+	// BOTH arrays in lockstep, count--. A self-copy when i == last is harmless. Then stop → cont.
+	let curOff = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(curOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let handleAddr = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(handleAddr, lhs: handlesBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let handle = ids.mint()
+	module.appendOp(removeAt, op: StdOp.loadIndirect(handle, addrId: handleAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.osCloseHandle(handle))
+	let oneRem = ids.mint()
+	module.appendOp(removeAt, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
+	let newCount = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let lastOff = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	// procHandles[i] = procHandles[last].
+	let lastHandleAddr = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(lastHandleAddr, lhs: handlesBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedHandle = ids.mint()
+	module.appendOp(removeAt, op: StdOp.loadIndirect(movedHandle, addrId: lastHandleAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.storeIndirect(handleAddr, offset: 0, valueId: movedHandle, valueType: StdType.i64))
+	// procGts[i] = procGts[last].
+	let lastGtAddr = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(lastGtAddr, lhs: gtsBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedGt = ids.mint()
+	module.appendOp(removeAt, op: StdOp.loadIndirect(movedGt, addrId: lastGtAddr, offset: 0, valueType: StdType.i64))
+	let holeGtAddr = ids.mint()
+	module.appendOp(removeAt, op: StdOp.binOp(holeGtAddr, lhs: gtsBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
+	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
+	module.setTerminator(removeAt, op: StdOp.branch(cont.id))
+end 'emitGtProcStoreRemove'
 
 // `__gt_sleep(ms)` — suspend the current GT for `ms` milliseconds, yielding to the scheduler. THE mid-body
 // yield: compute the absolute deadline, park on the timer, then either self-drive (top-level GT0, which has no

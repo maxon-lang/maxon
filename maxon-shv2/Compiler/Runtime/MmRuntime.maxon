@@ -195,7 +195,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	buildMmAlloc(module)
 	buildMmDecref(module)
 	buildMmFree(module)
-	buildMmLeakCheck(module)
+	buildMmLeakCheck(module, usage: usage)
 	if usage.usesIncref or usage.usesArray 'incref'
 		buildMmIncref(module)
 	end 'incref'
@@ -1182,7 +1182,17 @@ end 'emitNullGuardedDrop'
 // It is a Std function and not hand-assembled bytes because it needs nothing a Std function lacks:
 // a load, a compare, and two returns. It notably does NOT need to call `ExitProcess` — returning
 // the code to `mrt_start`, which already makes that call, keeps the one OS-exit path in one place.
-function buildMmLeakCheck(module StdModule)
+//
+// ⭐ P1.5-B2 #88 — UNDER `usesGt` IT ALSO GATES `__gt_live_count`. A green-thread program's spawned-but-
+// unreclaimed GT structs + seed stacks are slab/OS allocations invisible to `__mm_alloc_count`, so the GT
+// runtime keeps its own spawn/reclaim counter; this single OS-exit gate is the one home for every "must be
+// reclaimed before a clean exit" check, so a clean HEAP count falls through to a SECOND, INDEPENDENT `!= 0`
+// test on it. The two are never summed/OR'd into one count — a GT over-reclaim driving `__gt_live_count`
+// negative must not cancel a heap under-release — and a GT leak reports a DISTINCT code
+// (`RuntimeAbort.greenThreadLeak`, not `leakDetected`) so its diagnosis points at the GT counter. The extra
+// load is gated on `usage.usesGt` because `__gt_live_count` only exists when the GT runtime is installed —
+// and since `usesGt ⟹ usesHeap`, this gate is always present for a GT program, so no GT leak slips past it.
+function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 	var func = IrFunction.createFromStd(MmLeakCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1204,7 +1214,30 @@ function buildMmLeakCheck(module StdModule)
 	// dangerous of the two bugs, since it is a use-after-free waiting for a free list to exist.
 	let isLeaked = ids.mint()
 	module.appendOp(entry, op: StdOp.cmp(isLeaked, lhs: count, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
+
+	// A heap leak short-circuits to `leaked` (101) either way. When the GT runtime is present, a clean HEAP
+	// count falls through to a SECOND check on `__gt_live_count` — two INDEPENDENT `!= 0` tests, never a
+	// summed/OR'd single count. Without the GT runtime, the clean count goes straight to `clean`.
+	if usage.usesGt 'gtGate'
+		var checkGt = module.addBlock(func, label: b"checkgt")
+		var gtLeaked = module.addBlock(func, label: b"gtleaked")
+		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: checkGt.id))
+		let gtCountAddr = ids.mint()
+		module.appendOp(checkGt, op: StdOp.globalAddr(gtCountAddr, label: GtLiveCountLabel))
+		let gtCount = ids.mint()
+		module.appendOp(checkGt, op: StdOp.loadIndirect(gtCount, addrId: gtCountAddr, offset: 0, valueType: StdType.i64))
+		let gtIsLeaked = ids.mint()
+		module.appendOp(checkGt, op: StdOp.cmp(gtIsLeaked, lhs: gtCount, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+		module.setTerminator(checkGt, op: StdOp.condBranch(gtIsLeaked, thenBlockId: gtLeaked.id, elseBlockId: clean.id))
+		// A GT leak reports its OWN code — distinct from the heap 101 — so the diagnosis points at the GT
+		// counter, not the heap one.
+		let gtLeakCode = RuntimeAbort.greenThreadLeak.rawValue as ParsedInt
+		let gtLeakConst = ids.mint()
+		module.appendOp(gtLeaked, op: StdOp.const(gtLeakConst, value: gtLeakCode, valueType: StdType.i64))
+		module.setTerminator(gtLeaked, op: StdOp.ret(gtLeakConst))
+	end 'gtGate' else 'noGt'
+		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
+	end 'noGt'
 
 	// The exit code a leaked program reports lives in `RuntimeAbort` with every other abort code the
 	// emitted runtime spends, so the number space has one home and one duplicate check. ⚠ It is ALSO

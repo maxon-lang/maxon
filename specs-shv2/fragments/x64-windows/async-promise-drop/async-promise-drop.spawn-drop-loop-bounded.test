@@ -1,21 +1,19 @@
-// Test: async-subprocess.scratch-reuse-loop
-function child() returns int
-	return runProcess("cmd /c exit 1")
-end 'child'
+// Test: async-promise-drop.spawn-drop-loop-bounded
+
+function trivial() returns int
+	return 0
+end 'trivial'
 
 function main() returns ExitCode
 	var i = 0
-	var sum = 0
-	while i < 50 'l'
-		let p = async child()
-		let r = await p
-		sum = sum + r
+	while i < 1000 'loop'
+		let p = async trivial()
 		i = i + 1
-	end 'l'
-	return sum as ExitCode
+	end 'loop'
+	return 0 as ExitCode
 end 'main'
 ---
-ExitCode: 50
+ExitCode: 0
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -42,14 +40,11 @@ data {
   __gt_cmdline_buf_cap@168 = i64 0
 }
 
-func @child {
+func @trivial {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __gt_process_run
-    x64.epilogue 32
+    x64.movRegImm32 r8, 0
     x64.popReg rbp
     x64.ret
 }
@@ -59,27 +54,23 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.movRegImm32 r12, 0
     x64.jmp whilehdr
   whilehdr:
-    x64.cmpRegImm32 rbx, 50
-    x64.jcc less, l
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc less, loop
     x64.jmp whileexit
-  l:
-    x64.leaRegFunc rcx, [rip + child]
+  loop:
+    x64.leaRegFunc rcx, [rip + trivial]
     x64.callDirect __gt_spawn
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_await
-    x64.leaRegRegReg r12, r12, r8
     x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_promise_drop
     x64.jmp whilehdr
   whileexit:
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

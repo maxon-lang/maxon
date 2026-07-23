@@ -227,24 +227,85 @@ end 'main'
 <!-- test: async-subprocess.store-overflow-aborts -->
 <!-- targets: x64-windows -->
 Parking more than the store's capacity (64, `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`) children
-concurrently must NOT write past the 64-slot parallel arrays. Seventy children are spawned before any await (the
-discarded promises keep their GTs parked); driving them all would overflow the store, so `__gt_proc_add` aborts
-with exit code 70 (`ProcStoreOverflowExitCode`) rather than corrupt the heap — a documented, safe hard bound. This
-is heavier than the other cases (~64 real child spawns before the abort) because it is the regression test for a
-memory-safety guard.
+concurrently must NOT write past the 64-slot parallel arrays. Sixty-five children are spawned as LIVE promises
+before any await (since P1.5-B2 #88 a DISCARDED promise is dropped-cancelled, so the children must be kept alive
+by distinct bindings); `await p00` then drives them all — each `child` parks on the process store — and the 65th
+park exceeds the 64 slots, so `__gt_proc_add` aborts with exit code 70 (`RuntimeAbort.processStoreOverflow`)
+rather than corrupt the heap — a documented, safe hard bound. The un-awaited promises' drops are emitted but never
+reached (the abort fires mid-drive). This is heavier than the other cases (~64 real child spawns before the abort)
+because it is the regression test for a memory-safety guard.
 ```maxon
 function child() returns int
 	return runProcess("cmd /c exit 1")
 end 'child'
 
 function main() returns ExitCode
-	var i = 0
-	while i < 70 'l'
-		let p = async child()
-		i = i + 1
-	end 'l'
-	let q = async child()
-	let r = await q
+	let p00 = async child()
+	let p01 = async child()
+	let p02 = async child()
+	let p03 = async child()
+	let p04 = async child()
+	let p05 = async child()
+	let p06 = async child()
+	let p07 = async child()
+	let p08 = async child()
+	let p09 = async child()
+	let p10 = async child()
+	let p11 = async child()
+	let p12 = async child()
+	let p13 = async child()
+	let p14 = async child()
+	let p15 = async child()
+	let p16 = async child()
+	let p17 = async child()
+	let p18 = async child()
+	let p19 = async child()
+	let p20 = async child()
+	let p21 = async child()
+	let p22 = async child()
+	let p23 = async child()
+	let p24 = async child()
+	let p25 = async child()
+	let p26 = async child()
+	let p27 = async child()
+	let p28 = async child()
+	let p29 = async child()
+	let p30 = async child()
+	let p31 = async child()
+	let p32 = async child()
+	let p33 = async child()
+	let p34 = async child()
+	let p35 = async child()
+	let p36 = async child()
+	let p37 = async child()
+	let p38 = async child()
+	let p39 = async child()
+	let p40 = async child()
+	let p41 = async child()
+	let p42 = async child()
+	let p43 = async child()
+	let p44 = async child()
+	let p45 = async child()
+	let p46 = async child()
+	let p47 = async child()
+	let p48 = async child()
+	let p49 = async child()
+	let p50 = async child()
+	let p51 = async child()
+	let p52 = async child()
+	let p53 = async child()
+	let p54 = async child()
+	let p55 = async child()
+	let p56 = async child()
+	let p57 = async child()
+	let p58 = async child()
+	let p59 = async child()
+	let p60 = async child()
+	let p61 = async child()
+	let p62 = async child()
+	let p63 = async child()
+	let p64 = async child()
+	let r = await p00
 	return r as ExitCode
 end 'main'
 ```
