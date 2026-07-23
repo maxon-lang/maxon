@@ -1272,3 +1272,58 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:19:34: Unsupported: `clone` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
 ```
+
+### A DROP-only opaque struct element whose own field is not deep-cloneable compiles
+
+`Container with Item` where `Item` is a struct that OWNS a non-deep-cloneable field (`Array with (Array with
+String)`) is used DROP-ONLY here — never `.clone()`/`.slice()`/`.append()`. The `copyFunc@32` stamp and its
+cloner DCE-root (`rootManagedOpaqueArrayElementClones`) synthesize the element's `__clone_<T>` UNCONDITIONALLY
+for every copyable-opaque instance, including a program with no copy site. They must therefore gate on the SAME
+full-graph classifier (`typeSupportsDeepClone(asElement: true)`) the copy-site reject uses — NOT the element's
+top-level clone strategy: `Item` is `direct` at the top but owns a non-clonable field, so a top-level-only gate
+would root a `__clone_Item` the cloner synthesizer cannot build and PANIC on this valid drop-only program
+(`noteFieldCloneNeeds`). Gating on the full-graph classifier leaves `Item`'s `copyFunc@32` at 0 (never read —
+the element is never copied) while its `destroyFunc@40` still drops it through `__arr_decref`, so the program
+compiles and exits 0. (Adding a copy method to this same type is rejected — see the uncopyable-instantiation
+test above.)
+
+<!-- test: opaque-drop-only-uncopyable-struct-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias StringArray = Array with String
+typealias RowGrid = Array with StringArray
+
+type Item
+	export var rows as RowGrid
+
+	export static function create() returns Self
+		return Self{ rows: RowGrid.create() }
+	end 'create'
+end 'Item'
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+end 'Container'
+
+typealias ItemContainer = Container with Item
+
+function main() returns ExitCode
+	var c = ItemContainer.create()
+	c.push(Item.create())
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

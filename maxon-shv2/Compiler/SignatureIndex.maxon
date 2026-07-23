@@ -1117,25 +1117,18 @@ function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceI
 	end 'element'
 end 'instanceCloneStrategy'
 
-// Is a managed field's clone STRATEGY a single `(box) -> newBox` callee (`direct`) — the shape a descriptor
-// `copyFunc@32` slot and an array element cloner can hold (P1.7 slice 3b-vi-b-β)? A `managedArray` (a
-// managed-element-array field, cloned through a 2-arg `__arr_clone_managed`) or an `unsupported` type is not.
-export function managedCloneStrategyIsDirect(strategy ManagedCloneStrategy) returns bool
-	match strategy 'strategy'
-		direct then return true
-		managedArray then return false
-		unsupported then return false
-	end 'strategy'
-end 'managedCloneStrategyIsDirect'
-
-// The single `(box) -> newBox` clone callee of a `direct` strategy. Precondition:
-// `managedCloneStrategyIsDirect` — a `managedArray`/`unsupported` strategy panics as an invariant break (its
-// caller has already gated the field to `direct`).
+// The single `(box) -> newBox` clone callee of a `direct` strategy. Precondition: the caller has classified the
+// element deep-cloneable through the FULL-GRAPH `typeSupportsDeepClone(asElement: true)` (via
+// `genericInstanceOpaqueArrayElementIsCopyable` or the concrete copy gate `arrayElementSupportsDeepClone`), which
+// is `direct` at the TOP LEVEL for every deep-cloneable element — so a `managedArray`/`unsupported` strategy
+// reaching here is an invariant break and panics. (The full-graph gate is the RIGHT precondition, not a mere
+// top-level `direct` check: a struct/union that is `direct` at the top but owns a non-clonable field must NOT
+// reach a stamp — see `genericInstanceOpaqueArrayElementIsCopyable`.)
 export function directCloneCalleeOf(strategy ManagedCloneStrategy) returns ByteArray
 	match strategy 'strategy'
 		direct(callee) then return callee
-		managedArray then panic("directCloneCalleeOf: a `managedArray` strategy has no single-function clone callee — the caller must gate on managedCloneStrategyIsDirect")
-		unsupported then panic("directCloneCalleeOf: an `unsupported` strategy has no clone callee — the caller must gate on managedCloneStrategyIsDirect")
+		managedArray then panic("directCloneCalleeOf: a `managedArray` strategy has no single-function clone callee — the caller must gate on typeSupportsDeepClone(asElement: true)")
+		unsupported then panic("directCloneCalleeOf: an `unsupported` strategy has no clone callee — the caller must gate on typeSupportsDeepClone(asElement: true)")
 	end 'strategy'
 end 'directCloneCalleeOf'
 
@@ -3379,21 +3372,30 @@ export type ProgramSignatures
 		end 'element'
 	end 'managedOpaqueArrayElementDropCallee'
 
-	// ⭐ **DOES A MANAGED-OPAQUE-ARRAY-HOLDING INSTANCE HAVE A DIRECT-CLONEABLE ELEMENT (P1.7 slice 3b-vi-b-β)?**
-	// The GATE on the descriptor `copyFunc@32` stamp — the CLONE dual of the reloc-need predicate
-	// `genericInstanceHasManagedOpaqueArrayField`. `copyFunc@32` is stamped only when it can hold a single
-	// `(box) -> newBox` cloner: a String / struct / boxed-union / trivial-element-array element (`direct`). A
-	// managed-element-array element (`Array with (Array with String)`, a `managedArray` strategy — not a single
-	// function pointer) or a non-Array generic instance (a later slice, `unsupported`) is NOT direct, so its
-	// `copyFunc@32` stays 0 — and such an instance is NEVER copied (a base that copies its opaque array with a
-	// non-direct instantiation is rejected at the front end, `genericTypeFieldHasUncopyableInstantiation`), so
-	// the 0 slot is never read. A DROP-only instance of this shape (`Container with (Array with String)`, dropped
-	// but never copied) thus stamps `destroyFunc@40` but not `copyFunc@32`, exactly right — its element still
-	// DROPs through `__arr_decref`, which needs no single-function-pointer form. Reads the SAME
-	// `managedOpaqueArrayElementOf` walk as the drop stamp, so the two agree on which element they mean.
+	// ⭐ **DOES A MANAGED-OPAQUE-ARRAY-HOLDING INSTANCE HAVE A DEEP-CLONEABLE ELEMENT (P1.7 slice 3b-vi-b-β)?**
+	// The GATE on the descriptor `copyFunc@32` stamp AND on the cloner DCE-root (`rootManagedOpaqueArrayElementClones`)
+	// — the CLONE dual of the reloc-need predicate `genericInstanceHasManagedOpaqueArrayField`. `copyFunc@32` is
+	// stamped, and the element's `__clone_<T>` SYNTHESIZED, only when the element is deep-cloneable by this rung's
+	// single-`(box) -> newBox` mechanism: a String / boxed-union / struct / trivial-element-array element WHOSE WHOLE
+	// reachable type graph is itself clonable. It MUST read the SAME full-graph classifier the front-end reject
+	// (`genericTypeFieldHasUncopyableInstantiation`) and the concrete gate (`arrayElementSupportsDeepClone`) use —
+	// `typeSupportsDeepClone(asElement: true)` — NOT merely the element's TOP-LEVEL clone strategy. The reason is the
+	// stamp+root synthesizes the cloner UNCONDITIONALLY for every copyable-opaque instance, INCLUDING in a program
+	// that never copies (drop-only) and so never reaches the copy-site reject: a struct/union element that is
+	// `direct` at the top but owns a non-clonable field (`Array with (Array with String)`, a `Box with String`)
+	// would then root a `__clone_<T>` the cloner synthesizer cannot build and PANIC on a valid drop-only program
+	// (`noteFieldCloneNeeds`). Reading the full-graph classifier keeps the stamp/root envelope and the reject
+	// envelope IDENTICAL, so neither can admit a cloner the other forbids. A non-clonable element's `copyFunc@32`
+	// stays 0 — and such an instance is NEVER copied (a base that copies its opaque array with such an
+	// instantiation is rejected at the front end off this identical classifier), so the 0 slot is never read. A
+	// DROP-only instance of a non-clonable shape (`Container with (Array with String)`, dropped but never copied)
+	// thus stamps `destroyFunc@40` but not `copyFunc@32`, exactly right — its element still DROPs through
+	// `__arr_decref`, which needs no single-function-pointer form. Reads the SAME `managedOpaqueArrayElementOf`
+	// walk as the drop stamp, so the two agree on which element they mean.
 	export function genericInstanceOpaqueArrayElementIsCopyable(id GenericInstanceId) returns bool
+		var visited = ClonerSet.create()
 		match self.managedOpaqueArrayElementOf(id) 'element'
-			present(element) then return managedCloneStrategyIsDirect(managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: element))
+			present(element) then return self.typeSupportsDeepClone(element, asElement: true, visited: visited)
 			absent then return false
 		end 'element'
 	end 'genericInstanceOpaqueArrayElementIsCopyable'
