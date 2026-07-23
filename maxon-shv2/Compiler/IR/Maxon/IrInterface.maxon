@@ -1,0 +1,189 @@
+// IrInterface.maxon — the parsed shape of an `interface` declaration and a type's
+// declared `implements` conformance (P1.7a slice 1 — the FRONT-END half of
+// interfaces + witness tables: declaration + conformance CHECKING, no witness
+// tables, no dictionary-passing, no existentials).
+//
+// ⭐ **TYPES ARE STORED AS RENDERED SOURCE STRINGS, not interned `MaxonType`s.** A
+// conformance check compares an interface method against a type's method by SOURCE
+// spelling (`Integer`, `Self`, `void`) and the E3016 message PRINTS that spelling,
+// so the string is exactly what the checker needs. It also buys two properties the
+// interned form would cost work to keep — the same two `paramAggregateNames` buys
+// (Project.maxon): the string carries no interner id, so `mergeArtifact` folds an
+// interface with NO remap; and it does not depend on `resolveTypes`, which erases
+// `Integer` to `int` — and `checkConformance` runs BEFORE resolution, so the alias
+// name is still there to print.
+//
+// ⭐ **The stdlib protocol interfaces (Stringable, Hashable, …) are SYNTHESIZED on
+// lookup, not parsed.** shv2 does not read `stdlib/`; it synthesizes `String`/`Array`
+// natively, and it synthesizes these the same way (`builtinInterface`). So a
+// `type X implements Stringable` resolves against a compiler-known interface rather
+// than raising a spurious E3015 — exactly as a `String` field resolves against a
+// compiler-known type. This keeps the builtins OUT of the merge/reset machinery:
+// `project.interfaces` holds only USER-declared interfaces.
+
+// The rendered spelling of a `Self` type in an interface signature — the conforming
+// type substitutes for it during a conformance check (`Movable.move returns Self`
+// matches `Point.move returns Point`). Named because the renderer that writes it and
+// the checker that substitutes it must agree on the exact bytes.
+export let InterfaceSelfTypeName = b"Self"
+
+// The rendered spelling of a void (no-`returns`) method result — `increment()` stores
+// this and the E3016 message prints `returns void`. Named for `InterfaceSelfTypeName`'s
+// reason: two sites depend on the exact bytes.
+export let InterfaceVoidTypeName = b"void"
+
+// The method a user struct must supply to be interpolated (`"{p}"` → `Pair.toString()`).
+// Exported because the interpolation lowering (Parser) dispatches to it by name and the
+// builtin `Stringable`/`FormattedStringable` interfaces declare it.
+export let ToStringMethodName = b"toString"
+
+// --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
+let StringableInterfaceName = b"Stringable"
+let FormattedStringableInterfaceName = b"FormattedStringable"
+let HashableInterfaceName = b"Hashable"
+let EquatableInterfaceName = b"Equatable"
+let ComparableInterfaceName = b"Comparable"
+let CloneableInterfaceName = b"Cloneable"
+let ErrorInterfaceName = b"Error"
+
+// The protocol methods + their result/param type spellings, verbatim from
+// stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
+let HashMethodName = b"hash"
+let EqualsMethodName = b"equals"
+let CompareMethodName = b"compare"
+let CloneMethodName = b"clone"
+let FormatParamName = b"format"
+let OtherParamName = b"other"
+let StringTypeName = b"String"
+let HashValueTypeName = b"HashValue"
+let BoolTypeName = b"bool"
+let OrderingTypeName = b"Ordering"
+
+// One method SIGNATURE declared in an interface body (no body). Its type columns are
+// rendered SOURCE strings (see the header). `paramNames`/`paramTypeNames` are parallel.
+export type InterfaceMethodSig
+	export let name as ByteArray
+	export let paramNames as ByteArrayArray
+	export let paramTypeNames as ByteArrayArray
+	export let returnTypeName as ByteArray
+	// A `static function` in an interface body carries no receiver, so a conforming type
+	// need not supply it as an instance method — the conformance check SKIPS it, matching
+	// the reference oracle (`if method.IsStatic continue`).
+	export let isStatic as bool
+
+	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic}
+	end 'create'
+end 'InterfaceMethodSig'
+
+export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
+
+// A parsed (or synthesized) `interface`. `extendsInterfaces` are parent interface names
+// whose methods a conforming type must ALSO supply (`interface D extends B` — the check
+// projects B's methods into D at decl order); `associatedTypeNames` are the `uses`
+// parameters (kept for slice 2 — the enabled slice-1 corpus declares none).
+export type IrInterface
+	export let name as ByteArray
+	export let methods as InterfaceMethodSigArray
+	export let extendsInterfaces as ByteArrayArray
+	export let associatedTypeNames as ByteArrayArray
+
+	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray) returns IrInterface
+		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames}
+	end 'create'
+end 'IrInterface'
+
+export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
+
+// The per-file artifact contribution form — declaration order, folded into the
+// whole-program `IrInterfaceMap` by `mergeArtifact`.
+export typealias IrInterfaceArray = Array with IrInterface
+
+// A `type X implements I1, I2` conformance declaration. Carries the type NAME token
+// position (line/column/file) so the E3015/E3016 diagnostic lands ON the type name —
+// the anchor both reference compilers use (`nameToken` / `conf.line, conf.column`).
+export type ConformanceDecl
+	export let typeName as ByteArray
+	export let interfaceNames as ByteArrayArray
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(typeName ByteArray, interfaceNames ByteArrayArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns ConformanceDecl
+		return Self{typeName: typeName, interfaceNames: interfaceNames, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	end 'create'
+end 'ConformanceDecl'
+
+export typealias ConformanceDeclArray = Array with ConformanceDecl
+
+// The outcome of resolving an interface NAME to its definition — a synthesized builtin
+// or a user-declared one, else `notFound` (which `checkConformance` renders as E3015).
+export union InterfaceLookup
+	found(iface IrInterface)
+	notFound
+end 'InterfaceLookup'
+
+// A nullary interface method (`hash()`, `toString()`, `clone()`).
+function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
+	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false)
+end 'nullaryInterfaceMethod'
+
+// A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
+function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
+	var paramNames = ByteArrayArray.create()
+	paramNames.push(paramName)
+	var paramTypeNames = ByteArrayArray.create()
+	paramTypeNames.push(paramTypeName)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false)
+end 'unaryInterfaceMethod'
+
+// An interface with exactly one method and no `extends`/`uses` — every synthesized
+// protocol interface but `Error`.
+function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
+	var methods = InterfaceMethodSigArray.create()
+	methods.push(method)
+	return IrInterface.create(name, methods: methods, extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
+end 'singleMethodInterface'
+
+// A marker interface with NO methods (`Error`). A type conforms to it by declaring
+// `implements Error` alone; there is nothing to check.
+function markerInterface(name ByteArray) returns IrInterface
+	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
+end 'markerInterface'
+
+// The SYNTHESIZED stdlib protocol interfaces, verbatim from stdlib/Interfaces.maxon —
+// so `implements Stringable`/`Hashable`/… resolves without shv2 reading the stdlib (the
+// same reason `String`/`Array` are synthesized). Returns `notFound` for every other name,
+// leaving the user-declared registry as the only other source. `Iterator`/`Iterable`
+// (associated types) are slice-2 territory and are deliberately not synthesized here.
+export function builtinInterface(name ByteArray) returns InterfaceLookup
+	if name.equals(StringableInterfaceName) 'stringable'
+		return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringTypeName)))
+	end 'stringable'
+
+	if name.equals(FormattedStringableInterfaceName) 'formatted'
+		return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringTypeName, returnTypeName: StringTypeName)))
+	end 'formatted'
+
+	if name.equals(HashableInterfaceName) 'hashable'
+		return InterfaceLookup.found(singleMethodInterface(HashableInterfaceName, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName)))
+	end 'hashable'
+
+	if name.equals(EquatableInterfaceName) 'equatable'
+		return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolTypeName)))
+	end 'equatable'
+
+	if name.equals(ComparableInterfaceName) 'comparable'
+		return InterfaceLookup.found(singleMethodInterface(ComparableInterfaceName, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName)))
+	end 'comparable'
+
+	if name.equals(CloneableInterfaceName) 'cloneable'
+		return InterfaceLookup.found(singleMethodInterface(CloneableInterfaceName, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName)))
+	end 'cloneable'
+
+	if name.equals(ErrorInterfaceName) 'error'
+		return InterfaceLookup.found(markerInterface(ErrorInterfaceName))
+	end 'error'
+
+	return InterfaceLookup.notFound
+end 'builtinInterface'

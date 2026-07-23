@@ -1,0 +1,264 @@
+// ConformanceCheck.maxon — the whole-program `implements`-conformance pass (P1.7a slice 1).
+//
+// ⭐ **IT RUNS BEFORE `resolveTypes`, and that placement IS the design.** A conformance diagnostic
+// prints SOURCE type spellings — `is missing 1 method(s):\n  - increment() returns void`,
+// `process(value Float) returns Integer (expected process(value Integer) returns Integer)` — and
+// `resolveTypes` erases `Integer` to `int` and `Float` to `float`. So the check runs alongside
+// `checkValueMergeSignatures` (`compileToCodeResult`, before the pipeline), reading the still-unresolved
+// signatures; any diagnostic it records is caught by the pipeline's own error gate after `resolveTypes`.
+//
+// ⭐ **THE COMPARISON IS BY SOURCE STRING.** An interface method carries its types as rendered strings
+// (see IrInterface); a type's method carries them as `MaxonType`s in the merged module — rendered here
+// through `maxonTypeName` off the same project interner. A `Self` in the interface substitutes the
+// conforming type (`Movable.move returns Self` matches `Point.move returns Point`). This is the reference
+// oracle's model without its resolved-type machinery: for the concrete conformance slice 1 supports, two
+// signatures agree iff their source spellings agree (with the Self substitution), which is exactly what
+// the E3016 message prints.
+//
+// ⭐ **DIVERGENCE FROM THE BOOTSTRAP (toward v1): an UNKNOWN interface is E3015.** The C# bootstrap
+// SILENTLY accepts `implements Bogus`; v1 emits E3015, and so does shv2 — a typo'd interface name should
+// not pass. See the rung report.
+
+// The impl side of a conforming type's methods, read off the MERGED module. `maxonParamTypes` /
+// `maxonReturnType` are the REMAPPED (project-interner) types — `funcSignatures`' param types are
+// deliberately left file-local until `resolveTypes` overwrites them (ParseStaging.remapArtifact), so they
+// are NOT safe to render across files; the module's function is. Param NAMES come from `funcSignatures`
+// (interner-free ByteArrays, always valid) — the one thing the module's `IrFunction` does not carry.
+typealias FunctionByNameMap = Map with (ByteArray, IrFunction)
+
+// One interface method paired with the interface it was DECLARED on — the source interface, so a method
+// inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report.
+type CollectedInterfaceMethod
+	export let method as InterfaceMethodSig
+	export let sourceInterfaceName as ByteArray
+
+	export static function create(method InterfaceMethodSig, sourceInterfaceName ByteArray) returns CollectedInterfaceMethod
+		return Self{method: method, sourceInterfaceName: sourceInterfaceName}
+	end 'create'
+end 'CollectedInterfaceMethod'
+
+typealias CollectedInterfaceMethodArray = Array with CollectedInterfaceMethod
+
+typealias InterfaceNameSet = Set with ByteArray
+
+// Validate every `type X implements …` conformance whole-program (P1.7a slice 1). Records E3015 (unknown
+// interface) / E3016 (partial or wrong-signature implementation); the pipeline's error gate stops the
+// build. A conformance-free program (the whole scale corpus) short-circuits before building the function
+// index — the same allocation-free gate `checkLinearAwait`/`buildEscapeSummary` use.
+export function checkConformance(project Project, module MaxonModule)
+	if project.conformances.count() == 0 'noConformances'
+		return
+	end 'noConformances'
+
+	let functionsByName = buildFunctionByNameMap(module)
+	for conformance in project.conformances 'eachDecl'
+		checkOneConformance(project, functionsByName: functionsByName, conformance: conformance)
+	end 'eachDecl'
+end 'checkConformance'
+
+// A name -> merged `IrFunction` index, built once per compile that has conformances. `func.name` is the
+// qualified `Type.method` for a method, so a lookup is `qualifiedMethodName(typeName, methodName)`.
+function buildFunctionByNameMap(module MaxonModule) returns FunctionByNameMap
+	var byName = FunctionByNameMap.create()
+	for func in module.functions 'each'
+		byName.upsert(func.name, value: func)
+	end 'each'
+	return byName
+end 'buildFunctionByNameMap'
+
+// Check one `type X implements I1, I2` declaration against each named interface.
+function checkOneConformance(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl)
+	for i in 0 upto conformance.interfaceNames.count() 'eachIface'
+		let ifaceName = try conformance.interfaceNames.get(i) otherwise panic("checkOneConformance: interfaceNames.get OOB at {i}")
+		match resolveInterface(project, name: ifaceName) 'resolve'
+			notFound then reportPositioned(project, code: ErrorCode.semanticUnknownInterface, message: "type '{String.from(conformance.typeName)}' implements unknown interface '{String.from(ifaceName)}'", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+			found(iface) then checkInterfaceMethods(project, functionsByName: functionsByName, conformance: conformance, ifaceName: ifaceName, iface: iface)
+		end 'resolve'
+	end 'eachIface'
+end 'checkOneConformance'
+
+// Resolve an interface NAME to its definition — a synthesized builtin (Stringable, Hashable, …) FIRST,
+// then a user-declared one, else `notFound`. Builtins win so a user cannot shadow `Stringable` with a
+// broken redeclaration, and the common protocol interfaces resolve without shv2 reading the stdlib.
+function resolveInterface(project Project, name ByteArray) returns InterfaceLookup
+	match builtinInterface(name) 'builtin'
+		found(iface) then return InterfaceLookup.found(iface)
+		notFound then break 'builtin'
+	end 'builtin'
+
+	if let userIface = try project.interfaces.get(name) 'userDeclared'
+		return InterfaceLookup.found(userIface)
+	end 'userDeclared'
+
+	return InterfaceLookup.notFound
+end 'resolveInterface'
+
+// Validate that a conforming type supplies every method the interface requires (its own AND its
+// `extends`-inherited), each with a matching signature. Reports E3016 with the MISSING methods, else with
+// the WRONG-SIGNATURE ones — missing first and mutually exclusive, mirroring the oracle's throw-on-first.
+function checkInterfaceMethods(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, ifaceName ByteArray, iface IrInterface)
+	var collected = CollectedInterfaceMethodArray.create()
+	var visited = InterfaceNameSet.create()
+	collectInterfaceMethods(project, iface: iface, ifaceName: ifaceName, out: collected, visited: visited)
+
+	var missing = StringArray.create()
+	var wrongSignature = StringArray.create()
+	for i in 0 upto collected.count() 'eachMethod'
+		let collectedMethod = try collected.get(i) otherwise panic("checkInterfaceMethods: collected.get OOB at {i}")
+		// A `static` interface method carries no receiver, so a conforming type need not supply it as an
+		// instance method — the oracle skips it, and so does this check.
+		if collectedMethod.method.isStatic 'staticMethod'
+			continue
+		end 'staticMethod'
+
+		checkOneMethod(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, rootInterfaceName: ifaceName, missing: missing, wrongSignature: wrongSignature)
+	end 'eachMethod'
+
+	if missing.count() > 0 'hasMissing'
+		reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Partial interface implementation: type '{String.from(conformance.typeName)}' is missing {missing.count()} method(s):\n{joinBulletedLines(missing)}", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+		return
+	end 'hasMissing'
+
+	if wrongSignature.count() > 0 'hasWrongSignature'
+		reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: "Partial interface implementation: type '{String.from(conformance.typeName)}' has {wrongSignature.count()} method(s) with wrong signature:\n{joinBulletedLines(wrongSignature)}", line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+	end 'hasWrongSignature'
+end 'checkInterfaceMethods'
+
+// Collect an interface's methods and, recursively, its `extends` parents' — each tagged with the interface
+// it was DECLARED on (so a missing inherited method reports `(from Parent)`). `visited` guards against a
+// cyclic `extends` chain (a parent already seen contributes nothing). Own methods precede inherited ones,
+// matching the oracle's `CollectInterfaceMethods` order.
+function collectInterfaceMethods(project Project, iface IrInterface, ifaceName ByteArray, out CollectedInterfaceMethodArray, visited InterfaceNameSet)
+	if visited.contains(ifaceName) 'alreadySeen'
+		return
+	end 'alreadySeen'
+	visited.insert(ifaceName)
+
+	for i in 0 upto iface.methods.count() 'eachMethod'
+		out.push(CollectedInterfaceMethod.create(try iface.methods.get(i) otherwise panic("collectInterfaceMethods: methods.get OOB at {i}"), sourceInterfaceName: ifaceName))
+	end 'eachMethod'
+
+	for j in 0 upto iface.extendsInterfaces.count() 'eachParent'
+		let parentName = try iface.extendsInterfaces.get(j) otherwise panic("collectInterfaceMethods: extendsInterfaces.get OOB at {j}")
+		match resolveInterface(project, name: parentName) 'parent'
+			found(parentIface) then collectInterfaceMethods(project, iface: parentIface, ifaceName: parentName, out: out, visited: visited)
+			// A parent named by `extends` that does not resolve is not diagnosed here (slice 1 does not
+			// report a bad `extends` target); its methods simply cannot be projected.
+			notFound then break 'parent'
+		end 'parent'
+	end 'eachParent'
+end 'collectInterfaceMethods'
+
+// Check ONE interface method against the conforming type: absent -> `missing`, present but mismatched ->
+// `wrongSignature`. A missing method's expected signature is tagged `(from Parent)` when it was inherited.
+function checkOneMethod(project Project, functionsByName FunctionByNameMap, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, rootInterfaceName ByteArray, missing StringArray, wrongSignature StringArray)
+	let method = collectedMethod.method
+	let qualifiedName = qualifiedMethodName(conformance.typeName, methodName: method.name)
+
+	if let implFunc = try functionsByName.get(qualifiedName) 'present'
+		// Every method records BOTH a module function and a `funcSignatures` entry (parseFunction), so a
+		// function present in the module without a signature is a merge-invariant violation, not a miss.
+		let implSig = try project.funcSignatures.get(qualifiedName) otherwise panic("checkOneMethod: '{String.from(qualifiedName)}' is in the module but has no funcSignatures entry")
+		if not signatureMatches(project, method: method, typeName: conformance.typeName, implFunc: implFunc, implSig: implSig) 'mismatch'
+			wrongSignature.push("{formatActualSignature(project, methodName: method.name, implFunc: implFunc, implSig: implSig)} (expected {formatInterfaceMethodSignature(method)})")
+		end 'mismatch'
+		return
+	end 'present'
+
+	let expected = formatInterfaceMethodSignature(method)
+	if collectedMethod.sourceInterfaceName.equals(rootInterfaceName) 'ownMethod'
+		missing.push(expected)
+		return
+	end 'ownMethod'
+	missing.push("{expected} (from {String.from(collectedMethod.sourceInterfaceName)})")
+end 'checkOneMethod'
+
+// Does the impl method's signature match the interface method's? Instance methods carry `__self` at
+// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Compared
+// by SOURCE string, exactly as the message renders them.
+function signatureMatches(project Project, method InterfaceMethodSig, typeName ByteArray, implFunc IrFunction, implSig FuncSignature) returns bool
+	let selfOffset = 1 if implSig.takesReceiver() else 0
+	if method.paramNames.count() != implFunc.maxonParamTypes.count() - selfOffset 'arityDiffers'
+		return false
+	end 'arityDiffers'
+
+	for i in 0 upto method.paramNames.count() 'eachParam'
+		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: typeName)
+		let actual = maxonTypeName(try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}"), typeNames: project.typeNames).toByteArray()
+		if not expected.equals(actual) 'paramDiffers'
+			return false
+		end 'paramDiffers'
+	end 'eachParam'
+
+	let expectedReturn = substituteSelf(method.returnTypeName, conformingType: typeName)
+	return expectedReturn.equals(renderReturnType(project, returnType: implFunc.maxonReturnType))
+end 'signatureMatches'
+
+// The impl method's signature as a source string — `process(value Float) returns Integer`. Param NAMES
+// come from `funcSignatures` (interner-free); param TYPES from the module's REMAPPED `maxonParamTypes`.
+// Both are rendered to the same source-string columns the interface stores, then handed to the ONE
+// signature assembler — so an actual and an expected signature cannot drift in format.
+function formatActualSignature(project Project, methodName ByteArray, implFunc IrFunction, implSig FuncSignature) returns String
+	let selfOffset = 1 if implSig.takesReceiver() else 0
+	var paramNames = ByteArrayArray.create()
+	var paramTypes = ByteArrayArray.create()
+	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
+		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
+		paramTypes.push(maxonTypeName(try implFunc.maxonParamTypes.get(i) otherwise panic("formatActualSignature: maxonParamTypes.get OOB at {i}"), typeNames: project.typeNames).toByteArray())
+	end 'eachParam'
+	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType))
+end 'formatActualSignature'
+
+// An interface method's signature as a source string — `process(value Integer) returns Integer` — from
+// its stored (already source-rendered) columns, through the same assembler the impl side uses.
+function formatInterfaceMethodSignature(method InterfaceMethodSig) returns String
+	return assembleMethodSignature(method.name, paramNames: method.paramNames, paramTypes: method.paramTypeNames, returnType: method.returnTypeName)
+end 'formatInterfaceMethodSignature'
+
+// ⭐ **THE ONE `name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and impl
+// (actual) renderers so the two halves of a wrong-signature message cannot drift in format. `paramNames`
+// and `paramTypes` are parallel source-string columns.
+function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray) returns String
+	var rendered = "{String.from(name)}("
+	for i in 0 upto paramNames.count() 'eachParam'
+		if i > 0 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		let paramName = try paramNames.get(i) otherwise panic("assembleMethodSignature: paramNames.get OOB at {i}")
+		let paramType = try paramTypes.get(i) otherwise panic("assembleMethodSignature: paramTypes.get OOB at {i}")
+		rendered = "{rendered}{String.from(paramName)} {String.from(paramType)}"
+	end 'eachParam'
+	return "{rendered}) returns {String.from(returnType)}"
+end 'assembleMethodSignature'
+
+// Render an impl method's RETURN as a source string — `void` for a void return, else the type name off the
+// project interner. Returns a ByteArray so it feeds BOTH the string comparison in `signatureMatches` and
+// the message assembly in `formatActualSignature` without a re-conversion at either.
+function renderReturnType(project Project, returnType MaxonReturnType) returns ByteArray
+	return match returnType 'r'
+		void gives InterfaceVoidTypeName
+		value(inner) gives maxonTypeName(inner, typeNames: project.typeNames).toByteArray()
+	end 'r'
+end 'renderReturnType'
+
+// Substitute the conforming type for an interface's `Self` — every other spelling passes through. The
+// interface renders `Self` for a receiver-typed result/parameter; the conforming type's own method spells
+// the concrete type, so this is what lets `returns Self` match `returns Point`.
+function substituteSelf(typeName ByteArray, conformingType ByteArray) returns ByteArray
+	if typeName.equals(InterfaceSelfTypeName) 'isSelf'
+		return conformingType
+	end 'isSelf'
+	return typeName
+end 'substituteSelf'
+
+// Join `  - item` lines with newlines — the bulleted detail block of an E3016 message.
+function joinBulletedLines(items StringArray) returns String
+	var rendered = ""
+	for i in 0 upto items.count() 'each'
+		if i > 0 'separator'
+			rendered = "{rendered}\n"
+		end 'separator'
+		rendered = "{rendered}  - {try items.get(i) otherwise panic("joinBulletedLines: items.get OOB at {i}")}"
+	end 'each'
+	return rendered
+end 'joinBulletedLines'

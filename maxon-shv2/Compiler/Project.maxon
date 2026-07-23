@@ -873,6 +873,16 @@ export type Project
 	// `MaxonType.named` naming a declared `enum`/`union` resolves to `integer` here (an enum value
 	// is its i64 tag), and the parser reads the cases through the whole-program signature index.
 	export var enumTypes as EnumLayoutMap
+	// Declared `interface` types, keyed by name (see IrInterface) — P1.7a slice 1. Holds only
+	// USER-declared interfaces; the stdlib protocol interfaces (Stringable, Hashable, …) are
+	// synthesized on lookup (`builtinInterface`) rather than merged here, so they never ride the
+	// merge/reset machinery. Read whole-program by `checkConformance`.
+	export var interfaces as IrInterfaceMap
+	// Declared `implements` conformances, one per `type X implements …` (see ConformanceDecl) —
+	// P1.7a slice 1. An ARRAY, not a map: the conformance check drains it once whole-program, and a
+	// type declaring conformance twice is two decls to report, not one to overwrite. Reset with the
+	// other push-merge targets (`pendingFnMergeChecks`) so a warm rebuild does not double it.
+	export var conformances as ConformanceDeclArray
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -928,6 +938,8 @@ export type Project
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),
 			enumTypes: EnumLayoutMap.create(),
+			interfaces: IrInterfaceMap.create(),
+			conformances: ConformanceDeclArray.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

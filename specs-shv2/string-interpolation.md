@@ -703,8 +703,7 @@ end 'main'
 
 ### Custom Type with Stringable
 
-<!-- disabled-test: custom-stringable -->
-<!-- P1.7a: Stringable protocol -->
+<!-- test: custom-stringable -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -738,7 +737,7 @@ end 'main'
 ### Stringable with Format Specifier
 
 <!-- disabled-test: stringable-format-spec -->
-<!-- P1.7a: Stringable protocol -->
+<!-- P1.7a-s2: method overloading (Counter declares toString() AND toString(format String); shv2's non-mangled `Type.method` naming collides them into E3006) + FormattedStringable 2-arg interp dispatch + `{x:spec}` format-spec interp parsing -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -779,8 +778,7 @@ Counter(value=42)
 
 ### Multiple Stringable Types
 
-<!-- disabled-test: multiple-stringable -->
-<!-- P1.7a: Stringable protocol -->
+<!-- test: multiple-stringable -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -822,6 +820,34 @@ end 'main'
 ```
 ```stdout
 John Doe, 30 years old
+```
+
+### Struct Interpolation Without toString
+
+A user struct interpolated with `"{s}"` must have a `toString` method (by name); a struct without one
+is E3016, positioned at the interpolated expression.
+
+<!-- test: error.interp-struct-without-tostring -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Plain
+	var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Plain'
+
+function main() returns ExitCode
+	let p = Plain.create(5)
+	print("{p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:15:10: Type 'Plain' used in string interpolation must have a toString method
 ```
 
 ### Int-Backed Enum Interpolation

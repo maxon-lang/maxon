@@ -137,6 +137,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// accumulated parse diagnostic is.
 	checkValueMergeSignatures(project)
 
+	// ⭐ **`implements`-CONFORMANCE CHECKING (P1.7a slice 1) — HERE, before the pipeline.** It reads the
+	// still-UNRESOLVED merged signatures so its E3016 message can print the source type spellings
+	// (`Integer`, `Float`, `void`) that `resolveTypes` erases — the same reason `checkValueMergeSignatures`
+	// runs here. Any E3015/E3016 it records is caught by the pipeline's error gate after `resolveTypes`.
+	checkConformance(project, module: module)
+
 	// ⭐ LAY OUT THE `.data` SECTION — once per compile, and HERE rather than inside
 	// `queryProgramSignatures`.
 	//

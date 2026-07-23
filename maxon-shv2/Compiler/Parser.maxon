@@ -949,7 +949,7 @@ let MethodNameSeparator = "."
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
 // `Parser.declaredMethodName` (the declaration) and `Parser.parseQualifiedCall` (the use). See
 // `MethodNameSeparator` for what a second spelling would cost.
-function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
+export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
 
@@ -2967,6 +2967,14 @@ export type Parser
 				continue
 			end 'isEnumDecl'
 
+			// An `interface` DECLARATION, gated on depth 0 like `type`/`enum`. It MUST be consumed whole
+			// here (see `recordScannedInterface`): its bodiless method signatures would otherwise poison the
+			// sweep's `function` arm and its block-depth counter.
+			if depth == 0 and self.at(TokenKind.interface) 'isInterfaceDecl'
+				self.recordScannedInterface()
+				continue
+			end 'isInterfaceDecl'
+
 			depth = self.blockDepthAfter(depth)
 			self.advance()
 		end 'scan'
@@ -4365,6 +4373,26 @@ export type Parser
 		self.closeTypeParamScope()
 	end 'recordScannedType'
 
+	// ⭐ **CONSUME A WHOLE `interface` DECLARATION IN THE TOLERANT SWEEP (P1.7a slice 1)** — the twin of
+	// `recordScannedType`/`recordScannedEnum`, and it MUST walk the body itself for a sharp reason: an
+	// interface method is a `function` SIGNATURE with NO body and NO `end`. Left to the sweep's outer loop,
+	// each would trip the `function` arm — registering the method as a free function AND incrementing the
+	// block-depth counter with no matching `end` to decrement it, corrupting the scan for the rest of the
+	// file. So the whole declaration is consumed here, records NOTHING (the real parse builds
+	// `project.interfaces`, and the conformance check reads that), and lands the cursor past the closing
+	// `end`. An interface body opens no blocks, so the FIRST `end` closes it.
+	function recordScannedInterface()
+		try self.consume(TokenKind.interface) otherwise return
+		while not self.isEof() 'body'
+			if self.at(TokenKind.end) 'closes'
+				self.advance()
+				self.skipOptionalLabel()
+				return
+			end 'closes'
+			self.advance()
+		end 'body'
+	end 'recordScannedInterface'
+
 	// Cursor is AT `enum`/`union`. Append the enum/union it declares and leave the cursor PAST the
 	// declaration's `end` — `recordScannedType`'s twin.
 	//
@@ -4674,7 +4702,9 @@ export type Parser
 			try self.parseTypeDeclaration()
 		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
 			try self.parseEnumDeclaration(self.at(TokenKind.union))
-		end 'isEnumDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
+		end 'isEnumDecl' else if self.at(TokenKind.interface) 'isInterfaceDecl'
+			try self.parseInterfaceDeclaration()
+		end 'isInterfaceDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
 			// The declaration EMITS NOTHING — for a `var` exactly as for a `let`. A constant inlines at
 			// every read; a var's slot is laid down by the backend from the arena
 			// (`ProgramSignatures.declaredGlobals`), and its every read and write is emitted at the USE
@@ -5365,6 +5395,11 @@ export type Parser
 		// methods below, and the arity check reads the list off the recorded layout.
 		self.openTypeParamScope(layout)
 
+		// `implements I1, I2` (P1.7a slice 1) — parsed AFTER `uses` per the grammar
+		// `type Name [uses …] [implements …]`. Records a whole-program ConformanceDecl (anchored on the
+		// type NAME token) that `checkConformance` validates; the declaration itself emits nothing.
+		try self.parseTypeImplementsClause(nameTok)
+
 		// Which of this type's methods carry a layout-descriptor param (P1.6-B1) — a TRANSITIVE fixpoint over
 		// the type's own methods, computed NOW (the cursor sits at the body start) so `parseFunction` can
 		// reserve the param before it numbers a method's body values. A peek-only walk; the cursor is untouched.
@@ -5399,6 +5434,175 @@ export type Parser
 		self.artifact.recordStructType(layout)
 		self.closeTypeParamScope()
 	end 'parseTypeDeclaration'
+
+	// ⭐ **`interface Name [extends …] [uses …] … end` (P1.7a slice 1)** — the FRONT-END half of
+	// interfaces. Its whole effect is the `IrInterface` recorded below, which `checkConformance` reads to
+	// verify every `implements`-ing type supplies the required methods. It EMITS NOTHING: an interface
+	// declares a contract, not code — there are no witness tables, no dispatch, no lowering at this slice.
+	//
+	// Method signatures have an implicit `self` (never declared), so `parseFunctionParameters` reads the
+	// USER parameters only — exactly what the conformance check compares against an impl's parameters once
+	// it drops the impl's prepended `__self`. `Self` in a signature resolves against `enclosingType` (set
+	// to the interface name here), so the check can substitute the conforming type for it.
+	function parseInterfaceDeclaration() throws ParseError
+		try self.consume(TokenKind.interface)
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
+		self.enclosingType = nameTok.value
+
+		var extendsInterfaces = ByteArrayArray.create()
+		var associatedTypeNames = ByteArrayArray.create()
+		try self.parseInterfaceHeaderClauses(extendsInterfaces, associatedTypeNames: associatedTypeNames)
+
+		var methods = InterfaceMethodSigArray.create()
+		while true 'members'
+			self.skipNewlines()
+			if self.at(TokenKind.end) 'closes'
+				break
+			end 'closes'
+			if self.isEof() 'eof'
+				let tok = self.current()
+				throw ParseError.unexpectedEof(tok.line, column: tok.column)
+			end 'eof'
+
+			methods.push(try self.parseInterfaceMethod(nameTok.value))
+		end 'members'
+
+		try self.consume(TokenKind.end)
+		self.skipOptionalLabel()
+
+		self.artifact.recordInterface(IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames))
+		self.enclosingType = EmptySourceText
+	end 'parseInterfaceDeclaration'
+
+	// The optional `extends P1, P2` and `uses A, B` clauses of an interface header, in either order. A
+	// parent interface's methods a conforming type must ALSO supply (`checkConformance` projects them at
+	// decl order); `uses` names associated types (kept for slice 2 — the enabled slice-1 corpus declares
+	// none). Stops at the first token that opens neither clause (a newline into the body).
+	function parseInterfaceHeaderClauses(extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray) throws ParseError
+		while true 'clauses'
+			if self.at(TokenKind.extends) 'extendsClause'
+				try self.consume(TokenKind.extends)
+				try self.parseCommaSeparatedNames(extendsInterfaces)
+				continue
+			end 'extendsClause'
+
+			if self.at(TokenKind.uses) 'usesClause'
+				try self.consume(TokenKind.uses)
+				try self.parseCommaSeparatedNames(associatedTypeNames)
+				continue
+			end 'usesClause'
+
+			break
+		end 'clauses'
+	end 'parseInterfaceHeaderClauses'
+
+	// A comma-separated list of identifiers (`A, B, C`) into `out` — the shared reader behind an
+	// interface's `extends`/`uses` lists and a `type`'s `implements` list.
+	function parseCommaSeparatedNames(out ByteArrayArray) throws ParseError
+		out.push((try self.consume(TokenKind.identifier)).value)
+		while self.at(TokenKind.comma) 'more'
+			try self.consume(TokenKind.comma)
+			out.push((try self.consume(TokenKind.identifier)).value)
+		end 'more'
+	end 'parseCommaSeparatedNames'
+
+	// One `[static] function name(params) [returns Type] [throws E]` interface method SIGNATURE (no body).
+	// Its param/return types are rendered to SOURCE strings (see IrInterface) via `renderInterfaceTypeName`
+	// — `Self` for the enclosing interface, the alias name for a `named` type, `void` for no return.
+	function parseInterfaceMethod(interfaceName ByteArray) returns InterfaceMethodSig throws ParseError
+		let isStatic = self.at(TokenKind.static)
+		if isStatic 'staticMethod'
+			self.advance()
+		end 'staticMethod'
+
+		try self.consume(TokenKind.function)
+		let nameTok = try self.consume(TokenKind.identifier)
+
+		var paramNames = ByteArrayArray.create()
+		var paramTypes = MaxonTypeArray.create()
+		var paramRanges = SourceRangeArray.create()
+		try self.consume(TokenKind.leftParen)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.consume(TokenKind.rightParen)
+
+		let returnType = try self.parseOptionalReturnType()
+		// A `throws E` clause is consumed so a throwing interface method (`advance() throws IterationError`)
+		// parses; slice-1 conformance does not validate the throws relation (no enabled case needs it).
+		_ = try self.parseOptionalThrowsClause()
+
+		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic)
+	end 'parseInterfaceMethod'
+
+	// Render each of an interface method's parameter types to its source string, parallel to `paramTypes`.
+	function renderInterfaceParamTypes(paramTypes MaxonTypeArray, interfaceName ByteArray) returns ByteArrayArray
+		var out = ByteArrayArray.create()
+		for i in 0 upto paramTypes.count() 'each'
+			out.push(self.renderInterfaceTypeName(try paramTypes.get(i) otherwise panic("renderInterfaceParamTypes: paramTypes.get OOB at {i}"), interfaceName: interfaceName))
+		end 'each'
+		return out
+	end 'renderInterfaceParamTypes'
+
+	// Render an interface method's RETURN to its source string — `void` for no `returns`, else the type.
+	function renderInterfaceReturnType(returnType MaxonReturnType, interfaceName ByteArray) returns ByteArray
+		return match returnType 'r'
+			void gives InterfaceVoidTypeName
+			value(inner) gives self.renderInterfaceTypeName(inner, interfaceName: interfaceName)
+		end 'r'
+	end 'renderInterfaceReturnType'
+
+	// Render a parsed interface-signature `MaxonType` to the SOURCE string the conformance check compares
+	// and prints. `Self` (a `structRef` whose id is the interface's own name) renders as `Self`; every
+	// other type defers to `maxonTypeName` (the alias name for a `named`, the type name for a struct, the
+	// tag word for a primitive) — all read off the LOCAL interner, but the STRING is interner-independent,
+	// so it matches the impl side rendered off the project interner (the same property `paramAggregateNames`
+	// relies on). Rendered at parse time, so `mergeArtifact` folds an interface with no id to remap.
+	function renderInterfaceTypeName(t MaxonType, interfaceName ByteArray) returns ByteArray
+		if maxonTypeTag(t) == ValueTypeTag.structRef 'structRefType'
+			let refName = try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("renderInterfaceTypeName: structRef id {typeNameIdOf(t)} not in the local interner")
+			if refName.equals(interfaceName) 'selfRef'
+				return InterfaceSelfTypeName
+			end 'selfRef'
+		end 'structRefType'
+		return maxonTypeName(t, typeNames: self.artifact.typeNames).toByteArray()
+	end 'renderInterfaceTypeName'
+
+	// The `implements I1, I2 [with …]` conformance clause of a `type` declaration (P1.7a slice 1). Records
+	// a ConformanceDecl anchored on the type NAME token, or does nothing when there is no clause. A `with`
+	// binds an interface's associated types (slice 2); it is consumed and dropped so a conforming type that
+	// names one still parses.
+	function parseTypeImplementsClause(nameTok Token) throws ParseError
+		if not self.at(TokenKind.implements) 'noImplements'
+			return
+		end 'noImplements'
+		try self.consume(TokenKind.implements)
+
+		var interfaceNames = ByteArrayArray.create()
+		interfaceNames.push((try self.consume(TokenKind.identifier)).value)
+		try self.skipOptionalWithClause()
+		while self.at(TokenKind.comma) 'moreInterfaces'
+			try self.consume(TokenKind.comma)
+			interfaceNames.push((try self.consume(TokenKind.identifier)).value)
+			try self.skipOptionalWithClause()
+		end 'moreInterfaces'
+
+		self.artifact.recordConformance(ConformanceDecl.create(nameTok.value, interfaceNames: interfaceNames, nameLine: nameTok.line, nameColumn: nameTok.column, filePath: self.filePath))
+	end 'parseTypeImplementsClause'
+
+	// A `with <TypeArg>` / `with (<TypeArgs>)` associated-type binding after an interface name in an
+	// `implements` clause (slice 2). Consumed and dropped: slice 1 records only the interface NAMES, and no
+	// enabled case binds one. A parenthesized list skips balanced; a single arg is one type reference.
+	function skipOptionalWithClause() throws ParseError
+		if not self.at(TokenKind.with) 'noWith'
+			return
+		end 'noWith'
+		try self.consume(TokenKind.with)
+		if self.at(TokenKind.leftParen) 'parenList'
+			_ = self.skipBalancedParens()
+			return
+		end 'parenList'
+		_ = try self.parseTypeReference()
+	end 'skipOptionalWithClause'
 
 	// Parse an `enum`/`union` declaration (P1.1b wave B):
 	//
@@ -14100,8 +14304,47 @@ export type Parser
 			return
 		end 'boolPart'
 
+		// ⭐ **A USER STRUCT — `"{p}"` → a DIRECT `<Type>.toString()` CALL (P1.7a slice 1).** The concrete
+		// type is statically known here, so dispatch is a plain method call, NOT a witness (exactly what the
+		// monomorphizing bootstrap emits). Witnesses are needed only for an UNKNOWN concrete type — a
+		// constrained type parameter — which is slice 2.
+		if tag == ValueTypeTag.structRef 'structPart'
+			try self.materializeStructToStringPart(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+			return
+		end 'structPart'
+
 		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — P1.2 wave B interpolates String, integer and bool expressions; float arrives next, and a Stringable struct at P1.7a", line: exprTok.line, column: exprTok.column)
 	end 'materializeInterpExpr'
+
+	// ⭐ **INTERPOLATE A USER STRUCT VIA A DIRECT `<Type>.toString()` CALL (P1.7a slice 1).** A struct is
+	// interpolable iff it HAS a `toString` method (by NAME, not by declaring `Stringable` — the oracle's
+	// rule); a struct WITHOUT one is E3016, positioned at the interpolated expression. The call's result is
+	// classified +1 OWNED by `emitCall` (`mintOwnedCallResult` → `trackOwnedTemp`), so the fresh String is
+	// freed at STATEMENT END — after `emitStringInterp` has copied its bytes into the interp result. Its
+	// bytes are spliced exactly as a `{s}` String part's are (`materializeStringRecordPart`), the same
+	// machinery a String-returning call already interpolates through. Without the owned classify, one
+	// String would leak per interpolated struct (a v1 leak trap).
+	function materializeStructToStringPart(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+		let structName = self.internedName(self.valueNameId(exprVal))
+		let callee = qualifiedMethodName(structName, methodName: ToStringMethodName)
+
+		if not self.calleeIsDeclared(callee) 'noToString'
+			self.recordArtifactDiagnostic(ErrorCode.semanticPartialInterfaceImpl, message: "Type '{String.from(structName)}' used in string interpolation must have a toString method", tok: exprTok)
+			// The recorded diagnostic fails the build; materialize an EMPTY placeholder part so the interp
+			// assembly (which needs at least one part) does not panic on a bare `"{s}"`.
+			self.materializeStringRecordPart(self.emitStringLiteral(EmptySourceText, range: range), partBufs: partBufs, partLens: partLens, range: range)
+			return
+		end 'noToString'
+
+		var args = ValueIdArray.create()
+		args.push(exprVal)
+		var argLabels = ByteArrayArray.create()
+		argLabels.push(EmptySourceText)
+		var argRanges = SourceRangeArray.create()
+		argRanges.push(range)
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none)
+		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
+	end 'materializeStructToStringPart'
 
 	// A String-record part: load `buffer@0` and `length@8` off the record. Shared by literal fragments and
 	// `{s}` String parts — both are pointers to the fused 48-byte record, so both read the same two fields.
