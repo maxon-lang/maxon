@@ -262,6 +262,26 @@ end 'main'
 2
 ```
 
+<!-- test: float-backed-signed-zero -->
+<!-- -0.0 and +0.0 are DISTINCT raw values in shv2: an enum tag IS the IEEE-754 bit pattern (0x8000000000000000 vs 0x0), matched by an i64 compare, so ONE equality (bit-pattern) governs both the duplicate check and the dispatch — negz is reachable and dispatches to itself. The bootstrap instead REJECTS this pair as a duplicate '0': it folds -0.0 to +0.0 for the duplicate check while still dispatching by bit compare, mixing two equalities. That is a documented oracle divergence; shv2's single-equality design (the same -0.0 sign-preservation `negatedFloatBits` gives every negated float) is why this is accepted, not a wrong answer. Pinned so a future edit that normalized -0.0 would break here rather than silently. -->
+```maxon
+enum SignedZero
+	negz = -0.0
+	posz = 0.0
+end 'SignedZero'
+
+function main() returns ExitCode
+	let x = SignedZero.negz
+	return match x 'check'
+		negz gives 4
+		posz gives 7
+	end 'check'
+end 'main'
+```
+```exitcode
+4
+```
+
 <!-- disabled-test: enum-method -->
 <!-- instance methods on an enum receiver (later rung) -->
 ```maxon

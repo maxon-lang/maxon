@@ -1,0 +1,40 @@
+// Test: float-backed-signed-zero
+enum SignedZero
+	negz = -0.0
+	posz = 0.0
+end 'SignedZero'
+
+function main() returns ExitCode
+	let x = SignedZero.negz
+	return match x 'check'
+		negz gives 4
+		posz gives 7
+	end 'check'
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, -9223372036854775808
+    x64.movRegImm rcx, -9223372036854775808
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+}
