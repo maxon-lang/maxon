@@ -2954,12 +2954,13 @@ export type Parser
 			return
 		end 'noName'
 		let nameTok = self.current()
-		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so the
-		// modifier before it is at `pos - 2` — and `static` is what marks a receiver-less method. Read after
-		// the params/return type are consumed, `pos - 2` would name a token inside the return type instead.
-		// Guarded on `pos >= 2` so a `function` at the very start of the file (a top-level one, never a
-		// method) does not underflow — such a function has an empty `enclosingType` anyway.
-		let hasStaticModifier = self.pos >= 2 and self.kindAt(self.pos - 2) == TokenKind.static
+		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
+		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
+		// params/return type are consumed, that peek would land inside the return type instead. Asked through the
+		// SHARED `functionDeclIsStatic` (the `pos >= 1` guard keeps the `pos - 1` at the very start of a file from
+		// underflowing; such a top-level `function` has an empty `enclosingType` anyway) so this scan and the
+		// implicit-self sibling walk answer "does this method take `self`?" from one token-level test.
+		let hasStaticModifier = self.pos >= 1 and self.functionDeclIsStatic((self.pos - 1) as TokenIndex)
 		self.advance()
 		// The parameter list's `(` is captured before the skip so the param NAMES can be read back out of it
 		// (`paramNamesIn`) — the CONSUME scan needs them, and `skipBalancedParens` only advances past them.
@@ -3248,6 +3249,17 @@ export type Parser
 	function isBareCallAt(q TokenIndex) returns bool
 		return self.kindAt(q + 1) == TokenKind.leftParen and (q == 0 or self.kindAt(q - 1) != TokenKind.dot)
 	end 'isBareCallAt'
+
+	// Does the `function` keyword at `functionTok` carry a `static` modifier — the token IMMEDIATELY before it?
+	// `[export] static function` is the only member shape (`export` precedes `static`; `parseTypeMember`), so the
+	// token adjacent to `function` is exactly the modifier or not. THE one token-level answer to "is this a
+	// receiver-less method?", shared by the descriptor sweep (`recordScannedSignature`) and the implicit-self
+	// sibling walk (`ensureSiblingReceivers`, #65) so those two token scans cannot come to disagree about which
+	// methods take `self`. The FORWARD twin is `parseTypeMember`'s `not isStatic`, which mints the actual
+	// `SelfParamName` parameter every later reader recovers the fact from (`FuncSignature.takesReceiver`).
+	function functionDeclIsStatic(functionTok TokenIndex) returns bool
+		return functionTok > 0 and self.kindAt((functionTok - 1) as TokenIndex) == TokenKind.static
+	end 'functionDeclIsStatic'
 
 	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias followed by `.create(` — the
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous
@@ -15040,6 +15052,18 @@ export type Parser
 		try self.emitFieldWrite(receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
 	end 'emitCheckedSelfFieldStore'
 
+	// `self` inside a closure body is a CAPTURE, which shv2 does not yet support (P1.5-A2b): a lifted closure has
+	// no receiver, so reading the enclosing `self` would read the closure's own parameter slot 0 as a struct box
+	// — a silent wrong answer or crash. BOTH spellings that resolve a `self` receiver must refuse it identically:
+	// the explicit `self.…` (`parseSelfPrimary`) and the implicit-self bare sibling call (`implicitSelfReceiver`,
+	// #65). ONE condition, ONE message, ONE home — so a bare `foo()` and an explicit `self.foo()` can never drift
+	// into giving different diagnostics for the one unsupported construct.
+	function requireNotInSelfCapture(anchor Token) throws ParseError
+		if self.closureCaptureScopes.count() > 0 'capturedSelf'
+			throw ParseError.unsupported("a closure that captures `self` (P1.5-A2b: capturing closures + env block)", line: anchor.line, column: anchor.column)
+		end 'capturedSelf'
+	end 'requireNotInSelfCapture'
+
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
 	// cannot ride the identifier paths; what it can do is resolve to the same two destinations they
 	// do, which is what this routine is for.
@@ -15058,9 +15082,9 @@ export type Parser
 		// ValueId 0 is its first PARAMETER, not the enclosing method's `self` — so resolving `self` here
 		// (which reads the hardcoded receiver slot 0) would read a parameter as a struct box: a silent wrong
 		// answer or crash. It is refused as the capture it is; A2b captures the receiver into the env block.
-		if self.closureCaptureScopes.count() > 0 'capturedSelf'
-			throw ParseError.unsupported("a closure that captures `self` (P1.5-A2b: capturing closures + env block)", line: selfTok.line, column: selfTok.column)
-		end 'capturedSelf'
+		// The refusal is SHARED with the implicit-self bare-call path (`implicitSelfReceiver`, #65) so the two
+		// spellings cannot disagree about it — see `requireNotInSelfCapture`.
+		try self.requireNotInSelfCapture(selfTok)
 
 		// The receiver is required for EITHER destination, so it is established once, here, before
 		// the split — which is also what keeps `self` in a `static function` out of
@@ -16735,17 +16759,23 @@ export type Parser
 	end 'isImplicitSelfMethod'
 
 	// The receiver a bare call to the sibling `name` carries. An INSTANCE method gets the enclosing `self`
-	// prepended at parameter 0 — identical to what `self.name(…)` builds — so the two spellings emit the same
-	// call. A `static` sibling gets none. In a `static` method there is no `self` to prepend, so an instance
-	// sibling resolves receiver-less and fails the arity check on the hidden `self` parameter (E3036) — the same
-	// rejection the oracle gives ("missing argument for parameter 'self'"), reached with no special case here.
+	// prepended at parameter 0 — resolved EXACTLY as an explicit `self.name(…)` resolves it, so the two spellings
+	// emit byte-identical calls in every context. A `static` sibling gets none. Two contexts make the self
+	// resolution more than a plain scope read, and BOTH are shared with the explicit path so they cannot drift:
+	//   • inside a CLOSURE, `self` is an unsupported capture (P1.5-A2b) — refused with the SAME E2015
+	//     `parseSelfPrimary` raises (`requireNotInSelfCapture`), NOT the confusing arity E3036 a silent
+	//     receiver-less fallback would surface on a call the explicit spelling rejects outright;
+	//   • in a `static` method there is no `self` at all, so the lookup fails and the sibling resolves
+	//     receiver-less, failing the arity check on the hidden `self` parameter (E3036) — the same rejection the
+	//     oracle gives ("missing argument for parameter 'self'").
 	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
 	// is built and this `ensureSiblingReceivers` is a memo hit.
-	function implicitSelfReceiver(name ByteArray) returns ReceiverArg
+	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws ParseError
 		self.ensureSiblingReceivers()
 		if not (try self.siblingReceivers.get(name) otherwise false) 'staticSibling'
 			return ReceiverArg.none
 		end 'staticSibling'
+		try self.requireNotInSelfCapture(anchor)
 		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none)
 	end 'implicitSelfReceiver'
 
@@ -16771,9 +16801,9 @@ export type Parser
 			// `function`), so counting it here is the +1 that balances the method's `end`.
 			let isMethod = self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier
 			if isMethod 'method'
-				// `[export] [static] function <name>`: `static`, when present, sits immediately before
-				// `function`. A method with no `static` takes the hidden `self` receiver.
-				map.upsert(self.tokenAt(q + 1).value, value: not (q > 0 and self.kindAt(q - 1) == TokenKind.static))
+				// A method with no `static` modifier takes the hidden `self` receiver — the SAME token-level test
+				// the descriptor sweep uses (`functionDeclIsStatic`), so the two scans agree by construction.
+				map.upsert(self.tokenAt(q + 1).value, value: not self.functionDeclIsStatic(q))
 			end 'method'
 
 			if isMethod or self.opensBlockAt(q) 'opens'
@@ -16815,7 +16845,8 @@ export type Parser
 		// same-named free function; a name that is NOT a sibling stays the free/direct call below (E3004 if it
 		// names nothing declared).
 		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
-			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: self.implicitSelfReceiver(calleeTok.value), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+			let receiver = try self.implicitSelfReceiver(calleeTok.value, anchor: calleeTok)
+			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: receiver, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
 		end 'implicitSelfMethod'
 
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
