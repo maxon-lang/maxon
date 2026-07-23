@@ -7931,8 +7931,7 @@ export type Parser
 	// exception that sidesteps the cross-call move-tracking a null-move would have needed to tell a re-reading
 	// caller from a tearing-down one.
 	function retainThrownField(value ValueId, anchor Token)
-		let range = SourceRange.ofToken(anchor)
-		_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.emitIncref(value, range: SourceRange.ofToken(anchor))
 		self.markValueOwnsHeap(value)
 	end 'retainThrownField'
 
@@ -8401,7 +8400,7 @@ export type Parser
 			if self.valueIsOwnedHeap(otherwiseValue) 'ownedFallbackIntoBorrow'
 				let resumeBlock = self.currentBlock
 				self.currentBlock = okBlock
-				_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(result), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(tryTok))
+				self.emitIncref(result, range: SourceRange.ofToken(tryTok))
 				self.currentBlock = resumeBlock
 
 				self.transferFallbackToPhi(otherwiseValue, tryTok: tryTok)
@@ -8465,7 +8464,7 @@ export type Parser
 		if self.pendingTempsContain(errEdgeValue) 'movedTemp'
 			self.removeFromPendingTemps(errEdgeValue)
 		end 'movedTemp' else 'aliasedBinding'
-			_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(errEdgeValue), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(tryTok))
+			self.emitIncref(errEdgeValue, range: SourceRange.ofToken(tryTok))
 		end 'aliasedBinding'
 	end 'transferFallbackToPhi'
 
@@ -9044,6 +9043,17 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range)), range: range)
 		return result
 	end 'emitRuntimeCall'
+
+	// ⭐ **EMIT A VOID `__mm_incref` OF `value`** — the one spelling of "take a second owner of this box,
+	// discarding the returned nothing". Single-sources the three sites that incref a managed box in place:
+	// `retainThrownField` (#64 — a thrown borrowed-container field) and the two `try … otherwise` phi
+	// reconciliations (the ok-edge borrow that merges with an owned fallback, and `transferFallbackToPhi`'s
+	// aliased-binding error edge). `__mm_retain` is the RETURNING twin (`retainBorrowedAggregate`) for when a
+	// FRESH SSA name is needed; this void form is for when the box is increfed in place and the caller already
+	// holds the ValueId it means.
+	function emitIncref(value ValueId, range SourceRange)
+		_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitIncref'
 
 	// ⭐ **THE ONE `__mm_alloc` CALL.** Every heap box the compiler builds — a struct record, a fused
 	// String record, an interpolation scratch buffer, a boxed union — is allocated through here, so the
