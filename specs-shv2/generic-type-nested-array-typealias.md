@@ -63,6 +63,7 @@ end 'main'
 ### Generic type with string element
 
 <!-- test: string-element -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -109,6 +110,7 @@ end 'main'
 A method that FORWARDS its type-parameter element argument to a consuming sibling (`add` → `store` → `self.items.push`) must promote-and-consume the managed argument at its OWN concrete call site — otherwise the borrowed String is stored into the owning array and freed by the array's decref, a double-free. The transitive feed fixpoint marks `add`'s `item` a feed because it forwards to `store`'s feed parameter, so `sc.add("alpha")` consumes exactly as `sc.store("alpha")` would.
 
 <!-- test: forward-to-consuming-sibling -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -148,6 +150,7 @@ end 'main'
 The feed fixpoint closes over a chain of any depth: `a` forwards to `b` forwards to `c` forwards to the array push, so every hop's parameter is a feed and the outermost concrete call promotes-and-consumes.
 
 <!-- test: multi-hop-forward -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -282,6 +285,7 @@ edge — through the runtime descriptor gate (`__drop_type_param` reads the inst
 String is freed exactly once and the false branch does not leak.
 
 <!-- test: conditional-move-leak-free -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -319,6 +323,7 @@ The same method with the branch TAKEN moves the element into the array, which ow
 marks it moved on the pushed edge, so no second drop is emitted.
 
 <!-- test: conditional-move-into-array -->
+<!-- targets: x64-windows, x64-linux -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
