@@ -420,6 +420,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		const to funcAddr then break 'k'
 		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count())
 		osRangePanic to osFreePages then break 'k'
+		// The jump table makes no indirect call — it branches on an integer index.
+		switch then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -700,6 +702,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		callIndirect(resultId, _, resultType, _, _) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(resultType))
 		osRangePanic to osFreePages then break 'def'
+		// The jump table defines no value — a terminator has no result valtype to record.
+		switch then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -929,6 +933,9 @@ type WasmFuncEmitter
 			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osRangePanic to osFreePages then panic("emitStraightLineTerminator: an `osRangePanic` is a body op, never a terminator")
+			// A jump table has multiple successors, so `decideDispatcher` always routes its function through
+			// the loop+br_table dispatcher — it never reaches the straight-line terminator path.
+			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -985,6 +992,7 @@ type WasmFuncEmitter
 			retVoid then self.emitRetVoid()
 			branch(targetBlockId) then self.emitDispatchBranch(targetBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
 			condBranch(condId, thenBlockId, elseBlockId) then self.emitDispatchCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
+			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitDispatchSwitch(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
 			const to mod then panic("emitDispatcherTerminator: an arith op is not a terminator")
 			param then panic("emitDispatcherTerminator: a `param` op is not a terminator")
 			call then panic("emitDispatcherTerminator: a `call` op is not a terminator")
@@ -1051,6 +1059,8 @@ type WasmFuncEmitter
 			// ONLY inside the x64-windows-gated green-thread substrate, so it never reaches the wasm emitter; and
 			// wasm linear memory cannot be shrunk anyway (`memory.grow` only grows).
 			osFreePages then panic("emitBodyOp: `osFreePages` is x64-windows only (and wasm linear memory cannot shrink) — the green-thread substrate is x64-windows-gated at this rung")
+			// The dense-match jump table is ALWAYS a block terminator, never a body op.
+			switch then panic("emitBodyOp: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1721,6 +1731,98 @@ type WasmFuncEmitter
 		self.body.localSet(self.dispatchLocal)
 	end 'emitSetDispatch'
 
+	// ⭐ **THE DENSE-MATCH JUMP TABLE ON wasm** — a value `br_table` over the biased subject, wrapped in one
+	// nested landing block per DISTINCT case target plus the default. wasm has no relocation to patch, so the
+	// table is the `br_table` immediate itself; but a `br_table` cannot run per-edge phi copies, so each
+	// landing runs `emitDispatchBranch` (its target's phi copies + set-dispatch + `br` to the loop) exactly
+	// as the two-way dispatcher does. A native jump table's UNSIGNED bounds check has no `br_table` analog —
+	// `br_table` bound-checks only the low 32 bits of an i64 index — so an explicit `i64.ge_u` guard routes a
+	// wrapped-negative or high-bit-set index to the default first, matching x64's `jae` / arm64's `b.hs`.
+	//
+	// LANDING DEPTHS. Landings open outermost-first (`t0, t1, …, t_{m-1}, default`), so from the `br_table`
+	// (innermost) the default landing is depth 0, `t_{m-1}` is depth 1, …, `t_j` is depth `m − j`. A hole
+	// slot (target == default) routes to depth 0 too. After the `br_table`, closing the landings in order
+	// exposes each landing's code at a loop depth one shallower than the last: default at `loopDepth + m`,
+	// then `t_{m-1}` … `t_0` down to `loopDepth`.
+	function emitDispatchSwitch(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
+		var distinct = BlockIdArray.create()
+		for target in caseTargets 'collectDistinct'
+			if target != defaultTarget and not blockIdArrayContains(distinct, value: target) 'fresh'
+				distinct.push(target)
+			end 'fresh'
+		end 'collectDistinct'
+		let m = distinct.count()
+
+		// Open `m + 1` nested landing blocks (one per distinct target, plus the default). The loop is now at
+		// `loopDepth + m + 1`.
+		for _ in 0 upto (m + 1) 'openLandings'
+			self.body.beginBlock()
+		end 'openLandings'
+
+		// The 64-bit UNSIGNED bounds check: a value outside `[0, span)` (a wrapped-negative index included)
+		// branches to the default landing (innermost, depth 0). Only reached with an i64 subject — a bias
+		// `subtract` mints an `integer`, and a zero-based match's enum/int subject is i64 too.
+		self.emitSwitchBoundsGuard(subjectId, span: caseTargets.count())
+
+		// In range: the low 32 bits ARE the index (the guard proved `< span < 2^32`). `br_table` to the slot's
+		// landing depth; its own default is the default landing (unreachable after the guard, correct anyway).
+		self.emitSwitchIndex(subjectId)
+		var targets = Wasm32IndexArray.create()
+		for target in caseTargets 'eachSlot'
+			targets.push(self.switchLandingDepth(target, distinct: distinct, defaultTarget: defaultTarget, m: m))
+		end 'eachSlot'
+		self.body.brTable(targets, defaultTarget: 0 as Wasm32Index)
+
+		// Close each landing and emit its target's dispatch. `end` #1 exposes the default landing; `end` #(k+1)
+		// exposes `distinct[m − k]`. The loop is `loopDepth + m − k` deep at the k-th code point.
+		for k in 0 upto (m + 1) 'landings'
+			self.body.endOp()
+			let landingLoopDepth = (loopDepth + m - k) as Wasm32Index
+			var target = defaultTarget
+			if k > 0 'caseLanding'
+				target = try distinct.get(m - k) otherwise panic("emitDispatchSwitch: distinct.get OOB at {m - k} (m={m}, k={k})")
+			end 'caseLanding'
+			self.emitDispatchBranch(target, currentBlock: currentBlock, loopDepth: landingLoopDepth)
+		end 'landings'
+	end 'emitDispatchSwitch'
+
+	// The `i64.ge_u span` bounds guard `br_if`ing an out-of-range index to the default landing (depth 0). An
+	// i32 subject (never produced for a switch today — every biased index is i64) needs no i64 guard: its own
+	// value IS the index, so the `br_table`'s exact i32 bounds check suffices, and this emits nothing.
+	function emitSwitchBoundsGuard(subjectId ValueId, span ElementCount)
+		if getValtype(self.valtypes, v: subjectId) != WasmValType.i64 'notI64'
+			return
+		end 'notI64'
+		self.body.localGet(subjectId as Wasm32Index)
+		self.body.i64Const(span as ParsedInt)
+		self.body.i64GeU()
+		self.body.brIf(0 as Wasm32Index)
+	end 'emitSwitchBoundsGuard'
+
+	// Push the biased subject as the i32 `br_table` index. An i64 subject is narrowed (the guard proved it
+	// fits 32 bits); an i32 subject is already the index.
+	function emitSwitchIndex(subjectId ValueId)
+		self.body.localGet(subjectId as Wasm32Index)
+		if getValtype(self.valtypes, v: subjectId) == WasmValType.i64 'wide'
+			self.body.i32WrapI64()
+		end 'wide'
+	end 'emitSwitchIndex'
+
+	// The `br_table` branch depth for a slot whose target is `target`: the default landing (depth 0) for the
+	// default or a hole slot, else the distinct target's landing at depth `m − j` (landings opened
+	// outermost-first, so the innermost — default — is 0 and `t_j` is `m − j` from it).
+	function switchLandingDepth(target BlockId, distinct BlockIdArray, defaultTarget BlockId, m ElementCount) returns Wasm32Index
+		if target == defaultTarget 'toDefault'
+			return 0 as Wasm32Index
+		end 'toDefault'
+		for j in 0 upto distinct.count() 'find'
+			if (try distinct.get(j) otherwise panic("switchLandingDepth: distinct.get OOB at {j}")) == target 'hit'
+				return (m - j) as Wasm32Index
+			end 'hit'
+		end 'find'
+		panic("switchLandingDepth: case target block {target} is neither the default nor a collected distinct target — the distinct set is built from the same case-target array")
+	end 'switchLandingDepth'
+
 	function dispatchIndexOf(blockId BlockId) returns Wasm32Index
 		return try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")
 	end 'dispatchIndexOf'
@@ -1934,6 +2036,10 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
 		osRangePanic to osFreePages then panic("decideDispatcher: an `osRangePanic` is a body op, never a terminator")
+		// A jump table is a multiway branch — its function MUST use the loop+br_table dispatcher. (A `match`
+		// always creates several arm-body blocks, so `blockCount > 1` catches this first; the arm is here so
+		// a hypothetical single-block switch still forces the dispatcher rather than a straight-line path.)
+		switch then return true
 	end 'k'
 	return false
 end 'decideDispatcher'

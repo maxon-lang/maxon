@@ -340,6 +340,8 @@ function isCaptureMove(op TargetOp) returns bool
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
 		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
 		leaRegFunc to x64Syscall gives false
+		// The jump tables are multiway terminators, not a `movRegReg`, so neither is a capture move.
+		x64JumpTable to arm64JumpTable gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -445,6 +447,8 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not register-to-register moves
 		// (a `lea`, a call, a syscall), so none can be a `mov r, r` self-move.
 		leaRegFunc to x64Syscall then return false
+		// The jump tables are terminators, not register-to-register moves, so neither is a self-move.
+		x64JumpTable to arm64JumpTable then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -687,6 +691,11 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
 			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 			leaRegFunc to x64Syscall then panic("retargetControlOp: non-terminator op as terminator")
+			// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
+			// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
+			// CFG edge redirects all of them through the one split block.
+			x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then retargeted = retargetJumpTableX64(module, opIdx: ti, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then retargeted = retargetJumpTableArm64(module, opIdx: ti, indexReg: indexReg, defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel, oldTarget: oldTarget, newTarget: newTarget) or retargeted
 		end 'term'
 	end 'hasTerm'
 
@@ -745,6 +754,47 @@ function retargetArm64Branch(module TargetModule, opIdx OpIndex, target BlockId,
 	try module.ops.set(opIdx, value: TargetOp.arm64Branch(newTarget)) otherwise panic("retargetArm64Branch: ops.set OOB")
 	return true
 end 'retargetArm64Branch'
+
+// Redirect a jump table's `oldTarget` edges to `newTarget` (a spliced critical-edge block). Rebuilds the
+// case-target table and default with every occurrence remapped, and re-writes the op in place only when
+// something matched — the same "did I retarget?" bool the branch retargeters return, so the caller's
+// no-match panic still fires for an edge the table does not name. The two arms differ only in the op they
+// reconstruct (x64 vs arm64); the remap itself is the shared `remapJumpTargets`.
+function retargetJumpTableX64(module TargetModule, opIdx OpIndex, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, oldTarget BlockId, newTarget BlockId) returns bool
+	if not jumpTableNamesTarget(defaultTarget, caseTargets: caseTargets, oldTarget: oldTarget) 'notThis'
+		return false
+	end 'notThis'
+	let newDefault = newTarget if defaultTarget == oldTarget else defaultTarget
+	let newTargets = remapJumpTargets(caseTargets, oldTarget: oldTarget, newTarget: newTarget)
+	try module.ops.set(opIdx, value: TargetOp.x64JumpTable(indexReg, defaultTarget: newDefault, caseTargets: newTargets, tableLabel: tableLabel)) otherwise panic("retargetJumpTableX64: ops.set OOB")
+	return true
+end 'retargetJumpTableX64'
+
+function retargetJumpTableArm64(module TargetModule, opIdx OpIndex, indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray, oldTarget BlockId, newTarget BlockId) returns bool
+	if not jumpTableNamesTarget(defaultTarget, caseTargets: caseTargets, oldTarget: oldTarget) 'notThis'
+		return false
+	end 'notThis'
+	let newDefault = newTarget if defaultTarget == oldTarget else defaultTarget
+	let newTargets = remapJumpTargets(caseTargets, oldTarget: oldTarget, newTarget: newTarget)
+	try module.ops.set(opIdx, value: TargetOp.arm64JumpTable(indexReg, defaultTarget: newDefault, caseTargets: newTargets, tableLabel: tableLabel)) otherwise panic("retargetJumpTableArm64: ops.set OOB")
+	return true
+end 'retargetJumpTableArm64'
+
+// Does the jump table have any edge to `oldTarget` — a case slot or the default? Guards the retarget so
+// the op is left untouched (and `retargeted` stays false) when the split edge belongs to a DIFFERENT
+// predecessor's terminator.
+function jumpTableNamesTarget(defaultTarget BlockId, caseTargets BlockIdArray, oldTarget BlockId) returns bool
+	return defaultTarget == oldTarget or blockIdArrayContains(caseTargets, value: oldTarget)
+end 'jumpTableNamesTarget'
+
+// The case-target table with every `oldTarget` slot rewritten to `newTarget`, others verbatim.
+function remapJumpTargets(caseTargets BlockIdArray, oldTarget BlockId, newTarget BlockId) returns BlockIdArray
+	var out = BlockIdArray.create()
+	for t in caseTargets 'eachSlot'
+		out.push(newTarget if t == oldTarget else t)
+	end 'eachSlot'
+	return out
+end 'remapJumpTargets'
 
 // The physical op for move `i` of a plan: an `xchg` for a cycle-break, else a `mov`.
 export function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp

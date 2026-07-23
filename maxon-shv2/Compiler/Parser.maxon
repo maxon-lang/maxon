@@ -628,6 +628,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		await to tryAwait gives AsyncCalleeLookup.none
 		sizeofType gives AsyncCalleeLookup.none
 		byteStringLiteral gives AsyncCalleeLookup.none
+		switch gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -2244,6 +2245,25 @@ typealias PayloadBindingArray = Array with PayloadBinding
 // jump, neither of which this rung emits.)
 let MinIntervalsForDispatch = 4 as ElementCount
 
+// ⭐ **THE DENSE-TABLE DENSITY HEURISTIC — the three caps that decide a jump TABLE is worth its `.rdata`
+// slots over a binary search.** All three are the bootstrap's, shared verbatim so the two compilers pick
+// the same strategy for the same match (`MaxonToStandardConversion.SwitchDispatch.cs`).
+//
+// A table COSTS one i32 slot per value in the covered SPAN (min..max) but BUYS the removal of the whole
+// compare tree — so the span, not the arm count, is what has to be capped.
+//   • `MaxTableSpanSlots` — 4096 slots (a 16 KiB table) is the widest span admitted. The arm64 bounds
+//     check materialises this count into a scratch register precisely because 4096 does not fit the CMP
+//     imm12 field (`Arm64Backend.emitArm64JumpTable`).
+//   • `MaxTableSlotsPerInterval` — density alone cannot judge a table: four arms 30 apart are 88% dense
+//     inside the span cap yet trade 128 mostly-identical slots for the three compares a search removes. A
+//     slot budget PER interval removed keeps the table proportional to what it actually buys.
+//   • `MinTableDensity{Numerator,Denominator}` — the covered slots must be at least 2/5 (0.4) of the span,
+//     or the search — whose cost follows the interval COUNT, not the span — wins.
+let MaxTableSpanSlots = 4096 as ParsedInt
+let MaxTableSlotsPerInterval = 32 as ParsedInt
+let MinTableDensityNumerator = 2 as ParsedInt
+let MinTableDensityDenominator = 5 as ParsedInt
+
 // ⭐ **ONE NORMALIZED DISPATCH KEY — a closed value interval `[lo, hi]` and the arm body it selects.**
 // A `match` over an integer-like scrutinee (an enum/union tag, a scalar `int`/`char`/`bool`, a
 // ranged-int alias) is lowered by first reducing every arm to a list of these: a single value is
@@ -2270,6 +2290,24 @@ end 'DispatchInterval'
 
 typealias DispatchIntervalArray = Array with DispatchInterval
 
+// The verdict of the density heuristic over `intervals[from, to)`: whether a jump table is worth it, and if
+// so its `bias` (the minimum lo — subtract it and slot `i` is biased value `i`) and its `span` (the slot
+// count, min..max inclusive). `isTable` false leaves the other two unread. Top-level (not nested in
+// `Parser`), like `DispatchInterval` — the density planner returns it out of the parser's dispatch methods.
+type DispatchTablePlan
+	export var isTable as bool
+	export var bias as ParsedInt
+	export var span as ParsedInt
+
+	export static function notTable() returns DispatchTablePlan
+		return Self{isTable: false, bias: 0, span: 0}
+	end 'notTable'
+
+	export static function tableWith(bias ParsedInt, span ParsedInt) returns DispatchTablePlan
+		return Self{isTable: true, bias: bias, span: span}
+	end 'tableWith'
+end 'DispatchTablePlan'
+
 // A permutation of `raw` interval positions — the sort order and the min-heap `normalizeDispatchIntervals`
 // sweeps with. An entry is an index into the arm-order `raw` array, and because the raw array is built in
 // arm order that index IS the arm PRIORITY (lower = earlier arm = wins an overlap), so the heap orders by
@@ -2281,6 +2319,12 @@ typealias DispatchIndexArray = Array with ElementCount
 // point arms — a keyword or bytecode dispatch table, the shape a big `match` IS — Θ(K²). Membership is the
 // only thing asked of it (add, and "have I seen this?"), which is exactly a set's contract.
 typealias SeenPatternValues = Set with ParsedInt
+
+// The distinct arm-body block ids a jump table has already recorded a phi edge for — so an or-arm or a
+// split range, which reaches ONE body through several intervals all carrying the SAME carried-var
+// snapshot, records that body's dispatch edge ONCE (a second edge would double-apply the copy at SSA
+// destruction). Membership is the only question asked, which is a set's contract.
+typealias SeenBlockIdSet = Set with BlockId
 
 export type Parser
 	var tokens as TokenArray
@@ -7035,6 +7079,7 @@ export type Parser
 			tryAwait gives try self.rejectTryTarget(tryTok)
 			sizeofType gives try self.rejectTryTarget(tryTok)
 			byteStringLiteral gives try self.rejectTryTarget(tryTok)
+			switch gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -11169,6 +11214,15 @@ export type Parser
 			return
 		end 'chain'
 
+		// A DENSE run — the covered value span is tight enough (see the three density caps) — becomes an
+		// O(1) indexed jump TABLE rather than a compare tree. Tried at EVERY level, so a dense sub-range at a
+		// binary-search leaf tabulates itself too (the recursion below only reaches sparse regions).
+		let table = self.planDispatchTable(from, to: to, intervals: intervals)
+		if table.isTable 'dense'
+			try self.emitDispatchTable(from, to: to, block: block, subject: subject, intervals: intervals, plan: table, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
+			return
+		end 'dense'
+
 		let mid = from +count / 2
 		let pivot = (try intervals.get(mid) otherwise panic("emitDispatchRange: intervals.get OOB at pivot {mid}")).lo
 		self.currentBlock = block
@@ -11184,6 +11238,132 @@ export type Parser
 		try self.emitDispatchRange(func, from: from, to: mid, block: lowerBlock, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
 		try self.emitDispatchRange(func, from: mid, to: to, block: upperBlock, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
 	end 'emitDispatchRange'
+
+	// ⭐ **DECIDE WHETHER A DENSE RUN IS WORTH A JUMP TABLE**, reporting the bias (its minimum) and the slot
+	// count (the span). The bootstrap's `TryTableBias` verbatim (`SwitchDispatch.cs`): reject on the covered
+	// WIDTH exceeding the span cap, on the span outrunning the per-interval slot budget, then on the density
+	// falling below 2/5. `intervals` is sorted disjoint, so `intervals[from].lo` is the minimum and
+	// `intervals[to-1].hi` the maximum. Everything is measured MODULO 2^64 (a span crossing zero, or one
+	// reaching an open bound, is a real span, not an overflow), so the width is compared without ever
+	// forming a difference that would overflow `i64` — see `spanExceedsCap`.
+	function planDispatchTable(from ElementCount, to ElementCount, intervals DispatchIntervalArray) returns DispatchTablePlan
+		let bias = (try intervals.get(from) otherwise panic("planDispatchTable: intervals.get OOB at from {from}")).lo
+		let maxHi = (try intervals.get(to - 1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
+
+		// Reject on the covered WIDTH exceeding the cap WITHOUT forming `maxHi - bias`, which overflows i64
+		// when the span crosses far into both halves (e.g. `i64.min`..`i64.max`). `maxHi >= bias` always
+		// (sorted, disjoint), so the modular width is a mathematical value in `[0, 2^64)`; it is `< cap` iff
+		// `maxHi` sits within the `cap`-wide window above `bias`, which `spanWithinCap` tests overflow-safely.
+		if not spanWithinCap(bias, maxHi: maxHi) 'tooWide'
+			return DispatchTablePlan.notTable()
+		end 'tooWide'
+
+		// Both operands are now within `MaxTableSpanSlots` of each other, so `maxHi - bias` fits i64.
+		let span = maxHi - bias + 1
+
+		// The table must earn its slots against the compares it removes, not merely against the values it
+		// covers (`MaxTableSlotsPerInterval`). `to - from` is the interval count; the product fits i64
+		// (span <= 4096, the count is bounded by the arm count).
+		if span > ((to - from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
+			return DispatchTablePlan.notTable()
+		end 'sparse'
+
+		var coveredSlots = 0 as ParsedInt
+		for i in from upto to 'each'
+			let interval = try intervals.get(i) otherwise panic("planDispatchTable: intervals.get OOB at {i}")
+			coveredSlots = coveredSlots + (interval.hi - interval.lo + 1)
+		end 'each'
+
+		// Dense iff covered/span >= 2/5, kept as a cross-multiply so no division rounds. Both products fit
+		// i64 (each factor <= 4096 * 5).
+		if coveredSlots * MinTableDensityDenominator < span * MinTableDensityNumerator 'sparse'
+			return DispatchTablePlan.notTable()
+		end 'sparse'
+
+		return DispatchTablePlan.tableWith(bias, span: span)
+	end 'planDispatchTable'
+
+	// Is the modular width `maxHi - bias` (unsigned) strictly below `MaxTableSpanSlots`? Answered WITHOUT
+	// forming the difference, which overflows i64 for a span straddling both halves. `maxHi >= bias`
+	// (signed) is the caller's invariant, so the width is `maxHi - bias` as a true mathematical integer in
+	// `[0, 2^64)`. It is below the cap iff `maxHi` is at most `bias + (cap - 1)`:
+	//   • when `bias + (cap - 1)` does NOT overflow i64 (`bias <= i64.max - (cap - 1)`), that is a plain
+	//     signed compare;
+	//   • when it WOULD overflow, `bias` is within `cap` of `i64.max`, so `maxHi` (<= i64.max) is
+	//     necessarily within the window — accept.
+	function spanWithinCap(bias ParsedInt, maxHi ParsedInt) returns bool
+		let lastSlot = MaxTableSpanSlots - 1
+		if bias > I64MaxBound - lastSlot 'windowReachesTop'
+			return true
+		end 'windowReachesTop'
+		return maxHi <= bias + lastSlot
+	end 'spanWithinCap'
+
+	// ⭐ **EMIT A DENSE RUN AS A JUMP TABLE.** Bias the subject to a zero-based index (`subject − min`, a
+	// modular subtract, so an out-of-range subject wraps to a large unsigned value the target op's UNSIGNED
+	// bounds check sends to the default), build the dense block-id table (each interval fills its several
+	// slots; holes are the default), record the phi edges for the distinct arm bodies and the default, then
+	// emit the `switch` terminator. The bias subtract is elided when the minimum is 0 (a zero-based enum or
+	// scalar match), so `match Color` over `red=0…` biases nothing.
+	function emitDispatchTable(from ElementCount, to ElementCount, block IrBlock, subject ValueId, intervals DispatchIntervalArray, plan DispatchTablePlan, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
+		self.currentBlock = block
+
+		var index = subject
+		if plan.bias != 0 'bias'
+			index = self.emitBiasIndex(subject, bias: plan.bias, opTok: opTok)
+		end 'bias'
+
+		// Every slot in `[min, max]` needs a target; the ones no interval covers are the default. A range
+		// arm and an `or`-list simply fill several slots each — the whole reason a single range arm no longer
+		// forces the match onto a compare tree. `growFilled` from an empty array fills every one of `span`
+		// slots with the default.
+		var targets = BlockIdArray.create()
+		targets.growFilled(plan.span as ElementCount, value: missTarget)
+		for i in from upto to 'eachInterval'
+			let interval = try intervals.get(i) otherwise panic("emitDispatchTable: intervals.get OOB at {i}")
+			// Walk SLOT indices (`lo - bias` … `hi - bias`), never VALUES: a value-driven loop over an
+			// interval ending at `i64.max` would never terminate. Both offsets are in `[0, span)` (the
+			// interval lies within the covered span), so the subtraction cannot overflow.
+			let firstSlot = (interval.lo - plan.bias) as ElementCount
+			let lastSlot = (interval.hi - plan.bias) as ElementCount
+			for slot in firstSlot upto (lastSlot + 1) 'fill'
+				try targets.set(slot, value: interval.targetBlockId) otherwise panic("emitDispatchTable: targets.set OOB at slot {slot} (span {plan.span})")
+			end 'fill'
+		end 'eachInterval'
+
+		// The phi args each dispatch edge carries. An arm body is a phi target only when it is a fall-through
+		// target (`setupFallthroughTargetPhis` stamped its intervals' `edgeArgs`); the default carries
+		// `missArgs`. `recordBranchEdge` is a no-op for an empty arg list, so a phi-less table costs nothing
+		// here. Recorded ONCE per distinct target — an or-arm or a split range reaches one body through
+		// several intervals, all carrying the SAME snapshot, so a second edge to it would double-apply the
+		// copy at SSA destruction.
+		self.recordBranchEdge(block, targetId: missTarget, argIds: missArgs)
+		var seen = SeenBlockIdSet.create()
+		for i in from upto to 'eachEdge'
+			let interval = try intervals.get(i) otherwise panic("emitDispatchTable: intervals.get OOB at {i}")
+			if not seen.contains(interval.targetBlockId) 'firstEdge'
+				seen.insert(interval.targetBlockId)
+				self.recordBranchEdge(block, targetId: interval.targetBlockId, argIds: interval.edgeArgs)
+			end 'firstEdge'
+		end 'eachEdge'
+
+		self.artifact.emitTerminator(block, op: MaxonOp.switch(index, denseTargetBlockIds: targets, defaultBlockId: missTarget), range: SourceRange.ofToken(opTok))
+	end 'emitDispatchTable'
+
+	// The zero-based table index `subject − bias`, emitted as a RAW `binOp(sub)` that MINTS an `integer`
+	// result and bypasses `emitBinOp`'s operand type check — exactly as `emitDispatchCompare` emits a raw
+	// `compare`. The bypass is the point: a SCALAR enum's dispatch subject is a `named(<Enum>)` value, and
+	// arithmetic on an enum is a user-level type error — but this is not user arithmetic, it is the compiler
+	// REINTERPRETING the tag bits as the integer index the jump table needs. The subtraction is MODULAR
+	// (i64 wraparound), so a subject outside the covered span wraps to a large unsigned value the target op's
+	// UNSIGNED bounds check routes to the default. The Std tier collapses the `named` operand to i64
+	// (`stdTypeOf`), so the lowered `sub` is an ordinary i64 subtract.
+	function emitBiasIndex(subject ValueId, bias ParsedInt, opTok Token) returns ValueId
+		let biasLit = self.emitLiteral(bias, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
+		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: subject, rhs: biasLit, op: MaxonBinOp.sub), range: SourceRange.ofToken(opTok))
+		return result
+	end 'emitBiasIndex'
 
 	// A leaf region: test each interval in turn, branching to its arm body on a hit and to the next test
 	// (or `missTarget` after the last) on a miss. `recordBranchEdge` is a no-op for an empty arg list, so

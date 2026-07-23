@@ -416,6 +416,33 @@ function assertArm64CallClobbers()
 	assertOneCallClobber(TargetOp.arm64Syscall(0), name: "arm64Syscall", pool: pool, calleeWitness: 19, calleeName: "x19")
 end 'assertArm64CallClobbers'
 
+// The jump-table ops' `implicitDefs` scratch mask against the registers the ENCODER actually clobbers —
+// r10/r11 (`JumpTableBaseReg`/`JumpTableEntryReg`, x64) or x16/x17 (`Arm64Ip0`/`Arm64Ip1`, arm64). The
+// one-fact-one-place guard the op's header promises: the inline `TargetOpMeta` literal (0xC00 / 0x30000)
+// is what `forbidOperandsFromImplicit` keeps the index off, and the encoder is what actually writes those
+// registers — a drift between them is a silent miscompile (the index colored onto a scratch register the
+// encoder then clobbers before reading), so it is asserted equal here, per target, exactly as the call
+// clobbers are.
+function assertJumpTableScratch(target Target)
+	match target.cpu 'cpu'
+		x64 then assertOneJumpTableScratch(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: regMaskOf(X64Register.r10) or regMaskOf(X64Register.r11))
+		arm64 then assertOneJumpTableScratch(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: regMaskAdd(regMaskAdd(0 as RegMask, regNum: Arm64Ip0Reg), regNum: Arm64Ip1Reg))
+		wasm32 then break 'cpu'
+	end 'cpu'
+end 'assertJumpTableScratch'
+
+// The arm64 IP0/IP1 scratch register numbers (x16/x17), named here beside the assertion that reads them so
+// this file states the scratch pair once rather than reaching into `Arm64Backend`'s encoder constants.
+let Arm64Ip0Reg = 16 as RegNum
+let Arm64Ip1Reg = 17 as RegNum
+
+function assertOneJumpTableScratch(op TargetOp, name String, expected RegMask)
+	let clobber = op.rawValue.implicitDefs
+	if clobber != expected 'drift'
+		panic("assertJumpTableScratch: {name} implicitDefs {clobber} != the encoder's scratch registers {expected} — TargetDialect.{name}'s inline scratch mask and the jump-table encoder's fixed registers drifted apart, so the biased index could be colored onto a register the encoder clobbers")
+	end 'drift'
+end 'assertOneJumpTableScratch'
+
 // One call op's clobber mask against its ABI's caller-saved `pool`, and against a `calleeWitness`
 // register that must NOT be clobbered (a shipped v1 bug clobbered a callee-saved register —
 // project_regalloc_crosscall_spill_fixes). `name`/`calleeName` are carried because a union case
@@ -513,6 +540,7 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	assertRegisterFileMatchesEnum()
 	assertCallClobberConsistent(target)
 	assertRegClassCountMatches()
+	assertJumpTableScratch(target)
 
 	// The stats object is the PROJECT's, not a fresh one: its sub-phase timers are a
 	// breakdown of the `regalloc` phase `buildBackend` measures around this call, and the
@@ -743,6 +771,8 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// of the operand model, which finds no reuse def and adds nothing. The Linux `x64Syscall` names
 		// no register operand at all, so it carries no hint either.
 		leaRegFunc to x64Syscall then break 'hint'
+		// The jump tables carry no copy hint: their one operand is a plain use, not a move or a reuse.
+		x64JumpTable to arm64JumpTable then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1474,6 +1504,11 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// The Linux `syscall` names no register operand (its args are pre-moved into rdi..), so it passes
 		// through unchanged, exactly like `arm64Syscall` and x64's `iatCall`.
 		x64Syscall then return op
+		// The jump tables color their ONE register operand — the biased index — and carry the block-id
+		// table, default and rdata label through unchanged (the scratch registers are fixed in the encoder,
+		// not colored).
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.x64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 	end 'rewrite'
 end 'colorTargetOp'
 

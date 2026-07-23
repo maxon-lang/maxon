@@ -41,6 +41,10 @@ let Arm64Lr = 30
 // The IP scratch registers (x16/x17) — never in the allocatable pool, so the encoder clobbers them
 // freely for immediate materialisation, the `xchg` cycle-break and the ADRP scratch of a float load.
 let Arm64Ip0 = 16
+// x17 — the second intra-procedure-call scratch register (IP1), outside the arm64 allocatable pool. The
+// jump table holds the table base then the computed target address in it; x16 (Arm64Ip0) holds the case
+// count then the loaded slot entry. Both are declared clobbered by `arm64JumpTable`'s implicitDefs.
+let Arm64Ip1 = 17
 
 // A 3-register data-processing instruction `op Rd, Rn, Rm` — the shape ADD/SUB/MUL/AND/ORR/… share.
 function emitArm64Rrr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, rm MachineWord)
@@ -152,6 +156,12 @@ let Arm64OpBcond = 0x54000000
 let Arm64OpCbz = 0xB4000000
 let Arm64OpCbnz = 0xB5000000
 let Arm64OpBlr = 0xD63F0000
+// BR Xn — register-indirect branch (the jump table's computed-target jump). `0xD61F0000 | (Rn << 5)`.
+let Arm64OpBr = 0xD61F0000
+
+// LDRSW Xt, [Xn, Xm, LSL #2] — sign-extend a 32-bit word loaded from `[Xn + Xm*4]` into a 64-bit Xt (the
+// jump table's signed i32 slot load). `0xB8A07800 | (Rm << 16) | (Rn << 5) | Rt`.
+let Arm64OpLdrswRegLsl2 = 0xB8A07800
 
 // RET returns through x30 (LR); the LR is baked into this fully-formed encoding.
 let Arm64OpRet = 0xD65F03C0
@@ -888,7 +898,7 @@ end 'arm64RelInstructions'
 // x64-only arms panic (the x64 encoder owns them — `buildBackend` dispatches on `target.cpu`), and the
 // SHARED arms arm64 reuses (`movRegReg`, the spill/reload and base+disp forms, `xchgRegReg`) are encoded
 // here.
-function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray)
+function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray)
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue to movRegImm32 then panic("emitArm64TargetOp: an x64 control/frame op reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
@@ -975,8 +985,33 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// same target-dispatch bug the x64-only bands above panic on. arm64's own function-value ops are
 		// `arm64LeaFuncAddr`/`arm64BranchLinkReg`, and its syscall is `arm64Syscall`.
 		leaRegFunc to x64Syscall then panic("emitArm64TargetOp: an x64-only op (`leaRegFunc`/`callReg`/`x64Syscall`) reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
+		// The dense-match jump table: the imm12-safe cmp/b.hs/adrp+add/ldrsw/add/br sequence, its default-edge
+		// b.hs fixup and table-address ADRP+ADD reloc filed inline, its per-slot block-address relocs recorded
+		// in `jumpTables`. The x64 jump table never reaches the arm64 encoder.
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then arm64EmitJumpTable(code, rdataRelocs: rdataRelocs, branchFixups: branchFixups, jumpTables: jumpTables, indexReg: arm64GprField(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		x64JumpTable then panic("emitArm64TargetOp: an x64 jump table reached the arm64 encoder — the x64 backend encodes `x64JumpTable`")
 	end 'emit'
 end 'emitArm64TargetOp'
+
+// ⭐ **THE arm64 JUMP-TABLE SEQUENCE (imm12-safe).** `movz x16, #N` / `cmp idx, x16` / `b.hs default`;
+// `adrp x17, table` + `add x17, x17, #pageoff`; `ldrsw x16, [x17, idx, LSL #2]`; `add x17, x17, x16`;
+// `br x17`. ⚠⚠ The count N is MATERIALISED into x16 and compared register-to-register — NEVER `cmp idx, #N`.
+// The CMP imm12 field holds only 0..4095, but the density selector admits a span of EXACTLY 4096, and 4096
+// (0x1000) spills into the shifted-imm12 (LSL #12) bit: `cmp idx, #4096` silently assembles as `cmp idx, #0
+// << 12`, comparing against 0, sending EVERY value to the default. The register form is correct for any
+// count and does not tie this encoder's correctness to the span-cap constant (the exact bug the bootstrap
+// review caught). x16/x17 are the IP scratch pair (outside the allocatable pool), so the live index reg is
+// provably neither — no aliasing guard needed, unlike x64's r10/r11.
+function arm64EmitJumpTable(code ByteArray, rdataRelocs RdataRelocationArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, indexReg MachineWord, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+	arm64EmitMovImm(code, rd: Arm64Ip0, value: caseTargets.count())
+	arm64EmitCmpReg(code, rn: indexReg, rm: Arm64Ip0)
+	arm64EmitCondBranch(code, fixups: branchFixups, cond: Arm64CondCode.hs, targetBlock: defaultTarget)
+	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64Ip1, label: tableLabel, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+	emitArm64Insn(code, insn: Arm64OpLdrswRegLsl2 or (indexReg shl Arm64RmShift) or (Arm64Ip1 shl Arm64RnShift) or Arm64Ip0)
+	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64Ip1, rn: Arm64Ip1, rm: Arm64Ip0)
+	emitArm64Insn(code, insn: Arm64OpBr or (Arm64Ip1 shl Arm64RnShift))
+	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
+end 'arm64EmitJumpTable'
 
 // storeSlotReg / loadRegSlot are CLASS-AGNOSTIC (an 8-byte slot holds a GPR or an f64); the
 // instruction is chosen from the resolved register's file.
@@ -1169,6 +1204,9 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 	// same channel the entry stub's `_exit` rides. Empty for a function that touches no OS primitive.
 	var iatRelocs = RelocationArray.create()
 	var branchFixups = Arm64BlockBranchFixupArray.create()
+	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
+	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
+	var jumpTables = JumpTablePendingArray.create()
 	var blockOffsets = Arm64BlockOffsetMap.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -1178,12 +1216,12 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
-			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups)
+			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
-			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups)
+			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -1195,6 +1233,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 	// runtimes — stays unchanged (only arm64 chunks carry any).
 	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 	chunk.funcAdrpRelocs = funcAdrpRelocs
+	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 	return chunk
 end 'emitArm64FunctionChunk'
 
@@ -1236,6 +1275,7 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 	var debugSymbols = DebugSymbolArray.create()
 	var rdataRelocations = RdataRelocationArray.create()
 	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
+	var jumpTableRelocs = JumpTableRelocArray.create()
 
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
@@ -1263,6 +1303,11 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 		for fr in chunk.funcAdrpRelocs 'rebaseFuncAddr'
 			funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(funcStart + fr.codeOffset, funcName: fr.funcName))
 		end 'rebaseFuncAddr'
+		// Rebase each jump-table reloc's per-slot target offsets from chunk-local to whole-`.text` (the crux
+		// step: a block's offset is `funcStart + its chunk-local offset`), exactly as x64's concat does.
+		for jt in chunk.jumpTableRelocs 'rebaseJumpTables'
+			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart))
+		end 'rebaseJumpTables'
 	end 'eachChunk'
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
@@ -1280,6 +1325,7 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
 	result.arm64FuncAdrpRelocs = funcAdrpRelocs
+	result.jumpTableRelocs = jumpTableRelocs
 	return result
 end 'concatArm64FunctionChunks'
 

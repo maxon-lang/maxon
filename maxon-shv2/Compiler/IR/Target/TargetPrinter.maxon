@@ -190,6 +190,10 @@ function opIsArm64Band(op TargetOp) returns bool
 		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
 		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
 		leaRegFunc to x64Syscall gives false
+		// The jump tables are per-ISA: `x64JumpTable` is an x64 op (module not arm64 for it), `arm64JumpTable`
+		// an arm64 one.
+		x64JumpTable gives false
+		arm64JumpTable gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -322,8 +326,52 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		leaRegFunc(dest, funcName) gives "leaRegFunc {vregName(dest)}, [rip + {String.from(funcName)}]"
 		callReg(reg) gives "callReg {vregName(reg)}"
 		x64Syscall(number) gives "x64Syscall {number}"
+		// The jump tables render the biased index, the default, and the slot→target table run-length
+		// encoded (`[lo..hi]=label`), so a range/`or` arm's several identical slots collapse to one entry
+		// and the table stays readable even at the span cap.
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
 	end 'op'
 end 'formatTargetOp'
+
+// Render a jump table's slot→target array run-length encoded: consecutive slots with the same target
+// become one `[lo..hi]=label` entry (or `[i]=label` for a single slot), so a range arm's several slots
+// read as one span and an all-distinct table reads as one entry per slot. Keeps the dump legible without
+// losing which slot routes where.
+function formatJumpTableSlots(caseTargets BlockIdArray, blocks IrBlockArray) returns String
+	if caseTargets.count() == 0 'empty'
+		return ""
+	end 'empty'
+
+	var out = StringBuilder.create()
+	var afterFirst = false
+	var runStart = 0 as ElementCount
+	var runTarget = try caseTargets.get(0) otherwise panic("formatJumpTableSlots: caseTargets.get(0) on non-empty")
+	for i in 1 upto caseTargets.count() 'each'
+		let target = try caseTargets.get(i) otherwise panic("formatJumpTableSlots: caseTargets.get OOB at {i}")
+		if target != runTarget 'runEnd'
+			appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: i - 1, target: runTarget, blocks: blocks)
+			afterFirst = true
+			runStart = i
+			runTarget = target
+		end 'runEnd'
+	end 'each'
+	appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: caseTargets.count() - 1, target: runTarget, blocks: blocks)
+
+	return out.build()
+end 'formatJumpTableSlots'
+
+function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart ElementCount, runEnd ElementCount, target BlockId, blocks IrBlockArray)
+	if afterFirst 'separator'
+		out.append(", ")
+	end 'separator'
+	let label = String.from(resolveBlockLabel(target, blocks: blocks))
+	if runStart == runEnd 'single'
+		out.append("[{runStart}]={label}")
+	end 'single' else 'span'
+		out.append("[{runStart}..{runEnd}]={label}")
+	end 'span'
+end 'appendJumpTableRun'
 
 // The printed form of a SHARED op's operand — one that appears in BOTH ISAs (movRegReg, the
 // spill/reload and base+disp forms, xchgRegReg) and so carries a neutral `RegNum` with no ISA of its

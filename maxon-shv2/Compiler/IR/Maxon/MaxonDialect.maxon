@@ -836,6 +836,28 @@ export union MaxonOp
 	// `Array with Byte` the ownership model drops through `__arr_decref` (which skips the rdata buffer on
 	// the `capacity < 0` sentinel). `result` is the record pointer. Category `plain` (stands alone).
 	byteStringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	// --- P1.1b slice 2: the DENSE-match jump table ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `byteStringLiteral`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm (`literal to storeIndirect`, the category
+	// ranges). Its `OpCategory.plain` is metadata independent of this tail position — like the other
+	// terminators (`ret`/`condBranch`/`branch`), the Maxon-tier `OpCategory` classifies call/effect shape,
+	// not control flow, so a terminator lands in `plain` (the Std tier's `control` band is where the
+	// switch's control nature is recorded — see StdOp.switch).
+	//
+	// ⭐ **THE MULTIWAY BRANCH TERMINATOR** the parser emits for a DENSE integer-like `match` — the O(1)
+	// indexed jump the density heuristic (`emitDispatchRange`) chooses over the balanced binary search when
+	// the covered value span is tight enough to be worth a table. `subject` is the ALREADY ZERO-BIASED index
+	// (the parser emits a `subject − min` bias `binOp` before this op, so slot `i` selects the biased value
+	// `i`); `denseTargetBlockIds[i]` is the block a subject of biased value `i` transfers to, holes filled
+	// with `defaultBlockId`; a value outside `[0, denseTargetBlockIds.count())` (UNSIGNED — a negative bias
+	// wraps large) reaches `defaultBlockId`. It has N+1 successors — every distinct target block plus the
+	// default. Lowers 1:1 to `StdOp.switch`.
+	//
+	// ⚠ Its array field `denseTargetBlockIds` is bound in a SMALL match (`lowerSwitch`), never destructured
+	// by `lowerMaxonToStd.lowerOp`'s big one — the same tail-slot-Array-corrupts-the-decref trap
+	// `indirectCall` documents.
+	switch(subject ValueId, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

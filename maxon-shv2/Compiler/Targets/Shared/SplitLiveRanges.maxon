@@ -1996,6 +1996,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// integer-remat predicate answers `false`. `callReg` reads its callee register and is a call —
 		// not a const materialization either. The Linux `x64Syscall` is a call, likewise `false`.
 		leaRegFunc to x64Syscall gives false
+		// The jump tables are terminators, not constant materializations, so neither is rematerializable.
+		x64JumpTable to arm64JumpTable gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2551,6 +2553,9 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
 		// `opIsConstMaterialization` answers false for all, so none reaches here; named rather than swallowed.
 		leaRegFunc to x64Syscall panic("constDefInfo: def is not a constant materialization")
+		// The jump tables are not const materializations (`opIsConstMaterialization` gives false), so
+		// `constDefInfo` is never called on one — named rather than swallowed by a range arm.
+		x64JumpTable to arm64JumpTable panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -2737,6 +2742,10 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		callReg(reg) then return TargetOp.callReg(substituteVReg(reg, from: from, to: to))
 		// The Linux `syscall` carries only its number — no register operand to substitute, like `iatCall`.
 		x64Syscall then return op
+		// The jump tables substitute their ONE register operand — the biased index — leaving the block-id
+		// table, default and rdata label untouched.
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.x64JumpTable(substituteVReg(indexReg, from: from, to: to), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(substituteVReg(indexReg, from: from, to: to), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 	end 'rewrite'
 end 'substituteValueInOp'
 

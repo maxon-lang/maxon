@@ -30,6 +30,21 @@ export typealias VarSlot = int(0 to u64.max)
 export typealias BlockId = int(0 to u64.max)
 export typealias BlockIdArray = Array with BlockId
 
+// Linear membership over a BlockId list — the "have I already seen this successor?" question the
+// jump table's distinct-successor dedup asks at every tier (parser edge recording, Maxon await-CFG
+// walk, Target CFG build, wasm landing structure, critical-edge retarget). The list is a switch's
+// distinct-successor set, bounded by the arm count, so a scan is cheaper than a hash set's allocation
+// and hashing on these once-per-switch paths. Shared here — beside `BlockIdArray` — so the four tiers
+// that need it call ONE implementation rather than each spelling the same loop.
+export function blockIdArrayContains(list BlockIdArray, value BlockId) returns bool
+	for id in list 'each'
+		if id == value 'hit'
+			return true
+		end 'hit'
+	end 'each'
+	return false
+end 'blockIdArrayContains'
+
 // BlockRef: an index into a module's flat blocks array. Functions record their
 // ordered set of blocks as a BlockRefArray.
 export typealias BlockRef = int(0 to u64.max)

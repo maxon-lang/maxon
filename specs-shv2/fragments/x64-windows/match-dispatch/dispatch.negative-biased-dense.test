@@ -1,43 +1,39 @@
-// Test: dispatch.exhaustive-enum-no-default
-enum Color
-	red
-	green
-	blue
-	cyan
-	magenta
-	yellow
-end 'Color'
-
-function idx(c Color) returns ExitCode
-	return match c 'm'
-		red gives 1
-		green gives 2
-		blue gives 3
-		cyan gives 4
-		magenta gives 5
-		yellow gives 6
+// Test: dispatch.negative-biased-dense
+function classify(x int) returns int
+	return match x 'm'
+		-3 gives 1
+		-2 gives 2
+		-1 gives 3
+		0 gives 4
+		1 gives 5
+		default gives 0
 	end 'm'
-end 'idx'
+end 'classify'
 
 function main() returns ExitCode
+	// A dense span that CROSSES ZERO (min -3, span 5): the bias subtract is `x - (-3)` = `x + 3`, and the
+	// UNSIGNED bounds check routes a below-min value (which wraps to a huge unsigned index) to the default.
 	var n = 0 as ExitCode
-	if idx(Color.red) == 1 'a' n = n + 1 end 'a'
-	if idx(Color.green) == 2 'b' n = n + 1 end 'b'
-	if idx(Color.blue) == 3 'c' n = n + 1 end 'c'
-	if idx(Color.cyan) == 4 'd' n = n + 1 end 'd'
-	if idx(Color.magenta) == 5 'e' n = n + 1 end 'e'
-	if idx(Color.yellow) == 6 'f' n = n + 1 end 'f'
-	return n
+	if classify(-3) == 1 'a' n = n + 1 end 'a'
+	if classify(-1) == 3 'b' n = n + 1 end 'b'
+	if classify(0) == 4 'c' n = n + 1 end 'c'
+	if classify(1) == 5 'd' n = n + 1 end 'd'
+	if classify(-4) == 0 'e' n = n + 1 end 'e'
+	if classify(2) == 0 'f' n = n + 1 end 'f'
+	return n as ExitCode
 end 'main'
 ---
 ExitCode: 6
 ---
-func @idx {
+func @classify {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.jumpTable rcx, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm, [5]=matcharm] @__jumptable_0
-  matchdead:
+    x64.leaRegRegImm32 rax, rcx, 3
+    x64.jumpTable rax, default=matchdefault [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_0
+  matchdefault:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
   matcharm:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
@@ -53,9 +49,6 @@ func @idx {
   matcharm:
     x64.movRegImm32 r8, 5
     x64.jmp matchcont
-  matcharm:
-    x64.movRegImm32 r8, 6
-    x64.jmp matchcont
   matchcont:
     x64.popReg rbp
     x64.ret
@@ -68,8 +61,8 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-    x64.movRegImm32 rcx, 0
-    x64.callDirect idx
+    x64.movRegImm rcx, -3
+    x64.callDirect classify
     x64.cmpRegImm32 r8, 1
     x64.jcc equal, a
     x64.jmp critsplit
@@ -79,9 +72,9 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movRegImm32 rcx, 1
-    x64.callDirect idx
-    x64.cmpRegImm32 r8, 2
+    x64.movRegImm rcx, -1
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 3
     x64.jcc equal, b
     x64.jmp critsplit
   b:
@@ -90,9 +83,9 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movRegImm32 rcx, 2
-    x64.callDirect idx
-    x64.cmpRegImm32 r8, 3
+    x64.movRegImm32 rcx, 0
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 4
     x64.jcc equal, c
     x64.jmp critsplit
   c:
@@ -101,9 +94,9 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movRegImm32 rcx, 3
-    x64.callDirect idx
-    x64.cmpRegImm32 r8, 4
+    x64.movRegImm32 rcx, 1
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 5
     x64.jcc equal, d
     x64.jmp critsplit
   d:
@@ -112,9 +105,9 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movRegImm32 rcx, 4
-    x64.callDirect idx
-    x64.cmpRegImm32 r8, 5
+    x64.movRegImm rcx, -4
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
     x64.jcc equal, e
     x64.jmp critsplit
   e:
@@ -123,9 +116,9 @@ func @main {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.movRegImm32 rcx, 5
-    x64.callDirect idx
-    x64.cmpRegImm32 r8, 6
+    x64.movRegImm32 rcx, 2
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 0
     x64.jcc equal, f
     x64.jmp critsplit
   f:

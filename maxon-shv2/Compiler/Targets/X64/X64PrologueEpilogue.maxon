@@ -305,6 +305,12 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// are separate `mov`s, and rax/rcx/r11 are caller-saved and never pushed) — 0, like `callDirect`/
 		// `iatCall` above.
 		x64Syscall gives 0
+		// The x64 jump table's biased index USE can be colored into a callee-saved register, so it MUST be
+		// counted (the same real-miscompile trap `callReg` documents). The scratch r10/r11 (its implicitDefs)
+		// are caller-saved and never pushed, so they contribute nothing. `arm64JumpTable` never runs the x64
+		// prologue pass, so 0 (its own prologue counts it) — but the arm keeps the match exhaustive.
+		x64JumpTable(indexReg, _, _, _) gives physRegBit(indexReg)
+		arm64JumpTable gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -426,5 +432,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		arm64Ret to arm64Syscall gives false
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are body ops, never a `ret`.
 		leaRegFunc to x64Syscall gives false
+		// The jump tables are branch terminators, not a `ret`.
+		x64JumpTable to arm64JumpTable gives false
 	end 'check'
 end 'blockEndsWithReturn'

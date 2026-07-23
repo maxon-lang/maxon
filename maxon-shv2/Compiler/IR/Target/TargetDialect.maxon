@@ -283,6 +283,7 @@ end 'Arm64Register'
 export enum Arm64CondCode
 	eq = 0  // Z==1                 (== ; float ==)
 	ne = 1  // Z==0                 (!= ; float !=)
+	hs = 2  // C==1                 (unsigned >= — the jump table's out-of-bounds bounds check)
 	mi = 4  // N==1                 (float <  — false on NaN)
 	pl = 5  // N==0                 (float >= — the ordered complement)
 	hi = 8  // C==1 ∧ Z==0          (unsigned > ; float >)
@@ -1050,6 +1051,36 @@ export union TargetOp
 	// swallowed — appending past the last arm makes each stale match fail to compile until it is
 	// consciously extended.
 	x64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	// --- P1.1b slice 2: the DENSE-match jump table (x64 + arm64) ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `x64Syscall`, per the band-append invariant: every
+	// range arm over `TargetOp` stops at or before `x64Syscall`, so an op inserted mid-union is silently
+	// swallowed. Both are TERMINATORS (multiway indexed branches) that expand in the encoder to the full
+	// bounds-check + table-load + indirect-jump sequence, so they carry no `isMemory`/`isCall` flags — the
+	// table read is an ordinary `.rdata` load, not a call barrier.
+	//
+	// ⭐ **THE O(1) INDEXED JUMP.** `indexReg` holds the already zero-biased subject (a value USE);
+	// `caseTargets[i]` is the block a biased value `i` transfers to (holes = `defaultTarget`); `tableLabel`
+	// names the `.rdata` blob of N table-base-relative i32 offsets the backend registers and the writer
+	// patches. Successors are every DISTINCT block in `caseTargets` plus `defaultTarget`.
+	//
+	// ⭐⭐ **THE SCRATCH REGISTERS RIDE `implicitDefs`, and that is what makes the encoder's two fixed
+	// registers SAFE without a reserved-scratch pool** (shv2 has none — r10/r11 and x16/x17 are all
+	// otherwise usable). Declaring them clobbered does two things the allocator already knows how to honour
+	// (exactly as `idiv`'s RAX/RDX): `forbidOperandsFromImplicit` forbids `indexReg` from landing in a
+	// scratch register (so the fixed encoder registers never alias the live index — the def-vs-use aliasing
+	// the operand model's positions cannot force here, since the colorer reads `dyingRegs` not positions),
+	// and the liveness clobber census forbids any value live ACROSS the switch (into a successor) from a
+	// scratch register (so the table-base/entry writes destroy nothing live). x16/x17 are already outside
+	// arm64's allocatable pool, so their clobber only documents the encoder's use; r10/r11 ARE allocatable,
+	// so their clobber genuinely reserves them at this one op.
+	//
+	// x64 scratch = r10 (0x400) | r11 (0x800) = 0xC00. A union-backing literal cannot reference a named
+	// `let`, so the mask is inline (guarded — see `assertJumpTableScratch`).
+	x64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0xC00}
+	// arm64 scratch = x16 (0x10000) | x17 (0x20000) = 0x30000 — the IP0/IP1 scratch pair, already outside
+	// the arm64 allocatable pool. Inline for the same union-literal reason (guarded by `assertJumpTableScratch`).
+	arm64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

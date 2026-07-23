@@ -28,40 +28,19 @@ func @ored {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 5
-    x64.jcc less, matchlo
-    x64.jmp matchhi
-  matchlo:
-    x64.cmpRegImm32 rcx, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matchnext:
-    x64.cmpRegImm32 rcx, 3
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
-  matchhi:
-    x64.cmpRegImm32 rcx, 5
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 3
+    x64.leaRegRegImm32 rax, rcx, -1
+    x64.jumpTable rax, default=matchdefault [[0]=matcharm, [1]=matchdefault, [2]=matcharm, [3]=matchdefault, [4]=matcharm, [5]=matchdefault, [6]=matcharm, [7]=matchdefault, [8]=matcharm] @__jumptable_0
+  matchdefault:
+    x64.movRegImm32 r8, 9
     x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 7
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
-    x64.movRegImm32 r8, 2
-    x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 9
-    x64.jcc equal, matcharm
-    x64.jmp matchdefault
   matcharm:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matchdefault:
-    x64.movRegImm32 r8, 9
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 3
     x64.jmp matchcont
   matchcont:
     x64.popReg rbp

@@ -177,6 +177,7 @@ let opI64Eq = 0x51
 let opI64Ne = 0x52
 let opI64LtS = 0x53
 let opI64GtS = 0x55
+let opI64GeU = 0x5A  // i64.ge_u — the jump table's UNSIGNED 64-bit bounds check (wrapped-negative → out of range)
 let opI64LeS = 0x57
 let opI64GeS = 0x59
 
@@ -491,6 +492,13 @@ export type WasmBody
 	export function i64GeS()
 		self.buf.push(opI64GeS)
 	end 'i64GeS'
+
+	// i64.ge_u — the jump table's unsigned 64-bit bounds check: a wrapped-negative biased index reads as a
+	// huge unsigned value, so `biased u>= span` routes it to the default exactly as x64's `jae` / arm64's
+	// `b.hs` do (a plain `i32.wrap` + `br_table` would only bound-check the low 32 bits).
+	export function i64GeU()
+		self.buf.push(opI64GeU)
+	end 'i64GeU'
 
 	// i64 unary: `== 0` (i64 → i32), for logicalNot and cond materialization on i64 values.
 	export function i64Eqz()

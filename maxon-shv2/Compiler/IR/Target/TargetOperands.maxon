@@ -392,6 +392,13 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The Linux `syscall` names no explicit register operand — its arguments are pre-moved into
 		// rdi.. and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` does.
 		x64Syscall then break 'operands'
+		// The jump tables name ONE explicit operand: the biased index they read (a use). The two scratch
+		// registers they write are NOT operands — they are fixed encoder registers whose clobber rides
+		// `implicitDefs`, so `forbidOperandsFromImplicit` keeps the index off them and the liveness census
+		// keeps every cross-switch value off them (see TargetDialect.x64JumpTable). `caseTargets`/`tableLabel`
+		// are the CFG/table, not registers.
+		x64JumpTable(indexReg, _, _, _) then pushUse(buf, vreg: indexReg)
+		arm64JumpTable(indexReg, _, _, _) then pushUse(buf, vreg: indexReg)
 	end 'operands'
 end 'targetOpOperands'
 

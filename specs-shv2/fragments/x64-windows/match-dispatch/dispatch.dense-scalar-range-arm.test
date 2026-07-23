@@ -1,0 +1,171 @@
+// Test: dispatch.dense-scalar-range-arm
+function scalar(x int) returns int
+	return match x 'm'
+		0 gives 100
+		1 gives 101
+		2 to 4 gives 102
+		5 gives 105
+		7 gives 107
+		default gives 999
+	end 'm'
+end 'scalar'
+
+function main() returns ExitCode
+	// A dense scalar table (span 8) whose `2 to 4` range arm fills THREE slots with one block; slot 6 is a
+	// hole. Every covered value hits its arm; the hole, the two just-outside-span neighbours, a negative,
+	// and a far value all fall to the default.
+	var n = 0 as ExitCode
+	if scalar(0) == 100 'a' n = n + 1 end 'a'
+	if scalar(3) == 102 'b' n = n + 1 end 'b'
+	if scalar(4) == 102 'c' n = n + 1 end 'c'
+	if scalar(5) == 105 'd' n = n + 1 end 'd'
+	if scalar(6) == 999 'e' n = n + 1 end 'e'
+	if scalar(7) == 107 'f' n = n + 1 end 'f'
+	if scalar(8) == 999 'g' n = n + 1 end 'g'
+	if scalar(-1) == 999 'h' n = n + 1 end 'h'
+	if scalar(100000) == 999 'i' n = n + 1 end 'i'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+func @scalar {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.jumpTable rcx, default=matchdefault [[0]=matcharm, [1]=matcharm, [2..4]=matcharm, [5]=matcharm, [6]=matchdefault, [7]=matcharm] @__jumptable_0
+  matchdefault:
+    x64.movRegImm32 r8, 999
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 100
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 101
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 102
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 105
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 107
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 0
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 100
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 102
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 4
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 102
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 105
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 6
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 999
+    x64.jcc equal, e
+    x64.jmp critsplit
+  e:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 7
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 107
+    x64.jcc equal, f
+    x64.jmp critsplit
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 8
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 999
+    x64.jcc equal, g
+    x64.jmp critsplit
+  g:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 999
+    x64.jcc equal, h
+    x64.jmp critsplit
+  h:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 100000
+    x64.callDirect scalar
+    x64.cmpRegImm32 r8, 999
+    x64.jcc equal, i
+    x64.jmp critsplit
+  i:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

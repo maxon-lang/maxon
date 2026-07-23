@@ -744,6 +744,10 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	patchImportRelocations(code, relocations: codeResult.relocations, textSectionVmAddr: textSectionVmAddr, gotSectionVmAddr: gotSectionVmAddr)
 	patchArm64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textSectionVmAddr, rdataVmAddr: constSectionVmAddr, dataVmAddr: dataSectionVmAddr)
 	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textVmAddr: textSectionVmAddr)
+	// Patch each dense-`match` jump table's __const slots to `targetBlockVA − tableBaseVA`. The delta is
+	// table-base-RELATIVE, so it needs NO dyld chained-rebase (unlike the String `buffer@0` pointers): a PIE
+	// slide moves the table and its target blocks together, leaving the delta invariant.
+	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textSectionVmAddr, rdataAddr: constSectionVmAddr)
 
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	// macOS arm64 forces PIE — the kernel SIGKILLs a non-PIE main executable. MH_PIE

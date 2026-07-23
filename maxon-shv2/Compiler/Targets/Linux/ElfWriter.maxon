@@ -331,6 +331,10 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 		wasm32 then panic("writeElf: wasm32 reached the ELF relocation patcher — the entry guard rejects it")
 	end 'relocs'
 	bakeElfStringBufferAddresses(codeResult.rdata, globalData: codeResult.globalData, rodataVAddr: rodataVAddr)
+	// Patch each dense-`match` jump table's `.rodata` slots to `targetBlockVA − tableBaseVA`. The reloc
+	// format is target-neutral, so ONE call serves both the x64 and arm64 ELF paths — the ELF is static
+	// (fixed load address), so a VA delta IS the runtime delta.
+	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textVAddr, rdataAddr: rodataVAddr)
 
 	var elf = ByteArray.create()
 	elf.reserve(dataFileOffset + dataSegmentSize)

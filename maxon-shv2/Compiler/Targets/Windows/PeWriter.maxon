@@ -609,6 +609,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, dataRva: dataRva)
 	// Bake each String literal's `buffer@0` into the `.rdata` IMAGE now that `rdataRva` is fixed.
 	patchStringBufferFixups(codeResult.rdata, fixups: codeResult.globalData.stringBufferFixups, globalData: codeResult.globalData, rdataRva: rdataRva)
+	// Patch each dense-`match` jump table's `.rdata` slots to `targetBlockRva − tableBaseRva` now that both
+	// sections' RVAs are fixed (the image is fixed-base, so an RVA delta IS the runtime address delta).
+	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva)
 
 	// AddressOfEntryPoint = the entry stub's RVA. `mainCallFixupOffset` carries
 	// mrt_start's `.text` offset (0, since augmentWithRuntime lays it out first).

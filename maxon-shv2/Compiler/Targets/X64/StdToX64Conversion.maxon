@@ -213,6 +213,8 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
 		// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
 		osProcessExitCode to osFreePages gives 0
+		// The jump table makes no call — it reserves no outgoing argument stack.
+		switch gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -779,6 +781,8 @@ type StdToX64Lowering
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
 				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
 				tryCall to osFreePages then break 'term'
+				// The jump table does its OWN `cmp` against the bounds count — it fuses no preceding compare.
+				switch then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -830,6 +834,7 @@ type StdToX64Lowering
 				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
 				// is named rather than swallowed. (P1.5-A1)
 				tryCall to osFreePages then break 'isTheCompare'
+				switch then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -895,6 +900,8 @@ type StdToX64Lowering
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
 			tryCall to osFreePages gives false
+			// The jump table reads no fused compare flags — it sets its own via its bounds `cmp`.
+			switch gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -941,6 +948,8 @@ type StdToX64Lowering
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			// P1.5-B1a′ relocating morestack: release a completed GT's (possibly grown) stack.
 			osFreePages(addrId) then self.lowerOsFreePages(addrId, dstBlock: dstBlock)
+			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
+			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -954,6 +963,11 @@ type StdToX64Lowering
 			// float-equality split is decided per BLOCK, before the walk, not per op.
 			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock, blockRef: blockRef)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
+			// The dense-match jump table lowers to the x64 jump-table target op, registering its `.rdata`
+			// slot blob. Routed through a helper so the `denseTargetBlockIds` Array is not bound in this big
+			// match (the tail-slot-Array corruption `lowerIndirectCall` documents; here `defaultBlockId`
+			// follows it, but the helper keeps the discipline uniform).
+			switch then self.lowerSwitch(op, dstBlock: dstBlock)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
 			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerStdToX64: a `unaryOp` op appeared as a block terminator (lowering bug — a unary op is never a terminator)")
@@ -2064,6 +2078,8 @@ type StdToX64Lowering
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
 			tryCall to osFreePages gives false
+			// The jump table is not a float-equality condBranch.
+			switch gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2198,6 +2214,7 @@ type StdToX64Lowering
 			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
 			// arm here it cannot occur and panics (P1.5-A1).
 			tryCall to osFreePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			switch panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a jump table, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 
@@ -2205,6 +2222,23 @@ type StdToX64Lowering
 	function lowerBranch(targetBlockId BlockId, dstBlock IrBlock)
 		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(targetBlockId))
 	end 'lowerBranch'
+
+	// Lower the dense-match jump table to the x64 `x64JumpTable` terminator. Reserves the `.rdata` blob of
+	// N i32 slots HERE (the lowering owns `globalData`, exactly as `lowerFloatConst` registers its float
+	// island), and the op carries the unique blob label the encoder emits a `lea` to and the writer patches.
+	// The biased index rides as a virtual register; `caseTargets`/`defaultBlockId` are the CFG the successor
+	// walker and the encoder read. RE-MATCHES `op` in a SMALL match — the `lowerIndirectCall` discipline.
+	function lowerSwitch(op StdOp, dstBlock IrBlock)
+		match op 'sw'
+			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitJumpTable(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, dstBlock: dstBlock)
+			default panic("lowerSwitch: expected a `switch` op, got a different StdOp variant — `lowerTerminatorOp` routes only `switch` here")
+		end 'sw'
+	end 'lowerSwitch'
+
+	function emitJumpTable(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, dstBlock IrBlock)
+		let tableLabel = self.globalData.registerJumpTable(caseTargets.count())
+		self.targetModule.setTerminator(dstBlock, op: TargetOp.x64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel.toByteArray()))
+	end 'emitJumpTable'
 
 	// Value return: move the value into the primary-return register (R8), then emit the
 	// `ret`. A VOID return (`StdOp.retVoid`) carries no value at all and goes straight to

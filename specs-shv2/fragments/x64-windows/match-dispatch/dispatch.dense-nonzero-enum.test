@@ -33,48 +33,27 @@ func @rank {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.cmpRegImm32 rcx, 12
-    x64.jcc less, matchlo
-    x64.jmp matchhi
-  matchlo:
-    x64.cmpRegImm32 rcx, 10
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.leaRegRegImm32 rax, rcx, -10
+    x64.jumpTable rax, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_0
+  matchdead:
   matcharm:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 11
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 2
     x64.jmp matchcont
-  matchhi:
-    x64.cmpRegImm32 rcx, 12
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
   matcharm:
     x64.movRegImm32 r8, 3
     x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 13
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
   matcharm:
     x64.movRegImm32 r8, 4
     x64.jmp matchcont
-  matchnext:
-    x64.cmpRegImm32 rcx, 14
-    x64.jcc equal, matcharm
-    x64.jmp matchdead
   matcharm:
     x64.movRegImm32 r8, 5
     x64.jmp matchcont
   matchcont:
     x64.popReg rbp
     x64.ret
-  matchdead:
 }
 
 func @main {

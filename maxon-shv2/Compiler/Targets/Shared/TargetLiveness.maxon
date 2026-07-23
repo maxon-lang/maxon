@@ -1283,6 +1283,9 @@ function opIsCondBranch(op TargetOp) returns bool
 		// `leaRegFunc`/`callReg` (P1.5-A1) are a `lea` and a call, and the Linux `x64Syscall` a call —
 		// none is a conditional branch.
 		leaRegFunc to x64Syscall gives false
+		// The jump tables are MULTIWAY terminators, not two-way conditional branches: their successors come
+		// straight off the op (`collectBlockSuccessorIds`), not via a `condBranch`+`jmp` pairing.
+		x64JumpTable to arm64JumpTable gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1307,6 +1310,10 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing body ops,
 		// never a terminator — so never the ISA's unconditional branch.
 		leaRegFunc to x64Syscall gives false
+		// A jump table IS a terminator, but a MULTIWAY one — not the ISA's UNconditional single-target
+		// branch that a `condBranch` op's else-edge needs, so `false` (a jump-table block records no
+		// `condBranch`, so this is never consulted for one, but the classifier must be exhaustive).
+		x64JumpTable to arm64JumpTable gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1353,9 +1360,28 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
 			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 			leaRegFunc to x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
+			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
+			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
+
+// A jump table's successor set: every DISTINCT case-target block plus the default, each pushed ONCE. A
+// dense table repeats a block across many slots (a range/`or` arm fills several), but the CFG has ONE edge
+// per distinct successor — pushing a block per slot would inflate its predecessor degree and wrongly
+// classify every fall-through edge into it as critical. The default is pushed first (it is always a
+// successor — an out-of-range value reaches it), then each fresh case target. O(slots × distinct) with a
+// linear membership scan, which is fine: the distinct set is bounded by the arm count, and this runs once
+// per switch block per CFG build.
+function pushJumpTableSuccessors(out BlockIdArray, defaultTarget BlockId, caseTargets BlockIdArray)
+	out.push(defaultTarget)
+	for target in caseTargets 'eachSlot'
+		if not blockIdArrayContains(out, value: target) 'fresh'
+			out.push(target)
+		end 'fresh'
+	end 'eachSlot'
+end 'pushJumpTableSuccessors'
 
 // The then-target of the op a block's `condBranch` names. Panics if it is not a `jcc`: the
 // index names the block's conditional branch and nothing else, so any other op there means
@@ -2753,6 +2779,8 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none
 			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
 			leaRegFunc to x64Syscall then break 'capture'
+			// The jump tables are terminators, never an entry param-capture `movRegReg`.
+			x64JumpTable to arm64JumpTable then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3046,6 +3074,8 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` write no stack slot — a `lea`, a
 		// call and a syscall are not spill stores, so `none`, exactly like the `.data` store above.
 		leaRegFunc to x64Syscall gives ValueSpillSlot.none
+		// The jump tables write no stack slot — a multiway terminator is not a spill store.
+		x64JumpTable to arm64JumpTable gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 

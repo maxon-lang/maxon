@@ -564,6 +564,8 @@ type MaxonToStdLowering
 			sizeofType(result, targetType) then self.lowerSizeofType(result, targetType: targetType, dstBlock: dstBlock)
 			// P1.7 slice 2: a `b"…"` literal — an owned heap `Array with Byte` record over an immortal rdata blob.
 			byteStringLiteral(result, bytes) then self.lowerByteStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
+			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminator`.
+			switch then panic("lowerMaxonToStd: a `switch` op appeared as a body op (parser bug — the jump table is always a block terminator)")
 		end 'lower'
 	end 'lowerOp'
 
@@ -577,6 +579,11 @@ type MaxonToStdLowering
 			propagateError(errorFlag) then self.lowerPropagateError(errorFlag, dstBlock: dstBlock)
 			condBranch(cond, thenBlockId, elseBlockId) then self.lowerCondBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
+			// The dense-match jump table lowers 1:1 to the Std twin. Routed through a helper that RE-MATCHES
+			// the op in a SMALL match rather than binding `denseTargetBlockIds` in this big one — the tail-slot
+			// Array corruption `lowerIndirectCall` documents (the array is the middle slot here, but the helper
+			// keeps the discipline uniform and the natural field order).
+			switch then self.lowerSwitch(hlOp, dstBlock: dstBlock)
 			literal then panic("lowerMaxonToStd: a `literal` op appeared as a block terminator (parser bug — literal is never a terminator)")
 			binOp then panic("lowerMaxonToStd: a `binOp` op appeared as a block terminator (parser bug — a binary op is never a terminator)")
 			unaryOp then panic("lowerMaxonToStd: a `unaryOp` op appeared as a block terminator (parser bug — a unary op is never a terminator)")
@@ -1310,6 +1317,17 @@ type MaxonToStdLowering
 	function lowerBranch(targetBlockId BlockId, dstBlock IrBlock)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.branch(targetBlockId))
 	end 'lowerBranch'
+
+	// Lower the dense-match jump table 1:1 to its Std twin, as the block's terminator. Everything passes
+	// through verbatim (the parser already emitted the bias `subtract` and biased the table): the biased
+	// index value id, the dense block-id table, and the default. RE-MATCHES `hlOp` in a SMALL match so the
+	// `denseTargetBlockIds` Array is not bound in `lowerOp`'s big one — the `lowerIndirectCall` discipline.
+	function lowerSwitch(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 'sw'
+			switch(subject, denseTargetBlockIds, defaultBlockId) then self.stdModule.setTerminator(dstBlock, op: StdOp.switch(subject, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId))
+			default panic("lowerSwitch: expected a `switch` op, got a different MaxonOp variant — `lowerTerminator` routes only `switch` here")
+		end 'sw'
+	end 'lowerSwitch'
 
 	// Copy a source block's op-LESS terminator marker (`dead`/`fallthrough`) onto its
 	// freshly-cloned Std block. `unset` needs no action (the clone already starts

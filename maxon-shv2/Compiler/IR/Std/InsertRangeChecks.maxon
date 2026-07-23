@@ -376,6 +376,7 @@ type RangeCheckEmitter
 				binOp then break 'c'
 				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
 				cmp to osFreePages then break 'c'
+				switch then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -459,6 +460,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		const to branch gives false
 		ret(retValId) gives retValId == target
 		param to osFreePages gives false
+		// The jump table is a branch terminator, not a `ret` — it returns no value.
+		switch gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -513,6 +516,8 @@ function stdOpDefinesValue(op StdOp) returns bool
 		osRangePanic to osCloseHandle gives false
 		// `osFreePages` (P1.5-B1a′) defines no value; it sits past `osWaitHandle` in the union, so its own arm.
 		osFreePages gives false
+		// The jump table defines no value — a terminator branches, it does not produce a result.
+		switch gives false
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -548,6 +553,8 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		osRangePanic to osCloseHandle gives 0
 		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
 		osFreePages gives 0
+		// The jump table defines no value.
+		switch gives 0
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 

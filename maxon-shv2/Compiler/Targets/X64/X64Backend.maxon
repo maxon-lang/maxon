@@ -110,6 +110,8 @@ let ModRmRmRipRelative = 5
 
 // The ModR/M reg-field opcode extension of `call r/m64` (group-5 `/2`).
 let Grp5ExtCall = 2
+// The ModR/M reg-field opcode extension of `jmp r/m64` (group-5 `/4`) — the jump table's indirect branch.
+let Grp5ExtJmp = 4
 
 // --- Opcodes ---
 export let OpcodeRet = 0xC3
@@ -146,6 +148,8 @@ let OpcodeGrp2Imm8 = 0xC1  // group-2 SHIFT, r/m, imm8 (a COUNT — never sign-e
 let OpcodeGrp2Cl = 0xD3  // group-2 SHIFT, r/m, cl — the count is IMPLICIT, in CL
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
 let OpcodeMovzxRegRm8 = 0xB6  // movzx r, r/m8 (two-byte 0F B6 /r; reg field = dest)
+let OpcodeMovsxd = 0x63  // movsxd r64, r/m32 (REX.W 63 /r; reg field = dest) — the jump table's signed i32 load
+let SibScale4 = 2  // SIB scale field 10 = ×4 — the jump table's i32-slot index scaling
 let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
@@ -982,6 +986,62 @@ export function encodeJcc(code ByteArray, rel32Fixups ChunkRel32FixupArray, cond
 	writeDword(code, value: 0)
 end 'encodeJcc'
 
+// --- The dense-match jump table (x64) ---
+
+// The two FIXED scratch registers the jump-table sequence uses. r10 holds the table base then the target
+// address; r11 holds the loaded i32 entry. Both are declared clobbered by `TargetOp.x64JumpTable`'s
+// `implicitDefs`, which is what keeps the biased index off them (via `forbidOperandsFromImplicit`) and any
+// cross-switch value off them (via the liveness clobber census) — see the op's header.
+let JumpTableBaseReg = X64Register.r10
+let JumpTableEntryReg = X64Register.r11
+
+// `movsxd dest, [base + index*4]` (REX.W 63 /r + SIB scale=4) — the jump table's signed i32 slot load. The
+// shape of `encodeLeaRegRegReg` but with the `movsxd` opcode and a ×4 SIB scale, so the rbp/r13-base trap
+// (mod=00 base=101 means "no base") goes through the SAME `chooseDispMod`/`emitTrailingDisp` guard; the base
+// is always r10 here, so the trap never fires, but the general form keeps the encoder self-contained.
+function encodeMovsxdRegBaseIndexScale4(code ByteArray, dest X64Register, base X64Register, index X64Register)
+	if index == X64Register.rsp 'rspIndex'
+		panic("encodeMovsxdRegBaseIndexScale4: RSP cannot be a SIB index — the biased jump-table index must never be colored to rsp (rsp is not allocatable)")
+	end 'rspIndex'
+	emitRexRXB(code, wide: true, regField: dest, indexField: index, baseField: base)
+	code.push(OpcodeMovsxd)
+	let modField = chooseDispMod(0, baseIsRbpR13: regLow3(base) == RbpR13Low3)
+	code.push(modField or (regLow3(dest) shl 3) or ModRmRmSibFollows)
+	code.push((SibScale4 shl SibScaleShift) or (regLow3(index) shl 3) or regLow3(base))
+	emitTrailingDisp(code, modField: modField, disp: 0)
+end 'encodeMovsxdRegBaseIndexScale4'
+
+// `jmp r/m64` (FF /4, mod=11) — the jump table's register-indirect branch to the computed target address.
+// The twin of `encodeCallReg` (FF /2) with the jump opcode extension.
+function encodeJmpReg(code ByteArray, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtJmp, rmField: reg)
+end 'encodeJmpReg'
+
+// ⭐ **THE JUMP-TABLE SEQUENCE.** `cmp idx, N` / `jae default` (UNSIGNED, so a wrapped negative index hits
+// the default); `lea r10, [rip + table]`; `movsxd r11, [r10 + idx*4]`; `lea r10, [r10 + r11]` (the `add` as a
+// flag-free `lea`); `jmp r10`. `N` (≤ 4096) fits the `cmp` imm32. The `jae` files a chunk-local rel32 fixup
+// to the default block; the `lea` to the table files an `.rdata` reloc (patched to point at the blob); the
+// per-slot block-address relocations are recorded in `jumpTables` and resolved after the block loop.
+function encodeX64JumpTable(code ByteArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, indexReg X64Register, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray)
+	assertJumpTableIndexReg(indexReg)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: indexReg, imm: caseTargets.count() as Imm32)
+	encodeJcc(code, rel32Fixups: rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: defaultTarget)
+	encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: JumpTableBaseReg, label: tableLabel)
+	encodeMovsxdRegBaseIndexScale4(code, dest: JumpTableEntryReg, base: JumpTableBaseReg, index: indexReg)
+	encodeLeaRegRegReg(code, dest: JumpTableBaseReg, base: JumpTableBaseReg, index: JumpTableEntryReg)
+	encodeJmpReg(code, reg: JumpTableBaseReg)
+	jumpTables.push(JumpTablePending.create(String.from(tableLabel), caseTargets: caseTargets))
+end 'encodeX64JumpTable'
+
+// The colored biased-index register must not be a scratch register — the encoder would clobber it with the
+// table base (r10) or the loaded entry (r11) before reading it. `TargetOp.x64JumpTable`'s `implicitDefs`
+// forbids exactly this via `forbidOperandsFromImplicit`, so a violation is an allocator bug, not a user one.
+function assertJumpTableIndexReg(indexReg X64Register)
+	if indexReg == JumpTableBaseReg or indexReg == JumpTableEntryReg 'aliasesScratch'
+		panic("encodeX64JumpTable: the biased index was colored to r{regNumber(indexReg)}, a jump-table scratch register (r10/r11) — `x64JumpTable`'s implicitDefs (r10|r11) must forbid the index those registers (`forbidOperandsFromImplicit`)")
+	end 'aliasesScratch'
+end 'assertJumpTableIndexReg'
+
 // The bytes of `lea dest, [rip + disp32]` (REX.W 8D /r, mod=00 rm=101) UP TO — not
 // including — the disp32 field. Split out because its two consumers file their fixup in
 // different tables: a chunk-local label goes in the chunk's rel32 table, a named function
@@ -1314,7 +1374,7 @@ end 'slotDisplacement'
 // every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
 // function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
 // spill/reload slot displacement.
-function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, spillBaseDisp StackSize, usesGt bool)
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, spillBaseDisp StackSize, usesGt bool)
 	match op 'emit'
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
@@ -1412,6 +1472,11 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// band-append invariant forced this arm; a panic keeps the ISA boundary loud.
 		arm64Ret to arm64Syscall then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
+		// The dense-match jump table: the full cmp/jae/lea/movsxd/lea/jmp sequence, its default-edge rel32
+		// and table-address rdata reloc filed inline, its per-slot block-address relocs recorded in
+		// `jumpTables` (resolved after the block loop). The arm64 jump table never reaches the x64 encoder.
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then encodeX64JumpTable(code, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, indexReg: resolveGpr(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		arm64JumpTable then panic("emitTargetOp: an arm64 jump table reached the x64 encoder — the arm64 backend encodes `arm64JumpTable`")
 		// P1.5-A1: a function's address (`lea dest, [rip+disp32]` + a `.text` CallFixup — the existing
 		// `encodeLeaRegFuncAddr`, until now called only by the runtime stubs), and a register-indirect
 		// call (`FF /2`, mod=11 — `call reg`). `encodeModRmExtDirect` emits `REX.W FF /2`; REX.W is IGNORED
@@ -1448,6 +1513,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups` and `iatRelocs`.
 	var rdataRelocs = RdataRelocationArray.create()
 	var rel32Fixups = ChunkRel32FixupArray.create()
+	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
+	// resolved after the block loop, when `chunkLabelOffsets` holds every block's chunk-local offset.
+	var jumpTables = JumpTablePendingArray.create()
 	var chunkLabelOffsets = ChunkLabelOffsetMap.create()
 
 	// The base rsp offset of this function's spill-slot area, computed once (it depends
@@ -1488,12 +1556,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -1501,7 +1569,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 	// M1 registers no rdata constants (no float/mask islands) — those GROW in at
 	// M3 (floats) / M10 (strings).
-	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
+	return chunk
 end 'emitFunctionChunk'
 
 // ==========================================================================
@@ -1604,6 +1674,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var labelOffsets = FuncLabelOffsetMap.create()
 	var debugSymbols = DebugSymbolArray.create()
 	var rdataRelocations = RdataRelocationArray.create()
+	var jumpTableRelocs = JumpTableRelocArray.create()
 
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
@@ -1626,6 +1697,12 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 			reloc.rdataOffset = sectionOffsetOfReloc(globalData, reloc: rr)
 			rdataRelocations.push(reloc)
 		end 'rebaseRdata'
+		// Rebase each jump-table reloc's per-slot target offsets from chunk-local to whole-`.text` (the crux
+		// step: a block's offset is `funcStart + its chunk-local offset`). The writer patches the `.rdata`
+		// blob against these — the `Arm64FuncAdrpReloc.textOffset` rebase, per slot.
+		for jt in chunk.jumpTableRelocs 'rebaseJumpTables'
+			jumpTableRelocs.push(rebaseJumpTableReloc(jt, funcStart: funcStart))
+		end 'rebaseJumpTables'
 	end 'eachChunk'
 
 	// `__symtable` CLOSES `.text`, after the last function chunk — the placement the panic
@@ -1663,6 +1740,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
+	result.jumpTableRelocs = jumpTableRelocs
 	return result
 end 'concatX64FunctionChunks'
 

@@ -23,6 +23,11 @@
 export typealias GlobalNameIndexMap = Map with (String, MachineWord)
 export typealias GlobalDedupMap = Map with (ByteArray, String)
 
+// The synthetic-label prefix a dense-`match` jump table's `.rdata` blob is minted under
+// (`registerJumpTable`). Distinct from the float/String prefixes so a jump table is recognisable in a
+// fragment golden and never collides with them.
+let JumpTableLabelPrefix = "__jumptable_"
+
 // An `.rdata` label → its byte offset within the section. The read-only twin of `dataIndex`, and
 // it exists for that field's reason: answering "where does this constant live?" with a linear sum
 // over every prior payload would be Θ(constants × references), which is precisely the shape this
@@ -170,6 +175,22 @@ export type GlobalDataTable
 		self.names.push(label)
 		self.values.push(bytes)
 	end 'appendRdataPayload'
+
+	// ⭐ RESERVE an `.rdata` jump-table blob of `slotCount` i32 slots, returning the UNIQUE label that names
+	// it. The `nextStringId`-minted label makes each switch's table distinct (a byte-dedup would fuse two
+	// different tables — every table is all-zero placeholders at registration, patched per-slot by the WRITER
+	// once section addresses are known, so it MUST NOT join the bytes-keyed `valueDedup` pool). Reserving the
+	// zero bytes fixes the blob's `.rdata` offset now, so `rdataOffsetOf(label)` answers before the writer
+	// patches. The offset/name bookkeeping is the shared `appendRdataPayload`, so `rdataImage`'s drift assert
+	// covers it too.
+	export function registerJumpTable(slotCount ElementCount) returns String
+		let label = "{JumpTableLabelPrefix}{self.nextStringId}"
+		self.nextStringId = self.nextStringId + 1
+		var bytes = ByteArray.create()
+		bytes.growFilled(slotCount * JumpTableSlotBytes, value: 0)
+		self.appendRdataPayload(label, bytes: bytes)
+		return label
+	end 'registerJumpTable'
 
 	// ⭐ REGISTER a read-only constant under an EXACT, caller-supplied label — the layout-descriptor
 	// twin of `registerRdataConstant` (P1.6-B1). A descriptor's label is STRUCTURAL

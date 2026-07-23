@@ -142,6 +142,127 @@ end 'Arm64FuncAdrpReloc'
 
 export typealias Arm64FuncAdrpRelocArray = Array with Arm64FuncAdrpReloc
 
+// The byte width of ONE jump-table slot — a signed 32-bit table-base-relative code offset. Named once
+// here because it is a THREE-party fact: the backend reserves `slots * JumpTableSlotBytes` bytes of `.rdata`
+// (`GlobalDataTable.registerJumpTable`), the encoders index the table with a *4 scale (`movsxd`/`ldrsw`),
+// and `patchJumpTables` writes each slot as a 4-byte little-endian i32. Widen it in one place and all three
+// move together; three literal `4`s would drift.
+export let JumpTableSlotBytes = 4 as ByteCount
+
+// ⭐ **THE BLOCK-ADDRESS RELOCATION** — the one genuinely new link-time mechanism this slice adds. A dense
+// `match` emits an `.rdata` jump table of N i32 slots, each holding `targetBlockVA − tableBaseVA` (a
+// table-base-relative signed offset — position-independent, needing NO runtime rebase on any target, unlike
+// v1's 8-byte absolute rdata pointers which need a dyld rebase on Mach-O). The offsets cannot be known until
+// section layout: `tableBase` is in `.rdata`, the target blocks in `.text`, so both section addresses must
+// be fixed first. So the encoder leaves the slots zero and files ONE of these per switch; the WRITER patches
+// them into the `.rdata` IMAGE once it knows both sections' addresses (`patchJumpTables`).
+//
+// It rides a DEDICATED array (the `Arm64FuncAdrpReloc` pattern — a cross-section reference resolved at concat
+// and patched at write) rather than the code→section `RdataRelocation` stream: this patches a slot INSIDE
+// `.rdata` (not a disp32 in code) against a `.text` BLOCK (not a section offset), which `RdataRelocation`'s
+// (codeOffset, rdataLabel→rdataOffset) shape does not fit. Target-NEUTRAL — the i32 entry format is identical
+// on x64 and arm64, so both backends file these and one `patchJumpTables` serves every writer.
+//
+// `tableLabel` names the `.rdata` blob (`GlobalDataTable.rdataOffsetOf` gives its base). `targetTextOffsets[i]`
+// is slot `i`'s target block's `.text` offset — CHUNK-LOCAL when the chunk emits it, rebased to a whole-`.text`
+// offset by the concat pass (`+ funcStart`, exactly as `Arm64FuncAdrpReloc.textOffset` is resolved). One
+// record per switch (not per slot), so the whole N-slot table is patched from a single walk.
+export type JumpTableReloc
+	export var tableLabel as String
+	export var targetTextOffsets as CodeOffsetArray
+
+	export static function create(tableLabel String, targetTextOffsets CodeOffsetArray) returns JumpTableReloc
+		return Self{tableLabel: tableLabel, targetTextOffsets: targetTextOffsets}
+	end 'create'
+end 'JumpTableReloc'
+
+export typealias JumpTableRelocArray = Array with JumpTableReloc
+
+// A jump-table op awaiting its per-slot block-address relocations: recorded as the op is ENCODED (when
+// forward block offsets are not yet known) and expanded into a `JumpTableReloc` after the block loop, when
+// the chunk's block→offset map is complete. Shared by both backends (the format is target-neutral).
+export type JumpTablePending
+	export var tableLabel as String
+	export var caseTargets as BlockIdArray
+
+	export static function create(tableLabel String, caseTargets BlockIdArray) returns JumpTablePending
+		return Self{tableLabel: tableLabel, caseTargets: caseTargets}
+	end 'create'
+end 'JumpTablePending'
+
+export typealias JumpTablePendingArray = Array with JumpTablePending
+
+// A block id → its CHUNK-LOCAL `.text` offset. Both backends' block-offset maps are this type
+// (`ChunkLabelOffsetMap` / `Arm64BlockOffsetMap`), so `resolveJumpTableRelocs` reads either.
+export typealias BlockTextOffsetMap = Map with (BlockId, CodeOffset)
+
+// ⭐ Expand each encoded jump table into a `JumpTableReloc` whose `targetTextOffsets[i]` is slot `i`'s
+// target block's CHUNK-LOCAL offset — every block's offset is known once its chunk's block loop has run, and
+// the concat pass rebases these to whole-`.text` offsets. This IS the block→text-offset map the coordinator's
+// crux note asked to expose to concat: the chunk's own block-offset map, read per slot. Shared by the x64 and
+// arm64 chunk emitters.
+export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockTextOffsetMap) returns JumpTableRelocArray
+	var out = JumpTableRelocArray.create()
+	for pending in jumpTables 'eachTable'
+		var targetOffsets = CodeOffsetArray.create()
+		for target in pending.caseTargets 'eachSlot'
+			targetOffsets.push(try blockOffsets.get(target) otherwise panic("resolveJumpTableRelocs: jump-table slot targets block {target}, which was never laid out in this chunk — every case target is a block in this function"))
+		end 'eachSlot'
+		out.push(JumpTableReloc.create(pending.tableLabel, targetTextOffsets: targetOffsets))
+	end 'eachTable'
+	return out
+end 'resolveJumpTableRelocs'
+
+// One jump-table reloc with its per-slot target offsets shifted from chunk-local to whole-`.text` by the
+// chunk's start. Shared by the x64 and arm64 concat passes (the reloc format is target-neutral).
+export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset) returns JumpTableReloc
+	var rebased = CodeOffsetArray.create()
+	for off in reloc.targetTextOffsets 'each'
+		rebased.push(funcStart + off)
+	end 'each'
+	return JumpTableReloc.create(reloc.tableLabel, targetTextOffsets: rebased)
+end 'rebaseJumpTableReloc'
+
+// ⭐ **PATCH EVERY JUMP-TABLE SLOT into the `.rdata` IMAGE**, shared by all three writers. `rdata` is the
+// section image about to be written; `textAddr`/`rdataAddr` are the two sections' resolved addresses (an RVA
+// for the fixed-base PE, a VA for the PIE ELF/Mach-O — the arithmetic is identical because each slot is a
+// DIFFERENCE of the two, so the image base cancels). Each slot `i` gets `targetBlockAddr − tableBaseAddr`
+// written as a signed 32-bit little-endian value at `tableBase + i * JumpTableSlotBytes`, exactly the value
+// the runtime `tableBase + entry` reconstructs into the target block's address. Runs on the image BEFORE it
+// is written (like `patchStringBufferFixups`), so the patched bytes reach the file.
+export function patchJumpTables(rdata ByteArray, relocs JumpTableRelocArray, globalData GlobalDataTable, textAddr MachineWord, rdataAddr MachineWord)
+	for reloc in relocs 'eachTable'
+		let tableBase = globalData.rdataOffsetOf(reloc.tableLabel)
+		let tableBaseAddr = rdataAddr + tableBase
+		for (iter, targetTextOffset) in reloc.targetTextOffsets.withIterator() 'eachSlot'
+			let slotIndex = iter.index()
+			let targetAddr = textAddr + targetTextOffset
+			let entry = jumpTableEntry(targetAddr, tableBaseAddr: tableBaseAddr, tableLabel: reloc.tableLabel, slotIndex: slotIndex)
+			// The blob already holds `JumpTableSlotBytes` zero placeholder bytes here (reserved by
+			// `registerJumpTable`), so this overwrites the slot in place via the shared little-endian dword
+			// patcher rather than growing the image.
+			patchDword(rdata, offset: tableBase + slotIndex * JumpTableSlotBytes, value: entry)
+		end 'eachSlot'
+	end 'eachTable'
+end 'patchJumpTables'
+
+// The signed 32-bit table-base-relative offset for one slot: `targetAddr − tableBaseAddr`, returned as its
+// 32-bit two's-complement bit pattern (`patchDword` writes the low four bytes). Both blocks and the table
+// sit in the SAME image, so the true delta fits i32 for any program the backend can produce (a `.text` far
+// larger than 2 GiB is not reachable at this rung) — but a delta that did NOT fit would silently truncate
+// to a wrong jump, so it is checked and a violation is a loud link error, not a corrupt table.
+function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, tableLabel String, slotIndex ElementCount) returns MachineWord
+	let delta = (targetAddr as ParsedInt) - (tableBaseAddr as ParsedInt)
+	if delta < I32MinValue or delta > I32MaxValue 'outOfReach'
+		panic("patchJumpTables: slot {slotIndex} of '{tableLabel}' resolves to offset {delta}, outside the signed 32-bit reach of a jump-table entry — the code section has grown beyond 2 GiB from its jump tables")
+	end 'outOfReach'
+	return (delta and 0xFFFFFFFF) as MachineWord
+end 'jumpTableEntry'
+
+// The i32 reach a jump-table entry (a table-base-relative signed offset) must stay within.
+let I32MinValue = (0 - 0x80000000) as ParsedInt
+let I32MaxValue = 0x7FFFFFFF as ParsedInt
+
 // Per-function code chunk. B2's incremental backend emits one chunk per
 // function, then a module-level fixup pass concatenates them into the final
 // `.text` section. All offsets inside a chunk are CHUNK-LOCAL (`entryOffset` is
@@ -168,6 +289,10 @@ export type FunctionCodeChunk
 	export var iatRelocs as RelocationArray
 	export var rdataConstants as GlobalDataTable
 	export var funcAdrpRelocs as Arm64FuncAdrpRelocArray
+	// This chunk's jump-table block-address relocations (chunk-local `targetTextOffsets`, rebased at concat
+	// exactly like `funcAdrpRelocs`). Resolved after the block loop, when every block's chunk-local offset is
+	// known; empty for any function with no dense `match`.
+	export var jumpTableRelocs as JumpTableRelocArray
 
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
@@ -178,7 +303,8 @@ export type FunctionCodeChunk
 			rdataRelocs: RdataRelocationArray.create(),
 			iatRelocs: RelocationArray.create(),
 			rdataConstants: GlobalDataTable.create(),
-			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create()
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create()
 		}
 	end 'create'
 
@@ -197,7 +323,8 @@ export type FunctionCodeChunk
 			rdataRelocs: rdataRelocs,
 			iatRelocs: iatRelocs,
 			rdataConstants: rdataConstants,
-			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create()
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create()
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'
@@ -245,6 +372,10 @@ export type CodeResult
 	export var debugSymbols as DebugSymbolArray
 	export var wasmCoreModule as ByteArray
 	export var arm64FuncAdrpRelocs as Arm64FuncAdrpRelocArray
+	// The whole module's jump-table block-address relocations, rebased to whole-`.text` offsets by the
+	// concat pass; each writer patches them into the `.rdata` image with `patchJumpTables`. Empty for the
+	// wasm path (its `br_table` needs no relocation) and for any program with no dense `match`.
+	export var jumpTableRelocs as JumpTableRelocArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
 		return Self{
@@ -261,7 +392,8 @@ export type CodeResult
 			dataPrelude: ByteArray.create(),
 			debugSymbols: DebugSymbolArray.create(),
 			wasmCoreModule: ByteArray.create(),
-			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create()
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create()
 		}
 	end 'create'
 
@@ -285,7 +417,8 @@ export type CodeResult
 			dataPrelude: ByteArray.create(),
 			debugSymbols: DebugSymbolArray.create(),
 			wasmCoreModule: wasmCoreModule,
-			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create()
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create(),
+			jumpTableRelocs: JumpTableRelocArray.create()
 		}
 	end 'forWasm'
 end 'CodeResult'

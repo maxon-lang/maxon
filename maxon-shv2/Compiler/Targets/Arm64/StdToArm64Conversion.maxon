@@ -412,6 +412,8 @@ type StdToArm64Lowering
 			// P1.5-B1a′ `osFreePages` (the relocating morestack's page release) is x64-windows only — it is emitted
 			// ONLY inside the x64-windows-gated green-thread substrate (`__gt_drive_until`), so it never reaches arm64.
 			osFreePages then panic("lowerStdToArm64: `osFreePages` is x64-windows only — the green-thread substrate is x64-windows-gated at this rung")
+			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
+			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -445,8 +447,29 @@ type StdToArm64Lowering
 			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToArm64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops; also x64-windows only)")
 			osFreePages then panic("lowerStdToArm64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op; also x64-windows only)")
+			// The dense-match jump table lowers to the arm64 jump-table target op, registering its `.rdata`
+			// slot blob (its label the ADRP+ADD addresses and the writer patches). Routed through a helper so
+			// the `denseTargetBlockIds` Array is not bound in this big match.
+			switch then self.lowerSwitch(op, dstRef: dstRef)
 		end 'lower'
 	end 'lowerTerminatorOp'
+
+	// Lower the dense-match jump table to the arm64 `arm64JumpTable` terminator — the twin of x64's
+	// `emitJumpTable`. Reserves the `.rdata` blob of N i32 slots HERE (the lowering owns `globalData`,
+	// exactly as `lowerFloatConst` registers its float island); the op carries the unique blob label the
+	// ADRP+ADD pair addresses and the writer patches. RE-MATCHES `op` in a SMALL match, the same discipline
+	// x64 uses.
+	function lowerSwitch(op StdOp, dstRef BlockRef)
+		match op 'sw'
+			switch(subjectId, denseTargetBlockIds, defaultBlockId) then self.emitJumpTable(subjectId, caseTargets: denseTargetBlockIds, defaultTarget: defaultBlockId, dstRef: dstRef)
+			default panic("lowerSwitch: expected a `switch` op, got a different StdOp variant — `lowerTerminatorOp` routes only `switch` here")
+		end 'sw'
+	end 'lowerSwitch'
+
+	function emitJumpTable(subjectId ValueId, caseTargets BlockIdArray, defaultTarget BlockId, dstRef BlockRef)
+		let tableLabel = self.globalData.registerJumpTable(caseTargets.count())
+		self.emitTerminator(dstRef, op: TargetOp.arm64JumpTable(TargetVReg.virtual(subjectId), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel.toByteArray()))
+	end 'emitJumpTable'
 
 	// Materialize a constant. The `movz`/`movk` ladder is the encoder's; the isel emits one op.
 	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef BlockRef)
