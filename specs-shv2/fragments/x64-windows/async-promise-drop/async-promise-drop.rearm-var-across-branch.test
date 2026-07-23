@@ -1,0 +1,97 @@
+// Test: async-promise-drop.rearm-var-across-branch
+function trivial() returns int
+	return 0
+end 'trivial'
+
+function positive() returns bool
+	return true
+end 'positive'
+
+function main() returns ExitCode
+	var p = async trivial()
+	if positive() 'b'
+		p = async trivial()
+	end 'b'
+	return 0 as ExitCode
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_clock_ticks@80 = i64 0
+  __gt_clock_freq@88 = i64 0
+  __gt_proc_count@96 = i64 0
+  __gt_proc_handles_base@104 = i64 0
+  __gt_proc_gts_base@112 = i64 0
+  __gt_free_list_head@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __gt_startup_base@136 = i64 0
+  __gt_procinfo_base@144 = i64 0
+  __gt_exitcode_base@152 = i64 0
+  __gt_cmdline_buf_base@160 = i64 0
+  __gt_cmdline_buf_cap@168 = i64 0
+}
+
+func @trivial {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @positive {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + trivial]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.callDirect positive
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegFunc rcx, [rip + trivial]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, r12
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rcx, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rbx, 0
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

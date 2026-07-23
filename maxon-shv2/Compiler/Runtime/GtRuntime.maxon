@@ -996,6 +996,41 @@ function buildGtTimerEarliest(module StdModule)
 	module.functions.push(func)
 end 'buildGtTimerEarliest'
 
+// ⭐ **THE ONE PLACE A TIMER ENTRY'S FIELDS ARE COPIED ON A SWAP-REMOVE (P1.5-B2 #88, Finding 3).** Copy the
+// (deadline, gt) fields of the entry at `lastAddr` into the hole at `holeAddr`. Shared by `__gt_timer_check`'s
+// netpoll afterFire and `__gt_promise_drop`'s timer-store remove, so the set of fields carried on a swap is
+// enumerated ONCE — add a field to the entry, update this, and both swap sites carry it. A self-copy (the
+// removed entry WAS the last) is harmless.
+function emitTimerSwapDown(module StdModule, block IrBlock, ids ValueMinter, lastAddr ValueId, holeAddr ValueId)
+	let movedDeadline = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(movedDeadline, addrId: lastAddr, offset: TimerOffDeadline, valueType: StdType.i64))
+	let movedGt = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(movedGt, addrId: lastAddr, offset: TimerOffGt, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(holeAddr, offset: TimerOffDeadline, valueId: movedDeadline, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(holeAddr, offset: TimerOffGt, valueId: movedGt, valueType: StdType.i64))
+end 'emitTimerSwapDown'
+
+// ⭐ **THE ONE PLACE A PROC ENTRY'S FIELDS ARE COPIED ON A SWAP-REMOVE (Finding 3).** Copy the (handle, gt)
+// parallel-array entries at byte offset `lastOff` into `holeOff`, across BOTH proc-store arrays in lockstep.
+// Shared by `__gt_proc_check`'s netpoll afterFire and `__gt_promise_drop`'s proc-store remove, so the field
+// set (and the two-array lockstep) lives once. The caller does its own `CloseHandle`/count-store around it.
+function emitProcSwapDown(module StdModule, block IrBlock, ids ValueMinter, handlesBase ValueId, gtsBase ValueId, lastOff ValueId, holeOff ValueId)
+	let lastHandleAddr = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(lastHandleAddr, lhs: handlesBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedHandle = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(movedHandle, addrId: lastHandleAddr, offset: 0, valueType: StdType.i64))
+	let holeHandleAddr = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(holeHandleAddr, lhs: handlesBase, rhs: holeOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(holeHandleAddr, offset: 0, valueId: movedHandle, valueType: StdType.i64))
+	let lastGtAddr = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(lastGtAddr, lhs: gtsBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedGt = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(movedGt, addrId: lastGtAddr, offset: 0, valueType: StdType.i64))
+	let holeGtAddr = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(holeGtAddr, lhs: gtsBase, rhs: holeOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
+end 'emitProcSwapDown'
+
 // `__gt_timer_check(now)` — fire every parked GT whose deadline has passed: set its status to `ready`,
 // re-enqueue it (UNLESS it is `__gt_current_gt` — a self-driving GT0 polling its OWN deadline is already on
 // its stack, so status=ready alone wakes it and enqueueing would double-schedule it), and remove its entry
@@ -1100,13 +1135,8 @@ function buildGtTimerCheck(module StdModule)
 	module.appendOp(afterFire, op: StdOp.binOp(curOff, lhs: i, rhs: afEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let holeAddr = ids.mint()
 	module.appendOp(afterFire, op: StdOp.binOp(holeAddr, lhs: heapBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	// Copy the last entry (deadline, gt) into the hole. A self-copy when i == newCount is harmless.
-	let movedDeadline = ids.mint()
-	module.appendOp(afterFire, op: StdOp.loadIndirect(movedDeadline, addrId: lastAddr, offset: TimerOffDeadline, valueType: StdType.i64))
-	let movedGt = ids.mint()
-	module.appendOp(afterFire, op: StdOp.loadIndirect(movedGt, addrId: lastAddr, offset: TimerOffGt, valueType: StdType.i64))
-	module.appendOp(afterFire, op: StdOp.storeIndirect(holeAddr, offset: TimerOffDeadline, valueId: movedDeadline, valueType: StdType.i64))
-	module.appendOp(afterFire, op: StdOp.storeIndirect(holeAddr, offset: TimerOffGt, valueId: movedGt, valueType: StdType.i64))
+	// Copy the last entry (deadline, gt) into the hole — the shared swap-down (Finding 3).
+	emitTimerSwapDown(module, block: afterFire, ids: ids, lastAddr: lastAddr, holeAddr: holeAddr)
 	module.setTerminator(afterFire, op: StdOp.branch(loopHdr.id))
 	afterFire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: args2(i, second: newCount)))
 
@@ -1628,12 +1658,7 @@ function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMint
 	module.appendOp(removeAt, op: StdOp.binOp(curOff, lhs: i, rhs: remEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let holeAddr = ids.mint()
 	module.appendOp(removeAt, op: StdOp.binOp(holeAddr, lhs: heapBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedDeadline = ids.mint()
-	module.appendOp(removeAt, op: StdOp.loadIndirect(movedDeadline, addrId: lastAddr, offset: TimerOffDeadline, valueType: StdType.i64))
-	let movedGt = ids.mint()
-	module.appendOp(removeAt, op: StdOp.loadIndirect(movedGt, addrId: lastAddr, offset: TimerOffGt, valueType: StdType.i64))
-	module.appendOp(removeAt, op: StdOp.storeIndirect(holeAddr, offset: TimerOffDeadline, valueId: movedDeadline, valueType: StdType.i64))
-	module.appendOp(removeAt, op: StdOp.storeIndirect(holeAddr, offset: TimerOffGt, valueId: movedGt, valueType: StdType.i64))
+	emitTimerSwapDown(module, block: removeAt, ids: ids, lastAddr: lastAddr, holeAddr: holeAddr)
 	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
 	module.setTerminator(removeAt, op: StdOp.branch(cont.id))
 end 'emitGtTimerStoreRemove'
@@ -1709,20 +1734,8 @@ function emitGtProcStoreRemove(module StdModule, func IrFunction, ids ValueMinte
 	module.appendOp(removeAt, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let lastOff = ids.mint()
 	module.appendOp(removeAt, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	// procHandles[i] = procHandles[last].
-	let lastHandleAddr = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(lastHandleAddr, lhs: handlesBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedHandle = ids.mint()
-	module.appendOp(removeAt, op: StdOp.loadIndirect(movedHandle, addrId: lastHandleAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(removeAt, op: StdOp.storeIndirect(handleAddr, offset: 0, valueId: movedHandle, valueType: StdType.i64))
-	// procGts[i] = procGts[last].
-	let lastGtAddr = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(lastGtAddr, lhs: gtsBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedGt = ids.mint()
-	module.appendOp(removeAt, op: StdOp.loadIndirect(movedGt, addrId: lastGtAddr, offset: 0, valueType: StdType.i64))
-	let holeGtAddr = ids.mint()
-	module.appendOp(removeAt, op: StdOp.binOp(holeGtAddr, lhs: gtsBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(removeAt, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
+	// procHandles[i] = procHandles[last]; procGts[i] = procGts[last] — the shared swap-down (Finding 3).
+	emitProcSwapDown(module, block: removeAt, ids: ids, handlesBase: handlesBase, gtsBase: gtsBase, lastOff: lastOff, holeOff: curOff)
 	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
 	module.setTerminator(removeAt, op: StdOp.branch(cont.id))
 end 'emitGtProcStoreRemove'
@@ -1994,22 +2007,8 @@ function buildGtProcCheck(module StdModule)
 	module.appendOp(afterFire, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let curOff = ids.mint()
 	module.appendOp(afterFire, op: StdOp.binOp(curOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	// A self-copy when i == newCount is harmless. procHandles[i] = procHandles[last].
-	let lastHandleAddr = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(lastHandleAddr, lhs: handlesBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedHandle = ids.mint()
-	module.appendOp(afterFire, op: StdOp.loadIndirect(movedHandle, addrId: lastHandleAddr, offset: 0, valueType: StdType.i64))
-	let holeHandleAddr = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(holeHandleAddr, lhs: handlesBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(afterFire, op: StdOp.storeIndirect(holeHandleAddr, offset: 0, valueId: movedHandle, valueType: StdType.i64))
-	// procGts[i] = procGts[last].
-	let lastGtAddr = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(lastGtAddr, lhs: gtsBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let movedGt = ids.mint()
-	module.appendOp(afterFire, op: StdOp.loadIndirect(movedGt, addrId: lastGtAddr, offset: 0, valueType: StdType.i64))
-	let holeGtAddr = ids.mint()
-	module.appendOp(afterFire, op: StdOp.binOp(holeGtAddr, lhs: gtsBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(afterFire, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
+	// procHandles[i] = procHandles[last]; procGts[i] = procGts[last] — the shared swap-down (Finding 3).
+	emitProcSwapDown(module, block: afterFire, ids: ids, handlesBase: handlesBase, gtsBase: gtsBase, lastOff: lastOff, holeOff: curOff)
 	module.setTerminator(afterFire, op: StdOp.branch(loopHdr.id))
 	afterFire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: args2(i, second: newCount)))
 

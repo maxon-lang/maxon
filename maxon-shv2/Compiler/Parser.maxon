@@ -616,6 +616,10 @@ union AsyncCalleeLookup
 	none
 end 'AsyncCalleeLookup'
 
+// The set of promise values already visited while tracing a re-armed `var`'s merge phi back to a defining
+// `asyncCall` (P1.5-B2 #88) — breaks the loop back-edge cycle in `resolveAsyncCallee`.
+typealias AsyncCalleeVisited = Set with ValueId
+
 // The awaited callee for one op if it is the `asyncCall` that minted `promise`, else `none` (keep scanning).
 // Split from `asyncCallCalleeOf`'s loop so the equality test — which a match arm cannot host inline — lives
 // in `foundCalleeIfEqual`, and the loop body stays one statement. The `call to indirectCall` / `await to
@@ -7007,7 +7011,7 @@ export type Parser
 			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.giveTypeName(valueTag, aggregateName: assignedAggregate), expected: self.giveTypeName(declaredTag, aggregateName: declaredAggregate), line: nameTok.line, column: nameTok.column)
 		end 'aggregateReassignMismatch'
 
-		try self.reassignBindingValue(binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
+		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
 	end 'parseAssignment'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
@@ -7039,7 +7043,7 @@ export type Parser
 	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
 	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
 	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
-	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
+	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
 		let oldValue = binding.boundValue
 
 		// `s = s` (a self-rebind): the value and its ownership are unchanged, so there is nothing to drop
@@ -7054,29 +7058,62 @@ export type Parser
 		// ⭐ **RE-ARM A PROMISE BINDING (P1.5-B2 #88).** A promise is a scalar green-thread handle with a
 		// bespoke drop (`__gt_promise_drop`), never COW-promoted — so a binding that owns (or receives) a
 		// thread MUST be handled here, before the heap move/promotion path below (which would `promoteBorrowed`
-		// a scalar and panic). Only a fresh `async` spawn may (re-)arm it: an alias rebind (`p = q`) or a
-		// non-promise (`p = 5`) would orphan or mis-own the thread, so both are refused — a positioned E2015,
-		// not a miscompile. The OLD thread is dropped (cancelled) iff this binding still owns a LIVE one (an
-		// `await` already marked a consumed one moved); the binding then owns the new thread.
+		// a scalar and panic).
 		let oldIsPromise = self.valueIsPromise(oldValue)
 		let newIsPromise = self.valueIsPromise(value)
 		if oldIsPromise or newIsPromise 'promiseReassign'
-			if not newIsPromise or rhsWasBareLocal 'unsupportedPromiseReassign'
-				throw ParseError.unsupported("a promise binding ('{String.from(nameTok.value)}') can only be re-armed with a fresh `async` spawn; reassigning it to an alias or a non-promise value would orphan its green thread — `await` it or restructure instead", line: nameTok.line, column: nameTok.column)
-			end 'unsupportedPromiseReassign'
-			if oldIsPromise and not binding.movedFrom and self.bindingIsOwned(binding) 'dropOldThread'
+			// ⚠ **"STILL OWNS A LIVE THREAD" IS READ FROM MEMBERSHIP, NOT `valueIsPromise(oldValue)`.** A
+			// loop-header / if-merge phi carries no promise mark, so the value bit is phi-BLIND — a re-armed
+			// `var p` across a merge holds that unmarked phi as `oldValue`. Membership is the SAME source the
+			// heap path reads for exactly this reason (`wasOwned` below), which single-sources the drop
+			// decision so promise- and heap-provenance cannot drift across a phi again (Finding 1).
+			let ownsLiveThread = not binding.movedFrom and self.bindingIsOwned(binding)
+
+			// `p = q` — rebinding a promise binding to an ALIAS is refused: it would give one thread two owners
+			// (a double drop) or orphan this binding's own thread. A fresh `async` spawn is the only legal
+			// promise RHS; `await` one name before re-binding.
+			if newIsPromise and rhsWasBareLocal 'aliasRebind'
+				throw ParseError.unsupported("a promise binding ('{String.from(nameTok.value)}') cannot be re-armed from another promise binding — only a fresh `async` spawn may re-arm it; `await` one name before re-binding", line: nameTok.line, column: nameTok.column)
+			end 'aliasRebind'
+
+			// ⭐ **FINDING 2 — re-arming would DROP a thread another name still ALIASES.** `let q = p` gives
+			// this binding's thread a second name without enrolling it (a promise aliases, it does not move);
+			// re-arming `p` here drops the thread while `q` still names it, so a later `await q` reclaims freed
+			// memory — a UAF E3100 cannot catch (it is not a double await). Refuse it (a compile error, not a
+			// miscompile). Gated on `ownsLiveThread`, so a re-arm AFTER the thread was awaited (the committed
+			// `double-await-alias-outlives-rebind`, whose re-arm drops nothing) stays a linearity check, not this.
+			if ownsLiveThread and self.promiseThreadHasLiveAlias(func, reArmedName: nameTok.value, thread: oldValue) 'aliasedThreadRearm'
+				throw ParseError.unsupported("cannot re-arm the promise binding ('{String.from(nameTok.value)}'): its green thread is still named by an alias, so dropping it here would leave that alias dangling — `await` through one name before re-arming", line: nameTok.line, column: nameTok.column)
+			end 'aliasedThreadRearm'
+
+			// Drop (cancel) the old thread iff this binding still OWNS a live one — membership-based, so it
+			// fires even when `oldValue` is a phi (a re-armed `var` across a loop / branch). A binding whose
+			// thread an `await` consumed (`movedFrom`) owns nothing, so reassigning it to a scalar is fine and
+			// drops nothing (Finding 4). `emitDecref` routes an owned promise to `__gt_promise_drop`.
+			if ownsLiveThread 'dropOldThread'
 				self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
 			end 'dropOldThread'
-			// The binding owns the new thread. Enrol once — a promise re-armed after an `await` is already in
-			// the set as a moved ghost; a non-promise binding first taking a promise (`var x = 5; x = async f()`)
-			// joins it now. A WRITE revives the binding, so both move flags clear.
+
 			let alreadyInSet = self.bindingIsOwned(binding) or binding.movedFrom
 			self.scope.setValue(nameTok.value, value: value)
-			binding.movedFrom = false
-			binding.partiallyMoved = false
-			if not alreadyInSet 'enrolPromise'
-				self.ownedBindings.push(binding)
-			end 'enrolPromise'
+			if newIsPromise 'revivePromise'
+				// The binding owns the fresh thread — revive it for reads and its scope-exit drop, and enrol
+				// once (a re-armed promise is already in the set as a moved ghost; a non-promise binding first
+				// taking a promise — `var x = 5; x = async f()` — joins now).
+				binding.movedFrom = false
+				binding.partiallyMoved = false
+				if not alreadyInSet 'enrolPromise'
+					self.ownedBindings.push(binding)
+				end 'enrolPromise'
+			end 'revivePromise' else 'becameScalar'
+				// A non-promise value (`p = 5` after a consuming `await`, or after the live thread was dropped
+				// just above): the binding now owns nothing droppable. It STAYS in `ownedBindings` (mid-stack
+				// removal would desync the block/loop drop marks), so it is marked MOVED to make `emitScopeDrops`
+				// skip it — a bare scalar must not be `__mm_decref`'d. Reads still work: `requireBindingLive`
+				// admits any scalar-tagged binding (a scalar is never an unsafely-moved heap value).
+				binding.movedFrom = true
+				binding.partiallyMoved = false
+			end 'becameScalar'
 			self.removeFromPendingTemps(value)
 			return
 		end 'promiseReassign'
@@ -7862,18 +7899,66 @@ export type Parser
 	// "not a promise" / invariant diagnostic. Read at the `try await`/plain-`await` sites (rare), so an
 	// O(function ops) scan costs nothing on the await-free program and keeps the promise → callee fact off
 	// every value (no per-value column that the scale corpus, which has no async, would pay for).
+	//
+	// ⭐ **A RE-ARMED `var`'s PROMISE IS A MERGE PHI (P1.5-B2 #88, Finding 1)** — no `asyncCall` defines it
+	// directly, so the direct scan misses and the resolution TRACES the phi's incoming edge values to a
+	// defining `asyncCall`. A promise var's phi merges promises on every reaching edge (all from `async
+	// <callee>` of the same consistently-typed binding), so the first one reached answers for the awaited
+	// result type and the throws check. A `Set` of visited values breaks loop back-edge cycles.
 	function asyncCallCalleeOf(func IrFunction, promise ValueId) returns AsyncCalleeLookup
+		var visited = AsyncCalleeVisited.create()
+		return self.resolveAsyncCallee(func, promise: promise, visited: visited)
+	end 'asyncCallCalleeOf'
+
+	function resolveAsyncCallee(func IrFunction, promise ValueId, visited AsyncCalleeVisited) returns AsyncCalleeLookup
+		if visited.contains(promise) 'seen'
+			return AsyncCalleeLookup.none
+		end 'seen'
+		visited.insert(promise)
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("asyncCallCalleeOf: blockRef from func.blockRefs not in module.blocks")
+			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("resolveAsyncCallee: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("asyncCallCalleeOf: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
+				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("resolveAsyncCallee: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
 					found(callee) then return AsyncCalleeLookup.found(callee)
 					none then break 'm'
 				end 'm'
 			end 'eachOp'
 		end 'eachBlock'
+		// Not defined by an `asyncCall` directly — trace a merge phi's incoming values.
+		for incoming in self.phiIncomingValues(func, phi: promise) 'eachIncoming'
+			match self.resolveAsyncCallee(func, promise: incoming, visited: visited) 'r'
+				found(callee) then return AsyncCalleeLookup.found(callee)
+				none then break 'r'
+			end 'r'
+		end 'eachIncoming'
 		return AsyncCalleeLookup.none
-	end 'asyncCallCalleeOf'
+	end 'resolveAsyncCallee'
+
+	// The values that flow INTO `phi` on each predecessor edge, if `phi` is a merge block-arg — else empty. A
+	// ValueId is a block-arg of exactly ONE block (SSA), so the first block carrying it is THE one; the phi's
+	// slot in that block's `blockArgs` indexes each incoming edge's `argIds` (recorded in lockstep — an edge
+	// exists in `branchEdges` iff its target carries block-args, so every edge into this block has one).
+	function phiIncomingValues(func IrFunction, phi ValueId) returns ValueIdArray
+		var incoming = ValueIdArray.create()
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("phiIncomingValues: blockRef from func.blockRefs not in module.blocks")
+			for slot in 0 upto block.blockArgs.count() 'eachArg'
+				let arg = try block.blockArgs.get(slot) otherwise panic("phiIncomingValues: blockArgs.get OOB at {slot}")
+				if arg.valueId == phi 'isPhi'
+					for predRef in func.blockRefs 'eachPred'
+						let pred = try self.artifact.module.blocks.get(predRef) otherwise panic("phiIncomingValues: predRef not in module.blocks")
+						for edge in pred.branchEdges 'eachEdge'
+							if edge.targetBlockId == block.id 'intoBlock'
+								incoming.push(try edge.argIds.get(slot) otherwise panic("phiIncomingValues: an edge into block {block.id} carries {edge.argIds.count()} args but the phi is at slot {slot} — edge args must be lockstep with block args"))
+							end 'intoBlock'
+						end 'eachEdge'
+					end 'eachPred'
+					return incoming
+				end 'isPhi'
+			end 'eachArg'
+		end 'eachBlock'
+		return incoming
+	end 'phiIncomingValues'
 
 	// **E3055 — the `try` target's terminal call must be one that CAN throw.** Anchored on the `try` token,
 	// which is why it lives here and not in SemanticCheck (see `ParseError.tryOnNonThrowing`).
@@ -9088,6 +9173,39 @@ export type Parser
 			i = i + 1
 		end 'each'
 	end 'consumePromiseThread'
+
+	// ⭐ **IS A GREEN THREAD `p` OWNS STILL NAMED BY A LIVE ALIAS? (P1.5-B2 #88, Finding 2)** `let q = p` binds
+	// `q` to `p`'s thread ValueId without enrolling a second owner (a promise aliases, it does not move), so
+	// re-arming `p` must first confirm no such live alias exists — else dropping the thread dangles the alias
+	// (a UAF at `await q`). `thread` is the value being re-armed away. Two shapes:
+	//   • DIRECT — `thread` is the spawn's ValueId (a non-loop re-arm): scan the symbol table for a DIFFERENT
+	//     live name bound to it.
+	//   • MERGE PHI — a re-armed `var` across a loop / branch holds a phi as `thread`; the phi itself is named
+	//     by no alias, but the thread it MERGES (on the first reaching edge) may be. So also scan the phi's
+	//     incoming edge values (`phiIncomingValues`) — the pre-loop value an outer `let q = p` aliases.
+	// Purely a re-arm-time scan (no per-binding/per-value state), so the async-free scale corpus pays nothing.
+	function promiseThreadHasLiveAlias(func IrFunction, reArmedName ByteArray, thread ValueId) returns bool
+		if self.threadNameAliasedBy(reArmedName, thread: thread) 'direct'
+			return true
+		end 'direct'
+		for incoming in self.phiIncomingValues(func, phi: thread) 'eachIncoming'
+			if self.threadNameAliasedBy(reArmedName, thread: incoming) 'phiAlias'
+				return true
+			end 'phiAlias'
+		end 'eachIncoming'
+		return false
+	end 'promiseThreadHasLiveAlias'
+
+	// A live binding OTHER than `reArmedName` bound to `thread` and not moved-from — the raw symbol-table scan
+	// `promiseThreadHasLiveAlias` runs on the re-armed value and on each of its phi's incoming values.
+	function threadNameAliasedBy(reArmedName ByteArray, thread ValueId) returns bool
+		for (name, info) in self.scope.allVars() 'each'
+			if name != reArmedName and info.boundValue == thread and not info.movedFrom 'alias'
+				return true
+			end 'alias'
+		end 'each'
+		return false
+	end 'threadNameAliasedBy'
 
 	function poisonMoveSource(value ValueId, anchor Token) throws ParseError
 		var i = 0
@@ -12330,8 +12448,20 @@ export type Parser
 
 	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
 	// binding already holds as a `MaxonType`, so decomposing it constructs nothing.
+	//
+	// ⭐ **PROPAGATE THE PROMISE MARK ACROSS THE MERGE (P1.5-B2 #88, Finding 1).** `valueIsPromise` is a
+	// per-SSA-value mark that a merge phi does not otherwise carry, so a re-armed `var p` (whose value after a
+	// loop / branch IS this phi) would lose its promise identity — its scope-exit drop would misroute to
+	// `__mm_decref` on a GT pointer, and `await p` on the phi would be rejected as "not a promise". A promise
+	// var's phi merges promises on EVERY reaching edge (each value it holds is a spawn handle), so the mark is
+	// read off the value flowing IN here (`binding.boundValue`) and stamped on the phi. The ONE choke point
+	// for loop-header, loop-exit, if-continuation and match phis, so all four inherit it at once.
 	function mintPhiForBinding(block IrBlock, binding VarInfo) returns ValueId
-		return self.mintPhi(block, tag: maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
+		let phiId = self.mintPhi(block, tag: maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
+		if self.valueIsPromise(binding.boundValue) 'promisePhi'
+			self.markValuePromise(phiId)
+		end 'promisePhi'
+		return phiId
 	end 'mintPhiForBinding'
 
 	// Allocate a fresh ValueId AND record its source-level type, in lockstep. THE only way
@@ -16635,16 +16765,17 @@ export type Parser
 			return
 		end 'selfFieldAlias'
 
-		// ⭐ **A CONSUMED (AWAITED) PROMISE STAYS READABLE (P1.5-B2 #88).** For a promise binding, `movedFrom`
-		// means "an `await` consumed the green thread" and gates ONLY its scope-exit drop-skip — never its
-		// readability. A SECOND use of an awaited promise is caught by the more specific LINEAR-AWAIT check
-		// (E3100 at SemanticCheck), which needs the second `await p` to PARSE so it can see it; blocking the
-		// read here with use-after-move (E3102) would preempt E3100 and change the diagnostic. A re-arm
-		// (`p = async g()`) revives the binding. This restores the pre-#88 read behaviour for promises (which
-		// were untracked, hence never `movedFrom`), so the linear-await goldens are unchanged.
-		if self.valueIsPromise(binding.boundValue) 'promiseBinding'
+		// ⭐ **A SCALAR-VALUED BINDING IS ALWAYS SAFE TO READ (P1.5-B2 #88).** `movedFrom`/`partiallyMoved`
+		// forbid a read because a MOVED HEAP value now belongs to another owner; a scalar is never moved that
+		// way, so a move bit on a scalar-valued binding means something else entirely. Two such cases exist,
+		// both from #88: a CONSUMED promise (`movedFrom` = "an `await` reclaimed the green thread" — a second
+		// use is caught by the more specific linear-await E3100 at SemanticCheck, which needs the read to PARSE
+		// first, and a re-arm revives it), and a promise binding reassigned to a bare scalar (`movedFrom` =
+		// "owns nothing droppable"). A promise handle is integer-tagged, so this one predicate admits both.
+		let boundTag = self.tagOf(binding.boundValue)
+		if tagIsAsyncScalar(boundTag) or boundTag == ValueTypeTag.float 'scalarBinding'
 			return
-		end 'promiseBinding'
+		end 'scalarBinding'
 
 		// Both move states are dead at every read. `movedFrom` (a `let u = t` / `s = t` handed the value
 		// to another binding) and `partiallyMoved` (a binding-match moved a managed payload OUT of this

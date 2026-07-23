@@ -213,3 +213,129 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: async-promise-drop.rearm-var-across-loop -->
+<!-- targets: x64-windows -->
+Re-arming a promise `var` INSIDE A LOOP is not phi-blind (P1.5-B2 #88, review Finding 1): the loop-header phi
+carries the promise mark, so each iteration DROPS the previous thread (cancelling it) and the last one drops at
+scope exit — the live count balances to zero (exit 0). Before the fix the loop body emitted no drop (the phi was
+unmarked, so the re-arm saw no live thread to drop) and the scope-exit drop misrouted to `__mm_decref` on a GT
+pointer, corrupting the heap count (exit 101).
+```maxon
+function trivial() returns int
+	return 0
+end 'trivial'
+
+function main() returns ExitCode
+	var p = async trivial()
+	var i = 0
+	while i < 8 'loop'
+		p = async trivial()
+		i = i + 1
+	end 'loop'
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.rearm-var-across-branch -->
+<!-- targets: x64-windows -->
+Re-arming a promise `var` in ONE ARM OF A BRANCH is likewise not phi-blind (Finding 1): the if-continuation phi
+merges the re-armed thread and the untouched one, both marked promises, so the scope-exit drop cancels whichever
+the taken path holds — balanced on every path (exit 0). Before the fix this exited 101.
+```maxon
+function trivial() returns int
+	return 0
+end 'trivial'
+
+function positive() returns bool
+	return true
+end 'positive'
+
+function main() returns ExitCode
+	var p = async trivial()
+	if positive() 'b'
+		p = async trivial()
+	end 'b'
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.await-rearmed-var -->
+<!-- targets: x64-windows -->
+AWAITING a promise `var` re-armed across a branch works and yields the re-armed thread's result (Finding 1): the
+merge phi is recognised as a promise, and its awaited result type is recovered by tracing the phi's incoming
+`async` calls. `positive()` is true, so `p` holds the re-armed thread; `await p` returns 7 and both threads are
+accounted for (the original dropped at the re-arm, the re-armed one awaited). Before the fix `await p` on the
+phi was rejected E2015 ("not a promise").
+```maxon
+function seven() returns int
+	return 7
+end 'seven'
+
+function positive() returns bool
+	return true
+end 'positive'
+
+function main() returns ExitCode
+	var p = async seven()
+	if positive() 'b'
+		p = async seven()
+	end 'b'
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: async-promise-drop.error.rearm-aliased-thread -->
+Re-arming a promise `var` whose thread is still named by a LIVE ALIAS is refused (Finding 2): `let q = p` gives
+the thread a second name, so re-arming `p` would drop it while `q` still names it, and `await q` would then
+reclaim freed memory — a use-after-free E3100 cannot catch (it is not a double await). A compile error, not a
+miscompile. (`double-await-alias-outlives-rebind` stays E3100 because there the thread is AWAITED before the
+re-arm, so the re-arm drops nothing.)
+```maxon
+function compute() returns int
+	return 7
+end 'compute'
+
+function main() returns ExitCode
+	var p = async compute()
+	let q = p
+	p = async compute()
+	let r = await q
+	return r as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:9:2: Unsupported: cannot re-arm the promise binding ('p'): its green thread is still named by an alias, so dropping it here would leave that alias dangling — `await` through one name before re-arming
+```
+
+<!-- test: async-promise-drop.await-then-reassign-nonpromise -->
+<!-- targets: x64-windows -->
+Once a promise's thread has been AWAITED, its binding owns nothing, so reassigning it to a plain scalar is fine
+(Finding 4): `await p` reclaims the thread, then `p = 5` makes `p` an ordinary int. It is neither dropped (the
+binding owes nothing) nor use-after-move (a scalar binding is always readable), so `return p` is 5. Before the
+fix this was wrongly rejected E2015.
+```maxon
+function nine() returns int
+	return 9
+end 'nine'
+
+function main() returns ExitCode
+	var p = async nine()
+	let r = await p
+	p = 5
+	return p as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
