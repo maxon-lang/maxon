@@ -280,6 +280,12 @@ end 'signatureHasFunctionParam'
 // site to decide whether to append the descriptor argument, and per callee to bind the descriptor param.
 export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 
+// The set of witness-table `.rdata` labels already emitted (P1.7a slice 2a) — the blob, its method-slot
+// relocations, and the DCE-rooting of each impl are recorded ONCE per `(Type, Interface)`, even though a
+// concrete dispatch may reference the table at many call sites. `registerRdataConstantLabeled` is idempotent
+// by label on its own, but the relocations and the root are not, so this dedup gate guards them.
+export typealias WitnessTableLabelSet = Set with String
+
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project) returns StdModule
 	return MaxonToStdLowering.create(maxonModule, project: project).lower()
 end 'lowerMaxonToStd'
@@ -316,6 +322,12 @@ type MaxonToStdLowering
 	// `ensureLayoutDescriptor` — one blob per instance actually used as a `sizeof(T)` receiver — so a
 	// program pays for exactly the descriptors it references.
 	var layoutDescriptors as LayoutDescriptorRegistry
+	// The whole-program user interface registry (P1.7a slice 2a), from `project.interfaces` — resolved (with
+	// the synthesized builtins) to read an interface's method LIST when building a witness table blob (one slot
+	// per method, in decl order). Fully merged by lowering time, so a cross-file interface resolves here.
+	var interfaces as IrInterfaceMap
+	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
+	var emittedWitnessTables as WitnessTableLabelSet
 	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 48-byte record and
 	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
 	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
@@ -354,6 +366,15 @@ type MaxonToStdLowering
 	// Does the CURRENT function carry a layout-descriptor parameter? The non-sentinel gate on
 	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
 	var hasImplicitLayout as bool
+	// The number of hidden WITNESS parameters the CURRENT function carries (P1.7a slice 2a) — one per `where`
+	// constraint of its enclosing type, for an instance method of a constrained generic type (0 otherwise).
+	// The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness slot `i` is
+	// `witnessParamBase + i`. `bindImplicitParams` sets both from the type's constraint count.
+	var currentWitnessCount as ParamCount
+	// The ValueId of the CURRENT function's FIRST witness parameter (P1.7a slice 2a) — `paramCount -
+	// currentWitnessCount`. Read by `lowerWitnessDispatch` to forward the caller's own witness slot to a
+	// dispatch. Meaningless (and unread) when `currentWitnessCount` is 0.
+	var witnessParamBase as ValueId
 	// The `throws` clause of the function CURRENTLY being lowered (P1.4b) — re-pointed per function like
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
@@ -377,7 +398,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -458,8 +479,8 @@ type MaxonToStdLowering
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
 			self.currentFuncName = srcFunc.name
-			// Bind this function's hidden layout-descriptor parameter (P1.6-B1), if it carries one.
-			self.bindImplicitLayoutParam(srcFunc)
+			// Bind this function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses).
+			self.bindImplicitParams(srcFunc)
 			self.currentThrows = srcFunc.throwsTypeName
 			// The Std return type was collapsed onto `srcFunc.returnType` in the `transferFuncs` pass above,
 			// so it is final here — read it, don't re-collapse `maxonReturnType`.
@@ -566,6 +587,11 @@ type MaxonToStdLowering
 			byteStringLiteral(result, bytes) then self.lowerByteStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminator`.
 			switch then panic("lowerMaxonToStd: a `switch` op appeared as a body op (parser bug — the jump table is always a block terminator)")
+			// A constrained-type-parameter dispatch (P1.7a slice 2a) — materialize/forward the witness address
+			// and emit the fused `StdOp.witnessCall`. Routed through a helper that RE-MATCHES the op in a SMALL
+			// match rather than binding `args` in this big one — the tail-slot-Array corruption `lowerIndirectCall`
+			// documents.
+			witnessDispatch then self.lowerWitnessDispatch(hlOp, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -598,6 +624,7 @@ type MaxonToStdLowering
 			asyncCall to tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
 			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
 			byteStringLiteral then panic("lowerMaxonToStd: a `byteStringLiteral` op appeared as a block terminator (parser bug — a byte-string literal is a value-producing body op, never a terminator)")
+			witnessDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -715,26 +742,55 @@ type MaxonToStdLowering
 		end 'eachFunc'
 	end 'buildLayoutNeedingFuncs'
 
-	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it as the LAST param, and
-	// at this slice the descriptor is the ONLY trailing param it can add past the user + companion-env params
-	// — so a `paramCount` above the user+env count means it is present.
+	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it after the user + env
+	// companions and BEFORE any witness parameters (`[user][env][layout][witness_0..k]`, P1.7a slice 2a), so a
+	// `paramCount` above the user + env + WITNESS count means the layout slot is present. The witness count is
+	// derived whole-program from the enclosing type's `where` constraints (`witnessParamCountForFunc`), the
+	// SAME rule the parser reserved by, so caller and callee agree without a per-function field.
 	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() + self.envParamCount(func)
+		return func.paramCount > func.maxonParamTypes.count() + self.envParamCount(func) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
-	// Bind the CURRENT function's hidden layout-descriptor parameter — the LAST param slot the parser reserved
-	// (after user + env companions), so its ValueId is `paramCount - 1` and `emitParams` materialises its
-	// capture like any other parameter. `hasImplicitLayout` is the authoritative bit (a zero-user-param generic
-	// method's descriptor slot is legitimately ValueId 0, so the id cannot double as the presence flag).
-	function bindImplicitLayoutParam(func IrFunction)
+	// Bind the CURRENT function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses). The
+	// witness parameters occupy the FINAL `currentWitnessCount` ValueIds; the layout descriptor (when present)
+	// sits just before them. `hasImplicitLayout` is the authoritative layout-presence bit (a zero-user-param
+	// generic method's descriptor slot is legitimately ValueId 0, so the id cannot double as the presence flag);
+	// `witnessParamBase` is witness slot 0's ValueId, read by `lowerWitnessDispatch` to forward a witness.
+	function bindImplicitParams(func IrFunction)
+		self.currentWitnessCount = self.witnessParamCountForFunc(func)
+		self.witnessParamBase = func.paramCount - self.currentWitnessCount
+
 		self.hasImplicitLayout = self.functionHasDescriptorParam(func)
 		self.implicitLayoutValueId = 0
 		if not self.hasImplicitLayout 'noLayout'
 			return
 		end 'noLayout'
 
-		self.implicitLayoutValueId = (func.paramCount - 1) as ValueId
-	end 'bindImplicitLayoutParam'
+		self.implicitLayoutValueId = (func.paramCount - self.currentWitnessCount - 1) as ValueId
+	end 'bindImplicitParams'
+
+	// The number of hidden witness parameters `func` carries (P1.7a slice 2a) — the witness twin of
+	// `functionHasDescriptorParam`. Derived from the function's own signature (`takesReceiver`) and its
+	// enclosing type's `where`-constraint count, so the count is a pure function of whole-program facts and
+	// needs no per-function field. A synthesized function with no signature (a closure/thunk) carries none.
+	function witnessParamCountForFunc(func IrFunction) returns ParamCount
+		let sig = try self.funcSignatures.get(func.name) otherwise return 0
+		return self.witnessParamCountForCallee(func.name, sig: sig)
+	end 'witnessParamCountForFunc'
+
+	// The number of witness parameters the CALLEE `callee` carries (P1.7a slice 2a): its enclosing type's
+	// `where`-constraint count for an INSTANCE method, zero for a static or a free function. Both the callee
+	// side (append witness arguments) and the current-function side (bind witness parameters) read this ONE
+	// rule, so they cannot drift on how many witnesses a call passes.
+	function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
+		if not sig.takesReceiver() 'notInstance'
+			return 0
+		end 'notInstance'
+		match splitQualifiedName(callee) 'q'
+			notQualified then return 0
+			parts(typeName, _) then return self.signatures.structWhereConstraintCount(typeName)
+		end 'q'
+	end 'witnessParamCountForCallee'
 
 	// The number of companion-environment parameters `func` carries (P1.5-A2b-2) — one per function-typed
 	// user parameter — used to locate the layout slot that sits past them.
@@ -748,24 +804,138 @@ type MaxonToStdLowering
 		return n
 	end 'envParamCount'
 
-	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden layout-descriptor argument
-	// when the callee needs one. The descriptor rides LAST — after the user args and any env companions —
-	// matching the `[user][env][layout]` parameter order the parser reserved it at, so the caller's
-	// argument register and the callee's `param` op meet.
+	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
+	// dictionary-passing call carries: the layout descriptor (P1.6-B1) THEN one witness pointer per `where`
+	// constraint (P1.7a slice 2a), in the `[user][env][layout][witness_0..k]` order the parser reserved them
+	// at — so the caller's argument registers and the callee's `param` ops meet.
 	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock) returns ValueIdArray
 		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)
-		if not self.layoutNeedingFuncs.contains(callee) 'noLayout'
+		let needsLayout = self.layoutNeedingFuncs.contains(callee)
+		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
+		if not needsLayout and witnessCount == 0 'noImplicits'
 			return baseArgs
-		end 'noLayout'
+		end 'noImplicits'
 
 		// A FRESH array — `baseArgs` may BE the slotted `argIds` verbatim (finalizeCallArgs's fast path
-		// returns them unchanged), so pushing into it would mutate a possibly-shared array. Only the rare
-		// layout-needing call pays this copy; the common path already returned `baseArgs` above.
+		// returns them unchanged), so pushing into it would mutate a possibly-shared array. Only a
+		// dictionary-passing call pays this copy; the common path already returned `baseArgs` above.
 		var out = ValueIdArray.create()
 		out.append(baseArgs)
-		out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
+		if needsLayout 'layout'
+			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
+		end 'layout'
+		if witnessCount > 0 'witnesses'
+			self.appendWitnessArgs(out, argIds: argIds, callee: callee, dstBlock: dstBlock)
+		end 'witnesses'
 		return out
 	end 'finalizeCallArgsWithLayout'
+
+	// Append the hidden WITNESS arguments a dictionary-passing call to `callee` carries (P1.7a slice 2a) — one
+	// per `where` constraint of the callee's enclosing type, in constraint (source) order, AFTER any layout
+	// descriptor. Only an INSTANCE method carries witnesses (`witnessParamCountForCallee` returns 0 for a
+	// static/free callee), so the receiver is always `argIds[0]` — the value whose CONCRETE instance (or
+	// enclosing `self`) supplies each witness. `out` is the fresh argument array `finalizeCallArgsWithLayout`
+	// built (never `argIds`), so pushing is safe.
+	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, callee ByteArray, dstBlock IrBlock)
+		let receiver = try argIds.get(0) otherwise panic("appendWitnessArgs: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
+		let constraints = self.calleeWhereConstraints(callee)
+		for i in 0 upto constraints.count() 'eachConstraint'
+			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
+			out.push(self.materializeWitnessArg(receiver, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
+		end 'eachConstraint'
+	end 'appendWitnessArgs'
+
+	// The `where` constraints of `callee`'s enclosing type (P1.7a slice 2a). `callee` is a qualified
+	// `Type.method`; a non-qualified callee has no enclosing type and so no constraints (its witness count was
+	// already 0, so this is unreached for it — the panic guards a caller invariant, not a user error).
+	function calleeWhereConstraints(callee ByteArray) returns WhereConstraintArray
+		match splitQualifiedName(callee) 'q'
+			notQualified then panic("calleeWhereConstraints: witness-carrying callee '{String.from(callee)}' is not a qualified `Type.method` — only an instance method carries witnesses, and its name is always qualified")
+			parts(typeName, _) then return self.signatures.structWhereConstraints(typeName)
+		end 'q'
+	end 'calleeWhereConstraints'
+
+	// The witness-table address to pass for ONE constraint (P1.7a slice 2a). A CONCRETE generic-instance
+	// receiver → the RIP-relative address of `__witness_<ConcreteArg>_<Iface>` (`rdataAddr`), emitting the
+	// table on first reference; a receiver that is the enclosing generic body's OWN `self` (`structRef`) or a
+	// value of its type parameter → FORWARD the caller's own witness slot for the same constraint index (a
+	// generic→generic call, both of the same type, so the slots align). Mirrors `materializeLayoutArg`.
+	function materializeWitnessArg(receiver ValueId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
+		let tag = self.valueTagOf(receiver)
+		if tag == ValueTypeTag.genericInstance 'concrete'
+			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
+			let concreteType = self.signatures.mangleTypeArg(self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)).toByteArray()
+			let label = self.ensureWitnessTable(concreteType, interfaceName: constraint.interfaceName)
+			let addrId = self.mintStdValueId()
+			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
+			return addrId
+		end 'concrete'
+		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
+			return self.forwardCallerWitness(constraintIndex, callee: callee)
+		end 'forward'
+		panic("materializeWitnessArg: call to witness-carrying '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
+	end 'materializeWitnessArg'
+
+	// Forward the CURRENT (generic) function's own witness slot for `constraintIndex` to a callee (P1.7a slice
+	// 2a) — a generic body driving another generic method on `self` (or a value of its type parameter), both of
+	// the same type, so the caller's constraint list and the callee's are identical and the slot index aligns.
+	// The witness twin of `forwardCallerLayout`: the caller MUST carry witnesses (an instance method of a
+	// constrained type always does), so a missing slot is an internal invariant break, not a user error.
+	function forwardCallerWitness(constraintIndex WitnessSlotIndex, callee ByteArray) returns ValueId
+		if self.currentWitnessCount == 0 'noSlot'
+			panic("forwardCallerWitness: caller '{String.from(self.currentFuncName)}' has no witness parameter to forward to '{String.from(callee)}' — a generic→generic dispatch is only reached from an instance method of a constrained type, which always carries witnesses")
+		end 'noSlot'
+		return (self.witnessParamBase + constraintIndex) as ValueId
+	end 'forwardCallerWitness'
+
+	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName` (P1.7a slice 2a).** The
+	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `parentTablePtr@8`=0, `flags@16`=0, `methods[N]@24`) is
+	// registered zero-filled under `__witness_<Type>_<Iface>`; each method slot is stamped by a
+	// `funcAbs64InRdata` relocation whose target is the conforming type's own `<Type>.<method>` impl (the SAME
+	// reloc that bakes a layout descriptor's `destroyFunc@40`, so x64-only — the writers refuse it on
+	// arm64/wasm/macOS). Each impl is DCE-ROOTED (`recordCallUsage`) so the reloc never names a `.text` VA that
+	// was pruned — the noteDestructorUsage/noteClonerUsage rooting pattern for a slot named nowhere the module
+	// call graph can see. Idempotent by label: a table referenced at many sites registers ONE blob, ONE set of
+	// relocations, and one root.
+	function ensureWitnessTable(typeName ByteArray, interfaceName ByteArray) returns String
+		let label = witnessTableLabel(typeName, interfaceName: interfaceName)
+		if self.emittedWitnessTables.contains(label) 'cached'
+			return label
+		end 'cached'
+		self.emittedWitnessTables.insert(label)
+
+		let iface = self.resolveWitnessInterface(interfaceName)
+		let methodCount = iface.methods.count()
+
+		// `methodCount@0`, then zero-fill through the header (`parentTablePtr@8`, `flags@16`) and every method
+		// slot — the writer patches the slots via the relocations below. `scalarImage` is the SAME little-endian
+		// serializer the `.data`/`.rdata` images use, so the header word matches every other integer this backend
+		// writes.
+		var blob = ByteArray.create()
+		blob.append(scalarImage(methodCount as ParsedInt, byteCount: WitnessSlotBytes as ByteCount))
+		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * methodCount) as ElementCount, value: 0)
+		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob)
+
+		for i in 0 upto methodCount 'eachMethod'
+			let method = try iface.methods.get(i) otherwise panic("ensureWitnessTable: methods.get OOB at {i} below count {methodCount}")
+			let impl = qualifiedMethodName(typeName, methodName: method.name)
+			self.globalData.recordFuncAbs64InRdata(impl, rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
+		end 'eachMethod'
+
+		return label
+	end 'ensureWitnessTable'
+
+	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — a synthesized builtin FIRST
+	// (matching `ConformanceCheck.resolveInterface`), then a user interface from the merged `project.interfaces`.
+	// A witness table is only built for a constraint whose interface the parser already resolved same-file, so an
+	// unresolved name here is an internal invariant break, not a user error.
+	function resolveWitnessInterface(interfaceName ByteArray) returns IrInterface
+		match builtinInterface(interfaceName) 'builtin'
+			found(iface) then return iface
+			notFound then break 'builtin'
+		end 'builtin'
+		return try self.interfaces.get(interfaceName) otherwise panic("resolveWitnessInterface: witness constraint interface '{String.from(interfaceName)}' is neither a builtin nor a declared interface — the parser resolved it at the dispatch site, so it must resolve here")
+	end 'resolveWitnessInterface'
 
 	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source (P1.6-B1 / P1.7
 	// slice 3b-i). An INSTANCE method reads it from its RECEIVER (`self` at slotted position 0 — the value of
@@ -1066,16 +1236,51 @@ type MaxonToStdLowering
 	// shares its callee parameter's type). A helper because `lowerIndirectCall`'s arm must hand `args` to a
 	// function and touch it no other way (see there).
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
-		let resultType = self.indirectResultType(result)
-		var argFloatMask = 0 as ArgFloatMask
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: self.argFloatMaskOf(args), args: args))
+	end 'appendCallIndirect'
+
+	// Bit k set iff argument k is a float (an f64, routed to a float argument register) — the per-argument
+	// register-file mask a `callIndirect`/`witnessCall` carries, computed from the already-typed arg VALUES
+	// (`stdTypeOf`). ONE home, shared by the indirect-call and witness-call lowerings so the two cannot drift
+	// on how an argument's file is decided.
+	function argFloatMaskOf(args ValueIdArray) returns ArgFloatMask
+		var mask = 0 as ArgFloatMask
 		for k in 0 upto args.count() 'eachArg'
-			let arg = try args.get(k) otherwise panic("appendCallIndirect: args.get OOB at {k}")
+			let arg = try args.get(k) otherwise panic("argFloatMaskOf: args.get OOB at {k}")
 			if stdTypeIsFloat(self.stdTypeOf(arg)) 'floatArg'
-				argFloatMask = argFloatMask or (1 shl k)
+				mask = mask or (1 shl k)
 			end 'floatArg'
 		end 'eachArg'
-		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(resultType), argFloatMask: argFloatMask, args: args))
-	end 'appendCallIndirect'
+		return mask
+	end 'argFloatMaskOf'
+
+	// ⭐ **LOWER A CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessCall` (P1.7a slice 2a).** The
+	// witness ADDRESS is the enclosing (generic) function's own threaded witness parameter for this constraint
+	// — FORWARDED, exactly as `forwardCallerLayout` forwards the layout descriptor: a `witnessDispatch` is only
+	// ever emitted inside a generic body, whose `T` witness arrived as a hidden parameter (the concrete
+	// `__witness_<Type>_<Iface>` was materialized at the CALL SITE and passed in). Re-matched in a SMALL match
+	// so `args` is bound in a single-call arm, never in `lowerOp`'s big one (the tail-slot-Array decref
+	// corruption `lowerIndirectCall` documents).
+	function lowerWitnessDispatch(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 'w'
+			witnessDispatch(result, args, constraintIndex, methodIndex, isVoid) then self.appendWitnessCall(dstBlock, result: result, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)
+			default panic("lowerWitnessDispatch: expected a `witnessDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessDispatch` here")
+		end 'w'
+	end 'lowerWitnessDispatch'
+
+	// Build the Std `witnessCall`: forward the current function's witness parameter for `constraintIndex` as the
+	// table address, then capture the result exactly as `appendCallIndirect` does (an `isVoid` method leaves no
+	// result register to capture, so its `resultType` is `void`). A helper because `lowerWitnessDispatch`'s arm
+	// must hand `args` to a function and touch it no other way (see there and `lowerIndirectCall`).
+	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool)
+		if self.currentWitnessCount == 0 'noWitnessParam'
+			panic("appendWitnessCall: a witness dispatch in '{String.from(self.currentFuncName)}' but the function carries no witness parameters — the parser's reservation (an instance method of a constrained generic type) and this lowering's whole-program split disagree")
+		end 'noWitnessParam'
+		let witnessAddr = (self.witnessParamBase + constraintIndex) as ValueId
+
+		let resultType = StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
+	end 'appendWitnessCall'
 
 	// The Std type an indirect call CAPTURES its result in — normally the result value's own type. But a
 	// VOID function value (`let cb = doIt; cb()` at statement position, P1.5 #68) has NO result to capture:

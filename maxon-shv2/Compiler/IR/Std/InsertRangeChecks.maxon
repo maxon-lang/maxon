@@ -377,6 +377,8 @@ type RangeCheckEmitter
 				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
 				cmp to osFreePages then break 'c'
 				switch then break 'c'
+				// A witness call's result is a call return, not a foldable constant — nothing to record.
+				witnessCall then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -462,6 +464,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		param to osFreePages gives false
 		// The jump table is a branch terminator, not a `ret` — it returns no value.
 		switch gives false
+		// A witness call is a body op, not a `ret` — it is not the return whose value this checks.
+		witnessCall gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -518,6 +522,8 @@ function stdOpDefinesValue(op StdOp) returns bool
 		osFreePages gives false
 		// The jump table defines no value — a terminator branches, it does not produce a result.
 		switch gives false
+		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`.
+		witnessCall gives true
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -555,6 +561,8 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		osFreePages gives 0
 		// The jump table defines no value.
 		switch gives 0
+		// A witness call defines its result value, like `callIndirect`.
+		witnessCall(resultId, _, _, _, _, _) gives resultId
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 

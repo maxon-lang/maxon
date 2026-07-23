@@ -311,6 +311,9 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// prologue pass, so 0 (its own prologue counts it) — but the arm keeps the match exhaustive.
 		x64JumpTable(indexReg, _, _, _) gives physRegBit(indexReg)
 		arm64JumpTable gives 0
+		// The witness call's base-register USE can be colored into a callee-saved register, so it MUST be
+		// counted — the same trap `callReg` documents.
+		callMem(baseReg, _) gives physRegBit(baseReg)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -434,5 +437,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		leaRegFunc to x64Syscall gives false
 		// The jump tables are branch terminators, not a `ret`.
 		x64JumpTable to arm64JumpTable gives false
+		// The witness call is a body op, never a `ret`.
+		callMem gives false
 	end 'check'
 end 'blockEndsWithReturn'

@@ -215,6 +215,8 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		osProcessExitCode to osFreePages gives 0
 		// The jump table makes no call — it reserves no outgoing argument stack.
 		switch gives 0
+		// A witness call passes its arguments (receiver + user args, ≤ 6) in registers — no outgoing stack.
+		witnessCall gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -783,6 +785,8 @@ type StdToX64Lowering
 				tryCall to osFreePages then break 'term'
 				// The jump table does its OWN `cmp` against the bounds count — it fuses no preceding compare.
 				switch then break 'term'
+				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing.
+				witnessCall then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -835,6 +839,8 @@ type StdToX64Lowering
 				// is named rather than swallowed. (P1.5-A1)
 				tryCall to osFreePages then break 'isTheCompare'
 				switch then break 'isTheCompare'
+				// A witness call is a call, not the compare — the scan stops and records no fusion (safe).
+				witnessCall then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -902,6 +908,8 @@ type StdToX64Lowering
 			tryCall to osFreePages gives false
 			// The jump table reads no fused compare flags — it sets its own via its bounds `cmp`.
 			switch gives false
+			// A witness call is a value-producing body op, never a terminator that reads fused flags.
+			witnessCall gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -950,6 +958,8 @@ type StdToX64Lowering
 			osFreePages(addrId) then self.lowerOsFreePages(addrId, dstBlock: dstBlock)
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
+			// P1.7a slice 2a: the fused witness call — arg moves then a memory-indirect `call [witnessAddr + off]`.
+			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -992,6 +1002,7 @@ type StdToX64Lowering
 			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
+			witnessCall then panic("lowerStdToX64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1351,6 +1362,23 @@ type StdToX64Lowering
 			value(inner) then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(inner))))
 		end 'r'
 	end 'lowerCallIndirect'
+
+	// Lower the fused `witnessCall` (P1.7a slice 2a) — `callIndirect` whose callee is a MEMORY OPERAND: move
+	// each argument into its ABI register (the SHARED `emitArgMovesByFloatMask`, so witness and indirect calls
+	// cannot drift on argument slotting), then a memory-indirect `call qword [witnessAddr + 24 + 8*methodIndex]`
+	// (`callMem`) — the loaded function pointer is dereferenced by the call itself and NEVER occupies a virtual
+	// register. `witnessAddr` is carried as `callMem`'s base-register USE, so the allocator keeps the table
+	// address live across the argument moves in a register they have not written, exactly as `callReg` keeps an
+	// indirect callee. The result is captured from XMM0/R8 (a void method captures nothing), identical to
+	// `lowerCallIndirect`.
+	function lowerWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstBlock IrBlock)
+		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstBlock: dstBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callMem(TargetVReg.virtual(witnessAddr), disp: witnessMethodSlotOffset(methodIndex) as Imm32))
+		match resultType 'r'
+			void then break 'r'
+			value(inner) then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(inner))))
+		end 'r'
+	end 'lowerWitnessCall'
 
 	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a
 	// float): a FLOAT argument to an XMM arg register on a SEPARATE FP counter, everything else to a GPR arg
@@ -2087,6 +2115,8 @@ type StdToX64Lowering
 			tryCall to osFreePages gives false
 			// The jump table is not a float-equality condBranch.
 			switch gives false
+			// A witness call is a body op, never a float-equality condBranch.
+			witnessCall gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2222,6 +2252,7 @@ type StdToX64Lowering
 			// arm here it cannot occur and panics (P1.5-A1).
 			tryCall to osFreePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			switch panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a jump table, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			witnessCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

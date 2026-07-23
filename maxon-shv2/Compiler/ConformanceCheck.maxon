@@ -70,6 +70,77 @@ export function checkConformance(project Project, module MaxonModule)
 	end 'eachDecl'
 end 'checkConformance'
 
+// The interfaces a type is DECLARED to implement — `Point` -> {`Digest`}. Built from `project.conformances`
+// for the E3017 where-constraint check: an instantiation `Box with Point where T is Digest` is legal iff
+// `Point` declares `implements Digest`. Conformance is DECLARED (nominal), matching `checkConformance`'s model.
+typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
+
+// ⭐ **WHERE-CONSTRAINT VALIDATION AT INSTANTIATION (P1.7a slice 2a — E3017).** For every `typealias X = Base
+// with Args` whose base declares `where T is <Interface>` constraints, each concrete argument must conform to
+// (declare `implements`) the interface its parameter is constrained to — else E3017, anchored on the
+// instantiation. Runs AFTER `queryProgramSignatures` (the instances are interned by then) and reads the
+// DECLARED conformances `checkConformance` already validated (E3016), so a type reaching here as conforming has
+// a complete, correct implementation. A program with no constrained instantiation short-circuits allocation-free.
+export function checkWhereConstraints(project Project, signatures ProgramSignatures)
+	let sites = signatures.instantiationSites()
+	if sites.count() == 0 'noSites'
+		return
+	end 'noSites'
+
+	// A prior diagnostic (a parse error, an E3006 duplicate) leaves `project.conformances` possibly INCOMPLETE
+	// — a file whose parse failed may not have merged its `implements` clauses — so a conforming type could
+	// read as non-conforming and yield a SPURIOUS E3017. Refuse to check a malformed program, exactly as
+	// `checkConformance` does: the real diagnostic already fails the build, and this one would only be noise.
+	if projectHasErrors(project) 'malformedProject'
+		return
+	end 'malformedProject'
+
+	let declared = buildDeclaredConformanceMap(project)
+	for site in sites 'eachSite'
+		checkOneInstantiation(project, signatures: signatures, declared: declared, site: site)
+	end 'eachSite'
+end 'checkWhereConstraints'
+
+// Validate one instantiation site's every `where` constraint (P1.7a slice 2a). A base with no constraints
+// (the whole non-generic-witness corpus) iterates zero times.
+function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
+	let baseName = signatures.genericInstanceBaseName(site.gid)
+	let constraints = signatures.structWhereConstraints(baseName)
+	for i in 0 upto constraints.count() 'eachConstraint'
+		let constraint = try constraints.get(i) otherwise panic("checkOneInstantiation: whereConstraints.get OOB at {i}")
+		let concreteType = signatures.instanceArgTypeName(site.gid, position: constraint.typeParamIndex)
+		if not typeDeclaresInterface(declared, typeName: concreteType, interfaceName: constraint.interfaceName) 'violates'
+			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "type '{String.from(concreteType)}' does not implement '{String.from(constraint.interfaceName)}', which the `where` clause on generic type '{String.from(baseName)}' requires of its type parameter", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		end 'violates'
+	end 'eachConstraint'
+end 'checkOneInstantiation'
+
+// Build the DECLARED-conformance index from `project.conformances` — a type NAME to the set of interfaces it
+// declares `implements`. The E3017 check's `Point declares Digest?` lookup, built once per constrained program.
+function buildDeclaredConformanceMap(project Project) returns DeclaredConformanceMap
+	var declared = DeclaredConformanceMap.create()
+	// One `type X implements A, B` clause is ONE ConformanceDecl, so a fresh set per decl needs no
+	// accumulate-into-existing (which would borrow the map across its own `upsert`). A duplicate `implements`
+	// on one type is E3006, reported before this runs.
+	for conformance in project.conformances 'eachDecl'
+		var interfaces = InterfaceNameSet.create()
+		for i in 0 upto conformance.interfaceNames.count() 'eachIface'
+			interfaces.insert(try conformance.interfaceNames.get(i) otherwise panic("buildDeclaredConformanceMap: interfaceNames.get OOB at {i}"))
+		end 'eachIface'
+		declared.upsert(conformance.typeName, value: interfaces)
+	end 'eachDecl'
+	return declared
+end 'buildDeclaredConformanceMap'
+
+// Does `typeName` declare `implements interfaceName` (P1.7a slice 2a)? A type with no conformance declaration
+// answers false — the E3017 case.
+function typeDeclaresInterface(declared DeclaredConformanceMap, typeName ByteArray, interfaceName ByteArray) returns bool
+	if let interfaces = try declared.get(typeName) 'hasDecl'
+		return interfaces.contains(interfaceName)
+	end 'hasDecl'
+	return false
+end 'typeDeclaresInterface'
+
 // A name -> merged `IrFunction` index, built once per compile that has conformances. `func.name` is the
 // qualified `Type.method` for a method, so a lookup is `qualifiedMethodName(typeName, methodName)`.
 function buildFunctionByNameMap(module MaxonModule) returns FunctionByNameMap

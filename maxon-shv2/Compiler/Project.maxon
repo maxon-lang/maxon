@@ -377,6 +377,31 @@ export typealias FieldDefaultArray = Array with FieldDefault
 // after the real parse, and it is the AUTHORITY — a name in neither registry is E3011, and a
 // tolerant token sweep must never own a veto (see SignatureIndex's `CalleeReturn.undeclared`).
 // Two readers, two moments, one record type.
+// ⭐ **ONE `where <T> is <Interface>` CONSTRAINT on a generic type (P1.7a slice 2a).** `type Box uses T
+// where T is Digest` records one of these — `typeParamIndex` is the position of the constrained parameter
+// in `typeParamNames` (the `T`), `interfaceName` is the required interface (`Digest`). A conjunction
+// (`where T is A and B`) and a comma list (`where T is A, U is B`) each flatten to ONE entry per (param,
+// interface) pair, IN SOURCE ORDER — and that order IS the witness-slot order (dictionary-passing threads a
+// hidden witness pointer per constraint, index-aligned to this list). The instantiation-site check (E3017)
+// reads it straight off `structOf`, exactly as the arity check reads `typeParamNames`.
+export type WhereConstraint
+	export let typeParamIndex as FieldIndex
+	export let interfaceName as ByteArray
+
+	export static function create(typeParamIndex FieldIndex, interfaceName ByteArray) returns WhereConstraint
+		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName}
+	end 'create'
+end 'WhereConstraint'
+
+export typealias WhereConstraintArray = Array with WhereConstraint
+
+// The SHARED EMPTY `whereConstraints` a StructLayout holds until a `where` clause is recorded (P1.7a slice
+// 2a) — an unconstrained (or non-generic) type, which is every type on the scale corpus. `recordWhereConstraints`
+// REPLACES the field wholesale (copy-on-write), and it is never mutated in place, so one allocation serves
+// every unconstrained struct — the same discipline `sharedEmptyInnerAliases` / Slice 1's shared-empty
+// `interfaces`/`conformances` use to keep the per-struct parse path allocation-free.
+let sharedEmptyWhereConstraints = WhereConstraintArray.create()
+
 export type StructLayout
 	export var name as ByteArray
 	// Parallel arrays, in DECLARATION order: field `i` is called `fieldNames[i]`, is declared
@@ -406,12 +431,18 @@ export type StructLayout
 	// the param at position 0. It rides on the layout (which already travels whole-program) so the
 	// instantiation-site arity check reads it straight off `structOf`, needing no separate registry.
 	export var typeParamNames as ByteArrayArray
+	// The `where T is <Interface> …` CONSTRAINTS this generic type declares (P1.7a slice 2a), IN SOURCE
+	// ORDER — empty for an unconstrained (or non-generic) type. The order is the witness-slot order the
+	// dictionary-passing ABI threads: an instance method of a constrained type carries one hidden witness
+	// pointer per entry here, index-aligned. It rides the layout (which travels whole-program) for
+	// `typeParamNames`' reason — the E3017 instantiation check reads it straight off `structOf`.
+	export var whereConstraints as WhereConstraintArray
 
 	// An EMPTY layout, filled by `addField` (and, for a generic type, `recordTypeParams`). It does not
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create(), typeParamNames: ByteArrayArray.create()}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create(), typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints}
 	end 'create'
 
 	// Record the type's `uses` parameter names, in declaration order (P1.6-A). Replaces the column
@@ -420,6 +451,19 @@ export type StructLayout
 	export function recordTypeParams(names ByteArrayArray)
 		self.typeParamNames = names
 	end 'recordTypeParams'
+
+	// Record the type's `where` constraints, in source order (P1.7a slice 2a). Replaces the column
+	// wholesale for `recordTypeParams`' reason — the whole `where` clause is parsed as a unit, and the
+	// tolerant sweep and the real parse must record the SAME list (the witness-slot order depends on it).
+	export function recordWhereConstraints(constraints WhereConstraintArray)
+		self.whereConstraints = constraints
+	end 'recordWhereConstraints'
+
+	// The number of `where` constraints (P1.7a slice 2a) — the number of hidden witness parameters an
+	// instance method of this type carries under dictionary-passing. 0 for an unconstrained type.
+	export function whereConstraintCount() returns FieldIndex
+		return self.whereConstraints.count()
+	end 'whereConstraintCount'
 
 	// The number of generic type parameters (P1.6-A) — 0 for a non-generic type, the arity a
 	// `Base with Args` instantiation must match.

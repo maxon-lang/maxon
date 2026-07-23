@@ -160,6 +160,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// is rebuilt from it.
 	let signatures = try queryProgramSignatures(project)
 
+	// ⭐ **WHERE-CONSTRAINT VALIDATION (P1.7a slice 2a — E3017) — HERE, after the instances are interned.**
+	// Every `Box with Foo where T is Digest` instantiation is checked: `Foo` must declare `implements Digest`,
+	// else E3017 anchored on the `typealias`. It reads the interned generic instances (`queryProgramSignatures`)
+	// and the declared conformances (`checkConformance` already validated them), so it runs after both. Any
+	// E3017 it records is caught by the pipeline's error gate, exactly as an E3016 is.
+	checkWhereConstraints(project, signatures: signatures)
+
 	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
 	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
 	// committed golden is byte-for-byte what it was before this rung existed. That is not an

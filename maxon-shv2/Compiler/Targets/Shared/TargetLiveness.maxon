@@ -1286,6 +1286,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		// The jump tables are MULTIWAY terminators, not two-way conditional branches: their successors come
 		// straight off the op (`collectBlockSuccessorIds`), not via a `condBranch`+`jmp` pairing.
 		x64JumpTable to arm64JumpTable gives false
+		// The witness call is a body op, not a conditional branch.
+		callMem gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1314,6 +1316,8 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		// branch that a `condBranch` op's else-edge needs, so `false` (a jump-table block records no
 		// `condBranch`, so this is never consulted for one, but the classifier must be exhaustive).
 		x64JumpTable to arm64JumpTable gives false
+		// The witness call is a body op, not an unconditional branch.
+		callMem gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1360,6 +1364,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
 			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 			leaRegFunc to x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			callMem then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
@@ -2779,6 +2784,8 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			leaRegFunc to x64Syscall then break 'capture'
 			// The jump tables are terminators, never an entry param-capture `movRegReg`.
 			x64JumpTable to arm64JumpTable then break 'capture'
+			// The witness call is a call, never an entry param-capture `movRegReg`.
+			callMem then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3074,6 +3081,8 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		leaRegFunc to x64Syscall gives ValueSpillSlot.none
 		// The jump tables write no stack slot — a multiway terminator is not a spill store.
 		x64JumpTable to arm64JumpTable gives ValueSpillSlot.none
+		// The witness call writes no stack slot — a call is not a spill store.
+		callMem gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 

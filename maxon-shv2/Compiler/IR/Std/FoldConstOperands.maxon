@@ -117,6 +117,8 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		binOp to osFreePages gives StdConstInfo.notConst
 		// The jump table is a terminator — it defines no value, so nothing to fold a constant into.
 		switch gives StdConstInfo.notConst
+		// A witness call's result is a call return — not a constant this pass can rebuild, like `callIndirect`.
+		witnessCall gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -196,6 +198,8 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// block ids. (Its subject IS the biased index; folding a constant subject to a fixed target is a
 		// future optimization, not this pass's immediate-operand fold.)
 		switch gives FoldResult.unchanged
+		// A witness call carries no immediate-foldable operand — its operands are the table address and args.
+		witnessCall gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

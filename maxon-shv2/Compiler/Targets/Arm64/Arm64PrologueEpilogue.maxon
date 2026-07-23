@@ -158,6 +158,8 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// The jump tables are read through the shared operand model like every other op (`arm64JumpTable`
 		// names its biased index; `x64JumpTable` never appears on arm64). No per-op register list respelled.
 		x64JumpTable to arm64JumpTable gives arm64MaskFromOperands(op, buf: buf)
+		// The x64-only `callMem` never runs the arm64 prologue pass; the arm keeps the match exhaustive.
+		callMem gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -216,5 +218,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		arm64Branch to x64Syscall gives false
 		// The jump tables are branch terminators, not an `arm64Ret`.
 		x64JumpTable to arm64JumpTable gives false
+		// The x64-only `callMem` is a body op, never an `arm64Ret`.
+		callMem gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

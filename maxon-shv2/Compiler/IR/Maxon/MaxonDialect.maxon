@@ -858,6 +858,28 @@ export union MaxonOp
 	// by `lowerMaxonToStd.lowerOp`'s big one — the same tail-slot-Array-corrupts-the-decref trap
 	// `indirectCall` documents.
 	switch(subject ValueId, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
+	// --- P1.7a slice 2a: constrained-type-parameter interface DISPATCH ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `switch`, per the band-append invariant: a mid-union insert is
+	// silently swallowed by any range arm. Its `OpCategory.callFree` (shared with `call`/`indirectCall` — it
+	// IS a call, with full call-barrier semantics) is metadata independent of this tail position, exactly as
+	// `switch`'s `plain` and `asyncCall`'s `awaiting` are.
+	//
+	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE PARAMETER** — `self.item.digest()` where `item`
+	// is a value of a type parameter `T` constrained `where T is Digest`. The concrete type is UNKNOWN in the
+	// shared generic body (dictionary-passing, NOT monomorphization), so the call goes through a runtime
+	// WITNESS: `args[0]` is the receiver (the `T` value), `args[1..]` the user arguments; `constraintIndex` is
+	// which of the enclosing type's `where` constraints supplies the witness (index into `whereConstraints` /
+	// the hidden witness-parameter list); `methodIndex` is the DECL-ORDER slot of the method within that
+	// constraint's interface. `lowerMaxonToStd` resolves the witness address — `rdataAddr(__witness_<T>_<I>)`
+	// at a concrete instantiation, or the caller's own forwarded witness parameter in a generic→generic call —
+	// and emits the fused `StdOp.witnessCall`. `isVoid` records whether the method returns nothing (no result
+	// register to capture). `result` is the value it defines (a `void`-tagged discard when `isVoid`).
+	//
+	// ⚠ Its `args` (an `Array with ValueId`) is bound only in a SMALL match (`lowerWitnessDispatch`), never
+	// destructured by `lowerMaxonToStd.lowerOp`'s big one — the same tail-slot-`Array`-corrupts-the-decref trap
+	// `indirectCall`/`switch` document.
+	witnessDispatch(result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

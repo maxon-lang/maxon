@@ -855,6 +855,29 @@ export union StdOp
 	// inner `br_table`. Its array field is bound only in dedicated small matches, never in
 	// `collectStdOpUses`/`remapStdOpUses`'s big ones (which read/rewrite only `subjectId`).
 	switch(subjectId ValueId, denseTargetBlockIds BlockIdArray, defaultBlockId BlockId) = StdOpMeta{category: StdOpCategory.control, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// --- P1.7a slice 2a: the FUSED witness call (constrained-type-parameter interface dispatch) ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `switch`, per the band-append invariant: a mid-union
+	// insert is silently swallowed by a `… to X` range arm. Its `category: call` is metadata placing it
+	// logically in the call band, independent of this tail position.
+	//
+	// ⭐ **LOAD-AND-CALL IN ONE OP, so the loaded function pointer NEVER occupies a virtual register** — v1's
+	// load-bearing perf decision, taken from day one. `resultId = (*[witnessAddr + 24 + 8*methodIndex])(args…)`:
+	// the callee pointer is read from witness-table slot `methodIndex` off `witnessAddr` (the threaded witness
+	// parameter, a `.rdata` table address) and called in the SAME instruction — the x64 lowering emits a
+	// memory-indirect `call qword [witnessAddr + off]`, never a load-into-register then `call reg`. Fusing it
+	// is the whole point: a separate `loadIndirect` + `callIndirect` would give the fn-ptr an SSA value the
+	// register allocator must color and keep live across the argument moves, on the hottest dispatch shape a
+	// generic collection has.
+	//
+	// It is `callIndirect` with the callee expressed as a MEMORY ADDRESS (base + offset) rather than a
+	// register: identical `resultType`/`argFloatMask`/`args` shape and identical full-call-barrier metadata,
+	// so it shares that op's argument-marshaling and result-capture lowering verbatim. `witnessAddr` is a
+	// VALUE USE (the table address must be live at the call); `methodIndex` is metadata (the slot). `args`
+	// stays LAST (the ONE managed field, receiver at index 0), scalars first — the same allocation-flat shape
+	// `callIndirect` documents (a second managed field breaks the bootstrap's synthesized destructor). x64
+	// only at this slice: arm64/wasm loudly refuse (the witness blob rides the x64 `funcAbs64InRdata` reloc).
+	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -974,6 +997,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// block ids (the CFG, carried on the op), NOT value operands, and are deliberately not bound here (a
 		// tail-slot Array binding in this big match is the decref-corruption trap `switch` documents).
 		switch(subjectId, _, _) then referenced.insert(subjectId)
+		// A witness call reads the WITNESS-TABLE ADDRESS and its arguments — the exact shape of `callIndirect`
+		// (`witnessAddr` in place of the callee register), so it reports uses the same way. `resultId` is a def;
+		// `methodIndex`/`resultType`/`argFloatMask` are metadata (not value operands).
+		witnessCall(_, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1079,6 +1106,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// the middle-slot Array is safe — a trailing non-Array field (`defaultBlockId`) follows it, exactly
 		// the condition that lets `call` bind its trailing args here.
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) gives StdOp.switch(remappedValue(subjectId, subst: subst), denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
+		// The exact mirror of `collectStdOpUses`'s `witnessCall` arm: rewrite the witness-table address and the
+		// args (its result is a def; `methodIndex`/`resultType`/`argFloatMask` are metadata carried through).
+		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(resultId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

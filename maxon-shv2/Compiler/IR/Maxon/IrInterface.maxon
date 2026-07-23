@@ -37,6 +37,40 @@ export let InterfaceVoidTypeName = b"void"
 // builtin `Stringable`/`FormattedStringable` interfaces declare it.
 export let ToStringMethodName = b"toString"
 
+// --- Witness tables (P1.7a slice 2a — the dictionary-passing dispatch substrate) ---
+
+// The index of a `where`-constraint in a type's constraint list (P1.7a slice 2a) — which hidden witness
+// PARAMETER an instance method reads to dispatch through that constraint. A type has at most a handful of
+// constraints (each costs an ABI register), so a 16-bit index is ample.
+export typealias WitnessSlotIndex = int(0 to u16.max)
+
+// The DECL-ORDER index of a method within an interface (P1.7a slice 2a) — slot `i` of the witness table
+// holds interface method `i`. An interface declares a handful of methods, so 16 bits is ample.
+export typealias WitnessMethodIndex = int(0 to u16.max)
+
+// ⭐ **WITNESS-TABLE BYTE LAYOUT** (P1.7a slice 2a), matching v1's `WitnessTable`: a header of
+// `methodCount@0`, `parentTablePtr@8` (always 0 — parent-interface methods are projected INTO the child
+// table at decl order, so no runtime chain), `flags@16` (0), then `methods[N]@24` — one 8-byte function
+// pointer per interface method, in decl order, each stamped by a `funcAbs64InRdata` relocation. The fused
+// `witnessCall` reads method `i` from `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so
+// the emitter (the blob) and the reader (the x64 lowering) must share these two constants.
+export let WitnessTableHeaderBytes = 24 as ByteOffset
+export let WitnessSlotBytes = 8 as ByteOffset
+
+// The byte offset of witness-table method slot `index` (P1.7a slice 2a) — `24 + 8*index`. The ONE place
+// the header size and slot stride combine, so the blob's slot layout and the fused call's memory offset
+// cannot drift.
+export function witnessMethodSlotOffset(index WitnessMethodIndex) returns ByteOffset
+	return WitnessTableHeaderBytes + WitnessSlotBytes * index
+end 'witnessMethodSlotOffset'
+
+// The `.rdata` label of the witness table for `typeName` conforming to `interfaceName` (P1.7a slice 2a) —
+// `__witness_<Type>_<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
+// registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
+export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
+	return "__witness_{String.from(typeName)}_{String.from(interfaceName)}"
+end 'witnessTableLabel'
+
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
 let StringableInterfaceName = b"Stringable"
 let FormattedStringableInterfaceName = b"FormattedStringable"
@@ -122,6 +156,33 @@ export union InterfaceLookup
 	found(iface IrInterface)
 	notFound
 end 'InterfaceLookup'
+
+// ⭐ **THE RESOLVED TARGET OF A CONSTRAINED-TYPE-PARAMETER DISPATCH (P1.7a slice 2a)** — `self.item.digest()`
+// resolved against the enclosing type's `where` constraints. `constraintIndex` is which constraint (and so
+// which hidden witness parameter) supplies the method; `methodIndex` is the DECL-ORDER slot of the method in
+// that constraint's interface (the witness-table slot); `returnTypeName` is the interface method's rendered
+// return type, used to type the dispatch result exactly as a direct call types its own.
+export type WitnessDispatchTarget
+	export let constraintIndex as WitnessSlotIndex
+	export let methodIndex as WitnessMethodIndex
+	export let returnTypeName as ByteArray
+
+	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray) returns WitnessDispatchTarget
+		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName}
+	end 'create'
+end 'WitnessDispatchTarget'
+
+// The decl-order index of the method named `methodName` in `iface` (P1.7a slice 2a), or `methods.count()`
+// (the "not declared by this interface" sentinel) when absent — the witness-table slot the dispatch reads.
+export function interfaceMethodIndex(iface IrInterface, methodName ByteArray) returns WitnessMethodIndex
+	for i in 0 upto iface.methods.count() 'each'
+		let method = try iface.methods.get(i) otherwise panic("interfaceMethodIndex: methods.get OOB at {i} below count {iface.methods.count()}")
+		if method.name.equals(methodName) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+	return iface.methods.count()
+end 'interfaceMethodIndex'
 
 // A nullary interface method (`hash()`, `toString()`, `clone()`).
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig

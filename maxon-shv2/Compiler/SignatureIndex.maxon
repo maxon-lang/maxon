@@ -182,6 +182,12 @@ let DeclShapeGenericAlias = 30 as ContentHash
 // are the right arity in any file, so a reader's parse memo must move with the count.
 let DeclShapeTypeParam = 32 as ContentHash
 
+// A declared generic type's `where`-CONSTRAINT shape discriminator (P1.7a slice 2a). A change to `type Box
+// uses T where T is Digest`'s constraint list — an interface swapped, added, or dropped — changes which
+// `Box with …` instantiations are LEGAL (E3017) in any file and which witness table each dispatch reads, so
+// a reader's parse memo must move with it. The `DeclShapeTypeParam` twin for the constraint half.
+let DeclShapeWhereConstraint = 44 as ContentHash
+
 // A constructor parameter's TYPE-PARAMETER-FEED shape discriminators (P1.6-B2). Which type-parameter
 // position a parameter feeds decides whether a caller consumes a managed argument there, so a change to a
 // constructor's feed map must move a caller's parse memo — the consume twin of `ConsumeBitSet`/`Clear`.
@@ -1277,13 +1283,35 @@ export type GenericAliasEntry
 	export var baseName as ByteArray
 	export var argCount as FieldIndex
 	export var args as GenericArgNodeArray
+	// The instantiation-site anchor (P1.7a slice 2a) — where `typealias X = Base with Args` is declared, so the
+	// where-constraint check (E3017) can land its diagnostic ON the offending instantiation. Zero for a
+	// synthesized alias (e.g. an inner generic alias); the check skips a zero anchor.
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+	export var filePath as FilePath
 
-	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray) returns GenericAliasEntry
-		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args}
+	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray, nameLine LineNumber = 0, nameColumn ColumnNumber = 0, filePath FilePath = FilePath from "") returns GenericAliasEntry
+		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
 	end 'create'
 end 'GenericAliasEntry'
 
 export typealias GenericAliasEntryArray = Array with GenericAliasEntry
+
+// ⭐ **ONE `Base with Args` INSTANTIATION SITE (P1.7a slice 2a)** — an interned instance paired with the
+// source anchor of the `typealias X = Base with Args` that names it, for the where-constraint check (E3017)
+// to land its diagnostic on. Collected by `recordGenericAlias` for every alias with a real (non-zero) anchor.
+export type GenericInstantiationSite
+	export let gid as GenericInstanceId
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+	export let filePath as FilePath
+
+	export static function create(gid GenericInstanceId, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns GenericInstantiationSite
+		return Self{gid: gid, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
+	end 'create'
+end 'GenericInstantiationSite'
+
+export typealias GenericInstantiationSiteArray = Array with GenericInstantiationSite
 
 // One RANGED typealias declared INSIDE a generic type (P1.6-C): `type Wrapper uses T` with
 // `export typealias Idx = int(0 to u64.max)` ⇒ `(Wrapper, Idx=int(0..u64.max))`. The sweep
@@ -1473,6 +1501,12 @@ export type ProgramSignatures
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
 	// own (the giid indexes `genericInstances`), so it travels by name.
 	var genericAliases as GenericAliasMap
+	// ⭐ Every `typealias X = Base with Args` INSTANTIATION SITE (P1.7a slice 2a), with its source anchor — the
+	// list the where-constraint check (E3017) walks to validate each concrete argument conforms to the
+	// interface its type parameter is constrained to. A LIST, not a map: an instance may be named by several
+	// aliases, each a distinct site to check + anchor; a `Box with Foo` with no `where` constraint contributes
+	// entries the check skips in O(1) (empty constraint list). Empty for a program with no generic aliases.
+	var genericAliasSites as GenericInstantiationSiteArray
 	// ⭐ INNER ranged typealias registry (P1.6-C) — a RANGED `typealias Idx` declared INSIDE a generic
 	// type, keyed by its BASE-QUALIFIED name ("Wrapper.Idx"). It is what makes a per-instance alias
 	// (`IntWrapper.Idx`) nominal: `isPerInstanceAlias` composes an instance alias's base with this
@@ -1537,7 +1571,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -1807,6 +1841,14 @@ export type ProgramSignatures
 			let paramName = try layout.typeParamNames.get(i) otherwise panic("ProgramSignatures.recordStruct: typeParamNames.get OOB at {i}")
 			state = mixBytes(mix(state, value: DeclShapeTypeParam), bytes: paramName)
 		end 'eachTypeParam'
+		// The `where` constraints ride the hash (P1.7a slice 2a): a change to `where T is Digest` changes
+		// which `Box with …` are legal (E3017) and which witness table a dispatch reads in any file, so a
+		// reader's parse memo must move with it. Each entry's constrained-param INDEX and interface NAME are
+		// mixed, in list order — the witness-slot order depends on that order too.
+		for i in 0 upto layout.whereConstraintCount() 'eachConstraint'
+			let constraint = try layout.whereConstraints.get(i) otherwise panic("ProgramSignatures.recordStruct: whereConstraints.get OOB at {i}")
+			state = mixBytes(mix(mix(state, value: DeclShapeWhereConstraint), value: constraint.typeParamIndex), bytes: constraint.interfaceName)
+		end 'eachConstraint'
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
 		end 'eachField'
@@ -1844,6 +1886,14 @@ export type ProgramSignatures
 		let args = self.resolveGenericArgs(entry, remap: remap)
 		let giid = self.genericInstances.intern(baseId, args: args)
 		self.genericAliases.upsert(entry.aliasName, value: giid)
+
+		// Record the instantiation SITE (P1.7a slice 2a) for the E3017 where-constraint check — only when the
+		// alias carries a real source anchor (a top-level `typealias X = Base with Args`; a synthesized alias
+		// has none). The `giid` + anchor is all the check needs: the base's constraints and the substituted args
+		// are read off `giid`.
+		if entry.nameLine != 0 'hasAnchor'
+			self.genericAliasSites.push(GenericInstantiationSite.create(giid, nameLine: entry.nameLine, nameColumn: entry.nameColumn, filePath: entry.filePath))
+		end 'hasAnchor'
 
 		// The alias name, its base name and each arg's SHAPE ride the hash — a change to any of the
 		// three changes what a `IntBox.create(…)` in another file resolves and type-checks against.
@@ -2697,6 +2747,39 @@ export type ProgramSignatures
 		return DeclaredStruct.declared(layout)
 	end 'structOf'
 
+	// The `where` constraints declared on `typeName` (P1.7a slice 2a), in source order — the witness-slot
+	// order. Empty for a non-generic, unconstrained, or undeclared type. Read by the E3017 instantiation
+	// check (does each concrete argument conform?) and the witness lowering (which interface / concrete type
+	// each hidden witness parameter carries).
+	export function structWhereConstraints(typeName ByteArray) returns WhereConstraintArray
+		let layout = try self.structTypes.get(typeName) otherwise return WhereConstraintArray.create()
+		return layout.whereConstraints
+	end 'structWhereConstraints'
+
+	// The number of `where` constraints on `typeName` (P1.7a slice 2a) — the number of hidden witness
+	// parameters an instance method of the type carries under dictionary-passing. 0 for an unconstrained or
+	// undeclared type. A `Map.contains`-cheap arithmetic answer, so it is safe on the per-call-site path
+	// that decides whether to append witness arguments.
+	export function structWhereConstraintCount(typeName ByteArray) returns FieldIndex
+		let layout = try self.structTypes.get(typeName) otherwise return 0
+		return layout.whereConstraintCount()
+	end 'structWhereConstraintCount'
+
+	// Every `Base with Args` instantiation site with its source anchor (P1.7a slice 2a) — the list the E3017
+	// where-constraint check walks. A constraint-free base's sites are cheaply skipped (its `whereConstraints`
+	// is empty), so this is the whole instantiation set, not a pre-filtered one.
+	export function instantiationSites() returns GenericInstantiationSiteArray
+		return self.genericAliasSites
+	end 'instantiationSites'
+
+	// The concrete type NAME of instance `gid`'s type argument at `position` (P1.7a slice 2a) — the struct/name
+	// a witness table is keyed by, and the type the E3017 check verifies conforms. `mangleTypeArg` renders a
+	// struct/named arg to its bare name; a nested instance to its mangled form (which conforms to nothing at
+	// this slice, so the check reports it as non-conforming — correct).
+	export function instanceArgTypeName(gid GenericInstanceId, position TypeParamId) returns ByteArray
+		return self.mangleTypeArg(self.substitutedInstanceArg(gid, position: position)).toByteArray()
+	end 'instanceArgTypeName'
+
 	// Is `name` a declared `type` — the `bool` half of `structOf`, and a HOT-PATH allocation guard, the
 	// twin of `containsEnum`. `structOf` returns a `DeclaredStruct`, a Maxon union VALUE that boxes on
 	// its `undeclared` case as much as any other, so a caller that only needs "is it a struct?" for the
@@ -3032,6 +3115,16 @@ export type ProgramSignatures
 	// field), now extended over `self.typeNames` and recursed into a nested instance rather than rejecting.
 	// (Contrast `typeIsManaged`: a DIRECT struct/instance FIELD is always owned — only a type PARAMETER field
 	// borrows a trivial argument.)
+	//
+	// ⚠ **THIS BORROW IS UNSOUND FOR A TEMPORARY (P1.7a slice 2a finding — REPORTED, NOT fixed here).** A
+	// temporary scalar-struct argument the container OUTLIVES dangles: `let b = PointBox.create(Point.create(…))`
+	// drops the `Point` temp at the statement's end while `b` borrows it, so a later read of `b`'s element (a
+	// witness dispatch `b.itemHash()`, a field/method read) is a use-after-free. The sound fix — CONSUME any
+	// struct arg (route this to `typeIsManaged`) — makes the temporary case work but changes `PointBox.create(p);
+	// p.getX()` to a use-after-move E3102, which `generic-types/generic-trivial-struct-arg` deliberately relies
+	// on. The two are irreconcilable under all-or-nothing per-instance ownership; it is a language-semantics
+	// decision (MOVE vs BORROW-COPY a struct into a generic) left to the coordinator. Slice 2a's witness tests
+	// bind their element to a live variable that outlives the container, sidestepping the borrow's temporary hole.
 	export function typeArgIsOwned(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 		if tagIsText(tag) 'string'

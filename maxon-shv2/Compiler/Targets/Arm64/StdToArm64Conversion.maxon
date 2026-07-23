@@ -414,6 +414,9 @@ type StdToArm64Lowering
 			osFreePages then panic("lowerStdToArm64: `osFreePages` is x64-windows only — the green-thread substrate is x64-windows-gated at this rung")
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
+			// P1.7a slice 2a: witness tables ride the x64 `funcAbs64InRdata` relocation, which arm64 refuses
+			// (`requireNoFuncAbs64Relocs`) — constrained-type-parameter dispatch is x64-only at this slice (2b).
+			witnessCall then panic("lowerStdToArm64: a `witnessCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses; constrained-type-parameter dispatch on arm64 is P1.7a slice 2b")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -442,6 +445,7 @@ type StdToArm64Lowering
 			osExit then panic("lowerStdToArm64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
 			funcAddr then panic("lowerStdToArm64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
+			witnessCall then panic("lowerStdToArm64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			osRangePanic then panic("lowerStdToArm64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op; also x64-windows only)")
 			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")

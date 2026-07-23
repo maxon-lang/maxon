@@ -162,6 +162,9 @@ function opEscapesParam(op MaxonOp, param ValueId) returns bool
 		byteStringLiteral then break 'op'
 		// The jump table branches on its index — it persists no value, so it escapes no parameter.
 		switch then break 'op'
+		// A witness dispatch is a call — a function-value argument passed to it escapes the frame exactly as a
+		// `call`/`indirectCall` argument does (P1.7a slice 2a). Its receiver + user args are all in `args`.
+		witnessDispatch(_, args, _, _, _) then return valueIdInArray(args, value: param)
 	end 'op'
 	return false
 end 'opEscapesParam'
@@ -178,6 +181,8 @@ function terminatorEscapesParam(term MaxonOp, param ValueId) returns bool
 		byteStringLiteral then break 'term'
 		// The jump table is a branch terminator — it escapes no parameter (only `ret` of the param does).
 		switch then break 'term'
+		// A witness dispatch is a body op, never a terminator — it escapes no parameter here (P1.7a slice 2a).
+		witnessDispatch then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesParam'
@@ -272,6 +277,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				sizeofType then break 'op'
 				byteStringLiteral then break 'op'
 				switch then break 'op'
+				witnessDispatch then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -309,6 +315,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				sizeofType then break 'op'
 				byteStringLiteral then break 'op'
 				switch then break 'op'
+				witnessDispatch then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -446,6 +453,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		byteStringLiteral then break 'op'
 		// The jump table reads an integer index, never a promise handle — unrelated to any await.
 		switch then break 'op'
+		witnessDispatch then break 'op'
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -477,6 +485,8 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		// await-CFG walk exactly as `collectBlockSuccessorIds` does at the Target tier (deduped: a range/`or`
 		// arm fills several slots with one block, but the CFG has one edge to it).
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushMaxonSwitchSuccessors(into, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
+		// A witness dispatch is a body op, never a terminator — it has no in-function successor (P1.7a slice 2a).
+		witnessDispatch then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -539,6 +549,10 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					sizeofType then break 'op'
 					byteStringLiteral then break 'op'
 					switch then break 'op'
+					// A witness dispatch has no callee NAME to resolve — the parser already resolved the interface
+					// method against the type's `where` constraints (`resolveWitnessDispatch`), so there is nothing
+					// for this name-signature validation to say (P1.7a slice 2a).
+					witnessDispatch then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'

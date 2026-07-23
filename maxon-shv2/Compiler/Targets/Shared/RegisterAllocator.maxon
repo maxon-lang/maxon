@@ -773,6 +773,8 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		leaRegFunc to x64Syscall then break 'hint'
 		// The jump tables carry no copy hint: their one operand is a plain use, not a move or a reuse.
 		x64JumpTable to arm64JumpTable then break 'hint'
+		// The witness call's base register is a plain use (a call, like `callReg`), no copy hint.
+		callMem then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1509,6 +1511,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// not colored).
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.x64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		// The witness call colors its witness-table base register, exactly as `callReg` colors its callee.
+		callMem(baseReg, disp) then return TargetOp.callMem(colorVRegWith(baseReg, alloc: alloc), disp: disp)
 	end 'rewrite'
 end 'colorTargetOp'
 

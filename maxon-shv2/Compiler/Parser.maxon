@@ -633,6 +633,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		sizeofType gives AsyncCalleeLookup.none
 		byteStringLiteral gives AsyncCalleeLookup.none
 		switch gives AsyncCalleeLookup.none
+		witnessDispatch gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -695,6 +696,12 @@ typealias MethodIndexMap = Map with (ByteArray, CsrIndex)
 // `enclosingTypeParams`), so this shared instance is only ever an unread placeholder and is never mutated —
 // safe to share across the per-file parse fan-out.
 let sharedEmptyDescriptorNeeds = DescriptorNeedMap.create()
+
+// The INITIAL `Parser.enclosingWhereConstraints` (P1.7a slice 2a), held here (like
+// `sharedEmptyDescriptorNeeds`) so a type with no `where` clause — every type on the generics-free corpus —
+// allocates nothing. `readWhereClause` REPLACES the field with a fresh list only when the clause is present,
+// and it is never mutated in place, so this shared instance is safe across the per-file parse fan-out.
+let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 
 // The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyDescriptorNeeds`) so a parser
 // allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
@@ -2619,6 +2626,14 @@ export type Parser
 	// `typeParameter(POSITION)` — the position is the name's index in this list. Written and cleared in
 	// lockstep with `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingTypeParams as ByteArrayArray
+	// The `where T is <Interface> …` CONSTRAINTS of the type currently being declared (P1.7a slice 2a) —
+	// in source order (the witness-slot order), empty otherwise. It is how the body parse recognizes
+	// `self.item.digest()` as a witness DISPATCH (the receiver's type parameter has a constraint whose
+	// interface declares `digest`) and how `parseFunction` decides an instance method needs witness
+	// parameters. Written and cleared in lockstep with `enclosingTypeParams` (`parseTypeDeclaration`/
+	// `recordScannedType` are the writers); points at `sharedEmptyWhereConstraints` for an unconstrained
+	// type, so a non-generic (or unconstrained-generic) type declaration allocates nothing here.
+	var enclosingWhereConstraints as WhereConstraintArray
 	// ⭐ The BARE MEMBER NAMES of the INNER ranged typealiases declared in the type currently being parsed
 	// (P1.6-C) — `{Idx}` inside `type Wrapper` with `typealias Idx = int(0 to u64.max)`, empty otherwise. It
 	// is how `parseTypeReference` resolves a bare `Idx` in a field/return/parameter position to the
@@ -2790,6 +2805,7 @@ export type Parser
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeParams: ByteArrayArray.create(),
+			enclosingWhereConstraints: sharedEmptyWhereConstraints,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			siblingReceivers: sharedEmptySiblingReceivers,
@@ -4341,6 +4357,17 @@ export type Parser
 				continue
 			end 'isInnerAlias'
 
+			// `where T is <Interface> …` (P1.7a slice 2a) at the type's top level — recorded on the swept
+			// layout so `ProgramSignatures.recordStruct` hashes the constraints and the witness lowering /
+			// E3017 read them off `structOf` (the sweep's layout is the whole-program one). Handled here in
+			// the body loop rather than pre-consumed after `openTypeParamScope`, so it lands whether or not an
+			// `implements` clause (which the loop tolerantly skips token-by-token) precedes it. Tolerant, like
+			// `readStructFieldInto`: a malformed `where` is the real parse's to report.
+			if depth == 0 and self.at(TokenKind.where) 'isWhere'
+				layout.recordWhereConstraints(try self.readWhereClause() otherwise break)
+				continue
+			end 'isWhere'
+
 			if depth == 0 and self.atStructFieldKeyword() 'isField'
 				// A field the sweep cannot read leaves the layout SHORT, which would put every later
 				// field at the wrong offset — so the scan stops rather than recording a layout it
@@ -4460,6 +4487,10 @@ export type Parser
 		// SHARED empty set until a nested typealias is recorded (`readNestedRangedAlias` copy-on-writes), so a
 		// type that declares none allocates nothing.
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		// The `where`-constraint list is per-TYPE (P1.7a slice 2a), reset here for `enclosingInnerAliases`'
+		// reason: a sibling type's constraints must not leak into this one. Points at the SHARED empty until
+		// `readWhereClause` builds a real list, so an unconstrained type allocates nothing.
+		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
 
 		// A NON-GENERIC type allocates nothing: it keeps the layout's create-time empty `typeParamNames`
 		// and points the parser's enclosing scope at the shared empty list. Only a `uses` clause builds a
@@ -4495,7 +4526,48 @@ export type Parser
 		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
 		// nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		// Restored in lockstep (P1.7a slice 2a) so a dispatch outside a constrained type body resolves against
+		// no stale constraints — and allocates nothing, exactly as `emptyTypeParams` restores.
+		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
 	end 'closeTypeParamScope'
+
+	// ⭐ **PARSE A `where <T> is <Interface> [and <Interface>]… [, <U> is …]…` CLAUSE (P1.7a slice 2a).** The
+	// cursor sits on `where`. Each `<param> is <Interface>` records a `WhereConstraint`, in SOURCE ORDER —
+	// and that order is the witness-slot order the dictionary-passing ABI threads, so it must be stable
+	// between the tolerant sweep and the real parse (both call this). A conjunction `is A and B` and a comma
+	// list `T is A, U is B` each flatten to one entry per (param, interface) pair. The constrained parameter
+	// is resolved to its `uses`-list INDEX against `enclosingTypeParams` (set by `openTypeParamScope`); a name
+	// that is not a declared type parameter is rejected — a `where` on a non-parameter has no witness slot to
+	// fill. Returns the (possibly empty) constraint list; the caller records it on the layout.
+	function readWhereClause() returns WhereConstraintArray throws ParseError
+		try self.consume(TokenKind.where)
+		var constraints = WhereConstraintArray.create()
+
+		while true 'params'
+			let paramTok = try self.consume(TokenKind.identifier)
+			let paramIndex = self.typeParamPositionOf(paramTok.value)
+			if paramIndex >= self.enclosingTypeParams.count() 'notTypeParam'
+				throw ParseError.unsupported("a `where` clause constrains '{String.from(paramTok.value)}', which is not a type parameter of this type — a constraint must name one of its `uses` parameters", line: paramTok.line, column: paramTok.column)
+			end 'notTypeParam'
+			try self.consume(TokenKind.is)
+
+			while true 'interfaces'
+				let ifaceTok = try self.consume(TokenKind.identifier)
+				constraints.push(WhereConstraint.create(paramIndex, interfaceName: ifaceTok.value))
+				if not self.at(TokenKind.and) 'doneInterfaces'
+					break
+				end 'doneInterfaces'
+				self.advance()
+			end 'interfaces'
+
+			if not self.at(TokenKind.comma) 'doneParams'
+				break
+			end 'doneParams'
+			self.advance()
+		end 'params'
+
+		return constraints
+	end 'readWhereClause'
 
 	// Is the cursor on a FIELD declaration — `[export] (let|var) <name> as <Type>`?
 	//
@@ -5003,7 +5075,7 @@ export type Parser
 		try self.consume(TokenKind.with)
 		var args = GenericArgNodeArray.create()
 		let argCount = try self.parseGenericArgNodes(args)
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args))
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath))
 		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
 
@@ -5399,6 +5471,16 @@ export type Parser
 		// `type Name [uses …] [implements …]`. Records a whole-program ConformanceDecl (anchored on the
 		// type NAME token) that `checkConformance` validates; the declaration itself emits nothing.
 		try self.parseTypeImplementsClause(nameTok)
+
+		// `where T is <Interface> …` (P1.7a slice 2a) — parsed AFTER `implements` per the grammar
+		// `type Name uses T [implements I] where T is C`. The constraints are set on `enclosingWhereConstraints`
+		// (so the body parse below recognizes a `self.item.digest()` witness dispatch and reserves witness
+		// parameters) AND recorded on the layout (so the instantiation-site check validates `Box with Point`).
+		if self.at(TokenKind.where) 'whereClause'
+			let constraints = try self.readWhereClause()
+			self.enclosingWhereConstraints = constraints
+			layout.recordWhereConstraints(constraints)
+		end 'whereClause'
 
 		// Which of this type's methods carry a layout-descriptor param (P1.6-B1) — a TRANSITIVE fixpoint over
 		// the type's own methods, computed NOW (the cursor sits at the body start) so `parseFunction` can
@@ -6025,7 +6107,17 @@ export type Parser
 		end 'staticLayoutNeedsSelfReturn'
 
 		let layoutParamCount = 1 if needsLayoutParam else 0
-		let paramCount = userParamCount + self.countFunctionParams(paramTypes) + layoutParamCount
+		// ⭐ **A HIDDEN WITNESS PARAMETER PER `where` CONSTRAINT (P1.7a slice 2a, the dictionary's dispatch
+		// half).** An INSTANCE method of a constrained generic type carries one witness pointer per constraint,
+		// TRAILING after the layout descriptor: `[user][env][layout][witness_0..k]`, index-aligned to
+		// `enclosingWhereConstraints`. The reservation is UNCONDITIONAL on instance methods (not gated on
+		// whether this method actually dispatches), so the type's instance-method ABI is uniform and every
+		// caller passes the witnesses; a `static function` carries none (it has no `self` to source a witness
+		// from, and a static that dispatches is a later slice). `LowerMaxonToStd` splits layout from witness by
+		// this same rule (the enclosing type's constraint count + `takesReceiver`), so the count is derivable
+		// whole-program without a per-function field.
+		let witnessParamCount = self.witnessParamCountFor(takesReceiver)
+		let paramCount = userParamCount + self.countFunctionParams(paramTypes) + layoutParamCount + witnessParamCount
 		if paramCount > MaxRegisterParams 'tooManyAbiParams'
 			throw ParseError.unsupported("a function whose parameters plus their companion environment parameters exceed {MaxRegisterParams} (a function-typed parameter carries a hidden environment argument under the uniform closure ABI; M5 passes arguments in registers only, so the total must fit the register-argument slots — stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
 		end 'tooManyAbiParams'
@@ -6087,8 +6179,18 @@ export type Parser
 		// keeps every value column dense through the parameter block.
 		if needsLayoutParam 'seedLayoutParam'
 			self.recordValueType(MaxonType.integer)
-			self.artifact.recordParamOrigin((paramCount - 1) as ValueId, range: SourceRange.ofToken(nameTok))
+			self.artifact.recordParamOrigin((paramCount - witnessParamCount - 1) as ValueId, range: SourceRange.ofToken(nameTok))
 		end 'seedLayoutParam'
+
+		// Seed the hidden witness parameters (P1.7a slice 2a) — AFTER the layout slot, so they occupy the FINAL
+		// `witnessParamCount` ValueIds (`paramCount - witnessParamCount .. paramCount - 1`). Each is an i64
+		// witness-table pointer, unnamed (only the witness dispatch / forwarding lowering reads them, by
+		// position), its span the method name (no source token declares it), exactly like the layout slot.
+		// Seeded here keeps every value column dense through the parameter block.
+		for w in 0 upto witnessParamCount 'seedWitnessParam'
+			self.recordValueType(MaxonType.integer)
+			self.artifact.recordParamOrigin((paramCount - witnessParamCount + w) as ValueId, range: SourceRange.ofToken(nameTok))
+		end 'seedWitnessParam'
 
 		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
 		// the parameter types. Every `mintValue` below therefore pushes straight into the function's
@@ -6662,6 +6764,17 @@ export type Parser
 	// becomes `typeParameter(POSITION)`. A linear scan, for `StructLayout.indexOfField`'s reason: a type
 	// declares a handful of parameters, so a per-parse name→index map would be a heap object bought to
 	// serve two or three lookups.
+	// The number of hidden witness parameters a function of the enclosing type carries (P1.7a slice 2a) — one
+	// per `where` constraint for an INSTANCE method of a constrained generic type, zero otherwise (a static, or
+	// an unconstrained type). The reservation is uniform across the type's instance methods (see `parseFunction`),
+	// so this is a pure function of `takesReceiver` and the type's constraint count.
+	function witnessParamCountFor(takesReceiver bool) returns ParamCount
+		if not takesReceiver or self.enclosingWhereConstraints.isEmpty() 'noWitness'
+			return 0
+		end 'noWitness'
+		return self.enclosingWhereConstraints.count()
+	end 'witnessParamCountFor'
+
 	function typeParamPositionOf(name ByteArray) returns TypeParamId
 		for i in 0 upto self.enclosingTypeParams.count() 'each'
 			let paramName = try self.enclosingTypeParams.get(i) otherwise panic("typeParamPositionOf: enclosingTypeParams.get OOB at {i}")
@@ -8098,6 +8211,9 @@ export type Parser
 			sizeofType gives try self.rejectTryTarget(tryTok)
 			byteStringLiteral gives try self.rejectTryTarget(tryTok)
 			switch gives try self.rejectTryTarget(tryTok)
+			// A throwing witness dispatch (`try self.item.method()`) needs the dual-register `witnessTryCall`,
+			// which this slice does not build — the enabled interface methods do not throw. Reject cleanly.
+			witnessDispatch gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -13628,6 +13744,14 @@ export type Parser
 				continue
 			end 'arrayMethod'
 
+			// A `.method(…)` on a CONSTRAINED TYPE-PARAMETER value (P1.7a slice 2a) — `self.item.digest()` where
+			// `item` is a `T` value and `T` is constrained `where T is Digest`. The concrete type is unknown in the
+			// shared body, so it dispatches through the runtime witness (`witnessDispatch`), NOT a direct call.
+			if self.at(TokenKind.dot) and self.tagOf(current) == ValueTypeTag.typeParameter 'witnessMethod'
+				current = try self.parseWitnessMethodOnValue(func, receiver: current, resultUsed: resultUsed)
+				continue
+			end 'witnessMethod'
+
 			break
 		end 'postfix'
 		return current
@@ -15972,6 +16096,122 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed)
 	end 'parseArrayMethodOnValue'
+
+	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
+	// `typeParameter`-tagged value (`self.item`, a `T` field read) and the cursor sits on the `.` before the
+	// method name. The concrete type is UNKNOWN in the shared body, so it dispatches through the runtime WITNESS:
+	// the enclosing type's `where` constraint whose interface declares this method supplies the witness, and the
+	// method's decl-order slot in that interface is the table index. Emits `MaxonOp.witnessDispatch`, which
+	// `lowerMaxonToStd` turns into the fused `StdOp.witnessCall`. The receiver is BORROWED (arg 0); its user
+	// arguments (none for `digest()`) follow it in `args`.
+	function parseWitnessMethodOnValue(func IrFunction, receiver ValueId, resultUsed bool) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let receiverParamPos = self.valueNameId(receiver)
+		let target = try self.resolveWitnessDispatch(receiverParamPos, methodTok: methodTok)
+
+		try self.consume(TokenKind.leftParen)
+		var args = ValueIdArray.create()
+		args.push(receiver)
+		if not self.at(TokenKind.rightParen) 'hasArgs'
+			while true 'argLoop'
+				args.push(try self.parseValueExpression(func))
+				if not self.at(TokenKind.comma) 'endArgs'
+					break
+				end 'endArgs'
+				try self.consume(TokenKind.comma)
+			end 'argLoop'
+		end 'hasArgs'
+		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		let range = SourceRange.between(methodTok, last: rparenTok)
+		let result = try self.mintWitnessDispatchResult(target, receiverParamPos: receiverParamPos, methodTok: methodTok, resultUsed: resultUsed)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName)), range: range)
+		return result
+	end 'parseWitnessMethodOnValue'
+
+	// Resolve `<receiver>.<method>()` against the enclosing type's `where` constraints (P1.7a slice 2a): find the
+	// constraint on the receiver's type parameter whose interface declares `method`, returning its slot index,
+	// the method's decl-order index, and its return type. The interface is resolved SAME-FILE (declared before
+	// its constrained use), so a forward/cross-file interface is a clean reject rather than a silent miss.
+	function resolveWitnessDispatch(receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTarget throws ParseError
+		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'
+			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("resolveWitnessDispatch: enclosingWhereConstraints.get OOB at {i}")
+			if constraint.typeParamIndex != receiverParamPos 'otherParam'
+				continue
+			end 'otherParam'
+
+			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: methodTok)
+			let methodIndex = interfaceMethodIndex(iface, methodName: methodTok.value)
+			if methodIndex < iface.methods.count() 'declaresMethod'
+				let method = try iface.methods.get(methodIndex) otherwise panic("resolveWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
+				return WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName)
+			end 'declaresMethod'
+		end 'eachConstraint'
+
+		throw ParseError.unsupported("no `where` constraint on this type parameter declares a method '{String.from(methodTok.value)}' — a method call on a constrained type parameter must be provided by one of its interfaces", line: methodTok.line, column: methodTok.column)
+	end 'resolveWitnessDispatch'
+
+	// Resolve an interface NAME during PARSING (P1.7a slice 2a) — a synthesized builtin FIRST (matching
+	// `ConformanceCheck.resolveInterface`), then a user interface declared in THIS file. A `where` constraint's
+	// interface must be declared before the type it constrains (this slice resolves interfaces same-file, from
+	// the parse artifact rather than the not-yet-merged `project.interfaces`); an unresolved name is a clean
+	// reject at the dispatch site.
+	function requireInterfaceForParse(name ByteArray, methodTok Token) returns IrInterface throws ParseError
+		match builtinInterface(name) 'builtin'
+			found(iface) then return iface
+			notFound then break 'builtin'
+		end 'builtin'
+
+		for iface in self.artifact.interfaces 'each'
+			if iface.name.equals(name) 'hit'
+				return iface
+			end 'hit'
+		end 'each'
+
+		throw ParseError.unsupported("the `where` constraint interface '{String.from(name)}' is not declared before its constrained use — P1.7a slice 2a resolves a constraint's interface within the same file, declared before the generic type", line: methodTok.line, column: methodTok.column)
+	end 'requireInterfaceForParse'
+
+	// Mint the SSA value a witness dispatch defines, typed from the interface method's return type (P1.7a slice
+	// 2a) — the witness-dispatch twin of `mintDeclaredCallResult`. A `void` method mints a discarded `void`
+	// result in statement position and reports E2004 in value position (like a void direct call); a `Self`
+	// return is the receiver's own type parameter (the shared body cannot know the concrete type); every other
+	// return type is minted through `mintOwnedCallResult`, so a heap-returning interface method's result is
+	// adopted owned exactly as a direct call's is.
+	function mintWitnessDispatchResult(target WitnessDispatchTarget, receiverParamPos TypeParamId, methodTok Token, resultUsed bool) returns ValueId throws ParseError
+		if target.returnTypeName.equals(InterfaceVoidTypeName) 'voidReturn'
+			if resultUsed 'noValueToUse'
+				throw ParseError.voidCallResultUsed(String.from(methodTok.value), line: methodTok.line, column: methodTok.column)
+			end 'noValueToUse'
+			return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+		end 'voidReturn'
+
+		if target.returnTypeName.equals(InterfaceSelfTypeName) 'selfReturn'
+			return self.mintOwnedCallResult(MaxonType.typeParameter(receiverParamPos))
+		end 'selfReturn'
+
+		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName))
+	end 'mintWitnessDispatchResult'
+
+	// A non-void, non-`Self` interface return TYPE NAME (P1.7a slice 2a) as a `MaxonType`: the primitive
+	// keywords map to their tags, `String` to the builtin, and every other name — a user ranged alias
+	// (`Code`), a struct — to a `named` type `mintOwnedCallResult` resolves through the same alias/struct doors
+	// a direct call's return does.
+	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
+		if returnTypeName.equals(b"bool") 'boolReturn'
+			return MaxonType.boolean
+		end 'boolReturn'
+		if returnTypeName.equals(b"int") 'intReturn'
+			return MaxonType.integer
+		end 'intReturn'
+		if returnTypeName.equals(b"float") 'floatReturn'
+			return MaxonType.float
+		end 'floatReturn'
+		if returnTypeName.equals(b"String") 'stringReturn'
+			return MaxonType.string
+		end 'stringReturn'
+		return MaxonType.named(self.artifact.typeNames.intern(returnTypeName))
+	end 'interfaceReturnMaxonType'
 
 	// The token shape of a method call on an ARRAY FIELD reached through a field chain — `<base>(.<field>)+
 	// .<method>(` with AT LEAST TWO dots (a one-dot `b.m(…)` is `methodCallsAt`'s). `resolveFieldChainFrom`

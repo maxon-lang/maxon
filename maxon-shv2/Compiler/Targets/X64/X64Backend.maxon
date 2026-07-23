@@ -842,15 +842,23 @@ end 'encodeLeaRegRegImm32'
 // needs disp8 for an rbp/r13 base (mod=00 base=101 is RIP-relative, not [rbp]). One
 // place the [base+disp] address form is assembled — no per-op respelling.
 function emitBaseDispModRm(code ByteArray, regField X64Register, base X64Register, disp Imm32)
+	emitBaseDispModRmBits(code, regFieldBits: regLow3(regField), base: base, disp: disp)
+end 'emitBaseDispModRm'
+
+// The `[base + disp]` ModR/M (+ SIB + displacement) with the reg field given as RAW BITS — a register's
+// low 3 bits for a memory load/store, or an OPCODE EXTENSION (`/2` for `call r/m64`) for a group-5 memory
+// form. The one home of the rsp-SIB / rbp-disp8 traps, split from the register-taking `emitBaseDispModRm`
+// exactly as `encodeModRmExtDirect` splits the extension form off `encodeModRmDirect`.
+function emitBaseDispModRmBits(code ByteArray, regFieldBits MachineWord, base X64Register, disp Imm32)
 	let baseBits = regLow3(base)
 	let baseIsRbpR13 = baseBits == RbpR13Low3
 	let modField = chooseDispMod(disp, baseIsRbpR13: baseIsRbpR13)
-	code.push(modField or (regLow3(regField) shl 3) or baseBits)
+	code.push(modField or (regFieldBits shl 3) or baseBits)
 	if baseBits == ModRmRmSibFollows 'sib'
 		emitSibNoIndex(code, base: base)
 	end 'sib'
 	emitTrailingDisp(code, modField: modField, disp: disp)
-end 'emitBaseDispModRm'
+end 'emitBaseDispModRmBits'
 
 // The trailing displacement byte(s) a `[base + disp]` ModR/M needs, keyed by the mod
 // field `chooseDispMod` returned: nothing for mod=00, a signed disp8 for mod=01, a
@@ -1259,6 +1267,18 @@ export function encodeCallReg(code ByteArray, reg X64Register)
 	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: reg)
 end 'encodeCallReg'
 
+// `call qword [base + disp]` through a memory operand — group-5 `/2`, mod=01/10 (P1.7a slice 2a). The
+// memory twin of `encodeCallReg`, and the whole point of the fused witness call: the callee pointer is read
+// from `[witnessAddr + slotOffset]` BY THE CALL and never occupies a register. REX.W is ignored for a near
+// call, so `wide: false` keeps the prefix minimal (only a REX.B for an r8-r15 base); the `/2` extension
+// rides the ModR/M reg field via `emitBaseDispModRmBits`, and `regField: rax` gives REX.R = 0 (an opcode
+// extension needs none), so a base in rax..rdi emits no REX at all (`call [rax+8]` = `FF 50 08`).
+export function encodeCallMem(code ByteArray, base X64Register, disp Imm32)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: base)
+	code.push(OpcodeCallIndirect)
+	emitBaseDispModRmBits(code, regFieldBits: Grp5ExtCall, base: base, disp: disp)
+end 'encodeCallMem'
+
 // call [rip+disp32] through an IAT slot. The disp32 is left zero and an IAT
 // Relocation records its offset + slot; the PE writer patches it to the IAT
 // entry's RVA once section layout is fixed.
@@ -1488,6 +1508,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// x64-linux: a raw `syscall`. The number is the op's immediate (`mov eax, number`); its arguments
 		// were pre-moved into rdi/rsi/rdx/r10/r8/r9 by the OS-primitive lowering, exactly as a call's are.
 		x64Syscall(number) then encodeX64Syscall(code, number: number)
+		// P1.7a slice 2a: the fused witness call's memory-indirect `call qword [baseReg + disp]` — the callee
+		// pointer read from the witness table by the call itself, never virtualized.
+		callMem(baseReg, disp) then encodeCallMem(code, base: resolveGpr(baseReg), disp: disp)
 	end 'emit'
 end 'emitTargetOp'
 

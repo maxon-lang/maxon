@@ -1998,6 +1998,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		leaRegFunc to x64Syscall gives false
 		// The jump tables are terminators, not constant materializations, so neither is rematerializable.
 		x64JumpTable to arm64JumpTable gives false
+		// The witness call is a call, not a constant materialization — not rematerializable (like `callReg`).
+		callMem gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2556,6 +2558,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		// The jump tables are not const materializations (`opIsConstMaterialization` gives false), so
 		// `constDefInfo` is never called on one — named rather than swallowed by a range arm.
 		x64JumpTable to arm64JumpTable panic("constDefInfo: def is not a constant materialization")
+		callMem panic("constDefInfo: a `callMem` def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -2746,6 +2749,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// table, default and rdata label untouched.
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.x64JumpTable(substituteVReg(indexReg, from: from, to: to), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(substituteVReg(indexReg, from: from, to: to), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
+		// The witness call substitutes its witness-table base register, exactly as `callReg` does its callee.
+		callMem(baseReg, disp) then return TargetOp.callMem(substituteVReg(baseReg, from: from, to: to), disp: disp)
 	end 'rewrite'
 end 'substituteValueInOp'
 

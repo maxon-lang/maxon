@@ -1081,6 +1081,24 @@ export union TargetOp
 	// arm64 scratch = x16 (0x10000) | x17 (0x20000) = 0x30000 — the IP0/IP1 scratch pair, already outside
 	// the arm64 allocatable pool. Inline for the same union-literal reason (guarded by `assertJumpTableScratch`).
 	arm64JumpTable(indexReg TargetVReg, defaultTarget BlockId, caseTargets BlockIdArray, tableLabel ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
+	// --- P1.7a slice 2a: the fused witness call's memory-indirect call (x64) ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `arm64JumpTable`, per the band-append invariant: every
+	// range arm over `TargetOp` stops at or before `callReg`/`x64Syscall`, so an op inserted mid-union is
+	// silently swallowed — appending past the last arm makes each stale match fail to compile until it is
+	// consciously extended.
+	//
+	// Memory-indirect call `call qword [baseReg + disp]` (`FF /2`, mod=01/10) — the memory-operand twin of
+	// `callReg`, and the whole point of the fused `StdOp.witnessCall`: the callee pointer is read from
+	// `[witnessAddr + 24 + 8*methodIndex]` BY THE CALL ITSELF, so it never occupies a virtual register (never
+	// virtualized). `baseReg` (the witness-table address) is a genuine value USE — it must be live at the call —
+	// exactly like `callReg`'s `reg`; `disp` is the constant slot offset. `encodeCallMem` emits it.
+	//
+	// ⚠⚠ THE SAME CLOBBER MASK AS `callDirect`/`callReg`/`iatCall`, AND IT MUST STAY THAT WAY. A call destroys
+	// the caller-saved set whether the target is a name, a register or a memory operand, so `implicitDefs` is
+	// the custom ABI's caller-saved mask `0xFFFF0FC7` — held equal to `callerSavedMask()` by
+	// `assertX64CallClobbers` alongside `callDirect`/`callReg`/`iatCall`/`x64Syscall`.
+	callMem(baseReg TargetVReg, disp Imm32) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

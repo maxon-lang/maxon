@@ -194,6 +194,8 @@ function opIsArm64Band(op TargetOp) returns bool
 		// an arm64 one.
 		x64JumpTable gives false
 		arm64JumpTable gives true
+		// The memory-indirect witness call is an x64 op (P1.7a slice 2a).
+		callMem gives false
 	end 'p'
 end 'opIsArm64Band'
 
@@ -331,6 +333,7 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// and the table stays readable even at the span cap.
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
+		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
 	end 'op'
 end 'formatTargetOp'
 

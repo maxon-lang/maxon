@@ -342,6 +342,8 @@ function isCaptureMove(op TargetOp) returns bool
 		leaRegFunc to x64Syscall gives false
 		// The jump tables are multiway terminators, not a `movRegReg`, so neither is a capture move.
 		x64JumpTable to arm64JumpTable gives false
+		// The witness call is a call, not a `movRegReg`, so it is not a capture move.
+		callMem gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -449,6 +451,8 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		leaRegFunc to x64Syscall then return false
 		// The jump tables are terminators, not register-to-register moves, so neither is a self-move.
 		x64JumpTable to arm64JumpTable then return false
+		// The witness call is a call, not a register-to-register move, so it is not a self-move.
+		callMem then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -691,6 +695,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
 			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 			leaRegFunc to x64Syscall then panic("retargetControlOp: non-terminator op as terminator")
+			callMem then panic("retargetControlOp: a `callMem` (witness call) is a body op, not a terminator")
 			// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
 			// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
 			// CFG edge redirects all of them through the one split block.

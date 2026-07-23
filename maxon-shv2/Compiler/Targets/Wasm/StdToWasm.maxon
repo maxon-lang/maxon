@@ -428,6 +428,9 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osRangePanic to osFreePages then break 'k'
 		// The jump table makes no indirect call — it branches on an integer index.
 		switch then break 'k'
+		// A witness call is x64-only (P1.7a slice 2a); `emitBodyOp` loudly refuses it, so it interns no
+		// wasm functype here.
+		witnessCall then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -717,6 +720,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		osRangePanic to osFreePages then break 'def'
 		// The jump table defines no value — a terminator has no result valtype to record.
 		switch then break 'def'
+		// A witness call is x64-only (P1.7a slice 2a); `emitBodyOp` loudly refuses it, so no valtype here.
+		witnessCall then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -959,6 +964,7 @@ type WasmFuncEmitter
 			// A jump table has multiple successors, so `decideDispatcher` always routes its function through
 			// the loop+br_table dispatcher — it never reaches the straight-line terminator path.
 			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
+			witnessCall then panic("emitStraightLineTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1028,6 +1034,7 @@ type WasmFuncEmitter
 			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osRangePanic to osFreePages then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
+			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1084,6 +1091,11 @@ type WasmFuncEmitter
 			osFreePages then panic("emitBodyOp: `osFreePages` is x64-windows only (and wasm linear memory cannot shrink) — the green-thread substrate is x64-windows-gated at this rung")
 			// The dense-match jump table is ALWAYS a block terminator, never a body op.
 			switch then panic("emitBodyOp: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
+			// P1.7a slice 2a: witness tables ride the x64 `funcAbs64InRdata` relocation, which the wasm writer
+			// refuses (`requireNoFuncAbs64Relocs`) — constrained-type-parameter dispatch is x64-only (Slice 2b
+			// would route it through a `call_indirect` funcref table). The loud refuse for a wasm-targeted witness
+			// program (the managed-witness specs are `<!-- targets: x64-windows, x64-linux -->`-restricted).
+			witnessCall then panic("emitBodyOp: a `witnessCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the wasm writer refuses; constrained-type-parameter dispatch on wasm is P1.7a slice 2b (a `call_indirect` funcref-table route)")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2093,6 +2105,8 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		// always creates several arm-body blocks, so `blockCount > 1` catches this first; the arm is here so
 		// a hypothetical single-block switch still forces the dispatcher rather than a straight-line path.)
 		switch then return true
+		// A witness call is a single-successor body op — it forces no dispatcher (it is refused at emission).
+		witnessCall then break 'k'
 	end 'k'
 	return false
 end 'decideDispatcher'
