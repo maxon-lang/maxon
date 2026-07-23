@@ -300,6 +300,14 @@ export type RuntimeUsage
 	// __mm_incref` this scan DOES see. Drives `installMmRuntime` to build `__mm_incref`; a program that never
 	// increfs (the common one) keeps it out. Set alongside `usesHeap` (an incref is on a `__mm_alloc`'d box).
 	export var usesIncref as bool
+	// The program co-owns a BORROWED managed-aggregate parameter into a `var` (`var q = p`, OPEN #40),
+	// which the parser makes a second owner of the caller's box via `__mm_retain`. Its OWN bit, not
+	// `usesIncref`: `__mm_retain` (returns the pointer) and `__mm_incref` (void) have independent callers,
+	// so folding either into the other installs a dead function in the program that uses only the other
+	// (see `installMmRuntime`). A `call __mm_retain` this scan sees directly. Drives `installMmRuntime` to
+	// build `__mm_retain`; a program that never co-owns a borrowed aggregate keeps it out. Set alongside
+	// `usesHeap` (a retain is on a `__mm_alloc`'d box).
+	export var usesRetain as bool
 	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
 	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
@@ -308,7 +316,7 @@ export type RuntimeUsage
 	export var neededDestructors as DestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesIncref: false, neededDestructors: DestructorSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -427,6 +435,13 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIncref = true
 		usage.usesHeap = true
 	end 'incref'
+	// A `__mm_retain` the PARSER emitted (co-owning a borrowed managed-aggregate parameter into a `var`,
+	// OPEN #40) — install the retain helper for it. `usesHeap` follows because the box it retains was
+	// `__mm_alloc`'d (which set `usesHeap` at that box's own allocation site anyway).
+	if callee.equals(MmRetainName) 'retain'
+		usage.usesRetain = true
+		usage.usesHeap = true
+	end 'retain'
 	// Any `__arr_*` call carries the whole array runtime, and the heap under it: `__arr_create`/`__arr_grow`
 	// `__mm_alloc` the record and the element buffer, `__arr_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference

@@ -6073,6 +6073,25 @@ export type Parser
 			boundBareLocal = false
 		end 'promoteMutableString'
 
+		// ⭐ **A MUTABLE BORROWED-AGGREGATE BINDING CO-OWNS THE BOX FROM DECLARATION (OPEN #40).** A struct or
+		// union PARAMETER is a BORROWED box; `var q = p` aliases it (an aggregate has no cheap owning copy, so
+		// it CANNOT be duplicated the way a mutable String is — `q.x = 100` must show through to the caller).
+		// Left borrowed, a later `q = <owned>` inside a NESTED block would be the FIRST thing to make `q` own a
+		// drop, and `reassignBindingValue`'s `borrowedToOwned` would enrol it at the INNER block's depth — so
+		// the fresh box would drop at that block's `end` while `q` (declared outer) is read past it: a
+		// use-after-free. Retaining the box here (an INCREF, at `q`'s own scope) makes `q` owned FROM
+		// DECLARATION, so the reassignment is a uniform owned→owned and never the wrong-depth enrol. The incref
+		// balances on every path: a reassignment decrefs the retained box, and an untaken branch leaves the
+		// scope-exit drop to decref it — net zero, so the CALLER stays the owner. This is the exact mirror of
+		// `promoteMutableString`, with an incref (reference semantics) where the String makes a copy (value
+		// semantics). An already-OWNED initializer (`var p = Point.create(…)`, a move `var q = t`) is left
+		// untouched by the `not valueIsOwnedHeap` guard — it already owns a droppable box — and a `let` is
+		// never reassigned, so only a `var` needs this.
+		if mutable and self.valueIsNonTextAggregate(value) and not self.valueIsOwnedHeap(value) 'retainBorrowedAggregate'
+			boundValue = self.retainBorrowedAggregate(value, range: SourceRange.ofToken(nameTok))
+			boundBareLocal = false
+		end 'retainBorrowedAggregate'
+
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
@@ -8297,6 +8316,24 @@ export type Parser
 		self.materializeStringRecordPart(source, partBufs: partBufs, partLens: partLens, range: range)
 		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 	end 'promoteToOwnedString'
+
+	// ⭐ **RETAIN A BORROWED MANAGED AGGREGATE AS A FRESH OWNED VALUE (OPEN #40).** The struct/union analogue
+	// of `promoteToOwnedString`: where a String promotes by COPYING into a fresh owned record, an aggregate
+	// has no cheap owning copy and MUST stay the same box (the alias is observable through a field write), so
+	// it is promoted by an INCREF instead — `__mm_retain` raises the box's refcount and hands back the
+	// pointer. That the runtime fn RETURNS the pointer (rather than reusing the void `__mm_incref`) is the
+	// point: the result is a FRESH SSA value distinct from `source`, so a later re-borrow of `source`
+	// (`let r = p`) cannot `poisonMoveSource`-match this binding, and moving this binding poisons IT, not the
+	// source. The result carries the SOURCE's exact type (same tag + name id), so the binding is the same
+	// aggregate the source is — its fields, its `match` dispatch, and its drop callee all resolve
+	// identically. `markValueOwnsHeap` (not `trackOwnedTemp`) sets the owned-heap provenance WITHOUT
+	// enrolling a statement-scoped pending drop: `parseBinding` binds this to the `var`, which drops it at
+	// ITS scope exit through `ownedBindings` — the same door a consumed managed parameter drops through.
+	function retainBorrowedAggregate(source ValueId, range SourceRange) returns ValueId
+		let retained = self.emitRuntimeCall(MmRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
+		self.markValueOwnsHeap(retained)
+		return retained
+	end 'retainBorrowedAggregate'
 
 	// ⭐ **DROP EVERY OWNED TEMPORARY THE STATEMENT LEFT UNCONSUMED**, in REVERSE creation order (the
 	// `emitScopeDrops` convention — the last built is the first torn down), into `currentBlock`. Called at

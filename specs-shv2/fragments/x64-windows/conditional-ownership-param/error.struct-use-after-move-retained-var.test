@@ -1,0 +1,24 @@
+// Test: error.struct-use-after-move-retained-var
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function pick(p Point) returns Integer
+	var q = p
+	let r = q
+	return q.x
+end 'pick'
+
+function main() returns ExitCode
+	let base = Point.create(5)
+	return pick(base)
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:15:9: use of moved value 'q': its ownership moved to another binding at an earlier bind or assignment

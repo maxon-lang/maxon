@@ -69,6 +69,7 @@ export let MmAllocCountLabel = b"__mm_alloc_count"
 
 export let SlabAllocName = b"__slab_alloc"
 export let MmIncrefName = b"__mm_incref"
+export let MmRetainName = b"__mm_retain"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
@@ -182,6 +183,13 @@ end 'ValueMinter'
 // built here, under either bit, rather than by `installArrayRuntime` alone: the parser can emit it in a
 // program that touches no array. Same "vocabulary ships with its consumer" rule, one home now that the
 // consumers are two files apart.
+//
+// ⚠ `__mm_retain` IS CONDITIONAL for the same reason, under its OWN bit. Its one consumer is the parser
+// co-owning a borrowed managed-aggregate parameter into a `var` (`var q = p`, OPEN #40) — a `call
+// __mm_retain` `scanRuntimeUsage` sees directly (`usesRetain`). It is NOT folded under `usesIncref`
+// despite both being increfs: the two functions have independent callers (an array/`try` program
+// references `__mm_incref` but never `__mm_retain`, and vice versa), so folding either bit into the
+// other would install an unreachable copy of the unused one in the program that references only the other.
 export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	buildSlabAlloc(module)
 	buildMmAlloc(module)
@@ -191,6 +199,9 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesIncref or usage.usesArray 'incref'
 		buildMmIncref(module)
 	end 'incref'
+	if usage.usesRetain 'retain'
+		buildMmRetain(module)
+	end 'retain'
 end 'installMmRuntime'
 
 // One i64 parameter — the shape five of the six runtime functions share. Exported: the String
@@ -489,6 +500,34 @@ export function buildMmIncref(module StdModule)
 
 	module.functions.push(func)
 end 'buildMmIncref'
+
+// ⭐ **`__mm_retain(ptr) -> ptr` — ONE MORE OWNER, HANDING BACK A FRESH SSA NAME FOR THE SAME BOX.**
+//
+// The incref twin of `buildMmIncref`, differing only in that it RETURNS the pointer it just increfed
+// instead of `retVoid`. The parser needs both halves at once to co-own a BORROWED managed-aggregate
+// parameter into a `var` (`var q = p`, OPEN #40): the incref makes `q` a second owner of the caller's
+// box, and the RETURN gives `q` a ValueId DISTINCT from `p`'s — which the void `__mm_incref` cannot.
+// That distinct name is load-bearing, not cosmetic: were `q` to reuse `p`'s ValueId while owned, a
+// later re-borrow of `p` (`let r = p`) would `poisonMoveSource`-match `q` and wrongly poison it (see
+// `Parser.retainBorrowedAggregate`). The box is otherwise untouched — same pointer, count raised by
+// one — so the aggregate's aliasing (`q.x = 100` shows through to the caller) is preserved.
+//
+// ⚠⚠ **NON-ATOMIC, DELIBERATELY** — the same read-modify-write `buildMmIncref` and `__mm_decref`
+// carry, and it becomes `LOCK`-prefixed on the same day for the same reason. See
+// `emitRefcountCheckToLastOwner`.
+export function buildMmRetain(module StdModule)
+	var func = IrFunction.createFromStd(MmRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	emitAdjustRefcount(module, block: entry, ptr: ptr, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(ptr))
+
+	module.functions.push(func)
+end 'buildMmRetain'
 
 // The refcount word of the box `ptr` addresses — `[ptr - HeaderBytes + HeaderRefcountOffset]`. ONE of the
 // two places the header geometry is spelled (the other is the store in `emitAdjustRefcount`), so nothing
