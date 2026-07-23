@@ -784,10 +784,17 @@ type StdToArm64Lowering
 	// `lowerCall`: there is no callee NAME to class the result or arguments against, so both come from the
 	// function value's SIGNATURE carried on the op (P1.5 #78) — a float result is captured from **d0** (else
 	// **x0**), and each argument is routed by its own type (a float to d0..d7, else x0..x7).
-	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask, dstRef BlockRef)
+	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(TargetVReg.virtual(calleeReg)))
-		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64IndirectResultRegister(resultType))))
+		// A VALUE callee's result is captured from d0/x0 into `resultId`. A VOID callee (a raw element
+		// destructor) leaves nothing to capture — `resultId` is a dead slot with no def, so no capture move
+		// is emitted and it never enters liveness/coloring. Native already ignored an unread indirect
+		// result, so making the destructor call truly void is neutral for the code emitted here.
+		match resultType 'r'
+			void then break 'r'
+			value(inner) then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64IndirectResultRegister(inner))))
+		end 'r'
 	end 'lowerCallIndirect'
 
 	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a

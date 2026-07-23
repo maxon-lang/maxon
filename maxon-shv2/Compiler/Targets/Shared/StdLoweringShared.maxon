@@ -361,7 +361,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		// float-returning function value is XMM-classed and captured from xmm0/d0, everything else GPR from
 		// R8/x0. There is no callee NAME to look a return type up against as `call`/`tryCall` do, so the front
 		// end's own type for the result value rides on the op (`LowerMaxonToStd.lowerIndirectCall`).
-		callIndirect(resultId, _, resultType, _, _) then setValueClass(column, valueId: resultId, class: regClassForStdType(resultType))
+		callIndirect(resultId, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
 		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
 		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.
@@ -388,6 +388,19 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		switch then break 'result'
 	end 'result'
 end 'recordOpResultClass'
+
+// Class an indirect call's result. A VALUE callee's result is classed by its return type (a float-returning
+// function value is XMM/SIMD-classed and captured from xmm0/d0, everything else GPR from R8/x0). A VOID
+// callee (a raw element destructor) DEFINES no value — the backends emit no capture move for it (see
+// `lowerCallIndirect`), so `resultId` never enters coloring and takes no class. Unlike a void DIRECT `call`,
+// whose return register IS captured into a garbage-i64 result, a void indirect call has genuinely nothing to
+// capture, so classing its dead slot would reserve a register no instruction ever writes or reads.
+function classifyIndirectResult(column ValueClassColumn, resultId ValueId, resultType StdReturnType)
+	match resultType 'r'
+		void then break 'r'
+		value(inner) then setValueClass(column, valueId: resultId, class: regClassForStdType(inner))
+	end 'r'
+end 'classifyIndirectResult'
 
 // The class of a CALL's result — the callee's return type, looked up by name. A VOID call still
 // DEFINES a value (`lowerCall` moves the return register into it unconditionally), so a miss on `void`

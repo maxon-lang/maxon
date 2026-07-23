@@ -429,10 +429,14 @@ end 'internIndirectCallTypeFor'
 // under the encoded-functype key. `internFuncType` dedups by the encoded bytes, so a repeated signature
 // re-derives the SAME index (and a signature that equals a real function's own type — e.g. a `__fnref_`
 // thunk's — shares one type-section entry). The single door that builds an indirect call's wasm signature,
-// so the pre-interned type and the call-site `call_indirect` immediate cannot disagree (P1.5 #78).
-function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, resultType StdType, argFloatMask ArgFloatMask, argCount ParamCount)
+// so the pre-interned type and the call-site `call_indirect` immediate cannot disagree (P1.5 #78). The result
+// list comes from `funcResultValTypes`, the SAME void|value(StdType) → valtypes mapping a whole function's
+// signature uses: a VOID indirect callee (a raw element destructor) interns ZERO results, a value one its
+// single valtype. `emitCallIndirect` rebuilds the sig key through the same helper, so intern and call-site
+// cannot disagree on the void case either.
+function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, resultType StdReturnType, argFloatMask ArgFloatMask, argCount ParamCount)
 	let params = indirectCallParamValTypes(argFloatMask, argCount: argCount)
-	let results = singletonValTypes(wasmValTypeOf(resultType))
+	let results = funcResultValTypes(resultType)
 	let typeIdx = builder.internFuncType(params, results: results)
 	map.upsert(encodeFuncType(params, results: results), value: typeIdx)
 end 'internIndirectCallType'
@@ -700,7 +704,10 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		// (P1.5 #78): f64 for a float-returning function value, else i64 — the `resultType` the op carries,
 		// which is also the valtype the `call_indirect` functype declares as its result.
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		callIndirect(resultId, _, resultType, _, _) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(resultType))
+		// A VOID indirect callee (a raw element destructor) leaves NOTHING on the stack, so its `resultId` is a
+		// dead slot with no def — record no valtype (an unread i64-fill local, like any DCE gap). A value one
+		// takes the function value's own return width (f64 for a float-returning value, else i64).
+		callIndirect(resultId, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
 		osRangePanic to osFreePages then break 'def'
 		// The jump table defines no value — a terminator has no result valtype to record.
 		switch then break 'def'
@@ -715,6 +722,16 @@ function recordTryCallDefs(valtypes WasmValTypeArray, resultId ValueId, errorFla
 	setValtype(valtypes, v: resultId, vt: callResultValType(callee, calleeReturnType: calleeReturnType))
 	setValtype(valtypes, v: errorFlagId, vt: WasmValType.i64)
 end 'recordTryCallDefs'
+
+// Record an indirect call's result valtype. A VALUE callee defines `resultId` at the function value's own
+// return width; a VOID callee (a raw element destructor) leaves nothing on the stack, so `resultId` gets no
+// def — its local reads as the i64 fill any unreferenced value id does, and nothing reads it.
+function recordIndirectCallDefValtype(valtypes WasmValTypeArray, resultId ValueId, resultType StdReturnType)
+	match resultType 'r'
+		void then break 'r'
+		value(inner) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(inner))
+	end 'r'
+end 'recordIndirectCallDefValtype'
 
 // Reserve `resultId`'s slot (i64 placeholder) and queue its width to be copied from `lhs`.
 function recordDependentValtype(valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray, resultId ValueId, lhs ValueId)
@@ -1474,7 +1491,7 @@ type WasmFuncEmitter
 	// already-typed result and arg values), the SAME facts x64/arm64 use to pick the result's and each arg's
 	// register file. `pushOperandAt` widens a narrower value to the declared arg valtype exactly as a direct
 	// `call` does; a float arg already sits at f64, so its coercion is a no-op.
-	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask)
+	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask)
 		for argIdx in 0 upto args.count() 'eachArg'
 			let arg = try args.get(argIdx) otherwise panic("emitCallIndirect: args.get OOB at {argIdx}")
 			let argVt = WasmValType.f64 if argIsFloat(argFloatMask, argIndex: argIdx) else WasmValType.i64
@@ -1484,11 +1501,15 @@ type WasmFuncEmitter
 		self.pushOperandAt(calleeReg, targetVt: WasmValType.i32)
 
 		let params = indirectCallParamValTypes(argFloatMask, argCount: args.count())
-		let sigKey = encodeFuncType(params, results: singletonValTypes(wasmValTypeOf(resultType)))
+		let sigKey = encodeFuncType(params, results: funcResultValTypes(resultType))
 		let typeIdx = try self.indirectCallTypeIdx.get(sigKey) otherwise panic("emitCallIndirect: no interned functype for this {args.count()}-argument indirect call signature — buildIndirectCallTypeIdxMap missed it")
 		self.body.callIndirect(typeIdx)
 
-		self.body.localSet(resultId as Wasm32Index)
+		// A VOID indirect callee (a raw element destructor) pushes nothing, so there is no result to store —
+		// storing would underflow the typed stack. A value one leaves its result on top for the `local.set`.
+		if not stdReturnTypeIsVoid(resultType) 'hasResult'
+			self.body.localSet(resultId as Wasm32Index)
+		end 'hasResult'
 	end 'emitCallIndirect'
 
 	// Value return: push the return value and `return`. A `void` return type here means a value

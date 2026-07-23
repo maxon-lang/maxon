@@ -705,7 +705,7 @@ export union StdOp
 	// lowering moves each arg into its ABI register, calls THROUGH the callee register (`callReg` /
 	// `arm64BranchLinkReg`), then moves the return value into `resultId`.
 	//
-	// ⭐ IT CARRIES THE FUNCTION VALUE'S SIGNATURE — `resultType` (the result's Std type) and
+	// ⭐ IT CARRIES THE FUNCTION VALUE'S SIGNATURE — `resultType` (the result's return type) and
 	// `argFloatMask` (bit k set iff argument k is a float) — because, unlike a direct `call`, there is NO
 	// callee NAME to recover it from (`calleeResultClasses` / `calleeParamClasses` are keyed by name).
 	// Without it every backend assumed an INTEGER result and integer args, so a float-returning or
@@ -715,14 +715,26 @@ export union StdOp
 	// mask (`args`'s trailing entry, the uniform-ABI env pointer, is never float) and captures the result by
 	// `resultType`, exactly as a direct call reads the callee's declared types.
 	//
-	// ⚠ BOTH ARE SCALARS, DELIBERATELY. A per-arg `StdTypeArray` here would be a SECOND managed field on the
-	// variant, which the bootstrap that compiles shv2 mishandles in the union's synthesized destructor — a
-	// wild free surfacing as an unrelated `mm_decref` underflow at teardown, on EVERY indirect call. The
-	// scalar `argFloatMask` keeps `callIndirect` at ONE managed field (`args`) exactly like its original
-	// shape, and is the same allocation-flat idiom `CalleeParamClassMap`'s `ParamFloatMask` uses caller-side
-	// for the identical question. `args` stays LAST (the one managed field), scalars first. Both are METADATA,
-	// not value operands: `collectStdOpUses`/`remapStdOpUses` leave them untouched.
-	callIndirect(resultId ValueId, calleeReg ValueId, resultType StdType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// ⭐ `resultType` IS A `StdReturnType`, NOT A BARE `StdType` — the union `void | value(StdType)` — because
+	// an indirect callee can be genuinely VOID with NO result at all: the per-element destructor
+	// (`__str_decref`/`__destruct_<T>`/`__mm_decref`/`__arr_decref`, a `(param i64)` void function) the array
+	// drop walk invokes (`ArrayRuntime.emitElementDestroyRange`). A void function VALUE (`let cb = doIt; cb()`)
+	// is DIFFERENT and stays `value(i64)`: it routes through a `__fnref_` thunk that returns a dummy i64, so
+	// its `call_indirect` functype `(…)->i64` matches the thunk (LowerMaxonToStd.indirectResultType). The raw
+	// void destructor has no such thunk — its true type is `(param i64)` with no result — so on `void` the
+	// wasm functype interns ZERO results and the native backends capture no result register. Making the whole
+	// wasm signature (not just the width) exact is what stops the `call_indirect` type check from trapping.
+	//
+	// ⚠ `resultType`/`argFloatMask` ARE SCALARS, DELIBERATELY. A per-arg `StdTypeArray` here would be a SECOND
+	// managed field on the variant, which the bootstrap that compiles shv2 mishandles in the union's
+	// synthesized destructor — a wild free surfacing as an unrelated `mm_decref` underflow at teardown, on
+	// EVERY indirect call. `StdReturnType` is a VALUE union (its `value` arm wraps the enum `StdType`, no
+	// heap), so it adds no managed field: `argFloatMask` and it keep `callIndirect` at ONE managed field
+	// (`args`) exactly like its original shape — the same allocation-flat idiom `CalleeParamClassMap`'s
+	// `ParamFloatMask` uses caller-side for the identical question. `args` stays LAST (the one managed field),
+	// scalars first. Both are METADATA, not value operands: `collectStdOpUses`/`remapStdOpUses` leave them
+	// untouched.
+	callIndirect(resultId ValueId, calleeReg ValueId, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// A ranged-typealias RANGE-CHECK PANIC (P1.9): abort with the interned message at `.rdata` label
 	// `label`, printing it plus a symbolized backtrace and exiting 1. A `system`-band op — the same
 	// shape and rationale as `osExit`/`osWriteStdout`: it says WHAT is wanted (panic with this message)
