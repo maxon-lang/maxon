@@ -154,6 +154,38 @@ end 'main'
 42
 ```
 
+<!-- test: async-promise-drop.branch-await-one-drop-other -->
+<!-- targets: x64-windows -->
+The path-sensitive case: a promise `await`ed on ONE branch and DROPPED on the other, reconciled at the merge.
+`pick` spawns `p`, then on `x > 0` awaits it (the runtime reclaims the struct at the await) and on the else
+path lets it drop at scope exit (the `ready` arm cancels the never-run thread). Compiling ONE body with both
+fates — the awaited binding is `movedFrom`, the else path is live — must drop `p` on exactly the else path and
+NOT double-drop the awaited one. `pick(1)` returns 7 (awaited); `pick(0)` returns 0 (dropped, never ran); their
+sum is 7, and the live count balances to zero across both calls (no GT-leak abort 75).
+```maxon
+
+function compute() returns int
+	return 7
+end 'compute'
+
+function pick(x int) returns int
+	let p = async compute()
+	if x > 0 'branch'
+		return (await p) as int
+	end 'branch'
+	return 0
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick(1)
+	let b = pick(0)
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: async-promise-drop.parked-subprocess-drop-cancel -->
 <!-- targets: x64-windows -->
 The process-store twin of the parked-timer case. `slowProc` spawns a child that runs for ~2 s and parks on the
