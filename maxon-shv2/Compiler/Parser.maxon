@@ -11817,7 +11817,7 @@ export type Parser
 	// forming a difference that would overflow `i64` — see `spanExceedsCap`.
 	function planDispatchTable(from ElementCount, to ElementCount, intervals DispatchIntervalArray) returns DispatchTablePlan
 		let bias = (try intervals.get(from) otherwise panic("planDispatchTable: intervals.get OOB at from {from}")).lo
-		let maxHi = (try intervals.get(to -1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
+		let maxHi = (try intervals.get(to - 1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
 
 		// Reject on the covered WIDTH exceeding the cap WITHOUT forming `maxHi - bias`, which overflows i64
 		// when the span crosses far into both halves (e.g. `i64.min`..`i64.max`). `maxHi >= bias` always
@@ -11833,7 +11833,7 @@ export type Parser
 		// The table must earn its slots against the compares it removes, not merely against the values it
 		// covers (`MaxTableSlotsPerInterval`). `to - from` is the interval count; the product fits i64
 		// (span <= 4096, the count is bounded by the arm count).
-		if span > ((to -from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
+		if span > ((to - from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
 			return DispatchTablePlan.notTable()
 		end 'sparse'
 
