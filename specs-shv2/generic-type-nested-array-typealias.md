@@ -394,3 +394,427 @@ end 'main'
 ```exitcode
 0
 ```
+
+### Move an opaque managed element OUT with `pop`
+
+`pop` MOVES the opaque type-parameter element out of `self.items`: the runtime nulls the vacated slot (so the
+array's `__arr_decref` walk skips it) and the caller becomes the sole owner of the returned opaque word. The
+shared body has no static type for the element, so the moved-out value is enrolled owned and dropped at scope
+exit through the descriptor-gated `__drop_type_param` (`computeTypeDescriptorNeeds` reserves the descriptor off
+the same `self.items.pop()` shape). Here `drainOne` pops one of two Strings and drops it; the container drops
+the remaining String on `main`'s scope exit — each String is freed exactly once (no leak, no double-free of the
+moved-out element).
+
+<!-- test: pop-moves-opaque-element-out -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function drainOne()
+		let x = try self.items.pop() otherwise return
+	end 'drainOne'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("hello string long enough to force a heap allocation")
+	sc.push("world string long enough to force a heap allocation")
+	sc.drainOne()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Move out through a local bound to the opaque array field
+
+The opaque array field can be aliased to a local (`let arr = self.items`, a borrow) and moved out through the
+local. The descriptor-need pre-scan runs before the body is parsed and cannot resolve the receiver of a
+`pop`/`remove`, so it reserves the descriptor for ANY move-out in the shared body — the owned element still
+drops through the descriptor-gated `__drop_type_param` whether the receiver is the field directly or a local
+bound to it. `drainViaLocal` pops one of two Strings through the local and drops it; the container drops the
+survivor — each freed once.
+
+<!-- test: pop-via-local-binding -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function drainViaLocal()
+		let arr = self.items
+		let x = try arr.pop() otherwise return
+	end 'drainViaLocal'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("hello string long enough to force a heap allocation")
+	sc.push("world string long enough to force a heap allocation")
+	sc.drainViaLocal()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Read an opaque managed element with `get` (a borrow)
+
+`get` yields a BORROW of the opaque element: the array keeps ownership, so the borrowed value is dropped by
+nothing — the element stays live in the array and is freed once when the container drops. `peekCount` reads
+element 0 and then reports the count, which is still 1 (the borrow did not remove it); `main` asserts that and
+exits leak-free. A borrow that were mistakenly tracked owned would free the element AND leave the array's walk
+to free it again — a double-free the exit-0 run rules out.
+
+<!-- test: get-borrows-opaque-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function peekCount() returns Count
+		let x = try self.items.get(0) otherwise return 0
+		return self.items.count()
+	end 'peekCount'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("a string long enough to force a heap allocation")
+	let c = sc.peekCount()
+	if c == 1 'stillThere'
+		return 0
+	end 'stillThere'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Read an opaque managed element with `first` and `last` (borrows)
+
+`first` and `last` are borrows exactly like `get`: they hand back the opaque element without moving it out of
+the array. `peekEnds` borrows both ends of a one-element array and drops nothing; the container frees the single
+String once on scope exit.
+
+<!-- test: first-last-borrow-opaque-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function peekEnds()
+		let a = try self.items.first() otherwise return
+		let b = try self.items.last() otherwise return
+	end 'peekEnds'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("only element long enough to force a heap allocation")
+	sc.peekEnds()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Move an opaque managed element OUT with `remove`
+
+`remove(i)` moves the element at index `i` out exactly as `pop` moves the tail: the slot is vacated and the
+returned opaque word is owned by the caller. `dropAt` removes and drops element 0 of two Strings; the container
+drops the survivor on scope exit — each String freed once.
+
+<!-- test: remove-moves-opaque-element-out -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function dropAt()
+		let x = try self.items.remove(0) otherwise return
+	end 'dropAt'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("first string long enough to force a heap allocation")
+	sc.push("second string long enough to force a heap allocation")
+	sc.dropAt()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Popping an opaque struct element drops its managed field
+
+When the opaque element is itself a struct that owns a String, moving it out and dropping it must run the
+struct's own destructor — the descriptor's `destroyFunc@40` is the struct's `__destruct_<Pair>`, which frees the
+nested String. `drainOne` pops one `Pair` of two and drops it (freeing its String); the container drops the
+survivor. No String leaks.
+
+<!-- test: pop-opaque-struct-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var name as String
+	export var value as Integer
+
+	static function create(name String, value Integer) returns Self
+		return Self{name: name, value: value}
+	end 'create'
+end 'Pair'
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function drainOne()
+		let x = try self.items.pop() otherwise return
+	end 'drainOne'
+end 'Container'
+
+typealias PairContainer = Container with Pair
+
+function main() returns ExitCode
+	var pc = PairContainer.create()
+	pc.push(Pair.create("first pair string long enough for heap", value: 1))
+	pc.push(Pair.create("second pair string long enough for heap", value: 2))
+	pc.drainOne()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Reusing a moved-out opaque element is use-after-move
+
+A `pop`/`remove` result is a single-owner move — a type parameter carries no copy — so moving it back into the
+array and then using it again is use-after-move, rejected E3102 rather than storing the value into two slots
+that would both free it. The shared body move-tracks the opaque element for every instantiation, so the reject
+is uniform and needs no codegen (parse-time, so every target agrees).
+
+<!-- test: reuse-moved-out-opaque-element -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function reinsertTwice()
+		let x = try self.items.pop() otherwise return
+		self.items.push(x)
+		self.items.push(x)
+	end 'reinsertTwice'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("a string long enough to force a heap allocation")
+	sc.reinsertTwice()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:19: use of moved value 'x': its ownership moved to another binding at an earlier bind or assignment
+```
+
+### Pop and get on a trivial element are inert
+
+The SAME move-out and read shapes on a TRIVIAL element (`Container with SmallInt`) share the generic body, whose
+descriptor `destroyFunc@40` is 0 — so the moved-out int owns no heap and its scope-exit drop destroys nothing.
+`drainOne` pops one of two ints and `peek` reads element 0; the program exits 0, byte-for-byte the same shared
+body the managed instantiation runs, on every target.
+
+<!-- test: trivial-pop-get-inert -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias SmallInt = int(0 to 1000)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function drainOne()
+		let x = try self.items.pop() otherwise return
+	end 'drainOne'
+
+	export function peek()
+		let y = try self.items.get(0) otherwise return
+	end 'peek'
+end 'Container'
+
+typealias IntContainer = Container with SmallInt
+
+function main() returns ExitCode
+	var ic = IntContainer.create()
+	ic.push(7)
+	ic.push(9)
+	ic.drainOne()
+	ic.peek()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### A VALUE `otherwise` on an opaque accessor is rejected
+
+The plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) of an opaque element are supported with a
+DIVERGING `otherwise` (`return`/`throw`/`panic`), which never merges a value at the `try` continuation. A VALUE
+`otherwise <expr>` DOES merge, and reconciling ownership there (incref the borrowed element, or move/incref the
+fallback) is a descriptor-gated operation the shared body cannot pick statically — the element is a raw scalar
+for a trivial instantiation (a plain incref would fault) and a managed pointer for another. So a value
+`otherwise` on an opaque accessor is a clean E2015 until a descriptor-gated reconciliation lands; here `pop`
+supplies the owned fallback that the following `get` merges. (The concrete-element `try items.get(0) otherwise
+Item.create(…)` is unaffected — its element type is known, so the incref-on-get already resolves it.)
+
+<!-- test: opaque-accessor-value-otherwise-rejected -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function firstOrPopped()
+		let owned = try self.items.pop() otherwise return
+		let x = try self.items.get(0) otherwise owned
+	end 'firstOrPopped'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("first string long enough to force a heap allocation")
+	sc.push("second string long enough to force a heap allocation")
+	sc.firstOrPopped()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:11: Unsupported: a `try` on an opaque type-parameter array accessor (`get`/`first`/`last`/`pop`/`remove` on an `Array with <type parameter>` field) with a VALUE `otherwise <expr>` — reconciling the borrowed/moved-out element with the fallback at the `try` continuation needs a descriptor-gated incref/copy the shared body cannot pick statically (the element is a raw scalar for a trivial instantiation and a managed pointer for another), a distinct future slice. Use a DIVERGING `otherwise` (`otherwise return`/`throw`/`panic`) instead — the plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) are supported that way (P1.7 slice 3b-vi-a).
+```
