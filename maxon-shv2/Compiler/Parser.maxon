@@ -668,6 +668,12 @@ export let SelfParamName = b"__self"
 // `Parser.typeDescriptorNeeds`.
 typealias DescriptorNeedMap = Map with (ByteArray, bool)
 
+// The enclosing type's bare-method-name -> "does it take a receiver?" map (#65 implicit-self resolution).
+// A bare call `foo(…)` inside a method of the type resolves to the sibling method `foo`; the flag decides
+// whether the enclosing `self` is prepended (an instance method) or not (a `static` one). See
+// `Parser.siblingReceiverMap`.
+typealias SiblingReceiverMap = Map with (ByteArray, bool)
+
 // A generic method's bare name -> the sibling methods it calls on `self` (P1.6-B1) — the self-call edges the
 // descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) propagates over.
 typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
@@ -684,6 +690,12 @@ typealias MethodIndexMap = Map with (ByteArray, CsrIndex)
 // `enclosingTypeParams`), so this shared instance is only ever an unread placeholder and is never mutated —
 // safe to share across the per-file parse fan-out.
 let sharedEmptyDescriptorNeeds = DescriptorNeedMap.create()
+
+// The INITIAL `Parser.siblingReceivers`, held here (like `sharedEmptyDescriptorNeeds`) so a parser
+// allocates none of its own until a bare call inside a type body actually needs the map. The lazy builder
+// REPLACES the field with a fresh map — it never mutates in place — so this placeholder stays empty and is
+// safe to share across the per-file parse fan-out. A method-free file never touches the field at all.
+let sharedEmptySiblingReceivers = SiblingReceiverMap.create()
 
 // The module-level shared empty type-parameter-FEED array (P1.6-B2) every non-generic consuming function's
 // `ParamConsumeInfo` holds — a feed requires a type parameter, so such a function never fills one and it is
@@ -2510,6 +2522,22 @@ export type Parser
 	// one type declaration (a method self-calls only siblings, same file, contiguous), so no whole-program
 	// index is needed. Empty for a non-generic type.
 	var typeDescriptorNeeds as DescriptorNeedMap
+	// ⭐ **THE ENCLOSING TYPE'S MEMBER METHODS, bare name -> takesReceiver (#65)** — the map that resolves a
+	// bare call `foo(…)` inside a method body to the sibling method `foo`, prepending `self` for an instance
+	// method and nothing for a `static` one. Built LAZILY (`siblingReceiverMap`) the first time a call inside a
+	// type body needs it and memoized on `siblingReceiverScanType`, so a type whose methods make no calls — all
+	// of the scale corpus — allocates NOTHING, exactly as `typeDescriptorNeeds` costs a non-generic type nothing.
+	// It is the type's WHOLE method set (static and instance), so `contains` answers "is this a sibling?" and the
+	// value answers "does it take a receiver?" from one source — no second decider to drift against the qualified
+	// name the signature index declares.
+	var siblingReceivers as SiblingReceiverMap
+	// The type `siblingReceivers` was built for — the memo key. Empty until the first lazy build, and compared
+	// against `enclosingType` so a sibling type reuses nothing stale.
+	var siblingReceiverScanType as ByteArray
+	// The token index at which the enclosing type's body begins (past the header and any `uses` clause) — set by
+	// `parseTypeDeclaration`, and where the lazy `siblingReceiverMap` walk starts. The cursor has long since
+	// moved on by the time a method body's call needs it, so the start must be remembered rather than re-derived.
+	var enclosingTypeBodyStart as TokenIndex
 	// A REUSED sink for the REAL parse's generic-instance typealiases (P1.6-A). The whole-program index
 	// records every generic alias in the SWEEP (`foldFile`), so the real parse's `readTypeAliasDeclaration`
 	// has nowhere to fold one and nothing downstream reads it — but the shared reader records into a
@@ -2650,6 +2678,9 @@ export type Parser
 			enclosingTypeParams: ByteArrayArray.create(),
 			enclosingInnerAliases: sharedEmptyInnerAliases,
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
+			siblingReceivers: sharedEmptySiblingReceivers,
+			siblingReceiverScanType: EmptySourceText,
+			enclosingTypeBodyStart: 0,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
@@ -3178,6 +3209,15 @@ export type Parser
 			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
 				callees.push(self.tokenAt(q + 2).value)
 			end 'selfCall'
+			// A BARE sibling call `method(…)` (#65) is a self-call too: implicit-self resolves it to
+			// `self.method(…)`, so it must feed the descriptor-need fixpoint exactly as an explicit
+			// `self.method(…)` does — otherwise a method reading `sizeof(T)` reached only through a bare sibling
+			// call would leave its caller with no descriptor to forward (a `forwardCallerLayout` panic). A
+			// callee that is NOT a sibling (a free function, a builtin) is dropped by the fixpoint's name->index
+			// filter, so over-including here is harmless.
+			if kind == TokenKind.identifier and self.isBareCallAt(q) 'bareCall'
+				callees.push(self.tokenAt(q).value)
+			end 'bareCall'
 
 			if self.opensBlockAt(q) 'opensBlock'
 				depth = depth + 1
@@ -3200,6 +3240,14 @@ export type Parser
 	function isSelfMethodCallAt(selfPos TokenIndex) returns bool
 		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.leftParen
 	end 'isSelfMethodCallAt'
+
+	// Is the identifier at `q` a BARE call `<identifier>(` — followed by `(` and NOT preceded by a `.` (which
+	// would make it the member of a `receiver.method(…)` or a qualified `Type.method(…)` call, neither of which
+	// is a bare self-call)? The callee is the identifier itself. Used by the descriptor-need scan to treat an
+	// implicit-self bare sibling call (#65) as the `self.method(…)` it lowers to.
+	function isBareCallAt(q TokenIndex) returns bool
+		return self.kindAt(q + 1) == TokenKind.leftParen and (q == 0 or self.kindAt(q - 1) != TokenKind.dot)
+	end 'isBareCallAt'
 
 	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias followed by `.create(` — the
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` `.` `create` `(`, four contiguous
@@ -4612,6 +4660,11 @@ export type Parser
 		// the type's own methods, computed NOW (the cursor sits at the body start) so `parseFunction` can
 		// reserve the param before it numbers a method's body values. A peek-only walk; the cursor is untouched.
 		self.computeTypeDescriptorNeeds()
+
+		// The cursor sits at the type body start; remember it so the lazy sibling-receiver walk (#65) can begin
+		// here once a method body's bare call needs it. The memo is invalidated implicitly — its key still names
+		// the previous type, so the first call in this body rebuilds against this start.
+		self.enclosingTypeBodyStart = self.pos
 
 		while true 'members'
 			self.skipNewlines()
@@ -16669,6 +16722,78 @@ export type Parser
 		end 'unexpected'
 	end 'consumeConst'
 
+	// ⭐ **#65 — IS `name` A METHOD OF THE ENCLOSING TYPE?** A bare call `name(…)` inside a method body resolves
+	// to the sibling method `name` rather than a free function — and the method WINS when a free function of the
+	// same name also exists (oracle-verified), which is why the free-call path asks this FIRST. False at file
+	// scope, where there is no enclosing type and every call is free.
+	function isImplicitSelfMethod(name ByteArray) returns bool
+		if self.enclosingType.isEmpty() 'notInType'
+			return false
+		end 'notInType'
+		self.ensureSiblingReceivers()
+		return self.siblingReceivers.contains(name)
+	end 'isImplicitSelfMethod'
+
+	// The receiver a bare call to the sibling `name` carries. An INSTANCE method gets the enclosing `self`
+	// prepended at parameter 0 — identical to what `self.name(…)` builds — so the two spellings emit the same
+	// call. A `static` sibling gets none. In a `static` method there is no `self` to prepend, so an instance
+	// sibling resolves receiver-less and fails the arity check on the hidden `self` parameter (E3036) — the same
+	// rejection the oracle gives ("missing argument for parameter 'self'"), reached with no special case here.
+	// The caller (`parseCall`) has already established `name` IS a sibling (`isImplicitSelfMethod`), so the map
+	// is built and this `ensureSiblingReceivers` is a memo hit.
+	function implicitSelfReceiver(name ByteArray) returns ReceiverArg
+		self.ensureSiblingReceivers()
+		if not (try self.siblingReceivers.get(name) otherwise false) 'staticSibling'
+			return ReceiverArg.none
+		end 'staticSibling'
+		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none)
+	end 'implicitSelfReceiver'
+
+	// Populate `siblingReceivers` (the enclosing type's member methods, bare name -> takesReceiver) unless it is
+	// already built for this type. LAZY so a type whose methods make no calls — the whole scale corpus — never
+	// builds it and allocates nothing (the field keeps its `sharedEmptySiblingReceivers` placeholder). A
+	// file-local token walk of the type body, so it sees every sibling regardless of declaration order: a
+	// forward reference resolves exactly as a backward one, and recursion sees the method itself. It is the ONE
+	// source of both "is this a sibling?" (`contains`) and "does it take a receiver?" (the value), so those two
+	// facts cannot drift apart.
+	function ensureSiblingReceivers()
+		if self.siblingReceiverScanType.equals(self.enclosingType) 'memoHit'
+			return
+		end 'memoHit'
+
+		var map = SiblingReceiverMap.create()
+		var depth = 0 as BlockDepth
+		var q = self.enclosingTypeBodyStart
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			// A member method is `function <name>` — a closure is `function(` (no name, and no `end`), and no
+			// other construct pairs `function` with an identifier, so this cannot mistake one for a method. It
+			// opens the method's own block, which `opensBlockAt` does NOT count (it knows if/while/match, not
+			// `function`), so counting it here is the +1 that balances the method's `end`.
+			let isMethod = self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier
+			if isMethod 'method'
+				// `[export] [static] function <name>`: `static`, when present, sits immediately before
+				// `function`. A method with no `static` takes the hidden `self` receiver.
+				map.upsert(self.tokenAt(q + 1).value, value: not (q > 0 and self.kindAt(q - 1) == TokenKind.static))
+			end 'method'
+
+			if isMethod or self.opensBlockAt(q) 'opens'
+				depth = depth + 1
+			end 'opens' else 'notOpener'
+				if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
+					if depth == 0 'typeEnd'
+						break
+					end 'typeEnd'
+					depth = depth - 1
+				end 'closes'
+			end 'notOpener'
+
+			q = q + 1
+		end 'walk'
+
+		self.siblingReceivers = map
+		self.siblingReceiverScanType = self.enclosingType
+	end 'ensureSiblingReceivers'
+
 	// Parse a call expression `callee(args…)` and return the ValueId its result defines. The
 	// callee name is kept as identifier TEXT (a `ByteArray` slice per the MaxonOp value/name
 	// split); the arguments are parsed in source order with their `name:` labels. Call-site
@@ -16685,6 +16810,14 @@ export type Parser
 	// here and not in a later pass.
 	function parseCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let calleeTok = self.current()
+		// #65 — a bare call to a sibling method of the enclosing type resolves to that method under its
+		// qualified name, prepending `self` for an instance method. The method takes precedence over a
+		// same-named free function; a name that is NOT a sibling stays the free/direct call below (E3004 if it
+		// names nothing declared).
+		if self.isImplicitSelfMethod(calleeTok.value) 'implicitSelfMethod'
+			return try self.parseCallNamed(func, callee: qualifiedMethodName(self.enclosingType, methodName: calleeTok.value), anchor: calleeTok, receiver: self.implicitSelfReceiver(calleeTok.value), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+		end 'implicitSelfMethod'
+
 		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
 		// a generic type is instantiated only through a `Type.method` qualified call.
 		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)

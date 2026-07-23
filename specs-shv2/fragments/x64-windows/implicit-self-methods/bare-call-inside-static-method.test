@@ -1,0 +1,53 @@
+// Test: bare-call-inside-static-method
+
+typealias Integer = int(i64.min to i64.max)
+
+type Maker
+	export var n as Integer
+
+	static function mk() returns Integer
+		return 7
+	end 'mk'
+
+	static function build() returns Integer
+		return mk() + 1
+	end 'build'
+end 'Maker'
+
+function main() returns ExitCode
+	return Maker.build()
+end 'main'
+---
+ExitCode: 8
+---
+func @Maker.mk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Maker.build {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Maker.mk
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Maker.build
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
