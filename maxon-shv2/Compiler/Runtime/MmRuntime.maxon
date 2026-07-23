@@ -753,6 +753,15 @@ end 'installUnionDestructors'
 // Called after `scanRuntimeUsage`, before `.data` layout reads `usesHeap` and `installStringRuntime` reads
 // `usesStrDecref` — so the closed set and the bits are settled before anything they gate is built.
 export function noteDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	// ⭐ **ROOT EACH MANAGED OPAQUE-`T` `Array` ELEMENT'S DESTRUCTOR (P1.7 slice 3b-iii)** — BEFORE the
+	// closure below, so a struct/union element's own `__destruct_<T>` is closed over its nesting. A
+	// `Container with String`'s descriptor `destroyFunc@40` is filled by a `funcAbs64InRdata` relocation
+	// (`ensureLayoutDescriptor`) whose target — the element's `__str_decref` / `__destruct_<T>` /
+	// `__arr_decref` — is NAMED NOWHERE the module scan can see (the shared `__arr_decref` walk reads it out
+	// of the record at run time). So the writer would resolve a `.text` VA for a function that was never
+	// installed — the `bakeFuncAbs64Relocs` panic. Rooted off the SAME predicate + resolver the reloc uses,
+	// so the rooted set is exactly the relocated set.
+	rootManagedOpaqueArrayElementDrops(usage, signatures: signatures)
 	closeDestructorNeeds(usage, project: project, signatures: signatures)
 
 	for (_, layout) in project.structTypes 'eachStruct'
@@ -791,6 +800,22 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 		end 'referenced'
 	end 'eachInstance'
 end 'noteDestructorUsage'
+
+// ⭐ **INSTALL EVERY MANAGED OPAQUE-`T` `Array` ELEMENT DESTRUCTOR the `funcAbs64InRdata` relocs will bake
+// (P1.7 slice 3b-iii).** `ensureLayoutDescriptor` records ONE reloc per instance for which
+// `genericInstanceHasManagedOpaqueArrayField` holds, its target `managedOpaqueArrayElementDropCallee(id)`.
+// This roots that identical set through `recordCallUsage`, so the rooted destructors and the baked relocs
+// are ONE fact — no reloc names a `.text` VA that was never installed. It is unconditional over the
+// instances (not gated on the instance destructor being referenced): the reloc predicate is the sole gate,
+// so rooting on the same predicate cannot leave a reloc unrooted, and an over-rooted declared-but-unused
+// instance merely installs a leaf runtime function it never calls.
+function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures ProgramSignatures)
+	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		if signatures.genericInstanceHasManagedOpaqueArrayField(id) 'managedOpaque'
+			recordCallUsage(signatures.managedOpaqueArrayElementDropCallee(id), usage: usage)
+		end 'managedOpaque'
+	end 'eachInstance'
+end 'rootManagedOpaqueArrayElementDrops'
 
 // Grow `usage.neededDestructors` to a fixpoint over destructor NESTING: for every referenced managed
 // struct/union destructor, add the `__destruct_<T>` of each managed field that itself owns managed heap (a

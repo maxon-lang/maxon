@@ -389,7 +389,12 @@ function recordFunctionRefUsage(funcName ByteArray, usage RuntimeUsage)
 	end 'runtimeAddress'
 end 'recordFunctionRefUsage'
 
-function recordCallUsage(callee ByteArray, usage RuntimeUsage)
+// ⭐ **THE ONE CALLEE-NAME → RUNTIME-USAGE-BIT MAP.** Exported so `noteDestructorUsage` can root a
+// managed opaque-`T` `Array` element's destructor (P1.7 slice 3b-iii) through the IDENTICAL mapping the
+// module scan gives a callee named directly — a `__str_decref` turns on the String runtime, a `__arr_decref`
+// the array runtime, a `__destruct_<T>` joins `neededDestructors` — so the reloc-baked destructor is
+// installed for the writer to resolve exactly as if the module had called it.
+export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isRuntimeCallee(callee) 'heap'
 		usage.usesHeap = true
 	end 'heap'

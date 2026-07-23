@@ -62,8 +62,7 @@ end 'main'
 
 ### Generic type with string element
 
-<!-- disabled-test: string-element -->
-<!-- P1.7 opaque-managed-element ownership: the destroyFunc@40 funcAbs64InRdata reloc is implemented (3b-ii), but a Container-with-String array cannot yet OWN a managed opaque element — a generic method borrows its `T` arg, so the element is double-freed (caller drop + array decref walk). Needs the opaque-`T`-managed-element consume slice. -->
+<!-- test: string-element -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
