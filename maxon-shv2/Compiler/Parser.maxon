@@ -8488,6 +8488,19 @@ export type Parser
 			// payload whenever a ranged alias shifted the interning order (a leak / wild-free, OPEN #52).
 			return self.signatures.unionBoxDropCallee(requireEnumLayout(decl))
 		end 'union'
+		// A `named` value that is not a declared union is a declared STRUCT read from a FIELD: a struct
+		// field's value carries `named`, not `structRef` (`fieldTypeOf` re-tags only function/generic-alias
+		// fields), so the OLD value dropped on `h.n = …` arrives here. Route it through the SAME
+		// `managedFieldDropCallee` the `structRef` arm and the destructor synthesis use, so a MANAGED-owning
+		// struct drops through its `__destruct_<T>` cascade — the trivial `MmDecrefName` frees only the box
+		// and LEAKS its managed fields (exit 101). A trivial struct answers `MmDecrefName` there too
+		// (byte-identical), so only the managed case changes. The `containsStruct` gate keeps a `named` that
+		// names no declared struct (a ranged typealias) on the trivial path, where `managedFieldDropCallee`
+		// would otherwise panic (it classifies only struct/union/generic-alias fields).
+		let name = try self.artifact.typeNames.nameOf(self.valueNameId(value)) otherwise panic("decrefCalleeFor: a `named` value's type-name id is not in this file's interner — every `named` tag is minted with an id from it")
+		if self.signatures.containsStruct(name) 'struct'
+			return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
+		end 'struct'
 		return MmDecrefName
 	end 'decrefCalleeFor'
 

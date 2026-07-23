@@ -475,3 +475,151 @@ end 'main'
 ```exitcode
 4
 ```
+
+<!-- test: reassign-managed-struct-field -->
+Reassigning a field whose type is a struct that owns managed heap drops the OLD
+struct through *its* `__destruct_<T>` (not the trivial `__mm_decref`, which would free
+only the box and leak its String) before moving the new one in — the old `Named "a"`'s
+String is freed exactly once, the new value reads back, no leak (a leak is 101).
+```maxon
+type Named
+	export var label as String
+
+	static function create(l String) returns Self
+		return Self{label: l}
+	end 'create'
+end 'Named'
+
+type Holder
+	export var n as Named
+
+	static function create(first Named) returns Self
+		return Self{n: first}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(Named.create("a"))
+	h.n = Named.create("b")
+	if h.n.label == "b" 'updated'
+		return 9
+	end 'updated'
+	return 0
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: reassign-managed-struct-field-in-loop -->
+Reassigning a managed-owning-struct field on every iteration drops each old value
+through its destructor — the String of every superseded `Named` is freed once, no leak
+accumulates across the loop.
+```maxon
+type Named
+	export var label as String
+
+	static function create(l String) returns Self
+		return Self{label: l}
+	end 'create'
+end 'Named'
+
+type Holder
+	export var n as Named
+
+	static function create(first Named) returns Self
+		return Self{n: first}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(Named.create("start"))
+	var i = 0
+	while i < 5 'loop'
+		h.n = Named.create("iter")
+		i = i + 1
+	end 'loop'
+	if h.n.label == "iter" 'ok'
+		return 6
+	end 'ok'
+	return 0
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: reassign-nested-managed-struct-field -->
+The reassigned field's struct itself owns a struct-with-String field. The old value
+drops through a two-level cascade (`__destruct_Mid` → `__destruct_Inner` → the String)
+on the reassignment, freeing every managed field exactly once.
+```maxon
+type Inner
+	export var label as String
+
+	static function create(l String) returns Self
+		return Self{label: l}
+	end 'create'
+end 'Inner'
+
+type Mid
+	export var inner as Inner
+
+	static function create(i Inner) returns Self
+		return Self{inner: i}
+	end 'create'
+end 'Mid'
+
+type Holder
+	export var m as Mid
+
+	static function create(first Mid) returns Self
+		return Self{m: first}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(Mid.create(Inner.create("a")))
+	h.m = Mid.create(Inner.create("b"))
+	if h.m.inner.label == "b" 'ok'
+		return 4
+	end 'ok'
+	return 0
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: reassign-trivial-struct-field -->
+Reassigning a field whose struct owns NO managed heap still drops the old box through
+the trivial `__mm_decref` — the managed-struct routing must not fire for a scalar-only
+struct, so the emitted drop is unchanged.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+type Holder
+	export var p as Point
+
+	static function create(first Point) returns Self
+		return Self{p: first}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create(Point.create(1))
+	h.p = Point.create(2)
+	return h.p.x
+end 'main'
+```
+```exitcode
+2
+```
