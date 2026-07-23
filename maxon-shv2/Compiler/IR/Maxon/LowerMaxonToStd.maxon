@@ -1055,11 +1055,11 @@ type MaxonToStdLowering
 	end 'indirectResultType'
 
 	// ⭐ **`async f(args…)` → SPAWN A GREEN THREAD** (P1.5-B1a). The arguments are slotted to parameter order
-	// (`slotCallArgs`, exactly as `lowerCall`), then spilled into a fixed-size slab argument buffer — one
+	// (`slotCallArgs`, exactly as `lowerCall`), then spilled into the GT struct's INLINE arg region — one
 	// `storeIndirect` per argument, the trampoline reading them back into the ABI argument registers. The
 	// callee's DIRECT `.text` address (`funcAddr`, NOT a `__fnref_` thunk: the trampoline calls it with user
-	// arguments only, its own `(userargs) -> R` shape) and the buffer become `__gt_spawn(funcPtr, argBuf)`,
-	// whose result is the Promise handle. No float widening is possible — SemanticCheck refused a non-scalar
+	// arguments only, its own `(userargs) -> R` shape) becomes `__gt_spawn(funcPtr)`, whose result is the Promise
+	// handle (the GT struct pointer). No float widening is possible — SemanticCheck refused a non-scalar
 	// parameter — so the slotted args pass through as i64 without `finalizeCallArgs`.
 	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
@@ -1071,38 +1071,34 @@ type MaxonToStdLowering
 		end 'slot'
 	end 'lowerAsyncCall'
 
-	// Emit the slab argument buffer, the argument spills, the direct function address and the `__gt_spawn`
-	// call, given the arguments already slotted to parameter order. Split out of `lowerAsyncCall` so the
-	// slotting `match` uses statement arms (a panic on a mis-slotting SemanticCheck should have gated), the
-	// same shape `lowerCall` uses.
+	// Emit the direct function address, the `__gt_spawn(funcPtr)` call, and the argument spills into the GT
+	// struct's INLINE arg region, given the arguments already slotted to parameter order. Split out of
+	// `lowerAsyncCall` so the slotting `match` uses statement arms (a panic on a mis-slotting SemanticCheck
+	// should have gated), the same shape `lowerCall` uses.
 	function emitAsyncSpawn(result ValueId, callee ByteArray, argIds ValueIdArray, dstBlock IrBlock)
-		// The buffer is a FIXED MaxAsyncArgs slots; one store per argument at `k * GtArgSlotBytes`. A callee with
-		// more parameters than that would store PAST the buffer (MaxAsyncArgs currently equals the parser's
-		// MaxRegisterParams cap, so this cannot fire today) — guard it so a future cap divergence is a compile
-		// panic here, not a silent slab overrun the trampoline then mis-loads.
+		// The inline region is a FIXED MaxAsyncArgs slots; one store per argument at `GtOffArgInline + k *
+		// GtArgSlotBytes`. A callee with more parameters than that would store PAST the region (MaxAsyncArgs
+		// currently equals the parser's MaxRegisterParams cap, so this cannot fire today) — guard it so a future
+		// cap divergence is a compile panic here, not a silent struct overrun the trampoline then mis-loads.
 		if argIds.count() > MaxAsyncArgs 'overflow'
-			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the argument buffer holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — the parser's parameter cap and MaxAsyncArgs have diverged")
+			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the inline arg region holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — the parser's parameter cap and MaxAsyncArgs have diverged")
 		end 'overflow'
 
-		// argBuf = __slab_alloc(ArgBufBytes) — a fixed MaxAsyncArgs-slot buffer (slab-zeroed, so the slots the
-		// call does not fill stay zero, which the trampoline harmlessly loads into unread argument registers).
-		let sizeId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(sizeId, value: ArgBufBytes, valueType: StdType.i64))
-		let argBuf = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(argBuf, callee: SlabAllocName, args: argsOf(sizeId)))
-
-		for k in 0 upto argIds.count() 'eachArg'
-			let argId = try argIds.get(k) otherwise panic("emitAsyncSpawn: argIds.get OOB at {k}")
-			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(argBuf, offset: (k * GtArgSlotBytes) as ByteOffset, valueId: argId, valueType: StdType.i64))
-		end 'eachArg'
-
+		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer). The arg
+		// region is now INLINE in the struct (P1.5-B1c #87), so there is no separate slab buffer to allocate.
 		let funcPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(funcPtr, funcName: callee))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtSpawnName, args: argsOf(funcPtr)))
 
-		var spawnArgs = ValueIdArray.create()
-		spawnArgs.push(funcPtr)
-		spawnArgs.push(argBuf)
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtSpawnName, args: spawnArgs))
+		// Fill the struct's inline arg region: one store per argument at `result + GtOffArgInline + k * GtArgSlotBytes`.
+		// SAFE to fill AFTER the spawn: a spawned GT is only ENQUEUED, not run, until awaited (single-M), so the
+		// slots are written before the trampoline ever loads them. `__gt_spawn` set `gt.argBuf` to a self-pointer
+		// at `GtOffArgInline`, and the slab/memzero left the unfilled slots zero (harmlessly loaded into unread
+		// argument registers).
+		for k in 0 upto argIds.count() 'eachArg'
+			let argId = try argIds.get(k) otherwise panic("emitAsyncSpawn: argIds.get OOB at {k}")
+			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(result, offset: (GtOffArgInline + k * GtArgSlotBytes) as ByteOffset, valueId: argId, valueType: StdType.i64))
+		end 'eachArg'
 	end 'emitAsyncSpawn'
 
 	// `await p` → `__gt_await(p)`. The scheduler drive is entirely in the runtime; here it is a plain call

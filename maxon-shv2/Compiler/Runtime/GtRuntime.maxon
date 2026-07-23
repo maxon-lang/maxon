@@ -106,10 +106,23 @@ export let GtOffTibStackLimit = 0x98
 // multi-M park-gate the reference uses it for.
 export let GtOffIoYielded = 0xA8
 
-// 0xB0 = 176 bytes. Grows from B2b's 0x60 to keep `io_yielded` byte-identical to GtLayout at 0xA8; the words
-// 0x60–0xA0 are RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields), slab-zeroed and unused
-// until the subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
-export let GtStructSize = 0xB0
+// ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
+// so a spawn needs NO separate `__slab_alloc`'d argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a
+// SELF-POINTER `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer exactly as it read a
+// separate buffer (X64GtRuntime:155 is byte-identical). This DIVERGES from both references — v1
+// (`Arm64MacosGreenThread.maxon:2613-2616`) and the bootstrap (`ARM64CodeEmitter.Runtime.cs:4188-4194`) keep
+// the arg buffer a separate `__slab_alloc` and `__slab_free` it at run-completion — because shv2's slab has NO
+// free path (`MmRuntime.__slab_alloc` is a pure bump allocator). Inlining reclaims the arg region for free when
+// the struct is recycled onto the free-list, and it is SAFE because the region is DEAD by completion: the
+// trampoline reads all MaxAsyncArgs slots into registers at run-start and never touches them again. Offset 0xB0
+// is the current end of the reserved header, so every existing field (0x00–0xA8) stays byte-identical to the
+// authoritative GtLayout and the port property is preserved.
+export let GtOffArgInline = 0xB0
+
+// 0xE0 = 224 bytes = 0xB0 header + ArgBufBytes (0x30) inline arg region. The header words 0x60–0xA0 remain
+// RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields), slab-zeroed and unused until the
+// subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
+export let GtStructSize = GtOffArgInline + ArgBufBytes
 
 // --- GT status ---
 // `ready` (the slab-zeroed initial state), `completed` (set by the trampoline, read by the drive loop's
@@ -308,12 +321,32 @@ export let GtSystemStackTopLabel = b"__gt_system_stack_top"
 // every stack was a uniform 1 MiB; the morestack makes stacks VARIABLE-SIZED (2 KB, doubled on demand), so a
 // fixed-size free-list would hand a 2 KB-believing `__gt_spawn` an 8 KB grown stack (or vice versa) — a size the
 // spawner records as `GtStackSize` while the reservation is something else, which the guard then mis-projects
-// against and morestack mis-copies. So the lifecycle is now ALLOC-FRESH-ON-SPAWN + FREE-ON-COMPLETE: `__gt_spawn`
+// against and morestack mis-copies. So the STACK lifecycle is ALLOC-FRESH-ON-SPAWN + FREE-ON-COMPLETE: `__gt_spawn`
 // commits a fresh `GtStackSize` seed, `__gt_morestack` releases the OLD stack when it grows, and `__gt_drive_until`
-// releases the completed GT's (possibly grown) stack via `osFreePages` — so a spawn/await loop stays bounded by
-// alloc+free churn rather than a recycle. (A same-size 2 KB free-list for spawn reuse is a pure optimization left
-// to a later pass.) The GT STRUCT is still not reclaimed (OPEN #87); the never-awaited stack still leaks its seed
-// (OPEN #88), now 2 KB not 1 MiB.
+// releases the completed GT's (possibly grown) stack via `osFreePages` — so a spawn/await loop's STACKS stay bounded
+// by alloc+free churn rather than a recycle. (A same-size 2 KB free-list for stack reuse is a pure optimization left
+// to a later pass.)
+//
+// ⭐ THE GT STRUCT free-list (P1.5-B1c #87). The struct — unlike the variable-sized stack — is a FIXED GtStructSize,
+// so a free-list is size-safe: `__gt_drive_until` PUSHES a completed struct onto `__gt_free_list_head` (a `.data`
+// LIFO, linked through the now-idle `GtOffNext` run-queue slot) and `__gt_spawn` POPS one before falling back to a
+// fresh `__slab_alloc` — so a spawn/await loop reuses ONE struct rather than bump-leaking one per iteration (the slab
+// has no free path). This is v1's `next`-linked LIFO recycle (`Arm64MacosGreenThread.maxon:2364-2410`/`:2987-3005`)
+// MINUS its per-P sharding (single-M ⇒ ONE global head) and its 64-cap-then-`__slab_free` overflow (shv2 has no
+// `__slab_free` ⇒ an uncapped free-list that never frees is the natural fit). The never-awaited GT still leaks its
+// seed stack (OPEN #88 — a never-run GT never completes, so it never reaches the recycle path); this rung closes
+// only the awaited-GT struct+arg-buffer leak (#87).
+let GtFreeListHeadLabel = b"__gt_free_list_head"
+
+// ⭐ THE COMPLETION-BASED LIVE-STRUCT COUNTER (P1.5-B1c #87) — what makes the struct leak a GATED invariant.
+// Incremented when `__gt_drive_until` observes a GT `completed`, decremented when that struct is pushed onto the
+// free-list; the exit leak gate (`MmRuntime.buildMmLeakCheck`, under `usesGt`) ORs it into its `!= 0` verdict, so a
+// completed-but-unreclaimed struct exits 101 exactly as an unfreed heap object does. EXPORTED because that gate (a
+// separate subsystem) reads it. It is COMPLETION-based, NOT alloc-based, on purpose: a never-awaited GT (spawned,
+// never run — `spawn-not-awaited`, `store-overflow-aborts`) must exit with its OWN code, and an alloc-time counter
+// would make it 101 (that never-run-GT leak is OPEN #88, out of scope). A completion counter never counts one.
+export let GtLiveCountLabel = b"__gt_live_count"
+
 // P1.5 mid-body-yield timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap
 // region (both 0 until `__gt_init` allocates the region and seeds the base).
 let GtTimerCountLabel = b"__gt_timer_count"
@@ -330,6 +363,27 @@ let GtClockFreqLabel = b"__gt_clock_freq"
 let GtProcCountLabel = b"__gt_proc_count"
 let GtProcHandlesBaseLabel = b"__gt_proc_handles_base"
 let GtProcGtsBaseLabel = b"__gt_proc_gts_base"
+
+// ⭐ P1.5-B1c #92 — the REUSABLE subprocess scratch buffers. `__gt_process_run` used to `__slab_alloc` four
+// scratch buffers PER CALL (STARTUPINFOA, PROCESS_INFORMATION, the mutable cmdline copy, the exit-code slot),
+// none reclaimed — ~150 B leaked per call. The fixed-size three (startup 0x68, procInfo 0x18, exit-code 8) are
+// now allocated ONCE in `__gt_init` and reused every call; each is written+consumed in a NON-YIELDING single-M
+// window (the STARTUPINFOA/PROCESS_INFORMATION reads finish before the GT parks at `parkSwitch`; the exit-code
+// slot is used only in the post-resume `reap` block), so no two concurrent `__gt_process_run` calls' scratch can
+// coexist. This mirrors the reference's STACK-FRAME scratch (v1 `X64Backend.maxon:4930-4958`, auto-reclaimed on
+// return); shv2's `__gt_process_run` is builder-built Std with no addressable stack local, so a reused one-time
+// global — exactly the timer-heap / proc-array pattern already in `__gt_init` — is the shv2-appropriate form.
+let GtStartupBaseLabel = b"__gt_startup_base"
+let GtProcInfoBaseLabel = b"__gt_procinfo_base"
+let GtExitCodeBaseLabel = b"__gt_exitcode_base"
+
+// The mutable cmdline copy is VARIABLE-sized, so it is a GROW-ON-DEMAND global (base + capacity) rather than a
+// one-time init alloc: `__gt_process_run` reuses the buffer when `cmdlineLen + 1 <= cap`, else `__slab_alloc`s a
+// bigger one and updates both. The old buffer bump-"leaks", but only when a strictly-longer command than any
+// before appears — bounded by the number of distinct increasing lengths, not per-call (a spawn-loop of one
+// command allocates it ONCE). Both 0 until the first `__gt_process_run` grows the buffer.
+let GtCmdlineBufBaseLabel = b"__gt_cmdline_buf_base"
+let GtCmdlineBufCapLabel = b"__gt_cmdline_buf_cap"
 
 // The prefix every GT runtime entry point shares — the "does this program spawn a green thread?" test.
 let GtRuntimeCallPrefix = b"__gt_"
@@ -361,6 +415,16 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtProcCountLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtProcHandlesBaseLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtProcGtsBaseLabel), valueType: StdType.i64, value: 0))
+	// P1.5-B1c #87: the GT-struct free-list head + the completion-based live-struct counter the leak gate reads.
+	out.push(DataSectionEntry.create(String.from(GtFreeListHeadLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtLiveCountLabel), valueType: StdType.i64, value: 0))
+	// P1.5-B1c #92: the reusable subprocess scratch bases (startup/procInfo/exit-code) + the grow-on-demand
+	// cmdline-copy buffer's base and capacity.
+	out.push(DataSectionEntry.create(String.from(GtStartupBaseLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtProcInfoBaseLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtExitCodeBaseLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtCmdlineBufBaseLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtCmdlineBufCapLabel), valueType: StdType.i64, value: 0))
 	return out
 end 'gtRuntimeGlobals'
 
@@ -466,6 +530,35 @@ function buildGtInit(module StdModule)
 	let sysStackTopAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(sysStackTopAddr, label: GtSystemStackTopLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(sysStackTopAddr, offset: 0, valueId: sysStackTop, valueType: StdType.i64))
+	// P1.5-B1c #92: the three FIXED-size subprocess scratch buffers, `__slab_alloc`'d ONCE here and reused by
+	// every `__gt_process_run` (they were per-call allocs that leaked ~150 B/call). STARTUPINFOA's `cb` field is
+	// set here once — CreateProcessA only READS the struct, so the single init store holds for every call — and
+	// the rest stay slab-zeroed. PROCESS_INFORMATION's `hProcess` (the spawn-failure sentinel) and the exit-code
+	// slot are re-cleaned per call at their use site in `__gt_process_run`. Allocated unconditionally like the
+	// timer heap / proc arrays above (a pure-async program that never runs a subprocess pays ~0x88 one-time bytes,
+	// the same over-provisioning those regions already make). The variable cmdline copy is grown on demand there.
+	let startupSizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
+	let startupBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(startupBase, callee: SlabAllocName, args: argsOf(startupSizeConst)))
+	module.appendOp(doInit, op: StdOp.storeIndirect(startupBase, offset: StartupInfoCbOffset, valueId: startupSizeConst, valueType: StdType.i64))
+	let startupBaseAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(startupBaseAddr, label: GtStartupBaseLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(startupBaseAddr, offset: 0, valueId: startupBase, valueType: StdType.i64))
+	let procInfoSizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize, valueType: StdType.i64))
+	let procInfoBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(procInfoBase, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	let procInfoBaseAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(procInfoBaseAddr, label: GtProcInfoBaseLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(procInfoBaseAddr, offset: 0, valueId: procInfoBase, valueType: StdType.i64))
+	let exitCodeSizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(exitCodeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
+	let exitCodeBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(exitCodeBase, callee: SlabAllocName, args: argsOf(exitCodeSizeConst)))
+	let exitCodeBaseAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(exitCodeBaseAddr, label: GtExitCodeBaseLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(exitCodeBaseAddr, offset: 0, valueId: exitCodeBase, valueType: StdType.i64))
 	// __gt_init_done = 1.
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
@@ -476,82 +569,149 @@ function buildGtInit(module StdModule)
 	module.functions.push(func)
 end 'buildGtInit'
 
-// `__gt_spawn(funcPtr, argBuf) -> gt` — create a ready green thread and enqueue it. Allocates the GT struct
-// and its stack, lays the initial context-switch frame so the first switch-in `ret`s into the trampoline,
-// records the function + arg buffer, and enqueues the GT. Returns the GT pointer as the promise handle.
+// `__gt_spawn(funcPtr) -> gt` — create a ready green thread and enqueue it. Obtains a GT struct (a recycled one
+// off the free-list, else a fresh `__slab_alloc`), commits its seed stack, lays the initial context-switch frame
+// so the first switch-in `ret`s into the trampoline, points `gt.argBuf` at the struct's OWN inline arg region,
+// and enqueues the GT. Returns the GT pointer as the promise handle.
 //
-// It does NOT run the GT — a spawned GT runs only when a driver (`__gt_await`) dequeues and switches into
-// it. `argCount` is not a parameter: the arg buffer is a fixed MaxAsyncArgs slots and the trampoline loads
-// all of them (see the header).
+// ⭐ P1.5-B1c #87 — THE ARG BUFFER IS NO LONGER A PARAMETER. It lives INLINE at `gt + GtOffArgInline` (the slots
+// the lowering fills after this returns, safe because a spawned GT does not run until awaited); `gt.argBuf` is
+// set to that self-pointer, which the trampoline dereferences exactly as it read a separate buffer. So the
+// separate per-spawn `__slab_alloc`'d arg buffer — and its leak — is gone. `argCount` is still not a parameter:
+// the region is a fixed MaxAsyncArgs slots and the trampoline loads all of them (see the header).
+//
+// ⭐ P1.5-B1c #87 — REUSE A COMPLETED STRUCT. If `__gt_free_list_head` is non-null, POP it and WHOLE-STRUCT
+// MEMZERO it before re-init; else fall back to a fresh `__slab_alloc` (already slab-zeroed, so it skips the
+// memzero). The zero-on-recycle is a CORRECTNESS TRAP, not an optimization: a free-list struct lives OUTSIDE the
+// always-zeroing slab, so a recycled one still carries its previous tenant's status/result/waiter/io_*/threw/tib
+// fields — v1 fixed exactly this class of bug (a spurious pipe-read abort, `Arm64MacosGreenThread.maxon:2376-2404`)
+// with a whole-struct memzero on the recycle arm; the bootstrap's field-by-field re-init is the WEAKER version.
+//
+// It does NOT run the GT — a spawned GT runs only when a driver (`__gt_await`) dequeues and switches into it.
 function buildGtSpawn(module StdModule)
-	var func = IrFunction.createFromStd(GtSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
+	var func = IrFunction.createFromStd(GtSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var freshAlloc = module.addBlock(func, label: b"freshalloc")
+	var reuse = module.addBlock(func, label: b"reuse")
+	var zeroHdr = module.addBlock(func, label: b"zerohdr")
+	var zeroBody = module.addBlock(func, label: b"zerobody")
+	var initBlock = module.addBlock(func, label: b"init")
 
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: 1)
 	let funcPtr = 0 as ValueId
-	let argBuf = 1 as ValueId
 
 	// Lazy one-time scheduler init. A void call still mints an (unread) result id, as `__mm_decref`'s
 	// `__mm_free` call does.
 	let initResult = ids.mint()
 	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
 
-	// gt = __slab_alloc(GtStructSize) — zeroed, so status=ready, waiter/next/result=0.
+	// Reuse a completed struct if the free-list is non-empty, else allocate a fresh (already-zeroed) one.
 	let structSize = ids.mint()
 	module.appendOp(entry, op: StdOp.const(structSize, value: GtStructSize, valueType: StdType.i64))
-	let gt = ids.mint()
-	module.appendOp(entry, op: StdOp.call(gt, callee: SlabAllocName, args: argsOf(structSize)))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let freeHeadAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
+	let freeHead = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(freeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
+	let freeEmpty = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(freeEmpty, lhs: freeHead, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(freeEmpty, thenBlockId: freshAlloc.id, elseBlockId: reuse.id))
 
-	// ⭐ COMMIT A FRESH GtStackSize STACK (P1.5-B1a′). No free-list any more: with a growable/relocating stack the
-	// size is variable, so a completed GT's stack is RELEASED (`__gt_drive_until`), not recycled — a fresh seed is
-	// committed here every spawn (`MEM_COMMIT`, demand-paged so the untouched pages cost nothing until the GT runs).
+	// freshAlloc: gt = __slab_alloc(GtStructSize) — slab-zeroed, so no memzero needed → init(gtFresh).
+	let gtFresh = ids.mint()
+	module.appendOp(freshAlloc, op: StdOp.call(gtFresh, callee: SlabAllocName, args: argsOf(structSize)))
+	module.setTerminator(freshAlloc, op: StdOp.branch(initBlock.id))
+	freshAlloc.branchEdges.push(BranchEdge.create(initBlock.id, argIds: argsOf(gtFresh)))
+
+	// reuse: pop the head off the free-list (`__gt_free_list_head = freeHead.next`), then whole-struct memzero it.
+	let poppedNext = ids.mint()
+	module.appendOp(reuse, op: StdOp.loadIndirect(poppedNext, addrId: freeHead, offset: GtOffNext, valueType: StdType.i64))
+	module.appendOp(reuse, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: poppedNext, valueType: StdType.i64))
+	module.setTerminator(reuse, op: StdOp.branch(zeroHdr.id))
+	reuse.branchEdges.push(BranchEdge.create(zeroHdr.id, argIds: argsOf(zeroConst)))
+
+	// zeroHdr(off): if off >= GtStructSize → init(freeHead) (whole struct now zeroed), else zero the word at `off`.
+	let off = ids.mint()
+	zeroHdr.blockArgs.push(IrBlockArg.create(off, argType: StdType.i64))
+	let zeroDone = ids.mint()
+	module.appendOp(zeroHdr, op: StdOp.cmp(zeroDone, lhs: off, rhs: structSize, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(zeroHdr, op: StdOp.condBranch(zeroDone, thenBlockId: initBlock.id, elseBlockId: zeroBody.id))
+	zeroHdr.branchEdges.push(BranchEdge.create(initBlock.id, argIds: argsOf(freeHead)))
+
+	// zeroBody: *(freeHead + off) = 0 ; off += 8 → zeroHdr.
+	let slotAddr = ids.mint()
+	module.appendOp(zeroBody, op: StdOp.binOp(slotAddr, lhs: freeHead, rhs: off, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(zeroBody, op: StdOp.storeIndirect(slotAddr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
+	let wordBytesConst = ids.mint()
+	module.appendOp(zeroBody, op: StdOp.const(wordBytesConst, value: GtArgSlotBytes, valueType: StdType.i64))
+	let offNext = ids.mint()
+	module.appendOp(zeroBody, op: StdOp.binOp(offNext, lhs: off, rhs: wordBytesConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(zeroBody, op: StdOp.branch(zeroHdr.id))
+	zeroBody.branchEdges.push(BranchEdge.create(zeroHdr.id, argIds: argsOf(offNext)))
+
+	// init(gt): the shared init for both the fresh and recycled struct — now guaranteed zeroed either way.
+	let gt = ids.mint()
+	initBlock.blockArgs.push(IrBlockArg.create(gt, argType: StdType.i64))
+
+	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region (P1.5-B1c #87).
+	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
+	// region makes the buffer part of the struct — reclaimed for free when the struct is recycled.
+	let argInlineOffConst = ids.mint()
+	module.appendOp(initBlock, op: StdOp.const(argInlineOffConst, value: GtOffArgInline, valueType: StdType.i64))
+	let argInlinePtr = ids.mint()
+	module.appendOp(initBlock, op: StdOp.binOp(argInlinePtr, lhs: gt, rhs: argInlineOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argInlinePtr, valueType: StdType.i64))
+
+	// ⭐ COMMIT A FRESH GtStackSize STACK (P1.5-B1a′). The STACK is variable-sized (the relocating morestack grows
+	// it), so it is NOT recycled with the struct — a completed GT's stack is RELEASED (`__gt_drive_until`) and a
+	// fresh seed is committed here every spawn (`MEM_COMMIT`, demand-paged so untouched pages cost nothing).
 	let stackSizeVal = ids.mint()
-	module.appendOp(entry, op: StdOp.const(stackSizeVal, value: GtStackSize, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.const(stackSizeVal, value: GtStackSize, valueType: StdType.i64))
 	let stackBase = ids.mint()
-	module.appendOp(entry, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: stackBase, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argBuf, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: stackBase, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
 
 	// stackTop = stackBase + GtStackSize.
 	let stackTop = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	// Seed this GT's saved TIB bounds so the syscall shim's after-call restore repoints the Windows TIB to THIS
 	// GT's own stack: `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low). The GT's bounds
 	// are `[stackBase, stackTop)`; `__gt_morestack` updates them (and the guard) when it grows the stack.
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffTibStackBase, valueId: stackTop, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffTibStackLimit, valueId: stackBase, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffTibStackBase, valueId: stackTop, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffTibStackLimit, valueId: stackBase, valueType: StdType.i64))
 	// gt.stackGuard = stackBase + GtStackGuardMargin — the low-water mark the guarded function's prologue compares
 	// its projected rsp against (P1.5-B1a′). Below it, the prologue calls `__gt_morestack` to grow+relocate first.
 	let guardMarginConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(guardMarginConst, value: GtStackGuardMargin, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.const(guardMarginConst, value: GtStackGuardMargin, valueType: StdType.i64))
 	let stackGuard = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(stackGuard, lhs: stackBase, rhs: guardMarginConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackGuard, valueId: stackGuard, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.binOp(stackGuard, lhs: stackBase, rhs: guardMarginConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffStackGuard, valueId: stackGuard, valueType: StdType.i64))
 	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The five callee-saved slots below
 	// it are the MEM_COMMIT zeros — DON'T-CARE, because they become this GT's initial callee-saved registers, which
 	// the user function establishes before it reads them. Only the trampoline return-address slot must be written.
 	let eightConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
 	let retSlotAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let trampAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
-	module.appendOp(entry, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
-	// gt.sp = stackTop - GtInitialFrameBytes (points at the lowest saved-register slot); gt.fp is 0 (slab).
+	module.appendOp(initBlock, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
+	// gt.sp = stackTop - GtInitialFrameBytes (points at the lowest saved-register slot); gt.fp is 0 (zeroed).
 	let frameConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
 	let spVal = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
 
 	// Enqueue as ready and return the GT as the promise handle.
 	let enqResult = ids.mint()
-	module.appendOp(entry, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
-	module.setTerminator(entry, op: StdOp.ret(gt))
+	module.appendOp(initBlock, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	module.setTerminator(initBlock, op: StdOp.ret(gt))
 
 	module.functions.push(func)
 end 'buildGtSpawn'
@@ -983,6 +1143,7 @@ function buildGtDriveUntil(module StdModule)
 	var run = module.addBlock(func, label: b"run")
 	var recycle = module.addBlock(func, label: b"recycle")
 	var freeStack = module.addBlock(func, label: b"freestack")
+	var pushFree = module.addBlock(func, label: b"pushfree")
 	var netpoll = module.addBlock(func, label: b"netpoll")
 	var timerOnly = module.addBlock(func, label: b"timeronly")
 	var timerDecide = module.addBlock(func, label: b"timerdecide")
@@ -1039,16 +1200,57 @@ function buildGtDriveUntil(module StdModule)
 	// and is never freed); else RELEASE it. `osFreePages` is an `iatCall` inside this `__gt_` function, so slice 1's
 	// syscall shim wraps it onto the system stack automatically — the `VirtualFree` runs off the driver's own GT
 	// stack, and it releases g's stack (a different region), which g has already switched off of.
+	//
+	// ⭐ P1.5-B1c #87: g's struct is now LIVE-UNTIL-RECLAIMED — count it. This block is entered EXACTLY when g is
+	// `completed`, so the increment is per-completion (never for a never-run/never-awaited GT, which is why the
+	// counter is completion-based, not alloc-based). It is decremented in `pushFree` when g goes onto the free-list;
+	// the exit leak gate (`MmRuntime.buildMmLeakCheck`, under usesGt) ORs `__gt_live_count` into its `!= 0` verdict,
+	// so a completed-but-unreclaimed struct exits 101 exactly as an unfreed heap object does.
+	let liveIncAddr = ids.mint()
+	module.appendOp(recycle, op: StdOp.globalAddr(liveIncAddr, label: GtLiveCountLabel))
+	let liveIncOld = ids.mint()
+	module.appendOp(recycle, op: StdOp.loadIndirect(liveIncOld, addrId: liveIncAddr, offset: 0, valueType: StdType.i64))
+	let liveIncOne = ids.mint()
+	module.appendOp(recycle, op: StdOp.const(liveIncOne, value: 1, valueType: StdType.i64))
+	let liveIncNew = ids.mint()
+	module.appendOp(recycle, op: StdOp.binOp(liveIncNew, lhs: liveIncOld, rhs: liveIncOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(recycle, op: StdOp.storeIndirect(liveIncAddr, offset: 0, valueId: liveIncNew, valueType: StdType.i64))
 	let gStackBase = ids.mint()
 	module.appendOp(recycle, op: StdOp.loadIndirect(gStackBase, addrId: g, offset: GtOffStackBase, valueType: StdType.i64))
 	let gStackNull = ids.mint()
 	module.appendOp(recycle, op: StdOp.cmp(gStackNull, lhs: gStackBase, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: loopHdr.id, elseBlockId: freeStack.id))
+	// GT0 (stackBase 0) skips the stack free but STILL recycles its struct — `pushFree` reclaims it (correctness:
+	// GT0 never completes, so this arm is unreached today, but the recycle path stays whole either way).
+	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: pushFree.id, elseBlockId: freeStack.id))
 
 	// freeStack: release g's completed stack (whatever size the morestack grew it to — `VirtualFree(MEM_RELEASE)`
-	// frees the whole reservation from its base). This bounds a spawn/await loop by alloc+free churn.
+	// frees the whole reservation from its base). This bounds a spawn/await loop by alloc+free churn. Then the
+	// struct is reclaimed onto the free-list in `pushFree`.
 	module.appendOp(freeStack, op: StdOp.osFreePages(gStackBase))
-	module.setTerminator(freeStack, op: StdOp.branch(loopHdr.id))
+	module.setTerminator(freeStack, op: StdOp.branch(pushFree.id))
+
+	// ⭐ pushFree: RECLAIM g's completed struct onto the free-list (P1.5-B1c #87) — `g.next = __gt_free_list_head`;
+	// `__gt_free_list_head = g` (a LIFO push through the now-idle run-queue link, since a completed g is off the run
+	// queue). `__gt_spawn` pops it before falling back to a fresh `__slab_alloc`, so a spawn/await loop reuses ONE
+	// struct rather than bump-leaking one per iteration. Single-owner: only this driver reclaims a GT in single-M
+	// (there is no competing drain path), so the push races nothing. Decrement `__gt_live_count` here — the struct
+	// is now reclaimed, balancing the increment `recycle` made on completion, so a clean spawn/await loop nets zero.
+	let freeHeadAddr = ids.mint()
+	module.appendOp(pushFree, op: StdOp.globalAddr(freeHeadAddr, label: GtFreeListHeadLabel))
+	let oldFreeHead = ids.mint()
+	module.appendOp(pushFree, op: StdOp.loadIndirect(oldFreeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(pushFree, op: StdOp.storeIndirect(g, offset: GtOffNext, valueId: oldFreeHead, valueType: StdType.i64))
+	module.appendOp(pushFree, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: g, valueType: StdType.i64))
+	let liveDecAddr = ids.mint()
+	module.appendOp(pushFree, op: StdOp.globalAddr(liveDecAddr, label: GtLiveCountLabel))
+	let liveDecOld = ids.mint()
+	module.appendOp(pushFree, op: StdOp.loadIndirect(liveDecOld, addrId: liveDecAddr, offset: 0, valueType: StdType.i64))
+	let liveDecOne = ids.mint()
+	module.appendOp(pushFree, op: StdOp.const(liveDecOne, value: 1, valueType: StdType.i64))
+	let liveDecNew = ids.mint()
+	module.appendOp(pushFree, op: StdOp.binOp(liveDecNew, lhs: liveDecOld, rhs: liveDecOne, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(pushFree, op: StdOp.storeIndirect(liveDecAddr, offset: 0, valueId: liveDecNew, valueType: StdType.i64))
+	module.setTerminator(pushFree, op: StdOp.branch(loopHdr.id))
 
 	// netpoll: the run queue is empty. Block the single M until something becomes ready — a parked TIMER fires or a
 	// parked CHILD exits. `pc` = parked children, `earliest` = the nearest timer deadline (0 = none). When BOTH are
@@ -1470,6 +1672,9 @@ function buildGtProcessRun(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var growCmBuf = module.addBlock(func, label: b"growcmbuf")
+	var reuseCmBuf = module.addBlock(func, label: b"reusecmbuf")
+	var haveCmBuf = module.addBlock(func, label: b"havecmbuf")
 	var copyHdr = module.addBlock(func, label: b"copyhdr")
 	var copyBody = module.addBlock(func, label: b"copybody")
 	var afterCopy = module.addBlock(func, label: b"aftercopy")
@@ -1491,37 +1696,72 @@ function buildGtProcessRun(module StdModule)
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlinePtr, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
 	let cmdlineLen = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 
-	// startupPtr = slab_alloc(0x68) (slab-zeroed) ; startupPtr.cb = 0x68 — the one field CreateProcessA requires.
-	let startupSizeConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
+	// P1.5-B1c #92: the STARTUPINFOA and PROCESS_INFORMATION scratch are the ONE-TIME reusable buffers `__gt_init`
+	// allocated — load their bases rather than `__slab_alloc` fresh ones per call. `startup.cb` was set once in
+	// init (CreateProcessA only reads it). PROCESS_INFORMATION is REUSED, so its `hProcess` must be RE-ZEROED here:
+	// CreateProcessA leaves the struct UNTOUCHED on failure, so a stale non-zero handle from a prior successful
+	// spawn would make the `hProcess == 0` failure sentinel below read a FAILED spawn as "spawned OK" and park on a
+	// dead handle. Zeroing hProcess restores the fresh-slab invariant the sentinel relies on.
+	let startupBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(startupBaseAddr, label: GtStartupBaseLabel))
 	let startupPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(startupSizeConst)))
-	module.appendOp(entry, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: startupSizeConst, valueType: StdType.i64))
-
-	// procInfoPtr = slab_alloc(0x18) (slab-zeroed) — CreateProcessA fills hProcess@0, hThread@8.
-	let procInfoSizeConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.loadIndirect(startupPtr, addrId: startupBaseAddr, offset: 0, valueType: StdType.i64))
+	let procInfoBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(procInfoBaseAddr, label: GtProcInfoBaseLabel))
 	let procInfoPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	module.appendOp(entry, op: StdOp.loadIndirect(procInfoPtr, addrId: procInfoBaseAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(procInfoPtr, offset: ProcInfoHProcessOffset, valueId: zeroConst, valueType: StdType.i64))
 
-	// cmBuf = slab_alloc(cmdlineLen + 1) — a MUTABLE, NUL-terminated copy of the command line (CreateProcessA may
-	// write to lpCommandLine, and the .rdata String blob is neither writable nor NUL-terminated). The trailing
-	// byte stays the slab's zero, so the NUL is free — the copy writes only the `cmdlineLen` command bytes.
+	// The MUTABLE, NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine, and the .rdata String
+	// blob is neither writable nor NUL-terminated) is the GROW-ON-DEMAND reusable buffer: reuse it when
+	// `cmdlineLen + 1 <= cap`, else `__slab_alloc` a bigger one and update base+cap (the old one bump-"leaks", but
+	// only when a strictly-longer command than any before appears — bounded, not per-call). The trailing byte is
+	// the buffer's NUL: a freshly grown slab buffer is zeroed there; on REUSE the copy loop writes exactly
+	// `cmdlineLen` bytes and the byte at `cmBuf[cmdlineLen]` still holds the prior (shorter-or-equal) command's NUL
+	// or slab zero — so it is re-zeroed here to guarantee the terminator regardless of the previous tenant.
 	let oneConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(oneConst, value: TrailingNulBytes, valueType: StdType.i64))
 	let cmBufSize = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let cmBufBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(cmBufBaseAddr, label: GtCmdlineBufBaseLabel))
+	let cmBufCapAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(cmBufCapAddr, label: GtCmdlineBufCapLabel))
+	let cmBufCap = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(cmBufCap, addrId: cmBufCapAddr, offset: 0, valueType: StdType.i64))
+	let needGrow = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(needGrow, lhs: cmBufSize, rhs: cmBufCap, pred: StdCmpPred.gt, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(needGrow, thenBlockId: growCmBuf.id, elseBlockId: reuseCmBuf.id))
+
+	// growCmBuf: the buffer is too small (or first use, cap 0) — allocate `cmBufSize`, publish base+cap → haveCmBuf.
+	let grownBuf = ids.mint()
+	module.appendOp(growCmBuf, op: StdOp.call(grownBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	module.appendOp(growCmBuf, op: StdOp.storeIndirect(cmBufBaseAddr, offset: 0, valueId: grownBuf, valueType: StdType.i64))
+	module.appendOp(growCmBuf, op: StdOp.storeIndirect(cmBufCapAddr, offset: 0, valueId: cmBufSize, valueType: StdType.i64))
+	module.setTerminator(growCmBuf, op: StdOp.branch(haveCmBuf.id))
+	growCmBuf.branchEdges.push(BranchEdge.create(haveCmBuf.id, argIds: argsOf(grownBuf)))
+
+	// reuseCmBuf: the existing buffer is big enough — reuse its base → haveCmBuf.
+	let reusedBuf = ids.mint()
+	module.appendOp(reuseCmBuf, op: StdOp.loadIndirect(reusedBuf, addrId: cmBufBaseAddr, offset: 0, valueType: StdType.i64))
+	module.setTerminator(reuseCmBuf, op: StdOp.branch(haveCmBuf.id))
+	reuseCmBuf.branchEdges.push(BranchEdge.create(haveCmBuf.id, argIds: argsOf(reusedBuf)))
+
+	// haveCmBuf(cmBuf): the reusable cmdline buffer (grown or reused) → re-zero its NUL terminator, then copy.
 	let cmBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.branch(copyHdr.id))
+	haveCmBuf.blockArgs.push(IrBlockArg.create(cmBuf, argType: StdType.i64))
+	let nulAddr = ids.mint()
+	module.appendOp(haveCmBuf, op: StdOp.binOp(nulAddr, lhs: cmBuf, rhs: cmdlineLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(haveCmBuf, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroConst, valueType: StdType.u8))
+	module.setTerminator(haveCmBuf, op: StdOp.branch(copyHdr.id))
+	haveCmBuf.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroConst)))
 
 	// copyHdr(i): the byte-copy loop guard. cmdlines are short, so a byte loop is well within budget.
 	let i = ids.mint()
 	copyHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroConst)))
 	let atEnd = ids.mint()
 	module.appendOp(copyHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: cmdlineLen, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(copyHdr, op: StdOp.condBranch(atEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
@@ -1601,19 +1841,22 @@ function buildGtProcessRun(module StdModule)
 
 	// reap: the child has exited. Reload hProcess from `selfGt.io_handle` (its durable home across the yield — the
 	// value in a register cannot be assumed to survive an arbitrary number of intervening switches), then read the
-	// exit code and close the handle. codePtr = slab_alloc(8) ; GetExitCodeProcess(hProcess, codePtr) ; code =
-	// codePtr[0] (i64 read).
-	// ⭐ THE PRE-ZERO IS WHY THE i64 READ IS CLEAN. GetExitCodeProcess writes only the low DWORD (4 bytes) of the
-	// 8-byte slot; the slab returns the slot already ZEROED, so the high DWORD stays 0 and an i64 load yields the
-	// exit code with no dirty high half (a full-word load is the only wide memory form — a u32 read would need an
-	// `as` cast the runtime builder cannot spell). This is the plan's "pre-zero the result slot" satisfied by the
-	// slab's zeroing contract rather than by an extra store.
+	// exit code and close the handle. GetExitCodeProcess(hProcess, codePtr) ; code = codePtr[0] (i64 read).
+	// ⭐ P1.5-B1c #92: codePtr is the ONE-TIME reusable exit-code slot (`__gt_exitcode_base`), not a per-call
+	// `__slab_alloc`. THE PRE-ZERO IS WHY THE i64 READ IS CLEAN: GetExitCodeProcess writes only the low DWORD (4
+	// bytes) of the 8-byte slot, so on a REUSED slot a prior call's low DWORD and any dirty high DWORD must be
+	// cleared first for an i64 load to yield exactly this child's code (a full-word load is the only wide memory
+	// form — a u32 read would need an `as` cast the runtime builder cannot spell). The fresh-slab zeroing that used
+	// to satisfy this is now an explicit `store 0` before the call, since the slot is reused across calls.
 	let reapHandle = ids.mint()
 	module.appendOp(reap, op: StdOp.loadIndirect(reapHandle, addrId: selfGt, offset: GtOffIoHandle, valueType: StdType.i64))
-	let codeSlotSizeConst = ids.mint()
-	module.appendOp(reap, op: StdOp.const(codeSlotSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
+	let codeBaseAddr = ids.mint()
+	module.appendOp(reap, op: StdOp.globalAddr(codeBaseAddr, label: GtExitCodeBaseLabel))
 	let codePtr = ids.mint()
-	module.appendOp(reap, op: StdOp.call(codePtr, callee: SlabAllocName, args: argsOf(codeSlotSizeConst)))
+	module.appendOp(reap, op: StdOp.loadIndirect(codePtr, addrId: codeBaseAddr, offset: 0, valueType: StdType.i64))
+	let codeZeroConst = ids.mint()
+	module.appendOp(reap, op: StdOp.const(codeZeroConst, value: 0, valueType: StdType.i64))
+	module.appendOp(reap, op: StdOp.storeIndirect(codePtr, offset: 0, valueId: codeZeroConst, valueType: StdType.i64))
 	module.appendOp(reap, op: StdOp.osProcessExitCode(reapHandle, codePtrId: codePtr))
 	let code = ids.mint()
 	module.appendOp(reap, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))

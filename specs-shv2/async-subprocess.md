@@ -179,6 +179,36 @@ end 'main'
 25
 ```
 
+<!-- test: async-subprocess.scratch-reuse-loop -->
+<!-- targets: x64-windows -->
+Fifty children each exit 1, awaited in turn, summing to 50. The value is that `__gt_process_run`'s OS scratch —
+STARTUPINFOA, PROCESS_INFORMATION, the mutable cmdline copy and the exit-code slot — is REUSED across all fifty
+calls (P1.5-B1c #92): the three fixed buffers are one-time `__gt_init` allocations and the cmdline copy is a
+grow-on-demand global that allocates once for a constant command length, so the loop stays bounded rather than
+bump-leaking ~150 bytes per call. Reuse is only correct because PROCESS_INFORMATION's `hProcess` is re-zeroed
+before each spawn (the failure sentinel) and the exit-code slot is re-zeroed before each `GetExitCodeProcess`
+(a clean i64 read); the `__gt_live_count` gate stays clean, so a clean exit proves the reuse leaked nothing.
+```maxon
+function child() returns int
+	return runProcess("cmd /c exit 1")
+end 'child'
+
+function main() returns ExitCode
+	var i = 0
+	var sum = 0
+	while i < 50 'l'
+		let p = async child()
+		let r = await p
+		sum = sum + r
+		i = i + 1
+	end 'l'
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+50
+```
+
 <!-- test: async-subprocess.spawn-failure-aborts -->
 <!-- targets: x64-windows -->
 A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle.

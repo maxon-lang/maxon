@@ -206,7 +206,12 @@ stack is RELEASED (`osFreePages`/VirtualFree) as the driver reaps it, so 5000 it
 resident stack at a time and exit cleanly. (P1.5-B1a′ replaced B1a's fixed-size 1 MiB free-list with
 alloc-fresh-on-spawn + free-on-complete, because the relocating morestack makes stacks variable-sized; the
 bound is now alloc+free churn rather than a recycle. Without either, every spawn would leak its stack
-commit — invisible to the `__mm` leak gate — and exhaust commit on a bounded-pagefile machine.)
+commit — invisible to the `__mm` leak gate — and exhaust commit on a bounded-pagefile machine.) Since
+P1.5-B1c (#87) this loop is also a LEAK GATE on the GT struct + its inline arg buffer: each completed thread's
+struct is recycled onto the free-list and the completion-based `__gt_live_count` is balanced to zero, so a
+clean exit (0) proves nothing leaked. Before that fix each iteration bump-leaked its ~224-byte struct and its
+48-byte arg buffer (slab allocations invisible to `__mm_alloc_count`), and — once the counter existed but the
+free-list did not — this same program exited 101.
 ```maxon
 
 function noop() returns int
@@ -227,6 +232,36 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: async-scheduler.struct-reuse -->
+<!-- targets: x64-windows -->
+The GT-struct free-list is exercised AND its whole-struct memzero-on-recycle is correct: five spawn/awaits run
+in sequence, each reusing the struct the previous completed thread pushed onto the free-list (P1.5-B1c #87).
+Each thread computes `2 * i` from its argument, so `2+4+6+8+10 = 30` proves every recycled struct actually RAN
+its function. A recycled struct carries its previous tenant's fields (it lives outside the always-zeroing slab),
+so without the whole-struct memzero the second spawn would inherit `status == completed` and its `await` would
+short-circuit to the PRIOR result without ever running the new thread — a wrong sum, not 30.
+```maxon
+
+function dbl(x int) returns int
+	return x * 2
+end 'dbl'
+
+function main() returns ExitCode
+	var i = 1
+	var acc = 0
+	while i <= 5 'loop'
+		let p = async dbl(i)
+		let r = await p
+		acc = acc + r
+		i = i + 1
+	end 'loop'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+30
 ```
 
 <!-- test: async-scheduler.managed-result-refused -->

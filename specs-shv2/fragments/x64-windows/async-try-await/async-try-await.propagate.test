@@ -39,6 +39,13 @@ data {
   __gt_proc_count@96 = i64 0
   __gt_proc_handles_base@104 = i64 0
   __gt_proc_gts_base@112 = i64 0
+  __gt_free_list_head@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __gt_startup_base@136 = i64 0
+  __gt_procinfo_base@144 = i64 0
+  __gt_exitcode_base@152 = i64 0
+  __gt_cmdline_buf_base@160 = i64 0
+  __gt_cmdline_buf_cap@168 = i64 0
 }
 
 func @mayFail {
@@ -68,12 +75,9 @@ func @inner {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 1
-    x64.movRegImm32 rcx, 48
-    x64.callDirect __slab_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
     x64.leaRegFunc rcx, [rip + mayFail]
-    x64.movRegReg rdx, r8
     x64.callDirect __gt_spawn
+    x64.storeBaseDispReg.word64 [r8 + 176], rbx
     x64.movRegReg rcx, r8
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
