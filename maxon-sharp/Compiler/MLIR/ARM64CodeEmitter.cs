@@ -73,6 +73,11 @@ public partial class ARM64CodeEmitter() {
     _labels[name] = _code.Count;
   }
 
+  /// The offset in `.text` where the NEXT emitted byte will land. Read by the debug-info line-table
+  /// capture to pin each op to its code offset. Pure observation — offsets stay valid after
+  /// ResolveLabels, which patches bytes in place without shifting.
+  public int CurrentCodeOffset => _code.Count;
+
   public void SetCurrentFunction(string name) {
     _currentFunction = name;
   }

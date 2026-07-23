@@ -235,7 +235,14 @@ public static partial class MaxonToStandardConversion {
       } else {
         throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
       }
-      var newFunc = new IrFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
+      var newFunc = new IrFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) {
+        IsStdlib = func.IsStdlib,
+        // Carry the source anchor forward so the emitter can resolve this function's file for the
+        // debug-info line table (a function is single-file; its file lives here, not on each op).
+        SourceFilePath = func.SourceFilePath,
+        SourceLine = func.SourceLine,
+        SourceColumn = func.SourceColumn
+      };
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var literalMap = new Dictionary<MaxonValue, MaxonLiteralOp>();
       var varTypes = new Dictionary<string, string>();
@@ -282,6 +289,11 @@ public static partial class MaxonToStandardConversion {
       foreach (var block in func.Body.Blocks) {
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
+
+        // Debug-info span propagation (metadata only). Record, per Maxon op, where its lowered
+        // Standard ops begin in newBlock; ranges between marks inherit the op's span. Recorded at
+        // the top of the op loop so a `continue` inside the switch cannot skip it.
+        var spanMarks = Compiler.DebugInfo ? new List<(int, SourceSpan)>() : null;
 
         // Snapshot cross-block dictionaries before this block starts processing.
         // Some lowering paths mutate entries to reflect block-local context (e.g.
@@ -440,6 +452,9 @@ public static partial class MaxonToStandardConversion {
         }
 
         foreach (var op in block.Operations) {
+          if (spanMarks != null && func.TryGetDebugSpan(op, out var opSpan))
+            spanMarks.Add((newBlock.Operations.Count, opSpan));
+
           if (bulkZeroSkipOps.Contains(op)) {
             if (bulkZeroEmitPoints.TryGetValue(op, out var bzInfo))
               newBlock.AddOp(new StdBulkZeroOp(bzInfo.tag, bzInfo.count));
@@ -2601,6 +2616,8 @@ public static partial class MaxonToStandardConversion {
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }
         }
+
+        if (spanMarks != null) DebugSpanFlow.AssignRange(newFunc, newBlock, spanMarks);
 
         // Restore entries that existed before this block. Entries created inside
         // this block stay (their key is still the unique definition). Entries that

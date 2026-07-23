@@ -27,7 +27,13 @@ public static class StandardToARM64Conversion {
   }
 
   private static IrFunction<ARM64Op> ConvertFunction(IrFunction<StandardOp> func, IrModule<ARM64Op> outputModule) {
-    var newFunc = new IrFunction<ARM64Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
+    var newFunc = new IrFunction<ARM64Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) {
+      IsStdlib = func.IsStdlib,
+      // Carry the source anchor forward for the debug-info line table (file is a per-function fact).
+      SourceFilePath = func.SourceFilePath,
+      SourceLine = func.SourceLine,
+      SourceColumn = func.SourceColumn
+    };
 
     // Pre-scan: find which variables are actually loaded
     var loadedVariables = new HashSet<string>();
@@ -124,6 +130,9 @@ public static class StandardToARM64Conversion {
       var srcBlock = sourceBlocks[blockIdx];
       var armBlock = newFunc.Body.AddBlock(srcBlock.Name);
 
+      // Debug-info span propagation (metadata only): mark where each Standard op's ARM64 ops begin.
+      var spanMarks = Compiler.DebugInfo ? new List<(int, SourceSpan)>() : null;
+
       if (blockIdx == 0 || prevBlock == null) {
         regManager.Reset();
       } else if (divergingBlocks.Contains(blockIdx)) {
@@ -163,6 +172,9 @@ public static class StandardToARM64Conversion {
       }
 
       foreach (var op in srcBlock.Operations) {
+        if (spanMarks != null && func.TryGetDebugSpan(op, out var opSpan))
+          spanMarks.Add((armBlock.Operations.Count, opSpan));
+
         if (deadStoreOps.Contains(op)) { currentOpIndex++; continue; }
         if (op is StdParamOp && blockIdx == 0) { currentOpIndex++; continue; }
         ConvertOp(op, armBlock, varOffsets, regManager, outputModule, floatConstants, float32Constants,
@@ -171,6 +183,8 @@ public static class StandardToARM64Conversion {
         regManager.AdvanceOp();
         currentOpIndex++;
       }
+
+      if (spanMarks != null) DebugSpanFlow.AssignRange(newFunc, armBlock, spanMarks);
 
       prevBlock = armBlock;
       prevBlockIdx = blockIdx;

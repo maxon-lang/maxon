@@ -5,12 +5,9 @@ using MaxonSharp.Compiler.Ir.Dialects;
 namespace MaxonSharp.Compiler;
 
 /// <summary>
-/// A function symbol for the COFF symbol table (name + code offset within .text).
-/// </summary>
-public record CoffSymbol(string Name, int CodeOffset);
-
-/// <summary>
-/// Result of code emission.
+/// Result of code emission. <see cref="DebugInfo"/> is populated only under --debug-info; it carries
+/// the observed line/function/file tables for the compiler to finalize into a `.mxdbg` sidecar. It
+/// influences no emitted byte — a build with it null and one with it populated are byte-identical.
 /// </summary>
 public record CodeEmitResult(
   byte[] Code,
@@ -19,9 +16,9 @@ public record CodeEmitResult(
   byte[] Ucddata,
   byte[] Symdata,
   IReadOnlyList<ImportEntry> Imports,
-  IReadOnlyList<CoffSymbol> CoffSymbols,
   byte[]? Got = null,
-  IReadOnlyList<string>? ImportNames = null
+  IReadOnlyList<string>? ImportNames = null,
+  MaxonSharp.Debug.MxdbgWriter? DebugInfo = null
 );
 
 /// <summary>
@@ -37,6 +34,11 @@ public class X86CodeEmitter {
     Logger.Debug(LogCategory.Codegen, "Emitting machine code");
 
     var emitter = new Ir.X86CodeEmitter();
+
+    // Debug-info capture (--debug-info only). A pure observer of the emitted code: it records line
+    // rows against code offsets as each function is emitted. Null on a release build, and never
+    // consulted by emission, so `.text` is identical either way.
+    var dbg = Compiler.DebugInfo ? new MaxonSharp.Debug.DebugInfoBuilder() : null;
 
     // Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
     foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
@@ -82,9 +84,9 @@ public class X86CodeEmitter {
     emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName, moduleInitName);
 
     // Emit all functions (main and others)
-    EmitFunction(emitter, mainFunc);
+    EmitFunction(emitter, mainFunc, dbg);
     foreach (var func in module.Functions.Where(f => f != mainFunc)) {
-      EmitFunction(emitter, func);
+      EmitFunction(emitter, func, dbg);
     }
 
     // Emit __chkstk runtime function (for large stack allocations)
@@ -171,23 +173,22 @@ public class X86CodeEmitter {
     var symdata = emitter.GetSymdata();
     var imports = emitter.Imports;
 
-    // Build COFF symbol list sorted by offset so tools can binary-search by address
-    var coffSymbols = symbolEntries
-      .OrderBy(e => e.codeOffset)
-      .Select(e => new CoffSymbol(e.name, e.codeOffset))
-      .ToList();
+    dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length);
 
-    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata, {imports.Count} imports, {coffSymbols.Count} COFF symbols");
+    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata, {imports.Count} imports");
 
-    return new CodeEmitResult(code, rdata, data, ucddata, symdata, imports, coffSymbols);
+    return new CodeEmitResult(code, rdata, data, ucddata, symdata, imports, DebugInfo: dbg?.Writer);
   }
 
   /// <summary>
-  /// Emits machine code for a single function.
+  /// Emits machine code for a single function. When <paramref name="dbg"/> is set, records a line
+  /// row at each op whose source span differs from the previous op's (pure observation).
   /// </summary>
-  private static void EmitFunction(Ir.X86CodeEmitter emitter, IrFunction<X86Op> func) {
+  private static void EmitFunction(Ir.X86CodeEmitter emitter, IrFunction<X86Op> func,
+      MaxonSharp.Debug.DebugInfoBuilder? dbg) {
     emitter.DefineLabel(func.Name);
     emitter.SetCurrentFunction(func.Name);
+    dbg?.BeginFunction();
 
     foreach (var block in func.Body.Blocks) {
       if (block.Name != "entry") {
@@ -195,6 +196,9 @@ public class X86CodeEmitter {
       }
 
       foreach (var op in block.Operations) {
+        if (dbg != null && func.TryGetDebugSpan(op, out var span)) {
+          dbg.NoteLine(emitter.CurrentCodeOffset, func.SourceFilePath, span.Line, span.Col);
+        }
         emitter.Emit(op);
       }
     }

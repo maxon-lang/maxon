@@ -7729,6 +7729,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       HandleConditionalEndif();
       return;
     }
+
+    // Debug-info span capture (pure metadata; see docs/DEBUGGER_DESIGN.md). Record where this
+    // statement's ops begin and the source position of its first token, so every op the statement
+    // lowers to can be traced back to its line. Gated on --debug-info and skipped for stdlib to keep
+    // the sidecar to user code; nothing here influences which ops are produced.
+    bool captureSpan = Compiler.DebugInfo && !_isStdlib && _currentFunction != null && _currentBlock != null;
+    var spanBlock = captureSpan ? _currentBlock : null;
+    int spanMark = spanBlock?.Operations.Count ?? 0;
+    int spanLine = 0, spanCol = 0;
+    if (captureSpan) {
+      var firstTok = Current();
+      spanLine = firstTok.Line;
+      spanCol = firstTok.Column;
+    }
+
     if (Check(TokenType.Return)) {
       ParseReturn();
     } else if (Check(TokenType.At)) {
@@ -7783,6 +7798,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         throw new CompileError(ErrorCode.ParserUnexpectedEof, "Unexpected end of input, expected 'end'", endTok.Line, endTok.Column);
       }
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"unexpected token: '{endTok.Value}'", endTok.Line, endTok.Column);
+    }
+
+    // Stamp the statement's span onto the ops it added to its entry block. Nested statements
+    // (control-flow bodies) run their own ParseStatement and self-stamp into their own blocks;
+    // the ops captured here are the statement's "own" ops (condition eval, the assignment itself,
+    // the branch), which is precisely what a step/breakpoint stop should land on.
+    if (spanBlock != null) {
+      var span = new SourceSpan(spanLine, spanCol);
+      for (int i = spanMark; i < spanBlock.Operations.Count; i++) {
+        _currentFunction!.SetDebugSpan(spanBlock.Operations[i], span);
+      }
     }
   }
 

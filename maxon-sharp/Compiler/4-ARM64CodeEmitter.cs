@@ -14,6 +14,10 @@ public class ARM64CodeEmitterStage {
 
     var emitter = new ARM64CodeEmitter();
 
+    // Debug-info capture (--debug-info only). A pure observer; null on a release build and never
+    // consulted by emission, so `.text` is identical either way.
+    var dbg = Compiler.DebugInfo ? new MaxonSharp.Debug.DebugInfoBuilder() : null;
+
     // Define rdata constants
     foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
       emitter.DefineRdata(label, rdataBytes, alignment);
@@ -57,9 +61,9 @@ public class ARM64CodeEmitterStage {
     emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName, moduleInitName);
 
     // Emit all functions
-    EmitFunction(emitter, mainFunc);
+    EmitFunction(emitter, mainFunc, dbg);
     foreach (var func in module.Functions.Where(f => f != mainFunc)) {
-      EmitFunction(emitter, func);
+      EmitFunction(emitter, func, dbg);
     }
 
     // Emit runtime functions
@@ -128,22 +132,21 @@ public class ARM64CodeEmitterStage {
     var ucddata = emitter.GetUcddata();
     var symdata = emitter.GetSymdata();
 
-    // Build COFF symbol list
-    var coffSymbols = symbolEntries
-      .OrderBy(e => e.codeOffset)
-      .Select(e => new CoffSymbol(e.name, e.codeOffset))
-      .ToList();
+    dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length);
 
     Logger.Debug(LogCategory.Codegen, $"ARM64: Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata");
 
-    return new CodeEmitResult(code, rdata, data, ucddata, symdata, [], coffSymbols,
+    return new CodeEmitResult(code, rdata, data, ucddata, symdata, [],
       emitter.HasImports ? gotRaw : null,
-      emitter.HasImports ? importNamesList : null);
+      emitter.HasImports ? importNamesList : null,
+      dbg?.Writer);
   }
 
-  private static void EmitFunction(ARM64CodeEmitter emitter, IrFunction<ARM64Op> func) {
+  private static void EmitFunction(ARM64CodeEmitter emitter, IrFunction<ARM64Op> func,
+      MaxonSharp.Debug.DebugInfoBuilder? dbg) {
     emitter.DefineLabel(func.Name);
     emitter.SetCurrentFunction(func.Name);
+    dbg?.BeginFunction();
 
     foreach (var block in func.Body.Blocks) {
       if (block.Name != "entry") {
@@ -151,6 +154,9 @@ public class ARM64CodeEmitterStage {
       }
 
       foreach (var op in block.Operations) {
+        if (dbg != null && func.TryGetDebugSpan(op, out var span)) {
+          dbg.NoteLine(emitter.CurrentCodeOffset, func.SourceFilePath, span.Line, span.Col);
+        }
         emitter.Emit(op);
       }
     }

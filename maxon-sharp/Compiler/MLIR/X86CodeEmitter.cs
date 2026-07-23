@@ -918,6 +918,11 @@ public partial class X86CodeEmitter() {
     return _labels.TryGetValue(name, out var offset) ? offset : -1;
   }
 
+  /// The offset in `.text` where the NEXT emitted byte will land. Read by the debug-info line-table
+  /// capture to pin each op to its code offset. Pure observation — reading the buffer length changes
+  /// nothing. Offsets stay valid after ResolveLabels, which patches bytes in place without shifting.
+  public int CurrentCodeOffset => _code.Count;
+
   /// <summary>
   /// Emits a sorted function symbol table into symdata for stack trace lookups.
   /// Format: count(4) | entries[count] of {codeOffset(4), nameOffset(4)} | name strings

@@ -27,6 +27,7 @@ class Program {
       "error-codes" => ErrorCodeRegistry.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
+      "debug" => RunDebug(args[1..]),
       "lsp-server" => await RunLspAsync(),
       _ => Fail()
     };
@@ -40,6 +41,7 @@ class Program {
     Console.WriteLine("  run <function>           Compile build.maxon and run the specified function");
     Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
     Console.WriteLine("  monitor <exe> [args...]  Launch executable with shared-memory debug stream monitor");
+    Console.WriteLine("  debug [options] <target> Inspect debug info (--debug-info sidecar); see 'Debugger options'");
     Console.WriteLine("  spec-test [options]      Run spec tests");
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
@@ -55,8 +57,15 @@ class Program {
     Console.WriteLine("  --literal-coverage       Report static-eligibility of managed literal sites to stderr (measurement only)");
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
     Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
+    Console.WriteLine("  --debug-info             Also write a <output>.mxdbg debug-info sidecar (exe stays byte-identical)");
     Console.WriteLine("  --timing                 Print per-stage compile timings to stderr");
     Console.WriteLine("  --timing-functions=N     Also print top-N hottest functions per heavy pass (implies --timing)");
+    Console.WriteLine();
+    Console.WriteLine("Debugger options (debug):");
+    Console.WriteLine("  --dump-info <exe|.mxdbg> Print the sidecar's files, functions, and line table");
+    Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
+    Console.WriteLine("                           Map .text code offsets to file:line:col");
+    Console.WriteLine("  <exe>                    Interactive debugging (lands in P3)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -85,6 +94,129 @@ class Program {
     return 1;
   }
 
+  /// <summary>
+  /// The `maxon debug` command. P1 implements the two read-only sidecar surfaces —
+  /// `--dump-info &lt;exe|.mxdbg&gt;` and `--symbolize &lt;.mxdbg&gt; &lt;codeOffset...&gt;`. The
+  /// interactive REPL is a later phase (P3); a bare `maxon debug &lt;exe&gt;` says so.
+  /// </summary>
+  static int RunDebug(string[] args) {
+    if (args.Length == 0) {
+      Console.Error.WriteLine("Usage: maxon debug --dump-info <exe|.mxdbg>");
+      Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
+      return 1;
+    }
+
+    switch (args[0]) {
+      case "--dump-info": {
+        if (args.Length < 2) {
+          Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
+          return 1;
+        }
+        var reader = LoadSidecarOrReport(args[1]);
+        return reader == null ? 1 : DumpDebugInfo(reader, args[1]);
+      }
+
+      case "--symbolize": {
+        if (args.Length < 3) {
+          Console.Error.WriteLine("maxon debug --symbolize needs a .mxdbg path and at least one code offset.");
+          return 1;
+        }
+        var reader = LoadSidecarOrReport(args[1]);
+        if (reader == null) return 1;
+        return SymbolizeOffsets(reader, args[2..]);
+      }
+
+      default:
+        if (args[0].StartsWith('-')) {
+          Console.Error.WriteLine($"Unknown 'maxon debug' option: {args[0]}");
+          return 1;
+        }
+        // A bare target path: the interactive session is a later phase.
+        Console.WriteLine("Interactive debugging (breakpoints, stepping, the REPL) lands in P3.");
+        Console.WriteLine("For now: 'maxon debug --dump-info <exe>' and 'maxon debug --symbolize <.mxdbg> <offset...>'.");
+        return 0;
+    }
+  }
+
+  /// Load a `.mxdbg` sidecar for the given path (a `.mxdbg` file, or a binary whose sidecar is
+  /// `<binary>.mxdbg`). Reports a clear reason and returns null on any failure.
+  static Debug.MxdbgReader? LoadSidecarOrReport(string path) {
+    var sidecarPath = path.EndsWith(Debug.MxdbgFormat.SidecarExtension)
+      ? path
+      : path + Debug.MxdbgFormat.SidecarExtension;
+
+    if (!File.Exists(sidecarPath)) {
+      Console.Error.WriteLine($"No debug info found: '{sidecarPath}' does not exist "
+        + "(build with --debug-info to produce it).");
+      return null;
+    }
+
+    try {
+      return new Debug.MxdbgReader(File.ReadAllBytes(sidecarPath));
+    } catch (InvalidDataException ex) {
+      Console.Error.WriteLine($"Cannot read '{sidecarPath}': {ex.Message}");
+      return null;
+    }
+  }
+
+  static int DumpDebugInfo(Debug.MxdbgReader r, string path) {
+    Console.WriteLine($"Debug info: {path}");
+    Console.WriteLine($"  target:   {r.Triple}");
+    Console.WriteLine($"  build-id: 0x{r.BuildId:x16}");
+
+    Console.WriteLine($"  files ({r.FileCount}):");
+    for (uint i = 0; i < r.FileCount; i++) {
+      Console.WriteLine($"    [{i}] {r.FileName(i)}");
+    }
+
+    Console.WriteLine($"  functions ({r.FunctionCount}):");
+    for (uint i = 0; i < r.FunctionCount; i++) {
+      var f = r.Function(i);
+      Console.WriteLine($"    {f.Name,-32} [0x{f.CodeStart:x4}, 0x{f.CodeEnd:x4})  "
+        + $"frame=0x{f.FrameSize:x}  params={f.ParamCount}  lines={f.LineCount}");
+    }
+
+    Console.WriteLine($"  line table ({r.LineCount}):");
+    for (uint i = 0; i < r.LineCount; i++) {
+      var l = r.Line(i);
+      Console.WriteLine($"    0x{l.CodeOffset:x4}  {l.File}:{l.Line}:{l.Col}{FormatLineFlags(l.Flags)}");
+    }
+
+    return 0;
+  }
+
+  static int SymbolizeOffsets(Debug.MxdbgReader r, string[] offsetArgs) {
+    int exitCode = 0;
+    foreach (var arg in offsetArgs) {
+      if (!TryParseCodeOffset(arg, out var offset)) {
+        Console.Error.WriteLine($"Not a code offset: '{arg}' (use decimal or 0x-prefixed hex).");
+        exitCode = 1;
+        continue;
+      }
+      var line = r.PcToLine(offset);
+      var fn = r.FunctionAt(offset);
+      var where = line is { } l ? $"{l.File}:{l.Line}:{l.Col}" : "<no line>";
+      var inFn = fn is { } f ? $"  (in {f.Name})" : "";
+      Console.WriteLine($"0x{offset:x4}  {where}{inFn}");
+    }
+    return exitCode;
+  }
+
+  static string FormatLineFlags(uint flags) {
+    var tags = new List<string>();
+    if ((flags & Debug.MxdbgFormat.LineFlagStatement) != 0) tags.Add("statement");
+    if ((flags & Debug.MxdbgFormat.LineFlagCoverage) != 0) tags.Add("coverage");
+    return tags.Count == 0 ? "" : $"  [{string.Join(", ", tags)}]";
+  }
+
+  static bool TryParseCodeOffset(string s, out uint offset) {
+    if (s.StartsWith("0x") || s.StartsWith("0X")) {
+      return uint.TryParse(s.AsSpan(2), System.Globalization.NumberStyles.HexNumber,
+        System.Globalization.CultureInfo.InvariantCulture, out offset);
+    }
+    return uint.TryParse(s, out offset);
+  }
+
   static (bool emitIr, bool dumpStages, bool valid) ParseOptions(string[] args, HashSet<string>? additionalOptions = null) {
     var emitIr = false;
     var dumpStages = false;
@@ -107,6 +239,8 @@ class Program {
         Compiler.Compiler.AsyncTrace = true;
       } else if (arg == "--debugstream") {
         Compiler.Compiler.DebugStream = true;
+      } else if (arg == "--debug-info") {
+        Compiler.Compiler.DebugInfo = true;
       } else if (arg == "--timing") {
         Compiler.StageTimer.Enabled = true;
       } else if (arg.StartsWith("--timing-functions=")) {
@@ -180,7 +314,10 @@ class Program {
 
     var target = ParseTarget(args);
     var path = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
-    var useCache = !emitIr && !dumpStages;
+    // --debug-info is not part of the build-cache key, so a warm cache would otherwise skip
+    // compilation and never write the sidecar. Bypass the cache when it is set, exactly as
+    // --emit-ir/--dump-stages do for their extra artifacts.
+    var useCache = !emitIr && !dumpStages && !Compiler.Compiler.DebugInfo;
 
     if (File.Exists(path)) {
       // Single file: compile directly
@@ -258,10 +395,13 @@ class Program {
         var savedMmDebug = Compiler.Compiler.MmDebug;
         var savedAsyncTrace = Compiler.Compiler.AsyncTrace;
         var savedDebugStream = Compiler.Compiler.DebugStream;
+        var savedDebugInfo = Compiler.Compiler.DebugInfo;
         Compiler.Compiler.MmTrace = false;
         Compiler.Compiler.MmDebug = false;
         Compiler.Compiler.AsyncTrace = false;
         Compiler.Compiler.DebugStream = false;
+        // No sidecar for the internal build-runner — --debug-info is for the user's project.
+        Compiler.Compiler.DebugInfo = false;
         try {
           if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
             // Don't emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
@@ -275,6 +415,7 @@ class Program {
           Compiler.Compiler.MmDebug = savedMmDebug;
           Compiler.Compiler.AsyncTrace = savedAsyncTrace;
           Compiler.Compiler.DebugStream = savedDebugStream;
+          Compiler.Compiler.DebugInfo = savedDebugInfo;
         }
 
         var (exitCode, json) = RunExecutableCapture(runPath);
@@ -288,6 +429,10 @@ class Program {
           Console.Error.WriteLine("build.maxon produced invalid build configuration.");
           return 1;
         }
+
+        // build.maxon can request the debug-info sidecar (debug_info: true), the same as the
+        // --debug-info CLI flag. Either source turns it on for the project compile below.
+        if (config.Debug_info) Compiler.Compiler.DebugInfo = true;
 
         // If build.maxon supplied an output path with no extension, append the
         // host-target executable extension (".exe" on Windows, none elsewhere)
@@ -441,7 +586,10 @@ class Program {
     var sources = new SourceFile[] { new(buildFile, content, directory) };
 
     var ext = GetOutputExtension(target);
-    var useCache = !emitIr && !dumpStages;
+    // --debug-info is not part of the build-cache key, so a warm cache would otherwise skip
+    // compilation and never write the sidecar. Bypass the cache when it is set, exactly as
+    // --emit-ir/--dump-stages do for their extra artifacts.
+    var useCache = !emitIr && !dumpStages && !Compiler.Compiler.DebugInfo;
     BuildCache.EnsureCacheDir(directory);
     var outputPath = Path.Combine(BuildCache.GetCacheDir(directory), $".maxon-run-{functionName}{ext}");
     var cacheName = $"run-{functionName}";

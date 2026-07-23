@@ -79,7 +79,13 @@ public static class StandardToX86Conversion {
     // function) — it selects the null-skip label prefix. Label counters are
     // module-global and atomic (see field declarations); they are not reset.
     _inStdlib = func.IsStdlib;
-    var newFunc = new IrFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
+    var newFunc = new IrFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) {
+      IsStdlib = func.IsStdlib,
+      // Carry the source anchor forward for the debug-info line table (file is a per-function fact).
+      SourceFilePath = func.SourceFilePath,
+      SourceLine = func.SourceLine,
+      SourceColumn = func.SourceColumn
+    };
 
     // Pre-scan: find which variables are actually loaded (read back from stack).
     // A variable is "live" if it appears in a load op, or if it's referenced
@@ -244,6 +250,9 @@ public static class StandardToX86Conversion {
       var srcBlock = sourceBlocks[blockIdx];
       var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
+      // Debug-info span propagation (metadata only): mark where each Standard op's X86 ops begin.
+      var spanMarks = Compiler.DebugInfo ? new List<(int, SourceSpan)>() : null;
+
       if (blockIdx == 0 || prevX86Block == null) {
         regManager.Reset();
       } else if (divergingBlocks.Contains(blockIdx)) {
@@ -368,6 +377,9 @@ public static class StandardToX86Conversion {
       }
 
       foreach (var op in srcBlock.Operations) {
+        if (spanMarks != null && func.TryGetDebugSpan(op, out var opSpan))
+          spanMarks.Add((x86Block.Operations.Count, opSpan));
+
         if (preHandledOps.Contains(op) || twoJumpSkipOps.Contains(op)) { currentOpIndex++; continue; }
         // If there's a pending comparison result and this op is NOT a condBr
         // that uses it, materialize the comparison into a register via setcc.
@@ -1139,6 +1151,8 @@ public static class StandardToX86Conversion {
         regManager.AdvanceOp();
         currentOpIndex++;
       }
+
+      if (spanMarks != null) DebugSpanFlow.AssignRange(newFunc, x86Block, spanMarks);
 
       prevX86Block = x86Block;
       prevBlockIdx = blockIdx;

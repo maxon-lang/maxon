@@ -58,6 +58,27 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   // when scanning an incref/decref window for aliasing events.
   public HashSet<int>? BorrowOnlyParamIndices { get; set; }
 
+  // Debug-info side-table: op -> source position (see docs/DEBUGGER_DESIGN.md, SourceSpan).
+  //
+  // KEYED BY OP REFERENCE. Every op is a non-record class (MaxonOp/StandardOp/X86Op/ARM64Op are
+  // abstract classes, never records), so the default dictionary comparer is reference identity —
+  // exactly what we want, since two structurally-equal ops are still distinct instructions.
+  //
+  // Populated ONLY under --debug-info, and never read by codegen: the field is null (allocating
+  // nothing) in a release build, and even when present it changes not one emitted byte. That is the
+  // "pure observer" contract — it is why the sidecar can be produced without perturbing .text.
+  private Dictionary<TOp, SourceSpan>? _debugSpans;
+
+  public bool HasDebugSpans => _debugSpans is { Count: > 0 };
+
+  public void SetDebugSpan(TOp op, SourceSpan span) => (_debugSpans ??= [])[op] = span;
+
+  public bool TryGetDebugSpan(TOp op, out SourceSpan span) {
+    if (_debugSpans != null) return _debugSpans.TryGetValue(op, out span);
+    span = default;
+    return false;
+  }
+
   /// Create an independent deep copy of this function.
   public IrFunction<TOp> DeepClone() {
     var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
@@ -83,6 +104,9 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
       clonedBlock.Operations.AddRange(block.Operations);
       clone.Body.Blocks.Add(clonedBlock);
     }
+    // The clone shares op references (AddRange above copies the list, not the ops), so the same
+    // op->span keys apply verbatim. Copy them so a monomorphized instance keeps its source lines.
+    if (_debugSpans != null) clone._debugSpans = new Dictionary<TOp, SourceSpan>(_debugSpans);
     return clone;
   }
 }

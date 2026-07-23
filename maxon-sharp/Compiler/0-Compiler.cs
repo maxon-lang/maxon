@@ -32,6 +32,10 @@ public record CompileTarget(string Arch, string Os) {
     var unknown => throw new ArgumentException($"Unknown OS '{unknown}' in CompileTarget. Expected macos, windows, or linux.")
   };
 
+  /// The "arch-os" triple (e.g. "x64-windows") — the inverse of <see cref="Parse"/>. Stamped into
+  /// the debug-info sidecar so the driver knows which architecture's code it describes.
+  public string Triple => $"{Arch}-{Os}";
+
   /// <summary>
   /// Parses a target triple string like "arm64-macos" into a CompileTarget.
   /// </summary>
@@ -87,6 +91,14 @@ public class Compiler {
 
   [ThreadStatic] private static bool _debugStream;
   public static bool DebugStream { get => _debugStream; set => _debugStream = value; }
+
+  // When set (via --debug-info / BuildConfig.debug_info), the compiler CAPTURES source spans through
+  // the pipeline and writes a `<output>.mxdbg` sidecar next to the binary. It gates ONLY observation
+  // and the sidecar file — never a single emitted code byte. A build with this on and one with it off
+  // produce byte-identical executables (see docs/DEBUGGER_DESIGN.md). Off, nothing is captured and no
+  // sidecar is written.
+  [ThreadStatic] private static bool _debugInfo;
+  public static bool DebugInfo { get => _debugInfo; set => _debugInfo = value; }
 
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
@@ -166,7 +178,8 @@ public class Compiler {
         if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
 
         // Stage 6: Write Mach-O executable
-        MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames, coffSymbols: codeResult.CoffSymbols);
+        MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames);
+        WriteDebugSidecar(codeResult, outputPath, target);
         if (stageSw != null)
           Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
@@ -177,7 +190,8 @@ public class Compiler {
         if (stageSw != null) { emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart(); }
 
         // Stage 6: Write PE executable
-        PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);
+        PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata);
+        WriteDebugSidecar(codeResult, outputPath, target);
         if (stageSw != null)
           Console.Error.WriteLine($"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={stageSw.ElapsedMilliseconds}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath} in {totalSw.ElapsedMilliseconds}ms");
@@ -193,6 +207,30 @@ public class Compiler {
       return new CompileResult(false, [ex]);
     } catch (Exception ex) {
       return new CompileResult(false, [new CompileError(ErrorCode.InternalError, $"{ex.Message}\n{ex.StackTrace}")]);
+    }
+  }
+
+  /// <summary>
+  /// Writes the `<output>.mxdbg` debug-info sidecar next to the binary, when --debug-info captured it.
+  /// The build-id is the FNV-1a content hash of the emitted `.text` — nothing is embedded in the exe
+  /// (the driver recomputes the same hash from the binary's `.text` section later), so --debug-info
+  /// adds ZERO bytes to the executable and the two builds are byte-identical.
+  ///
+  /// Report-and-swallow, modelled on shv2's MetricsEmit.writeMetrics: a sidecar write failure is
+  /// logged and ignored, NEVER a build gate. The build has already succeeded; a debugging aid that
+  /// could not be written must not fail it.
+  /// </summary>
+  private static void WriteDebugSidecar(CodeEmitResult codeResult, string outputPath, CompileTarget target) {
+    if (codeResult.DebugInfo is not { } writer) return;
+
+    try {
+      ulong buildId = Debug.MxdbgFormat.ComputeBuildId(codeResult.Code);
+      var image = writer.Build(buildId, target.Triple);
+      var sidecarPath = outputPath + Debug.MxdbgFormat.SidecarExtension;
+      File.WriteAllBytes(sidecarPath, image);
+      Logger.Info(LogCategory.Compiler, $"Wrote {image.Length} bytes debug info to {sidecarPath}");
+    } catch (Exception ex) {
+      Logger.Error(LogCategory.Compiler, $"Failed to write debug-info sidecar (build not affected): {ex.Message}");
     }
   }
 

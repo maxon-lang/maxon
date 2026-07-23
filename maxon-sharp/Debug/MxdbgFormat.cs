@@ -34,6 +34,9 @@ public static class MxdbgFormat {
   /// The one true width of every count/offset/length word in the file.
   public const int FieldSize = 4;
 
+  /// The sidecar's file extension, appended to the binary's path: `foo.exe` -> `foo.exe.mxdbg`.
+  public const string SidecarExtension = ".mxdbg";
+
   // Header layout (little-endian). HeaderSize is the offset of the first section.
   public const int OffMagic = 0;        // [8]
   public const int OffVersion = 8;      // u32

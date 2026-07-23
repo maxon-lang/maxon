@@ -58,8 +58,7 @@ public class MachOWriter {
 
   public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null,
     byte[]? ucddata = null, byte[]? symdata = null,
-    byte[]? got = null, IReadOnlyList<string>? importNames = null,
-    IReadOnlyList<CoffSymbol>? coffSymbols = null) {
+    byte[]? got = null, IReadOnlyList<string>? importNames = null) {
     Logger.Debug(LogCategory.Pe, $"Writing Mach-O file: {path}");
 
     rdata ??= [];
@@ -128,34 +127,15 @@ public class MachOWriter {
     var buildVersionCmdSize = 24u;
     var codeSignatureCmdSize = 16u;
 
-    // --- Build symbol table (nlist_64) + string table for debugging ---
-    // Each function symbol resolves a __text address back to its name so lldb
-    // backtraces are legible. n_value is the static (pre-slide) VM address of the
-    // function: TextSegmentVMAddr + textSectionOffset + codeOffset.
+    // --- Symbol table (nlist_64) + string table ---
+    // Deliberately EMPTY (see docs/DEBUGGER_DESIGN.md): the function name->address payload that used
+    // to live here (for lldb legibility) now lives in the `.mxdbg` sidecar, and external-debugger
+    // compatibility is out of scope. LC_SYMTAB is still emitted, describing zero symbols — the Mach-O
+    // mirror of leaving PointerToSymbolTable/NumberOfSymbols at 0 in the PE header. The runtime
+    // `__symtable` (read by the panic backtrace) is a DIFFERENT table and is still emitted.
     byte[] symtabData = [];
     byte[] strtabData = [0]; // strtab[0] is always the empty string
     uint nsyms = 0;
-    if (coffSymbols != null && coffSymbols.Count > 0) {
-      var symStream = new MemoryStream();
-      var symW = new BinaryWriter(symStream);
-      var strStream = new MemoryStream();
-      strStream.WriteByte(0);
-      foreach (var sym in coffSymbols) {
-        var strx = (uint)strStream.Position;
-        var nameBytes = Encoding.ASCII.GetBytes(sym.Name);
-        strStream.Write(nameBytes, 0, nameBytes.Length);
-        strStream.WriteByte(0);
-        ulong vmAddr = MachOLayout.TextSegmentVMAddr + textSectionOffset + (uint)sym.CodeOffset;
-        symW.Write(strx);       // n_strx
-        symW.Write((byte)0x0e); // n_type = N_SECT (defined in a section)
-        symW.Write((byte)1);    // n_sect = __text (first section, 1-based)
-        symW.Write((ushort)0);  // n_desc
-        symW.Write(vmAddr);     // n_value
-      }
-      symtabData = symStream.ToArray();
-      strtabData = strStream.ToArray();
-      nsyms = (uint)coffSymbols.Count;
-    }
 
     // --- Build chained fixups data for __LINKEDIT ---
     byte[] chainedFixupsData = [];
