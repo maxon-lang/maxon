@@ -219,6 +219,14 @@ export let ArrSliceName = b"__arr_slice"
 export let ArrCloneName = b"__arr_clone"
 export let ArrAppendName = b"__arr_append"
 
+// ⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED DROP (P1.7 slice 3b-v).** `__drop_type_param(descriptor, value)`
+// drops ONE consumed opaque type-parameter binding whose element destructor is not known statically: the
+// shared generic body owns the value (a `push`/forward feed parameter left live on some path), but the
+// destructor lives in the enclosing instance's layout descriptor. NOT `__arr_`-prefixed (it is a single value,
+// not an array operation), but `__`-prefixed so `isCompilerInternalCallee` routes its call and the golden skip
+// (`isRuntimeFunction`) hides its body. Installed under `usesArray` (an opaque feed always feeds an array).
+export let DropTypeParamName = b"__drop_type_param"
+
 // Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit,
 // `__arr_cow_detach` gives the record a private writable buffer before any in-place write (P1.7 COW slice A).
 let ArrGrownCapName = b"__arr_grown_cap"
@@ -296,6 +304,7 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrAppend(module)
 	buildArrDecref(module)
 	verifyThrowingAccessorsMatchPredicate(module)
+	buildDropTypeParam(module)
 end 'installArrayRuntime'
 
 // ⭐ **THE DRIFT GUARD for "which array callee throws".** `isThrowingArrayRuntimeCallee` names seven
@@ -323,6 +332,41 @@ function verifyThrowingAccessorsMatchPredicate(module StdModule)
 		end 'arr'
 	end 'eachFunc'
 end 'verifyThrowingAccessorsMatchPredicate'
+
+// ⭐ **`__drop_type_param(descriptor, value)` — THE SINGLE-VALUE ANALOGUE of the managed-element destroy gate
+// (`emitDestroyRangeIfManaged`, P1.7 slice 3b-v).** Load the enclosing instance's layout descriptor
+// `destroyFunc@40` and, when it is non-zero (a MANAGED opaque-`T` instantiation), destroy `value` through it
+// with a `callIndirect`; a TRIVIAL instantiation (`destroyFunc@40 == 0`) is inert. This is how a shared generic
+// body drops a consumed opaque type-parameter binding — a `push`/forward feed parameter left live on some path
+// — whose destructor is not known statically (the same `destroyFunc@40` the array-create stamp
+// `appendOpaqueArrayCreate` reads, so the value is destroyed by exactly the element's own destructor). `value`
+// is a LIVE owner here (a moved-from binding's drop is skipped by `emitScopeDrops`), so unlike the array walk
+// it needs no per-slot null guard.
+function buildDropTypeParam(module StdModule)
+	var func = IrFunction.createFromStd(DropTypeParamName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doDrop = module.addBlock(func, label: b"dodrop")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let descriptor = 0 as ValueId
+	let value = 1 as ValueId
+
+	let dtor = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(dtor, addrId: descriptor, offset: LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let hasDtor = emitCmp(module, block: entry, a: dtor, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(hasDtor, thenBlockId: doDrop.id, elseBlockId: done.id))
+
+	emitElementDestructorCall(module, block: doDrop, destroy: dtor, elem: value, ids: ids)
+	module.setTerminator(doDrop, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildDropTypeParam'
 
 // --- The byte-loop builders: the runtime-polymorphic element_size lives HERE ---
 //
@@ -434,15 +478,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	let nonNull = emitCmp(module, block: body, a: elem, b: zero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doDrop.id, elseBlockId: step.id))
 
-	let dropped = ids.mint()
-	// The element destructor is a genuinely VOID `(param i64)` function (`__str_decref`/`__destruct_<T>`/
-	// `__mm_decref`/`__arr_decref`), so the call's `resultType` is `StdReturnType.void` — NOT `value(i64)`.
-	// The distinction is INVISIBLE on native (an unused result register is simply not captured) but decides
-	// the wasm `call_indirect` functype: `void` interns `(param i64)` with no result, matching the funcref's
-	// real type, where `value(i64)` interned `(param i64)(result i64)` and TRAPPED the wasm type check. The
-	// `dropped` id is the variant's required-but-dead result slot — never defined on a void call, never read.
-	// The single element-pointer argument is never a float (mask 0).
-	module.appendOp(doDrop, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
+	emitElementDestructorCall(module, block: doDrop, destroy: destroy, elem: elem, ids: ids)
 	module.setTerminator(doDrop, op: StdOp.branch(step.id))
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
@@ -452,6 +488,17 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 
 	return done
 end 'emitElementDestroyRange'
+
+// ⭐ **CALL AN ELEMENT DESTRUCTOR on `elem` through the `destroy` function pointer (P1.7).** THE one home of the
+// element-destructor register-file ABI: an element destructor is `(i64) -> void`, so its result slot is an
+// unused i64 (matching every scalar indirect call) and its single element-pointer argument is never a float
+// (mask 0). Shared by the array's per-slot destroy walk (`emitElementDestroyRange`) and the single-value
+// descriptor-gated drop (`buildDropTypeParam`, P1.7 slice 3b-v), so the two cannot drift if that ABI changes.
+// The caller has already loaded `destroy` and confirmed it non-null; this only emits the indirect call.
+function emitElementDestructorCall(module StdModule, block IrBlock, destroy ValueId, elem ValueId, ids ValueMinter)
+	let dropped = ids.mint()
+	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
+end 'emitElementDestructorCall'
 
 // ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40` (P1.7 slice 3a).** Load the array's stamped
 // element destructor and, when it is non-zero (a MANAGED-element array), DESTROY `[start, stop)` through

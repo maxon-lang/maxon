@@ -929,8 +929,32 @@ type MaxonToStdLowering
 			self.appendOpaqueArrayCreate(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'opaqueArrayCreate'
+		// A `__drop_type_param` (P1.7 slice 3b-v) arrives with ONE argument (the opaque owned value); its
+		// element destructor is not known statically, so the enclosing instance's layout descriptor is
+		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
+		// `appendOpaqueArrayCreate`'s destructor read, off the SAME `implicitLayoutValueId`.
+		if callee.equals(DropTypeParamName) 'dropTypeParam'
+			self.appendDropTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'dropTypeParam'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
 	end 'lowerRuntimeCall'
+
+	// Emit `__drop_type_param(descriptor, value)` (P1.7 slice 3b-v): prepend the CURRENT function's layout
+	// descriptor to the single `value` argument the parser emitted. The descriptor parameter is guaranteed by
+	// the parser's descriptor-need seed (a method that drops an opaque feed binding needs it, exactly as a
+	// `sizeof(T)` / opaque `X.create()` method does), so its absence here is a parser/lowering divergence — a
+	// loud bug, not a silent wrong load, matching `appendOpaqueArrayCreate`. `result` is the parser's VOID
+	// result value (a drop returns nothing), passed through so the Std op's result column stays dense.
+	function appendDropTypeParamDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if not self.hasImplicitLayout 'noLayout'
+			panic("appendDropTypeParamDescriptor: `__drop_type_param` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed (a method that drops an opaque feed binding) and this lowering disagree")
+		end 'noLayout'
+		var fullArgs = ValueIdArray.create()
+		fullArgs.push(self.implicitLayoutValueId)
+		fullArgs.append(args)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
+	end 'appendDropTypeParamDescriptor'
 
 	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__arr_create` whose result instance's element
 	// is a type parameter (P1.7 slice 3b-i)? The parser emits such a create with only `element_size`; the

@@ -914,6 +914,18 @@ export type ParamConsumeInfo
 		return try self.bits.get(index) otherwise panic("ParamConsumeInfo.isConsumed: bits.get OOB at {index} despite index < count")
 	end 'isConsumed'
 
+	// Does ANY parameter feed a type parameter (P1.7 slice 3b-v)? The whole-`feeds`-column twin of
+	// `typeParamFeedOf`'s single-index read — the descriptor-need seed asks it per method (via
+	// `ProgramSignatures.functionFeedsTypeParam`). Empty for a non-generic function, so it answers false.
+	export function feedsAnyTypeParam() returns bool
+		for i in 0 upto self.feeds.count() 'each'
+			if (try self.feeds.get(i) otherwise panic("feedsAnyTypeParam: feeds.get OOB at {i} despite i < count")).isFeed() 'feed'
+				return true
+			end 'feed'
+		end 'each'
+		return false
+	end 'feedsAnyTypeParam'
+
 	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
 	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
 	// as `isConsumed` answers `false` for its short `bits`.
@@ -1606,6 +1618,31 @@ export type ProgramSignatures
 			borrowsAll gives false
 		end 'c'
 	end 'paramIsConsumed'
+
+	// ⭐ **THE TYPE-PARAMETER FEED of `callee`'s parameter at position `index`, or `none`** (P1.7 slice 3b-v).
+	// The callee-entry twin of `paramIsConsumed`: an opaque-`T` FEED parameter (`push(item Element)` whose
+	// `item` moves into `self.items`, or a sibling forwarder the transitive fixpoint marked) is enrolled OWNED
+	// in the shared body so a double / conditional move is move-tracked and dropped once. A callee with no
+	// recorded entry, or an index past its recorded feeds, is `none` — the same borrow-default `paramIsConsumed`
+	// answers false for.
+	export function paramFeedOf(callee ByteArray, index ParamCount) returns TypeParamFeed
+		return match self.consumeOf(callee) 'c'
+			consumes(info) gives info.typeParamFeedOf(index)
+			borrowsAll gives TypeParamFeed.none
+		end 'c'
+	end 'paramFeedOf'
+
+	// ⭐ **DOES `callee` FEED ANY parameter into a type parameter?** (P1.7 slice 3b-v) — the descriptor-need
+	// seed reads this: a method that enrols an opaque feed parameter owned may DROP it on a path that does not
+	// move it (a conditional `push`/forward), and that drop reads the enclosing instance's layout descriptor
+	// `destroyFunc@40` at run time, so the method must carry the descriptor parameter. A borrow-only callee (no
+	// entry) feeds nothing.
+	export function functionFeedsTypeParam(callee ByteArray) returns bool
+		return match self.consumeOf(callee) 'c'
+			consumes(info) gives info.feedsAnyTypeParam()
+			borrowsAll gives false
+		end 'c'
+	end 'functionFeedsTypeParam'
 
 	// ⭐ **THE CALLEE'S CONSUME FACTS, or `borrowsAll`** — the door a CALL SITE asks once, then slots each
 	// argument against `info.paramNames` to decide which ones are moved. `borrowsAll` (no recorded entry) is

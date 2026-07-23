@@ -233,3 +233,159 @@ end 'main'
 ```exitcode
 0
 ```
+
+
+### Double move of an opaque managed element is use-after-move
+
+A generic method that pushes the SAME type-parameter element into `self.items` twice consumes it at the first
+push (the array owns it), so the second push is use-after-move — rejected E3102 rather than storing the value
+into two array slots that would both free it (the double-free the guard replaces). The shared body move-tracks
+the opaque element for every instantiation, so this is rejected uniformly (a type parameter is move-only — it
+carries no copy).
+
+<!-- test: double-move-is-use-after-move -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function pushTwice(item Element)
+		self.items.push(item)
+		self.items.push(item)
+	end 'pushTwice'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.pushTwice("hello")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:15:19: use of moved value 'item': its ownership moved to another binding at an earlier bind or assignment
+```
+
+### Conditionally-moved managed element is dropped, not leaked
+
+A method that pushes a consumed type-parameter element into `self.items` only on one branch leaves it LIVE on
+the other. The shared body enrols the element owned and the path-sensitive join drops it once on the un-pushed
+edge — through the runtime descriptor gate (`__drop_type_param` reads the instance's `destroyFunc@40`) — so the
+String is freed exactly once and the false branch does not leak.
+
+<!-- test: conditional-move-leak-free -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function pushIf(item Element, flag bool)
+		if flag 'maybe'
+			self.items.push(item)
+		end 'maybe'
+	end 'pushIf'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.pushIf("hello", flag: false)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Conditionally-moved managed element on the taken branch is owned by the array
+
+The same method with the branch TAKEN moves the element into the array, which owns and frees it once. The join
+marks it moved on the pushed edge, so no second drop is emitted.
+
+<!-- test: conditional-move-into-array -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function pushIf(item Element, flag bool)
+		if flag 'maybe'
+			self.items.push(item)
+		end 'maybe'
+	end 'pushIf'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.pushIf("hello", flag: true)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Conditional move on a trivial element is inert
+
+The SAME conditional-push shape on a TRIVIAL element (`Container with SmallInt`) shares the generic body's
+runtime drop gate, which reads the instance's `destroyFunc@40` as 0 and destroys nothing — so an int element
+left un-pushed owns no heap and the program exits 0, byte-for-byte the same shared body the managed
+instantiation runs.
+
+<!-- test: trivial-conditional-move-inert -->
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias SmallInt = int(0 to 100)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function pushIf(item Element, flag bool)
+		if flag 'maybe'
+			self.items.push(item)
+		end 'maybe'
+	end 'pushIf'
+end 'Container'
+
+typealias IntContainer = Container with SmallInt
+
+function main() returns ExitCode
+	var ic = IntContainer.create()
+	ic.pushIf(10, flag: false)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
