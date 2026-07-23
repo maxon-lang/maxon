@@ -55,8 +55,12 @@ public sealed class DebugInfoBuilder {
     foreach (var func in module.Functions) {
       var start = labelOffset(func.Name);
       if (start < 0) continue;
-      int idx = sortedOffsets.FindIndex(o => o > start);
-      int end = idx >= 0 ? sortedOffsets[idx] : codeLen;
+
+      // A function ends where the NEXT symbol begins: the first offset strictly greater than `start`.
+      // The offsets are sorted, so that boundary is a binary search, not a scan — the difference
+      // between O(functions x symbols) and O(functions x log symbols).
+      int idx = MxdbgFormat.PartitionPoint(sortedOffsets.Count, i => sortedOffsets[i] <= start);
+      int end = idx < sortedOffsets.Count ? sortedOffsets[idx] : codeLen;
       AddFunction(func.Name, start, end, func.ParamTypes.Count);
     }
   }

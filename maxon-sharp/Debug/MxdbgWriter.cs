@@ -113,22 +113,15 @@ public sealed class MxdbgWriter {
   private static uint HeaderEnd() => MxdbgFormat.HeaderSize;
 
   /// The [first,count) window of sorted line rows whose code offset lies in this function's range.
-  /// The line table is sorted, so a function's rows are contiguous — one linear pass finds the window.
+  /// The line table is sorted by code offset, so a function's rows are the contiguous block
+  /// `[lower(CodeStart), lower(CodeEnd))` — two binary searches, not a full scan of the table per
+  /// function. That turns the whole line-span pass from O(functions x lines) into O(functions x log
+  /// lines). An empty window reports first=0 to match the all-zero record the scan wrote.
   private static (uint first, uint count) FunctionLineSpan(List<LineRec> sortedLines, FuncRec f) {
-    uint first = 0;
-    uint count = 0;
-    bool started = false;
-    for (int i = 0; i < sortedLines.Count; i++) {
-      var off = sortedLines[i].CodeOffset;
-      if (off >= f.CodeStart && off < f.CodeEnd) {
-        if (!started) {
-          first = (uint)i;
-          started = true;
-        }
-        count++;
-      }
-    }
-    return (first, count);
+    int n = sortedLines.Count;
+    int lo = MxdbgFormat.PartitionPoint(n, i => sortedLines[i].CodeOffset < f.CodeStart);
+    int hi = MxdbgFormat.PartitionPoint(n, i => sortedLines[i].CodeOffset < f.CodeEnd);
+    return hi > lo ? ((uint)lo, (uint)(hi - lo)) : (0u, 0u);
   }
 
   private void WriteHeader(List<byte> buf, ulong buildId, uint tripleOff, uint tripleLen,

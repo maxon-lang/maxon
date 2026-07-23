@@ -82,6 +82,27 @@ public static class MxdbgFormat {
     return h;
   }
 
+  /// Index of the first position in `[0, count)` for which <paramref name="inLeftPartition"/> is
+  /// false — the classic partition point, for a monotone predicate that is true over a prefix and
+  /// false thereafter. Returns <paramref name="count"/> when the predicate holds throughout.
+  /// O(log count).
+  ///
+  /// Both boundary searches the debug builder needs over a sorted table — a function's `.text` end
+  /// (first symbol offset past its start) and a function's line-row window (first row at/after each
+  /// code bound) — reduce to this one primitive, so neither hand-rolls the loop. It replaces the
+  /// linear scans that made function registration O(functions x symbols) and the line-span lookup
+  /// O(functions x lines).
+  internal static int PartitionPoint(int count, Func<int, bool> inLeftPartition) {
+    int lo = 0;
+    int hi = count;
+    while (lo < hi) {
+      int mid = (lo + hi) >>> 1;
+      if (inLeftPartition(mid)) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
   internal static void Put(List<byte> buf, uint value) {
     Span<byte> tmp = stackalloc byte[FieldSize];
     BinaryPrimitives.WriteUInt32LittleEndian(tmp, value);
