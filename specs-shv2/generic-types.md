@@ -453,3 +453,77 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: opaque-field-reassign-trivial-instantiation-inert -->
+Reassigning a bare opaque `T` field inside a shared generic method body is INERT when every instantiation
+is trivial (`Box with SmallInt`): the opaque word owns no heap, so the write is a sound scalar plain store
+with no drop — unchanged from before P1.7 slice 3b-vii, and exercised on all targets.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+typealias SmallInt = int(0 to 100)
+typealias IntBox = Box with SmallInt
+function main() returns ExitCode
+	var b = IntBox.create(7)
+	b.replace(9)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.reassign-managed-opaque-field-in-generic-method -->
+Reassigning a bare opaque `T` field INSIDE a shared generic method body (`self.saved = next`) is rejected
+cleanly when an instantiation makes it MANAGED (`Box with String`): dropping the field's old opaque value
+would need the descriptor-gated single-value drop runtime, which currently installs only off the array floor,
+so an array-free generic struct cannot yet emit it. This was a reachable `0xC0000005` fault before the check.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+	export function replace(next Element)
+		self.saved = next
+	end 'replace'
+end 'Box'
+typealias StringBox = Box with String
+function main() returns ExitCode
+	var b = StringBox.create("alpha")
+	b.replace("beta")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:8: Unsupported: reassigning the bare opaque type-parameter field 'saved' of 'Box', whose element type owns managed heap — dropping its old value needs the descriptor-gated single-value drop runtime (installed only for programs that use an `Array`) or the concrete managed-field drop path (which currently leaks a managed struct field). A trivial element type is reassignable; hold a managed value in an `Array`-typed field instead
+```
+
+<!-- test: error.reassign-managed-opaque-field-concrete-instance -->
+The same reassignment on a CONCRETE instance (`b.saved = "beta"` where `b` is `Box with String`) is rejected
+too: its old String would drop through the concrete managed-field path, which currently leaks. This was a
+reachable `0xC0000005` fault at the call site before the check.
+```maxon
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+end 'Box'
+typealias StringBox = Box with String
+function main() returns ExitCode
+	var b = StringBox.create("alpha")
+	b.saved = "beta"
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:4: Unsupported: reassigning the bare opaque type-parameter field 'saved' of 'Box', whose element type owns managed heap — dropping its old value needs the descriptor-gated single-value drop runtime (installed only for programs that use an `Array`) or the concrete managed-field drop path (which currently leaks a managed struct field). A trivial element type is reassignable; hold a managed value in an `Array`-typed field instead
+```

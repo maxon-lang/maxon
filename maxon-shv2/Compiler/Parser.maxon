@@ -16125,6 +16125,28 @@ export type Parser
 		try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in field '{String.from(anchor.value)}' of '{String.from(layout.name)}': {CapturingClosureEscapeSuffix}", tok: anchor)
 
 		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+
+		// ⛔ **REASSIGNING A BARE OPAQUE `T` FIELD WHOSE ELEMENT IS MANAGED IS NOT YET SUPPORTED (P1.7 slice
+		// 3b-vii).** A `typeParameter` field reassignment must DROP its old value first, and when the element is a
+		// managed type the correct drop is unavailable here for two independent, out-of-scope reasons — so it is
+		// rejected cleanly rather than left to fault (`0xC0000005`, the reachable crash this check closes):
+		//   • a SHARED generic body (box is `self`, a `structRef`) would drop the opaque word through the
+		//     descriptor-gated single-value drop `__drop_type_param`, which installs ONLY off the array floor
+		//     (`installArrayRuntime`, under `usesArray`) — an array-free generic struct never pulls it in, so the
+		//     drop would fail to link (`resolveCallFixups`); and
+		//   • a CONCRETE instance (box is a `genericInstance`) would retype to the substituted element and drop it
+		//     through the concrete managed path, but that path leaks a managed STRUCT/UNION field's old value (it
+		//     drops through the trivial `__mm_decref`, not `__destruct_<T>` — a pre-existing defect that also
+		//     affects non-generic `p.f = …`).
+		// Both are their own follow-ups. A TRIVIAL element (`Box with SmallInt`, `Box with Point`) owns no heap:
+		// the old value needs no drop, so the plain store below is sound and UNCHANGED from before this slice. The
+		// gate is per-CONCRETE-instance where the instance is known, and over ALL instantiations in a shared body
+		// (which compiles once for every instantiation). An opaque `Array`-typed field mutator (`self.items.push`)
+		// already works and is unaffected.
+		if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter and self.opaqueFieldReassignIsManaged(box, layout: layout, index: index, fieldType: fieldType) 'opaqueManagedFieldReassign'
+			throw ParseError.unsupported("reassigning the bare opaque type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}', whose element type owns managed heap — dropping its old value needs the descriptor-gated single-value drop runtime (installed only for programs that use an `Array`) or the concrete managed-field drop path (which currently leaks a managed struct field). A trivial element type is reassignable; hold a managed value in an `Array`-typed field instead", line: anchor.line, column: anchor.column)
+		end 'opaqueManagedFieldReassign'
+
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
 		if not payloadClassIsManaged(class) 'scalarField'
 			self.emitFieldStore(box, layout: layout, index: index, value: value, range: range)
@@ -16136,6 +16158,23 @@ export type Parser
 		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, anchor: anchor, range: range)
 		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
 	end 'emitFieldWrite'
+
+	// Is the bare opaque `T` field being reassigned MANAGED for the box at hand (P1.7 slice 3b-vii)? A CONCRETE
+	// instance (`b.saved = …`) knows its exact argument, so the field's managed-ness is read off THIS instance
+	// (`genericInstanceFieldIsManaged`); a SHARED generic body (box is `self`, a `structRef`) compiles once for
+	// every instantiation, so it is managed when ANY instantiation makes it so
+	// (`genericTypeFieldHasManagedInstantiation`). Only these two box shapes reach a `typeParameter` field write —
+	// a concrete instance or the enclosing self — so an unexpected tag is an internal invariant break.
+	function opaqueFieldReassignIsManaged(box ValueId, layout StructLayout, index FieldIndex, fieldType MaxonType) returns bool
+		let tag = self.tagOf(box)
+		if tag == ValueTypeTag.genericInstance 'concrete'
+			return self.signatures.genericInstanceFieldIsManaged(self.valueNameId(box), index: index)
+		end 'concrete'
+		if tag == ValueTypeTag.structRef 'sharedBody'
+			return self.signatures.genericTypeFieldHasManagedInstantiation(layout.name, position: typeNameIdOf(fieldType))
+		end 'sharedBody'
+		panic("opaqueFieldReassignIsManaged: a `typeParameter` field write has a box of tag {tag.name} — only a concrete generic instance (`b.f = …`) or the enclosing self (`self.f = …`, a structRef) reaches an opaque field")
+	end 'opaqueFieldReassignIsManaged'
 
 	// Declare every field of the enclosing type as a self-field alias, so a bare `width` inside
 	// `function area()` of `type Rect` resolves to `self.width`. Called at instance-method entry

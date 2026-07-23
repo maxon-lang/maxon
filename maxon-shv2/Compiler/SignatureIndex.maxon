@@ -2948,6 +2948,28 @@ export type ProgramSignatures
 		return (try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeArgIsOwned: enumTypes.contains({String.from(name)}) is true but get failed")).isBoxed()
 	end 'typeArgIsOwned'
 
+	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS TYPE PARAMETER AT `position`
+	// MANAGED (P1.7 slice 3b-vii)?** A shared generic body reassigns a bare `T` field opaquely; the OLD value's
+	// descriptor-gated drop (`__drop_type_param`) is needed ONLY when some instantiation makes that field
+	// managed (`Box with String`), and is a sound scalar plain store — no drop — when every instantiation is
+	// trivial (`Box with SmallInt`). This is the exact gate that tells a crash-prone managed reassignment (the
+	// old value would be leaked and a borrow double-freed by the box's destructor: `0xC0000005` — rejected until
+	// the single-value drop runtime is installable off the array floor) from an all-trivial one (left to the
+	// unchanged plain store). Enumerates the whole instance registry, matching base NAME and reading each
+	// instance's argument at `position` through the SAME `typeArgIsOwned` boundary the box's own per-field drop
+	// gate (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
+	export function genericTypeFieldHasManagedInstantiation(baseName ByteArray, position TypeParamId) returns bool
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
+				let args = self.genericInstances.instanceArgs(id)
+				if position < args.count() and self.typeArgIsOwned(try args.get(position) otherwise panic("ProgramSignatures.genericTypeFieldHasManagedInstantiation: instanceArgs.get OOB at {position} despite the range guard")) 'managed'
+					return true
+				end 'managed'
+			end 'sameBase'
+		end 'eachInstance'
+		return false
+	end 'genericTypeFieldHasManagedInstantiation'
+
 	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
 	// A type-PARAMETER field is dropped iff its substituted argument OWNS managed heap (`typeArgIsOwned` — a
 	// trivial `Box with Point` borrows its `Point`); a DIRECT field (a base struct's own `tag as String`) is

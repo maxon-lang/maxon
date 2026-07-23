@@ -1,0 +1,16 @@
+// Test: error.reassign-managed-opaque-field-concrete-instance
+type Box uses Element
+	export var saved as Element
+	export static function create(first Element) returns Self
+		return Self{ saved: first }
+	end 'create'
+end 'Box'
+typealias StringBox = Box with String
+function main() returns ExitCode
+	var b = StringBox.create("alpha")
+	b.saved = "beta"
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:11:4: Unsupported: reassigning the bare opaque type-parameter field 'saved' of 'Box', whose element type owns managed heap — dropping its old value needs the descriptor-gated single-value drop runtime (installed only for programs that use an `Array`) or the concrete managed-field drop path (which currently leaks a managed struct field). A trivial element type is reassignable; hold a managed value in an `Array`-typed field instead
