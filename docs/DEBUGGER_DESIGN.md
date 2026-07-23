@@ -30,10 +30,17 @@ Everything below follows from these. If a design choice threatens either, the ch
 
 ### 1. Identical executables
 
-**`maxon build foo.maxon` and `maxon build --debug-info foo.maxon` produce a byte-identical
-`foo.exe`.** There is no separate "debug build". The `--debug-info` flag controls *one* thing: whether
-the detachable **`foo.exe.mxdbg` sidecar** is *also* written next to the binary. The only artifact
-difference between a production build and a debug-info build is the presence of that sidecar *file*.
+**`maxon build foo.maxon` and `maxon build --no-debug-info foo.maxon` produce a byte-identical
+`foo.exe`.** There is no separate "debug build". The sidecar is **on by default** (opt-out): a normal
+build writes the detachable **`foo.exe.mxdbg` sidecar** next to the binary, and `--no-debug-info`
+suppresses it (for clean/release output or a measured-hot build). Either way the `foo.exe` is
+identical — the flag controls *one* thing, whether the sidecar *file* is written, never a byte of code.
+
+Default-on holds only while it is cheap. The file write is trivial (the sidecar is built from data
+codegen already has); the one cost paid on every build is per-op source-span capture during
+parse/lowering. That cost is **measured with `run_scale_test`** before default-on is locked in — if it
+proves material, `--no-debug-info` must fully skip span capture (not merely the file write), or the
+default reverts to opt-in. Measurement decides, not assertion.
 
 Every binary already contains the debug agent (see below); it is dormant. Debug information is
 *observed and described*, never *injected* — the sidecar is a pure description of the already-emitted
@@ -164,10 +171,11 @@ Every change here is passive metadata capture. `.text` must stay byte-identical 
 - **Always emit the dormant agent + shared-memory substrate** into every binary, unconditionally. It
   is hook-free and dark unless `MAXON_DEBUG` is set. DebugStream's per-site event hooks stay
   `--debugstream`-gated. Embed the tiny `__build_id` (hash of `.text`).
-- **Emit the sidecar** (`--debug-info` / `-g` only), as a separate file kept out of the PE/Mach-O.
-  `BuildConfig.debug_info` already flows from `stdlib/Build.maxon` to the C# `BuildConfig.Debug_info`
-  but is currently never read — read it, and add a `--debug-info` flag in `ParseOptions` mirroring
-  `--emit-ir`. It gates only the sidecar file.
+- **Emit the sidecar by default**, as a separate file kept out of the PE/Mach-O; `--no-debug-info`
+  opts out and (once measured) skips span capture entirely. `BuildConfig.debug_info` already flows
+  from `stdlib/Build.maxon` to the C# `BuildConfig.Debug_info` but is currently never read — read it,
+  flip its default to true, and add a `--no-debug-info` flag in `ParseOptions`. It gates only whether
+  the sidecar is produced, never a code byte.
 - **`--no-debug-agent`** — a hardened-build opt-out that omits the agent; the one case where two
   binaries differ.
 - **Retire the COFF symbol table.** Stop emitting it. Nothing in-tree reads it (there is no linker;
@@ -309,7 +317,7 @@ first; port the lessons, not the cost.
 | # | Milestone | Acceptance |
 |---|-----------|-----------|
 | P0 | This design doc + format spec | doc committed |
-| P1 | Source spans; `.mxdbg` header/strings/files/funcs/line table + `__build_id`; retire COFF; `maxon debug --dump-info`/`--symbolize` | exe byte-identical with/without `-g`; PC↔file:line round-trips; suite green |
+| P1 | Source spans; `.mxdbg` header/strings/files/funcs/line table + `__build_id`; retire COFF; sidecar default-on (`--no-debug-info` opts out) once scale-test clears the cost; `maxon debug --dump-info`/`--symbolize` | exe byte-identical with/without `--no-debug-info`; PC↔file:line round-trips; span-capture cost measured (scale-test); suite green |
 | P2 | Locals loclists + type table | dump shows each local's location(s)+type |
 | P3 | Always-emit dormant agent + substrate; activation/handler/breakpoints/continue/stop; driver; rich REPL core with auto source-context | agent dark when unset; breakpoint hits; source window + GT-aware backtrace render on stop |
 | P4 | Stepping + per-GT park/resume; value trees; fuzzy targeting + completion; conditional breakpoints; `threads`/`gt`; batch/JSON; DebugStream correlation | step + navigate a value tree by path; `break … if`; break one GT while others run |
