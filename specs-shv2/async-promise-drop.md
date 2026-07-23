@@ -295,6 +295,33 @@ end 'main'
 7
 ```
 
+<!-- test: async-promise-drop.await-rearmed-loop-var -->
+<!-- targets: x64-windows -->
+AWAITING a promise `var` re-armed INSIDE A LOOP, from AFTER the loop — the loop-EXIT phi (P1.5-B2 #88; this
+closes residual #89's E2015 over-rejection of an `await` on a block-arg-carried promise). `p` is re-armed each
+iteration (dropping the previous thread); after the loop `await p` targets the loop-exit phi, whose promise mark
+and awaited result type are recovered by tracing the phi's incoming `async` calls. It returns the LAST spawn's
+result (5), every intermediate thread dropped and the live count balanced. Before #88 the phi-carried promise
+was rejected E2015 ("not a promise") at the `await`.
+```maxon
+function five() returns int
+	return 5
+end 'five'
+
+function main() returns ExitCode
+	var p = async five()
+	var i = 0
+	while i < 3 'loop'
+		p = async five()
+		i = i + 1
+	end 'loop'
+	return (await p) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
 <!-- test: async-promise-drop.error.rearm-aliased-thread -->
 Re-arming a promise `var` whose thread is still named by a LIVE ALIAS is refused (Finding 2): `let q = p` gives
 the thread a second name, so re-arming `p` would drop it while `q` still names it, and `await q` would then
