@@ -1,14 +1,14 @@
 // Test: async-subprocess.multi-concurrent
 function c1() returns int
-	return runProcess("cmd /c exit 1")
+	return try runProcess("cmd /c exit 1") otherwise 99
 end 'c1'
 
 function c2() returns int
-	return runProcess("cmd /c exit 2")
+	return try runProcess("cmd /c exit 2") otherwise 99
 end 'c2'
 
 function c3() returns int
-	return runProcess("cmd /c exit 3")
+	return try runProcess("cmd /c exit 3") otherwise 99
 end 'c3'
 
 function main() returns ExitCode
@@ -55,6 +55,15 @@ func @c1 {
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -67,6 +76,15 @@ func @c2 {
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_3]
     x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -79,6 +97,15 @@ func @c3 {
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_5]
     x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

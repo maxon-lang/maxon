@@ -8172,15 +8172,16 @@ export type Parser
 	// answers `false` for it and the check used to wave every non-throwing builtin through: `try arr.count()`
 	// and `try print("x")` compiled, and the desugar then branched on an error-flag register the callee never
 	// wrote — a `try` that takes its error path on whatever the ABI left in R10. The reference compiler
-	// rejects both. `isThrowingArrayRuntimeCallee` is THE ONE home of "which builtin throws", and this is the
-	// exact mirror of `SemanticCheck.validatePlainCall`, which reads the SAME predicate to report the opposite
-	// mistake (E3057 — a throwing accessor called WITHOUT `try`). Neither can drift from the other.
+	// rejects both. `isThrowingRuntimeCallee` is THE ONE home of "which builtin throws" (a throwing array
+	// accessor, or `runProcess`), and this is the exact mirror of `SemanticCheck.validatePlainCall`, which reads
+	// the SAME predicate to report the opposite mistake (E3057 — a throwing builtin called WITHOUT `try`).
+	// Neither can drift from the other.
 	//
 	// A callee NO file declares is left to SemanticCheck's E3004: a `try <typo>` is an unknown function, not a
 	// non-throwing one.
 	function requireThrowingTryTarget(callee ByteArray, tryTok Token) throws ParseError
 		if isCompilerInternalCallee(callee) 'builtin'
-			if isThrowingArrayRuntimeCallee(callee) 'throwingAccessor'
+			if isThrowingRuntimeCallee(callee) 'throwingAccessor'
 				return
 			end 'throwingAccessor'
 			throw ParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)

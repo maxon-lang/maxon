@@ -1,6 +1,6 @@
-// Test: async-subprocess.store-overflow-aborts
+// Test: async-subprocess.store-overflow-caught
 function child() returns int
-	return runProcess("cmd /c exit 1")
+	return try runProcess("cmd /c exit 1") otherwise 88
 end 'child'
 
 function main() returns ExitCode
@@ -69,11 +69,11 @@ function main() returns ExitCode
 	let p62 = async child()
 	let p63 = async child()
 	let p64 = async child()
-	let r = await p00
+	let r = await p64
 	return r as ExitCode
 end 'main'
 ---
-ExitCode: 70
+ExitCode: 88
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -107,6 +107,15 @@ func @child {
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 88
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -122,9 +131,6 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 520
-    x64.leaRegFunc rcx, [rip + child]
-    x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
     x64.leaRegFunc rcx, [rip + child]
     x64.callDirect __gt_spawn
     x64.storeSlotReg slot0, r8
@@ -280,9 +286,6 @@ func @main {
     x64.storeSlotReg slot50, r8
     x64.leaRegFunc rcx, [rip + child]
     x64.callDirect __gt_spawn
-    x64.storeSlotReg slot51, r8
-    x64.leaRegFunc rcx, [rip + child]
-    x64.callDirect __gt_spawn
     x64.storeSlotReg slot52, r8
     x64.leaRegFunc rcx, [rip + child]
     x64.callDirect __gt_spawn
@@ -307,6 +310,9 @@ func @main {
     x64.storeSlotReg slot59, r8
     x64.leaRegFunc rcx, [rip + child]
     x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rcx, [rip + child]
+    x64.callDirect __gt_spawn
     x64.movRegReg r12, r8
     x64.leaRegFunc rcx, [rip + child]
     x64.callDirect __gt_spawn
@@ -317,9 +323,11 @@ func @main {
     x64.leaRegFunc rcx, [rip + child]
     x64.callDirect __gt_spawn
     x64.movRegReg r15, r8
-    x64.movRegReg rcx, rbx
+    x64.leaRegFunc rcx, [rip + child]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
     x64.callDirect __gt_await
-    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot51, r8
     x64.movRegReg rcx, r15
     x64.callDirect __gt_promise_drop
     x64.movRegReg rcx, r14
@@ -327,6 +335,8 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __gt_promise_drop
     x64.movRegReg rcx, r12
+    x64.callDirect __gt_promise_drop
+    x64.movRegReg rcx, rbx
     x64.callDirect __gt_promise_drop
     x64.loadRegSlot rcx, slot59
     x64.callDirect __gt_promise_drop
@@ -343,8 +353,6 @@ func @main {
     x64.loadRegSlot rcx, slot53
     x64.callDirect __gt_promise_drop
     x64.loadRegSlot rcx, slot52
-    x64.callDirect __gt_promise_drop
-    x64.loadRegSlot rcx, slot51
     x64.callDirect __gt_promise_drop
     x64.loadRegSlot rcx, slot50
     x64.callDirect __gt_promise_drop
@@ -448,7 +456,7 @@ func @main {
     x64.callDirect __gt_promise_drop
     x64.loadRegSlot rcx, slot0
     x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, rbx
+    x64.loadRegSlot r8, slot51
     x64.epilogue 520
     x64.popReg r15
     x64.popReg r14

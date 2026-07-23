@@ -1,10 +1,11 @@
-// Test: async-subprocess.spawn-failure-aborts
+// Test: async-subprocess.spawn-failure-recover-continue
 function main() returns ExitCode
-	let code = runProcess("nonexistentprogram_xyz_12345")
-	return code as ExitCode
+	let bad = try runProcess("nonexistentprogram_xyz_67890") otherwise 0
+	let good = try runProcess("cmd /c exit 9") otherwise 0
+	return (bad + good) as ExitCode
 end 'main'
 ---
-ExitCode: 1
+ExitCode: 9
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -35,10 +36,35 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect __gt_process_run
-    x64.epilogue 32
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegReg r8, rbx, rax
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

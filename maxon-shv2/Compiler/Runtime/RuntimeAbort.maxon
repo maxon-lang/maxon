@@ -21,20 +21,11 @@
 // ⭐ **HOW TO PICK THE NEXT ONE: take the next free number ABOVE 70.** The band below is not ours —
 // 0-69 are ordinary program exit codes (a Maxon `main` returns one), and the subprocess specs' children
 // already use 1/2/3/4/5/25/45/123 — so an abort down there is indistinguishable from a program that
-// simply returned. `subprocessSpawnFailed` is the one exception and it is deliberate (see its note).
+// simply returned. (`runProcess`'s two failures used to break that rule with aborts 1 and 70; since
+// P1.5 #93 they THROW `SubprocessError` and the caller catches them, so no abort sits below 71 any more.)
 // 101 and 134 are the two the compiler already spends outside this band and they are declared here so
 // the enum's own duplicate check covers them.
 export enum RuntimeAbort
-	// `__gt_process_run`: `CreateProcessA` FAILED (a command whose first token is not a runnable
-	// executable). ⚠ DELIBERATELY 1, not a code from the band: this abort stands in for the child that
-	// never started, and 1 is what a shell reads as "that command failed". Pinned by
-	// `async-subprocess.spawn-failure-aborts`.
-	subprocessSpawnFailed = 1
-	// `__gt_proc_add`: the 64-slot process store is FULL (a program parks more children than
-	// `ProcStoreCapacity`, beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`). Aborting is the
-	// honest safe response to hitting the seed's documented concurrency ceiling — the alternative is a
-	// write past the parallel arrays. Pinned by `async-subprocess.store-overflow-aborts`.
-	processStoreOverflow = 70
 	// `__arr_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
 	arrayCapacityOverflow = 71
@@ -47,9 +38,10 @@ export enum RuntimeAbort
 	arrayNegativeResize = 73
 	// `__arr_create`: a 0 element size, which is a COMPILER bug rather than a program's (a concrete
 	// literal is never 0 and a descriptor read never yields 0) — it would make `__arr_grow` allocate a
-	// zero-byte buffer and corrupt. ⚠ It was 70 until this registry landed, colliding with
-	// `processStoreOverflow`; it is the one that moved because the other is spec-pinned and this is
-	// unreachable from any source program.
+	// zero-byte buffer and corrupt. ⚠ It was 70 until this registry landed, colliding with the
+	// process-store-overflow abort that then held 70 (since P1.5 #93 that path throws
+	// `SubprocessError.storeOverflow` instead); this is the one that moved because it is unreachable from
+	// any source program.
 	arrayElementSizeZero = 74
 	// `__mm_leak_check` (the ONE OS-exit gate): a green thread was spawned but neither AWAITED nor DROPPED —
 	// `__gt_live_count` was non-zero at exit (or, negative, an over-reclaim). A GT struct + its seed stack are

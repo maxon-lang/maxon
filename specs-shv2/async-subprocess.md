@@ -1,7 +1,7 @@
 ---
 feature: async-subprocess
 status: stable
-keywords: [subprocess, process, spawn, async, await, runProcess, green-threads, scheduler, netpoll, yield, concurrency]
+keywords: [subprocess, process, spawn, async, await, runProcess, green-threads, scheduler, netpoll, yield, concurrency, throws, try, SubprocessError]
 category: concurrency
 ---
 
@@ -14,9 +14,15 @@ thread** while the child runs, and returns the child's integer exit code once it
 wait: the thread parks on the child, hands control back to the scheduler, and RESUMES with its exit code once the
 child has exited — so other green threads run while a child is pending.
 
+`runProcess` is a **throwing** builtin (P1.5 #93): it throws `SubprocessError` and so must be called under `try`,
+exactly as a throwing array accessor is. It rides the same dual-register error ABI (`errorReturn`) an ordinary
+throwing call uses — the exit code in R8, the error flag in R10 — so `try runProcess(cmd) otherwise <handler>`
+catches the two failure paths (`spawnFailed`, `storeOverflow`) that used to abort the process, and a program can
+recover from them instead of dying.
+
 ```text
 function runChild() returns int
-	return runProcess("cmd /c exit 3")
+	return try runProcess("cmd /c exit 3") otherwise 99
 end 'runChild'
 
 function main() returns ExitCode
@@ -34,20 +40,23 @@ thread's child is still running.
 
 `runProcess` works from the main thread (`GT0`) and from a spawned `async` thread alike. Its argument is a
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
-an integer (the exit code), so — unlike `sleep` — it may be used in value position.
+an integer (the exit code), so — unlike `sleep` — it may be used in value position (under `try`).
 
-If the command names no runnable executable (`CreateProcessA` fails outright), `runProcess` aborts the process
-with exit code 1 rather than parking on a non-existent child — a deterministic fatal error, never a hang.
+If the command names no runnable executable (`CreateProcessA` fails outright), `runProcess` throws
+`SubprocessError.spawnFailed` rather than parking on a non-existent child — a deterministic error the caller
+catches, never a hang. Parking more than the store's 64-slot capacity concurrently throws
+`SubprocessError.storeOverflow` rather than corrupting the parallel arrays.
 
 ## Tests
 
 <!-- test: async-subprocess.exit-code -->
 <!-- targets: x64-windows -->
 A spawned green thread runs a child that exits 3; the thread parks on the child (yielding), resumes once the child
-exits, and returns the exit code, which becomes the program's exit code.
+exits, and returns the exit code, which becomes the program's exit code. The `runProcess` succeeds, so the
+`otherwise` fallback is never taken.
 ```maxon
 function runChild() returns int
-	return runProcess("cmd /c exit 3")
+	return try runProcess("cmd /c exit 3") otherwise 99
 end 'runChild'
 
 function main() returns ExitCode
@@ -66,11 +75,11 @@ Two children run in sequence (spawn, await, spawn, await) with distinct exit cod
 read back independently and combined, proving no cross-talk between the two parked-then-resumed threads.
 ```maxon
 function childA() returns int
-	return runProcess("cmd /c exit 4")
+	return try runProcess("cmd /c exit 4") otherwise 99
 end 'childA'
 
 function childB() returns int
-	return runProcess("cmd /c exit 5")
+	return try runProcess("cmd /c exit 5") otherwise 99
 end 'childB'
 
 function main() returns ExitCode
@@ -94,15 +103,15 @@ time). Each exit code is read back into its own digit, so `123` proves all three
 right handle-to-thread mapping and no cross-talk.
 ```maxon
 function c1() returns int
-	return runProcess("cmd /c exit 1")
+	return try runProcess("cmd /c exit 1") otherwise 99
 end 'c1'
 
 function c2() returns int
-	return runProcess("cmd /c exit 2")
+	return try runProcess("cmd /c exit 2") otherwise 99
 end 'c2'
 
 function c3() returns int
-	return runProcess("cmd /c exit 3")
+	return try runProcess("cmd /c exit 3") otherwise 99
 end 'c3'
 
 function main() returns ExitCode
@@ -130,7 +139,7 @@ that blocked the single thread on the child would instead produce `12`.
 var order = 0
 
 function slow() returns int
-	let c = runProcess("cmd /c ping -n 2 127.0.0.1 >nul")
+	let c = try runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -160,7 +169,7 @@ Robustness: twenty-five spawned threads each run a child that exits 1, awaited i
 onto the free-list). The sum proves all twenty-five ran to completion with no crash, no use-after-free, and no leak.
 ```maxon
 function child() returns int
-	return runProcess("cmd /c exit 1")
+	return try runProcess("cmd /c exit 1") otherwise 99
 end 'child'
 
 function main() returns ExitCode
@@ -190,7 +199,7 @@ before each spawn (the failure sentinel) and the exit-code slot is re-zeroed bef
 (a clean i64 read); the `__gt_live_count` gate stays clean, so a clean exit proves the reuse leaked nothing.
 ```maxon
 function child() returns int
-	return runProcess("cmd /c exit 1")
+	return try runProcess("cmd /c exit 1") otherwise 99
 end 'child'
 
 function main() returns ExitCode
@@ -209,34 +218,54 @@ end 'main'
 50
 ```
 
-<!-- test: async-subprocess.spawn-failure-aborts -->
+<!-- test: async-subprocess.spawn-failure-caught -->
 <!-- targets: x64-windows -->
-A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle.
-The runtime detects it and aborts with exit code 1 rather than parking on the null handle — which would busy-spin
-the netpoller forever. A deterministic fatal error, never a hang.
+A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle. The
+runtime now THROWS `SubprocessError.spawnFailed` (P1.5 #93) rather than aborting the process — so the direct
+`try runProcess(bad) otherwise 42` on GT0 catches it and returns the fallback 42. Before #93 this aborted with exit
+1; now the program runs to a normal return, proving the spawn failure is recoverable, not fatal.
 ```maxon
 function main() returns ExitCode
-	let code = runProcess("nonexistentprogram_xyz_12345")
+	let code = try runProcess("nonexistentprogram_xyz_12345") otherwise 42
 	return code as ExitCode
 end 'main'
 ```
 ```exitcode
-1
+42
 ```
 
-<!-- test: async-subprocess.store-overflow-aborts -->
+<!-- test: async-subprocess.spawn-failure-recover-continue -->
+<!-- targets: x64-windows -->
+Recovery leaves the scheduler CONSISTENT: after a caught `spawnFailed` (a command that cannot start), a SECOND
+`runProcess` of a VALID command still spawns, parks and returns its exit code. `bad` catches the spawn failure and
+falls back to 0; `good` runs `cmd /c exit 9` normally. `0 + 9 = 9` proves the caught error did not leave the process
+store, the netpoller or the current GT in a broken state.
+```maxon
+function main() returns ExitCode
+	let bad = try runProcess("nonexistentprogram_xyz_67890") otherwise 0
+	let good = try runProcess("cmd /c exit 9") otherwise 0
+	return (bad + good) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: async-subprocess.store-overflow-caught -->
 <!-- targets: x64-windows -->
 Parking more than the store's capacity (64, `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`) children
 concurrently must NOT write past the 64-slot parallel arrays. Sixty-five children are spawned as LIVE promises
-before any await (since P1.5-B2 #88 a DISCARDED promise is dropped-cancelled, so the children must be kept alive
-by distinct bindings); `await p00` then drives them all — each `child` parks on the process store — and the 65th
-park exceeds the 64 slots, so `__gt_proc_add` aborts with exit code 70 (`RuntimeAbort.processStoreOverflow`)
-rather than corrupt the heap — a documented, safe hard bound. The un-awaited promises' drops are emitted but never
-reached (the abort fires mid-drive). This is heavier than the other cases (~64 real child spawns before the abort)
+before any await (since P1.5-B2 #88 a DISCARDED promise is dropped-cancelled, so the children must be kept alive by
+distinct bindings). `await p64` drives them in run-queue order: the first sixty-four (`p00`..`p63`) each park on the
+process store (slots 0..63), and the sixty-fifth park (`p64`) finds the store full — so `__gt_process_run` THROWS
+`SubprocessError.storeOverflow` (P1.5 #93) rather than aborting with exit 70. `p64`'s `child` catches it via
+`otherwise 88` and completes with 88, which `await p64` returns — proving the 64-slot bound is now a RECOVERABLE
+error, not a fatal abort. The other sixty-four promises are still parked at scope exit and are dropped-cancelled
+(#88), so the live count balances. This is heavier than the other cases (~64 real child spawns before the overflow)
 because it is the regression test for a memory-safety guard.
 ```maxon
 function child() returns int
-	return runProcess("cmd /c exit 1")
+	return try runProcess("cmd /c exit 1") otherwise 88
 end 'child'
 
 function main() returns ExitCode
@@ -305,12 +334,12 @@ function main() returns ExitCode
 	let p62 = async child()
 	let p63 = async child()
 	let p64 = async child()
-	let r = await p00
+	let r = await p64
 	return r as ExitCode
 end 'main'
 ```
 ```exitcode
-70
+88
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->
@@ -324,4 +353,19 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:3:2: 'runProcess' requires a String, but its argument is int
+```
+
+<!-- test: async-subprocess.error.bare-call-requires-try -->
+<!-- targets: x64-windows -->
+`runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its `SubprocessError` is refused (E3057) —
+the exact mirror of the throwing-array-accessor rule. A bare `runProcess` would read only the exit code (R8) and
+silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.
+```maxon
+function main() returns ExitCode
+	let code = runProcess("cmd /c exit 1")
+	return code as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3057: <fragment>:3:13: throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error
 ```

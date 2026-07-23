@@ -1,6 +1,6 @@
 // Test: async-subprocess.exit-code
 function runChild() returns int
-	return runProcess("cmd /c exit 3")
+	return try runProcess("cmd /c exit 3") otherwise 99
 end 'runChild'
 
 function main() returns ExitCode
@@ -43,6 +43,15 @@ func @runChild {
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

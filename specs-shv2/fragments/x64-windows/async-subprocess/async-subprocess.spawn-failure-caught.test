@@ -1,18 +1,7 @@
-// Test: async-promise-drop.parked-subprocess-drop-cancel
-
-function slowProc() returns int
-	return try runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
-end 'slowProc'
-
-function fast() returns int
-	return 42
-end 'fast'
-
+// Test: async-subprocess.spawn-failure-caught
 function main() returns ExitCode
-	let slow = async slowProc()
-	let q = async fast()
-	let r = await q
-	return r as ExitCode
+	let code = try runProcess("nonexistentprogram_xyz_12345") otherwise 42
+	return code as ExitCode
 end 'main'
 ---
 ExitCode: 42
@@ -42,7 +31,7 @@ data {
   __gt_cmdline_buf_cap@168 = i64 0
 }
 
-func @slowProc {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -53,46 +42,12 @@ func @slowProc {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r8, 99
+    x64.movRegImm32 r8, 42
     x64.jmp trycont
   tryok:
     x64.jmp trycont
   trycont:
     x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @fast {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 42
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegFunc rcx, [rip + slowProc]
-    x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
-    x64.leaRegFunc rcx, [rip + fast]
-    x64.callDirect __gt_spawn
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_await
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

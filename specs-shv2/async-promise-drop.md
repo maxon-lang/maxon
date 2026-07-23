@@ -196,7 +196,7 @@ independently; the program exits promptly with 42 and the live count balances to
 ```maxon
 
 function slowProc() returns int
-	return runProcess("cmd /c ping -n 3 127.0.0.1 >nul")
+	return try runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
 end 'slowProc'
 
 function fast() returns int

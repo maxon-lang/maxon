@@ -2,7 +2,7 @@
 var order = 0
 
 function slow() returns int
-	let c = runProcess("cmd /c ping -n 2 127.0.0.1 >nul")
+	let c = try runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -56,6 +56,14 @@ func @slow {
     x64.prologue 32
     x64.leaRegRdata rcx, [rip + __str_rec_1]
     x64.callDirect __gt_process_run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
     x64.leaRegGlobal rax, __data_order
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.imulRegRegImm32 rax, rax, 10
