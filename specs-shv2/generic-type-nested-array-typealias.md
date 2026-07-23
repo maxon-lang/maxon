@@ -818,3 +818,48 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:19:11: Unsupported: a `try` on an opaque type-parameter array accessor (`get`/`first`/`last`/`pop`/`remove` on an `Array with <type parameter>` field) with a VALUE `otherwise <expr>` — reconciling the borrowed/moved-out element with the fallback at the `try` continuation needs a descriptor-gated incref/copy the shared body cannot pick statically (the element is a raw scalar for a trivial instantiation and a managed pointer for another), a distinct future slice. Use a DIVERGING `otherwise` (`otherwise return`/`throw`/`panic`) instead — the plain borrow (`get`/`first`/`last`) and move-out (`pop`/`remove`) are supported that way (P1.7 slice 3b-vi-a).
 ```
+
+### Returning an OWNED moved-out opaque element is rejected
+
+`pop`/`remove` hand back an OWNED opaque element the method body drops through the descriptor-gated
+`__drop_type_param`. RETURNING that owned element out of the generic method would make the CALLER its owner, but
+a generic method's opaque `typeParameter` return type is not resolved to the instantiation's concrete type at
+the call site, so the caller neither adopts nor drops it and the moved-out element LEAKS. Returning an opaque
+`T` is a distinct future slice (symmetric to the opaque value-`otherwise` deferral); until it lands the owned
+move-out must be dropped in the body or moved back into the array (`push`), so returning it is a clean E2015.
+(A BORROWED opaque return — `return item` for a borrowed `Element` parameter — owns nothing and is unaffected.)
+
+<!-- test: return-owned-opaque-element-rejected -->
+```maxon
+typealias ExitCode = int(0 to 125)
+
+type Container uses Element
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function takeOne() returns Element
+		return try self.items.pop() otherwise panic("empty")
+	end 'takeOne'
+end 'Container'
+
+typealias StringContainer = Container with String
+
+function main() returns ExitCode
+	var sc = StringContainer.create()
+	sc.push("alpha string long enough to force a heap allocation")
+	let taken = sc.takeOne()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:3: Unsupported: returning an OWNED opaque type-parameter value — an element moved out of an `Array with <type parameter>` field by `pop`/`remove` inside a generic body. The caller cannot resolve the opaque `T` return to the instantiation's concrete type, so it would neither adopt nor drop the moved-out element and the value would leak. Returning an opaque `T` is a distinct future slice; drop the moved-out element in the method body, or move it back into the array with `push` (P1.7 slice 3b-vi-a).
+```

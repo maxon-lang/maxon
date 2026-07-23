@@ -7372,6 +7372,20 @@ export type Parser
 			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: anchor.line, column: anchor.column)
 		end 'borrowedAggregateReturn'
 
+		// ⭐ **REJECT RETURNING AN OWNED OPAQUE type-parameter value (P1.7 slice 3b-vi-a).** `pop`/`remove` on an
+		// opaque `Array with <type parameter>` field now hand back an OWNED `typeParameter` element, dropped in
+		// the method body through the descriptor-gated `__drop_type_param`. Handing it back through the return
+		// register would make the CALLER its owner — but a generic method's opaque `typeParameter` return type is
+		// NOT resolved to the instantiation's concrete type at the call site, so the caller neither adopts nor
+		// drops it and the moved-out element LEAKS (exit 101, confirmed by probe). Returning an opaque `T` is a
+		// distinct future slice, symmetric to the opaque try-merge deferral (`finishValueTry`); until it lands,
+		// DROP the moved-out element in the method body or move it back into the array with `push` — both
+		// supported. A BORROWED opaque return (`return item` for a borrowed `Element` parameter) owns nothing, so
+		// `valueIsOpaqueOwned` is false and it is unaffected.
+		if self.valueIsOpaqueOwned(returned) 'ownedOpaqueReturn'
+			throw ParseError.unsupported("returning an OWNED opaque type-parameter value — an element moved out of an `Array with <type parameter>` field by `pop`/`remove` inside a generic body. The caller cannot resolve the opaque `T` return to the instantiation's concrete type, so it would neither adopt nor drop the moved-out element and the value would leak. Returning an opaque `T` is a distinct future slice; drop the moved-out element in the method body, or move it back into the array with `push` (P1.7 slice 3b-vi-a).", line: anchor.line, column: anchor.column)
+		end 'ownedOpaqueReturn'
+
 		self.emitHandoffExitDrops(returned, anchor: anchor)
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(anchor))
@@ -15362,9 +15376,12 @@ export type Parser
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`). An OPAQUE-`T` array
 	// (`self.items.push(x)` in a generic body, P1.7 slice 3b) dispatches here too, and the shared body treats the
 	// opaque element as an 8-byte WORD — which is correct for MOVE-IN (`push`/`set`/`insert` move the word, and
-	// the call-site consume promotes a managed argument, P1.7 slice 3b-iii), for the metadata methods and for
-	// drop, but NOT for reading, moving OUT, or COPYING the element: those hand back the word untyped, which a
-	// managed instantiation cannot own (`requireOpaqueArraySupportsMethod` rejects them).
+	// the call-site consume promotes a managed argument, P1.7 slice 3b-iii), for the metadata methods, for drop,
+	// for READING (`get`/`first`/`last` hand back a BORROW) and for MOVING OUT (`pop`/`remove` hand back an OWNED
+	// word dropped through the descriptor-gated `__drop_type_param`, P1.7 slice 3b-vi-a) — the word is only
+	// carried and dropped, never interpreted. What it is NOT enough for is a per-element COPY (`slice`/`clone`/
+	// `append`), which would byte-blit a managed pointer and double-free it (`requireOpaqueArraySupportsMethod`
+	// rejects those on an opaque array).
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
