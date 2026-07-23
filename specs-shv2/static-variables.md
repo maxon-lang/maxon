@@ -497,6 +497,27 @@ end 'main'
 f64 3.14
 ```
 
+<!-- test: data-section-f64-8byte-folded -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+A FOLDED float initializer lays down the same 8 bytes as the literal: `3.0 + 0.14` produces `3.14`, the strongest proof the constant evaluator produced a NUMBER (folded with the host's f64) and not a summed bit pattern (oracle-verified byte-identical to the literal `3.14`).
+
+```maxon
+var pi = 3.0 + 0.14
+
+function main() returns ExitCode
+	if pi > 3.0 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+f64 3.14
+```
+
 <!-- test: data-section-bool-then-i64-sorted -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A bool and i64 global: sorted largest-first, no padding needed.

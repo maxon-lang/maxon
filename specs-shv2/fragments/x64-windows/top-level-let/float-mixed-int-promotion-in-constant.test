@@ -1,0 +1,23 @@
+// Test: float-mixed-int-promotion-in-constant
+let M = 1 + 2.0
+let N = 5 * 1.5
+
+function main() returns ExitCode
+	return trunc(M) * 10 + trunc(N)
+end 'main'
+---
+ExitCode: 37
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.cvttsd2siRegReg rax, xmm0
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}

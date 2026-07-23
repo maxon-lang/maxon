@@ -226,6 +226,68 @@ end 'main'
 20
 ```
 
+<!-- test: float-arithmetic-in-constant -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+Top-level float constants fold `+`, `*`, and `/` with the host's f64 (oracle-verified: X=3.0, Y=6.0, Z=2.5). Native targets only: the exit code 362 exceeds the 8-bit WASI exit-code range (362 mod 256 = 106), a wasm limitation orthogonal to the fold — a bare-integer `return 362` wraps identically. The wasm suite still exercises float const folding via the three sibling tests below, whose codes are <= 255.
+```maxon
+let X = 1.0 + 2.0
+let Y = X * 2.0
+let Z = 10.0 / 4.0
+
+function main() returns ExitCode
+	return trunc(X)*100 + trunc(Y)*10 + trunc(Z)
+end 'main'
+```
+```exitcode
+362
+```
+
+<!-- test: float-mixed-int-promotion-in-constant -->
+A mixed int/float constant promotes the int operand to f64 before folding, exactly as the runtime path does (oracle-verified: M=3.0, N=7.5).
+```maxon
+let M = 1 + 2.0
+let N = 5 * 1.5
+
+function main() returns ExitCode
+	return trunc(M) * 10 + trunc(N)
+end 'main'
+```
+```exitcode
+37
+```
+
+<!-- test: float-subtraction-and-negation-in-constant -->
+Float subtraction and a negated float literal fold (oracle-verified: A=6.5, B=-2.0, C=4.5).
+```maxon
+let A = 10.0 - 3.5
+let B = -2.0
+let C = A + B
+
+function main() returns ExitCode
+	return trunc(C)
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: float-comparison-in-constant -->
+Float comparisons fold with a real f64 compare, so a negative operand orders correctly where an integer compare over the raw bit patterns would answer backwards (oracle-verified: both true).
+```maxon
+let LT = -1.0 > -2.0
+let GE = 2.5 >= 2.5
+
+function main() returns ExitCode
+	if LT and GE 'both'
+		return 1
+	end 'both'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: function-call-in-constant-error -->
 Function calls are not allowed in constant expressions.
 ```maxon

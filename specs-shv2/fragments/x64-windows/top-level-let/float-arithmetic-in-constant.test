@@ -1,0 +1,28 @@
+// Test: float-arithmetic-in-constant
+let X = 1.0 + 2.0
+let Y = X * 2.0
+let Z = 10.0 / 4.0
+
+function main() returns ExitCode
+	return trunc(X)*100 + trunc(Y)*10 + trunc(Z)
+end 'main'
+---
+ExitCode: 362
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.cvttsd2siRegReg rax, xmm0
+    x64.imulRegRegImm32 rax, rax, 100
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.imulRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,35 @@
+// Test: data-section-f64-8byte-folded
+var pi = 3.0 + 0.14
+
+function main() returns ExitCode
+	if pi > 3.0 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_pi@0 = f64 4614253070214989087
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_pi
+    x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, read
+    x64.jmp ifcont
+  read:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

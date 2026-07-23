@@ -1120,10 +1120,11 @@ end 'shortCircuitOperator'
 // `unresolved`/`void` are call results, which are rejected as E2045 before their type is ever asked
 // for.
 //
-// A `float` constant reaches here only as a LITERAL — `requireConstNotFloat` refuses every fold
-// over one — so its payload is the bit pattern `parseFloatBits` produced, and the `MaxonType.float`
-// this hands back is what tells `lowerLiteral` to lay those 8 bytes down as an f64 rather than an
-// i64. That is the whole of `let PI = 3.14` and `var ratio = 2.5`.
+// A `float` constant's payload is the IEEE-754 bit pattern — whether it came from a literal
+// (`parseFloatBits`) or from a fold (`foldFloatBinOp`/`foldFloatCompare`, which compute with the host's
+// f64 and re-encode the bits) — and the `MaxonType.float` this hands back is what tells `lowerLiteral`
+// to lay those 8 bytes down as an f64 rather than an i64. That is the whole of `let PI = 3.14`,
+// `var ratio = 2.5`, and now `let X = 1.0 + 2.0` too.
 function constantValueType(tag ValueTypeTag) returns MaxonType
 	if tag == ValueTypeTag.boolean 'bool'
 		return MaxonType.boolean
@@ -15468,17 +15469,42 @@ export type Parser
 	function foldConstBinOp(left ConstValue, right ConstValue, opTok Token, countStart TokenIndex) returns ConstValue throws ConstEvalError
 		if comparisonOperator(opTok.kind) 'comparison'
 			try self.requireConstComparable(left, right: right, opTok: opTok)
-			try self.requireConstNotFloat(left, right: right, opTok: opTok)
-			return ConstValue.create(foldIntCompare(infixCmpOp(opTok.kind), lhs: left.payload, rhs: right.payload), tag: ValueTypeTag.boolean)
+			let cmpOp = infixCmpOp(opTok.kind)
+
+			// A float comparison folds with the host's native f64 (`foldFloatCompare`), NEVER over the
+			// raw bit patterns: two negatives order opposite to their patterns, so an integer compare of
+			// `-1.0 > -2.0` would answer backwards. Both operands are float here — `requireConstComparable`
+			// rejects a mixed int/float compare — so `operandsAreFloat` true means BOTH sides carry bits.
+			if operandsAreFloat(left.tag, right: right.tag) 'float'
+				return ConstValue.create(foldFloatCompare(cmpOp, lhs: left.payload, rhs: right.payload), tag: ValueTypeTag.boolean)
+			end 'float'
+
+			return ConstValue.create(foldIntCompare(cmpOp, lhs: left.payload, rhs: right.payload), tag: ValueTypeTag.boolean)
 		end 'comparison'
 
 		let op = infixMaxonOp(opTok.kind)
 		try self.requireConstOperands(op, left: left, right: right, opTok: opTok)
-		try self.requireConstNotFloat(left, right: right, opTok: opTok)
 
 		if shiftOperator(op) 'shift'
 			return try self.foldConstShift(left, count: right, op: op, countStart: countStart)
 		end 'shift'
+
+		// Float arithmetic (`+ - * /`) folds with the host's native f64 (`foldFloatBinOp`), an INT
+		// operand of a mixed `1 + 2.0` first PROMOTED to its f64 value (`constFloatBits`). `mod` and the
+		// bit ops are integral-only, so `requireConstOperands` has already turned a float away from them
+		// above — a float pair here is always one of the four SSE-backed operators, and its result is
+		// always a `float` (`arithResultTag` promotes), so the tag is not re-asked of `binOpResultTag`.
+		if operandsAreFloat(left.tag, right: right.tag) 'float'
+			match foldFloatBinOp(op, lhs: self.constFloatBits(left), rhs: self.constFloatBits(right)) 'f'
+				folded(value) then return ConstValue.create(value, tag: ValueTypeTag.float)
+				// A float `/ 0`. shv2's own `divsd` yields ±inf/nan at run time, but a CONSTANT folds with
+				// the host's f64 — which faults on `/ 0` — and this rung does no software IEEE, so the
+				// constant is rejected. A DOCUMENTED divergence from the runtime, and its OWN message
+				// rather than the integer `constantDivisionByZero` one, whose "no run time to trap in"
+				// would tell a user who expected inf the wrong story (a float `/0` does not trap).
+				notFoldable then throw ConstEvalError.defective(ParseError.unsupported("`/` by zero in a float constant initializer: a constant is folded with the host's f64, which faults on division by zero (shv2's own float division would yield an infinity or NaN at run time), so the constant has no value", line: opTok.line, column: opTok.column))
+			end 'f'
+		end 'float'
 
 		match foldIntBinOp(op, lhs: left.payload, rhs: right.payload) 'folded'
 			folded(value) then return ConstValue.create(value, tag: binOpResultTag(op, left: left.tag, right: right.tag))
@@ -15490,6 +15516,18 @@ export type Parser
 			notFoldable then throw ConstEvalError.defective(ParseError.constantDivisionByZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column))
 		end 'folded'
 	end 'foldConstBinOp'
+
+	// The f64 BIT PATTERN of a constant in a float fold: a float carries its bits; an INT is PROMOTED
+	// to its f64 value first — the compile-time equivalent of `Parser.promoteToFloat`'s `cvtsi2sd`, so
+	// `1 + 2.0` folds to 3.0 and not to a summed bit pattern. `0.0 + payload` is the host's int→f64
+	// conversion; `floatToBits` captures the resulting bits.
+	function constFloatBits(value ConstValue) returns ParsedInt
+		if tagIsFloat(value.tag) 'alreadyFloat'
+			return value.payload
+		end 'alreadyFloat'
+
+		return __Builtins.floatToBits(0.0 + value.payload)
+	end 'constFloatBits'
 
 	// ⭐ THE SHIFT RULE, asked of a constant. Every part of the answer comes from TypeRules — the fill,
 	// the opcode, the legality of the count, and the fold — so a shift in a `let` and a shift in a
@@ -15543,54 +15581,39 @@ export type Parser
 		end 'rejected'
 	end 'requireConstOperands'
 
-	// ⛔ **A FLOAT IS NEVER FOLDED**, and this is the guard that says so — on the arithmetic path
-	// and the comparison path both, which is why it is one function called twice rather than two
-	// conditions.
-	//
-	// A `ConstValue`'s payload is a `ParsedInt`, and for a float it holds the IEEE-754 BIT
-	// PATTERN. Every fold this evaluator owns is INTEGER arithmetic over that payload
-	// (`foldIntBinOp`, `foldIntCompare`), so folding `3.14 + 2.0` would add two bit patterns and
-	// label the sum a float — a wrong answer computed before the program exists, with no run time
-	// left in which to be wrong.
-	//
-	// ⚠ **The COMPARISON is the subtler half, and the one that would survive testing.** Two
-	// POSITIVE doubles order exactly as their bit patterns do, so `3.5 > 2.5` folds to the RIGHT
-	// answer and the guard looks unnecessary; only a negative operand (whose sign bit inverts the
-	// integer order) or a NaN (which no integer compare can call unordered) shows it. StdDialect's
-	// `binOpImm` documents the identical trap one tier down, and `FoldConstOperands` carries the
-	// identical guard for the identical reason — three places, one fact, because a float's bits
-	// are reachable from three different folders.
-	//
-	// Doing better needs software IEEE-754 arithmetic inside the compiler — a real thing, not this
-	// rung's, and v1 does not fold them either. A float LITERAL is unaffected, and a literal is
-	// what every float constant in the corpus is: `let PI = 3.14`, `var ratio = 2.5`,
-	// `var zeroA = 0.0`. The bits are CARRIED, never computed on.
-	function requireConstNotFloat(left ConstValue, right ConstValue, opTok Token) throws ConstEvalError
-		if not operandsAreFloat(left.tag, right: right.tag) 'integral'
-			return
-		end 'integral'
-
-		throw ConstEvalError.defective(ParseError.unsupported("folding '{opTok.kind.rawValue}' over a float in a constant initializer (a float constant is held as its IEEE-754 bit pattern and the evaluator folds with integer arithmetic only, so the answer would be a bit pattern rather than a number — a float constant must be a literal)", line: opTok.line, column: opTok.column))
-	end 'requireConstNotFloat'
-
 	// A prefix `-` or `not`, mirroring `parseUnary` over values. Both readings of `not` come from
 	// `notOperatorFor`, so a constant `not` complements exactly what a runtime `not` complements.
 	function evalConstUnary(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = self.current()
 			self.advance()
+
+			// ⭐ A leading `-` on a FLOAT LITERAL is part of the literal — a sign flip (`negatedFloatBits`),
+			// NOT `0.0 - x`, which would lose `-0.0`'s sign. This mirrors `parseUnary`'s negated-literal
+			// fold and shares the ONE sign-flip spelling, so `-2.5` means the same in a `let` and a body.
+			// Trailing `as` casts then apply exactly as to a primary (as `parseCast` wraps `parseUnary`).
+			if self.at(TokenKind.floatLiteral) 'negatedFloatLiteral'
+				let tok = self.current()
+				self.advance()
+				return try self.applyConstCasts(try self.evalConstFloatLiteral(tok, negated: true))
+			end 'negatedFloatLiteral'
+
 			let operand = try self.evalConstPostfix(stack)
 			if not typeClassAdmits(TypeClass.numeric, tag: operand.tag) 'notANumber'
 				throw ConstEvalError.defective(ParseError.nonNumericNegation(typeTagName(operand.tag), line: opTok.line, column: opTok.column))
 			end 'notANumber'
 
-			// `-3.14` in a constant would `0 - bits` the IEEE pattern, which is not the negation of
-			// anything. The EXPRESSION path spells float negation `0.0 - x` and lets `subsd` answer
-			// it (`emitFloatNegation`) — a constant has no run time to do that in, and the correct
-			// compile-time answer (flip bit 63) is the one float operation this evaluator could
-			// perform, which is not a reason to let it perform exactly one. Same line as
-			// `requireConstNotFloat`, drawn in the same place.
-			try self.requireConstNotFloat(operand, right: operand, opTok: opTok)
+			if tagIsFloat(operand.tag) 'float'
+				// A NON-literal float negation (a float const REFERENCE, or `-(expr)`) is `0.0 - x` — the
+				// subtract-from-zero the runtime's `emitFloatNegation` emits (x64 has no XMM negate),
+				// routed through the ONE float sub fold so the constant and the codegen cannot disagree.
+				// `-(0.0)` is therefore `+0.0`, exactly as `emitFloatNegation` and the bootstrap give it.
+				// A subtract never divides, so the fold never declines.
+				match foldFloatBinOp(MaxonBinOp.sub, lhs: FloatZeroBits, rhs: operand.payload) 'negated'
+					folded(value) then return ConstValue.create(value, tag: ValueTypeTag.float)
+					notFoldable then panic("evalConstUnary: foldFloatBinOp declined `0.0 - x` — only division declines, and negation is a subtraction")
+				end 'negated'
+			end 'float'
 
 			return ConstValue.create(try self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok), tag: operand.tag)
 		end 'neg'
@@ -15611,12 +15634,19 @@ export type Parser
 	// numeric range cast. ⚠ The target's RANGE is not checked here (`256 as Octet` would slip through);
 	// full const range-checking is a follow-up shared with `as`-in-expression, which shv2 also lacks.
 	function evalConstPostfix(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
-		var value = try self.evalConstPrimary(stack)
-		while self.at(TokenKind.as) 'cast'
-			value = try self.applyConstCast(value)
-		end 'cast'
-		return value
+		return try self.applyConstCasts(try self.evalConstPrimary(stack))
 	end 'evalConstPostfix'
+
+	// Consume any trailing `as <Type>` casts on an already-evaluated constant. Split out so the
+	// negated-float-literal path applies the same casts a primary gets (mirroring `parseCast`, which
+	// wraps `parseUnary`'s negated literal in the identical cast loop).
+	function applyConstCasts(value ConstValue) returns ConstValue throws ConstEvalError
+		var result = value
+		while self.at(TokenKind.as) 'cast'
+			result = try self.applyConstCast(result)
+		end 'cast'
+		return result
+	end 'applyConstCasts'
 
 	// Consume one `as <Type>` cast and return the value (unchanged on the bytes; see `evalConstPostfix`).
 	// The target is a named alias or a primitive keyword — a single token at this rung (a ranged
@@ -15730,7 +15760,9 @@ export type Parser
 		end 'intLit'
 
 		if self.at(TokenKind.floatLiteral) 'floatLit'
-			return try self.evalConstFloatLiteral()
+			let tok = self.current()
+			self.advance()
+			return try self.evalConstFloatLiteral(tok, negated: false)
 		end 'floatLit'
 
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
@@ -15763,22 +15795,22 @@ export type Parser
 		return ConstValue.create(value, tag: ValueTypeTag.integer)
 	end 'evalConstIntLiteral'
 
-	// A float literal in a constant initializer — `let PI = 3.14`, `var zeroA = 0.0`. It carries
-	// the IEEE-754 bit pattern in the same `ParsedInt` payload every other constant uses, exactly
-	// as `parseFloatLiteral` does in an expression, and through the same `floatLiteralBits` — so the
-	// bits of a float in a `let` and a float in a body cannot come to differ.
+	// A float literal in a constant initializer — `let PI = 3.14`, `var zeroA = 0.0`, and the operands
+	// a fold like `let X = 1.0 + 2.0` computes on. It carries the IEEE-754 bit pattern in the same
+	// `ParsedInt` payload every other constant uses, exactly as `parseFloatLiteral` does in an
+	// expression, through the same `floatLiteralBits` — so the bits of a float in a `let` and a float
+	// in a body cannot differ.
 	//
-	// ⚠ It is the ONLY float a constant can contain, and `requireConstNotFloat` is what enforces
-	// that. The payload is a bit pattern, and every fold this evaluator has is integer arithmetic
-	// over it.
-	function evalConstFloatLiteral() returns ConstValue throws ConstEvalError
-		let tok = self.current()
-		self.advance()
+	// `negated` folds a leading `-` INTO the literal (`negatedFloatBits`, a sign flip), the same way
+	// `parseNegatedNumericLiteral` does — the reason `-0.0` keeps its sign where `0.0 - x` would lose
+	// it. `evalConstUnary` is its only negated caller; every other float literal reads un-negated. The
+	// caller has already consumed `tok`, mirroring `evalConstIntLiteral`'s call to `intLiteralValue`.
+	function evalConstFloatLiteral(tok Token, negated bool) returns ConstValue throws ConstEvalError
 		let bits = try self.floatLiteralBits(tok) otherwise (err) 'rejected'
 			throw ConstEvalError.defective(err)
 		end 'rejected'
 
-		return ConstValue.create(bits, tag: ValueTypeTag.float)
+		return ConstValue.create(negatedFloatBits(bits) if negated else bits, tag: ValueTypeTag.float)
 	end 'evalConstFloatLiteral'
 
 	function evalConstBoolLiteral() returns ConstValue

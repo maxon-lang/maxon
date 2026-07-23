@@ -534,6 +534,32 @@ export function foldIntCompare(op MaxonCmpOp, lhs ParsedInt, rhs ParsedInt) retu
 	end 'o'
 end 'foldIntCompare'
 
+// Fold `lhs <op> rhs` over two float BIT PATTERNS with the host's native f64 — the float twin of
+// `foldIntCompare`, and the ONE place a constant float comparison's answer is computed.
+//
+// ⚠ **IT MUST COMPARE AS f64, NOT OVER THE RAW PATTERNS**, and that is the whole reason it exists
+// beside `foldIntCompare` rather than reusing it. A double's bit pattern is sign-and-magnitude: two
+// POSITIVE doubles happen to order exactly as their patterns do, so an integer compare of `3.5 > 2.5`
+// is right BY ACCIDENT — but a negative operand (whose sign bit inverts the integer order) or a NaN
+// (which no integer compare can call unordered) exposes it. Reinterpreting to f64
+// (`__Builtins.bitsToFloat`) and letting the host compare gets `-1.0 > -2.0` and `-0.0 == +0.0` right.
+//
+// Both operands are float here: a mixed int/float compare is E3005 (`comparableOperands`), so the
+// caller reaches this only when both sides carry float bits.
+export function foldFloatCompare(op MaxonCmpOp, lhs ParsedInt, rhs ParsedInt) returns ParsedInt
+	let a = __Builtins.bitsToFloat(lhs)
+	let b = __Builtins.bitsToFloat(rhs)
+
+	return match op 'o'
+		eq gives boolPayload(a == b)
+		ne gives boolPayload(a != b)
+		lt gives boolPayload(a < b)
+		gt gives boolPayload(a > b)
+		le gives boolPayload(a <= b)
+		ge gives boolPayload(a >= b)
+	end 'o'
+end 'foldFloatCompare'
+
 // Fold a LOGICAL `not` over the 0/1 payload of a bool the compiler already holds.
 //
 // Separate from `foldIntUnaryOp`, which declines `logicalNot` outright — and the split is the
@@ -1092,6 +1118,50 @@ function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns Fo
 
 	return FoldedInt.folded(try (lhs mod rhs) otherwise panic("foldIntDivision: divisor was 0 past the zero guard"))
 end 'foldIntDivision'
+
+// Fold `lhs <op> rhs` over two float BIT PATTERNS with the host's native f64 — the float twin of
+// `foldIntBinOp`, and the ONE place a constant float arithmetic answer is computed. Each operand is
+// reinterpreted to f64 (`__Builtins.bitsToFloat`), the host combines them, and the single result is
+// re-encoded (`__Builtins.floatToBits`) — ONE round-trip, so no double-rounding.
+//
+// Only `+ - * /` reach here. They are exactly the operators with an SSE form (`operatorIsIntegral` is
+// false for them); `requireBinOpOperands` turns a float away from `mod` / the bit ops / the shifts
+// before a fold is asked (matching shv2's own runtime, which rejects float `mod` as E3005), so the
+// integral-only band is unreachable and panics rather than folding a wrong answer.
+//
+// ⚠ **`/` IS NOT ROUTED THROUGH THE INTEGER DIV-BY-ZERO GUARD** — a float's `rhs == 0` bit test would
+// miss `-0.0` and misread the pattern for a magnitude. Instead the division rides the HOST's own trap:
+// the bootstrap runtime that runs this compiler faults f64 `/ 0`, so a zero divisor surfaces as a throw
+// and becomes `notFoldable` — the constant is then rejected as div-by-zero, symmetric with the integer
+// path. (A documented divergence from shv2's emitted `divsd`, which yields ±inf/nan: a constant cannot,
+// because the host gives no float `/0` value and this rung does not reimplement IEEE division in
+// software.)
+export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+	let a = __Builtins.bitsToFloat(lhs)
+	let b = __Builtins.bitsToFloat(rhs)
+
+	if op == MaxonBinOp.add 'add'
+		return FoldedInt.folded(__Builtins.floatToBits(a + b))
+	end 'add'
+
+	if op == MaxonBinOp.sub 'sub'
+		return FoldedInt.folded(__Builtins.floatToBits(a - b))
+	end 'sub'
+
+	if op == MaxonBinOp.mul 'mul'
+		return FoldedInt.folded(__Builtins.floatToBits(a * b))
+	end 'mul'
+
+	if op == MaxonBinOp.div 'div'
+		let quotient = try (a / b) otherwise 'divByZero'
+			return FoldedInt.notFoldable
+		end 'divByZero'
+
+		return FoldedInt.folded(__Builtins.floatToBits(quotient))
+	end 'div'
+
+	panic("foldFloatBinOp: '{op.rawValue}' has no float reading — requireBinOpOperands turns a float away from `mod` / the bit ops / the shifts before this fold is reached")
+end 'foldFloatBinOp'
 
 // Fold a unary operator over an integer the parser already holds. `logicalNot` is a BOOL operator —
 // the parser has already resolved which `not` the source meant (see MaxonUnaryOp), so meeting it on
