@@ -26,6 +26,7 @@ class Program {
       "spec-test" => RunSpecTests(args[1..]),
       "error-codes" => ErrorCodeRegistry.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
+      "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "lsp-server" => await RunLspAsync(),
       _ => Fail()
     };
