@@ -1230,9 +1230,25 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   → E3006, so two same-name arities (`Counter.create` arity 0 + 2) collide; no `overload` resolution exists.
   Blocks `structs.md` `struct-field-default`, and the stdlib's overload sets (§487/§817) lean on it. Function
   resolution, orthogonal to structs.
-- **#65 — implicit-self method resolution.** A bare `bump()` inside an instance method stays a free call →
-  E3004 (bare self-FIELD access works). Needs `<EnclosingType>.<name>` resolution with static-vs-instance
-  receiver handling. Keeps `propagate-throw-through-local-struct` disabled (with #64).
+- **✅ #65 — implicit-self method resolution — CLOSED 2026-07-23** (main `55cafda11`, 1335→1347/0). A bare
+  call `foo(args)` inside a method body now resolves to the sibling method `foo` and routes through the SAME
+  `parseCallNamed`/`ReceiverArg` path as explicit `self.foo()` (byte-identical IR, zero fragment M). ⭐ **RULE
+  (oracle-verified): prepend `self` IFF the resolved sibling TAKES A RECEIVER** — an instance sibling gets
+  self, a STATIC sibling gets none; a bare call in a static method has no self to prepend; a method WINS over a
+  same-named free function; static→instance falls out as a clean E3036 (arity). `ensureSiblingReceivers` is a
+  lazy per-type token walk (the canonical `funcSignatures` isn't assembled at real-parse time, and the
+  file-local artifact holds only backward-declared methods — a forward-referenced sibling can't be queried
+  otherwise). The implementer caught + fixed a crash IT introduced (a generic `sizeof(T)`-reading sibling via a
+  bare call panicked in `forwardCallerLayout` — the descriptor-need scan only saw literal `self.method()`).
+  Review found + fixed TWO duplication defects: (1a) the bare receiver-resolution had a silent receiver-less
+  fallback where the explicit path refuses self-capture, so a bare sibling call inside a self-capturing closure
+  gave E3036 where `self.foo()` gives the P1.5 E2015 — un-forked via a shared `requireNotInSelfCapture`; (1b)
+  the "is this `static`?" token test was written a THIRD time — shared `functionDeclIsStatic`. `throw-transfers-
+  ownership.md`'s `propagate-throw-through-local-struct` now blocks ONLY on #64 (borrowed-self throw), not #65
+  (stale comment fixed). ⏭ Two shv2-vs-oracle divergences left as pre-existing, non-#65 (both shv2 internally
+  consistent, no miscompile): a local `let f = fn` SHADOWS a same-named sibling method (shv2 calls the local;
+  oracle gives the method precedence + flags the unused local E3012); a method named after a builtin (`sqrt`)
+  wins over the builtin for BOTH bare and explicit `self.` calls.
 - **#77 — string-backed enum raw values** (`enum … implements Error { case = "text" }` → E2015). Needs
   String's `.rawValue`/`.name` accessors (P1.2); may unblock other corpus.
 - **✅ #33 — negative float-backed enum raw values — CLOSED 2026-07-22** (main `8718c8d7c`, 1313→1315/0).
