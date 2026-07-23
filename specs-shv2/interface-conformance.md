@@ -268,6 +268,42 @@ end 'main'
 42
 ```
 
+<!-- test: conformance-alias-crossing -->
+An interface and a conforming impl may reach a shared type through DIFFERENT ranged typealiases. A ranged
+alias resolves to its underlying primitive (the range is dropped from the signature type, enforced by range
+checks instead), so `A` and `B` — both `int(0 to 100)` — are ONE type and the conformance is valid, not a
+spurious wrong-signature. Regression: the check compared alias NAMES, which false-rejected this valid program.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias A = int(0 to 100)
+typealias B = int(0 to 100)
+
+interface Processor
+	function process(value A) returns Integer
+end 'Processor'
+
+type Widget implements Processor
+	var v as Integer
+
+	function process(value B) returns Integer
+		return value
+	end 'process'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	var w = Widget.create()
+	return w.process(7)
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- disabled-test: builtin-interface-user-code -->
 <!-- P1.7a-s2: generic type params (`uses Element`) + `__ManagedMemory` + the `BuiltinArrayLiteral` builtin interface -->
 ```maxon
@@ -522,4 +558,41 @@ end 'main'
 ```maxoncstderr
 error E3016: <fragment>:5:6: Partial interface implementation: type 'Thing' is missing 1 method(s):
   - toString() returns String
+```
+
+<!-- test: error.duplicate-method-conformance -->
+A conforming type with a DUPLICATE-named method is E3006 (shv2's non-mangled `Type.method` naming collides
+the two), reported cleanly. Regression: the conformance check read the method's param types from the module
+but its param names from the signature registry, which resolve the collision independently and disagreed on
+arity — the check indexed one by the other's count and PANICKED instead of letting the E3006 fail the build.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns Integer
+end 'Named'
+
+type Widget implements Named
+	var v as Integer
+
+	function label() returns Integer
+		return v
+	end 'label'
+
+	function label(extra Integer) returns Integer
+		return v + extra
+	end 'label'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:16:11: duplicate definition of function 'Widget.label'
 ```

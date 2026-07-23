@@ -7,13 +7,15 @@
 // `checkValueMergeSignatures` (`compileToCodeResult`, before the pipeline), reading the still-unresolved
 // signatures; any diagnostic it records is caught by the pipeline's own error gate after `resolveTypes`.
 //
-// ⭐ **THE COMPARISON IS BY SOURCE STRING.** An interface method carries its types as rendered strings
-// (see IrInterface); a type's method carries them as `MaxonType`s in the merged module — rendered here
-// through `maxonTypeName` off the same project interner. A `Self` in the interface substitutes the
-// conforming type (`Movable.move returns Self` matches `Point.move returns Point`). This is the reference
-// oracle's model without its resolved-type machinery: for the concrete conformance slice 1 supports, two
-// signatures agree iff their source spellings agree (with the Self substitution), which is exactly what
-// the E3016 message prints.
+// ⭐ **THE MESSAGE PRINTS SOURCE STRINGS; THE COMPARISON CANONICALIZES ALIASES.** An interface method
+// carries its types as rendered strings (see IrInterface); a type's method carries them as `MaxonType`s in
+// the merged module — rendered here through `maxonTypeName` off the same project interner. A `Self` in the
+// interface substitutes the conforming type (`Movable.move returns Self` matches `Point.move returns Point`).
+// The E3016 MESSAGE prints those source spellings, but the agreement TEST runs them through
+// `canonicalTypeName` first, so a ranged typealias collapses to its underlying primitive exactly as
+// `resolveTypes` erases it — two aliases over the same primitive are one type here, as they are everywhere
+// else in shv2 (`takesA(makeB())` compiles). That is the reference oracle's resolved model; comparing raw
+// source spellings would false-reject a valid conformance that reaches a shared type through two alias names.
 //
 // ⭐ **DIVERGENCE FROM THE BOOTSTRAP (toward v1): an UNKNOWN interface is E3015.** The C# bootstrap
 // SILENTLY accepts `implements Bogus`; v1 emits E3015, and so does shv2 — a typo'd interface name should
@@ -49,6 +51,18 @@ export function checkConformance(project Project, module MaxonModule)
 	if project.conformances.count() == 0 'noConformances'
 		return
 	end 'noConformances'
+
+	// A duplicate-named method is E3006 (recorded by `commitFuncSignatures` during `queryAllModule`, so it
+	// already sits in `project.diagnostics` here). It leaves the module's function table and the
+	// `funcSignatures` registry resolving that collision independently, disagreeing on the method's arity —
+	// and this check reads a method's param TYPES from the module but its param NAMES from `funcSignatures`
+	// (see `checkOneMethod`), so on a disagreement it would index one column by the other's count and PANIC.
+	// The E3006 already fails the build (the pipeline's error gate throws before lowering), so any E3015/E3016
+	// here would be moot; refuse to read a malformed table, exactly as `PassPipeline.run` refuses to lower a
+	// module that already has errors.
+	if projectHasErrors(project) 'malformedModule'
+		return
+	end 'malformedModule'
 
 	let functionsByName = buildFunctionByNameMap(module)
 	for conformance in project.conformances 'eachDecl'
@@ -174,8 +188,9 @@ function checkOneMethod(project Project, functionsByName FunctionByNameMap, conf
 end 'checkOneMethod'
 
 // Does the impl method's signature match the interface method's? Instance methods carry `__self` at
-// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Compared
-// by SOURCE string, exactly as the message renders them.
+// position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Each side's
+// type is run through `canonicalTypeName` before comparing, so a ranged alias matches by its underlying
+// primitive (shv2's actual type identity) rather than by its source name — the message still prints the name.
 function signatureMatches(project Project, method InterfaceMethodSig, typeName ByteArray, implFunc IrFunction, implSig FuncSignature) returns bool
 	let selfOffset = 1 if implSig.takesReceiver() else 0
 	if method.paramNames.count() != implFunc.maxonParamTypes.count() - selfOffset 'arityDiffers'
@@ -185,14 +200,30 @@ function signatureMatches(project Project, method InterfaceMethodSig, typeName B
 	for i in 0 upto method.paramNames.count() 'eachParam'
 		let expected = substituteSelf(try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}"), conformingType: typeName)
 		let actual = maxonTypeName(try implFunc.maxonParamTypes.get(i + selfOffset) otherwise panic("signatureMatches: maxonParamTypes.get OOB at {i + selfOffset}"), typeNames: project.typeNames).toByteArray()
-		if not expected.equals(actual) 'paramDiffers'
+		if not canonicalTypeName(project, name: expected).equals(canonicalTypeName(project, name: actual)) 'paramDiffers'
 			return false
 		end 'paramDiffers'
 	end 'eachParam'
 
 	let expectedReturn = substituteSelf(method.returnTypeName, conformingType: typeName)
-	return expectedReturn.equals(renderReturnType(project, returnType: implFunc.maxonReturnType))
+	return canonicalTypeName(project, name: expectedReturn).equals(canonicalTypeName(project, name: renderReturnType(project, returnType: implFunc.maxonReturnType)))
 end 'signatureMatches'
+
+// ⭐ **COLLAPSE A RENDERED TYPE-NAME TO THE IDENTITY shv2'S TYPE SYSTEM ACTUALLY COMPARES BY.** A ranged
+// typealias resolves to its UNDERLYING primitive — `resolveNamedType` returns `alias.underlying` and DROPS
+// the range, so two aliases over the same primitive (even over different RANGES) are one type: `takesA` with
+// a `int(0 to 100)` parameter accepts a `int(0 to 200)` argument. The E3016 message still prints the SOURCE
+// spelling (only this COMPARISON canonicalizes), so a valid conformance whose interface and impl reach a
+// shared type through DIFFERENT alias names is not a spurious wrong-signature. Reads the SAME
+// `project.typeAliases`/`.underlying` `resolveNamedType` reads, so it cannot diverge from resolution for the
+// plain-alias case — the concrete parameter/return types this slice supports. A non-alias name (a struct, a
+// primitive keyword, `Self`-substituted, `void`) is not in the registry and passes through unchanged.
+function canonicalTypeName(project Project, name ByteArray) returns ByteArray
+	if let alias = try project.typeAliases.get(name) 'rangedAlias'
+		return maxonTypeName(alias.underlying, typeNames: project.typeNames).toByteArray()
+	end 'rangedAlias'
+	return name
+end 'canonicalTypeName'
 
 // The impl method's signature as a source string — `process(value Float) returns Integer`. Param NAMES
 // come from `funcSignatures` (interner-free); param TYPES from the module's REMAPPED `maxonParamTypes`.
