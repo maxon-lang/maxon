@@ -363,6 +363,27 @@ end 'main'
 error E2026: specs/fragments/enum-match-exhaustive/error.enum-not-exhaustive.test:13:2: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
+<!-- test: error.union-not-exhaustive -->
+<!-- The diagnostic must say "union", not "enum" — shv2 reads the kind word from EnumLayout.kindWord(). The bootstrap hardcodes "enum" here (a documented oracle divergence), so this case is shv2-authored, not a /specs port. -->
+```maxon
+union Shape
+	circle
+	square
+	triangle
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.circle
+	match s 'check'
+		circle then return 1
+		square then return 2
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2026: specs/fragments/enum-match-exhaustive/error.union-not-exhaustive.test:13:2: match on union 'Shape' is not exhaustive, missing: triangle
+```
+
 <!-- test: error.enum-default-without-throws -->
 ```maxon
 enum Color

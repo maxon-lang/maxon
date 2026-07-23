@@ -4667,13 +4667,23 @@ export type Parser
 
 		try self.consume(TokenKind.equals)
 
-		// A FLOAT raw value: its tag is the IEEE-754 BIT PATTERN (matched by an i64 compare, exactly
-		// as an int tag is), and its display is the float's source text.
-		if self.at(TokenKind.floatLiteral) 'floatValue'
+		// A FLOAT raw value, positive or NEGATED (`= 1.1`, `= -2.2`): its tag is the IEEE-754 BIT PATTERN
+		// (matched by an i64 compare, exactly as an int tag is), and its display is the float's source
+		// text. A leading `-` folds into the sign bit via `negatedFloatBits` — the same spelling
+		// `parseNegatedNumericLiteral` uses in expression position — because a negated float is still a
+		// FLOAT, not the int path `readEnumIntRawValue` would send it down (where the float literal after
+		// the minus is a type mismatch, not the negation the source wrote).
+		let floatNegated = self.at(TokenKind.minus) and self.peekKind() == TokenKind.floatLiteral
+		if floatNegated or self.at(TokenKind.floatLiteral) 'floatValue'
+			if floatNegated 'consumeMinus'
+				try self.consume(TokenKind.minus)
+			end 'consumeMinus'
 			let floatTok = try self.consume(TokenKind.floatLiteral)
-			let bits = try self.floatLiteralBits(floatTok)
+			let magnitude = try self.floatLiteralBits(floatTok)
+			let bits = negatedFloatBits(magnitude) if floatNegated else magnitude
+			let rawDisplay = "-{String.from(floatTok.value)}" if floatNegated else String.from(floatTok.value)
 			try self.requireFloatBacking(state, caseTok: nameTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: String.from(floatTok.value), caseTok: nameTok, payloads: PayloadFieldArray.create())
+			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: rawDisplay, caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'floatValue'
 

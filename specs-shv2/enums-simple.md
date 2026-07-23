@@ -240,6 +240,28 @@ end 'main'
 1
 ```
 
+<!-- test: float-backed-negative -->
+```maxon
+enum FloatSigned
+	below = -2.2
+	zero = 0.0
+	above = 1.1
+end 'FloatSigned'
+
+function main() returns ExitCode
+	let f = FloatSigned.below
+	let result = match f 'check'
+		below gives 2
+		zero gives 0
+		above gives 0
+	end 'check'
+	return result
+end 'main'
+```
+```exitcode
+2
+```
+
 <!-- disabled-test: enum-method -->
 <!-- instance methods on an enum receiver (later rung) -->
 ```maxon
