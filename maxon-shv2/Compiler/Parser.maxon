@@ -732,6 +732,45 @@ type MethodDescriptorScan
 	end 'create'
 end 'MethodDescriptorScan'
 
+// ⭐ **ONE SELF-CALL FORWARD EDGE for the transitive array-feed fixpoint (P1.7 slice 3b-iv)** — the caller's
+// CALL-ALIGNED parameter `callerParamPos` is passed to the sibling method `calleeName` as an argument: its FIRST
+// positional argument when `argLabel` is empty, or the labelled argument `argLabel:` otherwise. The callee's own
+// parameter position is resolved once every sibling's parameter list is known
+// (`Parser.solveAndPublishTransitiveFeeds`), exactly as a call site slots a labelled argument against the
+// callee's `paramNames` and the first positional argument against slot 1 (the receiver being slot 0).
+type ForwardFeedEdge
+	export let callerParamPos as ParamCount
+	export let calleeName as ByteArray
+	export let argLabel as ByteArray
+
+	export static function create(callerParamPos ParamCount, calleeName ByteArray, argLabel ByteArray) returns ForwardFeedEdge
+		return Self{callerParamPos: callerParamPos, calleeName: calleeName, argLabel: argLabel}
+	end 'create'
+end 'ForwardFeedEdge'
+
+export typealias ForwardFeedEdgeArray = Array with ForwardFeedEdge
+
+// ⭐ **ONE GENERIC INSTANCE METHOD's FEED SIGNALS for the transitive array-feed fixpoint (P1.7 slice 3b-iv)** —
+// its CALL-ALIGNED parameter names and type-parameter positions (`SelfParamName` at slot 0, matching the
+// receiver-prepending call site), the DIRECT array-mutator feeds its body performs (`self.items.push(param)`),
+// and the self-call forward edges out of it (`self.N(param)` / bare-sibling `N(param)`). `endPos` is the token
+// just past the method's `end`, so the type-body walk resumes there. Returned per method by
+// `Parser.scanOneMethodFeedSignals`.
+type MethodFeedScan
+	export let funcName as ByteArray
+	export let paramNames as ByteArrayArray
+	export let typeParamPositions as TypeParamIdArray
+	export let directFeeds as TypeParamFeedArray
+	export let edges as ForwardFeedEdgeArray
+	export let endPos as TokenIndex
+
+	export static function create(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, directFeeds TypeParamFeedArray, edges ForwardFeedEdgeArray, endPos TokenIndex) returns MethodFeedScan
+		return Self{funcName: funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, endPos: endPos}
+	end 'create'
+end 'MethodFeedScan'
+
+export typealias MethodFeedScanArray = Array with MethodFeedScan
+
 // The prefix Maxon RESERVES for compiler-internal names — every symbol the compiler emits
 // (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` parser temporaries, and
 // `__self` above) starts with it. `requireUnreservedName` forbids a USER DECLARATION from taking it.
@@ -3061,20 +3100,31 @@ export type Parser
 			self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: true)
 		end 'receiverless' else 'instanceMethod'
 			if not self.enclosingTypeParams.isEmpty() 'genericInstanceMethod'
-				// Self at slot 0 (`SelfParamName`, a sentinel type-param position), then the source parameters —
-				// the same order the call site pushes them, so the FEED lands at the argument's own position.
 				var typeParamPositions = TypeParamIdArray.create()
-				typeParamPositions.push(self.enclosingTypeParams.count())
-				let sourceNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositions, collectTypeParamFlags: true)
-				var paramNames = ByteArrayArray.create()
-				paramNames.push(SelfParamName)
-				for sourceName in sourceNames 'eachSource'
-					paramNames.push(sourceName)
-				end 'eachSource'
+				let paramNames = self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: typeParamPositions)
 				self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: false)
 			end 'genericInstanceMethod'
 		end 'instanceMethod'
 	end 'recordScannedSignature'
+
+	// ⭐ **THE CALL-ALIGNED PARAMETER LIST of an instance method in a generic type** — `SelfParamName` at slot 0
+	// (its sentinel type-parameter position), then the source parameters, in the SAME order the receiver-prepending
+	// call site pushes them (`parseCallNamed`), so a per-position consume/feed fact lands at the argument's own
+	// call-site position. `typeParamPositionsOut` is filled in lockstep (self's sentinel, then each source
+	// parameter's declared position from `paramNamesIn`). The ONE place this alignment is spelled — shared by the
+	// consume-bit scan (`recordScannedSignature`) and the transitive array-feed scan (`scanTypeMethodFeeds`) — so
+	// the two cannot drift on where `self` sits, which would land a feed on the wrong parameter (a wrong-consume
+	// double-free at the concrete call site).
+	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamIdArray) returns ByteArrayArray
+		typeParamPositionsOut.push(self.enclosingTypeParams.count())
+		let sourceNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true)
+		var paramNames = ByteArrayArray.create()
+		paramNames.push(SelfParamName)
+		for sourceName in sourceNames 'eachSource'
+			paramNames.push(sourceName)
+		end 'eachSource'
+		return paramNames
+	end 'callAlignedInstanceParams'
 
 	// ⭐ **THE CONSUME SCAN (P1.4a wave 2)** — one entry per function whose body MOVES a parameter into
 	// durable storage (a struct-literal field value). A peek-only walk of the body from `bodyStart` to its
@@ -3392,37 +3442,53 @@ export type Parser
 		end 'edges'
 		let callersOf = buildCsr(edgeCallee, to: edgeCaller, nodeCount: methodCount)
 
-		// Seed `needs` with each method's direct-sizeof bit; the directly-needing methods prime the worklist.
-		var needs = BoolArray.create()
-		var worklist = CsrColumn.create()
+		// Seed each method's direct-sizeof bit, then mark every method that REACHES a needing one over the
+		// reversed self-call edges — a method needs the descriptor iff it directly reads sizeof(T) or self-calls
+		// (transitively) a method that does.
+		var seeds = BoolArray.create()
 		for i in 0 upto methodCount 'seed'
-			let seed = try directSizeof.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false
-			needs.push(seed)
-			if seed 'root'
-				worklist.push(i)
-			end 'root'
+			seeds.push(try directSizeof.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false)
 		end 'seed'
-
-		// Reverse-reachability BFS over the CSR rows: a needing method turns on every sibling that calls it.
-		// The worklist is drained by a head cursor (each index is enqueued at most once), so this is O(edges).
-		var head = 0 as CsrIndex
-		while head < worklist.count() 'drain'
-			let needed = try worklist.get(head) otherwise panic("worklist.get({head})")
-			head = head + 1
-			for k in 0 upto callersOf.degree(needed) 'caller'
-				let caller = callersOf.neighbour(needed, k: k)
-				if not (try needs.get(caller) otherwise panic("needs.get({caller})")) 'newlyNeeds'
-					try needs.set(caller, value: true) otherwise panic("needs.set({caller})")
-					worklist.push(caller)
-				end 'newlyNeeds'
-			end 'caller'
-		end 'drain'
+		let needs = self.reverseReachabilityMark(callersOf, seeds: seeds)
 
 		// Publish each method's final need bit, keyed by name — what `parseFunction` reads to reserve the slot.
 		for i in 0 upto methodCount 'publish'
 			self.typeDescriptorNeeds.upsert(try methodNames.get(i) otherwise panic("methodNames.get({i}) in publish"), value: try needs.get(i) otherwise panic("needs.get({i}) in publish"))
 		end 'publish'
 	end 'solveDescriptorNeedFixpoint'
+
+	// ⭐ **REVERSE-REACHABILITY BFS over a CSR adjacency** — return the bit per node that is set iff the node is a
+	// seed OR reaches one over `graph`'s edges. The graph is the REVERSED relation (`buildCsr` with (callee,
+	// caller) swapped), so a seed's row lists the nodes that point AT it and the BFS propagates the mark BACKWARD.
+	// Each node enters the worklist at most once (the first time its bit flips on) and each edge is walked once,
+	// for O(nodes + edges). The shared engine of the descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) and
+	// the transitive array-feed fixpoint (`solveAndPublishTransitiveFeeds`), so the two cannot drift on how
+	// reachability is marked.
+	function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
+		var marked = BoolArray.create()
+		var worklist = CsrColumn.create()
+		for i in 0 upto seeds.count() 'seed'
+			let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
+			marked.push(isSeed)
+			if isSeed 'root'
+				worklist.push(i)
+			end 'root'
+		end 'seed'
+
+		var head = 0 as CsrIndex
+		while head < worklist.count() 'drain'
+			let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
+			head = head + 1
+			for k in 0 upto graph.degree(node) 'neighbour'
+				let nbr = graph.neighbour(node, k: k)
+				if not (try marked.get(nbr) otherwise panic("reverseReachabilityMark: marked.get({nbr}) OOB")) 'newlyMarked'
+					try marked.set(nbr, value: true) otherwise panic("reverseReachabilityMark: marked.set({nbr}) OOB")
+					worklist.push(nbr)
+				end 'newlyMarked'
+			end 'neighbour'
+		end 'drain'
+		return marked
+	end 'reverseReachabilityMark'
 
 	// The sibling methods `methodNames[callerIndex]` calls on `self` — the forward self-call edges out of one
 	// method. A thin read-only view onto `selfCallees` shared by the descriptor-need fixpoint's two CSR passes
@@ -3571,6 +3637,264 @@ export type Parser
 		let rightBounded = after == TokenKind.comma or after == TokenKind.rightParen
 		return leftBounded and rightBounded
 	end 'isBareArgValueAt'
+
+	// ⭐ **CLOSE THE ARRAY-FEED RELATION OVER SELF-CALL FORWARDS (P1.7 slice 3b-iv)** — after every method of a
+	// generic type is scanned, a method M's parameter P is ALSO a type-parameter FEED when M forwards P (as a bare
+	// argument) to a self-call `self.N(...)` whose corresponding parameter is itself a feed. Without this only the
+	// method that DIRECTLY pushes into the array (`store`) is a feed, so a forwarder (`add(item){ self.store(item) }`)
+	// leaves its OWN concrete call site (`sc.add("x")`) BORROWING the managed argument — which the owning array then
+	// destroys, freeing a value nobody transferred (a double-free, `0xC0000005`). This is the per-parameter analogue
+	// of `solveDescriptorNeedFixpoint`: a least fixpoint over the same self-call graph, mirrored here with FORWARD
+	// edges (M's parameter -> N's parameter) rather than a per-method boolean, solved by the same linear
+	// reverse-reachability BFS. It runs in the SWEEP — feeds are a whole-program `ParamConsumeInfo` fact a cross-file
+	// concrete call site reads — after the method loop, so every sibling's parameter list is known for edge
+	// resolution. A NON-generic type has no type parameter to feed, so it does nothing.
+	function recordTransitiveArrayFeeds(paramConsumes ParamConsumeEntryArray, bodyStart TokenIndex, feedStart ElementCount)
+		if self.enclosingTypeParams.isEmpty() 'notGeneric'
+			return
+		end 'notGeneric'
+		self.solveAndPublishTransitiveFeeds(self.scanTypeMethodFeeds(bodyStart), paramConsumes: paramConsumes, feedStart: feedStart)
+	end 'recordTransitiveArrayFeeds'
+
+	// Walk the generic type's body once, returning one `MethodFeedScan` per method — its call-aligned parameters,
+	// direct array-mutator feeds, and self-call forward edges. Mirrors `computeTypeDescriptorNeeds`' body walk: a
+	// named `function <ident>` opens a method whose whole body is scanned in one nested pass
+	// (`scanOneMethodFeedSignals`), and the walk resumes past its `end`, so this outer loop only ever sees
+	// member-level tokens. A `static` method is scanned uniformly: it has no `self`, so it contributes no direct
+	// feed and no self-call edge — inert in the fixpoint (it is never published), so it needs no special case.
+	function scanTypeMethodFeeds(bodyStart TokenIndex) returns MethodFeedScanArray
+		var scans = MethodFeedScanArray.create()
+		var q = bodyStart
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
+				break
+			end 'typeEnd'
+			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
+				var typeParamPositions = TypeParamIdArray.create()
+				let paramNames = self.callAlignedInstanceParams(q + 2, typeParamPositionsOut: typeParamPositions)
+				let scan = self.scanOneMethodFeedSignals(q + 2, funcName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value), paramNames: paramNames, typeParamPositions: typeParamPositions)
+				scans.push(scan)
+				q = scan.endPos
+				continue
+			end 'method'
+			q = q + 1
+		end 'walk'
+		return scans
+	end 'scanTypeMethodFeeds'
+
+	// Scan ONE method's body — from `startPos` (the `(` of its parameter list) to its own `end` — for the array-feed
+	// signals: the DIRECT array-mutator feeds it performs on `self` (`self.items.push(param)`) and the self-call
+	// forward edges out of it (`self.N(param)`, plus an implicit-self bare-sibling `N(param)` #65, which lowers to
+	// the same self-call). `depth` starts at 1 because the method's own block is already open; the parameter list and
+	// return type carry no `self.<field>.mutator` or `self.N` shape and no bare-sibling call, so scanning from
+	// `startPos` costs one harmless pass over them — mirroring `scanOneMethodDescriptorSignals`, which starts at the
+	// same token.
+	function scanOneMethodFeedSignals(startPos TokenIndex, funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray) returns MethodFeedScan
+		var directFeeds = self.initialTypeParamFeeds(paramNames.count(), genericScope: true)
+		var edges = ForwardFeedEdgeArray.create()
+		var depth = 1 as BlockDepth
+		var q = startPos
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			let kind = self.kindAt(q)
+			if kind == TokenKind.self 'selfToken'
+				// `self.<field>.push/set/insert(param)` is a DIRECT feed (two dots); `self.N(param)` is a FORWARD
+				// edge (one dot). The two token shapes are mutually exclusive, so both are probed at each `self`.
+				_ = self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
+				if self.isSelfMethodCallAt(q) 'selfCall'
+					self.collectForwardFeedEdges(q + 4, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 2).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges)
+				end 'selfCall'
+			end 'selfToken' else 'notSelf'
+				// A BARE sibling call `N(param)` (#65) lowers to `self.N(param)`, so it forwards exactly as an explicit
+				// self-call does. The callee is qualified to `<enclosingType>.N`; a call to a name that is not a sibling
+				// method is dropped by the fixpoint's name->index filter, so over-including here is harmless.
+				if kind == TokenKind.identifier and self.isBareCallAt(q) 'bareCall'
+					self.collectForwardFeedEdges(q + 2, calleeName: qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q).value), paramNames: paramNames, typeParamPositions: typeParamPositions, edges: edges)
+				end 'bareCall'
+			end 'notSelf'
+
+			if self.opensBlockAt(q) 'opensBlock'
+				depth = depth + 1
+			end 'opensBlock' else 'notOpener'
+				if kind == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
+					depth = depth - 1
+					if depth == 0 'methodEnd'
+						return MethodFeedScan.create(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, endPos: (q + 1) as TokenIndex)
+					end 'methodEnd'
+				end 'closes'
+			end 'notOpener'
+
+			q = q + 1
+		end 'walk'
+		return MethodFeedScan.create(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, endPos: q)
+	end 'scanOneMethodFeedSignals'
+
+	// Extract the self-call forward edges from ONE `self.N(...)` / bare-sibling `N(...)` call's argument list, whose
+	// first argument token is at `argsStart` (just past the `(`). For each argument that is a BARE reference to a
+	// caller parameter that is type-parameter-typed, append an edge to `calleeName` — positional (empty `argLabel`)
+	// for the first argument, labelled (`argLabel:`) otherwise — for the fixpoint to resolve to the callee's own
+	// parameter position. A non-parameter argument, an index expression, or a `.`-chain hop is not a bare forward and
+	// is skipped; a plain-typed caller parameter cannot BE a feed, so it is skipped too.
+	function collectForwardFeedEdges(argsStart TokenIndex, calleeName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, edges ForwardFeedEdgeArray)
+		var depth = 1
+		var p = argsStart
+		while depth > 0 and self.kindAt(p) != TokenKind.eof 'args'
+			let kind = self.kindAt(p)
+			if kind == TokenKind.leftParen 'openNested'
+				depth = depth + 1
+			end 'openNested' else 'notOpen'
+				if kind == TokenKind.rightParen 'closeArg'
+					depth = depth - 1
+				end 'closeArg' else 'notClose'
+					if depth == 1 and kind == TokenKind.identifier and self.isBareArgValueAt(p) 'candidate'
+						let idx = self.paramIndexIn(paramNames, name: self.tokenAt(p).value)
+						if idx < paramNames.count() and self.paramIsTypeParamTyped(typeParamPositions, index: idx) 'typeParamArg'
+							edges.push(ForwardFeedEdge.create(idx, calleeName: calleeName, argLabel: self.argLabelBefore(p)))
+						end 'typeParamArg'
+					end 'candidate'
+				end 'notClose'
+			end 'notOpen'
+			p = p + 1
+		end 'args'
+	end 'collectForwardFeedEdges'
+
+	// The argument LABEL immediately before a bare argument value at `valuePos`, or `EmptySourceText` for the first
+	// POSITIONAL argument. A labelled argument is `label : value`, so the label is two tokens back; a positional one
+	// is bounded by `(` or `,`. Mirrors how a call site slots a labelled argument by name and the first argument by
+	// position (`slotCallArgs`).
+	function argLabelBefore(valuePos TokenIndex) returns ByteArray
+		if self.kindAt((valuePos - 1) as TokenIndex) == TokenKind.colon and self.kindAt((valuePos - 2) as TokenIndex) == TokenKind.identifier 'labelled'
+			return self.tokenAt((valuePos - 2) as TokenIndex).value
+		end 'labelled'
+		return EmptySourceText
+	end 'argLabelBefore'
+
+	// Solve the array-feed relation to its least fixpoint over the self-call forward edges, then publish each
+	// method's transitive feeds into `paramConsumes`. A (method, parameter) NODE is a feed iff it directly feeds an
+	// array mutator OR it forwards to a feed node — iff it can REACH a directly-fed node over the forward edges. So
+	// REVERSE the edges (`buildCsr` with (callee, caller) SWAPPED, exactly as `solveDescriptorNeedFixpoint`) and mark
+	// reachability BACKWARD from the seeds: each node enters the worklist at most once (the first time its bit flips
+	// on) and each edge is walked once, for O(nodes + edges).
+	function solveAndPublishTransitiveFeeds(scans MethodFeedScanArray, paramConsumes ParamConsumeEntryArray, feedStart ElementCount)
+		let methodCount = scans.count()
+
+		// Dense method index per qualified name, and the per-method NODE base (prefix sum of call-aligned parameter
+		// counts), so a `(method, parameter)` pair flattens into one dense CSR key space. `nodeMethod` is the inverse
+		// (node -> its method), read when a newly-fed node marks its method for publishing.
+		var nameToIndex = MethodIndexMap.create()
+		var paramBase = CsrColumn.create()
+		var nodeMethod = CsrColumn.create()
+		var totalNodes = 0 as CsrIndex
+		for i in 0 upto methodCount 'index'
+			let scan = try scans.get(i) otherwise panic("solveAndPublishTransitiveFeeds: scans.get({i}) OOB below count {methodCount}")
+			nameToIndex.upsert(scan.funcName, value: i)
+			paramBase.push(totalNodes)
+			for _ in 0 upto scan.paramNames.count() 'node'
+				nodeMethod.push(i)
+			end 'node'
+			totalNodes = totalNodes + scan.paramNames.count()
+		end 'index'
+
+		// The REVERSED forward edges: a forward node edge (caller -> callee) is recorded as `callee -> caller`, so a
+		// BFS from a fed node reaches the callers that forward INTO it. An edge to a name that is not a sibling
+		// method, or to a callee parameter position out of range (a malformed call), is not a real edge and is
+		// dropped — `buildCsr` counting-sorts the rest into the reverse adjacency in O(edges + nodes).
+		var edgeCallee = CsrColumn.create()
+		var edgeCaller = CsrColumn.create()
+		for i in 0 upto methodCount 'edges'
+			let scan = try scans.get(i) otherwise panic("solveAndPublishTransitiveFeeds: scans.get({i}) OOB in edges")
+			let callerBase = try paramBase.get(i) otherwise panic("solveAndPublishTransitiveFeeds: paramBase.get({i}) OOB")
+			for edge in scan.edges 'edge'
+				if let j = try nameToIndex.get(edge.calleeName) 'sibling'
+					let calleeScan = try scans.get(j) otherwise panic("solveAndPublishTransitiveFeeds: scans.get({j}) OOB for callee")
+					let calleePos = self.forwardEdgeCalleePos(edge, calleeScan: calleeScan)
+					if calleePos < calleeScan.paramNames.count() 'realEdge'
+						edgeCallee.push((try paramBase.get(j) otherwise panic("solveAndPublishTransitiveFeeds: paramBase.get({j}) OOB")) + calleePos)
+						edgeCaller.push(callerBase + edge.callerParamPos)
+					end 'realEdge'
+				end 'sibling'
+			end 'edge'
+		end 'edges'
+		let feedersOf = buildCsr(edgeCallee, to: edgeCaller, nodeCount: totalNodes)
+
+		// Seed each DIRECTLY-fed node, then mark every node that REACHES one over the reversed forward edges — a
+		// (method, parameter) node is a feed iff it directly feeds an array mutator or forwards (transitively) to a
+		// feed node.
+		var seeds = BoolArray.create()
+		for i in 0 upto methodCount 'seedNodes'
+			let scan = try scans.get(i) otherwise panic("solveAndPublishTransitiveFeeds: scans.get({i}) OOB in seed")
+			for p in 0 upto scan.paramNames.count() 'param'
+				seeds.push((try scan.directFeeds.get(p) otherwise panic("solveAndPublishTransitiveFeeds: directFeeds.get({p}) OOB")).isFeed())
+			end 'param'
+		end 'seedNodes'
+		let isFeed = self.reverseReachabilityMark(feedersOf, seeds: seeds)
+
+		// A method must have its `paramConsumes` entry (re)written iff it GAINED a feed at a node that was not a
+		// direct seed — a method whose feeds are entirely direct already carries the right entry from the sweep.
+		var gained = BoolArray.create()
+		for _ in 0 upto methodCount 'seedGained'
+			gained.push(false)
+		end 'seedGained'
+		for node in 0 upto totalNodes 'markGained'
+			let transitively = (try isFeed.get(node) otherwise panic("solveAndPublishTransitiveFeeds: isFeed.get({node}) OOB")) and not (try seeds.get(node) otherwise panic("solveAndPublishTransitiveFeeds: seeds.get({node}) OOB"))
+			if transitively 'gainedFeed'
+				try gained.set(try nodeMethod.get(node) otherwise panic("solveAndPublishTransitiveFeeds: nodeMethod.get({node}) OOB"), value: true) otherwise panic("solveAndPublishTransitiveFeeds: gained.set OOB")
+			end 'gainedFeed'
+		end 'markGained'
+
+		self.publishTransitiveFeeds(scans, paramBase: paramBase, isFeed: isFeed, gained: gained, paramConsumes: paramConsumes, feedStart: feedStart)
+	end 'solveAndPublishTransitiveFeeds'
+
+	// The callee's call-aligned parameter position a forward edge targets: its FIRST user parameter (call-aligned
+	// slot 1) for a positional argument, or the labelled parameter's position (`paramIndexIn`) otherwise — the same
+	// slotting a call site applies (the receiver is call-aligned slot 0, so the first positional argument is slot 1).
+	function forwardEdgeCalleePos(edge ForwardFeedEdge, calleeScan MethodFeedScan) returns ParamCount
+		if edge.argLabel.isEmpty() 'positional'
+			return 1 as ParamCount
+		end 'positional'
+		return self.paramIndexIn(calleeScan.paramNames, name: edge.argLabel)
+	end 'forwardEdgeCalleePos'
+
+	// Write each transitively-fed method's final feeds into `paramConsumes`. Only a method that GAINED a feed at a
+	// non-directly-fed parameter is touched: replace the sweep's DIRECT-feed entry in place (a forwarder that ALSO
+	// directly feeds), or append a fresh one (a PURE forwarder the sweep recorded no entry for). An instance method
+	// has no plain consume bit (`detectFieldStores: false`), so the bits are all false; the feeds are read straight
+	// off the solved `isFeed` nodes. A method whose feeds are entirely direct is left as the sweep recorded it, so a
+	// type with no forwarder is byte-identical.
+	function publishTransitiveFeeds(scans MethodFeedScanArray, paramBase CsrColumn, isFeed BoolArray, gained BoolArray, paramConsumes ParamConsumeEntryArray, feedStart ElementCount)
+		for i in 0 upto scans.count() 'publish'
+			if not (try gained.get(i) otherwise panic("publishTransitiveFeeds: gained.get({i}) OOB")) 'noGain'
+				continue
+			end 'noGain'
+			let scan = try scans.get(i) otherwise panic("publishTransitiveFeeds: scans.get({i}) OOB")
+			let base = try paramBase.get(i) otherwise panic("publishTransitiveFeeds: paramBase.get({i}) OOB")
+			var bits = BoolArray.create()
+			var feeds = TypeParamFeedArray.create()
+			for p in 0 upto scan.paramNames.count() 'buildFeeds'
+				bits.push(false)
+				let feedParam = try isFeed.get(base + p) otherwise panic("publishTransitiveFeeds: isFeed.get OOB at ({base}+{p})")
+				if feedParam 'feedParam'
+					feeds.push(TypeParamFeed.feeds(self.paramTypeParamPositionAt(scan.typeParamPositions, index: p)))
+				end 'feedParam' else 'plainParam'
+					feeds.push(TypeParamFeed.none)
+				end 'plainParam'
+			end 'buildFeeds'
+			self.replaceOrAppendParamConsume(paramConsumes, feedStart: feedStart, entry: ParamConsumeEntry.create(scan.funcName, info: ParamConsumeInfo.create(scan.paramNames, bits: bits, feeds: feeds)))
+		end 'publish'
+	end 'publishTransitiveFeeds'
+
+	// Publish one transitively-fed method's consume entry: REPLACE the sweep's direct-feed entry for this method in
+	// place, or APPEND a fresh one when the sweep recorded none (a pure forwarder). Only entries added since
+	// `feedStart` — this type's own methods — are searched, and method names are whole-program unique, so the match
+	// is exact.
+	function replaceOrAppendParamConsume(paramConsumes ParamConsumeEntryArray, feedStart ElementCount, entry ParamConsumeEntry)
+		for i in feedStart upto paramConsumes.count() 'find'
+			if (try paramConsumes.get(i) otherwise panic("replaceOrAppendParamConsume: paramConsumes.get({i}) OOB")).name.equals(entry.name) 'match'
+				try paramConsumes.set(i, value: entry) otherwise panic("replaceOrAppendParamConsume: paramConsumes.set({i}) OOB")
+				return
+			end 'match'
+		end 'find'
+		paramConsumes.push(entry)
+	end 'replaceOrAppendParamConsume'
 
 	// ⭐ **READ A PARAMETER LIST IN ONE WALK (P1.6-A/B2)** — the ordered NAMES out of the `(…)` beginning at
 	// `parenPos` (returned), and IN THE SAME PASS the type-parameter POSITION each parameter's declared type
@@ -3753,6 +4077,12 @@ export type Parser
 		// `typeParameter(pos)` against. The cursor lands past the clause, at the type body the loop walks.
 		self.openTypeParamScope(layout)
 
+		// The cursor now sits at the type body's first token — captured for the transitive array-feed post-pass
+		// (P1.7 slice 3b-iv), which re-walks the body once EVERY method's parameter list is known. `feedStart` marks
+		// the point in `paramConsumes` this type's own entries begin, so that post-pass patches only them.
+		let bodyStart = self.pos
+		let feedStart = paramConsumes.count()
+
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
 			if depth == 0 and self.at(TokenKind.end) 'closesType'
@@ -3802,6 +4132,12 @@ export type Parser
 			depth = self.blockDepthAfter(depth)
 			self.advance()
 		end 'body'
+
+		// Close the array-feed relation over self-call forwards (P1.7 slice 3b-iv) now every method's parameter list
+		// is scanned — marking a forwarder's parameter a feed so its OWN concrete call site consumes the managed
+		// argument, exactly as the directly-pushing method's does. Runs before `closeTypeParamScope` so
+		// `enclosingType`/`enclosingTypeParams` still name this type.
+		self.recordTransitiveArrayFeeds(paramConsumes, bodyStart: bodyStart, feedStart: feedStart)
 
 		structs.push(layout)
 		self.closeTypeParamScope()
