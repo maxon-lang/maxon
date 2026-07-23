@@ -159,6 +159,88 @@ end 'main'
 ```stdout
 ```
 
+### Reassign to Another Borrowed Param Retains It, Not a String Blit (Struct)
+
+`q` retains borrowed `p` at its declaration, then on the taken branch is reassigned ANOTHER borrowed
+struct parameter `p2`. Because `q` is owned, the reassignment must promote the borrowed RHS — and a
+struct promotes by INCREF (co-own `p2`'s box), NOT the `String` copy the reassignment path once
+applied uniformly. `requireAssignable` admits `q = p2` (both are `Point`), so a String blit of `p2`'s
+fields as a fused String record was a silent miscompile that returned garbage (5111944). The retained
+box of `p` is decref'd at the reassignment, and `p2`'s co-owned box is decref'd at scope exit; both
+callers stay owners. Reads `p2.x` = 8.
+
+<!-- test: struct-reassign-to-other-borrowed-param -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function pick(p Point, p2 Point, c Integer) returns Integer
+	var q = p
+	if c > 0 'b'
+		q = p2
+	end 'b'
+	return q.x
+end 'pick'
+
+function main() returns ExitCode
+	let a = Point.create(5)
+	let b = Point.create(8)
+	return pick(a, p2: b, c: 1)
+end 'main'
+```
+```exitcode
+8
+```
+```stdout
+```
+
+### Reassign to Another Borrowed Param Retains It (Union)
+
+The union twin: `q` retains borrowed `u`, then is reassigned another borrowed union parameter `u2` on
+the taken branch. Before the fix the boxed union was string-promoted and the match faulted
+(`0xC0000005`); the retain co-owns `u2`'s box and the match reads its payload. Sums the taken branch
+(`u2`, 8) and the untaken one (`u`, 5) to exercise both the reassign-and-retain and the
+retained-box-only exit in one program: 13.
+
+<!-- test: union-reassign-to-other-borrowed-param -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Num
+	none
+	val(v Integer)
+end 'Num'
+
+function pick(u Num, u2 Num, c Integer) returns Integer
+	var q = u
+	if c > 0 'b'
+		q = u2
+	end 'b'
+	return match q 'm'
+		none gives 0
+		val(v) gives v
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	let a = Num.val(5)
+	let b = Num.val(8)
+	return pick(a, u2: b, c: 1) + pick(a, u2: b, c: 0)
+end 'main'
+```
+```exitcode
+13
+```
+```stdout
+```
+
 ### Conditional Reassign in a Nested Block, Then Match (Union)
 
 The union twin of the struct then-path: `q` aliases a borrowed union param, is reassigned

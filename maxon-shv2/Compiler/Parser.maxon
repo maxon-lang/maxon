@@ -5556,13 +5556,16 @@ export type Parser
 		return tagIsText(self.tagOf(value)) or self.valueIsNonTextAggregate(value)
 	end 'valueIsManagedHeap'
 
-	// Is `value` a managed heap AGGREGATE — a struct box or a boxed union — but NOT a String? This is the
-	// boundary a BORROWED value cannot cross as owned: unlike a String (which promotes with the fused-record
-	// blit `promoteToOwnedString`), an aggregate has no cheap owning copy — shv2 has neither `__mm_incref`
-	// nor an aggregate deep-copy — so handing one off as owned would give two owners one box (a double free).
-	// Named once because two refusals draw exactly this line: `return <borrowed aggregate>`
+	// Is `value` a managed heap AGGREGATE — a struct box or a boxed union — but NOT a String? An aggregate
+	// has no cheap owning COPY (unlike a String, which promotes with the fused-record blit
+	// `promoteToOwnedString`), so a borrowed one becomes owned only by CO-OWNERSHIP — an `__mm_retain`
+	// incref of the shared box (`retainBorrowedAggregate`, OPEN #40). That is wired for a `var q = p`
+	// binding, whose scope-exit drop decrefs the co-owned box so the caller stays an owner. It is NOT yet
+	// wired for the two HANDOFF sites that name this predicate — `return <borrowed aggregate>`
 	// (`emitOwnedValueReturn`) and a borrowed-aggregate `gives`/ternary arm merged into an owned result phi
-	// (`promoteBorrowedGive`). Both wait on the same cross-call consume (P1.5).
+	// (`promoteBorrowedGive`) — where the value ESCAPES to the caller: co-owning across that boundary needs
+	// the cross-call consume (P1.5), so until then both cleanly REFUSE rather than hand off a box whose own
+	// owner would free it too (a double free).
 	function valueIsNonTextAggregate(value ValueId) returns bool
 		let tag = self.tagOf(value)
 		// A generic INSTANCE (`Sizer with bool`, P1.6-B1) is a heap box exactly like a plain `structRef`: a
@@ -6055,42 +6058,32 @@ export type Parser
 		// poison never runs its owned-set scan on a consume (see `rhsWasBareLocalReference`).
 		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 
-		// ⭐ **A MUTABLE STRING BINDING OWNS A WRITABLE HEAP COPY.** `var s = "literal"` binds `s` to an
-		// immortal READ-ONLY rdata record, which `s.append(...)` cannot grow in place. So a `var` whose
-		// initializer is a BORROWED String is promoted to an owned heap copy AT THE DECLARATION — the same
-		// fused-record copy a borrowed `return` makes (`promoteToOwnedString`) — which makes `s` writable
-		// and enrols it as owned at ITS OWN scope. That last part is load-bearing: `ownedBindings` is a
-		// height stack, so a binding can only be marked owned at the depth it is declared, and promoting at
-		// the declaration is what lets an append INSIDE a nested loop mutate in place with no owned-set
-		// surgery (the OPEN #40 hazard the reassignment path still carries). A `let` String stays a borrowed
-		// rdata pointer — immutable, so never appended, and a copy would be an allocation with no consumer.
-		// An already-owned initializer (`var s = "{x}"`, or a move `var s = t`) is left untouched, and the
-		// promotion makes this binding a fresh CONSUME, not a bare-local move.
+		// ⭐ **A MUTABLE BORROWED MANAGED BINDING IS PROMOTED TO OWNED AT ITS DECLARATION.** A `var` whose
+		// initializer is a BORROWED managed value (a `"literal"` rdata String, or a struct/union PARAMETER —
+		// both hold a managed tag yet own nothing) is made to own a droppable value here, at ITS OWN scope:
+		//
+		//   • a String COPIES into a writable owned heap record — `var s = "hi"` binds an immortal READ-ONLY
+		//     rdata record `s.append(…)` cannot grow in place, so it is copied (value semantics).
+		//   • a struct/union INCREFS the shared box (OPEN #40) — an aggregate has no cheap owning copy and its
+		//     alias is observable (`q.x = 100` must show through to the caller), so it stays the SAME box with
+		//     one more owner (reference semantics).
+		//
+		// Promoting at the DECLARATION is what enrols the binding as owned at the depth it is declared. Left
+		// borrowed, a later `q = <owned>` inside a NESTED block would be the FIRST thing to make it own a
+		// drop, and `reassignBindingValue`'s `borrowedToOwned` would enrol it at the INNER block's depth — so
+		// the fresh box would drop at that block's `end` while the binding (declared outer) is read past it: a
+		// use-after-free (the String append-in-nested-loop hazard, and its aggregate twin OPEN #40). The
+		// retain/copy balances on every path: a reassignment decrefs/drops the promoted value, and an untaken
+		// branch leaves the scope-exit drop to reclaim it — net zero, so the caller stays the owner of an
+		// aggregate box. An already-OWNED initializer (`var s = "{x}"`, `var p = Point.create(…)`, a move
+		// `var q = t`) is left untouched by the `not valueIsOwnedHeap` guard, and a `let` is never reassigned,
+		// so only a `var` needs this. The promotion makes the binding a fresh CONSUME, not a bare-local move.
 		var boundValue = value
 		var boundBareLocal = rhsWasBareLocal
-		if mutable and self.tagOf(value) == ValueTypeTag.string and not self.valueIsOwnedHeap(value) 'promoteMutableString'
-			boundValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
+		if mutable and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
+			boundValue = self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
 			boundBareLocal = false
-		end 'promoteMutableString'
-
-		// ⭐ **A MUTABLE BORROWED-AGGREGATE BINDING CO-OWNS THE BOX FROM DECLARATION (OPEN #40).** A struct or
-		// union PARAMETER is a BORROWED box; `var q = p` aliases it (an aggregate has no cheap owning copy, so
-		// it CANNOT be duplicated the way a mutable String is — `q.x = 100` must show through to the caller).
-		// Left borrowed, a later `q = <owned>` inside a NESTED block would be the FIRST thing to make `q` own a
-		// drop, and `reassignBindingValue`'s `borrowedToOwned` would enrol it at the INNER block's depth — so
-		// the fresh box would drop at that block's `end` while `q` (declared outer) is read past it: a
-		// use-after-free. Retaining the box here (an INCREF, at `q`'s own scope) makes `q` owned FROM
-		// DECLARATION, so the reassignment is a uniform owned→owned and never the wrong-depth enrol. The incref
-		// balances on every path: a reassignment decrefs the retained box, and an untaken branch leaves the
-		// scope-exit drop to decref it — net zero, so the CALLER stays the owner. This is the exact mirror of
-		// `promoteMutableString`, with an incref (reference semantics) where the String makes a copy (value
-		// semantics). An already-OWNED initializer (`var p = Point.create(…)`, a move `var q = t`) is left
-		// untouched by the `not valueIsOwnedHeap` guard — it already owns a droppable box — and a `let` is
-		// never reassigned, so only a `var` needs this.
-		if mutable and self.valueIsNonTextAggregate(value) and not self.valueIsOwnedHeap(value) 'retainBorrowedAggregate'
-			boundValue = self.retainBorrowedAggregate(value, range: SourceRange.ofToken(nameTok))
-			boundBareLocal = false
-		end 'retainBorrowedAggregate'
+		end 'promoteBorrowedBinding'
 
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
@@ -6378,16 +6371,19 @@ export type Parser
 		let wasOwned = not wasMovedFrom and self.bindingIsOwned(binding)
 		let inOwnedSet = wasOwned or wasMovedFrom
 
-		// Promote a borrowed value assigned to a binding that is (or stays) in the owned set
-		// (owned→borrowed `s = "literal"`, or a moved-from binding revived with a literal) to an owned
-		// copy, so the binding keeps owning a droppable value rather than being deleted from the middle
-		// of the owned-binding stack (see the header). Reached only for a String: a struct binding's RHS
-		// is always a fresh owned struct box (its producer set the provenance bit), and `requireAssignable`
-		// rejects any other type.
+		// Promote a borrowed value assigned to a binding that is (or stays) in the owned set to an owned
+		// value, so the binding keeps owning a droppable one rather than being deleted from the middle of
+		// the owned-binding stack (see the header). Two shapes reach here: a borrowed String
+		// (owned→borrowed `s = "literal"`, or a moved-from String revived with a literal), COPIED; and a
+		// borrowed struct/union (`q = p2`, reassigning a retained OPEN #40 aggregate var to another borrowed
+		// parameter — same aggregate type, so `requireAssignable` admits it), INCREF'd. The same
+		// `promoteBorrowedToOwned` the declaration routes through, so the two sites cannot answer the
+		// String-vs-aggregate question differently: string-promoting a borrowed struct here blits its fields
+		// as a fused String record, a silent miscompile.
 		var newValue = value
 		var newIsOwned = self.valueIsOwnedHeap(value)
 		if inOwnedSet and not newIsOwned 'promoteBorrowed'
-			newValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
+			newValue = self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
 		end 'promoteBorrowed'
 
@@ -8334,6 +8330,34 @@ export type Parser
 		self.markValueOwnsHeap(retained)
 		return retained
 	end 'retainBorrowedAggregate'
+
+	// ⭐ **MAKE A BORROWED MANAGED VALUE OWNED — the ONE `String`-copy-vs-aggregate-retain decision both a
+	// DECLARATION (`var q = p`) and a REASSIGNMENT (`q = p2`) of an owned binding must make.** A borrowed
+	// value cannot be enrolled as owned as-is: its owner is elsewhere, so a scope-exit drop would free the
+	// caller's box a second time. So it is promoted — a String COPIES into a fresh owned record (value
+	// semantics), a struct/union INCREFS the shared box (reference semantics: an aggregate has no cheap
+	// owning copy and its alias is observable through a field write). The caller has already established
+	// that `value` is a BORROWED managed heap value (`valueIsManagedHeap and not valueIsOwnedHeap`), so the
+	// two arms are exhaustive and a scalar — which owns no heap and never reaches an owned binding — is a
+	// parser invariant break, not an unhandled case.
+	//
+	// ⚠ Single-sourced BECAUSE the two callers straddle a boundary that let them drift: before this, the
+	// reassignment path spelled only the String half (`promoteToOwnedString`) and, once the declaration
+	// began making struct/union `var`s owned (OPEN #40), string-promoted a borrowed STRUCT on `q = p2` — a
+	// blit of the struct's fields as a fused String record, a SILENT miscompile the type checker waves
+	// through (both sides are the same aggregate type) and the suite was green over. Routing both sites
+	// here makes a future divergence a compile error rather than a wrong answer.
+	function promoteBorrowedToOwned(value ValueId, range SourceRange) returns ValueId
+		if tagIsText(self.tagOf(value)) 'text'
+			return self.promoteToOwnedString(value, range: range)
+		end 'text'
+
+		if self.valueIsNonTextAggregate(value) 'aggregate'
+			return self.retainBorrowedAggregate(value, range: range)
+		end 'aggregate'
+
+		panic("promoteBorrowedToOwned: v{value} is neither text nor a managed aggregate — the caller has already gated on `valueIsManagedHeap`, so a borrowed value promoted to owned is always a String (copy) or a struct/union box (retain); a scalar owns no heap and never reaches an owned binding's promotion")
+	end 'promoteBorrowedToOwned'
 
 	// ⭐ **DROP EVERY OWNED TEMPORARY THE STATEMENT LEFT UNCONSUMED**, in REVERSE creation order (the
 	// `emitScopeDrops` convention — the last built is the first torn down), into `currentBlock`. Called at
