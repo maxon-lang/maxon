@@ -83,6 +83,16 @@ export let GtOffThrew = 0x58
 // 0x80 is exactly the `io_handle` slot the authoritative GtLayout names in the 0x60–0xA0 reserved gap (see the
 // note below), so the later IOCP/subprocess-pipe slices graft on without moving a field. Written and read only
 // from Std here, so — like `GtOffStackBase`/`GtOffNext` — it stays local, not exported to the hand-asm chunks.
+//
+// ⭐ P1.5 slice 1b TAGS this slot's spare LOW BIT with the reading GT's pipe ownership (kernel HANDLEs from
+// CreatePipe/CreateNamedPipe are always 4-aligned, so bit 0 is free): 1 = one-shot/owned (`__gt_io_read`'s
+// per-GT pipe, closed by the drop cancel arm), 0 = streaming/table-owned (`__gt_subp_read_line`'s pipe, left
+// open for `subpRelease`). `__gt_subp_yield_read` OR's the bit in at park; `emitGtIoCancelArm` masks it off
+// before CancelIoEx/CloseHandle and branches its CloseHandle on it. This replaces the dedicated `io_owns_pipe`
+// field an earlier cut of this fix added (which grew the GT struct +8 B and shifted the inline arg region),
+// and it is cross-thread-safe: the completion thread NEVER reads or writes io_handle (it touches only
+// io_result/status/ioParked and the run-queue), and only yield_read parks reach the cancel arm (proc/timer
+// parks have `ioParked == 0` and take the store-removal path), so the tag is always present and never clobbered.
 let GtOffIoHandle = 0x80
 
 // The GT's OWN Windows TIB stack bounds, saved so the syscall shim (P1.5-B1a′) can repoint `gs:[0x08]`
@@ -143,17 +153,6 @@ export let IoParkedAbandoned = 2
 export let IoParkedDrainDone = 3
 export let IoParkedNormalDone = 4
 
-// ⭐ **"THE READING GT OWNS ITS IO PIPE" MARKER (P1.5 slice 1b).** Set at PARK time by `__gt_subp_yield_read`:
-// 1 for a ONE-SHOT read (`__gt_io_read`'s per-GT pipe, which the GT owns), 0 for a STREAMING read
-// (`__gt_subp_read_line`'s TABLE-owned pipe, shared across the handle's reads). The `__gt_promise_drop` IO cancel
-// arm reads it to decide whether to `CloseHandle` the read pipe: a dropped one-shot read closes it (the resume
-// that would have never runs), a dropped STREAMING read must NOT (the pipe stays open for the next
-// `subpReadLine(h)`; `subpRelease` is its sole closer). A DEDICATED field, not an `ioParked` state, because the
-// completion thread overwrites `ioParked` to `IoParkedNormalDone` on a read that finished just before the drop —
-// erasing any owned/shared bit encoded there, while this survives. 0xB0 is shv2-divergent territory already (the
-// inline arg region, which this pushes to 0xB8); the port-critical 0x00–0xA8 header is untouched.
-export let GtOffIoOwnsPipe = 0xB0
-
 // ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
 // so a spawn needs NO separate `__slab_alloc`'d argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a
 // SELF-POINTER `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer exactly as it read a
@@ -162,15 +161,15 @@ export let GtOffIoOwnsPipe = 0xB0
 // the arg buffer a separate `__slab_alloc` and `__slab_free` it at run-completion — because shv2's slab has NO
 // free path (`MmRuntime.__slab_alloc` is a pure bump allocator). Inlining reclaims the arg region for free when
 // the struct is recycled onto the free-list, and it is SAFE because the region is DEAD by completion: the
-// trampoline reads all MaxAsyncArgs slots into registers at run-start and never touches them again. Offset 0xB8
-// follows `io_owns_pipe@0xB0`, so every existing field (0x00–0xA8) stays byte-identical to the authoritative
-// GtLayout and the port property is preserved (the trampoline reads the arg region through the 0x48 argBuf
-// self-pointer, never a hardcoded offset, so shifting the inline region moves no hand-assembled read).
-export let GtOffArgInline = 0xB8
+// trampoline reads all MaxAsyncArgs slots into registers at run-start and never touches them again. Offset 0xB0
+// is the current end of the reserved header, so every existing field (0x00–0xA8) stays byte-identical to the
+// authoritative GtLayout and the port property is preserved. (Slice 1b's pipe-ownership marker rides io_handle's
+// spare low bit — see `GtOffIoHandle` — so it did NOT need a field here and this stayed at 0xB0.)
+export let GtOffArgInline = 0xB0
 
-// 0xE8 = 232 bytes = 0xB8 header (through io_owns_pipe@0xB0) + ArgBufBytes (0x30) inline arg region. The header
-// words 0x60–0xA0 remain RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields). Must be a
-// multiple of 8 (whole-word fields).
+// 0xE0 = 224 bytes = 0xB0 header + ArgBufBytes (0x30) inline arg region. The header words 0x60–0xA0 remain
+// RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields), slab-zeroed and unused until the
+// subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
 export let GtStructSize = GtOffArgInline + ArgBufBytes
 
 // --- GT status ---
@@ -1895,9 +1894,18 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	var ioClosePipe = module.addBlock(func, label: b"ioclosepipe")
 	var ioPendingDec = module.addBlock(func, label: b"iopendingdec")
 
-	// startBlock: readEnd = gt.io_handle ; ovl = gt + GtOffOverlapped ; Enter __io_lock ; branch on ioParked == 4.
+	// startBlock: split gt.io_handle into its ownership tag + real handle ; ovl = gt + GtOffOverlapped ;
+	// Enter __io_lock ; branch on ioParked == 4. io_handle's spare low bit carries pipe ownership (yield_read
+	// OR'd it in; kernel HANDLEs are 4-aligned): `ownsPipe` is bit 0 (1 = one-shot/owned, 0 = streaming/table),
+	// `readEnd` is the real handle with the tag masked off — used for CancelIoEx and the conditional CloseHandle.
+	let rawHandle = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(rawHandle, addrId: gt, offset: GtOffIoHandle, valueType: StdType.i64))
+	let ownsBitConst = ids.mint()
+	module.appendOp(startBlock, op: StdOp.const(ownsBitConst, value: 1, valueType: StdType.i64))
+	let ownsPipe = ids.mint()
+	module.appendOp(startBlock, op: StdOp.binOp(ownsPipe, lhs: rawHandle, rhs: ownsBitConst, opcode: StdBinOpcode.bitAnd, operandType: StdType.i64))
 	let readEnd = ids.mint()
-	module.appendOp(startBlock, op: StdOp.loadIndirect(readEnd, addrId: gt, offset: GtOffIoHandle, valueType: StdType.i64))
+	module.appendOp(startBlock, op: StdOp.binOp(readEnd, lhs: rawHandle, rhs: ownsPipe, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let ovlOffConst = ids.mint()
 	module.appendOp(startBlock, op: StdOp.const(ovlOffConst, value: GtOffOverlapped as ParsedInt, valueType: StdType.i64))
 	let ovlPtr = ids.mint()
@@ -1943,9 +1951,8 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	module.setTerminator(ioAlreadyUnlock, op: StdOp.branch(ioCleanup.id))
 
 	// ioCleanup: close the read end ONLY if the GT owns the pipe (a one-shot read); a streaming read's pipe is
-	// table-owned and left open for `subpRelease`. Shared by both the abandon and already-fired paths.
-	let ownsPipe = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.loadIndirect(ownsPipe, addrId: gt, offset: GtOffIoOwnsPipe, valueType: StdType.i64))
+	// table-owned and left open for `subpRelease`. `ownsPipe` (0/1) was split out of io_handle's tag bit in
+	// startBlock, which dominates this merge of the abandon and already-fired paths.
 	let zeroOwns = ids.mint()
 	module.appendOp(ioCleanup, op: StdOp.const(zeroOwns, value: 0, valueType: StdType.i64))
 	let isOwned = ids.mint()
@@ -3262,9 +3269,11 @@ function buildSubpYieldRead(module StdModule)
 	emitStoreField(module, block: park, record: pendingAddr, offset: 0, value: pendingRaised)
 	let waitingConst = emitConst(module, block: park, value: GtStatusWaiting, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
-	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoHandle, valueId: readEnd, valueType: StdType.i64))
-	// Record pipe ownership for the drop cancel arm's CloseHandle decision (1 = one-shot/owned, 0 = streaming/table).
-	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoOwnsPipe, valueId: ownsPipe, valueType: StdType.i64))
+	// Tag pipe ownership into io_handle's spare low bit (1 = one-shot/owned, 0 = streaming/table) — the drop
+	// cancel arm masks it off and branches its CloseHandle on it. Kernel HANDLEs are 4-aligned, so bit 0 is free;
+	// this avoids a dedicated GT field (and the +8-byte struct growth it would cost every async program).
+	let taggedHandle = emitBin(module, block: park, a: readEnd, b: ownsPipe, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoHandle, valueId: taggedHandle, valueType: StdType.i64))
 	let parkedConst = emitConst(module, block: park, value: IoParkedInFlight, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: parkedConst, valueType: StdType.i64))
 	let waiter = emitLoadField(module, block: park, record: selfGt, offset: GtOffWaiter, ids: ids)
