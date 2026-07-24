@@ -2897,6 +2897,29 @@ export type ProgramSignatures
 		return self.isSetBaseName(self.genericInstanceBaseName(id))
 	end 'isSetInstance'
 
+	// The KEY type of `Set with T` — its sole type argument, in this index's own interner. The `Set` twin of
+	// `arrayElementType`.
+	export function setKeyType(id GenericInstanceId) returns MaxonType
+		let args = self.genericInstances.instanceArgs(id)
+		return try args.get(0) otherwise panic("ProgramSignatures.setKeyType: `Set` instance {id} has no type argument — arity (1) was checked at instantiation")
+	end 'setKeyType'
+
+	// Is `Set with T`'s key itself managed (String at this slice) — the boundary a managed-key set needs the
+	// per-key destroy walk for (P1.7b). A trivial key (int / ranged-int) is stored inline and owns nothing. The
+	// `Set` twin of `arrayElementIsManaged`, reading the SAME `typeIsManaged` boundary the drop cascade decides on.
+	export function setKeyIsManaged(id GenericInstanceId) returns bool
+		return self.typeIsManaged(self.setKeyType(id))
+	end 'setKeyIsManaged'
+
+	// The key DESTRUCTOR callee for a managed-key `Set with T` (P1.7b) — the runtime entry the set's teardown /
+	// dup-drop / remove-drop calls on each vacated key: a String → `__str_decref`. Routed through the SHARED
+	// `managedFieldDropCallee` over the key type, so the stamped key destructor equals the drop callee a managed
+	// FIELD of the same type gets — the moved-in key and the dropped key agree by construction. The `Set` twin of
+	// `arrayElementDropCallee`. Precondition: `setKeyIsManaged`.
+	export function setKeyDropCallee(id GenericInstanceId) returns ByteArray
+		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.setKeyType(id))
+	end 'setKeyDropCallee'
+
 	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
 	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
 	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
@@ -2990,6 +3013,18 @@ export type ProgramSignatures
 		args.push(MaxonType.string)
 		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
 	end 'arrayInstanceForString'
+
+	// The `Set with String` instance for a `Set from ["…"]` construction (P1.7b) — the `Set` twin of
+	// `arrayInstanceForString`. A `Set from [strings]` has no typealias to intern from and its key type is not
+	// fixed by a token, so the SWEEP over-interns it (alongside `Set with integer`) and the parser reads back
+	// whichever the source array's element resolves to. Keyed as `MaxonType.string` — the SAME arg a
+	// `typealias Set with String` interns and a `["…"]` literal shares — so a from-built set and a `.create()`d
+	// one of the same key type share ONE gid. Idempotent, so the sweep is the WRITE and the parser a pure READ.
+	export function setInstanceForString() returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(MaxonType.string)
+		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: args)
+	end 'setInstanceForString'
 
 	export function arrayInstanceForNamedElement(name ByteArray) returns GenericInstanceId
 		var args = MaxonTypeArray.create()

@@ -3041,13 +3041,13 @@ export type Parser
 		// element resolves to. A `[` + int-literal stays the int-array default and interns none of these.
 		var hasStringArrayLiteral = false
 		var hasAggregateArrayLiteral = false
-		// A bare `Set` identifier followed by `from` is a `Set from [ints]` construction (P1.7b slice B) — the one
-		// `from`-construction shv2 parses. Its int element type is inferred from the array literal, so — like a
-		// bare `[…]` — it has no typealias to intern its `Set with integer` instance from; the sweep interns that
-		// one well-known instance for the parser to read back. (The `[…]` of the literal itself sets
-		// `hasIntArrayLiteral`, so the SOURCE `Array with integer` instance is interned too.) Set here, acted on
-		// after the walk.
-		var hasIntSetFromLiteral = false
+		// A bare `Set` identifier followed by `from` is a `Set from [ints]` / `Set from ["…"]` construction (P1.7b)
+		// — the one `from`-construction shv2 parses. Its key type (int or String) is inferred from the array
+		// literal, so — like a bare `[…]` — it has no typealias to intern its `Set with <key>` instance from; the
+		// sweep over-interns BOTH well-known instances (int and String) for the parser to read back whichever the
+		// source array resolves to. (The `[…]` of the literal itself sets `hasIntArrayLiteral` / `hasStringArrayLiteral`,
+		// so the SOURCE array instance is interned too.) Set here, acted on after the walk.
+		var hasSetFromLiteral = false
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -3065,7 +3065,7 @@ export type Parser
 			end 'byteStringToken'
 
 			if self.atSetFromConstruction() 'setFromToken'
-				hasIntSetFromLiteral = true
+				hasSetFromLiteral = true
 			end 'setFromToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
@@ -3152,11 +3152,14 @@ export type Parser
 			index.internArrayLiteralAggregateInstances()
 		end 'internAggregateArrayLiteral'
 
-		// Intern the `Set with integer` instance if this file materializes a `Set from [ints]` construction —
-		// after `foldFile`, exactly as the int-array literal instance above, so its giid follows the file's named
-		// generic instances (a stable, source-path-ordered assignment).
-		if hasIntSetFromLiteral 'internSetFromLiteral'
+		// Intern the `Set with integer` AND `Set with String` instances if this file materializes a `Set from […]`
+		// construction — its key type (int or String) is inferred from the array literal, which the sweep cannot
+		// see, so both are over-interned (the parser reads back whichever the source array resolves to), exactly as
+		// `internArrayLiteralAggregateInstances` over-interns the array's possible element instances. After
+		// `foldFile` so their giids follow the file's named generic instances (a stable, source-path-ordered assignment).
+		if hasSetFromLiteral 'internSetFromLiteral'
 			_ = index.internBuiltinIntegerInstance(SetBuiltinBaseName)
+			_ = index.setInstanceForString()
 		end 'internSetFromLiteral'
 	end 'foldDeclaredSignaturesInto'
 
@@ -3174,13 +3177,12 @@ export type Parser
 	// Is the cursor on a `Set from` construction — a bare `Set` identifier immediately followed by `from`
 	// (P1.7b slice B)?
 	//
-	// ONE predicate, read by BOTH the declaration sweep (which PRE-INTERNS `Set with integer` so the parser's
-	// own read is never the first to mutate the shared registry) and `parsePrimary`'s construction arm (which
-	// BUILDS the `__set_from`), for the reason `atTopLevelBindingKeyword` is one predicate. Taught to one and
-	// not the other — a broadened `from`-construction trigger the parser builds but the sweep does not recognize
-	// — a `Set from` would go un-pre-interned, and the parser's `internBuiltinIntegerInstance` read would become
-	// the FIRST write to the shared registry mid-parse: an order-dependent gid no drift guard can see. Teaching
-	// this one predicate teaches both.
+	// ONE predicate, read by BOTH the declaration sweep (which PRE-INTERNS `Set with integer` AND `Set with String`
+	// so the parser's own read is never the first to mutate the shared registry) and `parsePrimary`'s construction
+	// arm (which BUILDS the `__set_from`), for the reason `atTopLevelBindingKeyword` is one predicate. Taught to one
+	// and not the other — a broadened `from`-construction trigger the parser builds but the sweep does not recognize
+	// — a `Set from` would go un-pre-interned, and the parser's instance read would become the FIRST write to the
+	// shared registry mid-parse: an order-dependent gid no drift guard can see. Teaching this one predicate teaches both.
 	function atSetFromConstruction() returns bool
 		return self.at(TokenKind.identifier) and self.current().value.equals(SetBuiltinBaseName) and self.peekKind() == TokenKind.from
 	end 'atSetFromConstruction'
@@ -16365,30 +16367,45 @@ export type Parser
 		end 'unknownStatic'
 		try self.consume(TokenKind.leftParen)
 		try self.consume(TokenKind.rightParen)
-		try self.requireSetIntKeyType(giid, tok: aliasTok)
+		try self.requireSetKeyType(giid, tok: aliasTok)
 		let set = self.emitSetCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
 		self.trackOwnedTemp(set)
 		return set
 	end 'parseSetStaticCall'
 
-	// Emit `__set_create()` for instance `giid`, yielding the empty set record (P1.7b slice A). The record is
-	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers.
+	// Emit `__set_create(elemDrop)` for instance `giid`, yielding the empty set record (P1.7b). The record is
+	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers; `elemDrop@40` carries the key
+	// destructor (`__str_decref` for a String key, 0 for a trivial int key) so the set drops its owned keys at
+	// teardown / dup-insert / remove.
 	function emitSetCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
-		return self.emitRuntimeCall(SetCreateName, args: ValueIdArray.create(), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		let elemDrop = self.setElementDestroyValue(giid, range: range)
+		return self.emitRuntimeCall(SetCreateName, args: singletonArgs(elemDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitSetCreateOp'
 
-	// ⭐ **THE INT-KEY-ONLY GATE (P1.7b slice A).** A `Set`'s key type must be `int` (or a ranged-int alias):
+	// ⭐ **THE `elemDrop@40` STAMP VALUE for a `Set` (P1.7b) — the `Set` twin of `arrayElementDestroyValue`.** A
+	// MANAGED key (String) → the RAW `.text` address of its drop callee (`__str_decref`), via the same P1.5-A1
+	// `funcAddr` code→register path the array element destructor rides (no rdata reloc, no descriptor); a trivial
+	// int key → 0. `__set_decref`'s teardown walk calls it through a `callIndirect` on each live key.
+	function setElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
+		if self.signatures.setKeyIsManaged(giid) 'managed'
+			return self.emitRuntimeFuncAddr(self.signatures.setKeyDropCallee(giid), range: range)
+		end 'managed'
+		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+	end 'setElementDestroyValue'
+
+	// ⭐ **THE KEY-TYPE GATE (P1.7b).** A `Set`'s key type must be `int` (or a ranged-int alias) OR `String`:
 	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` witnesses, and only `int`
-	// has those synthesized (2b-i). A managed key (String / struct / `ByteArray`) rides a sibling slice, so a
-	// non-int `Set` is a clean E2015 here rather than a link failure at the missing witness impl. The key type
-	// is read through `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
-	// (`LowerMaxonToStd.appendSetWitnessArgs`), so the gate and the dispatch agree on what "int-keyed" means.
-	function requireSetIntKeyType(giid GenericInstanceId, tok Token) throws ParseError
+	// (2b-i) and `String` (Slice C) have those synthesized. A struct / `ByteArray` key rides a later slice, so it
+	// is a clean E2015 here rather than a link failure at the missing witness impl. The key type is read through
+	// `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
+	// (`LowerMaxonToStd.appendSetWitnessArgs`) — so the gate and the dispatch agree on the key's identity (an
+	// `int` and a ranged-int alias both reduce to `int`; a `String` names itself).
+	function requireSetKeyType(giid GenericInstanceId, tok Token) throws ParseError
 		let keyType = self.signatures.conformerTypeArgName(giid, position: 0 as TypeParamId).toByteArray()
-		if not keyType.equals(IntConformerName) 'notInt'
-			throw ParseError.unsupported("`Set` supports INT scalar keys only at P1.7b slice A — a '{String.from(keyType)}' key (String / struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
-		end 'notInt'
-	end 'requireSetIntKeyType'
+		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName)) 'unsupportedKey'
+			throw ParseError.unsupported("`Set` supports `int` and `String` keys — a '{String.from(keyType)}' key (struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
+		end 'unsupportedKey'
+	end 'requireSetKeyType'
 
 	// ⭐ **`Set from [1, 2, 3]` — CONSTRUCT A SET FROM AN ARRAY LITERAL (P1.7b slice B).** The cursor sits on the
 	// `Set` identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
@@ -16415,16 +16432,19 @@ export type Parser
 	end 'parseSetFromConstruction'
 
 	// The `Set with <elem>` instance a `Set from [<literal>]` constructs — its key type is the array literal's
-	// ELEMENT type, so a `Set from [ints]` is the `Set with integer` instance (`internBuiltinIntegerInstance`,
-	// whose `integer` element canonicalizes to the `int` witness, matching the array's own element). INT-element
-	// only this slice: the literal must be `Array with integer`, so a String / managed-element literal (`Set from
-	// ["a"]`) is a clean E2015 here rather than a link failure at the missing key witness. Both instances are
-	// pre-interned by the sweep, so these are pure reads.
+	// ELEMENT type. A `Set from [ints]` → `Set with integer` (whose `integer` element canonicalizes to the `int`
+	// witness); a `Set from ["…"]` → `Set with String`. INT and STRING elements this slice: a struct / ByteArray
+	// literal is a clean E2015 here rather than a link failure at the missing key witness. Both source instances
+	// (`Array with integer` / `Array with String`) and both `Set` instances are pre-interned by the sweep, so
+	// these are pure reads.
 	function setInstanceForArrayLiteral(arrGid GenericInstanceId, setTok Token) returns GenericInstanceId throws ParseError
-		if arrGid != self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName) 'notInt'
-			throw ParseError.unsupported("`Set from […]` supports INT scalar keys only at P1.7b slice B — a String / managed-element literal is a later slice", line: setTok.line, column: setTok.column)
-		end 'notInt'
-		return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
+		if arrGid == self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName) 'intKey'
+			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
+		end 'intKey'
+		if arrGid == self.signatures.arrayInstanceForString() 'stringKey'
+			return self.signatures.setInstanceForString()
+		end 'stringKey'
+		throw ParseError.unsupported("`Set from […]` supports `int` and `String` keys — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
 	end 'setInstanceForArrayLiteral'
 
 	// ⭐ **DISPATCH A `Set` METHOD off a binding receiver (P1.7b slice A)** — the set twin of
@@ -16438,54 +16458,97 @@ export type Parser
 		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed)
 	end 'parseSetMethodCall'
 
-	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b
-	// slice A). `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator
-	// (rejected in value position, E3059) that returns the receiver — what the statement still denotes, like
-	// `emitArrayVoidCall`. `insert`/`contains`/`remove` carry the key's witness tables, appended by
-	// `LowerMaxonToStd.appendSetWitnessArgs`; the parser passes only `[set, elem]`.
+	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).
+	// `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator (rejected in
+	// value position, E3059) that returns the receiver — what the statement still denotes, like `emitArrayVoidCall`.
+	// `insert`/`contains`/`remove` carry the key's witness tables, appended by `LowerMaxonToStd.appendSetWitnessArgs`;
+	// the parser passes only `[set, elem]`. The set's key type (`giid`, off the receiver's name-id) gates the key
+	// argument's type and decides ownership: `insert` MOVES a managed key in (`consume: true`), while
+	// `contains`/`remove` BORROW it (`consume: false`).
 	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
+		let giid = self.valueNameId(set)
 
 		if methodTok.value.equals(SetCountMethod) 'count'
 			try self.parseArrayNoArgs()
 			return self.emitRuntimeCall(SetCountName, args: singletonArgs(set), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(SetContainsMethod) 'contains'
-			let elem = try self.parseSetKeyArg(func)
+			let elem = try self.parseSetKeyArg(func, giid: giid, consume: false)
 			return self.emitRuntimeCall(SetContainsName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'contains'
 		if methodTok.value.equals(SetRemoveMethod) 'remove'
-			let elem = try self.parseSetKeyArg(func)
+			let elem = try self.parseSetKeyArg(func, giid: giid, consume: false)
 			return self.emitRuntimeCall(SetRemoveName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'remove'
 
 		// `insert` is a non-throwing VOID mutator — rejected in value position (E3059, the shared check).
 		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
 		if methodTok.value.equals(SetInsertMethod) 'insert'
-			let elem = try self.parseSetKeyArg(func)
+			let elem = try self.parseSetKeyArg(func, giid: giid, consume: true)
 			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 			return set
 		end 'insert'
 
-		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — P1.7b slice A provides create/insert/contains/remove/count; `from`-construction and iteration are later slices", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — P1.7b provides create/insert/contains/remove/count; `from`-construction and iteration are later slices", line: methodTok.line, column: methodTok.column)
 	end 'dispatchSetMethod'
 
-	// `( key )` — a single positional INT key argument for `insert`/`contains`/`remove` (P1.7b slice A). An int
-	// key is a scalar, so there is no move-in (unlike a managed array element); it is type-checked here so a
-	// non-int value (a String pointer that would be hashed as an integer) is a clean E2015 rather than a wrong
-	// answer. `requireSetIntKeyType` at `create` already fixed the set's KEY type to int; this rejects a
-	// mismatched VALUE at the call.
-	function parseSetKeyArg(func IrFunction) returns ValueId throws ParseError
+	// `( key )` — a single positional key argument for `insert`/`contains`/`remove` (P1.7b). The key's type must
+	// match the set's key type (int or String), rejected here so a mismatched value (an int where a String key is
+	// expected, or vice versa — a pointer hashed as an integer, or an int hashed as String bytes) is a clean E2015
+	// rather than a wrong answer. For `insert` (`consume: true`) a managed (String) key is MOVED into the set —
+	// the set becomes its sole owner (`moveKeyIntoSet`, the set twin of `moveElementIntoArray`); `contains`/`remove`
+	// (`consume: false`) BORROW the key for the compare (its owned temp drops at statement end). A trivial int key
+	// is a scalar — no move either way.
+	function parseSetKeyArg(func IrFunction, giid GenericInstanceId, consume bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let keyTok = self.current()
+		let valueStart = self.pos
 		let key = try self.parseExpression(func, block: self.currentBlock)
-		if self.tagOf(key) != ValueTypeTag.integer 'notInt'
-			throw ParseError.unsupported("`Set` supports INT scalar keys only at P1.7b slice A — got a '{typeTagName(self.tagOf(key))}' key", line: keyTok.line, column: keyTok.column)
-		end 'notInt'
+		try self.requireSetKeyMatchesType(key, giid: giid, keyTok: keyTok)
+		// The move-in MUST run before the `)` is consumed — `rhsWasBareLocalReference` reads `[valueStart, self.pos)`
+		// to decide whether the arg is a bare local to POISON, exactly as `parseArrayElementArg` moves before its `)`.
+		var result = key
+		if consume 'moveIn'
+			result = try self.moveKeyIntoSet(key, giid: giid, valueStart: valueStart)
+		end 'moveIn'
 		try self.consume(TokenKind.rightParen)
-		return key
+		return result
 	end 'parseSetKeyArg'
+
+	// The key VALUE's tag must match the set's key TYPE (P1.7b): an int-keyed set takes an integer value, a
+	// String-keyed set takes a String value. `requireSetKeyType` at `create` fixed the KEY type; this rejects a
+	// mismatched value at the call (a String pointer hashed as an int, or an int hashed as String bytes, would be
+	// a wrong answer or a fault). Only int and String keys reach here — the create gate admits no other.
+	function requireSetKeyMatchesType(key ValueId, giid GenericInstanceId, keyTok Token) throws ParseError
+		let keyTag = self.tagOf(key)
+		if tagIsText(maxonTypeTag(self.signatures.setKeyType(giid))) 'stringKey'
+			if not tagIsText(keyTag) 'notString'
+				throw ParseError.unsupported("`Set with String` requires a String key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
+			end 'notString'
+			return
+		end 'stringKey'
+		if keyTag != ValueTypeTag.integer 'notInt'
+			throw ParseError.unsupported("`Set with int` requires an int key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
+		end 'notInt'
+	end 'requireSetKeyMatchesType'
+
+	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET (P1.7b String keys).** The `Set` twin of `moveElementIntoArray`:
+	// the set becomes the key's sole owner (its `__set_decref` walk / dup-drop / remove-drop destroys it), so a
+	// managed (String) key is consumed exactly as an array element is — a borrowed String literal is promoted to
+	// an owned copy, an owned value is transferred (bare local poisoned / temp de-listed) — through the SHARED
+	// `moveManagedValueInto`. A trivial int key owns no heap and passes through unchanged. A `Set` key is always
+	// CONCRETE this slice (int or String), so there is no opaque-`T` case `moveElementIntoArray` carries.
+	// `valueStart` locates the value's first token — its bare-local source and the diagnostic anchor both.
+	function moveKeyIntoSet(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
+		if not self.signatures.setKeyIsManaged(giid) 'trivial'
+			return value
+		end 'trivial'
+		let anchor = self.tokenAt(valueStart)
+		let isString = tagIsText(maxonTypeTag(self.signatures.setKeyType(giid)))
+		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
+	end 'moveKeyIntoSet'
 
 	// ⭐ **DISPATCH A BUILTIN `Array` METHOD off an instance receiver (P1.7 slice 1).** The array twin of
 	// `parseStringMethodCall`: the receiver is a live `Array` instance (a moved-from array touched here is
