@@ -267,6 +267,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// one `__drop_type_param` for either case, exactly once (its sole install site).
 	installDropTypeParamRuntime(pipeline.stdModule, usage: usage)
 
+	// The synthesized `int.hash`/`int.equals` primitive-conformance impls (P1.7a slice 2b) — installed the same
+	// already-lowered-Std way, but keyed on neither a `usage` bit nor a pre-pipeline scan: the witness table that
+	// needs them is built DURING lowering (`ensureWitnessTable` → a funcAbs64 reloc naming the impl), so the
+	// install reads `project.globalData`'s pending relocs directly. Table-built ⟺ impl-installed, golden-neutral
+	// for every program that builds no int witness table (the conformance-free corpus and the whole wasm suite).
+	installPrimitiveConformanceRuntime(pipeline.stdModule, globalData: project.globalData)
+
 	// The per-union (P1.3 slice 2) and per-struct (P1.4a wave 2) destructor cascades, installed the same way
 	// and for the same reason: already-lowered Std, appended after the pipeline so they are never
 	// re-optimized. Only the destructors the module actually CALLS — directly or through a nested cascade

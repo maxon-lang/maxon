@@ -864,7 +864,10 @@ type MaxonToStdLowering
 		let tag = self.valueTagOf(receiver)
 		if tag == ValueTypeTag.genericInstance 'concrete'
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
-			let concreteType = self.signatures.mangleTypeArg(self.signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)).toByteArray()
+			// The CANONICAL conformer name (`Box with Integer` -> `int`, `Box with Point` -> `Point`), so the
+			// table label (`__witness_int_Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
+			// impl — the SAME reducer the E3017 check keys its conformance lookup by, never a second spelling.
+			let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 			let label = self.ensureWitnessTable(concreteType, interfaceName: constraint.interfaceName)
 			let addrId = self.mintStdValueId()
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))

@@ -214,6 +214,12 @@ export union ParseError implements Error
 	// bools is LEGAL (`a == b`); it is the MIXTURE that is meaningless, because the compare
 	// would be over the bool's 0/1 payload rather than over anything the source wrote.
 	comparisonTypeMismatch(left String, right String, line LineNumber, column ColumnNumber)
+	// `==`/`!=` on an UNCONSTRAINED type parameter (`item == other` where `item` is a `T` with no `where T is
+	// Equatable`). Renders as **E3005**, positioned at the operator. Equality on a type parameter dispatches
+	// through its Equatable witness; without the constraint there is no witness, and a scalar `compare` would
+	// silently compare two opaque words (a POINTER compare for a struct `T`). `op` is the operator spelling,
+	// `typeParamName` the parameter's declared name (both appear in the message).
+	equalityRequiresEquatable(op String, typeParamName String, line LineNumber, column ColumnNumber)
 	// An `if` / `while` condition that is not a `bool` (`if 4`). Renders as E3005, positioned
 	// at the CONDITION's first token — the expression the message is about, not the keyword
 	// that introduced it. `keyword` is "if"/"while", so one message template serves both.
@@ -14035,6 +14041,18 @@ export type Parser
 			throw ParseError.unionNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'unionCompare'
 
+		// ⭐ `==`/`!=` ON AN ENCLOSING (opaque) TYPE PARAMETER dispatches through its Equatable witness (P1.7a
+		// slice 2b) — the SAME table `<T>.equals()` uses. Inside the shared body `T`'s concrete type is unknown,
+		// so a scalar `compare` would compare two opaque WORDS: right for an `int` by luck, a POINTER compare for
+		// a struct `T` (a silent wrong answer). An UNCONSTRAINED enclosing `T` has no witness and is E3005.
+		// ⚠ Only a value of an ENCLOSING type parameter opts in: a `typeParameter`-tagged value in a NON-generic
+		// caller is a concrete generic-method result (`let v = intBox.get()`) whose real type IS known (`int`) —
+		// it must stay a scalar compare (`isEnclosingTypeParam` is false there, so it falls through to
+		// `comparableOperands`). ORDERING (`<`/…) on a type parameter is Comparable's, a separate slice.
+		if (op == MaxonCmpOp.eq or op == MaxonCmpOp.ne) and (self.isEnclosingTypeParam(lhs) or self.isEnclosingTypeParam(rhs)) 'typeParamEquality'
+			return try self.emitTypeParamEquality(lhs, rhs: rhs, op: op, opTok: opTok, leftIsParam: self.isEnclosingTypeParam(lhs))
+		end 'typeParamEquality'
+
 		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
@@ -14058,6 +14076,59 @@ export type Parser
 			lt to ge then throw ParseError.comparisonTypeMismatch(typeTagName(ValueTypeTag.string), right: typeTagName(ValueTypeTag.string), line: opTok.line, column: opTok.column)
 		end 'op'
 	end 'emitStringCompare'
+
+	// Is `v` a value of one of the ENCLOSING type's parameters (`self.item`, `other T` inside `type Box uses T`)
+	// — a genuinely opaque `T`, NOT a concrete generic-method result that the parser happens to tag
+	// `typeParameter` in a non-generic caller (P1.7a slice 2b)? The `typeParameter` value's name-id is its
+	// parameter POSITION; it names an enclosing parameter iff that position is in range of `enclosingTypeParams`,
+	// which is empty outside a generic body. The gate that keeps `==` a scalar compare for `let v = intBox.get();
+	// v == 42` while making it a witness dispatch for `item == other` inside `Box`'s own body.
+	function isEnclosingTypeParam(v ValueId) returns bool
+		if self.tagOf(v) != ValueTypeTag.typeParameter 'notParam'
+			return false
+		end 'notParam'
+		return self.valueNameId(v) < self.enclosingTypeParams.count()
+	end 'isEnclosingTypeParam'
+
+	// ⭐ **LOWER `==`/`!=` ON A CONSTRAINED TYPE PARAMETER to an Equatable witness dispatch (P1.7a slice 2b).**
+	// The `typeParameter` operand is the witness receiver (equality is symmetric, so a `T`-vs-value mix uses
+	// whichever side is the parameter); `equals(other Self)` is dispatched through the constraint's witness with
+	// `[receiver, other]`, exactly the shape `parseWitnessMethodOnValue` builds for `<T>.equals(other)`. `==`
+	// returns the bool verdict directly; `!=` negates it (`logicalNot`), built from the SAME dispatch so the two
+	// can never disagree — the `emitStringCompare` shape. The result is a trivial scalar bool (no ownership).
+	function emitTypeParamEquality(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token, leftIsParam bool) returns ValueId throws ParseError
+		let receiver = lhs if leftIsParam else rhs
+		let other = rhs if leftIsParam else lhs
+		let paramPos = self.valueNameId(receiver)
+		let target = try self.requireEquatableWitness(paramPos, op: op, opTok: opTok)
+
+		let equalsResult = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(equalsResult, args: pairArgs(receiver, second: other), constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: false), range: SourceRange.ofToken(opTok))
+
+		match op 'result'
+			eq then return equalsResult
+			ne then return self.emitUnaryOp(equalsResult, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			lt to ge then panic("emitTypeParamEquality: only `==`/`!=` reach here — emitCompare gates ordering out")
+		end 'result'
+	end 'emitTypeParamEquality'
+
+	// The Equatable witness for a `==`/`!=` on type parameter `paramPos` (P1.7a slice 2b), or E3005 when the
+	// parameter carries no Equatable constraint. `equals` is Equatable's method, so a constraint declaring it is
+	// exactly a `where <paramPos> is Equatable` — the same by-method search `.equals()` dispatch uses, here with
+	// its own diagnostic for the miss.
+	function requireEquatableWitness(paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
+		match try self.findWitnessDispatch(paramPos, methodName: EqualsMethodName, errorTok: opTok) 'lookup'
+			found(target) then return target
+			notFound then throw ParseError.equalityRequiresEquatable(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), line: opTok.line, column: opTok.column)
+		end 'lookup'
+	end 'requireEquatableWitness'
+
+	// The declared NAME of the enclosing type's type parameter at `pos` (P1.7a slice 2b) — `T` in `type Box uses
+	// T`. `enclosingTypeParams` is name-by-position, populated for every generic type body, so a `typeParameter`
+	// value's position always indexes it.
+	function enclosingTypeParamName(position TypeParamId) returns ByteArray
+		return try self.enclosingTypeParams.get(position) otherwise panic("enclosingTypeParamName: type-parameter position {position} out of range of the enclosing type's {self.enclosingTypeParams.count()} parameter(s)")
+	end 'enclosingTypeParamName'
 
 	// Emit the `__str_eq(lhs, rhs)` runtime call, typed `boolean` (its i64 result is 0/1). The one
 	// caller-typed emit site for both `==` and `!=`, and for a `string`-scrutinee `match` pattern.
@@ -16146,22 +16217,36 @@ export type Parser
 	// the method's decl-order index, and its return type. The interface is resolved SAME-FILE (declared before
 	// its constrained use), so a forward/cross-file interface is a clean reject rather than a silent miss.
 	function resolveWitnessDispatch(receiverParamPos TypeParamId, methodTok Token) returns WitnessDispatchTarget throws ParseError
+		match try self.findWitnessDispatch(receiverParamPos, methodName: methodTok.value, errorTok: methodTok) 'lookup'
+			found(target) then return target
+			notFound then throw ParseError.unsupported("no `where` constraint on this type parameter declares a method '{String.from(methodTok.value)}' — a method call on a constrained type parameter must be provided by one of its interfaces", line: methodTok.line, column: methodTok.column)
+		end 'lookup'
+	end 'resolveWitnessDispatch'
+
+	// The non-throwing CORE of witness-dispatch resolution (P1.7a slice 2b): find the constraint on
+	// `receiverParamPos`'s type parameter whose interface declares `methodName`, returning its slot index, the
+	// method's decl-order index, and its return type — or `notFound` when none does. Shared by the `.method()`
+	// dispatch (`resolveWitnessDispatch`, which rejects a miss as "no constraint provides this method") and the
+	// `==`/`!=` lowering (`requireEquatableWitness`, which rejects a miss as E3005), so the constraint search is
+	// written once and each caller owns its own diagnostic. `errorTok` positions `requireInterfaceForParse`'s
+	// undeclared-interface reject.
+	function findWitnessDispatch(receiverParamPos TypeParamId, methodName ByteArray, errorTok Token) returns WitnessDispatchLookup throws ParseError
 		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'
-			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("resolveWitnessDispatch: enclosingWhereConstraints.get OOB at {i}")
+			let constraint = try self.enclosingWhereConstraints.get(i) otherwise panic("findWitnessDispatch: enclosingWhereConstraints.get OOB at {i}")
 			if constraint.typeParamIndex != receiverParamPos 'otherParam'
 				continue
 			end 'otherParam'
 
-			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: methodTok)
-			let methodIndex = interfaceMethodIndex(iface, methodName: methodTok.value)
+			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
+			let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
 			if methodIndex < iface.methods.count() 'declaresMethod'
-				let method = try iface.methods.get(methodIndex) otherwise panic("resolveWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
-				return WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName)
+				let method = try iface.methods.get(methodIndex) otherwise panic("findWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
+				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName))
 			end 'declaresMethod'
 		end 'eachConstraint'
 
-		throw ParseError.unsupported("no `where` constraint on this type parameter declares a method '{String.from(methodTok.value)}' — a method call on a constrained type parameter must be provided by one of its interfaces", line: methodTok.line, column: methodTok.column)
-	end 'resolveWitnessDispatch'
+		return WitnessDispatchLookup.notFound
+	end 'findWitnessDispatch'
 
 	// Resolve an interface NAME during PARSING (P1.7a slice 2a) — a synthesized builtin FIRST (matching
 	// `ConformanceCheck.resolveInterface`), then a user interface declared in THIS file. A `where` constraint's

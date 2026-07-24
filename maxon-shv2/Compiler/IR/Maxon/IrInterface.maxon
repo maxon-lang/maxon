@@ -82,14 +82,14 @@ let ErrorInterfaceName = b"Error"
 
 // The protocol methods + their result/param type spellings, verbatim from
 // stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
-let HashMethodName = b"hash"
-let EqualsMethodName = b"equals"
+export let HashMethodName = b"hash"
+export let EqualsMethodName = b"equals"
 let CompareMethodName = b"compare"
 let CloneMethodName = b"clone"
 let FormatParamName = b"format"
 let OtherParamName = b"other"
 let StringTypeName = b"String"
-let HashValueTypeName = b"HashValue"
+export let HashValueTypeName = b"HashValue"
 let BoolTypeName = b"bool"
 let OrderingTypeName = b"Ordering"
 
@@ -172,6 +172,16 @@ export type WitnessDispatchTarget
 	end 'create'
 end 'WitnessDispatchTarget'
 
+// The outcome of searching a type parameter's `where` constraints for one whose interface declares a given
+// method (P1.7a slice 2b) — `found` when a constraint supplies it, `notFound` when none does. The non-throwing
+// core shared by the `.method()` dispatch (which turns `notFound` into its "no constraint provides this method"
+// reject) and the `==`/`!=`-on-a-type-parameter lowering (which turns it into E3005 "requires `where T is
+// Equatable`"): the search runs in ONE place, and each caller owns its own diagnostic for the miss.
+export union WitnessDispatchLookup
+	found(target WitnessDispatchTarget)
+	notFound
+end 'WitnessDispatchLookup'
+
 // The decl-order index of the method named `methodName` in `iface` (P1.7a slice 2a), or `methods.count()`
 // (the "not declared by this interface" sentinel) when absent — the witness-table slot the dispatch reads.
 export function interfaceMethodIndex(iface IrInterface, methodName ByteArray) returns WitnessMethodIndex
@@ -248,3 +258,25 @@ export function builtinInterface(name ByteArray) returns InterfaceLookup
 
 	return InterfaceLookup.notFound
 end 'builtinInterface'
+
+// The canonical conformer name of the primitive `int` — what `ProgramSignatures.conformerTypeArgName`
+// reduces every ranged int alias to, and the key of `int`'s witness tables (`__witness_int_*`) and its
+// synthesized `int.hash`/`int.equals` impls. Named because the intrinsic-conformance predicate, the witness
+// materializer, and the impl installer must all spell it the same. It MUST equal
+// `primitiveTypeTagName(ValueTypeTag.integer)` — the one place a resolved `integer` is rendered to a name.
+export let IntPrimitiveConformerName = b"int"
+
+// ⭐ **THE INTRINSIC PRIMITIVE CONFORMANCES (P1.7a slice 2b) — the SINGLE source of "does a primitive
+// conform to this protocol?"** The primitive `int` conforms to `Hashable` and `Equatable` with NO user
+// `implements`: shv2 synthesizes its `int.hash`/`int.equals` impls natively (the type-side twin of the
+// synthesized `Hashable`/`Equatable` interfaces), so `Box with Integer where T is Hashable` is legal and its
+// witness slots resolve to real `.text` symbols. `typeConformsTo` ORs this with the user registry, and the
+// install-need decision reads it too, so the E3017 answer, the witness table, and the synthesized-impl set
+// cannot drift. `typeName` is the CANONICAL conformer name (`Integer` already collapsed to `int`).
+// Comparable/`Ordering`, float, bool and Character are DELIBERATELY excluded — each is its own future slice.
+export function isIntrinsicPrimitiveConformance(typeName ByteArray, interfaceName ByteArray) returns bool
+	if not typeName.equals(IntPrimitiveConformerName) 'notInt'
+		return false
+	end 'notInt'
+	return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+end 'isIntrinsicPrimitiveConformance'

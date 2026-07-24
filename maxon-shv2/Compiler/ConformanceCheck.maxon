@@ -108,12 +108,29 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 	let constraints = signatures.structWhereConstraints(baseName)
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkOneInstantiation: whereConstraints.get OOB at {i}")
-		let concreteType = signatures.instanceArgTypeName(site.gid, position: constraint.typeParamIndex)
-		if not typeDeclaresInterface(declared, typeName: concreteType, interfaceName: constraint.interfaceName) 'violates'
-			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "type '{String.from(concreteType)}' does not implement '{String.from(constraint.interfaceName)}', which the `where` clause on generic type '{String.from(baseName)}' requires of its type parameter", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		// The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
+		// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
+		// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
+		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
+		if not typeConformsTo(declared, typeName: conformerType, interfaceName: constraint.interfaceName) 'violates'
+			let sourceType = signatures.instanceArgTypeName(site.gid, position: constraint.typeParamIndex)
+			reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "type '{String.from(sourceType)}' does not implement '{String.from(constraint.interfaceName)}', which the `where` clause on generic type '{String.from(baseName)}' requires of its type parameter", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		end 'violates'
 	end 'eachConstraint'
 end 'checkOneInstantiation'
+
+// ⭐ **DOES `typeName` CONFORM TO `interfaceName`? THE ONE predicate every conformance site consults (P1.7a
+// slice 2b).** An intrinsic primitive conformance (`int` implements `Hashable`/`Equatable`, synthesized
+// natively) ORed with the user-declared registry — so "int conforms to Hashable" is decided in exactly one
+// place, never split between an intrinsic answer and a registry answer that could drift. `typeName` is the
+// CANONICAL conformer name (`conformerTypeArgName`); the registry is keyed by the declared struct name, which
+// a ranged-int alias's `int` never collides with, so the OR is unambiguous.
+function typeConformsTo(declared DeclaredConformanceMap, typeName ByteArray, interfaceName ByteArray) returns bool
+	if isIntrinsicPrimitiveConformance(typeName, interfaceName: interfaceName) 'intrinsic'
+		return true
+	end 'intrinsic'
+	return typeDeclaresInterface(declared, typeName: typeName, interfaceName: interfaceName)
+end 'typeConformsTo'
 
 // Build the DECLARED-conformance index from `project.conformances` — a type NAME to the set of interfaces it
 // declares `implements`. The E3017 check's `Point declares Digest?` lookup, built once per constrained program.

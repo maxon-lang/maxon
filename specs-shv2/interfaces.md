@@ -213,8 +213,7 @@ end 'main'
 
 ## Tests
 
-<!-- disabled-test: basic-interface -->
-<!-- P1.7a-s2: stdlib HashValue alias resolution — `returns HashValue` is E3011 (shv2 does not read stdlib type aliases) -->
+<!-- test: basic-interface -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -313,8 +312,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: multiple-interfaces -->
-<!-- P1.7a-s2: stdlib HashValue alias resolution — `returns HashValue` is E3011 (shv2 does not read stdlib type aliases) -->
+<!-- test: multiple-interfaces -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

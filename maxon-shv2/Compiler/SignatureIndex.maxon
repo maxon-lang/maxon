@@ -3076,6 +3076,32 @@ export type ProgramSignatures
 		return primitiveTypeTagName(tag)
 	end 'mangleTypeArg'
 
+	// ⭐ **THE CANONICAL CONFORMER NAME OF A TYPE ARGUMENT (P1.7a slice 2b).** A ranged int/float alias
+	// (`Integer` = `int(0 to u32.max)`) collapses to its underlying primitive name (`int`) — the name its
+	// INTRINSIC conformance (`int` implements `Hashable`/`Equatable`) and its witness table (`__witness_int_*`
+	// → the synthesized `int.hash`/`int.equals` impls) are keyed by; a struct/String keeps its own name. The
+	// ONE reducer shared by the E3017 where-constraint check (`typeConformsTo`) and witness-table
+	// materialization (`materializeWitnessArg`), so the conformance lookup, the table label, and the impl
+	// symbol cannot disagree on whether a `Box with Integer` conforms via `int`. Distinct from
+	// `instanceArgTypeName`, which keeps the SOURCE spelling (`Integer`) for the E3017 MESSAGE — this
+	// canonicalizes only the identity the comparison rests on, exactly as `ConformanceCheck.canonicalTypeName`
+	// does for a method-signature type name.
+	export function conformerTypeArgName(gid GenericInstanceId, position TypeParamId) returns String
+		return self.mangleTypeArg(self.canonicalizeRangedAlias(self.substitutedInstanceArg(gid, position: position)))
+	end 'conformerTypeArgName'
+
+	// A ranged numeric alias resolves to its underlying primitive `MaxonType` (`int(0 to u32.max)` -> `integer`),
+	// exactly as `resolveNamedType` does (`alias.underlying`, range dropped); every other type passes through.
+	// The one step that lets `conformerTypeArgName` name a primitive-bound argument by its primitive.
+	function canonicalizeRangedAlias(t MaxonType) returns MaxonType
+		if maxonTypeTag(t) == ValueTypeTag.named 'named'
+			if let alias = try self.typeAliases.get(self.nameOfId(typeNameIdOf(t))) 'rangedAlias'
+				return alias.underlying
+			end 'rangedAlias'
+		end 'named'
+		return t
+	end 'canonicalizeRangedAlias'
+
 	// The structural mangling of a generic instance itself — `Box_Integer` for `Box with Integer` — the
 	// base name joined to each argument's mangling. Shared by `mangleTypeArg` (a nested-instance argument)
 	// and lowering's descriptor-label builder.

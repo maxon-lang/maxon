@@ -179,6 +179,17 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 		return MaxonType.exitCode
 	end 'isExitCode'
 
+	// ⭐ `HashValue` is the SYNTHESIZED result type of `Hashable.hash()` — the type-side analogue of the
+	// synthesized `Hashable` interface (`builtinInterface`). shv2 reads no stdlib, so its `typealias
+	// HashValue = int(0 to u32.max)` is not in `project.typeAliases`; without this it is E3011 on every user
+	// `hash() returns HashValue`. It resolves to width-free `integer` exactly as a ranged int alias does
+	// (`alias.underlying` drops the range) — the u32 mask lives in the synthesized `int.hash` body, not the
+	// type. Handled inline like `ExitCode` rather than seeded into `typeAliases`, which `resetMergeTargets`
+	// recreates empty per warm-rebuild miss.
+	if name.equals(HashValueTypeName) 'isHashValue'
+		return MaxonType.integer
+	end 'isHashValue'
+
 	// ⭐ A DECLARED `type` KEEPS ITS NAME ID, and that one line is the difference between the two
 	// registries this function consults. An alias RESOLVES AWAY — `Score` becomes `int`, and
 	// nothing downstream can tell it was ever written — because an alias creates no nominal
