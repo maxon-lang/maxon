@@ -279,6 +279,8 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		// out-param is a caller-supplied pointer passed in r9, not a stack scratch like `osWriteStdout`'s).
 		osPipeCreateOutbound gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
 		osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
+		// GetSystemTimeAsFileTime takes ONE argument, in rcx — register-only, no outgoing stack space.
+		osReadWallClock gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -851,6 +853,8 @@ type StdToX64Lowering
 				witnessCall then break 'term'
 				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
 				osPipeCreate to osWriteFile then break 'term'
+				// The wall-clock read is a void body op, never a terminator.
+				osReadWallClock then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -909,6 +913,9 @@ type StdToX64Lowering
 				// CAN land here as the last flag-writer before a branch; like a `call`, it is not the compare, so
 				// the scan stops and no fusion is recorded (declining is always safe).
 				osPipeCreate to osWriteFile then break 'isTheCompare'
+				// The wall-clock read declares `clobbersFlags: true` (it lowers to a call), so it CAN be the
+				// last flag-writer before a branch; like a `call` it is not the compare, so the scan stops.
+				osReadWallClock then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -980,6 +987,8 @@ type StdToX64Lowering
 			witnessCall gives false
 			// P1.5 dogfood slice 1a: an IOCP op is never a terminator — none reads fused compare flags.
 			osPipeCreate to osWriteFile gives false
+			// The wall-clock read is never a terminator, so it reads no fused compare flags.
+			osReadWallClock gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1046,6 +1055,8 @@ type StdToX64Lowering
 			// P1.5 dogfood slice 1b: the streaming subprocess stdin pipe + synchronous write.
 			osPipeCreateOutbound(namePtrId, saPtrId, childReadPtrId, parentWritePtrId) then self.lowerOsPipeCreateOutbound(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
 			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsWriteFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+			// The `__Builtins` WALL clock: read the host's calendar into the caller's out-param word.
+			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1090,6 +1101,7 @@ type StdToX64Lowering
 			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("lowerStdToX64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
+			osReadWallClock then panic("lowerStdToX64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1736,6 +1748,21 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(ticksPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryPerformanceCounter)))
 	end 'lowerOsReadClockWin64'
+
+	// Lower `osReadWallClock(ftPtr)` to `GetSystemTimeAsFileTime(ftPtr)` through the IAT — the out-param
+	// pointer in rcx, no result (the 64-bit FILETIME lands in the caller's word). The `__Builtins` WALL clock.
+	//
+	// ⭐ x64-WINDOWS ONLY, for the same reason `osReadClock` is: the calendar's POSIX spelling is
+	// `clock_gettime(CLOCK_REALTIME)`, whose `timespec` needs a different out-param shape and a different
+	// scale, so inventing one here would be untested code no test could reach. A program that reaches the
+	// wall clock on another target is refused in SEMANTIC CHECK, at its own source span (E3104) — this
+	// panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
+	function lowerOsReadWallClock(ftPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.GetSystemTimeAsFileTime, arg0: ftPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsReadWallClock: GetSystemTimeAsFileTime is x64-windows only — the wall clock is x64-windows-gated at this rung, and SemanticCheck refuses it on every other target")
+		end 'route'
+	end 'lowerOsReadWallClock'
 
 	// Lower `osSleepMs(ms)` to Windows `Sleep(ms)` through the IAT — the netpoller's real wait on the earliest
 	// timer deadline (never a busy-spin). `ms` moves into rcx (Win64's first argument register); Sleep is void.
@@ -2458,6 +2485,8 @@ type StdToX64Lowering
 			witnessCall gives false
 			// P1.5 dogfood slice 1a: an IOCP op is never a terminator, let alone a float-equality condBranch.
 			osPipeCreate to osWriteFile gives false
+			// The wall-clock read is never a terminator, let alone a float-equality condBranch.
+			osReadWallClock gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2595,6 +2624,7 @@ type StdToX64Lowering
 			switch panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a jump table, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			witnessCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osReadWallClock panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osReadWallClock`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

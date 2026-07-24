@@ -374,9 +374,16 @@ export type RuntimeUsage
 	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
 	// referenced cloners. `usesHeap` follows any cloner (the box it allocates).
 	export var neededCloners as ClonerSet
+	// The program reads the WALL clock (`__clock_now_unix_s`, `__Builtins.currentUnixTimeSeconds`). Its OWN
+	// bit, DECOUPLED from `usesGt` and from `usesHeap`, and that decoupling is the point: a calendar read is
+	// a leaf that calls one Win32 import and divides, with no relationship to the green-thread scheduler
+	// whose `__gt_now_ns` answers the OTHER clock question. Folding it under `usesGt` would install the
+	// entire scheduler — plus the allocator and the leak gate under it — for a program that asks what
+	// today's date is. Drives `installClockRuntime` + the one `__clock_wall_ticks` `.data` slot.
+	export var usesWallClock as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -484,6 +491,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIocp = true
 		usage.usesStrCopy = true
 	end 'streaming'
+	// A `__clock_*` call carries the WALL clock and NOTHING ELSE — no scheduler, no heap, no leak gate. It is
+	// the ONE runtime family here that declares no transitive dependency, and that is a fact about the code
+	// rather than an omission: `__clock_now_unix_s`'s Std body reads one `.data` word through one Win32 import
+	// and divides, calling nothing this Maxon-module scan cannot see.
+	if isClockRuntimeCallee(callee) 'wallClock'
+		usage.usesWallClock = true
+	end 'wallClock'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

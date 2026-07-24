@@ -109,18 +109,25 @@ end 'isRuntimeCallee'
 // reservation at parse time (`E2051 ParserReservedIdentifier` — "declarations starting with '__' are
 // reserved for compiler internals"), so no user name can collide there.
 //
-// ⭐ **THE RESERVATION IS NOW ENFORCED, SO THIS PREDICATE IS SOUND** (OPEN.md #35, CLOSED). shv2 emits
-// E2051 for any `__`-prefixed DECLARATION (`Parser.requireUnreservedName`, at all eight binding sites;
-// the shv2 claim is in `docs/error-codes.txt` and the `reserved-double-underscore.md` suite pins it).
-// Because no user name can be DECLARED with this prefix, a `__` CALLEE is provably compiler-owned, and
-// skipping its user-function checks below is safe rather than hopeful — this reservation is the missing
-// precondition the widened predicate was always written to depend on.
+// ⭐ **THE RESERVATION IS ENFORCED AT BOTH ENDS, AND THIS PREDICATE NEEDS BOTH** (OPEN.md #35, CLOSED;
+// completed by P1.0b step 2). Two separate rules make "a `__` CALLEE is compiler-owned" TRUE:
 //
-// It closed a SILENT MISCOMPILE the widening had opened: before E2051, a user could declare and call a
-// `__`-prefixed function (measured — `__add(7)` against a two-parameter `__add` compiled and ran with
-// the second argument uninitialised, exit 65543, where the bootstrap rejects the declaration outright),
-// because `isCompilerInternalCallee` routed that call past `validateCall`'s arity/label checks. The
-// declaration is now rejected at parse time, so the call can never form.
+//   1. **No `__` name may be DECLARED** — E2051, `Parser.requireUnreservedName`, at all eight binding
+//      sites, pinned by `reserved-double-underscore.md`. This closed a SILENT MISCOMPILE: before it, a
+//      user could declare and call a `__`-prefixed function (measured — `__add(7)` against a
+//      two-parameter `__add` compiled and ran with the second argument uninitialised, exit 65543, where
+//      the bootstrap rejects the declaration outright), because this predicate routed that call past
+//      `validateCall`'s arity/label checks.
+//   2. **No `__` name may be CALLED from source unless it names a recognized intrinsic** — E3004,
+//      `Parser.requireCalleeIsNotReservedName`, at the two source call doors (`emitCall`,
+//      `emitAsyncCall`), pinned by `builtins-clock.md`.
+//
+// ⚠ **RULE 1 ALONE IS NOT ENOUGH, AND THIS PREDICATE SPENT A LONG TIME BELIEVING IT WAS.** A callee need
+// not be DECLARED anywhere to be WRITTEN — `__whatever()` names nothing, so E2051 never fires, and the
+// early return in `SemanticCheck.validateCall` then waved it past every unknown-callee check. It reached
+// the linker, or lowering, and PANICKED with neither a file nor a line (three measured shapes:
+// `resolveCallFixups: call to unknown function`, `lowerAsyncCall: … has no signature`,
+// `valueTagToStdType: an 'unresolved' tag reached lowering`). Rule 2 is what makes the premise real.
 let CompilerInternalPrefix = b"__"
 
 // ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** The GENERAL predicate — a superset of

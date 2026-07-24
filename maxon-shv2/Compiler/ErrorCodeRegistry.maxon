@@ -302,6 +302,16 @@ export enum ErrorCode
 	// double-free. A WRITE to a moved-from `var` is legal (it revives the binding). shv2-only: the
 	// reference compilers refcount, so aliasing is legal there and there is no move to violate.
 	useAfterMove = "E3102"
+	// A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled
+	// for another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are
+	// x64-windows only at this rung, so `sleep`, `runProcess`, the streaming-subprocess builtins and
+	// the `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can
+	// emit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
+	// Distinct from E3074, which is the self-hosted compiler's subprocess-specific wasm rejection:
+	// this one is about the target's substrate in general, not about one API.
+	// Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
+	// and no line -- a compiler crash where a diagnostic was owed.
+	targetUnsupportedConstruct = "E3104"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"

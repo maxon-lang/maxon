@@ -381,6 +381,8 @@ type RangeCheckEmitter
 				witnessCall then break 'c'
 				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
 				osPipeCreate to osWriteFile then break 'c'
+				// The wall-clock read produces no ranged-typealias value to range-check.
+				osReadWallClock then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -470,6 +472,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		witnessCall gives false
 		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
 		osPipeCreate to osWriteFile gives false
+		// The wall-clock read is a body op, never a `ret`.
+		osReadWallClock gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -540,6 +544,8 @@ function stdOpDefinesValue(op StdOp) returns bool
 		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound gives false
 		osWriteFile gives true
+		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
+		osReadWallClock gives false
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -593,6 +599,8 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		// P1.5 dogfood slice 1b: osWriteFile returns its captured RAX BOOL id; osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound gives 0
 		osWriteFile(resultId, _, _, _, _) gives resultId
+		// The wall-clock read defines nothing.
+		osReadWallClock gives 0
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 

@@ -404,6 +404,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		// P1.5 dogfood slice 1b: osWriteFile defines the WriteFile BOOL (an integer, GPR); osPipeCreateOutbound defines nothing.
 		osPipeCreateOutbound then break 'result'
 		osWriteFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// The wall-clock read defines no value — `GetSystemTimeAsFileTime` writes its answer to the
+		// caller's out-param word, exactly as `osReadClock` does with its two.
+		osReadWallClock then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

@@ -136,6 +136,12 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // pipe name process-unique. APPENDED AFTER `VirtualFree` so every existing slot INDEX (and hence every existing `iatCall`
 // relocation) is unchanged — a reorder would silently repoint every prior import.
 //
+// `GetSystemTimeAsFileTime` is the WALL clock — the one import that answers a CALENDAR question rather than
+// a stopwatch one. `__clock_now_unix_s` (`__Builtins.currentUnixTimeSeconds`) reads it into a `.data` word,
+// shifts the 1601→1970 epoch and divides by the 100 ns tick. It lowers from the Std `osReadWallClock` op.
+// APPENDED AFTER `CancelIoEx` so every existing slot INDEX (and hence every existing `iatCall` relocation) is
+// unchanged — a reorder would silently repoint every prior import.
+//
 // ⚠ All are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
 // that constant counts import DIRECTORY entries (DLLs), not imports.
 export enum IatSlot
@@ -169,6 +175,7 @@ export enum IatSlot
 	GetLastError
 	GetCurrentProcessId
 	CancelIoEx
+	GetSystemTimeAsFileTime
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

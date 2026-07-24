@@ -376,7 +376,19 @@ export let GtPromiseDropName = b"__gt_promise_drop"
 // scheduler internals it and the await drivers share.
 export let GtSleepName = b"__gt_sleep"
 let GtDriveUntilName = b"__gt_drive_until"
-let GtNowNsName = b"__gt_now_ns"
+// ⭐ **EXPORTED BECAUSE THE FRONT END TARGETS IT DIRECTLY** — `__Builtins.currentTimeNanos()` and
+// `currentTimeMs()` lower to a call to THIS function rather than to a monotonic clock of their own
+// (`Parser.parseCallNamed`'s `__Builtins` table). That is the point rather than a convenience: the
+// scheduler's timer deadlines are expressed in this counter, so a program that SLEEPS and a program that
+// TIMES itself must read the same one — two monotonic clocks that could disagree about the epoch is exactly
+// how `sleep(30)` comes back measuring 29 ms.
+//
+// ⚠ **A clock read therefore turns on `usesGt`** (`isGtRuntimeCallee` matches the `__gt_` prefix), so a
+// program whose only clock question is monotonic installs the whole scheduler plus the heap floor under it.
+// That is the price of the shared counter, and it is the right side of the trade — the alternative is two
+// clocks. The WALL clock has no such relationship to the scheduler and correctly rides its own
+// `usesWallClock` bit instead (see `ClockRuntime.maxon`'s header).
+export let GtNowNsName = b"__gt_now_ns"
 let GtTimerAddName = b"__gt_timer_add"
 let GtTimerCheckName = b"__gt_timer_check"
 let GtTimerEarliestName = b"__gt_timer_earliest"

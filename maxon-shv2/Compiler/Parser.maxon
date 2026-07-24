@@ -620,6 +620,19 @@ export union ParseError implements Error
 	// a silent miscompile a boxed union turns into a wild free. `propagated` is the callee's error type,
 	// `enclosing` the function's.
 	propagateTypeMismatch(propagated String, enclosing String, line LineNumber, column ColumnNumber)
+	// ⭐ A `__`-prefixed CALLEE written in source that names no compiler intrinsic (P1.0b step 2). Renders as
+	// **E3004** — the SAME code `SemanticCheck.validateCall` gives `undeclaredThing()` — because it is the
+	// same fact: the call names a function that does not exist. `__whatever()` and `whatever()` are one
+	// mistake and must not answer with two codes.
+	//
+	// It is a PARSE error, and that is the one thing about it that needs a reason, because shv2 deliberately
+	// moved "undefined function" OUT of the parser: a plain callee may be declared in another FILE, which
+	// only the whole-program registry can see. A `__` callee cannot — `E2051` forbids DECLARING one anywhere
+	// — so the parser has complete knowledge for exactly this family, and it is also the only tier that knows
+	// the name came from SOURCE rather than from the compiler's own `emitRuntimeCall`. SemanticCheck cannot
+	// tell those two apart, which is precisely why its `isCompilerInternalCallee` early return let this class
+	// of program through to the backend (see `requireCalleeIsNotReservedName`).
+	unknownCompilerIntrinsic(callee String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
@@ -1408,6 +1421,68 @@ let FloorBuiltinName = b"floor"
 let CeilBuiltinName = b"ceil"
 let RoundBuiltinName = b"round"
 let SqrtBuiltinName = b"sqrt"
+
+// ⭐ **THE `__Builtins` INTRINSIC TABLE (P1.0b step 2) — THE ONE PLACE THE RECOGNIZED SET IS STATED.**
+//
+// `__Builtins` is the compiler's builtin TYPE, and every leaf of the stdlib bottoms out in a static call on
+// it (`stdlib/Clock.maxon`'s `nowMs`/`nowNanos`/`nowUnixSeconds` are three one-line wrappers around the
+// three names below). It reaches `parseCallNamed` as an ORDINARY QUALIFIED CALLEE — the mangled bytes
+// `__Builtins.currentTimeMs` — which is exactly why the bare-name builtin table above can never match one,
+// and why this table is a separate arm rather than three more rows in it.
+//
+// Every row is a NAME plus its lowering, so "which intrinsics exist" and "what each one becomes" are one
+// fact in one place. A name NOT here is not silently a link error: it falls through to `emitCall`, whose
+// reserved-callee rejection refuses every unrecognized `__` callee with a positioned E3004 (see
+// `requireCalleeIsNotReservedName` — the "unknown intrinsic" arm of this table, homed there because it
+// answers for `__whatever()` too).
+//
+// The whole arm is gated behind ONE prefix compare, so a program with no `__Builtins` call pays a
+// two-byte `bytesStartWith` per parsed call and nothing else — the same allocation-free `equals`
+// discipline the math-intrinsic rows document.
+let BuiltinsQualifierPrefix = b"__Builtins."
+let BuiltinsCurrentTimeNanosName = b"__Builtins.currentTimeNanos"
+let BuiltinsCurrentTimeMsName = b"__Builtins.currentTimeMs"
+let BuiltinsCurrentUnixTimeSecondsName = b"__Builtins.currentUnixTimeSeconds"
+
+// Every clock intrinsic reads a clock and takes nothing.
+let ClockIntrinsicArity = 0 as ParamCount
+
+// The scale between the two MONOTONIC readings — `currentTimeMs()` IS `currentTimeNanos() / 1e6`. Named
+// here because this is the only place it is applied; the wall clock's own two scale constants live with
+// the runtime function that uses them (`ClockRuntime.maxon`).
+let NanosPerMillisecond = 1000000
+
+// ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
+//
+// `__` is reserved for compiler internals: `E2051` refuses to DECLARE such a name, and the compiler emits
+// its own calls to them through `emitRuntimeCall`, never through here. So a `__`-prefixed callee arriving
+// at one of the two SOURCE call doors (`emitCall`, `emitAsyncCall`) either matched the intrinsic table
+// above — in which case it was already lowered and never reached this — or names nothing at all.
+//
+// ⚠ **THE CHECK IS HERE AND NOT IN SemanticCheck, AND THAT IS THE WHOLE REPAIR.**
+// `SemanticCheck.validateCall` RETURNS EARLY on any `__` callee, on the premise that "no user name can be
+// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned". The premise is about
+// DECLARATIONS and the conclusion is about CALLEES, and a callee need not be declared anywhere — so a
+// source-written `__foo()` sailed past E3004, past the arity/label/type checks, past lowering, and died in
+// the LINKER with neither a file nor a line:
+//
+//   panic at X64Backend.maxon:1794: resolveCallFixups: call to unknown function '__Builtins.currentTimeMs'
+//   panic at LowerMaxonToStd.maxon:1346: lowerAsyncCall: async callee '__whatever' has no signature
+//   panic at LowerMaxonToStd.maxon:112:  valueTagToStdType: an `unresolved` tag reached lowering
+//
+// (all three measured, all three on plain user code). SemanticCheck cannot make this check itself: by the
+// time it runs, a `call __mm_decref` the parser emitted and a `call __whatever` the user wrote are the same
+// `MaxonOp.call`, and nothing in the Maxon tier records which is which. The PARSER is the one tier that
+// knows, because it knows which of its own two doors the name came through — so the fix is to close the
+// door, which restores `isCompilerInternalCallee`'s premise for real: after this, every `__` callee in the
+// IR was emitted by the compiler.
+function requireCalleeIsNotReservedName(callee ByteArray, anchor Token) throws ParseError
+	if not isCompilerInternalCallee(callee) 'ordinaryCallee'
+		return
+	end 'ordinaryCallee'
+
+	throw ParseError.unknownCompilerIntrinsic(String.from(callee), line: anchor.line, column: anchor.column)
+end 'requireCalleeIsNotReservedName'
 
 // **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
 // its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
@@ -19269,8 +19344,60 @@ export type Parser
 			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.sqrt, name: callee, calleeTok: anchor)
 		end 'sqrtBuiltin'
 
+		// The `__Builtins.*` intrinsic table (see `BuiltinsQualifierPrefix`). Gated behind ONE prefix compare
+		// so a call to anything else pays two bytes and no allocation; an unrecognized member falls through to
+		// `emitCall`'s reserved-callee rejection, which is this table's "unknown intrinsic" arm.
+		if bytesStartWith(callee, prefix: BuiltinsQualifierPrefix) 'builtinsIntrinsic'
+			if callee.equals(BuiltinsCurrentTimeNanosName) 'currentTimeNanos'
+				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: GtNowNsName, calleeTok: anchor)
+			end 'currentTimeNanos'
+
+			if callee.equals(BuiltinsCurrentTimeMsName) 'currentTimeMs'
+				return try self.emitMonotonicMs(args, calleeTok: anchor)
+			end 'currentTimeMs'
+
+			if callee.equals(BuiltinsCurrentUnixTimeSecondsName) 'currentUnixTimeSeconds'
+				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: WallClockNowUnixSecondsName, calleeTok: anchor)
+			end 'currentUnixTimeSeconds'
+		end 'builtinsIntrinsic'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
 	end 'parseCallNamed'
+
+	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
+	//
+	// `stdlib/Clock.maxon`'s doc-comment says `nowMs()` is backed by `GetTickCount64`, whose period is
+	// ~15.6 ms. A QPC-derived millisecond satisfies every promise that comment makes — monotonic,
+	// milliseconds, absolute value platform-defined — and satisfies them BETTER, so the stdlib is left
+	// exactly as it is and this lowering is the stronger contract. The only direction that could break a
+	// caller is the other one (a coarse tick where a fine one was promised), and
+	// `specs-shv2/builtins-clock.md`'s `ms-resolves-sub-tick` is the test that would catch it.
+	//
+	// The divide is emitted INLINE rather than as a `__clock_now_ms` runtime function, because a runtime
+	// function whose whole body is one call and one divide is a call/ret wrapped around two instructions —
+	// the same reasoning that makes `trunc` a builtin instead of a stdlib call. It goes through the ordinary
+	// `emitBinOp`, so the operand rules, the result tag and the constant view are the ones every source-level
+	// `/` gets; there is no second division path to keep in step.
+	function emitMonotonicMs(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		let nanos = try self.emitClockIntrinsicCall(args, name: BuiltinsCurrentTimeMsName, runtimeName: GtNowNsName, calleeTok: calleeTok)
+		let perMilli = self.emitLiteral(NanosPerMillisecond, valueType: MaxonType.integer, range: SourceRange.ofToken(calleeTok))
+		return try self.emitBinOp(nanos, rhs: perMilli, op: MaxonBinOp.div, opTok: calleeTok)
+	end 'emitMonotonicMs'
+
+	// ⭐ **THE ARITY CHECK AND THE EMIT EVERY CLOCK INTRINSIC SHARES**, written once and returning the
+	// integer-tagged reading. All three take no arguments and become one call to a runtime entry point the
+	// compiler builds at the Std tier, so only the entry point's NAME differs.
+	//
+	// The arity rejection is the SAME `builtinArity` every other builtin raises — a builtin has no signature
+	// registry entry for SemanticCheck's ordinary arity check to consult, which is exactly why that variant
+	// exists. `name` is the callee's own bytes so the diagnostic quotes what the user wrote.
+	function emitClockIntrinsicCall(args ValueIdArray, name ByteArray, runtimeName ByteArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != ClockIntrinsicArity 'arity'
+			throw ParseError.builtinArity(String.from(name), expected: ClockIntrinsicArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		return self.emitRuntimeCall(runtimeName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitClockIntrinsicCall'
 
 	// `trunc(x)` — **THE f64 → int BRIDGE**, and a compiler BUILTIN rather than a stdlib function.
 	//
@@ -19612,6 +19739,7 @@ export type Parser
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
+		try requireCalleeIsNotReservedName(callee, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
@@ -19658,6 +19786,7 @@ export type Parser
 	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
 	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId throws ParseError
+		try requireCalleeIsNotReservedName(callee, anchor: anchor)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'

@@ -1,0 +1,50 @@
+// Test: builtins-clock.unix-seconds-is-a-calendar-time
+function main() returns ExitCode
+	let now = __Builtins.currentUnixTimeSeconds()
+	var score = 0
+	if now > 1735689600 'afterKnownPast'
+		score = score + 1
+	end 'afterKnownPast'
+	if now < 4102444800 'beforeFarFuture'
+		score = score + 1
+	end 'beforeFarFuture'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __clock_wall_ticks@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __clock_now_unix_s
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 1735689600
+    x64.jcc greater, afterKnownPast
+    x64.jmp critsplit
+  afterKnownPast:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 4102444800
+    x64.cmpRegReg r8, rcx
+    x64.jcc less, beforeFarFuture
+    x64.jmp critsplit
+  beforeFarFuture:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

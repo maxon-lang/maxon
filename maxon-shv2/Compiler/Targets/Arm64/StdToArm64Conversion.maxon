@@ -420,6 +420,10 @@ type StdToArm64Lowering
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — it is emitted only
 			// inside the x64-windows-gated IOCP runtime, so arm64 rejects rather than inventing an untested lowering.
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
+			// The `__Builtins` WALL clock reads `GetSystemTimeAsFileTime`, a Win32 import with no arm64
+			// counterpart at this rung; SemanticCheck refuses such a program at its source span (E3104), so
+			// this is the backstop for a compiler bug rather than the user-facing rejection.
+			osReadWallClock then panic("lowerStdToArm64: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -459,6 +463,7 @@ type StdToArm64Lowering
 			// the `denseTargetBlockIds` Array is not bound in this big match.
 			switch then self.lowerSwitch(op, dstRef: dstRef)
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: a P1.5 IOCP op appeared as a block terminator (lowering bug — all are body ops; also x64-windows only)")
+			osReadWallClock then panic("lowerStdToArm64: an `osReadWallClock` op appeared as a block terminator (lowering bug — a wall-clock read is a value-consuming body op; also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

@@ -985,6 +985,18 @@ E3103 SemanticDivisionByZero
 	doc handled with `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a
 	doc bug, rejected at compile time.
 
+E3104 SemanticTargetUnsupportedConstruct
+	shv2 targetUnsupportedConstruct
+	doc A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled
+	doc for another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are
+	doc x64-windows only at this rung, so `sleep`, `runProcess`, the streaming-subprocess builtins and
+	doc the `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can
+	doc emit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.
+	doc Distinct from E3074, which is the self-hosted compiler's subprocess-specific wasm rejection:
+	doc this one is about the target's substrate in general, not about one API.
+	doc Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
+	doc and no line -- a compiler crash where a diagnostic was owed.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

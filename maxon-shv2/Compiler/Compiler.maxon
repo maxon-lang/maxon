@@ -229,6 +229,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'subpGlobals'
+	// The wall clock's one out-param scratch word rides its OWN bit, so only a program that reads the
+	// CALENDAR lays it out — a monotonic-clock or scheduler program's `.data` image is unchanged.
+	if usage.usesWallClock 'clockGlobals'
+		for entry in clockRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'clockGlobals'
 	project.globalData.layOut(declaredGlobals)
 
 	var pipeline = PassPipeline.create(project, maxonModule: module)
@@ -282,6 +289,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the
 	// one `__drop_type_param` for either case, exactly once (its sole install site).
 	installDropTypeParamRuntime(pipeline.stdModule, usage: usage)
+
+	// The WALL clock (`__clock_now_unix_s`) — installed the same already-lowered way, on its own
+	// `usesWallClock` bit. Its monotonic sibling (`__gt_now_ns`) comes from `installGtRuntime` above instead,
+	// because the SCHEDULER owns that counter: its timer deadlines are expressed in it, and routing both the
+	// scheduler and `__Builtins.currentTimeNanos` to ONE function is what keeps them from disagreeing.
+	installClockRuntime(pipeline.stdModule, usage: usage)
 
 	// The synthesized `int.hash`/`int.equals` primitive-conformance impls (P1.7a slice 2b) — installed the same
 	// already-lowered-Std way, but keyed on neither a `usage` bit nor a pre-pipeline scan: the witness table that

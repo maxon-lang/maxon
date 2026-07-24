@@ -446,6 +446,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		witnessCall then break 'k'
 		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only and pull in no wasm import.
 		osPipeCreate to osWriteFile then break 'k'
+		// The wall clock is x64-windows only and makes no indirect call.
+		osReadWallClock then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -739,6 +741,8 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		witnessCall then break 'def'
 		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only — no wasm valtype to record.
 		osPipeCreate to osWriteFile then break 'def'
+		// The wall clock is x64-windows only and defines no value — no wasm valtype to record.
+		osReadWallClock then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -983,6 +987,7 @@ type WasmFuncEmitter
 			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
 			witnessCall then panic("emitStraightLineTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 			osPipeCreate to osWriteFile then panic("emitStraightLineTerminator: a P1.5 IOCP op is a body op, never a terminator")
+			osReadWallClock then panic("emitStraightLineTerminator: an `osReadWallClock` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1054,6 +1059,7 @@ type WasmFuncEmitter
 			osRangePanic to osFreePages then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
 			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
 			osPipeCreate to osWriteFile then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
+			osReadWallClock then panic("emitDispatcherTerminator: an `osReadWallClock` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1118,6 +1124,12 @@ type WasmFuncEmitter
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — wasm rejects rather
 			// than inventing an untested lowering (it is emitted only inside the x64-windows-gated IOCP runtime).
 			osPipeCreate to osWriteFile then panic("emitBodyOp: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
+			// The `__Builtins` WALL clock reads `GetSystemTimeAsFileTime`. WASI has `wasi:clocks/wall-clock.now`,
+			// but its answer is a (seconds, nanoseconds) RECORD rather than a single 64-bit tick count, so a wasm
+			// lowering is a different shape rather than a different import name — a later slice, not a rename.
+			// SemanticCheck refuses a wall-clock program on wasm at its own source span (E3104), so this panic is
+			// the backstop for a compiler bug that got one past that gate, not the user-facing rejection.
+			osReadWallClock then panic("emitBodyOp: `osReadWallClock` is x64-windows only — the wall clock is x64-windows-gated at this rung")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2130,6 +2142,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		// A witness call is a single-successor body op — it forces no dispatcher (it is refused at emission).
 		witnessCall then break 'k'
 		osPipeCreate to osWriteFile then panic("decideDispatcher: a P1.5 IOCP op is a body op, never a terminator")
+		osReadWallClock then panic("decideDispatcher: an `osReadWallClock` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

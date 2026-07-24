@@ -1,0 +1,109 @@
+// Runtime/ClockRuntime.maxon — the WALL clock, the one host clock that is not the scheduler's.
+//
+// ⭐ WHY THIS IS ITS OWN FILE AND NOT A FUNCTION IN `GtRuntime`. `__gt_now_ns` lives there because the
+// green-thread scheduler OWNS it: the timer heap, the sleep deadline and the netpoll wait are all
+// expressed in its monotonic nanoseconds, so the clock and its consumer are one mechanism. A wall clock
+// has no such relationship — nothing in the scheduler can use a reading that steps backwards when NTP
+// corrects a drift, which is precisely what a calendar time does. Filing it under `__gt_` would say the
+// scheduler owns it, and `isGtRuntimeCallee` would then install the WHOLE scheduler for a program whose
+// only clock question is "what is today's date".
+//
+// So it wears its own `__clock_` band, gets its own `RuntimeUsage` bit, and installs one function and one
+// `.data` word. The MONOTONIC pair (`__Builtins.currentTimeNanos` / `currentTimeMs`) deliberately does NOT
+// move here: it routes to the scheduler's existing `__gt_now_ns`, because that reading and the scheduler's
+// deadlines must come from ONE counter — two monotonic clocks that could disagree is the bug the split
+// identity in `buildGtNowNs` exists to avoid.
+
+// The prefix every wall-clock runtime entry point shares — the "does this program read the CALENDAR?" test.
+let ClockRuntimeCallPrefix = b"__clock_"
+
+export let WallClockNowUnixSecondsName = b"__clock_now_unix_s"
+
+// The 8-byte scratch word `GetSystemTimeAsFileTime`'s out-param writes to, read straight back by
+// `__clock_now_unix_s`. Safe as a shared global for the same reason `__gt_clock_ticks` is: the function is
+// straight-line with no yield point between the write and the read, so it cannot be re-entered mid-read.
+let ClockWallTicksLabel = b"__clock_wall_ticks"
+
+// A FILETIME counts 100-NANOSECOND intervals since 1601-01-01 00:00:00 UTC. Two facts turn that into Unix
+// seconds, and both are named rather than spelled inline at the arithmetic:
+//   • 10,000,000 ticks per second (100 ns each);
+//   • 11,644,473,600 seconds from the 1601 epoch to the 1970 one — 116444736000000000 ticks, which fits an
+//     i64 with three orders of magnitude to spare.
+let FileTimeTicksPerSecond = 10000000
+let FileTimeTicksFrom1601To1970 = 116444736000000000
+
+// ⭐ **DOES THIS CALLEE READ THE WALL CLOCK?** The `__clock_`-only test, the exact twin of
+// `isGtRuntimeCallee`. Deliberately NARROW: unlike a `__gt_*` call it implies no scheduler and no heap —
+// `__clock_now_unix_s` is a leaf that calls one Win32 import and divides, so a calendar-reading program
+// carries neither the allocator nor the leak gate.
+export function isClockRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ClockRuntimeCallPrefix)
+end 'isClockRuntimeCallee'
+
+// ⭐ **THE CLOCK SUBSTRATE — BOTH clocks, whichever band their entry point wears.** The set
+// `SemanticCheck.requireTargetSupportsRuntimeCallee` refuses on a non-x64-windows target (E3104): the two
+// runtime entries a `__Builtins` clock intrinsic lowers to. The monotonic one is `__gt_`-named because the
+// SCHEDULER owns that counter (see the header), so this predicate spans two bands — which is exactly why it
+// is one function rather than a prefix test at the call site.
+//
+// ⚠ **IT IS NOT `isGtRuntimeCallee`, AND THAT WIDER TEST WAS MEASURED WRONG.** The `__gt_` band also holds
+// calls the compiler INSERTS rather than the user writes — `__gt_promise_drop` is emitted at a SCOPE EXIT
+// for an un-awaited promise — and an E3104 against one of those names a runtime entry the user has never
+// heard of, at a span where they wrote nothing, blaming the drop instead of the `async`. Measured on the
+// wasm suite: two `async-linearity.error.*` cases, whose pinned diagnostic is the target-NEUTRAL
+// double-await E3100, additionally reported "'__gt_promise_drop' has no wasm32-wasi implementation" at the
+// closing `end`. The honest gate for `async`/`await` on a non-x64-windows target is on those OP KINDS (whose
+// `__gt_*` calls do not exist until lowering — the same blind spot `scanRuntimeUsage` documents), and it is
+// its own piece of work, not something to bolt onto a callee-name test.
+export function isClockSubstrateCallee(callee ByteArray) returns bool
+	return callee.equals(GtNowNsName) or isClockRuntimeCallee(callee)
+end 'isClockSubstrateCallee'
+
+// The wall clock's one `.data` slot, laid out only when the program reads the calendar (`usesWallClock`), so
+// every other program's `.data` image is unchanged. An ordinary i64 slot in every respect, exactly like
+// MmRuntime's `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.
+export function clockRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	out.push(DataSectionEntry.create(String.from(ClockWallTicksLabel), valueType: StdType.i64, value: 0))
+	return out
+end 'clockRuntimeGlobals'
+
+// Install the wall-clock runtime into the lowered Std module, on its own `usesWallClock` bit. Appended AFTER
+// the pipeline (like every other runtime install) so it is never re-optimized, and already-lowered Std so it
+// still flows through the whole backend.
+export function installClockRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesWallClock 'noWallClock'
+		return
+	end 'noWallClock'
+	buildWallClockNowUnixSeconds(module)
+end 'installClockRuntime'
+
+// `__clock_now_unix_s() -> i64` — whole seconds since 1970-01-01 UTC. `osReadWallClock` writes
+// `GetSystemTimeAsFileTime`'s 100 ns tick count to a `.data` scratch word; the epoch shift and the
+// ticks→seconds scale are done HERE in builder-built Std, exactly as `__gt_now_ns` scales QPC ticks — the
+// Std tier is where the rewrite's thesis puts clock arithmetic, so the target op stays "read the host's
+// calendar into this word" and nothing more.
+//
+// The subtraction cannot underflow on any clock a program can observe: a FILETIME below the 1970 offset
+// means the host's calendar is set before 1970, which Windows does not permit (its own minimum system time
+// is 1980). It is a plain i64 `sub`, no guard, for the same reason `__gt_now_ns` needs no 128-bit math.
+function buildWallClockNowUnixSeconds(module StdModule)
+	var func = IrFunction.createFromStd(WallClockNowUnixSecondsName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	let ticksAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(ticksAddr, label: ClockWallTicksLabel))
+	module.appendOp(entry, op: StdOp.osReadWallClock(ticksAddr))
+	let ticks = emitLoadField(module, block: entry, record: ticksAddr, offset: 0, ids: ids)
+
+	let epochTicks = emitConst(module, block: entry, value: FileTimeTicksFrom1601To1970, ids: ids)
+	let sinceEpoch = emitBin(module, block: entry, a: ticks, b: epochTicks, opcode: StdBinOpcode.sub, ids: ids)
+	let perSecond = emitConst(module, block: entry, value: FileTimeTicksPerSecond, ids: ids)
+	let seconds = ids.mint()
+	module.appendOp(entry, op: StdOp.div(seconds, lhs: sinceEpoch, rhs: perSecond))
+	module.setTerminator(entry, op: StdOp.ret(seconds))
+
+	module.functions.push(func)
+end 'buildWallClockNowUnixSeconds'

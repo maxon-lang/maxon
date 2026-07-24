@@ -965,6 +965,28 @@ export union StdOp
 	// the BOOL result (captured from RAX) — nonzero success, zero a broken pipe. Distinct from `osWriteStdout`,
 	// which writes to the process's OWN stdout via GetStdHandle and takes no explicit handle.
 	osWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// --- The `__Builtins` WALL clock: the calendar read `__clock_now_unix_s` is built on ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osWriteFile`, per the band-append invariant: a mid-band
+	// insert is silently swallowed by a `… to X` range arm. Its `category: system` places it logically in the
+	// system band, independent of this tail position.
+	//
+	// `osReadWallClock(ftPtr)` = `GetSystemTimeAsFileTime(ftPtr)` — writes the host's CALENDAR time, as a
+	// 64-bit count of 100 ns intervals since 1601-01-01 UTC, to `[ftPtr]`. ONE VALUE operand (the out-param
+	// address, a `globalAddr` of the runtime's `.data` scratch word), no result — the same out-param shape
+	// `osReadClock` and `osProcessExitCode` use, and for the same reason: the Win32 API returns its answer
+	// through memory.
+	//
+	// It is a SEPARATE op from `osReadClock` rather than a third pointer on it, because the two answer
+	// different questions from different counters: `osReadClock` reads the MONOTONIC performance counter (a
+	// stopwatch, for the scheduler's deadlines), this one the WALL clock (a calendar, which can step
+	// backwards). Fusing them would make every scheduler tick pay for a calendar read it must never use.
+	//
+	// ⭐ x64-WINDOWS ONLY, like `osReadClock` above it. The epoch shift and the ticks→seconds divide stay
+	// BUILDER-BUILT Std (`__clock_now_unix_s` in ClockRuntime.maxon), so no new Target op is needed for the
+	// arithmetic and a future POSIX backend supplies only the read. Full call-barrier metadata: it IS an
+	// indirect call once lowered, exactly like `osReadClock`.
+	osReadWallClock(ftPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1107,6 +1129,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// still live operands); `osWriteFile` reads handle+buf+len+bytesOutPtr, its `resultId` a def skipped here.
 		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) then insertUseQuad(referenced, a: namePtr, b: saPtr, c: childReadPtr, d: parentWritePtr)
 		osWriteFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
+		// The out-param ADDRESS is the one value operand the wall-clock read has, and it must be reported or
+		// the allocator would free its register before the OS call writes through it — the same obligation
+		// `osReadClock`'s two addresses carry. It defines nothing.
+		osReadWallClock(ftPtr) then referenced.insert(ftPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1251,6 +1277,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// P1.5 dogfood slice 1b: the streaming stdin pipe + write, rewriting exactly the value operands they read.
 		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) gives StdOp.osPipeCreateOutbound(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), childReadPtrId: remappedValue(childReadPtr, subst: subst), parentWritePtrId: remappedValue(parentWritePtr, subst: subst))
 		osWriteFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osWriteFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
+		// The exact mirror of `collectStdOpUses`'s arm: the out-param address is the one read, so it is the
+		// one rewrite. It defines nothing.
+		osReadWallClock(ftPtr) gives StdOp.osReadWallClock(remappedValue(ftPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

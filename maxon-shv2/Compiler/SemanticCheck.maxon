@@ -639,7 +639,17 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 	// fire, and each would report a defect in code the user did not write. Its arguments are the
 	// compiler's own: their count is fixed at the emit site and their types are the runtime's, not a
 	// signature's.
+	//
+	// ⚠ The early return is SOUND ONLY BECAUSE THE PARSER NOW REFUSES A SOURCE-WRITTEN `__` CALLEE
+	// (`Parser.requireCalleeIsNotReservedName`, E3004). Its stated premise used to be "no user name can be
+	// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned" — which is about
+	// DECLARATIONS, and a callee need not be declared anywhere. Three panics rode through that gap. What
+	// makes the premise true is the closed door, not the reservation; do not remove one without the other.
+	//
+	// The ONE thing this pass can say about a compiler-owned callee is which TARGET it can be lowered for,
+	// because it is the first pass that holds both the call's source span and `project.target`.
 	if isCompilerInternalCallee(callee) 'compilerOwnCall'
+		requireTargetSupportsRuntimeCallee(project, callee: callee, callRange: callRange, filePath: filePath)
 		return
 	end 'compilerOwnCall'
 
@@ -656,6 +666,43 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{String.from(callee)}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 	end 'slot'
 end 'validateCall'
+
+// ⭐ **REFUSE A CLOCK READ THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN.**
+//
+// The `__Builtins` clock intrinsics read the host clock through Win32 imports — `osReadClock`'s
+// QueryPerformanceCounter/Frequency and `osReadWallClock`'s GetSystemTimeAsFileTime, both of which
+// `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. Each intrinsic lowers to ONE runtime entry
+// (`__gt_now_ns` / `__clock_now_unix_s`), so the CALLEE NAME is the whole test, and this is where a program
+// compiled for another target is refused.
+//
+// ⚠ It replaces a PANIC, not a diagnostic: before it, such a program crashed the compiler three tiers down
+// (`StdToWasm.maxon: 'osReadClock' is x64-windows only`) with no file and no line. Those panics stay as
+// BACKSTOPS for a compiler bug that gets one past this gate; they are no longer the user-facing rejection.
+//
+// ⚠ **THE SET IS `isClockSubstrateCallee`, NOT THE WHOLE `__gt_` BAND**, and the difference was measured
+// rather than guessed — see that predicate's own note. `sleep(ms)`, `runProcess(cmd)`, the
+// streaming-subprocess builtins and `async`/`await` still panic on a non-x64-windows target; each of them is
+// x64-windows-gated BY SPEC (`<!-- targets: x64-windows -->`), which is why no test reaches those panics,
+// and giving them a diagnostic properly means gating the async OP KINDS too — a separate piece of work.
+function requireTargetSupportsRuntimeCallee(project Project, callee ByteArray, callRange SourceRange, filePath FilePath)
+	if not isClockSubstrateCallee(callee) 'targetNeutralRuntime'
+		return
+	end 'targetNeutralRuntime'
+
+	if targetHasWin32Substrate(project.target) 'supported'
+		return
+	end 'supported'
+
+	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "this construct is x64-windows only at this rung: it lowers to the runtime entry '{String.from(callee)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: filePath)
+end 'requireTargetSupportsRuntimeCallee'
+
+// Does `target` have the Win32 import table the green-thread/clock substrate is built on? x64-windows alone:
+// x64-linux takes the syscall route (which every one of these ops rejects), and arm64/wasm have no lowering
+// at all. Written as a positive capability question rather than as "not wasm", so a target added later is
+// unsupported until someone says otherwise.
+function targetHasWin32Substrate(target Target) returns bool
+	return target.cpu == CpuArch.x64 and target.os == Os.windows
+end 'targetHasWin32Substrate'
 
 // **The one type rule that cannot live in the parser.** An argument must agree with the
 // parameter it fills, and the callee may be declared in another FILE — so the question needs
