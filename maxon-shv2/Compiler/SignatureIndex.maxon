@@ -3380,20 +3380,15 @@ export type ProgramSignatures
 	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
-		// An `Array` instance has NO base struct to iterate and is dropped through `__arr_decref` (routed by
-		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`. Answering
-		// `false` here keeps it out of `installGenericInstanceDestructors` and `noteDestructorUsage`'s
-		// instance loop (which would call `baseLayoutOf` and panic) — its own `__arr_decref` frees the box.
-		if self.isArrayInstance(id) 'array'
+		// An `Array` or `Set` instance has NO base struct to iterate and is dropped through its own box-drop
+		// callee (`__arr_decref` / `__set_decref`, routed by `genericInstanceBoxDropCallee`), NOT a synthesized
+		// per-instance `__destruct_<mangled>`. Answering `false` keeps both out of the destructor-synthesis
+		// instance loop (`installGenericInstanceDestructors` / `noteDestructorUsage`), which would call
+		// `baseLayoutOf` and panic on a base-less builtin — the same two-collection merge
+		// `managedOpaqueArrayElementOf` already makes.
+		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
 			return false
-		end 'array'
-		// A `Set` instance, like an `Array` one, has no base struct to iterate and is dropped through
-		// `__set_decref` (routed below), NOT a synthesized `__destruct_<mangled>` — keeping it out of the
-		// destructor-synthesis instance loop (which would call `baseLayoutOf` and panic). Its elements are
-		// scalar this slice, so `__set_decref` frees the three buffers and the record, no element walk.
-		if self.isSetInstance(id) 'set'
-			return false
-		end 'set'
+		end 'notStruct'
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
 				return true

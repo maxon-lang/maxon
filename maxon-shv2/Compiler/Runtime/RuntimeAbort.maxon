@@ -50,6 +50,13 @@ export enum RuntimeAbort
 	// goes to the green-thread counter, not the heap one (this file's founding rule: an abort must not report
 	// another abort's number). Pinned by `async-promise-drop`'s never-ran/completed/parked cases.
 	greenThreadLeak = 75
+	// `__set_insert`: the linear probe walked all `capacity` slots without finding an Empty one AND saw no
+	// Deleted tombstone to reuse — i.e. count == capacity. UNREACHABLE from any source program: insert grows
+	// (to <75% load, so >=1/4 of slots are non-Occupied) BEFORE probing, and a fresh table has no tombstones,
+	// so an Empty slot is always found first. It fires only on a broken load-factor/grow invariant — a
+	// COMPILER bug — where the alternative (a silent `retVoid`) would drop the element and leave `count`
+	// lying. Same "unreachable from source, abort not silence" class as `arrayElementSizeZero`.
+	setInsertNoFreeSlot = 76
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

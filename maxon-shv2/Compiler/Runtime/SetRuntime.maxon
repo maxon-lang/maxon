@@ -553,13 +553,16 @@ function buildSetInsert(module StdModule)
 
 	// exhausted: every slot was probed without finding Empty — the table is Occupied+Deleted. The load factor
 	// keeps `count` below capacity, so at least one slot is a tombstone and `firstDeleted >= 0` here; reuse it.
-	// The `unreachableFull` branch (no tombstone AND no empty ⇒ count == capacity) cannot happen after a grow.
+	// The `unreachableFull` branch (no tombstone AND no empty ⇒ count == capacity) cannot happen after a grow —
+	// so it ABORTS rather than silently `retVoid`ing (which would drop the element and leave `count` lying); a
+	// reachable `unreachableFull` is a broken load-factor/grow invariant, a compiler bug, exactly the
+	// "unreachable from source, abort not silence" class `ArrayRuntime`'s aborts already occupy.
 	let zeroForFallback = emitConst(module, block: exhausted, value: 0, ids: ids)
 	let haveFallback = emitCmp(module, block: exhausted, a: firstDeleted, b: zeroForFallback, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(exhausted, op: StdOp.condBranch(haveFallback, thenBlockId: fallbackInsert.id, elseBlockId: unreachableFull.id))
 	emitSetStoreEntry(module, block: fallbackInsert, set: set, index: firstDeleted, elem: elem, hash: hash, ids: ids)
 	module.setTerminator(fallbackInsert, op: StdOp.retVoid)
-	module.setTerminator(unreachableFull, op: StdOp.retVoid)
+	emitRuntimeAbort(module, func: func, block: unreachableFull, abort: RuntimeAbort.setInsertNoFreeSlot, ids: ids)
 
 	module.functions.push(func)
 end 'buildSetInsert'
