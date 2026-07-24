@@ -326,7 +326,7 @@ internal sealed class MaxonDebugger : IDisposable {
   public static IReadOnlyList<string> FileNames(MxdbgReader s) {
     var names = new List<string>((int)s.FileCount);
     for (uint i = 0; i < s.FileCount; i++) {
-      var leaf = LeafPathComponent(s.FileName(i));
+      var leaf = MxdbgReader.LeafPathComponent(s.FileName(i));
       if (leaf.Length > 0) names.Add(leaf);
     }
     return names;
@@ -353,13 +353,6 @@ internal sealed class MaxonDebugger : IDisposable {
 
   private MxdbgReader RequireSidecar() =>
     Sidecar ?? throw new DebuggerException("no debug info loaded");
-
-  /// The trailing path component, split on both separators so a Windows-rooted sidecar path and a
-  /// forward-slash spelling yield the same leaf.
-  private static string LeafPathComponent(string path) {
-    int cut = path.LastIndexOfAny(['/', '\\']);
-    return cut < 0 ? path : path[(cut + 1)..];
-  }
 
   /// <summary>
   /// Post one command to the agent's mailbox and wait for its ack. Writes Cmd + CmdArg, then rings the

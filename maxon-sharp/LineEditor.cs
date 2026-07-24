@@ -166,11 +166,12 @@ internal sealed class LineEditor {
 
   private static void DoCompletion(string prompt, StringBuilder buf, ref int cursor,
       ref int lastLen, Func<CompletionContext> contextProvider) {
-    var candidates = DebugCompletion.Complete(buf.ToString(), cursor, contextProvider());
+    string text = buf.ToString();
+    var candidates = DebugCompletion.Complete(text, cursor, contextProvider());
     if (candidates.Count == 0) return;
 
-    int wordStart = WordStart(buf, cursor);
-    string word = buf.ToString(wordStart, cursor - wordStart);
+    int wordStart = DebugCompletion.WordStart(text, cursor);
+    string word = text[wordStart..cursor];
 
     if (candidates.Count == 1) {
       ReplaceWord(buf, ref cursor, wordStart, candidates[0]);
@@ -192,14 +193,6 @@ internal sealed class LineEditor {
     buf.Remove(wordStart, cursor - wordStart);
     buf.Insert(wordStart, replacement);
     cursor = wordStart + replacement.Length;
-  }
-
-  /// The start of the whitespace-delimited word ending at <paramref name="cursor"/> — the span Tab
-  /// completes, matching how <see cref="DebugCompletion"/> isolates the word it filters against.
-  private static int WordStart(StringBuilder buf, int cursor) {
-    int i = cursor;
-    while (i > 0 && !char.IsWhiteSpace(buf[i - 1])) i--;
-    return i;
   }
 
   // ---- Ctrl-R reverse incremental search ----
@@ -387,8 +380,7 @@ internal static class DebugCompletion {
     if (cursor < 0) cursor = 0;
     if (cursor > line.Length) cursor = line.Length;
 
-    int wordStart = cursor;
-    while (wordStart > 0 && !char.IsWhiteSpace(line[wordStart - 1])) wordStart--;
+    int wordStart = WordStart(line, cursor);
     string prefix = line[wordStart..cursor];
 
     var pool = PoolFor(line, wordStart, ctx);
@@ -423,6 +415,16 @@ internal static class DebugCompletion {
     int j = i;
     while (j < line.Length && !char.IsWhiteSpace(line[j])) j++;
     return line[i..j];
+  }
+
+  /// The start of the whitespace-delimited word ending at <paramref name="cursor"/> — the ONE
+  /// word-boundary rule, used both here (to isolate the prefix the engine filters against) and by the
+  /// interactive editor (to know which span Tab REPLACES with a candidate). Single-sourced so the span
+  /// filtered and the span replaced can never disagree.
+  public static int WordStart(string line, int cursor) {
+    int i = Math.Clamp(cursor, 0, line.Length);
+    while (i > 0 && !char.IsWhiteSpace(line[i - 1])) i--;
+    return i;
   }
 
   private static IReadOnlyList<string> Concat(IReadOnlyList<string> a, IReadOnlyList<string> b) {

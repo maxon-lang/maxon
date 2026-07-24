@@ -209,11 +209,11 @@ public sealed class MxdbgReader {
   /// offset is the statement's entry, past the prologue for any non-first statement.
   /// </summary>
   public uint? LineToOffset(string fileName, uint line) {
-    var wantLeaf = LeafName(fileName);
+    var wantLeaf = LeafPathComponent(fileName);
     uint? best = null;
     for (uint i = 0; i < _lineCount; i++) {
       var row = Line(i);
-      if (row.Line != line || !LeafName(row.File).Equals(wantLeaf, StringComparison.OrdinalIgnoreCase))
+      if (row.Line != line || !LeafPathComponent(row.File).Equals(wantLeaf, StringComparison.OrdinalIgnoreCase))
         continue;
       if (best is null || row.CodeOffset < best) best = row.CodeOffset;
     }
@@ -221,8 +221,10 @@ public sealed class MxdbgReader {
   }
 
   /// The trailing path component, split on both separators so a Windows-rooted sidecar path and a
-  /// forward-slash command-line spelling compare equal.
-  private static string LeafName(string path) {
+  /// forward-slash command-line spelling compare equal. Public and single-sourced here because the file
+  /// completion pool (which offers `break <file>` leaves) MUST split a path the same way this reader
+  /// resolves `break file:line` by leaf — a second copy could offer a leaf that then fails to resolve.
+  public static string LeafPathComponent(string path) {
     int cut = path.LastIndexOfAny(['/', '\\']);
     return cut < 0 ? path : path[(cut + 1)..];
   }
