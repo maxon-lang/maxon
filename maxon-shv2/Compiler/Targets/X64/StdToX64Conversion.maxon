@@ -131,6 +131,33 @@ let WaitAnyHandle = 0x0
 // range violation is a plain non-zero exit wherever the message-printing `mrt_panic` is unavailable.
 let RangePanicExitCode = 1 as MachineWord
 
+// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's Win32 magic values ---
+// The exact constants v1's `__subp_create_overlapped_pipe` (read path) and the bootstrap's IOCP init use, named
+// once here so the pipe/iocp/event/thread lowerings cannot restate them. `INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE`
+// is what makes the parent read end usable with FILE_FLAG_OVERLAPPED + IOCP (an anonymous `CreatePipe` handle
+// cannot be overlapped).
+let InheritHandlesTrue = 1  // CreateProcessA bInheritHandles=TRUE (the child inherits the pipe write end)
+let PipeReadOpenMode = 0x40080001  // PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE
+let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
+let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
+let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB, v1's SubpPipeBufferSize)
+let PipeDefaultTimeout = 0x0  // nDefaultTimeOut (0 = the 50 ms system default; unused for a byte-mode read)
+let GenericWrite = 0x40000000  // the child write end's dwDesiredAccess (CreateFileW)
+let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
+let OpenExisting = 3  // dwCreationDisposition — connect to the already-created named pipe
+let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
+let HandleFlagInherit = 1  // SetHandleInformation dwMask/HANDLE_FLAG_INHERIT — cleared on the parent read end
+let HandleFlagClear = 0  // SetHandleInformation dwFlags = 0 (strip inheritance)
+let IocpNoCompletionKey = 0x0  // CreateIoCompletionPort CompletionKey for an associate
+let IocpNoConcurrentThreads = 0x0  // CreateIoCompletionPort NumberOfConcurrentThreads for an associate
+let IocpInvalidHandleValue = 0 - 1  // CreateIoCompletionPort FileHandle = INVALID_HANDLE_VALUE (-1) creates a new port
+let IocpSingleConcurrentThread = 1  // NumberOfConcurrentThreads for a fresh port (the one completion thread)
+let FileSkipCompletionPortOnSuccess = 1  // SetFileCompletionNotificationModes — a SYNC read posts no IOCP packet
+let CreateEventManualReset = 0x0  // CreateEventA bManualReset = FALSE → AUTO-reset (one wait consumes one signal)
+let CreateEventInitialUnsignaled = 0x0  // CreateEventA bInitialState = FALSE (unsignaled until the first SetEvent)
+let ThreadDefaultStackSize = 0x0  // CreateThread dwStackSize = 0 → the executable's default stack
+let ThreadRunImmediately = 0x0  // CreateThread dwCreationFlags = 0 (not CREATE_SUSPENDED)
+
 // The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
 // slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
 // points at (WriteFile writes the count there; it must be a valid pointer, not NULL). These are SLOT
@@ -169,6 +196,21 @@ let CreateProcessCurrentDirSlot = 3  // arg8 lpCurrentDirectory = NULL
 let CreateProcessStartupInfoSlot = 4  // arg9 lpStartupInfo
 let CreateProcessProcInfoSlot = 5  // arg10 lpProcessInformation
 let CreateProcessOutgoingSlots = CreateProcessStackArgWords
+
+// --- P1.5 dogfood slice 1a: the IOCP-substrate imports' outgoing stack-argument counts ---
+// Stated ONCE per import, exactly as `WriteFileStackArgWords`/`CreateProcessStackArgWords` are — the SAME
+// constant sizes the GT-frame reservation (`stdOpOutgoingArgBytes`) AND the syscall shim's per-call copy
+// (`gtShimStackArgWords`), so the two can never disagree about how many words each kernel call reads off the
+// stack. All are REAL stack arguments the kernel reads (no out-param scratch slot on the stack — ReadFile's
+// bytes-read out-param is the 4th argument in r9, a register). EXPORTED because the shim reads them.
+export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBufferSize, nInBufferSize, nDefaultTimeOut, lpSecurityAttributes
+export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
+export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
+export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+
+// `osPipeCreate` reserves the MAX outgoing stack-arg count across its calls (CreateNamedPipeW's 4 dominates
+// CreateFileW's 3), so its single GT-frame region holds either call's stack args at `[rsp + shadow + k*8]`.
+let PipeCreateOutgoingSlots = CreateNamedPipeStackArgWords
 
 // The `[rsp + disp]` displacement of a Win64 OUTGOING stack-argument slot — past the 32-byte shadow space,
 // one `SpillSlotBytes`-sized slot per index. The Win64 ABI fact shared by EVERY >4-argument import call the
@@ -217,6 +259,17 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		switch gives 0
 		// A witness call passes its arguments (receiver + user args, ≤ 6) in registers — no outgoing stack.
 		witnessCall gives 0
+		// P1.5 dogfood slice 1a: the three >4-argument IOCP calls reserve their stack-arg region (osPipeCreate the
+		// max across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
+		// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument (register
+		// only): osIocpCreate/osEventCreate/osLockInit/osLockEnter/osLockLeave/osLastError reserve none.
+		osPipeCreate gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
+		osThreadCreate gives win64OutgoingArgBytes(CreateThreadStackArgWords)
+		osReadOverlapped gives win64OutgoingArgBytes(ReadFileStackArgWords)
+		osProcessSpawnInherit gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
+		osIocpCreate to osEventCreate gives 0
+		osLockInit to osLockLeave gives 0
+		osLastError gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -787,6 +840,8 @@ type StdToX64Lowering
 				switch then break 'term'
 				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing.
 				witnessCall then break 'term'
+				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
+				osPipeCreate to osProcessSpawnInherit then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -841,6 +896,10 @@ type StdToX64Lowering
 				switch then break 'isTheCompare'
 				// A witness call is a call, not the compare — the scan stops and records no fusion (safe).
 				witnessCall then break 'isTheCompare'
+				// P1.5 dogfood slice 1a: the IOCP ops declare `clobbersFlags: true` (they lower to calls), so one
+				// CAN land here as the last flag-writer before a branch; like a `call`, it is not the compare, so
+				// the scan stops and no fusion is recorded (declining is always safe).
+				osPipeCreate to osProcessSpawnInherit then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -910,6 +969,8 @@ type StdToX64Lowering
 			switch gives false
 			// A witness call is a value-producing body op, never a terminator that reads fused flags.
 			witnessCall gives false
+			// P1.5 dogfood slice 1a: an IOCP op is never a terminator — none reads fused compare flags.
+			osPipeCreate to osProcessSpawnInherit gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -960,6 +1021,17 @@ type StdToX64Lowering
 			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 			// P1.7a slice 2a: the fused witness call — arg moves then a memory-indirect `call [witnessAddr + off]`.
 			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
+			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import ops.
+			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
+			osIocpCreate(resultId) then self.lowerOsIocpCreate(resultId, dstBlock: dstBlock)
+			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstBlock: dstBlock)
+			osThreadCreate(resultId, entryPtrId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, dstBlock: dstBlock)
+			osLockInit(lockPtrId) then self.lowerOsWin64Call1(IatSlot.InitializeCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
+			osLockEnter(lockPtrId) then self.lowerOsWin64Call1(IatSlot.EnterCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
+			osLockLeave(lockPtrId) then self.lowerOsWin64Call1(IatSlot.LeaveCriticalSection, arg0: lockPtrId, dstBlock: dstBlock)
+			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, ovlId) then self.lowerOsReadOverlapped(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
+			osLastError(resultId) then self.lowerOsLastError(resultId, dstBlock: dstBlock)
+			osProcessSpawnInherit(cmdlinePtrId, startupPtrId, procInfoPtrId) then self.lowerOsProcessSpawnWin64(cmdlinePtrId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, inheritHandles: true, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1003,6 +1075,7 @@ type StdToX64Lowering
 			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("lowerStdToX64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
+			osPipeCreate to osProcessSpawnInherit then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn are all body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1673,12 +1746,12 @@ type StdToX64Lowering
 	// ⭐ x64-WINDOWS ONLY, like the whole green-thread substrate; the syscall route rejects.
 	function lowerOsProcessSpawn(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsProcessSpawnWin64(cmdlinePtrId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, dstBlock: dstBlock)
+			importCall then self.lowerOsProcessSpawnWin64(cmdlinePtrId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, inheritHandles: false, dstBlock: dstBlock)
 			syscall then panic("lowerOsProcessSpawn: CreateProcessA is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
 		end 'route'
 	end 'lowerOsProcessSpawn'
 
-	function lowerOsProcessSpawnWin64(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, dstBlock IrBlock)
+	function lowerOsProcessSpawnWin64(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, inheritHandles bool, dstBlock IrBlock)
 		// The two OUT-struct pointers (args 9/10) onto their stack slots FIRST, while every register is still
 		// free — each reads its virtual and writes to the frame, clobbering no other operand's register.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessStartupInfoSlot), src: TargetVReg.virtual(startupPtrId), width: X64AccessWidth.word64))
@@ -1697,6 +1770,12 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		// osProcessSpawnInherit OVERWRITES the bInheritHandles stack slot (arg 5, zeroed above) with TRUE so the child
+		// inherits the pipe write end its STARTUPINFO names as hStdOutput; osProcessSpawn leaves the 0. rax is free here.
+		if inheritHandles 'inherit'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: InheritHandlesTrue))
+			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		end 'inherit'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateProcessA)))
 	end 'lowerOsProcessSpawnWin64'
 
@@ -1791,6 +1870,164 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(arg1)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
 	end 'lowerOsWin64Call2'
+
+	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate lowerings ---
+	// Every one routes on `x64OsCallKind` and REJECTS the syscall path — the whole substrate is x64-windows-gated.
+
+	// A Win64 outgoing stack argument set to an IMMEDIATE: `mov rax, imm ; mov [rsp + shadow + slot*8], rax`. rax is
+	// caller-saved (clobbered by the coming call anyway) so it is a free scratch, exactly as `lowerOsProcessSpawnWin64`
+	// uses it. Shared by every >4-argument IOCP call so the `[rsp+disp]` spelling lives in one place.
+	function emitWin64StackArgImm(dstBlock IrBlock, slot MachineWord, value MachineWord)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: value))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(slot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+	end 'emitWin64StackArgImm'
+
+	// Capture a Win64 import call's primary result (RAX) into `resultId` — the one place the five value-defining IOCP
+	// ops read their handle/BOOL/error back, mirroring `lowerOsWaitHandleWin64`'s RAX capture.
+	function emitCaptureRax(dstBlock IrBlock, resultId ValueId)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'emitCaptureRax'
+
+	// Lower `osPipeCreate` to the five-call overlapped-read-pipe sequence (ported from v1's
+	// `__subp_create_overlapped_pipe`, read path). The two handles land in `[readPtr]`/`[writePtr]`; each later call
+	// RELOADS the read end from `[readPtr]` rather than pinning a register across an intervening `iatCall`.
+	function lowerOsPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsPipeCreateWin64(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsPipeCreate: the overlapped named pipe is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsPipeCreate'
+
+	function lowerOsPipeCreateWin64(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId, dstBlock IrBlock)
+		// 1) CreateNamedPipeW(name, PipeReadOpenMode, PipeMessageMode, PipeMaxInstances, nOutBuf, nInBuf, timeout, NULL).
+		//    Stack args 5-8 first (rax scratch, while every arg register is free), then the register args.
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: PipeBufferSize)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: PipeBufferSize)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: PipeDefaultTimeout)
+		self.emitWin64StackArgImm(dstBlock, slot: 3, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: PipeReadOpenMode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PipeMessageMode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PipeMaxInstances))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateNamedPipeW)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(readPtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		// 2) CreateFileW(name, GenericWrite, FileShareNone, saPtr, OpenExisting, FileAttributeNormal, NULL) → write end.
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: GenericWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareNone))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(saPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileW)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(writePtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		// 3) SetHandleInformation(readEnd, HandleFlagInherit, HandleFlagClear) — strip inheritance from the parent read end.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: HandleFlagInherit))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: HandleFlagClear))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetHandleInformation)))
+		// 4) CreateIoCompletionPort(readEnd, iocp, key=0, threads=0) — register the read end with the process IOCP.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(iocpId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpNoConcurrentThreads))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
+		// 5) SetFileCompletionNotificationModes(readEnd, FileSkipCompletionPortOnSuccess) — a SYNC read posts no packet.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(readPtrId), disp: 0, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileSkipCompletionPortOnSuccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetFileCompletionNotificationModes)))
+	end 'lowerOsPipeCreateWin64'
+
+	// Lower `osIocpCreate` to `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)`. INVALID_HANDLE_VALUE is a
+	// FULL 64-bit -1, so it uses `movRegImm` (64-bit) — `movRegImm32` would zero-extend to 0x00000000FFFFFFFF, a
+	// different (invalid) handle.
+	function lowerOsIocpCreate(resultId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsIocpCreateWin64(resultId, dstBlock: dstBlock)
+			syscall then panic("lowerOsIocpCreate: CreateIoCompletionPort is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsIocpCreate'
+
+	function lowerOsIocpCreateWin64(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm(x64PhysReg(X64Register.rcx), value: IocpInvalidHandleValue))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: IocpNoCompletionKey))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: IocpSingleConcurrentThread))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateIoCompletionPort)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsIocpCreateWin64'
+
+	// Lower `osEventCreate` to `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-reset, initially-unsignaled event.
+	function lowerOsEventCreate(resultId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsEventCreateWin64(resultId, dstBlock: dstBlock)
+			syscall then panic("lowerOsEventCreate: CreateEventA is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsEventCreate'
+
+	function lowerOsEventCreateWin64(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: CreateEventManualReset))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: CreateEventInitialUnsignaled))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateEventA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsEventCreateWin64'
+
+	// Lower `osThreadCreate(entryPtr)` to `CreateThread(NULL, 0, entryPtr, NULL, 0, NULL)` — start the IOCP completion
+	// thread on its own OS stack. `entryPtr` (arg 3, a `.text` address from a `funcAddr`) → r8; args 5-6 on the stack.
+	function lowerOsThreadCreate(resultId ValueId, entryPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsThreadCreateWin64(resultId, entryPtrId: entryPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsThreadCreate: CreateThread is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsThreadCreate'
+
+	function lowerOsThreadCreateWin64(resultId ValueId, entryPtrId ValueId, dstBlock IrBlock)
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: ThreadRunImmediately)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: ThreadDefaultStackSize))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(entryPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateThread)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsThreadCreateWin64'
+
+	// Lower `osReadOverlapped(handle, buf, cap, bytesOutPtr, ovl)` to `ReadFile(handle, buf, cap, bytesOutPtr, ovl)`.
+	// `bytesOutPtr` (arg 4) → r9; `ovl` (arg 5) is the ONE stack argument. The BOOL result is captured into `resultId`.
+	function lowerOsReadOverlapped(resultId ValueId, handleId ValueId, bufId ValueId, capId ValueId, bytesOutPtrId ValueId, ovlId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsReadOverlappedWin64(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
+			syscall then panic("lowerOsReadOverlapped: ReadFile (overlapped) is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsReadOverlapped'
+
+	function lowerOsReadOverlappedWin64(resultId ValueId, handleId ValueId, bufId ValueId, capId ValueId, bytesOutPtrId ValueId, ovlId ValueId, dstBlock IrBlock)
+		// The one stack arg (`ovl`, slot 0) FIRST via rax scratch, then the four register args.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(ovlId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(capId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(bytesOutPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ReadFile)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsReadOverlappedWin64'
+
+	// Lower `osLastError` to `GetLastError()` — no arguments, the DWORD result captured into `resultId`. Called
+	// IMMEDIATELY after a failing `osReadOverlapped` (no intervening call clobbers the thread's last-error).
+	function lowerOsLastError(resultId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsLastErrorWin64(resultId, dstBlock: dstBlock)
+			syscall then panic("lowerOsLastError: GetLastError is x64-windows only — the IOCP substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsLastError'
+
+	function lowerOsLastErrorWin64(resultId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetLastError)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsLastErrorWin64'
+
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
@@ -2120,6 +2357,8 @@ type StdToX64Lowering
 			switch gives false
 			// A witness call is a body op, never a float-equality condBranch.
 			witnessCall gives false
+			// P1.5 dogfood slice 1a: an IOCP op is never a terminator, let alone a float-equality condBranch.
+			osPipeCreate to osProcessSpawnInherit gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2256,6 +2495,7 @@ type StdToX64Lowering
 			tryCall to osFreePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			switch panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a jump table, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			witnessCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osPipeCreate to osProcessSpawnInherit panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

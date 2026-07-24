@@ -389,6 +389,16 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		// A witness call classes its result by the `resultType` the op carries — the same register-file
 		// question as `callIndirect` (there is no callee NAME to look a return type up against).
 		witnessCall(resultId, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		// P1.5 dogfood slice 1a: the five value-defining IOCP ops define GPR i64 results (kernel handles, the
+		// ReadFile BOOL, the GetLastError DWORD — all integers); the rest define nothing.
+		osPipeCreate then break 'result'
+		osIocpCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osEventCreate(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osThreadCreate(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osLockInit to osLockLeave then break 'result'
+		osReadOverlapped(resultId, _, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osLastError(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osProcessSpawnInherit then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

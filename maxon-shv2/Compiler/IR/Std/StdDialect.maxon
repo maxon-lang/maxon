@@ -878,6 +878,60 @@ export union StdOp
 	// `callIndirect` documents (a second managed field breaks the bootstrap's synthesized destructor). x64
 	// only at this slice: arm64/wasm loudly refuse (the witness blob rides the x64 `funcAbs64InRdata` reloc).
 	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import primitives ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `switch` (a `control`-band op physically at the tail), per the
+	// band-append invariant: every stale `… to switch` / `… to osFreePages` full-tail range arm now FAILS TO COMPILE
+	// until it is consciously extended (the invariant working in the reviewer's favour, and how these ops found every
+	// site that must classify or lower them). Each carries `category: system` (metadata placing it logically in the
+	// system band, independent of this tail position) — the same shape and rationale as the P1.5 subprocess ops:
+	// each says WHAT is wanted and lets each backend say HOW, keeping the Win32 import table out of the target-neutral
+	// tier. ⭐ x64-WINDOWS ONLY, like the whole green-thread substrate; every other backend REJECTS them (they are
+	// emitted only inside the x64-windows-gated IOCP runtime, so a linux/arm64/wasm lowering would be untested dead
+	// code no test could reach). Full call-barrier metadata: each IS one or more indirect calls once lowered.
+	//
+	// The FIVE value-defining ones — `osIocpCreate`, `osEventCreate`, `osThreadCreate`, `osReadOverlapped`,
+	// `osLastError` — DEFINE a result (a HANDLE, a BOOL, or an error code captured from RAX). The rest consume their
+	// result via MEMORY (an out-param pointer) or ignore it (a lock op's void return), so they carry no result id, as
+	// `osCloseHandle`/`osWaitHandles` do.
+	//
+	// `osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr)` = create ONE overlapped read pipe: CreateNamedPipeW(name,
+	// INBOUND|OVERLAPPED|FIRST_PIPE_INSTANCE, …) → the parent READ end stored to `[readPtr]`; CreateFileW(name,
+	// GENERIC_WRITE, …, saPtr=inheritable, OPEN_EXISTING, …) → the inheritable child WRITE end stored to `[writePtr]`;
+	// SetHandleInformation strips inheritance from the read end; CreateIoCompletionPort registers the read end with
+	// `iocp` and SetFileCompletionNotificationModes sets FILE_SKIP_COMPLETION_PORT_ON_SUCCESS. Five VALUE operands, no
+	// result (the two handles land in memory). Ports v1's `__subp_create_overlapped_pipe` read path.
+	osPipeCreate(namePtrId ValueId, saPtrId ValueId, iocpId ValueId, readPtrId ValueId, writePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osIocpCreate()` = `CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1)` — create the process-wide IOCP. No
+	// value operands; DEFINES the port handle (captured from RAX).
+	osIocpCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osEventCreate()` = `CreateEventA(NULL, FALSE, FALSE, NULL)` — an AUTO-RESET, initially-unsignaled event (the
+	// netpoll's wake). No value operands; DEFINES the event handle.
+	osEventCreate(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osThreadCreate(entryPtr)` = `CreateThread(NULL, 0, entryPtr, NULL, 0, NULL)` — start the IOCP completion thread.
+	// One VALUE operand (the `.text` entry address, from a `funcAddr`); DEFINES the thread handle.
+	osThreadCreate(resultId ValueId, entryPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
+	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire at a main-thread mutation
+	// site (the completion thread acquires it DIRECTLY in the hand-assembled loop, not through this op). One VALUE operand, no result.
+	osLockEnter(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osLockLeave(lockPtr)` = `LeaveCriticalSection(lockPtr)`. One VALUE operand, no result.
+	osLockLeave(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osReadOverlapped(handle, buf, cap, bytesOutPtr, ovl)` = `ReadFile(handle, buf, cap, bytesOutPtr, ovl)` — issue the
+	// overlapped read. FIVE args (`ovl` is the 5th, a stack arg); DEFINES the BOOL result (captured from RAX): nonzero =
+	// SYNCHRONOUS completion (with FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, no IOCP packet posts — `[bytesOutPtr]` has the
+	// count and the caller must NOT yield); zero = the read is queued OR failed — the caller reads `osLastError` to
+	// distinguish ERROR_IO_PENDING (yield) from ERROR_BROKEN_PIPE (EOF) from a real error.
+	osReadOverlapped(resultId ValueId, handleId ValueId, bufId ValueId, capId ValueId, bytesOutPtrId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osLastError()` = `GetLastError()` — the thread's last-error, read IMMEDIATELY after a failing `osReadOverlapped` (no
+	// intervening call clobbers it — the shim's TIB writes do not touch the TEB's LastError word). No value operands; DEFINES the code.
+	osLastError(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr)` = `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, TRUE, 0,
+	// NULL, NULL, startupPtr, procInfoPtr)` — the `osProcessSpawn` twin with bInheritHandles=TRUE, so a child inherits the
+	// pipe write end its STARTUPINFO names as hStdOutput. Three VALUE operands, no result — identical marshalling to
+	// `osProcessSpawn` save the one TRUE flag (shared lowering).
+	osProcessSpawnInherit(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1001,6 +1055,19 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// (`witnessAddr` in place of the callee register), so it reports uses the same way. `resultId` is a def;
 		// `methodIndex`/`resultType`/`argFloatMask` are metadata (not value operands).
 		witnessCall(_, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
+		// P1.5 dogfood slice 1a: each IOCP op reports its VALUE operands; its `resultId` (where present) is a DEF,
+		// skipped here exactly as `osWaitHandle`'s is. `osIocpCreate`/`osEventCreate`/`osLastError` read nothing (a
+		// pure result def, like `osAllocPages`'s but with no size operand).
+		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) then insertUseQuint(referenced, a: namePtr, b: saPtr, c: iocp, d: readPtr, e: writePtr)
+		osIocpCreate then break 'u'
+		osEventCreate then break 'u'
+		osThreadCreate(_, entryPtr) then referenced.insert(entryPtr)
+		osLockInit(lockPtr) then referenced.insert(lockPtr)
+		osLockEnter(lockPtr) then referenced.insert(lockPtr)
+		osLockLeave(lockPtr) then referenced.insert(lockPtr)
+		osReadOverlapped(_, handle, buf, cap, bytesOutPtr, ovl) then insertUseQuint(referenced, a: handle, b: buf, c: cap, d: bytesOutPtr, e: ovl)
+		osLastError then break 'u'
+		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) then insertUseTriple(referenced, a: cmdlinePtr, b: startupPtr, c: procInfoPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1024,6 +1091,16 @@ function insertUseTriple(referenced StdValueUseSet, a ValueId, b ValueId, c Valu
 	referenced.insert(b)
 	referenced.insert(c)
 end 'insertUseTriple'
+
+// The five-operand twin — for the P1.5 IOCP ops that read five value operands (`osPipeCreate`'s name + SA + iocp +
+// two out-pointers; `osReadOverlapped`'s handle + buf + cap + bytesOut-pointer + overlapped).
+function insertUseQuint(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId, d ValueId, e ValueId)
+	referenced.insert(a)
+	referenced.insert(b)
+	referenced.insert(c)
+	referenced.insert(d)
+	referenced.insert(e)
+end 'insertUseQuint'
 
 // An indirect call reads its callee register AND every argument. The callee is a value operand (the
 // code pointer), unlike a direct `call` whose callee is a NAME — so it must be inserted alongside the
@@ -1109,6 +1186,18 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`'s `witnessCall` arm: rewrite the witness-table address and the
 		// args (its result is a def; `methodIndex`/`resultType`/`argFloatMask` are metadata carried through).
 		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(resultId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
+		// The exact mirror of `collectStdOpUses`'s P1.5 IOCP arms: rewrite exactly the value operands they read;
+		// the result-only ops (`osIocpCreate`/`osEventCreate`/`osLastError`) rewrite nothing.
+		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) gives StdOp.osPipeCreate(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), iocpId: remappedValue(iocp, subst: subst), readPtrId: remappedValue(readPtr, subst: subst), writePtrId: remappedValue(writePtr, subst: subst))
+		osIocpCreate gives op
+		osEventCreate gives op
+		osThreadCreate(resultId, entryPtr) gives StdOp.osThreadCreate(resultId, entryPtrId: remappedValue(entryPtr, subst: subst))
+		osLockInit(lockPtr) gives StdOp.osLockInit(remappedValue(lockPtr, subst: subst))
+		osLockEnter(lockPtr) gives StdOp.osLockEnter(remappedValue(lockPtr, subst: subst))
+		osLockLeave(lockPtr) gives StdOp.osLockLeave(remappedValue(lockPtr, subst: subst))
+		osReadOverlapped(resultId, handle, buf, cap, bytesOutPtr, ovl) gives StdOp.osReadOverlapped(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst), ovlId: remappedValue(ovl, subst: subst))
+		osLastError gives op
+		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

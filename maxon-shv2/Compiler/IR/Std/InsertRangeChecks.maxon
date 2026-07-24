@@ -379,6 +379,8 @@ type RangeCheckEmitter
 				switch then break 'c'
 				// A witness call's result is a call return, not a foldable constant — nothing to record.
 				witnessCall then break 'c'
+				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
+				osPipeCreate to osProcessSpawnInherit then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -466,6 +468,8 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		switch gives false
 		// A witness call is a body op, not a `ret` — it is not the return whose value this checks.
 		witnessCall gives false
+		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
+		osPipeCreate to osProcessSpawnInherit gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -524,6 +528,13 @@ function stdOpDefinesValue(op StdOp) returns bool
 		switch gives false
 		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`.
 		witnessCall gives true
+		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
+		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
+		osPipeCreate gives false
+		osIocpCreate to osThreadCreate gives true
+		osLockInit to osLockLeave gives false
+		osReadOverlapped to osLastError gives true
+		osProcessSpawnInherit gives false
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -563,6 +574,15 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		switch gives 0
 		// A witness call defines its result value, like `callIndirect`.
 		witnessCall(resultId, _, _, _, _, _) gives resultId
+		// P1.5 dogfood slice 1a: the value-defining IOCP ops return their captured RAX result id; the rest 0.
+		osPipeCreate gives 0
+		osIocpCreate(resultId) gives resultId
+		osEventCreate(resultId) gives resultId
+		osThreadCreate(resultId, _) gives resultId
+		osLockInit to osLockLeave gives 0
+		osReadOverlapped(resultId, _, _, _, _, _) gives resultId
+		osLastError(resultId) gives resultId
+		osProcessSpawnInherit gives 0
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 

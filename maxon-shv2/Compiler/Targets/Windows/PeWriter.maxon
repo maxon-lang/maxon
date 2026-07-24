@@ -124,7 +124,19 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // assembled `__gt_morestack` chunk calls it directly). APPENDED AFTER `CloseHandle` so every existing slot INDEX
 // (and hence every existing `iatCall` relocation) is unchanged — a reorder would silently repoint every prior import.
 //
-// ⚠ All fourteen are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
+// `CreateNamedPipeW`/`CreateFileW`/`SetHandleInformation`/`CreateIoCompletionPort`/`SetFileCompletionNotificationModes`/
+// `GetQueuedCompletionStatus`/`CreateThread`/`CreateEventA`/`SetEvent`/`InitializeCriticalSection`/
+// `EnterCriticalSection`/`LeaveCriticalSection`/`ReadFile`/`GetLastError`/`GetCurrentProcessId` (P1.5 dogfood slice 1a —
+// the IOCP overlapped-read substrate) are the async-subprocess-stdio core: an overlapped named pipe (CreateNamedPipeW +
+// CreateFileW + SetHandleInformation) is registered with a process-wide IOCP (CreateIoCompletionPort +
+// SetFileCompletionNotificationModes), a dedicated completion thread (CreateThread) drains it with
+// GetQueuedCompletionStatus and re-readies the parked green thread under a CRITICAL_SECTION (Initialize/Enter/Leave),
+// waking the netpoll's WaitForSingleObject via an auto-reset CreateEventA/SetEvent; the yielding read is a ReadFile whose
+// FALSE return is classified by GetLastError (997 pending → yield, 109 broken-pipe → EOF); GetCurrentProcessId makes the
+// pipe name process-unique. APPENDED AFTER `VirtualFree` so every existing slot INDEX (and hence every existing `iatCall`
+// relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// ⚠ All are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
 // that constant counts import DIRECTORY entries (DLLs), not imports.
 export enum IatSlot
 	ExitProcess
@@ -141,6 +153,21 @@ export enum IatSlot
 	WaitForMultipleObjects
 	CloseHandle
 	VirtualFree
+	CreateNamedPipeW
+	CreateFileW
+	SetHandleInformation
+	CreateIoCompletionPort
+	SetFileCompletionNotificationModes
+	GetQueuedCompletionStatus
+	CreateThread
+	CreateEventA
+	SetEvent
+	InitializeCriticalSection
+	EnterCriticalSection
+	LeaveCriticalSection
+	ReadFile
+	GetLastError
+	GetCurrentProcessId
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

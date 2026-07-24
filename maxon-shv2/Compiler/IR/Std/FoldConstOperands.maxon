@@ -119,6 +119,8 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		switch gives StdConstInfo.notConst
 		// A witness call's result is a call return — not a constant this pass can rebuild, like `callIndirect`.
 		witnessCall gives StdConstInfo.notConst
+		// P1.5 dogfood slice 1a: an IOCP op's result is a kernel handle/BOOL/error, never a compile-time constant.
+		osPipeCreate to osProcessSpawnInherit gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -200,6 +202,8 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		switch gives FoldResult.unchanged
 		// A witness call carries no immediate-foldable operand — its operands are the table address and args.
 		witnessCall gives FoldResult.unchanged
+		// P1.5 dogfood slice 1a: an IOCP op takes no const-foldable immediate operand.
+		osPipeCreate to osProcessSpawnInherit gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 
