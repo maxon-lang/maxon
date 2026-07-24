@@ -1846,7 +1846,58 @@ it, correctly, because three measured facts invalidate a naive whitelist:
    bare-name builtin table, `Parser.maxon:18830`).
 
 **⇒ SEQUENCE: (1) dead-function elimination → (2) `__Builtins.*` recognition → (3) the whitelist mechanism with
-`stdlib/Clock.maxon` as entry #1.** Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
+`stdlib/Clock.maxon` as entry #1.**
+
+- **✅ STEP (1) DEAD-FUNCTION ELIMINATION — CLOSED 2026-07-24** (main `5984d5090`; 4 commits `1bcb8a201` feat +
+  `33c6e15a8` perf + `79a37d1b4` review + `5984d5090` final scale row; 1496→**1513/0** on the merged tree, wasm
+  **1360/0**). `Compiler/IR/Std/DeadFunctionElimination.maxon` — roots → mark → sweep over the finished Std module,
+  run ONCE at the target-neutral backend entry (`buildBackend`, after `assertNoSugarOps`) so x64/arm64/wasm all
+  inherit it. **ROOTS:** `main`; the two Std functions a hand-assembled Target CHUNK calls by name (`__mm_leak_check`,
+  `__gt_enqueue`); and every `GlobalDataTable.pendingRdataRelocs[*].funcName` (descriptor `destroyFunc`/`copyFunc` +
+  witness-table method slots), rooted UNCONDITIONALLY because the pass never prunes `.rdata` — keeping the data and
+  pruning only code is what lets the root set be three lines (v1 pruned data too and paid ~400 of its 772 lines for
+  it; dead-DATA elimination is a separate rung, `.rdata` offsets move so `RequiredData` moves with them). **EDGES:**
+  `call`, `tryCall`, and **`funcAddr` — a static edge even though the consuming call is indirect** (v1 SHIPPED the bug
+  of assuming otherwise and pruned a destructor; shv2 has the correct arm from commit one because v1 paid for it).
+  `callIndirect`/`witnessCall` name no callee by design. Took v1's KNOWLEDGE, left its CODE: v1 pushed name STRINGS on
+  the worklist (3 byte-hashes per edge) — shv2 resolves to a `FuncIndex` once (one hash), refusing to port a cost
+  curve into the pass whose job is to make the back end cheaper. **⭐ IT EXPOSED A REAL DUPLICATED-FACT BUG:** three
+  Target gates RE-DERIVED "is the GT/IOCP runtime installed?" by probing the module for a representative function
+  (`moduleHasFunction(module, GtSpawnName)`) — a proxy valid only while nothing REMOVES an installed function. A
+  `sleep(1)` program installs the whole scheduler and never calls `__gt_spawn`; DFE correctly pruned it, the gate went
+  false, and 13 async specs failed loud at link. Collapsed to ONE decider (`RuntimeUsage` owns INSTALLATION, DFE owns
+  REACHABILITY within it and can only remove); **`moduleHasFunction` and `IrModule.dropFunctionsByName` DELETED**.
+  ⭐⭐ **The independent review then found TWO more reachable defects a green suite hid:** (a) **DFE renumbers
+  `module.functions`, but `ValueOriginTable`/`ParamOriginTable` key every row by a function's POSITION in that array**
+  — after the first pruned function every later one resolved its values against a DIFFERENT function's rows; loud half
+  a `RegisterPressureDiagnostic` COMPILER-BUG panic, **silent half worse: E5001 pointing at the WRONG SOURCE LINE**
+  (fixed with `remapFunctionIndices` + a `dropped == 0` early-out so the no-prune corpus pays nothing); (b) the gate
+  collapse had been applied to x64 and arm64 but **NOT wasm**, whose `appendLeakGate` still asked the module and
+  **SILENTLY skipped the leak gate** (measured by deleting the root: x64/arm64 panic at link, wasm exits 0 with a
+  4,332-byte module vs 4,421). ⇒ all three backends now emit the gate from `usage.usesHeap`, so **pruning that root is
+  a link failure on EVERY target — a STRUCTURAL guard**, which is why no leak-firing spec is needed (note: no
+  committed spec makes the leak gate fire, since nothing legitimately leaks). Optimizer: corrected the implementer's
+  own attribution (the flat instrumentation term is +2 allocs/+112 B, not +1/+80 — part hid INSIDE the new column),
+  proved linearity three ways (allocation first-differences double; the body/`sugarGate` ratio DECREASES monotonically
+  1.195→1.024; by construction O(F + ops + relocs + callee-name bytes) with no nested scan and no unbounded re-push),
+  and fixed a cost bug (an EAGER `String.from(func.name)` beside a LAZY `logTrace` — a cost rising with how well the
+  prune works, on every non-trace build). **BENEFIT, measured on a heap program the corpus cannot express: 15 of 31
+  functions dropped, whole compile −41.4% allocations / −40.3% bytes, emitted code −44%; DFE spends 131 allocations to
+  save ~17,300 — ~130×.** Corpus caveat recorded: the arithmetic corpus has NO dead code (`dropped 0 of 60`), so the
+  instrument shows only cost and structurally cannot show the win. ⏭ **Measured debt, deliberately not taken:** no
+  `compactOps`/`compactBlocks` after the sweep (orphans verified inert — every Std consumer goes through
+  `liveOpIndices`/`func.blockRefs`); no CHUNK-level pruning (a sleep-only program still carries the `__gt_trampoline`
+  chunk as dead bytes) because the chunks are a FIXED set, O(1) in program size, and pruning them needs a Target-tier
+  reachability graph = a SECOND decider beside `RuntimeUsage`, the precise defect this rung removed — revisit only if
+  chunk count ever becomes a function of program size. ⏭ Also flagged, unmeasured: DFE runs AFTER the mid-tier
+  pipeline, so `pruneDeadBlockArgs`/`elimTrivialBlockArgs`/`foldConstOperands` (~9.6% of rung-5 allocs) still run over
+  functions DFE will delete; moving it earlier is blocked because the runtime installers append functions after the
+  pipeline and an early run would need `fnRefThunkTargets` as a second root set.
+- ⚠ **`verify-warm-rebuild`'s INVALIDATION property is DEAD and has been** (found by the DFE rung, pre-existing): its
+  synthetic probe edits use `__`-prefixed identifiers (`__warmRebuildProbe*`, `VerifyWarmRebuild.maxon:264-302`) and
+  the parser rejects those with **E2051**, so the gate can never report `PASS invalidation` — it reports *"a synthetic
+  probe edit made &lt;file&gt; stop parsing"*. Its DETERMINISM and CACHE properties do pass. **A gate that cannot fire is
+  worthless** — fix the probe to use legal identifiers. Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
 lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
 intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
 QPC/QPF monotonic nanos): `currentTimeNanos()` ≡ `__gt_now_ns()`; `currentTimeMs()` = `__gt_now_ns()/1e6` (⚠ the
