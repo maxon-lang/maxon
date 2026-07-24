@@ -19269,6 +19269,10 @@ export type Parser
 			// none — the shared body does not know the concrete instance). The CONCRETE call site's own argument is
 			// never opaque-owned, so it stays on the existing instance-feed path untouched.
 			if not self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) and not self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue) 'borrowed'
+				// ⭐ A borrowed TEMPORARY whose borrow ESCAPES into the constructed instance's field must outlive
+				// that instance (P1.7a slice 2a): give it a SCOPE lifetime so the container's later read of the
+				// element is not a use-after-free.
+				self.materializeEscapingBorrowTemp(info, position: position, argValue: argValue)
 				continue
 			end 'borrowed'
 			// Only an OWNED managed value can double-free: it MOVES (no per-position copy), so the same value at a
@@ -19322,6 +19326,32 @@ export type Parser
 	function isOpaqueOwnedFeedArg(info ParamConsumeInfo, position ParamCount, argValue ValueId) returns bool
 		return info.typeParamFeedOf(position).isFeed() and self.valueIsOpaqueOwned(argValue)
 	end 'isOpaqueOwnedFeedArg'
+
+	// ⭐ **GIVE A BORROWED TEMPORARY A SCOPE LIFETIME WHEN ITS BORROW ESCAPES INTO A GENERIC FIELD (P1.7a slice
+	// 2a — the user ruling).** A `T`-typed FEED position of a generic constructor STORES its argument into the
+	// constructed instance's field (`Box.create(item T)` → `Self{ item: item }`); when that argument is a
+	// TRIVIAL-managed struct (`Box with Point`) the store is a BORROW — the container does NOT own or drop the
+	// element, the caller does. That is sound for a NAMED binding the container outlives (`create(p); …` keeps
+	// `p` usable, `generic-trivial-struct-arg`), but a TEMPORARY (`create(Point.create(3, y: 4))`) is otherwise
+	// dropped at the STATEMENT's end — while the container it is borrowed into outlives it, so a later read of
+	// the element (`b.itemDigest()`) reads freed memory. Materializing the temporary as a hidden scope-local
+	// (a nameless owned binding, exactly as a temporary `match` scrutinee is enrolled) moves its drop to SCOPE
+	// exit: it now behaves as if the user wrote `let __tmp = Point.create(…); let b = Box.create(__tmp)`, the
+	// borrow the user's ruling keeps. Reverse drop order makes it sound — the container drops FIRST (its
+	// borrowed field frees nothing), then the temporary frees the element exactly once. A NON-feed borrow does
+	// not escape (the callee only reads the argument for the call's duration), so it is left dropping at
+	// statement end; only an escaping FEED borrow of an unconsumed temporary is promoted.
+	function materializeEscapingBorrowTemp(info ParamConsumeInfo, position ParamCount, argValue ValueId)
+		if not info.typeParamFeedOf(position).isFeed() 'notEscapingFeed'
+			return
+		end 'notEscapingFeed'
+		if not self.pendingTempsContain(argValue) 'notTemporary'
+			return
+		end 'notTemporary'
+
+		self.removeFromPendingTemps(argValue)
+		self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: self.typeOf(argValue), mutable: false, boundValue: argValue))
+	end 'materializeEscapingBorrowTemp'
 
 	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap
 	// (P1.6-B2)? Only a generic-alias constructor carries an instance; only a fed parameter has a position; a

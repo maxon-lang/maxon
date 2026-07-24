@@ -228,6 +228,55 @@ end 'main'
 0
 ```
 
+<!-- test: where-clauses.witness-temporary-arg -->
+<!-- targets: x64-windows, x64-linux -->
+The element passed to the container is a TEMPORARY (an rvalue constructor result, not a named binding).
+Its borrow escapes into the container's field, so it is materialized as a hidden scope-local that outlives
+the container — the later witness dispatch reads a live element, and the element is freed exactly once at
+scope exit (reverse order: the container first, freeing nothing, then the element).
+```maxon
+typealias Code = int(0 to u32.max)
+typealias Coord = int(0 to 1000)
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Point implements Digest
+	export var x as Coord
+	export var y as Coord
+	export static function create(x Coord, y Coord) returns Self
+		return Self{ x: x, y: y }
+	end 'create'
+	export function digest() returns Code
+		return self.x * 31 + self.y
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3, y: 4))
+	if b.itemDigest() == 97 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: where-clauses.error.instantiate-nonconforming -->
 A concrete argument that does not implement the constrained interface is rejected at the instantiation (E3017).
 ```maxon
