@@ -228,3 +228,78 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:6:15: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```
+
+<!-- test: primitive-conformance.error.eq-concrete-self-arg -->
+`T == <literal>` inside `where T is Equatable` is E3005: `Equatable` only proves equality against another
+`Self` (= `T`), so a concrete literal is not a valid operand. Marshalling it into the `Self` pointer would
+FAULT for a struct `T` (the callee's `equals(other Point)` dereferences the literal as its `other` pointer) —
+so this is rejected at compile time, not miscompiled. Target-independent.
+```maxon
+typealias Coord = int(0 to 1000)
+
+type Point implements Equatable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function equals(other Point) returns bool
+		return self.x == other.x
+	end 'equals'
+end 'Point'
+
+type Box uses T where T is Equatable
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function matchesLiteral() returns bool
+		return self.item == 42
+	end 'matchesLiteral'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:20: '==' on type parameter 'T' requires an argument of type 'T' (the `Self` its constraint provides), not a concrete value
+```
+
+<!-- test: primitive-conformance.error.equals-concrete-self-arg -->
+The method-call twin: `T.equals(<literal>)` inside `where T is Equatable` is the SAME E3005 reject, at the
+SAME shared witness-dispatch arg site — a concrete literal is not the `Self` the constraint provides, and
+would fault for a struct `T`. Target-independent.
+```maxon
+typealias Coord = int(0 to 1000)
+
+type Point implements Equatable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function equals(other Point) returns bool
+		return self.x == other.x
+	end 'equals'
+end 'Point'
+
+type Box uses T where T is Equatable
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function matchesLiteral() returns bool
+		return self.item.equals(42)
+	end 'matchesLiteral'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:20: 'equals' on type parameter 'T' requires an argument of type 'T' (the `Self` its constraint provides), not a concrete value
+```

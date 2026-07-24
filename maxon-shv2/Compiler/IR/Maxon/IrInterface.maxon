@@ -161,14 +161,18 @@ end 'InterfaceLookup'
 // resolved against the enclosing type's `where` constraints. `constraintIndex` is which constraint (and so
 // which hidden witness parameter) supplies the method; `methodIndex` is the DECL-ORDER slot of the method in
 // that constraint's interface (the witness-table slot); `returnTypeName` is the interface method's rendered
-// return type, used to type the dispatch result exactly as a direct call types its own.
+// return type, used to type the dispatch result exactly as a direct call types its own. `paramTypeNames` are
+// the method's rendered formal parameter types (P1.7a slice 2b) — read to reject a concrete value marshalled
+// into a `Self`-typed formal (`Equatable.equals`'s `other Self`), which would fault (a struct `equals`
+// dereferences an int literal as its `other` pointer).
 export type WitnessDispatchTarget
 	export let constraintIndex as WitnessSlotIndex
 	export let methodIndex as WitnessMethodIndex
 	export let returnTypeName as ByteArray
+	export let paramTypeNames as ByteArrayArray
 
-	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray) returns WitnessDispatchTarget
-		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName}
+	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray) returns WitnessDispatchTarget
+		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames}
 	end 'create'
 end 'WitnessDispatchTarget'
 

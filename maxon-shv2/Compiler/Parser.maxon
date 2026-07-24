@@ -220,6 +220,13 @@ export union ParseError implements Error
 	// silently compare two opaque words (a POINTER compare for a struct `T`). `op` is the operator spelling,
 	// `typeParamName` the parameter's declared name (both appear in the message).
 	equalityRequiresEquatable(op String, typeParamName String, line LineNumber, column ColumnNumber)
+	// A CONCRETE value supplied for a `Self`-typed witness-method argument (`item == 42` / `item.equals(42)`
+	// inside `type Box uses T where T is Equatable`, T a struct). Renders as **E3005**, positioned at the
+	// operator / method. The `where` constraint only proves `equals(Self)` — equality against another value of
+	// the SAME type parameter T — so a concrete literal or concrete-typed value is not a `Self`; marshalling it
+	// into the `Self` pointer/slot faults (a struct `equals` dereferences an int literal as its `other`
+	// pointer). `what` is the operator or method spelling, `typeParamName` the constrained parameter's name.
+	witnessSelfArgNotTypeParam(what String, typeParamName String, line LineNumber, column ColumnNumber)
 	// An `if` / `while` condition that is not a `bool` (`if 4`). Renders as E3005, positioned
 	// at the CONDITION's first token — the expression the message is about, not the keyword
 	// that introduced it. `keyword` is "if"/"while", so one message template serves both.
@@ -14102,8 +14109,14 @@ export type Parser
 		let paramPos = self.valueNameId(receiver)
 		let target = try self.requireEquatableWitness(paramPos, op: op, opTok: opTok)
 
+		// The `other` operand fills `equals`'s `Self`-typed formal, so it must be a value of `T` — a concrete
+		// literal (`item == 42`) would be marshalled into the `Self` pointer and faulted. Same reject the
+		// method-call form runs, one shared helper.
+		let args = pairArgs(receiver, second: other)
+		try self.requireGenuineSelfArgs(target, args: args, what: comparisonOpSpelling(op), receiverParamPos: paramPos, errorTok: opTok)
+
 		let equalsResult = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(equalsResult, args: pairArgs(receiver, second: other), constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: false), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(equalsResult, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: false), range: SourceRange.ofToken(opTok))
 
 		match op 'result'
 			eq then return equalsResult
@@ -14122,6 +14135,33 @@ export type Parser
 			notFound then throw ParseError.equalityRequiresEquatable(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), line: opTok.line, column: opTok.column)
 		end 'lookup'
 	end 'requireEquatableWitness'
+
+	// ⭐ **REJECT A CONCRETE VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT (P1.7a slice 2b).** A
+	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s `other Self`) requires an ACTUAL
+	// argument that is a value of the receiver's enclosing type parameter `T` — the only thing the `where`
+	// constraint proves. A concrete literal or concrete-typed value marshalled into that `Self` pointer/slot is
+	// a MISCOMPILE: for a struct `T` the callee's `equals(other Point)` dereferences an int literal as its
+	// `other` pointer (0xC0000005). Run UNIFORMLY for the operator (`T == 42`) and method-call (`T.equals(42)`)
+	// forms — their one shared arg-validation point. `args[0]` is the receiver; interface formal `j` maps to
+	// `args[j+1]`. This closes ONLY the `Self`-arg crash class: a genuine type-parameter argument of ANY
+	// position passes (a cross-type-param mismatch `A == B` is a separate future rung, not narrowed here), and a
+	// missing actual is an arity concern left to the caller, not read past here.
+	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
+		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
+			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
+			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
+				continue
+			end 'notSelfFormal'
+			if j + 1 >= args.count() 'noActual'
+				continue
+			end 'noActual'
+
+			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: args.get OOB at {j + 1} below count {args.count()}")
+			if not self.isEnclosingTypeParam(actual) 'concreteSelfArg'
+				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), line: errorTok.line, column: errorTok.column)
+			end 'concreteSelfArg'
+		end 'eachFormal'
+	end 'requireGenuineSelfArgs'
 
 	// The declared NAME of the enclosing type's type parameter at `pos` (P1.7a slice 2b) — `T` in `type Box uses
 	// T`. `enclosingTypeParams` is name-by-position, populated for every generic type body, so a `typeParameter`
@@ -16206,6 +16246,11 @@ export type Parser
 		end 'hasArgs'
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
+		// A `Self`-typed formal (`equals(other Self)`) requires an argument that is a value of `T` — a concrete
+		// literal (`self.item.equals(42)`) would be marshalled into the `Self` pointer and faulted. The SAME
+		// reject the `==` operator form runs, one shared helper.
+		try self.requireGenuineSelfArgs(target, args: args, what: String.from(methodTok.value), receiverParamPos: receiverParamPos, errorTok: methodTok)
+
 		let range = SourceRange.between(methodTok, last: rparenTok)
 		let result = try self.mintWitnessDispatchResult(target, receiverParamPos: receiverParamPos, methodTok: methodTok, resultUsed: resultUsed)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName)), range: range)
@@ -16241,7 +16286,7 @@ export type Parser
 			let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
 			if methodIndex < iface.methods.count() 'declaresMethod'
 				let method = try iface.methods.get(methodIndex) otherwise panic("findWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
-				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName))
+				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName, paramTypeNames: method.paramTypeNames))
 			end 'declaresMethod'
 		end 'eachConstraint'
 
