@@ -60,7 +60,7 @@ internal sealed class DbgValueRenderer {
   // A String adds isAsciiFlag@40 for a 48-byte record; the renderer needs only the first three fields.
   private const int ManagedBufferOffset = 0;
   private const int ManagedLengthOffset = 8;
-  private const int ManagedHeaderReadBytes = 24; // buffer + length + capacity — the fields we interpret
+  private const int ManagedHeaderReadBytes = 16; // buffer@0 + length@8 — the only two fields we interpret
 
   // An associated-value enum/union is a heap record: [tag:i64 @ 0, payload_0:i64 @ 8, ...]
   // (MaxonToStandardConversion.Enums.cs "Heap-allocate the enum: [tag @ 0, payload_0 @ 8, ...]").
@@ -100,11 +100,8 @@ internal sealed class DbgValueRenderer {
     var results = new List<DbgValue>();
     if (_sidecar.FunctionAt((uint)stop.PcOffset) is not { } fn) return results;
 
-    for (uint i = fn.LocalFirst; i < fn.LocalFirst + fn.LocalCount; i++) {
-      var loc = _sidecar.Local(i);
-      if (loc.LocKind != MxdbgLocKind.StackSlotRbpRel) continue;
+    foreach (var loc in StackLocals(fn))
       results.Add(Render(loc.Name, SlotAddress(stop, loc.LocValue), loc.TypeId, 0));
-    }
     return results;
   }
 
@@ -185,10 +182,8 @@ internal sealed class DbgValueRenderer {
       return new DbgValue(name, t.Name, MxdbgTypeKind.Struct, AggregateDisplay, [], true);
 
     var children = new List<DbgValue>();
-    for (uint fi = t.FieldFirst; fi < t.FieldFirst + t.FieldCount; fi++) {
-      var f = _sidecar.Field(fi);
+    foreach (var f in Fields(t))
       children.Add(Render(f.Name, record + f.Offset, f.TypeId, depth + 1));
-    }
     return new DbgValue(name, t.Name, MxdbgTypeKind.Struct, AggregateDisplay, children, false);
   }
 
@@ -261,9 +256,8 @@ internal sealed class DbgValueRenderer {
   // ---- Navigation helpers ----
 
   private bool TryFindLocal(MxdbgReader.FuncInfo fn, string localName, out MxdbgReader.LocalInfo found) {
-    for (uint i = fn.LocalFirst; i < fn.LocalFirst + fn.LocalCount; i++) {
-      var loc = _sidecar.Local(i);
-      if (loc.LocKind == MxdbgLocKind.StackSlotRbpRel && loc.Name == localName) {
+    foreach (var loc in StackLocals(fn)) {
+      if (loc.Name == localName) {
         found = loc;
         return true;
       }
@@ -292,8 +286,7 @@ internal sealed class DbgValueRenderer {
       return false;
     }
 
-    for (uint fi = t.FieldFirst; fi < t.FieldFirst + t.FieldCount; fi++) {
-      var f = _sidecar.Field(fi);
+    foreach (var f in Fields(t)) {
       if (f.Name == segment) {
         addr = record + f.Offset;
         typeId = f.TypeId;
@@ -307,15 +300,13 @@ internal sealed class DbgValueRenderer {
   }
 
   private bool EnumIsHeapAllocated(MxdbgReader.TypeInfo t) {
-    for (uint fi = t.FieldFirst; fi < t.FieldFirst + t.FieldCount; fi++) {
-      if (_sidecar.TypeName(_sidecar.Field(fi).TypeId) != VoidTypeName) return true;
-    }
+    foreach (var f in Fields(t))
+      if (_sidecar.TypeName(f.TypeId) != VoidTypeName) return true;
     return false;
   }
 
   private bool TryFindCase(MxdbgReader.TypeInfo t, long discriminant, out MxdbgReader.FieldInfo found) {
-    for (uint fi = t.FieldFirst; fi < t.FieldFirst + t.FieldCount; fi++) {
-      var f = _sidecar.Field(fi);
+    foreach (var f in Fields(t)) {
       if (f.Offset == discriminant) {
         found = f;
         return true;
@@ -323,6 +314,27 @@ internal sealed class DbgValueRenderer {
     }
     found = default;
     return false;
+  }
+
+  // ---- Table-window scans (ONE definition of each window; the [First, First+Count) bound is stated
+  //      once so a future edit cannot drift one copy's bound past the others') ----
+
+  /// The fields (struct fields, or enum/union cases) of a type, in table order. The single home for the
+  /// field sub-table window `[FieldFirst, FieldFirst+FieldCount)`.
+  private IEnumerable<MxdbgReader.FieldInfo> Fields(MxdbgReader.TypeInfo t) {
+    for (uint fi = t.FieldFirst; fi < t.FieldFirst + t.FieldCount; fi++)
+      yield return _sidecar.Field(fi);
+  }
+
+  /// The function's named locals that have a frame-pointer-relative stack home — the only ones a value
+  /// tree can be read against. The single home for both the local window `[LocalFirst, LocalFirst+
+  /// LocalCount)` and the stack-slot filter, so <see cref="Locals"/> and <see cref="TryFindLocal"/>
+  /// cannot disagree on which locals are inspectable.
+  private IEnumerable<MxdbgReader.LocalInfo> StackLocals(MxdbgReader.FuncInfo fn) {
+    for (uint i = fn.LocalFirst; i < fn.LocalFirst + fn.LocalCount; i++) {
+      var loc = _sidecar.Local(i);
+      if (loc.LocKind == MxdbgLocKind.StackSlotRbpRel) yield return loc;
+    }
   }
 
   // ---- Byte-level readers ----
