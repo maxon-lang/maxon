@@ -24,12 +24,13 @@ namespace MaxonSharp.Debug;
 /// an INCOMPATIBLE change and <see cref="FormatVersion"/> is bumped — a reader that speaks only the
 /// P1 layout refuses the file rather than misreading the moved fields.
 ///
-/// The compiler populates the type/field tables and each function's frame size. It does not yet
-/// populate the local table (that binding of a local NAME to its source-level TYPE is erased by the
-/// Standard dialect and needs a per-function side-table carried from the Maxon→Standard pass — the
-/// P2b slice); every function therefore reports `localCount == 0` for now. The format, writer, reader
-/// and self-test fully support the local records, so P2b lands the capture without another version
-/// bump.
+/// The compiler populates the type/field tables, each function's frame size, AND (as of P2b) each
+/// function's named locals. A local's source-level TYPE is erased by the Standard dialect (every store
+/// carries only i64/f64/ptr), so it is captured in the Maxon→Standard pass, where the type is still
+/// known, into a per-function side-table that the machine conversion carries forward and the emitter
+/// joins with the register-allocator's name→slot map. Locals with a stable stack slot bind to that
+/// slot; a value the optimizer kept only in registers (no stack home) has no record — honest, since
+/// the sidecar would otherwise name a location it does not live at.
 /// </summary>
 public static class MxdbgFormat {
   /// 8 bytes so the header stays 4/8-byte aligned. A reader that does not see this refuses the file.

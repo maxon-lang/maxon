@@ -132,12 +132,14 @@ public class ARM64CodeEmitterStage {
     var ucddata = emitter.GetUcddata();
     var symdata = emitter.GetSymdata();
 
-    // The prologue op the emitter turned into the frame setup carries the real frame size (x29/x30
-    // save area + locals); a frameless function has no prologue op and reports 0.
+    // Types first: a local record references its type by the id RegisterTypes fixes, and each local's
+    // source type is folded into the type table there. The prologue op the emitter turned into the
+    // frame setup carries the real frame size (x29/x30 save area + locals); a frameless function has
+    // no prologue op and reports 0.
+    dbg?.RegisterTypes(module);
     dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length,
         f => MaxonSharp.Debug.DebugInfoBuilder.FrameSizeFromPrologue(
             f, op => op is ARM64PrologueOp p ? (uint)p.StackSize : null));
-    dbg?.RegisterTypes(module.TypeDefs);
 
     Logger.Debug(LogCategory.Codegen, $"ARM64: Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata");
 

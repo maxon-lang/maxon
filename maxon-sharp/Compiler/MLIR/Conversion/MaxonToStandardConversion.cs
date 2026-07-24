@@ -263,6 +263,19 @@ public static partial class MaxonToStandardConversion {
       _stackEligibleStructs = module.StackEligibleStructs;
       _valueTupleReturnStash = [];
       _varNameToStructType = varNameToStructType;
+      // Debug-info (--debug-info only): the per-function local NAME -> SOURCE type name table, filled
+      // by EmitStore as the body lowers and joined with the machine slot offsets at emit. Seed it with
+      // the ORIGINAL parameter types here, before the ABI erases struct/enum params to i64 pointers —
+      // this is the one place a struct/enum PARAMETER's real type is still spelled out. Ranged-alias
+      // params were already flattened to their base at the top of Run, so those honestly bind to base.
+      // First-write-wins, so a later EmitStore of the same name (its i64 pointer slot) does not clobber
+      // the real type recorded here.
+      var debugLocalTypes = Compiler.DebugInfo ? new Dictionary<string, string>() : null;
+      _debugLocalTypes = debugLocalTypes;
+      if (debugLocalTypes != null) {
+        for (int pi = 0; pi < func.ParamNames.Count; pi++)
+          debugLocalTypes.TryAdd(func.ParamNames[pi], func.ParamTypes[pi].Name);
+      }
       var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
@@ -2661,6 +2674,11 @@ public static partial class MaxonToStandardConversion {
         }
       }
 
+      // Attach the captured local-type table (debug info only). Transfer ownership: the ThreadStatic
+      // cursor is cleared after the loop so the post-loop synthetic-function generators (which call
+      // EmitStore) cannot mutate a function's already-attached map.
+      if (debugLocalTypes != null) newFunc.SetLocalSourceTypes(debugLocalTypes);
+
       result.AddFunction(newFunc);
       } catch (CompileError) {
         // CompileError carries a typed code and source position; never wrap
@@ -2671,6 +2689,10 @@ public static partial class MaxonToStandardConversion {
         throw new InvalidOperationException($"Lowering function '{func.Name}' failed: {ex.Message}", ex);
       }
     }
+
+    // The per-function debug-local cursor must not point at the last function's (now attached) map
+    // while the synthetic global-cleanup/destructor functions below lower through EmitStore.
+    _debugLocalTypes = null;
 
     // Reset the per-function lowering mode so the post-loop helpers and any subsequent
     // pass (StandardToX86 etc.) mint user-side ids by default.

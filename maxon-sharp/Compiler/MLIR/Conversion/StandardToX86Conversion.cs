@@ -1179,6 +1179,11 @@ public static class StandardToX86Conversion {
       }
     }
 
+    // Debug-info (--debug-info only): hand the emitter this function's local NAME -> rbp-relative
+    // slot offset (computed above) plus the source-type table carried from MaxonToStandard, so it can
+    // join them into the sidecar's local records. Pure observation — no emitted byte depends on it.
+    if (debugInfo) newFunc.SetLocalDebugInfo(varOffsets, func);
+
     return (newFunc, rdataEntries);
   }
 

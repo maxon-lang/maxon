@@ -77,6 +77,40 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
     return false;
   }
 
+  // Debug-info side-tables for local-variable location lists (see docs/DEBUGGER_DESIGN.md, P2b).
+  //
+  // A local's SOURCE-level type is erased by the Standard dialect (every store carries only
+  // i64/f64/ptr), so it must be captured in MaxonToStandardConversion — the last pass that still
+  // knows a `let p = Point(...)` names `Point` — and carried forward, keyed by the variable NAME
+  // (stable across lowering, unlike an op reference). LocalSlotOffsets is the complementary
+  // name -> rbp/x29-relative stack-slot offset the machine conversion assigns. The two are joined at
+  // emit into the sidecar's local records.
+  //
+  // Both are populated ONLY under --debug-info and never read by codegen: null (allocating nothing) in
+  // a release build, and even when present they change not one emitted byte — the "pure observer"
+  // contract that lets the sidecar be produced without perturbing .text.
+  private Dictionary<string, string>? _localSourceTypes;
+  private Dictionary<string, int>? _localSlotOffsets;
+
+  public IReadOnlyDictionary<string, string>? LocalSourceTypes => _localSourceTypes;
+  public IReadOnlyDictionary<string, int>? LocalSlotOffsets => _localSlotOffsets;
+
+  /// Record the name -> source-type table (MaxonToStandardConversion, where the source type is still
+  /// known). The machine conversion later carries it forward via <see cref="SetLocalDebugInfo"/>.
+  public void SetLocalSourceTypes(Dictionary<string, string> types) => _localSourceTypes = types;
+
+  /// Attach BOTH local side-tables to this machine-dialect function: the slot offsets the target
+  /// conversion just computed, and the source-type table carried (by variable name, stable across
+  /// lowering) from the <paramref name="source"/> function it lowers. One call so the x64 and arm64
+  /// conversions cannot attach one table and forget the other — the same cross-target-divergence guard
+  /// as DebugInfoBuilder.FrameSizeFromPrologue. Source types are copied, not aliased, since neither map
+  /// is mutated afterward — mirroring how <see cref="CopySourceAnchorFrom"/> carries the file anchor.
+  public void SetLocalDebugInfo<TOther>(Dictionary<string, int> slotOffsets, IrFunction<TOther> source)
+      where TOther : IPrintableOp {
+    _localSlotOffsets = slotOffsets;
+    if (source.LocalSourceTypes is { } types) _localSourceTypes = new Dictionary<string, string>(types);
+  }
+
   /// Carry the source anchor (file/line/column) forward from the function this one lowers. The file
   /// is a per-function fact with one home, so each lowering pass copies it once through here rather
   /// than repeating the three-field assignment in its new-function initializer.

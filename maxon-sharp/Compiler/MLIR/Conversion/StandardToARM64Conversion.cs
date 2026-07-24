@@ -222,6 +222,12 @@ public static class StandardToARM64Conversion {
       }
     }
 
+    // Debug-info (--debug-info only): hand the emitter this function's local NAME -> x29-relative slot
+    // offset plus the source-type table carried from MaxonToStandard, mirroring the x64 lowering. The
+    // offsets are x29-relative (the arm64 frame pointer), which the sidecar records as StackSlotRbpRel
+    // — the driver interprets the base register per target triple. Pure observation.
+    if (debugInfo) newFunc.SetLocalDebugInfo(varOffsets, func);
+
     return newFunc;
   }
 

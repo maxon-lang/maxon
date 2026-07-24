@@ -173,12 +173,13 @@ public class X86CodeEmitter {
     var symdata = emitter.GetSymdata();
     var imports = emitter.Imports;
 
-    // The prologue op the emitter turned into `sub rsp, N` carries the real frame size; a function
-    // with no frame has no prologue op and reports 0.
+    // Types first: a local record references its type by the id RegisterTypes fixes, and each local's
+    // source type is folded into the type table there. The prologue op the emitter turned into
+    // `sub rsp, N` carries the real frame size; a function with no frame has no prologue op, reports 0.
+    dbg?.RegisterTypes(module);
     dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length,
         f => MaxonSharp.Debug.DebugInfoBuilder.FrameSizeFromPrologue(
             f, op => op is X86PrologueOp p ? (uint)p.StackSize : null));
-    dbg?.RegisterTypes(module.TypeDefs);
 
     Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata, {imports.Count} imports");
 

@@ -17,6 +17,13 @@ public sealed class DebugInfoBuilder {
   // File path -> file-table id, so a path repeated across functions/lines registers once.
   private readonly Dictionary<string, uint> _fileIds = [];
 
+  // Type NAME -> its id (index into the type table), fixed by RegisterTypes after the name sort. A
+  // local record points at a type by id, so RegisterFunctions resolves each local's source-type name
+  // through this. Every emittable local's type name is folded into the type closure before ids are
+  // assigned (see RegisterTypes), so a local's type is always present here — the sidecar never points
+  // a local at a wrong id. RegisterTypes MUST run before RegisterFunctions for this reason.
+  private Dictionary<string, uint> _typeNameToId = [];
+
   // Per-function line cursor: the last source position emitted, so a line row is written only when
   // the position CHANGES. That yields one row per statement boundary — a minimal, monotonic table.
   private bool _haveLast;
@@ -40,16 +47,20 @@ public sealed class DebugInfoBuilder {
   }
 
   /// Register a function's `.text` range and its real emitted frame size (bytes the prologue reserves
-  /// below the frame pointer). frame-relative locals are placed against this frame.
-  public void AddFunction(string name, int codeStart, int codeEnd, uint frameSize, int paramCount) =>
+  /// below the frame pointer), returning its function id (index into the function table). frame-relative
+  /// locals are placed against this frame.
+  public uint AddFunction(string name, int codeStart, int codeEnd, uint frameSize, int paramCount) =>
     _writer.AddFunction(name, (uint)codeStart, (uint)codeEnd, frameSize, (uint)paramCount);
 
   /// <summary>
-  /// Register every real function's `.text` range and frame size. A function ends where the NEXT
-  /// symbol (another function or a runtime helper) begins, so ranges stay tight even against the
-  /// runtime helpers laid out between user functions. Shared by both code emitters — the per-target
-  /// inputs are the label-offset lookup, the emitted symbol list, and the frame-size reader (each
-  /// target names its own prologue op).
+  /// Register every real function's `.text` range and frame size, and each function's named locals. A
+  /// function ends where the NEXT symbol (another function or a runtime helper) begins, so ranges stay
+  /// tight even against the runtime helpers laid out between user functions. Shared by both code
+  /// emitters — the per-target inputs are the label-offset lookup, the emitted symbol list, and the
+  /// frame-size reader (each target names its own prologue op).
+  ///
+  /// <see cref="RegisterTypes"/> MUST have run first: a local record references its type by the id
+  /// that pass fixed, and every local's type name was folded into the type table there.
   /// </summary>
   public void RegisterFunctions<TOp>(IrModule<TOp> module, Func<string, int> labelOffset,
       IReadOnlyList<(string Name, int CodeOffset)> symbols, int codeLen,
@@ -64,7 +75,43 @@ public sealed class DebugInfoBuilder {
       // between O(functions x symbols) and O(functions x log symbols).
       int idx = MxdbgFormat.PartitionPoint(sortedOffsets.Count, i => sortedOffsets[i] <= start);
       int end = idx < sortedOffsets.Count ? sortedOffsets[idx] : codeLen;
-      AddFunction(func.Name, start, end, frameSizeOf(func), func.ParamTypes.Count);
+      uint funcId = AddFunction(func.Name, start, end, frameSizeOf(func), func.ParamTypes.Count);
+
+      // One stable stack slot per named local (the bootstrap has no aggressive register allocator),
+      // so the loclist is a single entry spanning the whole function. scopeStart/scopeEnd are the
+      // function's code range. RegisterTypes folded every emittable local's type name into the table,
+      // so the id resolves; a local whose type could not be placed is SKIPPED rather than pointed at a
+      // wrong id — omission is honest ("capture what you can"), a wrong typeId would be the design
+      // doc's "instrument that lies".
+      foreach (var (name, offset, typeName) in EmittableLocals(func)) {
+        if (_typeNameToId.TryGetValue(typeName, out var typeId))
+          _writer.AddLocal(funcId, name, MxdbgLocKind.StackSlotRbpRel, offset, typeId, (uint)start, (uint)end);
+      }
+    }
+  }
+
+  /// <summary>
+  /// The named locals of a function that earn a sidecar record: each entry of the machine
+  /// conversion's name -> slot-offset table that is a real user/parameter variable — not a compiler
+  /// temp (`__`-prefixed), not a struct-field sub-slot (`name.field`) — and whose source type was
+  /// captured. Yielded name-sorted so the local table is deterministic regardless of the offset
+  /// dictionary's enumeration order. Empty when the function carries no debug side-tables (a release
+  /// build, or a synthetic function the capture never ran for).
+  ///
+  /// One home for the local-emission filter, shared by <see cref="RegisterTypes"/> (which folds each
+  /// local's type name into the type table) and <see cref="RegisterFunctions"/> (which emits the
+  /// records) so the two cannot disagree about which locals exist — the identical type-name set is
+  /// what guarantees every resolved id is present.
+  /// </summary>
+  private static IEnumerable<(string Name, int Offset, string TypeName)> EmittableLocals<TOp>(
+      IrFunction<TOp> func) where TOp : IPrintableOp {
+    var slots = func.LocalSlotOffsets;
+    var types = func.LocalSourceTypes;
+    if (slots == null || types == null) yield break;
+
+    foreach (var name in slots.Keys.OrderBy(n => n, StringComparer.Ordinal)) {
+      if (name.StartsWith("__", StringComparison.Ordinal) || name.Contains('.')) continue;
+      if (types.TryGetValue(name, out var typeName)) yield return (name, slots[name], typeName);
     }
   }
 
@@ -89,15 +136,19 @@ public sealed class DebugInfoBuilder {
     MxdbgTypeKind Kind, uint Size, uint Align, List<(string Name, uint Offset, string TypeName)> Fields);
 
   /// <summary>
-  /// Build the type table from the module's resolved type definitions. Structs render as named
+  /// Build the type table from the module's resolved type definitions, and fold in the source types
+  /// of every named local so a local record can point at a valid `typeId`. Structs render as named
   /// offset-typed fields, enums/unions as cases keyed by discriminant, ranged aliases carry their
-  /// backing width, and any primitive or opaque type a field references is added so its `typeId` is
-  /// valid. Pure observation — reads the same layout codegen used, writes no code byte.
+  /// backing width, and any primitive or opaque type a field/local references is added so its `typeId`
+  /// is valid. Pure observation — reads the same layout codegen used, writes no code byte.
   ///
   /// Deterministic: the type set is sorted by name before ids are assigned, so the file is identical
-  /// across builds no matter what order the type dictionary enumerates in.
+  /// across builds no matter what order the type dictionary enumerates in. MUST run before
+  /// <see cref="RegisterFunctions"/>, which resolves each local's type name through the id map fixed
+  /// here.
   /// </summary>
-  public void RegisterTypes(IReadOnlyDictionary<string, IrType> typeDefs) {
+  public void RegisterTypes<TOp>(IrModule<TOp> module) where TOp : IPrintableOp {
+    var typeDefs = module.TypeDefs;
     var descs = new Dictionary<string, TypeDesc>();
 
     // Seed the worklist with every renderable user type, then close over the field/case types they
@@ -105,6 +156,19 @@ public sealed class DebugInfoBuilder {
     var work = new Queue<IrType>();
     foreach (var t in typeDefs.Values) {
       if (RenderKind(t) != null) work.Enqueue(t);
+    }
+
+    // Also seed every named local's SOURCE type, so a `let n = 42` (whose type "i64" no struct field
+    // may reference) still lands a real entry the local record can point at. A resolvable name is
+    // described like a field's type; an unresolvable one (a raw function-pointer "ptr", a stray type
+    // parameter) becomes an honest opaque entry rather than pointing at a wrong concrete type.
+    foreach (var func in module.Functions) {
+      foreach (var (_, _, typeName) in EmittableLocals(func)) {
+        if (descs.ContainsKey(typeName)) continue;
+        var lt = ResolveFieldType(typeName, typeDefs);
+        if (lt != null) work.Enqueue(lt);
+        else EnsureOpaque(descs, typeName);
+      }
     }
 
     while (work.Count > 0) {
@@ -133,16 +197,17 @@ public sealed class DebugInfoBuilder {
     // Sort by name and assign each type its id (its index), then emit. The closure registers every
     // referenced name — resolved types are enqueued and described, unresolvable ones (type parameters)
     // get an opaque entry above — so the id-0 fallback below is only a defensive last resort, no longer
-    // the type-parameter mislabel it once masked.
+    // the type-parameter mislabel it once masked. The id map is kept for RegisterFunctions to resolve
+    // each local's source-type name.
     var names = descs.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
-    var nameToId = new Dictionary<string, uint>(names.Count);
-    for (int i = 0; i < names.Count; i++) nameToId[names[i]] = (uint)i;
+    _typeNameToId = new Dictionary<string, uint>(names.Count);
+    for (int i = 0; i < names.Count; i++) _typeNameToId[names[i]] = (uint)i;
 
     foreach (var name in names) {
       var d = descs[name];
       _writer.AddType(name, d.Kind, d.Size, d.Align);
       foreach (var (fieldName, offset, fieldTypeName) in d.Fields)
-        _writer.AddField(fieldName, offset, nameToId.GetValueOrDefault(fieldTypeName, 0u));
+        _writer.AddField(fieldName, offset, _typeNameToId.GetValueOrDefault(fieldTypeName, 0u));
     }
   }
 
