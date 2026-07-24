@@ -68,6 +68,18 @@ public sealed class DebugInfoBuilder {
     }
   }
 
+  /// The frame size the prologue reserves, read from the function's prologue op — the ONE scan both
+  /// code emitters share, so a change to how the frame size is found cannot silently diverge x64 from
+  /// arm64 (the reviewer's finding). <paramref name="prologueStackSize"/> returns the reserved bytes
+  /// when the op IS that target's prologue op, else null; a frameless function (no prologue op) is 0.
+  public static uint FrameSizeFromPrologue<TOp>(IrFunction<TOp> func, Func<TOp, uint?> prologueStackSize)
+      where TOp : IPrintableOp {
+    foreach (var block in func.Body.Blocks)
+      foreach (var op in block.Operations)
+        if (prologueStackSize(op) is { } size) return size;
+    return 0;
+  }
+
   // ---- Type table ----
 
   /// One renderable type collected during the closure, keyed in <see cref="RegisterTypes"/> by its
@@ -106,13 +118,22 @@ public sealed class DebugInfoBuilder {
         // A field's type is resolved to its canonical definition so a nominal reference lands on the
         // one entry for that type rather than a partially-specialised use-site copy.
         var ft = ResolveFieldType(f.TypeName, typeDefs);
-        if (ft != null && !descs.ContainsKey(CanonicalName(ft))) work.Enqueue(ft);
+        if (ft != null) {
+          if (!descs.ContainsKey(CanonicalName(ft))) work.Enqueue(ft);
+        } else {
+          // A name that resolves to no concrete type — a generic type PARAMETER (Key, Value, T, ...)
+          // or the multi-payload marker below. Register it as an honest OPAQUE entry NAMED for the
+          // parameter, so the field points at a truthful "opaque" type instead of silently at type
+          // id 0 (an unrelated, alphabetically-first type — the design doc's "instrument that lies").
+          EnsureOpaque(descs, f.TypeName);
+        }
       }
     }
 
-    // Sort by name and assign each type its id (its index), then emit. Fields resolve their type name
-    // to that id. A field naming a type that never made it into the set (should not happen — the
-    // closure enqueues every referenced type) falls back to id 0 rather than crashing the sidecar.
+    // Sort by name and assign each type its id (its index), then emit. The closure registers every
+    // referenced name — resolved types are enqueued and described, unresolvable ones (type parameters)
+    // get an opaque entry above — so the id-0 fallback below is only a defensive last resort, no longer
+    // the type-parameter mislabel it once masked.
     var names = descs.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
     var nameToId = new Dictionary<string, uint>(names.Count);
     for (int i = 0; i < names.Count; i++) nameToId[names[i]] = (uint)i;
@@ -129,6 +150,20 @@ public sealed class DebugInfoBuilder {
   /// struct/enum collapse onto one entry because a field reference is first resolved to the canonical
   /// definition (see <see cref="ResolveFieldType"/>) and then named through this.
   private static string CanonicalName(IrType t) => t.Name;
+
+  /// The name of the shared opaque marker a multi-value enum/union payload points at (angle brackets
+  /// keep it distinct from every real type name). It becomes a ManagedRecord opaque entry via the same
+  /// unresolved-name path as a generic type parameter.
+  private const string MultiPayloadTypeName = "<multi-payload>";
+
+  /// Ensure an honest OPAQUE (<see cref="MxdbgTypeKind.ManagedRecord"/>, pointer-width) entry exists
+  /// under <paramref name="name"/> — for a referenced type with no concrete definition (a generic type
+  /// parameter, or the multi-payload marker) so the field points at a truthful "opaque" type named for
+  /// the reference, never at a wrong concrete type.
+  private static void EnsureOpaque(Dictionary<string, TypeDesc> descs, string name) {
+    if (!descs.ContainsKey(name))
+      descs[name] = new TypeDesc(MxdbgTypeKind.ManagedRecord, 8, 8, []);
+  }
 
   /// The renderable kind of a type, or null for an opaque heap/pointer type (interface, function,
   /// type parameter, placeholder, backing marker, error union) that is described as a
@@ -164,19 +199,22 @@ public sealed class DebugInfoBuilder {
         return new TypeDesc(kind, (uint)s.SizeInBytes, 8, fields);
 
       case IrEnumType e:
-        // Cases render by discriminant: offset = ordinal, type = the case's single payload (or void).
+        // Cases render by discriminant: offset = ordinal, type = the case's payload. No payload is
+        // void; a single value is that type; a MULTI-value payload (rect(w, h)) has no single type in
+        // this model, so it points at an honest opaque marker rather than falsely rendering as void
+        // ("no payload").
         foreach (var c in e.Cases) {
-          var payload = c.AssociatedValues is { Count: 1 } av ? av[0].Type : IrType.Void;
-          fields.Add((c.Name, (uint)c.Ordinal, payload.Name));
+          string payloadName;
+          if (c.AssociatedValues is { Count: 1 } av) payloadName = av[0].Type.Name;
+          else if (c.AssociatedValues is { Count: > 1 }) payloadName = MultiPayloadTypeName;
+          else payloadName = IrType.Void.Name;
+
+          fields.Add((c.Name, (uint)c.Ordinal, payloadName));
         }
         return new TypeDesc(kind, (uint)e.SizeInBytes, 8, fields);
 
       case IrRangedPrimitiveType r:
         return new TypeDesc(kind, (uint)r.SizeInBytes, (uint)r.SizeInBytes, fields);
-
-      case IrTypeParameterType:
-        // Unsized — carry a pointer width rather than call SizeInBytes (which throws).
-        return new TypeDesc(MxdbgTypeKind.ManagedRecord, 8, 8, fields);
     }
 
     if (IsPrimitive(t)) {
