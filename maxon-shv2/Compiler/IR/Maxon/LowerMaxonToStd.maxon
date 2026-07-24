@@ -1143,8 +1143,7 @@ type MaxonToStdLowering
 	// `Set with Integer` and a `Box with Integer` name their `int` witness table identically — and
 	// `materializeKeyWitness` takes each table's `rdataAddr`.
 	function appendSetWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		let setReceiver = try args.get(0) otherwise panic("appendSetWitnessArgs: set runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the set record")
-		let gid = try self.valueNameIds.get(setReceiver) otherwise panic("appendSetWitnessArgs: set receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` value is always a concrete generic instance")
+		let gid = self.setWitnessKeyGid(result, callee: callee, args: args)
 		let keyType = self.signatures.conformerTypeArgName(gid, position: 0 as TypeParamId).toByteArray()
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
@@ -1152,6 +1151,19 @@ type MaxonToStdLowering
 		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: SetEquatableInterfaceName, dstBlock: dstBlock))
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendSetWitnessArgs'
+
+	// The `Set` instance whose key type names the witness tables threaded into a set runtime call. For
+	// `insert`/`contains`/`remove` it is the SET RECEIVER (`args[0]`). For `__set_from` — which builds a set FROM
+	// an array — `args[0]` is the SOURCE ARRAY, so the set is the RESULT instead (its element type is the same,
+	// but the array is not the set; reading the gid off the result keeps the witness bound to what is being
+	// built, not to the thing being consumed). One door, so "whose key type?" has one answer.
+	function setWitnessKeyGid(result ValueId, callee ByteArray, args ValueIdArray) returns GenericInstanceId
+		if callee.equals(SetFromName) 'fromConstruction'
+			return try self.valueNameIds.get(result) otherwise panic("setWitnessKeyGid: `__set_from` result v{result} has no name-id (its GenericInstanceId) — a `Set from […]` value is always a concrete generic instance")
+		end 'fromConstruction'
+		let setReceiver = try args.get(0) otherwise panic("setWitnessKeyGid: set runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the set record")
+		return try self.valueNameIds.get(setReceiver) otherwise panic("setWitnessKeyGid: set receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` value is always a concrete generic instance")
+	end 'setWitnessKeyGid'
 
 	// The `rdataAddr` of the `__witness_<keyType>_<interface>` table (P1.7b slice A) — the address a set runtime
 	// call passes for the key's `Hashable` or `Equatable` witness. `ensureWitnessTable` registers the blob and

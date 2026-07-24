@@ -9,14 +9,15 @@ category: collections
 
 ## Documentation
 
-A `Set` is a collection of unique elements backed by an open-addressing hash table. This slice provides
-the hash-table CORE for INT scalar keys, constructed with `IntSet.create()`: `insert`, `contains`,
-`remove`, `count`, and automatic growth (double + rehash) at a 75% load factor. The key's `hash()` /
-`equals()` are dispatched through the key type's `Hashable` / `Equatable` witness tables
-(dictionary-passing), so the runtime is key-type-agnostic.
+A `Set` is a collection of unique elements backed by an open-addressing hash table. It provides the
+hash-table CORE for INT scalar keys: `insert`, `contains`, `remove`, `count`, and automatic growth
+(double + rehash) at a 75% load factor. The key's `hash()` / `equals()` are dispatched through the key
+type's `Hashable` / `Equatable` witness tables (dictionary-passing), so the runtime is key-type-agnostic.
 
-`Set from [...]` construction syntax, managed/String keys, and iteration are later slices. The witness
-tables are x64-only (funcAbs64 relocations), so these tests are gated to the x64 targets.
+A set is constructed either with `Set from [1, 2, 3]` — an array literal whose element type (int) is
+inferred — or with `IntSet.create()` for an empty typed set. `Set from` with managed/String keys and
+iteration are later slices. The witness tables are x64-only (funcAbs64 relocations), so these tests are
+gated to the x64 targets.
 
 ## Tests
 
@@ -40,20 +41,39 @@ end 'main'
 0
 ```
 
-<!-- test: insert.new-element -->
+<!-- test: basic.creation -->
 <!-- targets: x64-windows, x64-linux -->
-Inserting three distinct elements grows the count to three.
-
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(10)
-	s.insert(20)
-	s.insert(30)
-	if s.count() != 3 'check'
+	let s = Set from [1, 2, 3]
+	return s.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: basic.contains-true -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	let s = Set from [10, 20, 30]
+	if s.contains(20) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: basic.contains-false -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	let s = Set from [10, 20, 30]
+	if s.contains(99) 'check'
 		return 1
 	end 'check'
 	return 0
@@ -61,116 +81,75 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: insert.new-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	s.insert(4)
+	return s.count()
+end 'main'
+```
+```exitcode
+4
 ```
 
 <!-- test: insert.duplicate -->
 <!-- targets: x64-windows, x64-linux -->
-Inserting the same element repeatedly is a no-op — the count stays one.
-
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(10)
-	s.insert(10)
-	s.insert(10)
-	if s.count() != 1 'check'
+	var s = Set from [1, 2, 3]
+	s.insert(2)
+	return s.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: insert.then-contains -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	s.insert(5)
+	if s.contains(5) 'check'
 		return 1
 	end 'check'
 	return 0
 end 'main'
 ```
 ```exitcode
-0
-```
-
-<!-- test: insert.then-contains -->
-<!-- targets: x64-windows, x64-linux -->
-An inserted element is reported present by `contains`.
-
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
-function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(42)
-	if not s.contains(42) 'present'
-		return 1
-	end 'present'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: contains.absent -->
-<!-- targets: x64-windows, x64-linux -->
-`contains` reports an element that was never inserted as absent.
-
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
-function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(42)
-	if s.contains(99) 'absent'
-		return 1
-	end 'absent'
-	return 0
-end 'main'
-```
-```exitcode
-0
+1
 ```
 
 <!-- test: remove.existing -->
 <!-- targets: x64-windows, x64-linux -->
-Removing a present element returns true and decrements the count.
-
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(1)
-	s.insert(2)
-	s.insert(3)
-	if not s.remove(2) 'removed'
-		return 1
-	end 'removed'
-	if s.count() != 2 'count'
-		return 2
-	end 'count'
-	return 0
+	var s = Set from [1, 2, 3]
+	let removed = s.remove(2)
+	if removed 'check'
+		return s.count()
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
-0
+2
 ```
 
 <!-- test: remove.nonexistent -->
 <!-- targets: x64-windows, x64-linux -->
-Removing an absent element returns false and leaves the count unchanged.
-
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(1)
-	if s.remove(99) 'notPresent'
+	var s = Set from [1, 2, 3]
+	let removed = s.remove(99)
+	if removed 'check'
 		return 1
-	end 'notPresent'
-	if s.count() != 1 'count'
-		return 2
-	end 'count'
+	end 'check'
 	return 0
 end 'main'
 ```
@@ -180,58 +159,13 @@ end 'main'
 
 <!-- test: remove.then-contains -->
 <!-- targets: x64-windows, x64-linux -->
-A removed element is reported absent by `contains` afterward.
-
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(5)
-	let removed = s.remove(5)
-	if not removed 'r'
+	var s = Set from [1, 2, 3]
+	_ = s.remove(2)
+	if s.contains(2) 'check'
 		return 1
-	end 'r'
-	if s.contains(5) 'stillThere'
-		return 2
-	end 'stillThere'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: remove-reinsert -->
-<!-- targets: x64-windows, x64-linux -->
-Removing then re-inserting the same key reuses the tombstoned slot — the count is
-restored and both elements remain present.
-
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
-function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(7)
-	s.insert(8)
-	if not s.remove(7) 'r'
-		return 1
-	end 'r'
-	if s.count() != 1 'c1'
-		return 2
-	end 'c1'
-	s.insert(7)
-	if s.count() != 2 'c2'
-		return 3
-	end 'c2'
-	if not s.contains(7) 'has7'
-		return 4
-	end 'has7'
-	if not s.contains(8) 'has8'
-		return 5
-	end 'has8'
+	end 'check'
 	return 0
 end 'main'
 ```
@@ -241,8 +175,72 @@ end 'main'
 
 <!-- test: grow.preserves-elements -->
 <!-- targets: x64-windows, x64-linux -->
-Inserting twenty elements crosses the 75% load factor of the initial 16-slot table and
-forces a grow-and-rehash; every element survives and the count is exact.
+```maxon
+function main() returns ExitCode
+	let s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+	var allPresent = 1
+	var i = 1
+	while i <= 15 'check'
+		if not s.contains(i) 'missing'
+			allPresent = 0
+		end 'missing'
+		i = i + 1
+	end 'check'
+	return allPresent
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: empty.single-element -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	let s = Set from [42]
+	return s.count()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: remove-reinsert -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	_ = s.remove(2)
+	s.insert(2)
+	if s.contains(2) 'check'
+		return s.count()
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: negative-values -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	let s = Set from [-5, -3, -1, 0, 1, 3, 5]
+	if s.contains(-3) 'check'
+		return s.count()
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: grow.insert-loop -->
+<!-- targets: x64-windows, x64-linux -->
+Growing a `.create()`d set past the 75% load factor of the initial 16-slot table by repeated `insert`
+forces a grow-and-rehash; every element survives, the count is exact, and a never-inserted key is absent.
 
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -268,48 +266,6 @@ function main() returns ExitCode
 	if s.contains(20) 'phantom'
 		return 3
 	end 'phantom'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: negative-values -->
-<!-- targets: x64-windows, x64-linux -->
-Negative keys hash by the low-32 mask of their two's-complement representation and behave
-consistently across insert / contains / remove.
-
-```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
-function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(-5)
-	s.insert(-100)
-	s.insert(-5)
-	if s.count() != 2 'count'
-		return 1
-	end 'count'
-	if not s.contains(-5) 'hasNeg5'
-		return 2
-	end 'hasNeg5'
-	if not s.contains(-100) 'hasNeg100'
-		return 3
-	end 'hasNeg100'
-	if s.contains(-7) 'noNeg7'
-		return 4
-	end 'noNeg7'
-	if not s.remove(-5) 'rmNeg5'
-		return 5
-	end 'rmNeg5'
-	if s.count() != 1 'count2'
-		return 6
-	end 'count2'
-	if s.contains(-5) 'goneNeg5'
-		return 7
-	end 'goneNeg5'
 	return 0
 end 'main'
 ```

@@ -1,31 +1,18 @@
 // Test: grow.preserves-elements
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	var i = 0
-	while i < 20 'fill'
-		s.insert(i)
-		i = i + 1
-	end 'fill'
-	if s.count() != 20 'count'
-		return 1
-	end 'count'
-	var j = 0
-	while j < 20 'check'
-		if not s.contains(j) 'missing'
-			return 2
+	let s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+	var allPresent = 1
+	var i = 1
+	while i <= 15 'check'
+		if not s.contains(i) 'missing'
+			allPresent = 0
 		end 'missing'
-		j = j + 1
+		i = i + 1
 	end 'check'
-	if s.contains(20) 'phantom'
-		return 3
-	end 'phantom'
-	return 0
+	return allPresent
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 1
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -39,94 +26,97 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
-    x64.callDirect __set_create
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 7
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 11
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 14
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 15
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.leaRegRdata rdx, [rip + __witness_int_Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_from
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r13, 1
     x64.jmp whilehdr
   whilehdr:
-    x64.cmpRegImm32 r12, 20
-    x64.jcc less, fill
-    x64.jmp whileexit
-  fill:
-    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
-    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __set_insert
-    x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __set_count
-    x64.cmpRegImm32 r8, 20
-    x64.jcc notEqual, count
-    x64.jmp ifcont
-  count:
-    x64.movRegImm32 r12, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __set_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r12, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.cmpRegImm32 r12, 20
-    x64.jcc less, check
+    x64.cmpRegImm32 r13, 15
+    x64.jcc lessEqual, check
     x64.jmp whileexit
   check:
     x64.leaRegRdata rax, [rip + __witness_int_Hashable]
     x64.leaRegRdata r9, [rip + __witness_int_Equatable]
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
     x64.callDirect __set_contains
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, missing
-    x64.jmp ifcont
+    x64.jmp critsplit
   missing:
-    x64.movRegImm32 r12, 2
-    x64.movRegReg rcx, rbx
-    x64.callDirect __set_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.movRegImm32 rax, 0
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, rbx
+    x64.jmp ifcont
   ifcont:
-    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg rbx, rax
     x64.jmp whilehdr
   whileexit:
-    x64.movRegImm32 rdx, 20
-    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
-    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
-    x64.movRegReg rcx, rbx
-    x64.callDirect __set_contains
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, phantom
-    x64.jmp ifcont
-  phantom:
-    x64.movRegImm32 r12, 3
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __set_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __set_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

@@ -1,22 +1,14 @@
 // Test: remove.existing
-typealias Int = int(i64.min to i64.max)
-typealias IntSet = Set with Int
-
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(1)
-	s.insert(2)
-	s.insert(3)
-	if not s.remove(2) 'removed'
-		return 1
-	end 'removed'
-	if s.count() != 2 'count'
-		return 2
-	end 'count'
-	return 0
+	var s = Set from [1, 2, 3]
+	let removed = s.remove(2)
+	if removed 'check'
+		return s.count()
+	end 'check'
+	return 1
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 2
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -31,63 +23,51 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.callDirect __set_create
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 1
-    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
-    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
     x64.movRegReg rcx, rbx
-    x64.callDirect __set_insert
+    x64.callDirect __arr_push
     x64.movRegImm32 rdx, 2
-    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
-    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
     x64.movRegReg rcx, rbx
-    x64.callDirect __set_insert
+    x64.callDirect __arr_push
     x64.movRegImm32 rdx, 3
-    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
-    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
     x64.movRegReg rcx, rbx
-    x64.callDirect __set_insert
+    x64.callDirect __arr_push
+    x64.leaRegRdata rdx, [rip + __witness_int_Hashable]
+    x64.leaRegRdata rax, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_from
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
     x64.movRegImm32 rdx, 2
     x64.leaRegRdata rax, [rip + __witness_int_Hashable]
     x64.leaRegRdata r9, [rip + __witness_int_Equatable]
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __set_remove
-    x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, removed
+    x64.jcc notEqual, check
     x64.jmp ifcont
-  removed:
-    x64.movRegImm32 r12, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __set_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegReg rcx, rbx
+  check:
+    x64.movRegReg rcx, r12
     x64.callDirect __set_count
-    x64.cmpRegImm32 r8, 2
-    x64.jcc notEqual, count
-    x64.jmp ifcont
-  count:
-    x64.movRegImm32 r12, 2
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __set_decref
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
     x64.callDirect __set_decref
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

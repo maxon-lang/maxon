@@ -2897,6 +2897,19 @@ export type ProgramSignatures
 		return self.isSetBaseName(self.genericInstanceBaseName(id))
 	end 'isSetInstance'
 
+	// ⭐ **THE `Set with integer` INSTANCE FOR A `Set from [ints]` CONSTRUCTION (P1.7b slice B).** The hash-table
+	// twin of `internArrayIntegerInstance`: a `Set from [1,2,3]` has no typealias to intern its element from (the
+	// int element is inferred from the literal), so the SWEEP interns this ONE well-known instance whenever a
+	// file's tokens contain a `Set from` construct (`Parser.foldDeclaredSignaturesInto`), and the parser reads
+	// the same giid back at construction time. Interning is IDEMPOTENT, so the sweep's call is the WRITE and every
+	// parser call is a pure READ — the instance is always interned before any file is parsed, which is what keeps
+	// a per-file parse from being the first to mutate the shared registry. Its `integer` element canonicalizes to
+	// the `int` conformer (`conformerTypeArgName`), so its witnesses are `__witness_int_*`, exactly as the array
+	// literal's element does.
+	export function internSetIntegerInstance() returns GenericInstanceId
+		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: singletonInteger())
+	end 'internSetIntegerInstance'
+
 	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
 	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
 	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
