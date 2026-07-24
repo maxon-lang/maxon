@@ -264,17 +264,25 @@ public static partial class MaxonToStandardConversion {
       _valueTupleReturnStash = [];
       _varNameToStructType = varNameToStructType;
       // Debug-info (--debug-info only): the per-function local NAME -> SOURCE type name table, filled
-      // by EmitStore as the body lowers and joined with the machine slot offsets at emit. Seed it with
-      // the ORIGINAL parameter types here, before the ABI erases struct/enum params to i64 pointers —
-      // this is the one place a struct/enum PARAMETER's real type is still spelled out. Ranged-alias
-      // params were already flattened to their base at the top of Run, so those honestly bind to base.
-      // First-write-wins, so a later EmitStore of the same name (its i64 pointer slot) does not clobber
-      // the real type recorded here.
-      var debugLocalTypes = Compiler.DebugInfo ? new Dictionary<string, string>() : null;
+      // by EmitStore as the body lowers and joined with the machine slot offsets at emit. Gated on
+      // !IsStdlib to match the line/span capture (which is `DebugInfo && !isStdlib`) — only user code
+      // gets local records; stdlib/runtime internals are not the user's debugging surface.
+      //
+      // Seed params with their ORIGINAL type, before the ABI erases a struct/enum param to an i64
+      // pointer — the one place a struct/enum PARAMETER's real type is still spelled out (ranged-alias
+      // params were already flattened to their base at the top of Run, so those honestly bind to base).
+      // Sealing the param names makes their later i64-pointer store a no-op for capture, so it is not
+      // mistaken for a conflicting redefinition of the slot.
+      bool captureDebugLocals = Compiler.DebugInfo && !func.IsStdlib;
+      var debugLocalTypes = captureDebugLocals ? new Dictionary<string, string>() : null;
+      var debugSealedLocalNames = captureDebugLocals ? new HashSet<string>() : null;
       _debugLocalTypes = debugLocalTypes;
+      _debugSealedLocalNames = debugSealedLocalNames;
       if (debugLocalTypes != null) {
-        for (int pi = 0; pi < func.ParamNames.Count; pi++)
-          debugLocalTypes.TryAdd(func.ParamNames[pi], func.ParamTypes[pi].Name);
+        for (int pi = 0; pi < func.ParamNames.Count; pi++) {
+          debugLocalTypes[func.ParamNames[pi]] = func.ParamTypes[pi].Name;
+          debugSealedLocalNames!.Add(func.ParamNames[pi]);
+        }
       }
       var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
@@ -2690,9 +2698,10 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    // The per-function debug-local cursor must not point at the last function's (now attached) map
+    // The per-function debug-local cursors must not point at the last function's (now attached) map
     // while the synthetic global-cleanup/destructor functions below lower through EmitStore.
     _debugLocalTypes = null;
+    _debugSealedLocalNames = null;
 
     // Reset the per-function lowering mode so the post-loop helpers and any subsequent
     // pass (StandardToX86 etc.) mint user-side ids by default.

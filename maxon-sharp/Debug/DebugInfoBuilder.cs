@@ -121,7 +121,10 @@ public sealed class DebugInfoBuilder {
 
     foreach (var (name, offset) in slots) {
       if (name.StartsWith("__", StringComparison.Ordinal) || name.Contains('.')) continue;
-      if (types.TryGetValue(name, out var typeName)) yield return (name, offset, typeName);
+      // A name reused across sibling scopes for different types is poisoned by the capture — its one
+      // slot cannot honestly name a single type, so it is OMITTED (not confidently mislabeled).
+      if (types.TryGetValue(name, out var typeName) && !DebugLocalTypes.IsConflicted(typeName))
+        yield return (name, offset, typeName);
     }
   }
 

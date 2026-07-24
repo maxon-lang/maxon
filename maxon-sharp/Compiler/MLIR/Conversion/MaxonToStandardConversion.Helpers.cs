@@ -219,11 +219,16 @@ public static partial class MaxonToStandardConversion {
         throw new InvalidOperationException($"Unsupported StdValue type for store: {value.GetType().Name}");
     }
 
-    // Debug-info capture (--debug-info only; map null otherwise). Record this local's SOURCE type the
-    // first time it is stored — a heap pointer names its struct/enum type (set above in the StdHeapPtr
-    // case), a scalar names its storage width. First-write-wins keeps the DECLARING type for a slot a
-    // later scope reuses, matching the one-stable-slot-per-name model the sidecar's loclist assumes.
-    _debugLocalTypes?.TryAdd(varName, _varNameToStructType!.GetValueOrDefault(varName, varTypes[varName]));
+    // Debug-info capture (--debug-info only; map null otherwise). Record this local's SOURCE type — a
+    // heap pointer names its struct/enum type (set above in the StdHeapPtr case), a scalar names its
+    // storage width. A PARAM's type is authoritative from its seed (its i64-pointer store here would
+    // otherwise look like a conflict), so sealed names are skipped. For a non-param, a second store of
+    // the same name with a DIFFERENT type poisons the entry, so the reused slot is OMITTED rather than
+    // labeled with only one of its two types (see DebugLocalTypes) — the one stable slot cannot name
+    // both honestly.
+    if (_debugLocalTypes != null && !_debugSealedLocalNames!.Contains(varName))
+      DebugLocalTypes.Record(_debugLocalTypes, varName,
+        _varNameToStructType!.GetValueOrDefault(varName, varTypes[varName]));
   }
 
   /// Converts a tag name to its symdata label form (e.g. "foo.bar" -> "__tag_foo_bar").
@@ -236,11 +241,15 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static int _nextTagIndex;
   [ThreadStatic] private static Dictionary<string, string>? _varNameToStructType;
   // Debug-info (--debug-info): the current function's local NAME -> SOURCE type name, captured by
-  // EmitStore. Points at the per-function map the Run loop creates; null when debug info is off and
-  // during the post-loop synthetic-function generation (so those helpers do not pollute a function's
-  // already-attached map). MaxonToStandard is single-threaded, so a ThreadStatic cursor is safe here
-  // exactly as _varNameToStructType is.
+  // EmitStore. Points at the per-function map the Run loop creates; null when debug info is off (or
+  // the function is stdlib) and during the post-loop synthetic-function generation (so those helpers
+  // do not pollute a function's already-attached map). MaxonToStandard is single-threaded, so a
+  // ThreadStatic cursor is safe here exactly as _varNameToStructType is.
   [ThreadStatic] private static Dictionary<string, string>? _debugLocalTypes;
+  // The PARAMETER names of the current function. Their type is seeded authoritatively from the source
+  // signature (before the ABI erases a struct/enum param to an i64 pointer), so EmitStore must NOT let
+  // that pointer store look like a conflicting redefinition — it skips capture for a sealed name.
+  [ThreadStatic] private static HashSet<string>? _debugSealedLocalNames;
   private static string EnsureSymdataTag(string tag) {
     _symdataTagCache ??= [];
     if (_symdataTagCache.TryGetValue(tag, out var existingLabel))

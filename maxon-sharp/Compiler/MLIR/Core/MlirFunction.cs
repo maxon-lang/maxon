@@ -151,3 +151,32 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
     return clone;
   }
 }
+
+/// <summary>
+/// Encoding of the debug-info local NAME -> SOURCE type map (<see cref="IrFunction{TOp}.LocalSourceTypes"/>).
+/// The map is filled while lowering (MaxonToStandardConversion) and read at emit (DebugInfoBuilder);
+/// this is the ONE home for the "reused name, conflicting type" rule so the two ends cannot disagree.
+///
+/// A single stack slot in the bootstrap carries ONE loclist entry spanning the whole function. If a
+/// variable NAME is reused across sibling scopes for DIFFERENT source types and both bindings earn a
+/// slot, no single type is honest over that range — so the name is POISONED and OMITTED from the
+/// sidecar rather than confidently labeled with whichever type was seen first (the design doc's
+/// forbidden "instrument that lies").
+/// </summary>
+public static class DebugLocalTypes {
+  // Marks a name recorded under two different source types. A NUL cannot appear in a real type name,
+  // so this never collides with a captured type; it is never written to the sidecar (the emit-side
+  // filter drops it before it reaches the type or local tables).
+  private const string Conflicted = "\0conflicted";
+
+  /// Record <paramref name="name"/> -> <paramref name="typeName"/> on first sight; a later record of
+  /// the same name with a DIFFERENT type poisons it, and it stays poisoned. A same-type re-record
+  /// (e.g. a loop-carried var stored each iteration) is not a conflict.
+  public static void Record(Dictionary<string, string> map, string name, string typeName) {
+    if (!map.TryGetValue(name, out var existing)) map[name] = typeName;
+    else if (existing != typeName && existing != Conflicted) map[name] = Conflicted;
+  }
+
+  /// True when a recorded type is the conflict poison — the local must be OMITTED from the sidecar.
+  public static bool IsConflicted(string typeName) => typeName == Conflicted;
+}

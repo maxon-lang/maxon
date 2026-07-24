@@ -170,6 +170,10 @@ class Program {
       Console.WriteLine($"    [{i}] {r.FileName(i)}");
     }
 
+    // The stack-slot offsets are frame-pointer-relative; the frame-pointer REGISTER is per target
+    // (x29 on arm64, rbp on x64). The sidecar's offsets are target-agnostic — only this label differs.
+    var framePointer = FramePointerRegister(r.Triple);
+
     Console.WriteLine($"  functions ({r.FunctionCount}):");
     for (uint i = 0; i < r.FunctionCount; i++) {
       var f = r.Function(i);
@@ -177,7 +181,7 @@ class Program {
         + $"frame=0x{f.FrameSize:x}  params={f.ParamCount}  lines={f.LineCount}  locals={f.LocalCount}");
       for (uint k = f.LocalFirst; k < f.LocalFirst + f.LocalCount; k++) {
         var lc = r.Local(k);
-        Console.WriteLine($"        {lc.Name,-20} {FormatLocation(lc)}  : {r.TypeName(lc.TypeId)}");
+        Console.WriteLine($"        {lc.Name,-20} {FormatLocation(lc, framePointer)}  : {r.TypeName(lc.TypeId)}");
       }
     }
 
@@ -200,8 +204,15 @@ class Program {
     return 0;
   }
 
-  static string FormatLocation(Debug.MxdbgReader.LocalInfo lc) => lc.LocKind switch {
-    Debug.MxdbgLocKind.StackSlotRbpRel => lc.LocValue >= 0 ? $"[rbp+0x{lc.LocValue:x}]" : $"[rbp-0x{-lc.LocValue:x}]",
+  // The frame-pointer register the StackSlotRbpRel offsets are relative to, per the sidecar's target:
+  // x29 on arm64, rbp on x64. The offsets themselves are target-agnostic (the emitter records the
+  // frame-pointer-relative displacement); only this human-readable label differs.
+  static string FramePointerRegister(string triple) =>
+    triple.StartsWith("arm64", StringComparison.Ordinal) ? "x29" : "rbp";
+
+  static string FormatLocation(Debug.MxdbgReader.LocalInfo lc, string framePointer) => lc.LocKind switch {
+    Debug.MxdbgLocKind.StackSlotRbpRel =>
+      lc.LocValue >= 0 ? $"[{framePointer}+0x{lc.LocValue:x}]" : $"[{framePointer}-0x{-lc.LocValue:x}]",
     Debug.MxdbgLocKind.Register => $"reg{lc.LocValue}",
     Debug.MxdbgLocKind.OptimizedOut => "<optimized out>",
     _ => throw new InvalidOperationException($"Unknown local location kind {lc.LocKind}"),
