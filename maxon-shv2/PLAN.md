@@ -1739,6 +1739,45 @@ are `__slab`-invisible to the `__mm` leak gate:
   deferred full-Subprocess-API / managed-error rung (Design B).** → the streaming subprocess + parallel-harness
   dogfood remains the P1.5 acceptance test.
 
+### ⭐ DOGFOOD STARTED (2026-07-24, user-directed "continue with the dogfood") — sliced ~6 ways
+
+The parallel-harness acceptance test (compile `maxon-shv2/Testing/`'s ~1,922-line spec-runner with shv2, run it
+alongside the `maxon.exe`-built oracle, results must agree) is a MULTI-RUNG milestone. Sliced: **1 async
+subprocess stdio** (StreamingSubprocess streaming builtins + async pipe I/O — its own two sub-slices, below) ·
+**2 Set + Hashable + witness tables** (via `String.trim()` → `CharacterSet`; ⭐ **the parallel repo is already
+building this — P1.7a slice 2a "witness-table dispatch" landed upstream `a507e6b24`**, so slice 2 is partly done)
+· **3 String methods** (`trim`/`slice`/`split`/`toByteArray`, Array-backed) + the `__Builtins.*` surface · **4
+`Stringable`/interface completeness** (FilePath interp) · **5 compile the harness** · **6 the differential-oracle
+gate**.
+
+- **✅ SLICE 1a — the IOCP overlapped-read SUBSTRATE — CLOSED 2026-07-24** (main `18feb228d`; 5 commits `150ad27c2`
+  foundation + `a8731fa13` core + `692b5b5b4` perf + `0ceebc7fe` UAF-fix + `18feb228d` docs; 1451→1462/0 after
+  rebase over upstream P1.7a-2a/debugger-P2b). A temporary `spawnReadLine(cmd)` PROBE builtin (the seed for the
+  real API): spawn a Windows child with stdout on an **overlapped named pipe**, issue a **yielding** overlapped
+  `ReadFile`, park the GT, and be resumed by a **dedicated IOCP completion OS thread** that re-enqueues the parked
+  GT under a `CRITICAL_SECTION` (`__io_lock`) — **shv2's FIRST cross-thread run-queue mutation.** **DESIGN = Option A
+  (IOCP + completion thread), a USER RULING** over the coordinator-recommended single-M overlapped-event-wait; it
+  pulls a bounded piece of the multi-M concern (a run-queue lock) forward, deliberately. ⭐ Adaptations from the v1/
+  bootstrap references (which are multi-M): the OVERLAPPED is EMBEDDED in the GT's reserved `0x60–0x7F` window (shv2's
+  bump slab has NO free, so v1's per-read `__slab_alloc`+free of an IoAsyncCtx would leak); a **publish-after-park
+  handshake** (park sets `ioParked` only after committing `waiting`; the completion thread spin-waits it before
+  `status=ready`) closes the lost-wakeup race the completion thread otherwise causes — the coordinator OVERRULED the
+  implementer's plan to drop it ("single-M ⇒ no gate" covers only the stale-SP race, not the second-thread status
+  race). Built as **1a-i** (15 IAT slots + 11 StdOps + lowerings, no consumer) then **1a-ii** (the core), landed
+  together (vocabulary-with-consumer). Optimizer: the `osReadOverlapped` 6-field case widens the flat StdOp union
+  **+8 B/op for every program** (proven arithmetically) — **accepted LINEAR debt** (narrowing breaks the tiering
+  thesis); no superlinearity (io path `usesIocp`-gated + corpus-blind). ⭐⭐ **The independent review CAUGHT A
+  DETERMINISTIC REACHABLE cross-thread UAF (0xC0000005) a green suite + 1,400 stress cycles MISSED:** dropping an
+  in-flight reader promise un-awaited freed the GT while the completion thread still held `ovlPtr = gt+0x60` (the
+  `__gt_promise_drop` waiting arm's "no in-flight OVERLAPPED to abort" invariant, made false by this slice). FIXED
+  with a 4-state `ioParked` machine + an `emitGtIoCancelArm` that `CancelIoEx`+drains (abandon/DrainDone handshake)
+  before freeing; re-reviewed race-free; pinned by `spawn-read-line.drop-in-flight`. 4 bespoke `spawn-read-line.md`
+  tests, x64-windows-gated. ⏭ **Measured debt for slice 1b** (Workstream O): `__gt_io_read` `__slab_alloc`s ~4.2 KB/
+  call never freed (bump slab; fine for a probe, invisible to `__mm`) — the real API wants freed/stack-local scratch
+  (the #92 reuse pattern, adapted for the read's yield). **⇒ NEXT = slice 1b** (the full StreamingSubprocess surface:
+  `readStdoutLine`/`readStderrLine` line-buffering + `writeStdinAll`/`closeStdin`/`waitExit`/`release` + the 7 native
+  builtins + making shv2 compile the stdlib `StreamingSubprocess` API + specs).
+
 Per the runtime-binding decision (Context): shv2 **excludes `Internals.maxon` and emits natively**
 — builtin registration for the `__Managed*` surface replaces v1's `__Internals` mechanism +
 `StdlibLoader` (6,434 lines, the road not taken).
