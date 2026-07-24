@@ -187,18 +187,13 @@ public sealed class MxdbgReader {
     var order = FuncOrderByCodeStart();
 
     // Partition point: the first function that starts AFTER codeOffset; its predecessor holds the
-    // greatest CodeStart <= codeOffset — the sole containment candidate.
-    int lo = 0;
-    int hi = order.Length;
-    while (lo < hi) {
-      int mid = (lo + hi) >>> 1;
-      if (FuncCodeStart(order[mid]) <= codeOffset) lo = mid + 1;
-      else hi = mid;
-    }
+    // greatest CodeStart <= codeOffset — the sole containment candidate for the emitter's disjoint
+    // ranges. Routes through the ONE partition-point primitive the debug builder also uses, rather than
+    // hand-rolling the loop a third time.
+    int after = MxdbgFormat.PartitionPoint(order.Length, i => FuncCodeStart(order[i]) <= codeOffset);
+    if (after == 0) return null;
 
-    if (lo == 0) return null;
-
-    int cand = order[lo - 1];
+    int cand = order[after - 1];
     return codeOffset >= FuncCodeStart(cand) && codeOffset < FuncCodeEnd(cand) ? Function((uint)cand) : null;
   }
 
