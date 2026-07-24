@@ -94,8 +94,9 @@ internal sealed class MaxonDebugger : IDisposable {
 
     long size = RuntimeEmitter.DbgControlSegmentSize;
     var mapping = SharedMapping.Create(size, ControlSegmentPrefix);
+    MemoryMappedViewAccessor? accessor = null;
     try {
-      var accessor = mapping.Map.CreateViewAccessor(0, size);
+      accessor = mapping.Map.CreateViewAccessor(0, size);
       // A fresh segment is zeroed; StopAtEntry is the one field seeded before spawn, so the driver can
       // set breakpoints before user code runs, gdb-style.
       accessor.Write(RuntimeEmitter.DbgOffStopAtEntry, 1L);
@@ -133,6 +134,7 @@ internal sealed class MaxonDebugger : IDisposable {
 
       return new MaxonDebugger(mapping, accessor, process, stdout, stderr, sidecar);
     } catch {
+      accessor?.Dispose();
       mapping.Dispose();
       throw;
     }
@@ -276,17 +278,32 @@ internal sealed class MaxonDebugger : IDisposable {
 
   // ---- Backtrace ----
 
+  /// Why a backtrace request produced no frames, kept DISTINCT so a surface never reports a command
+  /// that failed to ack as "unsupported, rebuild to enable" (the two need different user actions).
+  public enum BacktraceStatus {
+    /// The agent filled the frame array (which may still be empty — a stop at entry has no stack).
+    Ok,
+    /// The agent predates the backtrace command (control version &lt; DbgBacktraceMinVersion); a v2
+    /// agent would ack-and-ignore, so its empty array must NOT be read as a real trace.
+    UnsupportedByAgent,
+    /// The command was posted but never acked (timeout / target exited mid-request).
+    NotAcknowledged,
+  }
+
+  public readonly record struct BacktraceResult(BacktraceStatus Status, IReadOnlyList<Frame> Frames);
+
   /// <summary>
   /// Request the stopped GT's backtrace: post the backtrace command, read the frame array the agent
   /// filled, and symbolize each frame. Frame 0 is the exact stop PC; frames above it are return
-  /// addresses symbolized with the call-site bias. Returns null when the agent predates the backtrace
-  /// command (control version &lt; <see cref="RuntimeEmitter.DbgBacktraceMinVersion"/>) — the driver
-  /// reports "not supported by this binary" rather than reading the ack-and-ignored empty array as a
-  /// real (empty) trace.
+  /// addresses symbolized with the call-site bias. The <see cref="BacktraceStatus"/> distinguishes a
+  /// genuinely unsupported agent from a command that failed to ack, so the surfaces report each with
+  /// the right advice.
   /// </summary>
-  public IReadOnlyList<Frame>? Backtrace() {
-    if (AgentVersion < RuntimeEmitter.DbgBacktraceMinVersion) return null;
-    if (!PostCommand(RuntimeEmitter.DbgCmdBacktrace, 0)) return null;
+  public BacktraceResult Backtrace() {
+    if (AgentVersion < RuntimeEmitter.DbgBacktraceMinVersion)
+      return new BacktraceResult(BacktraceStatus.UnsupportedByAgent, []);
+    if (!PostCommand(RuntimeEmitter.DbgCmdBacktrace, 0))
+      return new BacktraceResult(BacktraceStatus.NotAcknowledged, []);
 
     // The park loop's ack store-release published the array; acquire it before reading.
     Thread.MemoryBarrier();
@@ -300,7 +317,7 @@ internal sealed class MaxonDebugger : IDisposable {
       bool isReturnAddress = i > 0;
       frames.Add(new Frame(i, off, isReturnAddress, Symbolize(off, returnAddressBias: isReturnAddress)));
     }
-    return frames;
+    return new BacktraceResult(BacktraceStatus.Ok, frames);
   }
 
   // ---- Process lifetime ----

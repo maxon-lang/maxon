@@ -24,13 +24,13 @@ internal static class MaxonDebugRepl {
   private readonly record struct SourceLine(uint Number, string Text, bool IsCurrent);
 
   /// Everything the two renderers need for one stop: the symbolized location, the source window (empty
-  /// when the file cannot be read), and the symbolized backtrace (null when the agent predates it).
+  /// when the file cannot be read), and the symbolized backtrace (carrying its own status).
   private readonly record struct StopReport(
     string ReasonText,
     MaxonDebugger.SymLocation Location,
     string SourcePath,
     IReadOnlyList<SourceLine> Source,
-    IReadOnlyList<MaxonDebugger.Frame>? Backtrace);
+    MaxonDebugger.BacktraceResult Backtrace);
 
   // ---- Interactive REPL ----
 
@@ -90,29 +90,34 @@ internal static class MaxonDebugRepl {
     }
 
     private void Execute(string input) {
-      if (input.Length == 0) return;
-
-      var (cmd, rest) = SplitFirst(input);
-      switch (cmd) {
-        case "break" or "b":
+      var (command, word, rest) = ParseCommand(input);
+      switch (command) {
+        case DebugCommand.Empty:
+          break;
+        case DebugCommand.Break:
           DoBreak(rest);
           break;
-        case "run" or "r" or "continue" or "c":
-          DoContinue(cmd is "run" or "r");
+        case DebugCommand.Run:
+          DoContinue(isRun: true);
           break;
-        case "backtrace" or "bt" or "where":
+        case DebugCommand.Continue:
+          DoContinue(isRun: false);
+          break;
+        case DebugCommand.Backtrace:
           DoBacktrace();
           break;
-        case "help" or "?" or "commands":
+        case DebugCommand.Help:
           PrintHelp();
           break;
-        case "quit" or "q" or "exit":
+        case DebugCommand.Quit:
           dbg.Terminate();
           _finished = true;
           break;
-        default:
-          Console.Out.WriteLine($"Unknown command '{cmd}'. Type 'help' for the command list.");
+        case DebugCommand.Unknown:
+          Console.Out.WriteLine($"Unknown command '{word}'. Type 'help' for the command list.");
           break;
+        default:
+          throw new InvalidOperationException($"Unhandled command {command}");
       }
     }
 
@@ -164,12 +169,12 @@ internal static class MaxonDebugRepl {
     }
 
     private void DoBacktrace() {
-      if (_stop is not { } report) {
+      if (_stop is null) {
         Console.Out.WriteLine("Not stopped — run to a breakpoint first.");
         return;
       }
-      var bt = dbg.Backtrace() ?? report.Backtrace;
-      RenderBacktraceText(bt, Console.Out);
+      // The target is still parked at the same stop, so a fresh request is authoritative.
+      RenderBacktraceText(dbg.Backtrace(), Console.Out);
     }
 
     private static void PrintHelp() {
@@ -224,27 +229,35 @@ internal static class MaxonDebugRepl {
     }
   }
 
-  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string command, ref bool finished) {
-    var (cmd, rest) = SplitFirst(command.Trim());
-    switch (cmd) {
-      case "":
+  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string commandLine, ref bool finished) {
+    var (command, word, rest) = ParseCommand(commandLine);
+    switch (command) {
+      case DebugCommand.Empty:
         break;
-      case "break" or "b":
+      case DebugCommand.Break:
         BatchBreak(dbg, rest);
         break;
-      case "run" or "r" or "continue" or "c":
+      // Run and Continue are the same mechanism; the interactive prompt distinguishes them, batch has
+      // no prompt so both post continue and await the next event.
+      case DebugCommand.Run:
+      case DebugCommand.Continue:
         BatchContinue(dbg, exePath, ref finished);
         break;
-      case "backtrace" or "bt" or "where":
+      case DebugCommand.Backtrace:
         EmitBacktrace(dbg.Backtrace());
         break;
-      case "quit" or "q" or "exit":
+      case DebugCommand.Quit:
         dbg.Terminate();
         finished = true;
         break;
-      default:
-        EmitError($"unknown command '{cmd}'");
+      case DebugCommand.Help:
+        EmitError("'help' is interactive-only; not available in --batch");
         break;
+      case DebugCommand.Unknown:
+        EmitError($"unknown command '{word}'");
+        break;
+      default:
+        throw new InvalidOperationException($"Unhandled command {command}");
     }
   }
 
@@ -371,17 +384,28 @@ internal static class MaxonDebugRepl {
     RenderBacktraceText(report.Backtrace, w);
   }
 
-  private static void RenderBacktraceText(IReadOnlyList<MaxonDebugger.Frame>? frames, TextWriter w) {
-    if (frames == null) {
-      w.WriteLine("  backtrace: not supported by this binary's debug agent (rebuild to enable).");
+  /// The reason a backtrace produced no usable frames, or null when it succeeded — stated ONCE so the
+  /// text and JSON faces cannot describe an unsupported agent and an unacked command differently.
+  private static string? BacktraceUnavailableReason(MaxonDebugger.BacktraceStatus status) => status switch {
+    MaxonDebugger.BacktraceStatus.Ok => null,
+    MaxonDebugger.BacktraceStatus.UnsupportedByAgent =>
+      "not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.BacktraceStatus.NotAcknowledged =>
+      "backtrace command not acknowledged (the target may have exited)",
+    _ => throw new InvalidOperationException($"Unhandled backtrace status {status}"),
+  };
+
+  private static void RenderBacktraceText(MaxonDebugger.BacktraceResult bt, TextWriter w) {
+    if (BacktraceUnavailableReason(bt.Status) is { } reason) {
+      w.WriteLine($"  backtrace: {reason}.");
       return;
     }
-    if (frames.Count == 0) {
+    if (bt.Frames.Count == 0) {
       w.WriteLine("  backtrace: (no stack — stopped at entry)");
       return;
     }
     w.WriteLine("  backtrace:");
-    foreach (var f in frames) {
+    foreach (var f in bt.Frames) {
       var loc = f.Location;
       var where = loc.HasLine ? $"{loc.File}:{loc.Line}" : "<no line>";
       var fn = loc.HasFunction ? loc.Function : "<unknown>";
@@ -416,20 +440,21 @@ internal static class MaxonDebugRepl {
     WriteBacktraceArray(w, "backtrace", report.Backtrace);
   });
 
-  private static void EmitBacktrace(IReadOnlyList<MaxonDebugger.Frame>? frames) => WriteEvent(w => {
+  private static void EmitBacktrace(MaxonDebugger.BacktraceResult bt) => WriteEvent(w => {
     w.WriteString("event", "backtrace");
-    if (frames == null) {
-      w.WriteBoolean("supported", false);
-      return;
-    }
-    WriteBacktraceArray(w, "frames", frames);
+    WriteBacktraceArray(w, "frames", bt);
   });
 
-  private static void WriteBacktraceArray(Utf8JsonWriter w, string name,
-      IReadOnlyList<MaxonDebugger.Frame>? frames) {
-    if (frames == null) { w.WriteNull(name); return; }
+  private static void WriteBacktraceArray(Utf8JsonWriter w, string name, MaxonDebugger.BacktraceResult bt) {
+    // An unavailable backtrace is null + a reason, NEVER an empty array — a consumer must not read
+    // "unsupported" or "unacked" as "a real, empty stack."
+    if (BacktraceUnavailableReason(bt.Status) is { } reason) {
+      w.WriteNull(name);
+      w.WriteString($"{name}Unavailable", reason);
+      return;
+    }
     w.WriteStartArray(name);
-    foreach (var f in frames) {
+    foreach (var f in bt.Frames) {
       w.WriteStartObject();
       w.WriteNumber("frame", f.Index);
       var loc = f.Location;
@@ -519,6 +544,29 @@ internal static class MaxonDebugRepl {
   private static (string Cmd, string Remainder) SplitFirst(string input) {
     int sp = input.IndexOf(' ');
     return sp < 0 ? (input, "") : (input[..sp], input[(sp + 1)..].Trim());
+  }
+
+  /// The canonical commands both faces dispatch on. `Run` and `Continue` are the same MECHANISM
+  /// (continue) but stay distinct here so the interactive prompt can word them differently.
+  private enum DebugCommand { Empty, Break, Run, Continue, Backtrace, Help, Quit, Unknown }
+
+  /// The ONE place the command vocabulary (canonical words + aliases) is stated. Both the interactive
+  /// REPL and the batch runner classify through this, so adding a P4 command (`step`, `threads`, …)
+  /// here teaches BOTH faces at once — a copy in one and not the other would have one face accept a
+  /// word the other rejects.
+  private static (DebugCommand Command, string Word, string Args) ParseCommand(string input) {
+    var (word, args) = SplitFirst(input.Trim());
+    var command = word switch {
+      "" => DebugCommand.Empty,
+      "break" or "b" => DebugCommand.Break,
+      "run" or "r" => DebugCommand.Run,
+      "continue" or "c" => DebugCommand.Continue,
+      "backtrace" or "bt" or "where" => DebugCommand.Backtrace,
+      "help" or "?" or "commands" => DebugCommand.Help,
+      "quit" or "q" or "exit" => DebugCommand.Quit,
+      _ => DebugCommand.Unknown,
+    };
+    return (command, word, args);
   }
 
   private static string ReasonText(long reason) => reason switch {

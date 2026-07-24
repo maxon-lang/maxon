@@ -60,9 +60,16 @@ public static class BinaryBuildId {
       return false;
     }
 
-    if (TryExtractTextSection(bytes, out var text, out error)) {
-      buildId = MxdbgFormat.ComputeBuildId(text);
-      return true;
+    // Defense-in-depth for this method's "never crash, refuse cleanly" contract: the section-table
+    // walks are individually bounds-checked, but a crafted binary must convert ANY residual parse fault
+    // into an honest refusal, never a stack trace out of ValidateBuildId → Attach.
+    try {
+      if (TryExtractTextSection(bytes, out var text, out error)) {
+        buildId = MxdbgFormat.ComputeBuildId(text);
+        return true;
+      }
+    } catch (Exception ex) {
+      error = $"cannot parse '{binaryPath}': {ex.Message}";
     }
     return false;
   }
@@ -126,6 +133,9 @@ public static class BinaryBuildId {
       if (lcSize == 0 || cmd + lcSize > b.Length) { error = "malformed Mach-O load command"; return false; }
 
       if (lcCmd == MachoLcSegment64 && SectionName(b, (int)cmd + MachoSegNameOffset, 16) == MachoTextSegName) {
+        // A crafted __TEXT SEGMENT_64 can advertise an lcSize < the 72-byte segment header (still within
+        // the file) — bound the nsects read explicitly, since cmd + lcSize <= len does not cover it.
+        if (cmd + MachoSegNSectsOffset + 4 > b.Length) { error = "truncated Mach-O __TEXT segment command"; return false; }
         uint nsects = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan((int)cmd + MachoSegNSectsOffset));
         for (uint s = 0; s < nsects; s++) {
           long sec = cmd + MachoSegCmdHeaderSize + (long)s * MachoSection64Size;

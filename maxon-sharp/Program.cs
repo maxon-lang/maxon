@@ -191,10 +191,17 @@ class Program {
     foreach (var arg in args) {
       if (arg.StartsWith("--commands=")) {
         commands = arg["--commands=".Length..];
-      } else if (exe == null && !arg.StartsWith('-')) {
+      } else if (exe == null) {
+        // Before the target, a '-'-prefixed token is a DRIVER option — reject an unknown one rather
+        // than silently forwarding a mistyped flag (e.g. `--comands=`) to the target as an argument.
+        if (arg.StartsWith('-')) {
+          Console.Error.WriteLine($"maxon debug --batch: unknown option '{arg}' "
+            + "(expected --commands=<spec> then <exe> [args...]).");
+          return 1;
+        }
         exe = arg;
       } else {
-        // Everything after the target is forwarded to it verbatim (including any leading '-').
+        // After the target, everything is forwarded to it verbatim (including any leading '-').
         targetArgs.Add(arg);
       }
     }
