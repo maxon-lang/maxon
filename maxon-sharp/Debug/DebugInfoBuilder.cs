@@ -277,17 +277,21 @@ public sealed class DebugInfoBuilder {
         return new TypeDesc(kind, (uint)s.SizeInBytes, 8, fields);
 
       case IrEnumType e:
-        // Cases render by discriminant: offset = ordinal, type = the case's payload. No payload is
-        // void; a single value is that type; a MULTI-value payload (rect(w, h)) has no single type in
-        // this model, so it points at an honest opaque marker rather than falsely rendering as void
-        // ("no payload").
+        // Cases render by discriminant: offset = the RUNTIME TAG the case stores (TagValue — the raw
+        // value for an int-backed enum, the ordinal otherwise), NOT the ordinal, so the renderer
+        // matches the discriminant codegen actually emitted. type = the case's payload: void for none,
+        // that type for a single value; a MULTI-value payload (rect(w, h)) has no single type in this
+        // model, so it points at an honest opaque marker rather than falsely rendering as void.
+        // Residual: a tag outside u32 (a negative or >2^32 raw value) truncates in this slot; the
+        // renderer then reports the case as an honest unresolved `Enum(#tag)` rather than a wrong case
+        // (the full i64 discriminant cannot collide with a non-negative stored tag).
         foreach (var c in e.Cases) {
           string payloadName;
           if (c.AssociatedValues is { Count: 1 } av) payloadName = av[0].Type.Name;
           else if (c.AssociatedValues is { Count: > 1 }) payloadName = MultiPayloadTypeName;
           else payloadName = IrType.Void.Name;
 
-          fields.Add((c.Name, (uint)c.Ordinal, payloadName));
+          fields.Add((c.Name, unchecked((uint)c.TagValue), payloadName));
         }
         return new TypeDesc(kind, (uint)e.SizeInBytes, 8, fields);
 

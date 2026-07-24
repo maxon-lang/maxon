@@ -342,6 +342,15 @@ public class IrEnumCase(string name, int ordinal, object? rawValue = null,
   // rewrite the placeholder short-name into the fully qualified function name
   // once it's been looked up against the module's function registry.
   public object? RawValue { get; set; } = rawValue;
+
+  /// The discriminant the runtime actually stores for this case: an int-backed enum stores its RAW
+  /// value, every other backing (and every associated-value case) stores the ORDINAL. This is the ONE
+  /// source of that fact — both the tag the compiler emits (see the parser's GetCaseTagValue) and the
+  /// tag the debug-info sidecar records read it here, so the discriminant a stopped value is compared
+  /// against can never drift from the one codegen wrote (the "one fact written twice" bug otherwise:
+  /// storing the ordinal in the sidecar while codegen stored the raw value silently mislabels a case).
+  public long TagValue => RawValue is long rv ? rv : Ordinal;
+
   public List<(string Name, IrType Type)>? AssociatedValues { get; } = associatedValues;
   // Source position for diagnostics produced by deferred resolution passes
   // (e.g. function-backed enum lookups). Null on synthesized cases.

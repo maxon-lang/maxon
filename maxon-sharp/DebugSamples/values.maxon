@@ -1,12 +1,21 @@
 // P4a value-inspection gate sample. Deterministic: fixed literals, a distinct exit code (42).
-// Before the breakpoint line, `main` initializes one of every kind the value renderer covers: a plain
-// int (count), a String (greeting), and a struct (person) whose named fields include a String (name),
-// an int (age), a bool (active), and a nested struct (home) with its own String + int — so `locals`
-// and dotted `print` path navigation both have real values to walk.
+// Before the breakpoint line, `main` initializes one of every kind the value renderer covers: a String
+// (greeting) and a struct (person) whose named fields include a String (name), an int (age), a bool
+// (active), an int-backed enum (priority), and a nested struct (home) with its own String + int — so
+// `locals` and dotted `print` path navigation both have real values to walk.
 
 typealias Age = int(0 to 150)
 typealias Population = int(0 to u64.max)
 typealias ExitCode = int(0 to 255)
+
+// Int-backed enum whose ORDINAL order differs from its RAW values: `low` is declared first, so its
+// ordinal is 0 but its raw value is 1; `high`'s ordinal is 1 but its raw value is 0. The renderer must
+// match a stopped value's discriminant against the RAW value the runtime stored, NOT the ordinal — so
+// `.high` (raw 0) must render as `Priority.high`, not as the case whose ordinal happens to be 0 (`low`).
+enum Priority
+	low = 1
+	high = 0
+end 'Priority'
 
 type City
 	export var name as String
@@ -21,20 +30,21 @@ type Person
 	export var name as String
 	export var age as Age
 	export var active as bool
+	export var priority as Priority
 	export var home as City
 
-	static function init(name String, age Age, active bool, home City) returns Self
-		return Self{name: name, age: age, active: active, home: home}
+	static function init(name String, age Age, active bool, priority Priority, home City) returns Self
+		return Self{name: name, age: age, active: active, priority: priority, home: home}
 	end 'init'
 end 'Person'
 
 function main() returns ExitCode
-	// The scalars ride struct FIELDS (person.age / person.active / person.home.population), not standalone
-	// locals: whether a scalar LOCAL gets a stack home is the register allocator's choice, so it may not
-	// appear in `locals` — a MANAGED local (String/struct) always does, and a field always has a memory
-	// home. `greeting.isAscii()` is a runtime call, so `active` is a real bool, not a folded constant.
+	// The scalars ride struct FIELDS (person.age / person.active / person.priority / person.home.population),
+	// not standalone locals: whether a scalar LOCAL gets a stack home is the register allocator's choice, so
+	// it may not appear in `locals` — a MANAGED local (String/struct) always does, and a field always has a
+	// memory home. `greeting.isAscii()` is a runtime call, so `active` is a real bool, not a folded constant.
 	let greeting = "hello world"
-	let person = Person.init("Ada", age: 20, active: greeting.isAscii(), home: City.init("Portland", population: 650000))
+	let person = Person.init("Ada", age: 20, active: greeting.isAscii(), priority: Priority.high, home: City.init("Portland", population: 650000))
 
 	// Breakpoint target: both locals are initialized and still in scope here.
 	print(greeting)

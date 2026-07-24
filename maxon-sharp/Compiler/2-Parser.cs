@@ -6296,10 +6296,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
 
-  /// Returns the tag value to store in the heap block for an enum case.
-  /// For int-backed enums, the tag is the raw value. For all others, it's the ordinal.
-  private static long GetCaseTagValue(IrEnumCase enumCase) =>
-    enumCase.RawValue is long rv ? rv : enumCase.Ordinal;
+  /// The tag value to store in the heap block for an enum case — <see cref="IrEnumCase.TagValue"/>,
+  /// the single source of the runtime discriminant (also read by the debug-info sidecar). Kept as a
+  /// named projection so the `.Min`/`.Max` call sites can pass it as a method group.
+  private static long GetCaseTagValue(IrEnumCase enumCase) => enumCase.TagValue;
 
   /// <summary>
   /// Parse EnumType.fromRawValue(arg) or EnumType.fromName(nameArg, ...associatedArgs).
