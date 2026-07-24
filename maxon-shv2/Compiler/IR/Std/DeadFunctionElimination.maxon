@@ -203,8 +203,11 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray)
 		if isLive 'live'
 			kept.push(func)
 		end 'live' else 'dead'
-			let name = String.from(func.name)
-			logTrace(LogCategory.ir, message: function() gives "dfe: dropping unreachable function '{name}'")
+			// `String.from` runs INSIDE the lazy message, never beside it: this arm is taken once per
+			// function the pass drops, so materializing the name eagerly would spend an allocation per
+			// SUCCESS — the cost rising with exactly how well the prune works — to render a line that is
+			// off on every build but a `--log=ir:trace` one.
+			logTrace(LogCategory.ir, message: function() gives "dfe: dropping unreachable function '{String.from(func.name)}'")
 		end 'dead'
 	end 'eachFunc'
 
