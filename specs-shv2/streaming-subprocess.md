@@ -30,14 +30,13 @@ non-negative integer handle indexing a runtime table, and every later call names
   slot's reusable line buffers persist across spawn/release cycles, so a spawn+read+release loop is
   memory-bounded rather than leaking a fresh buffer per iteration (slice 1a's measured debt).
 
-⚠ **Handle lifetime is the CALLER's responsibility on this bare-builtin probe surface: do not `subpRelease(h)`
-while another green thread still has a read parked in flight on `h`.** A parked reader holds a raw pointer into
-the slot and writes buffered/EOF state into it when its read resumes; if the release frees the slot and a later
-`subpSpawn` reuses that index in the meantime, the resumed reader corrupts the NEW handle's stream state (a
-silent cross-handle wrong answer — it is memory-safe, never a use-after-free). Dropping an un-awaited reader
-promise is safe (the drop tears the reader GT down before it can resume — see the drop-reader test); only an
-explicit release out from under a live reader is not. The real scope-owned `StreamingSubprocess` API removes the
-footgun structurally (the handle cannot be released while a borrow is outstanding).
+**Releasing a handle out from under a parked reader is SAFE.** Each table slot carries a GENERATION that
+`subpSpawn` bumps when it claims the slot, so a `(slot, generation)` pair names one handle for all time. A reader
+captures the generation at park time and re-reads it on resume: if a `subpRelease(h)` freed the slot and a later
+`subpSpawn` reused that index while the reader slept, the generations differ, so the stale reader returns its own
+empty/EOF result (correct — its handle is gone) and writes NO slot state back, leaving the new handle's stream
+untouched. Without it the resumed reader stamped its EOF into whatever handle now owned the slot, silently making
+the NEW handle read EOF — memory-safe, but a cross-handle wrong answer.
 
 The read line-buffers per handle: each stdout/stderr stream carries a growable byte buffer that a read
 appends into; the reader scans for `\n`, returns everything through the first one, and keeps the tail
@@ -220,6 +219,39 @@ end 'main'
 ```
 ```exitcode
 4
+```
+
+<!-- test: streaming-subprocess.release-while-parked-then-reuse-slot -->
+<!-- targets: x64-windows -->
+`subpRelease(h)` runs while an `async` reader is still PARKED on `h`, and the freed slot is then immediately
+reused by a new `subpSpawn` — the new handle must read correctly. The reader parks on the slow child
+(`ping -n 3` then `echo hi`); `subpRelease(h)` frees the slot out from under it; `subpSpawn` reuses that index
+for `h2` and BUMPS the slot generation. When the stale reader resumes it sees the generation changed, returns an
+empty line (0) and writes NOTHING back — so `h2` still reads `second\r\n` (8 bytes). Returns `n2*10 + rn` =
+8×10 + 0 = 80. Without the generation guard the stale reader stamped its EOF into `h2`'s stream and this
+returned 0.
+```maxon
+function reader(h int) returns int
+	let line = subpReadLine(h)
+	return line.byteLength()
+end 'reader'
+
+function main() returns ExitCode
+	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let r = async reader(h)
+	sleep(300)
+	subpRelease(h)
+	let h2 = subpSpawn("cmd /c echo second")
+	let rn = await r
+	let l2 = subpReadLine(h2)
+	let n2 = l2.byteLength()
+	let c2 = subpWait(h2)
+	subpRelease(h2)
+	return (n2 * 10 + rn) as ExitCode
+end 'main'
+```
+```exitcode
+80
 ```
 
 <!-- test: streaming-subprocess.spawn-release-loop -->

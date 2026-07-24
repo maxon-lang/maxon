@@ -3123,7 +3123,7 @@ end 'buildGtIoRead'
 // stream. stderr is read post-exit only in the harness, so it never multiplexes against a live stdout read.
 export let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
-let SubpSlotBytes = 128
+let SubpSlotBytes = 136
 // Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
 // the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
 // survive release for reuse; the OS handles are cleared at release.
@@ -3135,6 +3135,15 @@ let SubpStdoutBase = 32
 let SubpStderrBase = 72
 let SubpSlotWriteBuf = 112
 let SubpSlotWriteCap = 120
+
+// ⭐ **THE SLOT GENERATION — what makes a released handle's parked reader HARMLESS.** `subpSpawn` bumps it when it
+// CLAIMS a slot, so every (slot, generation) pair names one handle for all time. A reader captures the generation
+// at PARK time and re-reads it on resume: if they differ, the slot was released and re-spawned into a DIFFERENT
+// handle while the reader slept, so the reader returns its own empty/EOF result and writes NOTHING back — without
+// this, `subpRelease(h)` on a parked reader let it resume and stamp its EOF/bufLen into whatever handle now owns
+// the slot, silently making the NEW handle read EOF (memory-safe, but a wrong answer). Read and written ONLY by
+// GT-side code (spawn + the reader's resume) — the completion thread never touches it, so no cross-thread state.
+let SubpSlotGeneration = 128
 let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
@@ -3583,7 +3592,13 @@ function buildSubpSpawn(module StdModule)
 	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpStreamBufCap)
 	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpSlotWriteCap)
 	var afterBytesOut = emitEnsureSlotPtr(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as ParsedInt)
+	// ⭐ CLAIM the slot: bump the generation so any reader still parked on the PREVIOUS occupant of this slot sees a
+	// mismatch on resume and writes nothing back (see `SubpSlotGeneration`). Bumped here, with `inUse`, because this
+	// is the point the slot becomes a NEW handle; a failed spawn never reaches it and leaves the slot free.
+	let genPrev = emitLoadField(module, block: afterBytesOut, record: slot, offset: SubpSlotGeneration, ids: ids)
 	let liveConst = emitConst(module, block: afterBytesOut, value: 1, ids: ids)
+	let genNext = emitBin(module, block: afterBytesOut, a: genPrev, b: liveConst, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterBytesOut, record: slot, offset: SubpSlotGeneration, value: genNext)
 	emitStoreField(module, block: afterBytesOut, record: slot, offset: SubpSlotInUse, value: liveConst)
 	module.setTerminator(afterBytesOut, op: StdOp.ret(slotIdx))
 
@@ -3635,6 +3650,8 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	var growCheck = module.addBlock(func, label: b"growcheck")
 	var doGrow = module.addBlock(func, label: b"dogrow")
 	var doRead = module.addBlock(func, label: b"doread")
+	var readDone = module.addBlock(func, label: b"readdone")
+	var staleExit = module.addBlock(func, label: b"staleexit")
 	var setEof = module.addBlock(func, label: b"seteof")
 	var didRead = module.addBlock(func, label: b"didread")
 
@@ -3728,6 +3745,14 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	module.setTerminator(doGrow, op: StdOp.branch(doRead.id))
 
 	// doRead: append one chunk at buf[bufLen]. 0 bytes → latch EOF and re-scan (which lands on emitRemainder).
+	//
+	// ⭐ THE PARK is the `__gt_subp_yield_read` call below — the ONE point this function sleeps, and therefore the
+	// one point `subpRelease(h)` + a re-`subpSpawn` can hand this slot to a DIFFERENT handle behind our back. So the
+	// slot's generation is captured HERE, before the park, and re-read immediately after: a mismatch means the slot
+	// we resumed into is no longer ours, and EVERY resume-side slot write (`setEof`'s eof, `didRead`'s bufLen, and —
+	// downstream of the re-scan — `found`/`emitRemainder`'s bufLen and `doGrow`'s bufPtr/bufCap) must be skipped.
+	// Guarding at this single point covers all of them because every one is reachable only through here.
+	let genOffFromStream = (SubpSlotGeneration - streamBase) as ByteOffset
 	let bufPtrD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
 	let bufLenD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let readDst = emitBin(module, block: doRead, a: bufPtrD, b: bufLenD, opcode: StdBinOpcode.add, ids: ids)
@@ -3735,11 +3760,25 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	// ownsPipe = 0: the read pipe is TABLE-owned, so a promise dropped mid-read must NOT close it — the cancel arm
 	// cancels+drains, leaves it open for the next `subpReadLine(h)`, and `subpRelease` closes it.
 	let sharedPipeConst = emitConst(module, block: doRead, value: 0, ids: ids)
+	let genAtPark = emitLoadField(module, block: doRead, record: streamPtr, offset: genOffFromStream, ids: ids)
 	let nRead = ids.mint()
 	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr, fifth: sharedPipeConst)))
-	let zeroD = emitConst(module, block: doRead, value: 0, ids: ids)
-	let isZero = emitCmp(module, block: doRead, a: nRead, b: zeroD, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(doRead, op: StdOp.condBranch(isZero, thenBlockId: setEof.id, elseBlockId: didRead.id))
+	let genOnResume = emitLoadField(module, block: doRead, record: streamPtr, offset: genOffFromStream, ids: ids)
+	let slotReused = emitCmp(module, block: doRead, a: genOnResume, b: genAtPark, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(doRead, op: StdOp.condBranch(slotReused, thenBlockId: staleExit.id, elseBlockId: readDone.id))
+
+	// staleExit: our handle was released and its slot re-spawned into a different one while we slept. Return an
+	// EMPTY line (correct for us — our handle is gone) and touch NO slot state, so the new occupant is untouched.
+	// `streamPtr` is only a source address for a ZERO-length copy here, so it reads nothing.
+	let staleLen = emitConst(module, block: staleExit, value: 0, ids: ids)
+	let staleResult = ids.mint()
+	module.appendOp(staleExit, op: StdOp.call(staleResult, callee: SubpStrFromBytesName, args: twoArgs(streamPtr, second: staleLen)))
+	module.setTerminator(staleExit, op: StdOp.ret(staleResult))
+
+	// readDone: the slot is still ours — classify the read.
+	let zeroD = emitConst(module, block: readDone, value: 0, ids: ids)
+	let isZero = emitCmp(module, block: readDone, a: nRead, b: zeroD, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(readDone, op: StdOp.condBranch(isZero, thenBlockId: setEof.id, elseBlockId: didRead.id))
 
 	// setEof / didRead: `i` (the scan resume index) equals `bufLenD` here — no '\n' was found in [0, bufLenD), so
 	// re-entering `scanHdr(i)` scans only the new bytes [bufLenD, bufLenD+n), keeping the whole read O(total bytes).
@@ -3752,8 +3791,6 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	emitStoreField(module, block: didRead, record: streamPtr, offset: SubpStreamBufLen, value: newLen)
 	module.setTerminator(didRead, op: StdOp.branch(scanHdr.id))
 	didRead.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(i)))
-
-	_ = readDst
 	module.functions.push(func)
 end 'buildSubpReadLine'
 
