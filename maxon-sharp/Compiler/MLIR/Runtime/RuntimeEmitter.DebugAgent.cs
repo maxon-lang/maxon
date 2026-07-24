@@ -46,11 +46,23 @@ public partial class RuntimeEmitter {
   /// v2 agent (a binary built before P3c) has no backtrace handler and its park loop would ACK the
   /// unknown command without filling the array, so the driver gates <c>backtrace</c> on version ≥ 3 and
   /// reports "not supported by this binary" rather than showing an empty trace it would read as real.
-  public const long DbgControlVersion = 3;
+  ///
+  /// v4 (P4a) adds the <see cref="DbgCmdReadMem"/> command and the read-length / status / result-buffer
+  /// fields it fills (<see cref="DbgOffReadLen"/> / <see cref="DbgOffReadStatus"/> /
+  /// <see cref="DbgOffReadBuf"/>) — again previously-zero bytes after the backtrace array, so no earlier
+  /// field moves. Same honesty gate as v3: a v3 agent would ACK the unknown read command without filling
+  /// the buffer, so the driver gates value inspection on version ≥ 4 and reports "needs a rebuilt agent"
+  /// rather than reading zeroed garbage as if it were the debuggee's memory.
+  public const long DbgControlVersion = 4;
 
   /// The control-segment version at which the agent first understood <see cref="DbgCmdBacktrace"/>.
   /// The driver refuses to trust the frame array from an older agent (which would ack-and-ignore).
   public const long DbgBacktraceMinVersion = 3;
+
+  /// The control-segment version at which the agent first understood <see cref="DbgCmdReadMem"/>. The
+  /// driver refuses to read the result buffer from an older agent (which would ack-and-ignore, leaving
+  /// the buffer whatever it was) — the same UnsupportedByAgent discipline the backtrace gate uses.
+  public const long DbgReadMemMinVersion = 4;
 
   /// The whole agent control segment: one page. The P3a handshake header and the P3b command/stop
   /// mailbox both live in this one page, so a consumer that maps this much needs no re-mapping.
@@ -101,6 +113,22 @@ public partial class RuntimeEmitter {
   public const int DbgOffBtCount = 0x68;
   public const int DbgOffBtFrames = 0x70;
 
+  // Read-memory channel (driver writes ReadLen with the addr in DbgOffCmdArg; agent writes Status + Buf)
+  // — v4. Placed after the backtrace frame array, which ends at DbgOffBtFrames + DbgMaxBacktraceFrames*8
+  // = 0x70 + 64*8 = 0x270, so these bytes were previously zero. In response to DbgCmdReadMem the agent
+  // copies ReadLen (clamped to DbgReadBufCap) bytes of the debuggee's own memory at DbgOffCmdArg into
+  // DbgOffReadBuf and stores 1 into DbgOffReadStatus. The park loop's ack store-release publishes the
+  // buffer, so a driver that has seen the ack sees the copied bytes.
+  public const int DbgOffReadLen = 0x270;     // i64 — bytes the agent should copy (second command arg)
+  public const int DbgOffReadStatus = 0x278;  // i64 — 1 = the agent performed the copy
+  public const int DbgOffReadBuf = 0x280;     // result buffer, DbgReadBufCap bytes (0x280..0x480)
+
+  /// The read-memory result-buffer capacity: the most bytes one DbgCmdReadMem copies. The driver chunks
+  /// a larger read into ≤ this many bytes per command; the agent clamps ReadLen to it so a driver bug
+  /// can never make the copy run past DbgOffReadBuf. 512 keeps DbgOffReadBuf..+512 = 0x280..0x480 well
+  /// inside the one control page (0x480 &lt; 4096) — one number both ends step by.
+  public const int DbgReadBufCap = 512;
+
   /// flags bit 0: the in-process agent has mapped the segment and armed its trap handler. Released
   /// with a store-release AFTER the magic/version, so a consumer that sees this bit also sees them.
   public const long DbgFlagAgentAlive = 1;
@@ -112,6 +140,7 @@ public partial class RuntimeEmitter {
   public const long DbgCmdClearBp = 2;
   public const long DbgCmdContinue = 3;
   public const long DbgCmdBacktrace = 4;
+  public const long DbgCmdReadMem = 5;
 
   // Stop reasons written to DbgOffStopReason by the agent. Only "breakpoint" exists in P3b; stepping
   // and async-break reasons join it at P4.
@@ -705,10 +734,96 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
+  /// __dbg_read_mem() — copy ReadLen bytes of the debuggee's own memory at DbgOffCmdArg into the
+  /// control segment's DbgOffReadBuf, then store 1 into DbgOffReadStatus. The parked GT runs this in the
+  /// trap-handler context, so — like <see cref="EmitDbgBacktrace"/> — it allocates nothing, calls
+  /// nothing, and keeps its state in scratch registers and frame slots: a plain bounded byte-copy loop.
+  /// The driver only asks for addresses derived from valid locations (a stack slot, a followed struct
+  /// pointer), and clamps each request to <see cref="DbgReadBufCap"/>; the loop clamps ReadLen to the
+  /// same cap so a driver bug can never write past the buffer. A hardware fault guard for a dangling
+  /// pointer is a documented P4a residual — the MVP does the raw copy.
+  ///
+  /// Written ONCE in the target-neutral builder (like <see cref="EmitDbgBacktrace"/>), so it covers x86
+  /// and arm64 together; unlike the breakpoint patch it needs no W^X flip or single-step, since it only
+  /// reads memory and writes the segment.
+  /// </summary>
+  private void EmitDbgReadMem() {
+    _b.FunctionStart("__dbg_read_mem", 0, 0x40);
+
+    var lenOkLabel = UniqueLabel("dbg_read_len_ok");
+    var copyLabel = UniqueLabel("dbg_read_copy");
+    var copyDoneLabel = UniqueLabel("dbg_read_copy_done");
+    var doneLabel = UniqueLabel("dbg_read_done");
+
+    // Frame slots: 0=base 1=src 2=dst 3=len 4=i. The copy loop contains no Call, so its state lives in
+    // frame slots, matching the backtrace walk's slot discipline.
+    const int slotBase = 0;
+    const int slotSrc = 1;
+    const int slotDst = 2;
+    const int slotLen = 3;
+    const int slotIndex = 4;
+
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: copy nothing
+    _b.StoreLocal(slotBase, VReg.Scratch1);
+
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffCmdArg);   // src = the debuggee address to read
+    _b.StoreLocal(slotSrc, VReg.Scratch2);
+
+    // dst = base + DbgOffReadBuf, computed ONCE. The copy then stores each byte at [dst + i] with a
+    // ZERO displacement: StoreIndirectByte encodes an 8-bit displacement only, so DbgOffReadBuf (0x280)
+    // must NOT be passed as its offset — a large disp there would silently truncate to disp8. Advancing
+    // a base pointer is both correct and the idiomatic copy-loop form.
+    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.AddRegImm(VReg.Scratch2, DbgOffReadBuf);
+    _b.StoreLocal(slotDst, VReg.Scratch2);
+
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch1, DbgOffReadLen);  // len
+
+    // Clamp len to [0, DbgReadBufCap] with an UNSIGNED compare (a negative len reads as a huge value and
+    // is clamped down too), so the copy can never run past the buffer.
+    _b.CmpRegImm(VReg.Scratch3, DbgReadBufCap);
+    _b.JumpIf(Condition.BelowEqual, lenOkLabel);
+    _b.MovRegImm(VReg.Scratch3, DbgReadBufCap);
+    _b.DefineLabel(lenOkLabel);
+    _b.StoreLocal(slotLen, VReg.Scratch3);
+
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(slotIndex, VReg.Scratch0);              // i = 0
+
+    _b.DefineLabel(copyLabel);
+    _b.LoadLocal(VReg.Scratch0, slotIndex);               // i
+    _b.LoadLocal(VReg.Scratch1, slotLen);                 // len
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, copyDoneLabel);       // i >= len (unsigned): done
+
+    _b.LoadLocal(VReg.Scratch1, slotSrc);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);           // src + i
+    _b.LoadIndirectByte(VReg.Scratch2, VReg.Scratch1, 0); // b = [src + i]
+
+    _b.LoadLocal(VReg.Scratch1, slotDst);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);           // dst + i
+    _b.StoreIndirectByte(VReg.Scratch1, 0, VReg.Scratch2); // [dst + i] = b (zero disp: see note above)
+
+    _b.LoadLocal(VReg.Scratch0, slotIndex);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(slotIndex, VReg.Scratch0);              // i++
+    _b.Jump(copyLabel);
+
+    _b.DefineLabel(copyDoneLabel);
+    _b.LoadLocal(VReg.Scratch1, slotBase);
+    _b.MovRegImm(VReg.Scratch2, 1);
+    _b.StoreIndirect(VReg.Scratch1, DbgOffReadStatus, VReg.Scratch2); // status = 1 (copy performed)
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
   /// __dbg_park_loop() — the stop-the-world pause. Spin on the command doorbell (CmdSeq), dispatching
-  /// set-breakpoint / clear-breakpoint / backtrace (and acking each), until the driver sends continue;
-  /// yield the slice between polls so the pause does not peg a core. Reused by the entry stop and the
-  /// breakpoint-hit stop. Returns when continue arrives (or the agent detaches).
+  /// set-breakpoint / clear-breakpoint / backtrace / read-memory (and acking each), until the driver
+  /// sends continue; yield the slice between polls so the pause does not peg a core. Reused by the entry
+  /// stop and the breakpoint-hit stop. Returns when continue arrives (or the agent detaches).
   /// </summary>
   private void EmitDbgParkLoop() {
     _b.FunctionStart("__dbg_park_loop", 0, 0x40);
@@ -718,6 +833,7 @@ public partial class RuntimeEmitter {
     var setLabel = UniqueLabel("dbg_park_set");
     var clearLabel = UniqueLabel("dbg_park_clear");
     var btLabel = UniqueLabel("dbg_park_backtrace");
+    var readLabel = UniqueLabel("dbg_park_read");
     var ackLabel = UniqueLabel("dbg_park_ack");
     var contLabel = UniqueLabel("dbg_park_continue");
     var doneLabel = UniqueLabel("dbg_park_done");
@@ -740,6 +856,8 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Equal, clearLabel);
     _b.CmpRegImm(VReg.Ret, DbgCmdBacktrace);
     _b.JumpIf(Condition.Equal, btLabel);
+    _b.CmpRegImm(VReg.Ret, DbgCmdReadMem);
+    _b.JumpIf(Condition.Equal, readLabel);
     _b.Jump(ackLabel);                                   // unknown command: ack and keep waiting
 
     _b.DefineLabel(setLabel);
@@ -754,6 +872,10 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(btLabel);                             // fill the frame array, then ack (below)
     _b.Call("__dbg_backtrace");
+    _b.Jump(ackLabel);
+
+    _b.DefineLabel(readLabel);                           // fill the read buffer, then ack (below)
+    _b.Call("__dbg_read_mem");
     _b.Jump(ackLabel);
 
     _b.DefineLabel(ackLabel);                            // reload base (a call clobbered it), ack, loop
@@ -824,6 +946,7 @@ public partial class RuntimeEmitter {
     EmitDbgBpOrigOfAddr();
     EmitDbgPublishStop();
     EmitDbgBacktrace();
+    EmitDbgReadMem();
     EmitDbgParkLoop();
     EmitDbgOnBreakpoint();
     EmitDebugAgentInit();

@@ -23,9 +23,11 @@ internal static class MaxonDebugRepl {
   /// A rendered source line: its 1-based number, its text, and whether it is the stopped line.
   private readonly record struct SourceLine(uint Number, string Text, bool IsCurrent);
 
-  /// Everything the two renderers need for one stop: the symbolized location, the source window (empty
-  /// when the file cannot be read), and the symbolized backtrace (carrying its own status).
+  /// Everything the two renderers need for one stop: the raw stop (its FP/PC, which value inspection
+  /// reads locals against), the symbolized location, the source window (empty when the file cannot be
+  /// read), and the symbolized backtrace (carrying its own status).
   private readonly record struct StopReport(
+    MaxonDebugger.StopInfo Stop,
     string ReasonText,
     MaxonDebugger.SymLocation Location,
     string SourcePath,
@@ -106,6 +108,12 @@ internal static class MaxonDebugRepl {
         case DebugCommand.Backtrace:
           DoBacktrace();
           break;
+        case DebugCommand.Print:
+          DoPrint(rest);
+          break;
+        case DebugCommand.Locals:
+          DoLocals();
+          break;
         case DebugCommand.Help:
           PrintHelp();
           break;
@@ -177,12 +185,56 @@ internal static class MaxonDebugRepl {
       RenderBacktraceText(dbg.Backtrace(), Console.Out);
     }
 
+    private void DoPrint(string rest) {
+      if (_stop is not { } report) {
+        Console.Out.WriteLine("Not stopped — run to a breakpoint first.");
+        return;
+      }
+      if (rest.Length == 0) {
+        Console.Out.WriteLine("Usage: print <expr>   (e.g. print person.home.name)");
+        return;
+      }
+      if (MakeValueRenderer(dbg, out var reason) is not { } renderer) {
+        Console.Out.WriteLine($"{reason}.");
+        return;
+      }
+      try {
+        RenderValueText(renderer.Evaluate(report.Stop, rest), Console.Out);
+      } catch (DebuggerException ex) {
+        Console.Out.WriteLine($"print: {ex.Message}.");
+      }
+    }
+
+    private void DoLocals() {
+      if (_stop is not { } report) {
+        Console.Out.WriteLine("Not stopped — run to a breakpoint first.");
+        return;
+      }
+      if (MakeValueRenderer(dbg, out var reason) is not { } renderer) {
+        Console.Out.WriteLine($"{reason}.");
+        return;
+      }
+      try {
+        var values = renderer.Locals(report.Stop);
+        if (values.Count == 0) {
+          Console.Out.WriteLine("  (no named locals with a stack home here)");
+          return;
+        }
+        Console.Out.WriteLine("locals:");
+        foreach (var v in values) RenderValueText(v, Console.Out);
+      } catch (DebuggerException ex) {
+        Console.Out.WriteLine($"locals: {ex.Message}.");
+      }
+    }
+
     private static void PrintHelp() {
       Console.Out.WriteLine("Commands:");
       Console.Out.WriteLine("  break <file>:<line>   (b)   set a breakpoint at a source line");
       Console.Out.WriteLine("  run                   (r)   start the program (continue from entry)");
       Console.Out.WriteLine("  continue              (c)   resume from a breakpoint");
       Console.Out.WriteLine("  backtrace             (bt)  show the stopped call stack");
+      Console.Out.WriteLine("  locals                      list the stopped function's locals with values");
+      Console.Out.WriteLine("  print <expr>          (p)   render a value; dotted paths navigate (person.home.name)");
       Console.Out.WriteLine("  quit                  (q)   end the session");
       Console.Out.WriteLine("On every stop the source line is shown with a → marker, plus a symbolized backtrace.");
     }
@@ -216,9 +268,11 @@ internal static class MaxonDebugRepl {
       }
 
       bool finished = false;
+      // The last stop the target reached, so a later `print`/`locals` knows which parked frame to read.
+      MaxonDebugger.StopInfo? currentStop = null;
       foreach (var command in commands) {
         if (finished) break;
-        RunBatchCommand(dbg, exePath, command, ref finished);
+        RunBatchCommand(dbg, exePath, command, ref finished, ref currentStop);
       }
 
       // Drain any parked state so the target is never left spinning in the stop-the-world loop.
@@ -229,7 +283,8 @@ internal static class MaxonDebugRepl {
     }
   }
 
-  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string commandLine, ref bool finished) {
+  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string commandLine, ref bool finished,
+      ref MaxonDebugger.StopInfo? currentStop) {
     var (command, word, rest) = ParseCommand(commandLine);
     switch (command) {
       case DebugCommand.Empty:
@@ -241,10 +296,16 @@ internal static class MaxonDebugRepl {
       // no prompt so both post continue and await the next event.
       case DebugCommand.Run:
       case DebugCommand.Continue:
-        BatchContinue(dbg, exePath, ref finished);
+        BatchContinue(dbg, exePath, ref finished, ref currentStop);
         break;
       case DebugCommand.Backtrace:
         EmitBacktrace(dbg.Backtrace());
+        break;
+      case DebugCommand.Locals:
+        BatchLocals(dbg, currentStop);
+        break;
+      case DebugCommand.Print:
+        BatchPrint(dbg, rest, currentStop);
         break;
       case DebugCommand.Quit:
         dbg.Terminate();
@@ -285,15 +346,50 @@ internal static class MaxonDebugRepl {
     });
   }
 
-  private static void BatchContinue(MaxonDebugger dbg, string exePath, ref bool finished) {
+  private static void BatchContinue(MaxonDebugger dbg, string exePath, ref bool finished,
+      ref MaxonDebugger.StopInfo? currentStop) {
     if (!dbg.Continue()) { EmitError("the agent did not acknowledge continue"); return; }
 
     if (dbg.WaitForStop(out var stop)) {
+      currentStop = stop;
       EmitStop(BuildStopReport(dbg, exePath, stop));
       return;
     }
+    // Ran to completion: no parked frame to inspect any more.
+    currentStop = null;
     finished = true;
     dbg.WaitForExit(2000);
+  }
+
+  private static void BatchLocals(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
+    if (currentStop is not { } stop) { EmitError("not stopped — run to a breakpoint first"); return; }
+    if (MakeValueRenderer(dbg, out var reason) is not { } renderer) { EmitError(reason); return; }
+    try {
+      var values = renderer.Locals(stop);
+      WriteEvent(w => {
+        w.WriteString("event", "locals");
+        w.WriteStartArray("values");
+        foreach (var v in values) WriteValueObject(w, v);
+        w.WriteEndArray();
+      });
+    } catch (DebuggerException ex) {
+      EmitError(ex.Message);
+    }
+  }
+
+  private static void BatchPrint(MaxonDebugger dbg, string rest, MaxonDebugger.StopInfo? currentStop) {
+    if (currentStop is not { } stop) { EmitError("not stopped — run to a breakpoint first"); return; }
+    if (rest.Length == 0) { EmitError("print needs an expression (e.g. print person.home.name)"); return; }
+    if (MakeValueRenderer(dbg, out var reason) is not { } renderer) { EmitError(reason); return; }
+    try {
+      var value = renderer.Evaluate(stop, rest);
+      WriteEvent(w => {
+        w.WriteString("event", "value");
+        WriteValueBody(w, value);
+      });
+    } catch (DebuggerException ex) {
+      EmitError(ex.Message);
+    }
   }
 
   /// If the target is still parked when the command list ends, continue past any remaining breakpoints
@@ -319,7 +415,7 @@ internal static class MaxonDebugRepl {
     var loc = dbg.Symbolize(stop.PcOffset);
     var (sourcePath, source) = ReadSourceWindow(loc, exePath);
     var backtrace = dbg.Backtrace();
-    return new StopReport(ReasonText(stop.Reason), loc, sourcePath, source, backtrace);
+    return new StopReport(stop, ReasonText(stop.Reason), loc, sourcePath, source, backtrace);
   }
 
   private static (string Path, IReadOnlyList<SourceLine> Lines) ReadSourceWindow(
@@ -492,6 +588,77 @@ internal static class MaxonDebugRepl {
     Console.Out.WriteLine(Encoding.UTF8.GetString(buffer.ToArray()));
   }
 
+  // ---- Shared renderers: values (P4a; reused by print / locals across both faces) ----
+
+  /// The message a pre-v4 binary gets: its agent ack-and-ignores the read-memory command, so value
+  /// inspection is not available until it is rebuilt. Stated ONCE (like <see cref="BacktraceUnavailableReason"/>)
+  /// so the text and JSON faces cannot word "rebuild to enable" differently.
+  private const string ValueInspectionUnsupportedText =
+    "value inspection is not supported by this binary's debug agent (rebuild to enable)";
+
+  /// Why a memory read the renderer needed could not be satisfied, so a failed read surfaces the same
+  /// wording everywhere rather than a bare exception message.
+  private static string ReadMemoryUnavailableText(MaxonDebugger.ReadMemoryStatus status) => status switch {
+    MaxonDebugger.ReadMemoryStatus.UnsupportedByAgent => ValueInspectionUnsupportedText,
+    MaxonDebugger.ReadMemoryStatus.NotAcknowledged => "memory read not acknowledged (the target may have exited)",
+    _ => throw new InvalidOperationException($"Unhandled read-memory status {status}"),
+  };
+
+  /// <summary>
+  /// Build a value renderer over the current session, or return null with <paramref name="unsupportedReason"/>
+  /// set when this binary's agent predates value inspection (control version &lt; DbgReadMemMinVersion) —
+  /// the P3c UnsupportedByAgent gate, checked ONCE here rather than per read. The renderer's memory reads
+  /// go through the version-gated, chunked agent read; a non-Ok read raises a <see cref="DebuggerException"/>
+  /// the surface catches so a partial failure reports honestly instead of showing a guessed value.
+  /// </summary>
+  private static Debug.DbgValueRenderer? MakeValueRenderer(MaxonDebugger dbg, out string unsupportedReason) {
+    if (!dbg.ValueInspectionSupported) {
+      unsupportedReason = ValueInspectionUnsupportedText;
+      return null;
+    }
+    unsupportedReason = "";
+    return new Debug.DbgValueRenderer(dbg.Sidecar!, (addr, len) => {
+      var r = dbg.ReadMemory(addr, len);
+      return r.Status == MaxonDebugger.ReadMemoryStatus.Ok
+        ? r.Data
+        : throw new DebuggerException(ReadMemoryUnavailableText(r.Status));
+    });
+  }
+
+  /// The value-tree TEXT face: one indented line per node (`name (Type) = display`), children nested
+  /// under it. Shared by `print` and `locals` so they render identically.
+  private static void RenderValueText(Debug.DbgValue value, TextWriter w) => RenderValueTextAt(value, w, 1);
+
+  private static void RenderValueTextAt(Debug.DbgValue v, TextWriter w, int indent) {
+    var pad = new string(' ', indent * 2);
+    var type = v.TypeName.Length > 0 ? $" ({v.TypeName})" : "";
+    var ellipsis = v.Truncated ? " …" : "";
+    w.WriteLine($"{pad}{v.Name}{type} = {v.Display}{ellipsis}");
+    foreach (var child in v.Children) RenderValueTextAt(child, w, indent + 1);
+  }
+
+  /// The value-tree JSON face, written as the fields of the current object (the `value` event inlines
+  /// this; a `values[]` element wraps it via <see cref="WriteValueObject"/>). ONE shape, produced once,
+  /// so text and JSON never diverge.
+  private static void WriteValueBody(Utf8JsonWriter w, Debug.DbgValue v) {
+    w.WriteString("name", v.Name);
+    if (v.TypeName.Length > 0) w.WriteString("type", v.TypeName);
+    w.WriteString("kind", v.Kind.ToString());
+    w.WriteString("display", v.Display);
+    if (v.Truncated) w.WriteBoolean("truncated", true);
+    if (v.Children.Count > 0) {
+      w.WriteStartArray("children");
+      foreach (var c in v.Children) WriteValueObject(w, c);
+      w.WriteEndArray();
+    }
+  }
+
+  private static void WriteValueObject(Utf8JsonWriter w, Debug.DbgValue v) {
+    w.WriteStartObject();
+    WriteValueBody(w, v);
+    w.WriteEndObject();
+  }
+
   // ---- Small helpers ----
 
   private static Debug.MxdbgReader? LoadSidecar(string exePath) {
@@ -548,7 +715,7 @@ internal static class MaxonDebugRepl {
 
   /// The canonical commands both faces dispatch on. `Run` and `Continue` are the same MECHANISM
   /// (continue) but stay distinct here so the interactive prompt can word them differently.
-  private enum DebugCommand { Empty, Break, Run, Continue, Backtrace, Help, Quit, Unknown }
+  private enum DebugCommand { Empty, Break, Run, Continue, Backtrace, Print, Locals, Help, Quit, Unknown }
 
   /// The ONE place the command vocabulary (canonical words + aliases) is stated. Both the interactive
   /// REPL and the batch runner classify through this, so adding a P4 command (`step`, `threads`, …)
@@ -562,6 +729,8 @@ internal static class MaxonDebugRepl {
       "run" or "r" => DebugCommand.Run,
       "continue" or "c" => DebugCommand.Continue,
       "backtrace" or "bt" or "where" => DebugCommand.Backtrace,
+      "print" or "p" => DebugCommand.Print,
+      "locals" => DebugCommand.Locals,
       "help" or "?" or "commands" => DebugCommand.Help,
       "quit" or "q" or "exit" => DebugCommand.Quit,
       _ => DebugCommand.Unknown,

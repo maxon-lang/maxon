@@ -1,0 +1,39 @@
+P4a value-inspection gate — reproducible transcript over DebugSamples/values.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/values.maxon
+  maxon debug --batch --commands='break values.maxon:40; run; locals; print person; print person.name; print person.age; print person.active; print person.home; print person.home.name; print person.home.population; print greeting; print missing; print person.bogus' maxon-sharp/DebugSamples/values.exe
+
+WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
+  * The `locals` and `value` event bodies are the P4a subject and are BYTE-STABLE: no heap addresses (a
+    struct renders as "{...}" with its fields as children — displayed as the \u2026 ellipsis), no timing,
+    no paths. The output is newline-delimited JSON; System.Text.Json escapes " ' < > and non-ASCII as
+    \uXXXX, so "hello world" appears as \u0022hello world\u0022, etc.
+  * The `stop`/`backtrace` events carry the source path exactly as it was passed to `maxon build` (the
+    repo-relative `maxon-sharp/DebugSamples/values.maxon` when built from the repo root as shown above;
+    an absolute path if built with one), and two build-specific `.text` offsets (0x258 = the stop PC at
+    values.maxon:40, 0x51 = the entry-stub return address). Those come from P3's breakpoint/backtrace
+    machinery, not P4a, and move only if codegen for `main` moves.
+  * Exit code is 42; the target's own three print calls emit `hello worldAdaPortland` on STDERR in
+    --batch mode (stdout stays a clean JSON channel), so they are not part of this stdout transcript.
+
+Coverage exercised here: String (text + length), a struct rendered as a named-field subtree, a bool
+field (person.active = true), int fields (person.age = 20, population = 650000), a nested struct
+(person.home), dotted path navigation to every leaf, and honest error nodes for an unknown local
+(missing) and an unknown field (person.bogus).
+
+--- EXPECTED --batch STDOUT (newline-delimited JSON, one event per line) ---
+{"event":"breakpoint","action":"set","file":"values.maxon","line":40,"offset":"0x258","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x258","function":"main","file":"maxon-sharp/DebugSamples/values.maxon","line":40,"col":2,"source":[{"line":37,"text":"\tlet person = Person.init(\u0022Ada\u0022, age: 20, active: greeting.isAscii(), home: City.init(\u0022Portland\u0022, population: 650000))","current":false},{"line":38,"text":"","current":false},{"line":39,"text":"\t// Breakpoint target: both locals are initialized and still in scope here.","current":false},{"line":40,"text":"\tprint(greeting)","current":true},{"line":41,"text":"\tprint(person.name)","current":false},{"line":42,"text":"\tprint(person.home.name)","current":false},{"line":43,"text":"","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/values.maxon","line":40,"offset":"0x258"},{"frame":1,"offset":"0x51"}]}
+{"event":"locals","values":[{"name":"greeting","type":"String","kind":"String","display":"\u0022hello world\u0022 (len=11)"},{"name":"person","type":"Person","kind":"Struct","display":"{\u2026}","children":[{"name":"name","type":"String","kind":"String","display":"\u0022Ada\u0022 (len=3)"},{"name":"age","type":"i64","kind":"Primitive","display":"20"},{"name":"active","type":"i1","kind":"Primitive","display":"true"},{"name":"home","type":"City","kind":"Struct","display":"{\u2026}","children":[{"name":"name","type":"String","kind":"String","display":"\u0022Portland\u0022 (len=8)"},{"name":"population","type":"i64","kind":"Primitive","display":"650000"}]}]}]}
+{"event":"value","name":"person","type":"Person","kind":"Struct","display":"{\u2026}","children":[{"name":"name","type":"String","kind":"String","display":"\u0022Ada\u0022 (len=3)"},{"name":"age","type":"i64","kind":"Primitive","display":"20"},{"name":"active","type":"i1","kind":"Primitive","display":"true"},{"name":"home","type":"City","kind":"Struct","display":"{\u2026}","children":[{"name":"name","type":"String","kind":"String","display":"\u0022Portland\u0022 (len=8)"},{"name":"population","type":"i64","kind":"Primitive","display":"650000"}]}]}
+{"event":"value","name":"name","type":"String","kind":"String","display":"\u0022Ada\u0022 (len=3)"}
+{"event":"value","name":"age","type":"i64","kind":"Primitive","display":"20"}
+{"event":"value","name":"active","type":"i1","kind":"Primitive","display":"true"}
+{"event":"value","name":"home","type":"City","kind":"Struct","display":"{\u2026}","children":[{"name":"name","type":"String","kind":"String","display":"\u0022Portland\u0022 (len=8)"},{"name":"population","type":"i64","kind":"Primitive","display":"650000"}]}
+{"event":"value","name":"name","type":"String","kind":"String","display":"\u0022Portland\u0022 (len=8)"}
+{"event":"value","name":"population","type":"i64","kind":"Primitive","display":"650000"}
+{"event":"value","name":"greeting","type":"String","kind":"String","display":"\u0022hello world\u0022 (len=11)"}
+{"event":"value","name":"missing","kind":"Primitive","display":"\u003Cno local named \u0027missing\u0027 here\u003E"}
+{"event":"value","name":"person.bogus","kind":"Primitive","display":"\u003Cno field \u0027bogus\u0027 in Person\u003E"}
+{"event":"exit","code":42}

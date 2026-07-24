@@ -1,0 +1,45 @@
+// P4a value-inspection gate sample. Deterministic: fixed literals, a distinct exit code (42).
+// Before the breakpoint line, `main` initializes one of every kind the value renderer covers: a plain
+// int (count), a String (greeting), and a struct (person) whose named fields include a String (name),
+// an int (age), a bool (active), and a nested struct (home) with its own String + int — so `locals`
+// and dotted `print` path navigation both have real values to walk.
+
+typealias Age = int(0 to 150)
+typealias Population = int(0 to u64.max)
+typealias ExitCode = int(0 to 255)
+
+type City
+	export var name as String
+	export var population as Population
+
+	static function init(name String, population Population) returns Self
+		return Self{name: name, population: population}
+	end 'init'
+end 'City'
+
+type Person
+	export var name as String
+	export var age as Age
+	export var active as bool
+	export var home as City
+
+	static function init(name String, age Age, active bool, home City) returns Self
+		return Self{name: name, age: age, active: active, home: home}
+	end 'init'
+end 'Person'
+
+function main() returns ExitCode
+	// The scalars ride struct FIELDS (person.age / person.active / person.home.population), not standalone
+	// locals: whether a scalar LOCAL gets a stack home is the register allocator's choice, so it may not
+	// appear in `locals` — a MANAGED local (String/struct) always does, and a field always has a memory
+	// home. `greeting.isAscii()` is a runtime call, so `active` is a real bool, not a folded constant.
+	let greeting = "hello world"
+	let person = Person.init("Ada", age: 20, active: greeting.isAscii(), home: City.init("Portland", population: 650000))
+
+	// Breakpoint target: both locals are initialized and still in scope here.
+	print(greeting)
+	print(person.name)
+	print(person.home.name)
+
+	return 42
+end 'main'

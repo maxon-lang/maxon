@@ -203,14 +203,37 @@ internal sealed class MaxonDebugger : IDisposable {
   }
 
   /// <summary>
-  /// Post one command to the agent's mailbox and wait for its ack. Writes Cmd + CmdArg, then (after a
-  /// full barrier, matching the agent's release/acquire on CmdSeq) bumps CmdSeq to a fresh sequence and
-  /// waits for AckSeq to reach it. Returns false on timeout or target exit — except a Continue the
-  /// target races to exit after, which is treated as done (the program legitimately ran to completion).
+  /// Post one command to the agent's mailbox and wait for its ack. Writes Cmd + CmdArg, then rings the
+  /// doorbell and awaits the ack. Returns false on timeout or target exit — except a Continue the target
+  /// races to exit after, which is treated as done (the program legitimately ran to completion).
   /// </summary>
   private bool PostCommand(long cmd, long arg) {
     _accessor.Write(RuntimeEmitter.DbgOffCmd, cmd);
     _accessor.Write(RuntimeEmitter.DbgOffCmdArg, arg);
+    return RingDoorbellAndAwaitAck(cmd);
+  }
+
+  /// <summary>
+  /// Post a read-memory command: Cmd = ReadMem, CmdArg = addr, ReadLen = len (the ONE command that
+  /// takes a second arg), then ring the doorbell and await the ack. Split from <see cref="PostCommand"/>
+  /// only because it writes that extra field; the doorbell + ack discipline is shared so the two cannot
+  /// drift on how a command is published or awaited.
+  /// </summary>
+  private bool PostReadChunk(ulong addr, int len) {
+    _accessor.Write(RuntimeEmitter.DbgOffCmd, RuntimeEmitter.DbgCmdReadMem);
+    _accessor.Write(RuntimeEmitter.DbgOffCmdArg, (long)addr);
+    _accessor.Write(RuntimeEmitter.DbgOffReadLen, len);
+    return RingDoorbellAndAwaitAck(RuntimeEmitter.DbgCmdReadMem);
+  }
+
+  /// <summary>
+  /// Ring the command doorbell for a command whose fields are already written, and wait for its ack.
+  /// After a full barrier (matching the agent's release/acquire on CmdSeq) it bumps CmdSeq to a fresh
+  /// sequence and waits for AckSeq to reach it. Returns false on timeout or target exit — except a
+  /// Continue the target races to exit after, treated as done. Shared by every mailbox poster so the
+  /// publish-and-await protocol lives in exactly one place.
+  /// </summary>
+  private bool RingDoorbellAndAwaitAck(long cmd) {
     Thread.MemoryBarrier();
     _cmdSeq += 1;
     _accessor.Write(RuntimeEmitter.DbgOffCmdSeq, _cmdSeq);
@@ -223,6 +246,56 @@ internal sealed class MaxonDebugger : IDisposable {
       Thread.Yield();
     }
     return false;
+  }
+
+  // ---- Memory reads (value inspection) ----
+
+  /// Why a memory read produced no bytes, kept DISTINCT (as <see cref="BacktraceStatus"/> is) so a
+  /// surface never reports a command that failed to ack as "rebuild to enable" — the two need different
+  /// user actions.
+  public enum ReadMemoryStatus {
+    /// The agent filled the result buffer; <c>Data</c> holds the requested bytes.
+    Ok,
+    /// The agent predates the read-memory command (control version &lt; DbgReadMemMinVersion); a v3 agent
+    /// would ack-and-ignore, so its buffer bytes must NOT be read as the debuggee's memory.
+    UnsupportedByAgent,
+    /// The command was posted but never acked (timeout / target exited mid-request).
+    NotAcknowledged,
+  }
+
+  public readonly record struct ReadMemoryResult(ReadMemoryStatus Status, byte[] Data);
+
+  /// True when this binary's agent understands value inspection (control version ≥ DbgReadMemMinVersion).
+  /// A surface checks this once before rendering values, so a pre-v4 binary gets one clean "unsupported"
+  /// message rather than a per-read failure.
+  public bool ValueInspectionSupported => AgentVersion >= RuntimeEmitter.DbgReadMemMinVersion;
+
+  /// <summary>
+  /// Read <paramref name="len"/> bytes of the debuggee's memory at <paramref name="addr"/>, chunked into
+  /// ≤ <see cref="RuntimeEmitter.DbgReadBufCap"/> reads through the parked agent. Gated on the agent
+  /// version: a v3 agent would ack the unknown command without filling the buffer, so its bytes are
+  /// refused (<see cref="ReadMemoryStatus.UnsupportedByAgent"/>) rather than read as real memory — the
+  /// P3c UnsupportedByAgent lesson. The renderer only asks for addresses derived from valid locations
+  /// (a stack slot, a followed non-null pointer), so a raw copy is safe for the MVP.
+  /// </summary>
+  public ReadMemoryResult ReadMemory(ulong addr, int len) {
+    if (len < 0) throw new ArgumentOutOfRangeException(nameof(len));
+    if (!ValueInspectionSupported) return new ReadMemoryResult(ReadMemoryStatus.UnsupportedByAgent, []);
+
+    var buf = new byte[len];
+    int done = 0;
+    while (done < len) {
+      int chunk = Math.Min(len - done, RuntimeEmitter.DbgReadBufCap);
+      if (!PostReadChunk(addr + (ulong)done, chunk))
+        return new ReadMemoryResult(ReadMemoryStatus.NotAcknowledged, []);
+
+      // The park loop's ack store-release published the buffer; acquire it before copying out.
+      Thread.MemoryBarrier();
+      for (int i = 0; i < chunk; i++)
+        buf[done + i] = _accessor.ReadByte(RuntimeEmitter.DbgOffReadBuf + i);
+      done += chunk;
+    }
+    return new ReadMemoryResult(ReadMemoryStatus.Ok, buf);
   }
 
   // ---- Stop events ----
