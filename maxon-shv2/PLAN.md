@@ -1893,11 +1893,12 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   pipeline, so `pruneDeadBlockArgs`/`elimTrivialBlockArgs`/`foldConstOperands` (~9.6% of rung-5 allocs) still run over
   functions DFE will delete; moving it earlier is blocked because the runtime installers append functions after the
   pipeline and an early run would need `fnRefThunkTargets` as a second root set.
-- ⚠ **`verify-warm-rebuild`'s INVALIDATION property is DEAD and has been** (found by the DFE rung, pre-existing): its
-  synthetic probe edits use `__`-prefixed identifiers (`__warmRebuildProbe*`, `VerifyWarmRebuild.maxon:264-302`) and
-  the parser rejects those with **E2051**, so the gate can never report `PASS invalidation` — it reports *"a synthetic
-  probe edit made &lt;file&gt; stop parsing"*. Its DETERMINISM and CACHE properties do pass. **A gate that cannot fire is
-  worthless** — fix the probe to use legal identifiers.
+- ✅ **`verify-warm-rebuild`'s INVALIDATION property — FIXED at step (3) 2026-07-24** (was DEAD, found by the DFE
+  rung, pre-existing): its synthetic probe edits used `__`-prefixed identifiers (`__warmRebuildProbe*`,
+  `VerifyWarmRebuild.maxon:264-302`) and the parser rejects those with **E2051**, so the gate could never report `PASS
+  invalidation` — it reported *"a synthetic probe edit made &lt;file&gt; stop parsing"*. Its DETERMINISM and CACHE
+  properties always passed. **A gate that cannot fire is worthless** — the probe now uses legal identifiers (no `__`
+  prefix), E2051 no longer fires, and the gate reports `PASS invalidation`.
 - **✅ STEP (2) `__Builtins.*` RECOGNITION — CLOSED 2026-07-24** (main `1c36c1ba8`; feat `233c01045`; 1513→**1529/0**
   x64 (1525 on the branch + upstream Set-B), wasm **1366/0**). A `__Builtins.<name>` recognizer as a SEPARATE arm of
   the bare-name builtin table in `Parser.maxon`'s `parseCallNamed`, gated behind one `bytesStartWith(callee,
@@ -1930,6 +1931,31 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   recognizer itself allocates nothing. **⭐⭐ HEADLINE (independently re-verified): `stdlib/Clock.maxon` compiles with
   shv2 UNMODIFIED** — byte-identical copy + a driver over all 5 API surfaces builds + runs, printing a correct current
   date. **⇒ STEP (3) — the whitelist loader with Clock as entry #1 — IS READY.**
+- **✅ STEP (3) STDLIB WHITELIST LOADER — CLOSED 2026-07-24, COMPLETING THE CHAIN** (feat `95bb62c4b` + perf
+  `4fc57f111` + review `17c44abd0`; merged-tree x64 **1552/0**, wasm **1367/0**, no leak, `--workers=1==12`
+  byte-identical). `Compiler/StdlibWhitelist.maxon`: `whitelistedStdlibRelativePaths()` returns
+  `["stdlib/Clock.maxon"]`; `locateStdlibDir()` walks up from `Process.executablePath()`'s dir (the bootstrap's
+  exe-dir walk, NOT v1's cwd walk, which fails for a program compiled in a temp dir); `loadStdlibWhitelist(project)`
+  prepends each listed path as an ORDINARY source via `loadOneSourceFile`, so Clock rides the normal
+  lex→parse→lower→DFE path with no special-casing. **BYTE-NEUTRAL for every program that does not use a whitelisted
+  module:** Clock is merged but unreachable-from-`main`, so DFE prunes all 7 of its functions before the backend and
+  the emitted PE/wasm is byte-identical (ZERO fragment M across the whole suite) — which is the property that lets the
+  whitelist grow one path at a time without disturbing anything already green. ⚠ **BRIEF PREMISE INCOMPLETE (fixed):**
+  "DFE prunes unused Clock ⇒ byte-identical" was wrong on its own — `scanRuntimeUsage`/`checkCalls` run BEFORE DFE and
+  dragged Clock's scheduler cone into every program; fixed with `whitelistSkipSet` (whitelisted-AND-unreachable-from-
+  `main`), which those two passes skip, restoring byte-neutrality. **⭐ OPTIMIZER caught a false scale claim:** the
+  implementer's "flat ~+0.5 MB" was actually DOUBLING every rung (622 K→20.9 M) — Clock drops from the MIDDLE of a
+  runtime-installing compile, shifting a survivor and forcing `valueOrigins.remapFunctionIndices`'s O(program) column
+  rebuild on EVERY such compile; fixed by compacting `valueOrigins` IN PLACE (−20.5 MB rung5). **⭐⭐ REVIEW caught the
+  mechanism's last growing term was DEAD CODE:** `moduleReferencesWhitelisted`'s short-circuit NEVER fired — it scanned
+  the whitelisted functions' OWN bodies, whose internal `Clock.elapsedMs`→`Clock.nowMs` edge always matched and
+  returned true, so the O(functions) reachability MAP was rebuilt on every compile; fixed by skipping whitelisted
+  bodies (the only edge that counts is the first crossing INTO the whitelist from a non-whitelisted caller), which
+  removes −16 K…−246 K x2.0/rung and leaves the non-Clock corpus with NO growing whitelist term at all — a FLAT
+  per-compile constant (Clock's DFE-pruned lex+parse+lower). Headline: `stdlib/Clock.maxon`, UNMODIFIED, now compiles
+  as part of every build and a driver reads a correct current date (exit=today). ⇒ **the whitelist now widens by
+  appending ONE path** (`Sleep.maxon` measured as the next-closest: one `__Builtins.sleep`, and `__gt_sleep` already
+  exists). **This CLOSES the user-directed stdlib-whitelist chain (steps 1→2→3).**
 - Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
 lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
 intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
