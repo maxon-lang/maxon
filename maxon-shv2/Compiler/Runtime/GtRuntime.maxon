@@ -143,6 +143,17 @@ export let IoParkedAbandoned = 2
 export let IoParkedDrainDone = 3
 export let IoParkedNormalDone = 4
 
+// ⭐ **"THE READING GT OWNS ITS IO PIPE" MARKER (P1.5 slice 1b).** Set at PARK time by `__gt_subp_yield_read`:
+// 1 for a ONE-SHOT read (`__gt_io_read`'s per-GT pipe, which the GT owns), 0 for a STREAMING read
+// (`__gt_subp_read_line`'s TABLE-owned pipe, shared across the handle's reads). The `__gt_promise_drop` IO cancel
+// arm reads it to decide whether to `CloseHandle` the read pipe: a dropped one-shot read closes it (the resume
+// that would have never runs), a dropped STREAMING read must NOT (the pipe stays open for the next
+// `subpReadLine(h)`; `subpRelease` is its sole closer). A DEDICATED field, not an `ioParked` state, because the
+// completion thread overwrites `ioParked` to `IoParkedNormalDone` on a read that finished just before the drop —
+// erasing any owned/shared bit encoded there, while this survives. 0xB0 is shv2-divergent territory already (the
+// inline arg region, which this pushes to 0xB8); the port-critical 0x00–0xA8 header is untouched.
+export let GtOffIoOwnsPipe = 0xB0
+
 // ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
 // so a spawn needs NO separate `__slab_alloc`'d argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a
 // SELF-POINTER `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer exactly as it read a
@@ -151,14 +162,15 @@ export let IoParkedNormalDone = 4
 // the arg buffer a separate `__slab_alloc` and `__slab_free` it at run-completion — because shv2's slab has NO
 // free path (`MmRuntime.__slab_alloc` is a pure bump allocator). Inlining reclaims the arg region for free when
 // the struct is recycled onto the free-list, and it is SAFE because the region is DEAD by completion: the
-// trampoline reads all MaxAsyncArgs slots into registers at run-start and never touches them again. Offset 0xB0
-// is the current end of the reserved header, so every existing field (0x00–0xA8) stays byte-identical to the
-// authoritative GtLayout and the port property is preserved.
-export let GtOffArgInline = 0xB0
+// trampoline reads all MaxAsyncArgs slots into registers at run-start and never touches them again. Offset 0xB8
+// follows `io_owns_pipe@0xB0`, so every existing field (0x00–0xA8) stays byte-identical to the authoritative
+// GtLayout and the port property is preserved (the trampoline reads the arg region through the 0x48 argBuf
+// self-pointer, never a hardcoded offset, so shifting the inline region moves no hand-assembled read).
+export let GtOffArgInline = 0xB8
 
-// 0xE0 = 224 bytes = 0xB0 header + ArgBufBytes (0x30) inline arg region. The header words 0x60–0xA0 remain
-// RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields), slab-zeroed and unused until the
-// subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
+// 0xE8 = 232 bytes = 0xB8 header (through io_owns_pipe@0xB0) + ArgBufBytes (0x30) inline arg region. The header
+// words 0x60–0xA0 remain RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields). Must be a
+// multiple of 8 (whole-word fields).
 export let GtStructSize = GtOffArgInline + ArgBufBytes
 
 // --- GT status ---
@@ -1866,9 +1878,13 @@ end 'buildGtPromiseDrop'
 //     microseconds — with the lock RELEASED so the completion thread can acquire it), proving the completion thread
 //     is done, then cleans up + frees.
 //
-// Cleanup on both paths: `CloseHandle(readEnd)` (the read end was recorded in `io_handle@0x80` at park) and
-// `__io_pending--` (the reader's park incremented it and its resume never runs). The lock-serialized `ioParked`
-// read here versus the completion thread's `ioParked` read there is what makes the two decisions mutually exclusive.
+// Cleanup on both paths: `__io_pending--` (the reader's park incremented it and its resume never runs) and —
+// ONLY when `gt.io_owns_pipe` is 1 — `CloseHandle(readEnd)`. A ONE-SHOT read (`__gt_io_read`) owns its per-GT
+// pipe, so the drop closes it (the resume that would have never runs); a STREAMING read (`__gt_subp_read_line`)
+// reads a TABLE-owned pipe shared across the handle's reads, so the drop must NOT close it — it stays open for
+// the next `subpReadLine(h)` (CancelIoEx cancels only the pending op, consuming nothing), and `subpRelease` is
+// its sole closer (no double-close). The lock-serialized `ioParked` read here versus the completion thread's
+// `ioParked` read there is what makes the free decision mutually exclusive.
 function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, cont IrBlock)
 	var ioAbandon = module.addBlock(func, label: b"ioabandon")
 	var ioDrainSpin = module.addBlock(func, label: b"iodrainspin")
@@ -1876,6 +1892,8 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	var ioAlreadyFired = module.addBlock(func, label: b"ioalreadyfired")
 	var ioAlreadyUnlock = module.addBlock(func, label: b"ioalreadyunlock")
 	var ioCleanup = module.addBlock(func, label: b"iocleanup")
+	var ioClosePipe = module.addBlock(func, label: b"ioclosepipe")
+	var ioPendingDec = module.addBlock(func, label: b"iopendingdec")
 
 	// startBlock: readEnd = gt.io_handle ; ovl = gt + GtOffOverlapped ; Enter __io_lock ; branch on ioParked == 4.
 	let readEnd = ids.mint()
@@ -1924,18 +1942,31 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	module.appendOp(ioAlreadyUnlock, op: StdOp.osLockLeave(lockPtr))
 	module.setTerminator(ioAlreadyUnlock, op: StdOp.branch(ioCleanup.id))
 
-	// ioCleanup: CloseHandle(readEnd) ; __io_pending-- ; → cont (freeStack). Shared by both paths.
-	module.appendOp(ioCleanup, op: StdOp.osCloseHandle(readEnd))
+	// ioCleanup: close the read end ONLY if the GT owns the pipe (a one-shot read); a streaming read's pipe is
+	// table-owned and left open for `subpRelease`. Shared by both the abandon and already-fired paths.
+	let ownsPipe = ids.mint()
+	module.appendOp(ioCleanup, op: StdOp.loadIndirect(ownsPipe, addrId: gt, offset: GtOffIoOwnsPipe, valueType: StdType.i64))
+	let zeroOwns = ids.mint()
+	module.appendOp(ioCleanup, op: StdOp.const(zeroOwns, value: 0, valueType: StdType.i64))
+	let isOwned = ids.mint()
+	module.appendOp(ioCleanup, op: StdOp.cmp(isOwned, lhs: ownsPipe, rhs: zeroOwns, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.setTerminator(ioCleanup, op: StdOp.condBranch(isOwned, thenBlockId: ioClosePipe.id, elseBlockId: ioPendingDec.id))
+
+	// ioClosePipe: the one-shot per-GT pipe — close it (the resume that would have never runs).
+	module.appendOp(ioClosePipe, op: StdOp.osCloseHandle(readEnd))
+	module.setTerminator(ioClosePipe, op: StdOp.branch(ioPendingDec.id))
+
+	// ioPendingDec: __io_pending-- ; → cont (freeStack). Runs for owned and shared alike.
 	let pendingAddr = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.globalAddr(pendingAddr, label: IoPendingLabel))
+	module.appendOp(ioPendingDec, op: StdOp.globalAddr(pendingAddr, label: IoPendingLabel))
 	let pendingCur = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.loadIndirect(pendingCur, addrId: pendingAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(ioPendingDec, op: StdOp.loadIndirect(pendingCur, addrId: pendingAddr, offset: 0, valueType: StdType.i64))
 	let pendingOneConst = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.const(pendingOneConst, value: 1, valueType: StdType.i64))
+	module.appendOp(ioPendingDec, op: StdOp.const(pendingOneConst, value: 1, valueType: StdType.i64))
 	let pendingLowered = ids.mint()
-	module.appendOp(ioCleanup, op: StdOp.binOp(pendingLowered, lhs: pendingCur, rhs: pendingOneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(ioCleanup, op: StdOp.storeIndirect(pendingAddr, offset: 0, valueId: pendingLowered, valueType: StdType.i64))
-	module.setTerminator(ioCleanup, op: StdOp.branch(cont.id))
+	module.appendOp(ioPendingDec, op: StdOp.binOp(pendingLowered, lhs: pendingCur, rhs: pendingOneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(ioPendingDec, op: StdOp.storeIndirect(pendingAddr, offset: 0, valueId: pendingLowered, valueType: StdType.i64))
+	module.setTerminator(ioPendingDec, op: StdOp.branch(cont.id))
 end 'emitGtIoCancelArm'
 
 
@@ -3057,8 +3088,9 @@ function buildGtIoRead(module StdModule)
 	// handshake the streaming reader also uses (one copy of the completion-thread coordination). It returns the byte
 	// count, 0 on EOF/error (the slice-1a probe treats an environment error as EOF). The probe keeps its per-CALL
 	// `__slab_alloc` (its accepted debt); the streaming API allocs the buffer per HANDLE and reuses it across reads.
+	let ownsPipeConst = emitConst(module, block: spawnOk, value: 1, ids: ids)
 	let bytesRead = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.call(bytesRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr)))
+	module.appendOp(spawnOk, op: StdOp.call(bytesRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr, fifth: ownsPipeConst)))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 	module.setTerminator(spawnOk, op: StdOp.ret(bytesRead))
 
@@ -3170,14 +3202,14 @@ end 'emitEnsureSlotBuffer'
 // (ERROR_BROKEN_PIPE = EOF, or a real error) return 0. Does NOT close `readEnd` — the caller owns the handle's
 // lifetime (the probe closes its one-shot pipe after; the streaming reader keeps its table-owned pipe).
 //
-// ⚠ It stores `readEnd` into `gt.io_handle` and sets `ioParked`, so a promise DROPPED while parked here runs the
-// existing `__gt_promise_drop` IO cancel arm (CancelIoEx + CloseHandle of `readEnd`). For the probe's one-shot pipe
-// that is correct; for a STREAMING read the pipe is table-owned, so dropping a streaming reader mid-read is out of
-// this slice's scope (the acceptance reads on GT0 or an AWAITED GT, never a dropped one) — a distinct concurrency
-// shape (the cancel arm would need to distinguish a shared-handle read) left for a follow-up.
+// ⚠ It stores `readEnd` into `gt.io_handle`, sets `ioParked`, AND records `ownsPipe` in `gt.io_owns_pipe` — so a
+// promise DROPPED while parked here runs `__gt_promise_drop`'s IO cancel arm, which CancelIoEx+drains for both but
+// only `CloseHandle`s the read pipe when `ownsPipe` is 1 (the one-shot per-GT pipe). A STREAMING read passes
+// `ownsPipe = 0`: the cancel arm leaves its TABLE-owned pipe open (usable for the next `subpReadLine(h)`), and
+// `subpRelease` is the sole closer — so dropping a streaming reader mid-read is CORRECT, not out of scope.
 function buildSubpYieldRead(module StdModule)
-	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(4)
+	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(5)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var syncDone = module.addBlock(func, label: b"syncdone")
@@ -3188,11 +3220,12 @@ function buildSubpYieldRead(module StdModule)
 	var parkSwitch = module.addBlock(func, label: b"parkswitch")
 	var resume = module.addBlock(func, label: b"resume")
 
-	emitParams(module, block: entry, count: 4)
+	emitParams(module, block: entry, count: 5)
 	let readEnd = 0 as ValueId
 	let buf = 1 as ValueId
 	let cap = 2 as ValueId
 	let bytesOutPtr = 3 as ValueId
+	let ownsPipe = 4 as ValueId
 
 	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
 	let curAddr = ids.mint()
@@ -3230,6 +3263,8 @@ function buildSubpYieldRead(module StdModule)
 	let waitingConst = emitConst(module, block: park, value: GtStatusWaiting, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoHandle, valueId: readEnd, valueType: StdType.i64))
+	// Record pipe ownership for the drop cancel arm's CloseHandle decision (1 = one-shot/owned, 0 = streaming/table).
+	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoOwnsPipe, valueId: ownsPipe, valueType: StdType.i64))
 	let parkedConst = emitConst(module, block: park, value: IoParkedInFlight, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: parkedConst, valueType: StdType.i64))
 	let waiter = emitLoadField(module, block: park, record: selfGt, offset: GtOffWaiter, ids: ids)
@@ -3697,8 +3732,11 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let bufLenD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let readDst = emitBin(module, block: doRead, a: bufPtrD, b: bufLenD, opcode: StdBinOpcode.add, ids: ids)
 	let chunkConst2 = emitConst(module, block: doRead, value: SubpReadChunkBytes as ParsedInt, ids: ids)
+	// ownsPipe = 0: the read pipe is TABLE-owned, so a promise dropped mid-read must NOT close it — the cancel arm
+	// cancels+drains, leaves it open for the next `subpReadLine(h)`, and `subpRelease` closes it.
+	let sharedPipeConst = emitConst(module, block: doRead, value: 0, ids: ids)
 	let nRead = ids.mint()
-	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr)))
+	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fiveArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr, fifth: sharedPipeConst)))
 	let zeroD = emitConst(module, block: doRead, value: 0, ids: ids)
 	let isZero = emitCmp(module, block: doRead, a: nRead, b: zeroD, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(doRead, op: StdOp.condBranch(isZero, thenBlockId: setEof.id, elseBlockId: didRead.id))

@@ -172,6 +172,41 @@ end 'main'
 23
 ```
 
+<!-- test: streaming-subprocess.drop-reader-then-reread -->
+<!-- targets: x64-windows -->
+A streaming reader is DROPPED mid-read, then the SAME handle is re-read and must still work. `reader(h)` runs
+`subpReadLine(h)` in an `async` GT; the child (`ping -n 3` then `echo hi`) delays ~2 s, so the reader parks on
+the overlapped read with no data. `dropIt` sleeps 200 ms (the reader is parked) then returns, DROPPING the
+un-awaited promise. Because the read pipe is TABLE-owned (not the GT's), the drop's cancel arm CancelIoEx +
+drains but must NOT close it — so the follow-up `subpReadLine(h)` on the same handle re-issues a fresh read and
+gets `hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). Before the ownership
+marker, the drop closed the shared pipe and this returned 0 (EOF forever).
+```maxon
+function reader(h int) returns int
+	let line = subpReadLine(h)
+	return line.byteLength()
+end 'reader'
+
+function dropIt(h int) returns int
+	let r = async reader(h)
+	sleep(200)
+	return 0
+end 'dropIt'
+
+function main() returns ExitCode
+	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
+	let d = dropIt(h)
+	let line = subpReadLine(h)
+	let n = line.byteLength()
+	let code = subpWait(h)
+	subpRelease(h)
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
 <!-- test: streaming-subprocess.spawn-release-loop -->
 <!-- targets: x64-windows -->
 Twelve spawn+read+release cycles reuse the same table slot (and its line buffer) each iteration, proving no
