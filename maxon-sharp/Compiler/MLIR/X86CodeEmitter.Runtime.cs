@@ -8260,7 +8260,7 @@ public partial class X86CodeEmitter {
     EmitGlobalLoadReg(X86Register.Rax, DbgStepModeGlobal);
     EmitMovRegImm(X86Register.Rdx, DbgStepModeUser);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
-    EmitJcc("e", "__dbg_th_arm_userstep");               // ctx is spilled at [rbp-0x10]
+    EmitJcc("e", "__dbg_th_arm_stepover");               // ctx is spilled at [rbp-0x10]
     EmitMovRegImm(X86Register.Rax, VehContinueExecution);
     EmitRuntimeFunctionEnd();
 
@@ -8318,18 +8318,28 @@ public partial class X86CodeEmitter {
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, ContextOffRsp);   // arg1 = sp
     EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, ContextOffRbp);    // arg2 = fp
     EmitCallRuntimeLabel("__dbg_on_step");              // publish reason=step + park until next command
-    // Park returned. If the next command is also a step, arm the next single-step; else resume (TF clear).
+    // Park returned. If the next command is also a step, arm the next single-step. On continue, if a
+    // breakpoint is armed at Rip — the user STEPPED onto it, so the bp-HIT path's step-over never ran
+    // (step_addr is 0) — step over it exactly as the bp-hit path does; a plain resume would re-trap
+    // immediately on the 0xCC still sitting here (a double-report at the same PC). Otherwise resume.
     EmitGlobalLoadReg(X86Register.Rax, DbgStepModeGlobal);
     EmitMovRegImm(X86Register.Rdx, DbgStepModeUser);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
-    EmitJcc("e", "__dbg_th_arm_userstep");
+    EmitJcc("e", "__dbg_th_arm_stepover");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // ctx
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, ContextOffRip);   // arg0 = Rip
+    EmitCallRuntimeLabel("__dbg_bp_slot");              // RAX = idx (-1 if no bp at Rip)
+    EmitCmpRegImm(X86Register.Rax, 0);
+    EmitJcc("ge", "__dbg_th_arm_stepover");             // bp at Rip → step over it (mode stays OverBp)
     EmitMovRegImm(X86Register.Rax, VehContinueExecution);
     EmitRuntimeFunctionEnd();
 
-    // Arm the next user single-step from the current ctx.Rip: disarm any breakpoint sitting there (so the
-    // real instruction runs, not the trap) and set EFLAGS.TF. ctx is spilled at [rbp-0x10]. Shared by the
-    // post-park re-step and the (defensive) bp-cleared-mid-step path.
-    DefineLabel("__dbg_th_arm_userstep");
+    // Arm a single-step-OVER from the current ctx.Rip: disarm any breakpoint sitting there (so the real
+    // instruction runs, not the trap) and set EFLAGS.TF; the follow-up single-step re-arms it and then,
+    // per __dbg_step_mode, either publishes a step stop (User) or resumes silently (OverBp). ctx is
+    // spilled at [rbp-0x10]. Shared by three callers: the post-park re-step (User), a continue that
+    // resumes onto a breakpoint (OverBp), and the (defensive) bp-cleared-mid-step path (User).
+    DefineLabel("__dbg_th_arm_stepover");
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);            // ctx
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, ContextOffRip);  // arg0 = current pc (abs)
     EmitCallRuntimeLabel("__dbg_prepare_step_at");

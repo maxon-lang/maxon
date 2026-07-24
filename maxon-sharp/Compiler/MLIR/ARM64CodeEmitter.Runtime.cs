@@ -7802,15 +7802,26 @@ public partial class ARM64CodeEmitter {
     EmitLoadIndirect(ARM64Register.X1, ARM64Register.X4, McontextOffSsSp, 8);   // arg1 = sp
     EmitLoadIndirect(ARM64Register.X2, ARM64Register.X4, McontextOffSsFp, 8);   // arg2 = fp
     EmitBranchLink("__dbg_on_step");                    // publish reason=step + park until next command
-    // Park returned. If the next command is a step, plant the next single-step; else resume.
+    // Park returned. If the next command is a step, plant the next single-step. On continue, if a bp is
+    // armed at newPc — the user STEPPED onto it, so the bp-hit path's step-over never ran (step_addr is
+    // 0) — step over it the same way; a plain resume would re-trap on the BRK still sitting here (a
+    // double-report at the same PC).
     EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepModeGlobal);
     EmitMovRegImm(ARM64Register.X1, Runtime.RuntimeEmitter.DbgStepModeUser);
     EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitBranchCond(ARM64ConditionCode.Ne, "__dbg_th_userstep_resume");
-    // prepare_step_at(newPc): disarm a bp at newPc if present, set step_addr for the post-step re-arm.
+    EmitBranchCond(ARM64ConditionCode.Eq, "__dbg_th_userstep_plant");
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitBranchLink("__dbg_bp_slot");                    // X0 = idx (-1 if no bp at newPc)
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, "__dbg_th_userstep_resume");   // no bp: resume
+
+    // Plant a single-step-OVER from newPc: disarm any bp there (prepare_step_at sets step_addr for the
+    // post-step re-arm), then plant a temp bp at newPc + 4 (arm64 has no hardware trap flag). The
+    // follow-up temp-bp hit re-arms and, per __dbg_step_mode, publishes (User) or resumes silently
+    // (OverBp). Shared by the post-park re-step and a continue that resumes onto a breakpoint.
+    DefineLabel("__dbg_th_userstep_plant");
     EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
     EmitBranchLink("__dbg_prepare_step_at");
-    // Plant a temp bp at newPc + 4 to single-step the next instruction (arm64 has no hardware trap flag).
     EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, DbgBreakpointPatchLen, isAdd: true);
     EmitStoreToSp(slotTemp, ARM64Register.X0);
