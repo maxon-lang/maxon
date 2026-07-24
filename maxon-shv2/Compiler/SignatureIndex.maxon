@@ -3116,15 +3116,20 @@ export type ProgramSignatures
 	// (Contrast `typeIsManaged`: a DIRECT struct/instance FIELD is always owned — only a type PARAMETER field
 	// borrows a trivial argument.)
 	//
-	// ⚠ **THIS BORROW IS UNSOUND FOR A TEMPORARY (P1.7a slice 2a finding — REPORTED, NOT fixed here).** A
-	// temporary scalar-struct argument the container OUTLIVES dangles: `let b = PointBox.create(Point.create(…))`
-	// drops the `Point` temp at the statement's end while `b` borrows it, so a later read of `b`'s element (a
-	// witness dispatch `b.itemHash()`, a field/method read) is a use-after-free. The sound fix — CONSUME any
-	// struct arg (route this to `typeIsManaged`) — makes the temporary case work but changes `PointBox.create(p);
-	// p.getX()` to a use-after-move E3102, which `generic-types/generic-trivial-struct-arg` deliberately relies
-	// on. The two are irreconcilable under all-or-nothing per-instance ownership; it is a language-semantics
-	// decision (MOVE vs BORROW-COPY a struct into a generic) left to the coordinator. Slice 2a's witness tests
-	// bind their element to a live variable that outlives the container, sidestepping the borrow's temporary hole.
+	// ⚠ **THIS BORROW STILL DANGLES ACROSS SCOPES (P1.7a slice 2a finding — residual, borrow-liveness class).**
+	// A SAME-SCOPE temporary is now sound: `Parser.materializeEscapingBorrowTemp` enrolls it as a hidden
+	// scope-local so it outlives the container (the `where-clauses.witness-temporary-arg` test). But when the
+	// container binding lives in an OUTER scope and its borrowed element's source lives in an INNER scope —
+	// `var b = …; if c then b = PointBox.create(Point.create(…)) end; b.itemDigest()`, or a loop-carried
+	// reassignment, or a NAMED inner binding — the element is freed at the inner scope's exit while `b` borrows
+	// it, so a later read of `b`'s element (the witness dispatch slice 2a first enables) is a use-after-free.
+	// This is not the materialization's incompleteness (the named-inner form dangles identically, and that form
+	// the temp fix never touched) — it is the general borrow-liveness gap of the P1.6-B2 borrow-not-consume
+	// model. The complete fix — CONSUME any struct arg (route this to `typeIsManaged`) — makes it sound but
+	// changes `PointBox.create(p); p.getX()` to a use-after-move E3102, which `generic-types/generic-trivial-
+	// struct-arg` deliberately relies on; the two are irreconcilable under all-or-nothing per-instance
+	// ownership, so it is a language-semantics decision (MOVE vs BORROW-COPY a struct into a generic) or a
+	// borrow-liveness rejection left to the coordinator.
 	export function typeArgIsOwned(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 		if tagIsText(tag) 'string'

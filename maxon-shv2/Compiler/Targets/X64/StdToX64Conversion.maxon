@@ -1353,15 +1353,21 @@ type StdToX64Lowering
 	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstBlock IrBlock)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callReg(TargetVReg.virtual(calleeReg)))
-		// A VALUE callee's result is captured from XMM0/R8 into `resultId`. A VOID callee (a raw element
-		// destructor) leaves nothing to capture — `resultId` is a dead slot with no def, so no capture move
-		// is emitted and it never enters liveness/coloring. Native already ignored an unread indirect
-		// result, so making the destructor call truly void is neutral for the code emitted here.
+		self.captureIndirectResult(resultId, resultType: resultType, dstBlock: dstBlock)
+	end 'lowerCallIndirect'
+
+	// Capture the result of a callee expressed by VALUE (an indirect or witness call) from its ABI result
+	// register into `resultId`. A VALUE callee's result comes back from XMM0/R8 (`indirectResultRegister`); a
+	// VOID callee (a raw element destructor) leaves nothing to capture — `resultId` is a dead slot with no def,
+	// so no move is emitted and it never enters liveness/coloring. ONE home, shared by `lowerCallIndirect` and
+	// `lowerWitnessCall` so the two cannot drift on how an indirect result is captured (a divergence would be a
+	// silently miscaptured return, not a compile error).
+	function captureIndirectResult(resultId ValueId, resultType StdReturnType, dstBlock IrBlock)
 		match resultType 'r'
 			void then break 'r'
 			value(inner) then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(inner))))
 		end 'r'
-	end 'lowerCallIndirect'
+	end 'captureIndirectResult'
 
 	// Lower the fused `witnessCall` (P1.7a slice 2a) — `callIndirect` whose callee is a MEMORY OPERAND: move
 	// each argument into its ABI register (the SHARED `emitArgMovesByFloatMask`, so witness and indirect calls
@@ -1374,10 +1380,7 @@ type StdToX64Lowering
 	function lowerWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstBlock IrBlock)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callMem(TargetVReg.virtual(witnessAddr), disp: witnessMethodSlotOffset(methodIndex) as Imm32))
-		match resultType 'r'
-			void then break 'r'
-			value(inner) then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(inner))))
-		end 'r'
+		self.captureIndirectResult(resultId, resultType: resultType, dstBlock: dstBlock)
 	end 'lowerWitnessCall'
 
 	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a
