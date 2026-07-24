@@ -152,14 +152,54 @@ public sealed class MxdbgReader {
   /// render a field's or local's type without the caller re-indexing the type table.
   public string TypeName(uint typeId) => typeId < _typeCount ? Type(typeId).Name : "";
 
-  /// The function whose `.text` range contains <paramref name="codeOffset"/>, or null in a gap
-  /// (padding, runtime helpers with no source).
-  public FuncInfo? FunctionAt(uint codeOffset) {
-    for (uint i = 0; i < _funcCount; i++) {
-      var f = Function(i);
-      if (codeOffset >= f.CodeStart && codeOffset < f.CodeEnd) return f;
+  /// Function indices sorted by CodeStart, built once on first use. The function table is stored in
+  /// module-emission order (only the LINE table is sorted at write time), so <see cref="FunctionAt"/>
+  /// cannot binary-search it directly — this index gives it an O(log F) lookup instead of the O(F) scan
+  /// that, called once per single-stepped instruction by the stepper's <see cref="PcToLine"/>, made a
+  /// `step` O(N·F) (and worse: the old scan materialized every probed function, decoding a name string
+  /// the range test never needed).
+  private int[]? _funcOrderByCodeStart;
+
+  /// A function's CodeStart/CodeEnd read WITHOUT decoding its name — the only fields the range search
+  /// needs, so the O(log F) probe path allocates nothing.
+  private uint FuncCodeStart(int index) =>
+    MxdbgFormat.U32(_b, (int)(_funcTableOff + (uint)index * MxdbgFormat.FuncEntrySize) + 8);
+
+  private uint FuncCodeEnd(int index) =>
+    MxdbgFormat.U32(_b, (int)(_funcTableOff + (uint)index * MxdbgFormat.FuncEntrySize) + 12);
+
+  private int[] FuncOrderByCodeStart() {
+    if (_funcOrderByCodeStart is null) {
+      var order = new int[_funcCount];
+      for (int i = 0; i < _funcCount; i++) order[i] = i;
+      Array.Sort(order, (a, b) => FuncCodeStart(a).CompareTo(FuncCodeStart(b)));
+      _funcOrderByCodeStart = order;
     }
-    return null;
+    return _funcOrderByCodeStart;
+  }
+
+  /// The function whose `.text` range contains <paramref name="codeOffset"/>, or null in a gap
+  /// (padding, runtime helpers with no source). O(log F): the emitter's function ranges are disjoint,
+  /// so the greatest CodeStart not past the offset is the ONLY candidate that can contain it — a
+  /// containment miss there means the offset lies in a gap. Identical answers to a linear scan for the
+  /// disjoint ranges the emitter produces.
+  public FuncInfo? FunctionAt(uint codeOffset) {
+    var order = FuncOrderByCodeStart();
+
+    // Partition point: the first function that starts AFTER codeOffset; its predecessor holds the
+    // greatest CodeStart <= codeOffset — the sole containment candidate.
+    int lo = 0;
+    int hi = order.Length;
+    while (lo < hi) {
+      int mid = (lo + hi) >>> 1;
+      if (FuncCodeStart(order[mid]) <= codeOffset) lo = mid + 1;
+      else hi = mid;
+    }
+
+    if (lo == 0) return null;
+
+    int cand = order[lo - 1];
+    return codeOffset >= FuncCodeStart(cand) && codeOffset < FuncCodeEnd(cand) ? Function((uint)cand) : null;
   }
 
   /// <summary>
