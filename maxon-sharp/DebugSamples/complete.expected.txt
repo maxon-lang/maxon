@@ -1,0 +1,80 @@
+P4c REPL-ergonomics gate — reproducible transcript over DebugSamples/step.maxon.
+
+P4c is a driver/REPL-only rung: fuzzy `break <function>`, "did you mean" on a typo, an interactive line
+editor (tab-completion / history / reverse-search — TTY-only, verified by hand), and a non-interactive
+`maxon debug --complete '<partial>' <exe>` that makes the pure completion engine batch-testable. It touches
+no compiler or codegen, so the emitted binary and sidecar are unchanged (the P4a/P4b goldens still match).
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/step.maxon
+  maxon debug --batch --commands='break helper; run; backtrace' maxon-sharp/DebugSamples/step.exe
+  maxon debug --batch --commands='break deepr'                   maxon-sharp/DebugSamples/step.exe
+  maxon debug --complete 'break hel'                             maxon-sharp/DebugSamples/step.exe
+  maxon debug --complete 'pri'                                   maxon-sharp/DebugSamples/step.exe
+
+RED (the same commands against a pre-P4c binary, before this rung):
+  * `break helper` — `break` only parsed `file:line`, so a bare function name errored:
+      {"event":"error","message":"break needs \u003Cfile\u003E:\u003Cline\u003E"}
+  * `--complete` — the subcommand did not exist, so it was rejected on stderr with exit 1:
+      Unknown 'maxon debug' option: --complete
+
+WHAT EACH GREEN CASE PROVES:
+  * break helper / run / backtrace — the name `helper` resolves to helper's FIRST-STATEMENT offset (0x1cb,
+    past the prologue of its [0x1a0,0x242) range), the breakpoint is armed there (action "set", function
+    "helper", line 15), and `run` STOPS in helper (stop event function "helper", line 15).
+  * break deepr — a typo matches no function structurally, so it is reported action "no-match" with the
+    closest name within a small edit distance as a "did you mean" suggestion ("deeper"). Edit distance NEVER
+    arms a breakpoint — a typo suggests, it does not silently stop at the wrong place.
+  * --complete 'break hel' — after `break`, completion draws from function + file names; only `helper`
+    starts with "hel".
+  * --complete 'pri' — at the command word, completion draws from command names; only `print` starts with
+    "pri".
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The event shapes, actions, functions, lines, suggestion, and completion lists are the P4c subject and
+    are STABLE.
+  * The `.text` offsets (0x1cb helper's first statement, 0xab the main call return, 0x4c the entry-stub
+    return) are build-specific and move only if codegen for main/helper moves — they are the same offsets
+    the P4b step golden records.
+  * Exit code is 8 (helper(3) = deeper(3)+1 = 7; then the loop adds 0 and 1 -> 8). In --batch the target has
+    no stdout of its own here, so the JSON channel on stdout is the whole transcript.
+
+The interactive line editor (Tab / ↑↓ history / Ctrl-R reverse-search key handling) needs a real console and
+cannot be driven by --batch; it is verified by hand. Its completion LOGIC is the pure `--complete` engine
+gated below, and its history/reverse-search operate over the same command vocabulary.
+
+--- EXPECTED: maxon debug --batch --commands='break helper; run; backtrace' (newline-delimited JSON) ---
+{"event":"breakpoint","action":"set","function":"helper","offset":"0x1cb","file":"maxon-sharp/DebugSamples/step.maxon","line":15}
+{"event":"stop","reason":"breakpoint","offset":"0x1cb","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"col":2,"source":[{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":true},{"line":16,"text":"\treturn inner \u002B 1","current":false},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1cb"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"backtrace","frames":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1cb"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"exit","code":8}
+
+--- EXPECTED: maxon debug --batch --commands='break deepr' (typo -> did you mean) ---
+{"event":"breakpoint","action":"no-match","query":"deepr","suggestion":"deeper"}
+{"event":"exit","code":8}
+
+--- EXPECTED: maxon debug --complete 'break hel' (one candidate per line) ---
+helper
+
+--- EXPECTED: maxon debug --complete 'pri' ---
+print
+
+--- EXPECTED: maxon debug --complete '' (all command words, sorted) ---
+backtrace
+break
+continue
+finish
+help
+locals
+next
+print
+quit
+run
+step
+until
+
+--- EXPECTED: maxon debug --complete 'break ' (all functions + file leaf, sorted) ---
+deeper
+helper
+main
+step.maxon

@@ -193,12 +193,31 @@ internal sealed class MaxonDebugger : IDisposable {
 
   public bool Continue() => PostCommand(RuntimeEmitter.DbgCmdContinue, 0);
 
-  /// The outcome of resolving+arming a `file:line` breakpoint, so the resolve→arm DECISION lives once
-  /// here and each surface only renders it (a divergent copy of "no code vs set" would be a wrong
-  /// answer, not a compile error).
-  public enum BreakKind { NoCode, Set, Unacknowledged }
+  /// The outcome of resolving+arming a breakpoint, so the resolve→arm DECISION lives once here and each
+  /// surface only renders it (a divergent copy of "no code vs set" would be a wrong answer, not a compile
+  /// error). <see cref="Ambiguous"/> / <see cref="NoMatch"/> arise only from a `break &lt;function&gt;`
+  /// resolution (P4c); a `file:line` resolution never produces them.
+  public enum BreakKind { NoCode, Set, Unacknowledged, Ambiguous, NoMatch }
 
-  public readonly record struct BreakResult(BreakKind Kind, uint Offset, SymLocation Location);
+  /// <summary>
+  /// The outcome of a break request. <see cref="Candidates"/> lists the matches for an
+  /// <see cref="BreakKind.Ambiguous"/> function name; <see cref="Suggestion"/> is the closest known name
+  /// for a <see cref="BreakKind.NoMatch"/> (empty when nothing is close enough). The factories keep the
+  /// empty-list / empty-string invariants in one place so no call site scatters them.
+  /// </summary>
+  public readonly record struct BreakResult(
+    BreakKind Kind, uint Offset, SymLocation Location, IReadOnlyList<string> Candidates, string Suggestion) {
+
+    public static BreakResult NoCodeAt() => new(BreakKind.NoCode, 0, default, [], "");
+    public static BreakResult AmbiguousMatch(IReadOnlyList<string> candidates) =>
+      new(BreakKind.Ambiguous, 0, default, candidates, "");
+    public static BreakResult NoMatchFor(string suggestion) => new(BreakKind.NoMatch, 0, default, [], suggestion);
+
+    /// The Set/Unacknowledged pair from an arm result — the resolve→arm outcome BOTH break paths (file:line
+    /// and function) share, so an armed-but-unacknowledged breakpoint is worded identically either way.
+    public static BreakResult FromAck(bool acked, uint offset, SymLocation location) =>
+      new(acked ? BreakKind.Set : BreakKind.Unacknowledged, offset, location, [], "");
+  }
 
   /// <summary>
   /// Resolve a `file:line` to its `.text` offset via the sidecar and arm a breakpoint there.
@@ -207,10 +226,139 @@ internal sealed class MaxonDebugger : IDisposable {
   /// </summary>
   public BreakResult SetBreakpoint(string file, uint line) {
     if (Sidecar is not { } s) throw new DebuggerException("no debug info loaded; cannot resolve file:line");
-    if (s.LineToOffset(file, line) is not { } off) return new BreakResult(BreakKind.NoCode, 0, default);
+    if (s.LineToOffset(file, line) is not { } off) return BreakResult.NoCodeAt();
 
     bool acked = SetBreakpointAtOffset(off);
-    return new BreakResult(acked ? BreakKind.Set : BreakKind.Unacknowledged, off, Symbolize(off));
+    return BreakResult.FromAck(acked, off, Symbolize(off));
+  }
+
+  // ---- Fuzzy function breakpoints (P4c) ----
+
+  /// <summary>
+  /// Resolve <paramref name="name"/> to a function and arm a breakpoint at its FIRST-STATEMENT offset
+  /// (past the prologue), the way `break Account.withdraw` / `break helper` targets a function's entry.
+  /// The name is matched by a ranked strategy — EXACT full name, then QUALIFIED dotted-suffix
+  /// (`String.isAscii` → `stdlib.String.isAscii`), then LEAF segment (`withdraw` → `Account.withdraw`),
+  /// then unambiguous PREFIX. A unique match at the strongest non-empty tier is armed; two or more is
+  /// reported <see cref="BreakKind.Ambiguous"/> with the candidates (never silently resolved — a wrong
+  /// breakpoint target is a wrong answer). When no tier matches, the closest name within a small edit
+  /// distance is offered as a <see cref="BreakKind.NoMatch"/> suggestion — edit distance NEVER arms a
+  /// breakpoint, so a typo suggests rather than silently stopping at the wrong place. Requires a sidecar.
+  /// </summary>
+  public BreakResult SetBreakpointAtFunction(string name) {
+    if (Sidecar is not { } s)
+      throw new DebuggerException("no debug info loaded; cannot resolve a function name");
+
+    var matches = ResolveFunctions(s, name);
+    if (matches.Count == 1) {
+      uint off = FunctionEntryOffset(s, matches[0]);
+      bool acked = SetBreakpointAtOffset(off);
+      return BreakResult.FromAck(acked, off, Symbolize(off));
+    }
+    if (matches.Count > 1)
+      return BreakResult.AmbiguousMatch([.. matches.Select(f => f.Name).OrderBy(n => n, StringComparer.Ordinal)]);
+
+    var suggestion = DebugFuzzy.ClosestMatch(name, FunctionNames(s), DebugFuzzy.MaxEditDistance);
+    return BreakResult.NoMatchFor(suggestion ?? "");
+  }
+
+  /// The named functions matching <paramref name="name"/> at the STRONGEST non-empty resolution tier
+  /// (exact → qualified dotted-suffix → leaf segment → prefix). Edit distance is deliberately NOT a tier;
+  /// it feeds only the no-match suggestion, so a typo can never silently arm a breakpoint here.
+  private static IReadOnlyList<MxdbgReader.FuncInfo> ResolveFunctions(MxdbgReader s, string name) {
+    var funcs = new List<MxdbgReader.FuncInfo>((int)s.FunctionCount);
+    for (uint i = 0; i < s.FunctionCount; i++) {
+      var f = s.Function(i);
+      if (f.Name.Length > 0) funcs.Add(f);
+    }
+
+    var exact = funcs.Where(f => f.Name == name).ToList();
+    if (exact.Count > 0) return exact;
+
+    if (name.Contains('.')) {
+      var qualified = funcs.Where(f => f.Name.EndsWith("." + name, StringComparison.Ordinal)).ToList();
+      if (qualified.Count > 0) return qualified;
+    }
+
+    var leaf = funcs.Where(f => LeafSegment(f.Name) == name).ToList();
+    if (leaf.Count > 0) return leaf;
+
+    var prefix = funcs.Where(f => f.Name.StartsWith(name, StringComparison.Ordinal)).ToList();
+    return prefix;
+  }
+
+  /// The breakpoint offset for a function: the smallest STATEMENT-flagged line-table offset within the
+  /// function's `[CodeStart, CodeEnd)` range — its first statement, past the prologue — or CodeStart when
+  /// no row is flagged. The same landing `break file:line` plants on the function's opening statement.
+  private static uint FunctionEntryOffset(MxdbgReader s, MxdbgReader.FuncInfo fn) {
+    uint? best = null;
+    for (uint i = fn.LineFirst; i < fn.LineFirst + fn.LineCount; i++) {
+      var row = s.Line(i);
+      if ((row.Flags & MxdbgFormat.LineFlagStatement) == 0) continue;
+      if (row.CodeOffset < fn.CodeStart || row.CodeOffset >= fn.CodeEnd) continue;
+      if (best is null || row.CodeOffset < best) best = row.CodeOffset;
+    }
+    return best ?? fn.CodeStart;
+  }
+
+  /// The trailing `.`-delimited segment of a qualified function name (`withdraw` of `Account.withdraw`).
+  private static string LeafSegment(string qualifiedName) {
+    int dot = qualifiedName.LastIndexOf('.');
+    return dot < 0 ? qualifiedName : qualifiedName[(dot + 1)..];
+  }
+
+  // ---- Sidecar name pools (completion + fuzzy suggestions; P4c) ----
+
+  /// The names of every function the sidecar records, skipping the unnamed runtime helpers — the pool the
+  /// completion engine and the function-break "did you mean" both draw from. Static so the non-interactive
+  /// `--complete` gate can read a bare <see cref="MxdbgReader"/> without a live session.
+  public static IReadOnlyList<string> FunctionNames(MxdbgReader s) {
+    var names = new List<string>((int)s.FunctionCount);
+    for (uint i = 0; i < s.FunctionCount; i++) {
+      var name = s.Function(i).Name;
+      if (name.Length > 0) names.Add(name);
+    }
+    return names;
+  }
+
+  /// The LEAF names of the sidecar's source files — the spelling `break foo.maxon:N` uses (LineToOffset
+  /// matches by trailing path component), so completing the leaf is consistent with how a file resolves.
+  public static IReadOnlyList<string> FileNames(MxdbgReader s) {
+    var names = new List<string>((int)s.FileCount);
+    for (uint i = 0; i < s.FileCount; i++) {
+      var leaf = LeafPathComponent(s.FileName(i));
+      if (leaf.Length > 0) names.Add(leaf);
+    }
+    return names;
+  }
+
+  /// The named stack-slot locals of the function enclosing <paramref name="atCodeOffset"/> — the ones a
+  /// later `print`/`locals` can actually read (register-only and optimized-out locals carry no stack home,
+  /// so completing them would offer a name `print` then rejects). Empty outside any known function.
+  public static IReadOnlyList<string> LocalNames(MxdbgReader s, long atCodeOffset) {
+    if (s.FunctionAt((uint)atCodeOffset) is not { } fn) return [];
+    var names = new List<string>((int)fn.LocalCount);
+    for (uint i = fn.LocalFirst; i < fn.LocalFirst + fn.LocalCount; i++) {
+      var loc = s.Local(i);
+      if (loc.LocKind == MxdbgLocKind.StackSlotRbpRel && loc.Name.Length > 0) names.Add(loc.Name);
+    }
+    return names;
+  }
+
+  /// Live-session conveniences over the loaded sidecar — the interactive REPL builds its completion
+  /// context through these; the `--complete` gate uses the static forms on a reader it loads directly.
+  public IReadOnlyList<string> FunctionNames() => FunctionNames(RequireSidecar());
+  public IReadOnlyList<string> FileNames() => FileNames(RequireSidecar());
+  public IReadOnlyList<string> LocalNames(long atStopPc) => LocalNames(RequireSidecar(), atStopPc);
+
+  private MxdbgReader RequireSidecar() =>
+    Sidecar ?? throw new DebuggerException("no debug info loaded");
+
+  /// The trailing path component, split on both separators so a Windows-rooted sidecar path and a
+  /// forward-slash spelling yield the same leaf.
+  private static string LeafPathComponent(string path) {
+    int cut = path.LastIndexOfAny(['/', '\\']);
+    return cut < 0 ? path : path[(cut + 1)..];
   }
 
   /// <summary>

@@ -67,16 +67,23 @@ internal static class MaxonDebugRepl {
     private bool _finished;
     private StopReport? _stop;
 
+    /// The interactive line editor: tab-completion, persistent history, Ctrl-R reverse-search, with a
+    /// plain-ReadLine fallback when stdin is not a TTY. One per session so its in-memory history spans the
+    /// session and is written back to the shared history file.
+    private readonly LineEditor _editor = new(HistoryFilePath());
+
     /// The one wording of "you must be stopped first", shared by every command that reads the parked
     /// frame (backtrace / print / locals / step / next / finish / until).
     private const string NotStoppedText = "Not stopped — run to a breakpoint first.";
 
+    /// The one wording of a breakpoint the agent did not acknowledge, shared by the file:line and function
+    /// break renderers so they cannot drift.
+    private const string BreakUnacknowledgedText = "The agent did not acknowledge the breakpoint.";
+
     public int Loop() {
       while (!_finished) {
-        Console.Out.Write(Prompt());
-        Console.Out.Flush();
-        var line = Console.In.ReadLine();
-        if (line == null) {                // EOF (piped input drained): leave the target parked-then-kill
+        var line = _editor.ReadLine(Prompt(), BuildCompletionContext);
+        if (line == null) {                // EOF (Ctrl-D / piped input drained): leave target parked-then-kill
           dbg.Terminate();
           break;
         }
@@ -85,6 +92,14 @@ internal static class MaxonDebugRepl {
       dbg.WaitForExit(2000);
       dbg.JoinIo();
       return 0;
+    }
+
+    /// The completion pools for the current state: commands + the sidecar's functions/files always, and the
+    /// stopped frame's locals when there is one. Built lazily (only when Tab is pressed) via the editor's
+    /// context callback, so an idle prompt does not walk the sidecar each keystroke.
+    private CompletionContext BuildCompletionContext() {
+      IReadOnlyList<string> locals = _stop is { } report ? dbg.LocalNames(report.Stop.PcOffset) : [];
+      return new CompletionContext(CommandWords, dbg.FunctionNames(), dbg.FileNames(), locals, ArgTargetFor);
     }
 
     private string Prompt() {
@@ -138,7 +153,7 @@ internal static class MaxonDebugRepl {
           _finished = true;
           break;
         case DebugCommand.Unknown:
-          Console.Out.WriteLine($"Unknown command '{word}'. Type 'help' for the command list.");
+          Console.Out.WriteLine($"Unknown command '{word}'.{DidYouMeanCommandSuffix(word)} Type 'help' for the command list.");
           break;
         default:
           throw new InvalidOperationException($"Unhandled command {command}");
@@ -146,24 +161,53 @@ internal static class MaxonDebugRepl {
     }
 
     private void DoBreak(string arg) {
-      if (!TryParseFileLine(arg, out var file, out var lineNo)) {
-        Console.Out.WriteLine("Usage: break <file>:<line>");
+      if (arg.Length == 0) {
+        Console.Out.WriteLine("Usage: break <file>:<line>   |   break <function>");
         return;
       }
-      var r = dbg.SetBreakpoint(file, lineNo);
+      if (TryParseFileLine(arg, out var file, out var lineNo)) {
+        RenderFileLineBreak(dbg.SetBreakpoint(file, lineNo), file, lineNo);
+      } else {
+        RenderFunctionBreak(dbg.SetBreakpointAtFunction(arg), arg);
+      }
+    }
+
+    private static void RenderFileLineBreak(MaxonDebugger.BreakResult r, string file, uint lineNo) {
       switch (r.Kind) {
         case MaxonDebugger.BreakKind.NoCode:
           Console.Out.WriteLine($"No code at {file}:{lineNo} (blank line, or no statement there).");
           break;
         case MaxonDebugger.BreakKind.Unacknowledged:
-          Console.Out.WriteLine("The agent did not acknowledge the breakpoint.");
+          Console.Out.WriteLine(BreakUnacknowledgedText);
           break;
         case MaxonDebugger.BreakKind.Set:
           var inFn = r.Location.HasFunction ? $" in {r.Location.Function}" : "";
           Console.Out.WriteLine($"Breakpoint set at {file}:{lineNo}{inFn} (0x{r.Offset:x}).");
           break;
         default:
-          throw new InvalidOperationException($"Unhandled break outcome {r.Kind}");
+          throw new InvalidOperationException($"Unhandled file:line break outcome {r.Kind}");
+      }
+    }
+
+    private static void RenderFunctionBreak(MaxonDebugger.BreakResult r, string query) {
+      switch (r.Kind) {
+        case MaxonDebugger.BreakKind.Set:
+          var at = r.Location.HasLine ? $" ({r.Location.File}:{r.Location.Line})" : "";
+          var fn = r.Location.HasFunction ? r.Location.Function : query;
+          Console.Out.WriteLine($"Breakpoint set at {fn}{at} (0x{r.Offset:x}).");
+          break;
+        case MaxonDebugger.BreakKind.Unacknowledged:
+          Console.Out.WriteLine(BreakUnacknowledgedText);
+          break;
+        case MaxonDebugger.BreakKind.Ambiguous:
+          Console.Out.WriteLine($"'{query}' is ambiguous — candidates: {string.Join(", ", r.Candidates)}. "
+            + "Qualify it (e.g. Type.method).");
+          break;
+        case MaxonDebugger.BreakKind.NoMatch:
+          Console.Out.WriteLine($"No function matches '{query}'.{DidYouMeanSuffix(r.Suggestion)}");
+          break;
+        default:
+          throw new InvalidOperationException($"Unhandled function break outcome {r.Kind}");
       }
     }
 
@@ -290,6 +334,7 @@ internal static class MaxonDebugRepl {
     private static void PrintHelp() {
       Console.Out.WriteLine("Commands:");
       Console.Out.WriteLine("  break <file>:<line>   (b)   set a breakpoint at a source line");
+      Console.Out.WriteLine("  break <function>            set a breakpoint at a function's entry (fuzzy: leaf/prefix/typo)");
       Console.Out.WriteLine("  run                   (r)   start the program (continue from entry)");
       Console.Out.WriteLine("  continue              (c)   resume from a breakpoint");
       Console.Out.WriteLine("  step                  (s)   step into: advance one statement, entering calls");
@@ -391,7 +436,7 @@ internal static class MaxonDebugRepl {
         EmitError("'help' is interactive-only; not available in --batch");
         break;
       case DebugCommand.Unknown:
-        EmitError($"unknown command '{word}'");
+        EmitError($"unknown command '{word}'{DidYouMeanCommandSuffix(word)}");
         break;
       default:
         throw new InvalidOperationException($"Unhandled command {command}");
@@ -399,20 +444,18 @@ internal static class MaxonDebugRepl {
   }
 
   private static void BatchBreak(MaxonDebugger dbg, string arg) {
-    if (!TryParseFileLine(arg, out var file, out var lineNo)) {
-      EmitError("break needs <file>:<line>");
-      return;
+    if (arg.Length == 0) { EmitError("break needs <file>:<line> or a function name"); return; }
+    if (TryParseFileLine(arg, out var file, out var lineNo)) {
+      BatchBreakFileLine(dbg.SetBreakpoint(file, lineNo), file, lineNo);
+    } else {
+      BatchBreakFunction(dbg.SetBreakpointAtFunction(arg), arg);
     }
-    var r = dbg.SetBreakpoint(file, lineNo);
-    var action = r.Kind switch {
-      MaxonDebugger.BreakKind.NoCode => "no-code",
-      MaxonDebugger.BreakKind.Set => "set",
-      MaxonDebugger.BreakKind.Unacknowledged => "unacked",
-      _ => throw new InvalidOperationException($"Unhandled break outcome {r.Kind}"),
-    };
+  }
+
+  private static void BatchBreakFileLine(MaxonDebugger.BreakResult r, string file, uint lineNo) {
     WriteEvent(w => {
       w.WriteString("event", "breakpoint");
-      w.WriteString("action", action);
+      w.WriteString("action", BreakActionName(r.Kind));
       w.WriteString("file", file);
       w.WriteNumber("line", lineNo);
       if (r.Kind != MaxonDebugger.BreakKind.NoCode) {
@@ -421,6 +464,34 @@ internal static class MaxonDebugRepl {
       }
     });
   }
+
+  private static void BatchBreakFunction(MaxonDebugger.BreakResult r, string query) => WriteEvent(w => {
+    w.WriteString("event", "breakpoint");
+    w.WriteString("action", BreakActionName(r.Kind));
+    switch (r.Kind) {
+      case MaxonDebugger.BreakKind.Set:
+      case MaxonDebugger.BreakKind.Unacknowledged:
+        if (r.Location.HasFunction) w.WriteString("function", r.Location.Function);
+        w.WriteString("offset", HexOffset(r.Offset));
+        if (r.Location.HasLine) {
+          w.WriteString("file", r.Location.File);
+          w.WriteNumber("line", r.Location.Line);
+        }
+        break;
+      case MaxonDebugger.BreakKind.Ambiguous:
+        w.WriteString("query", query);
+        w.WriteStartArray("candidates");
+        foreach (var c in r.Candidates) w.WriteStringValue(c);
+        w.WriteEndArray();
+        break;
+      case MaxonDebugger.BreakKind.NoMatch:
+        w.WriteString("query", query);
+        if (r.Suggestion.Length > 0) w.WriteString("suggestion", r.Suggestion);
+        break;
+      default:
+        throw new InvalidOperationException($"Unhandled function break outcome {r.Kind}");
+    }
+  });
 
   private static void BatchContinue(MaxonDebugger dbg, string exePath, ref bool finished,
       ref MaxonDebugger.StopInfo? currentStop) {
@@ -793,6 +864,40 @@ internal static class MaxonDebugRepl {
     }
   }
 
+  /// <summary>
+  /// `maxon debug --complete '&lt;partial line&gt;' &lt;exe&gt;` — print the completion candidates for a
+  /// partial input, one per line, so the pure <see cref="DebugCompletion"/> engine is batch-testable (and
+  /// is what an editor/DAP calls). Static over the sidecar alone: there is no live session, so LOCALS
+  /// (which need a stopped frame) are not offered here — only commands, functions, and files. Deterministic
+  /// (the engine returns sorted, de-duplicated candidates).
+  /// </summary>
+  public static int RunComplete(string exePath, string partialLine) {
+    var sidecar = LoadSidecar(exePath);
+    if (sidecar == null) return 1;
+
+    var ctx = new CompletionContext(
+      CommandWords,
+      MaxonDebugger.FunctionNames(sidecar),
+      MaxonDebugger.FileNames(sidecar),
+      [],                                   // no live stop → no locals to complete
+      ArgTargetFor);
+    foreach (var candidate in DebugCompletion.Complete(partialLine, partialLine.Length, ctx))
+      Console.Out.WriteLine(candidate);
+    return 0;
+  }
+
+  /// The persistent command-history file — `~/.maxon_debug_history` via the user profile (`%USERPROFILE%`
+  /// on Windows, `$HOME` on POSIX), or null when no home resolves (history then lives only in memory for
+  /// the session). The editor guards all history-file I/O, so a null or unwritable path never faults.
+  private static string? HistoryFilePath() {
+    try {
+      var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+      return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".maxon_debug_history");
+    } catch (Exception) {
+      return null;
+    }
+  }
+
   private static bool TryLoadCommands(string spec, out List<string> commands, out string error) {
     commands = [];
     error = "";
@@ -837,30 +942,76 @@ internal static class MaxonDebugRepl {
     Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Print, Locals, Help, Quit, Unknown,
   }
 
-  /// The ONE place the command vocabulary (canonical words + aliases) is stated. Both the interactive
-  /// REPL and the batch runner classify through this, so adding a P4 command (`step`, `threads`, …)
-  /// here teaches BOTH faces at once — a copy in one and not the other would have one face accept a
-  /// word the other rejects.
+  /// One command's vocabulary AND its completion policy: the canonical word, its aliases, and the pool its
+  /// argument completes against. Stating all three together keeps them from drifting — a new command adds
+  /// ONE row and both faces plus completion learn it at once.
+  private readonly record struct CommandSpec(
+    DebugCommand Command, string Canonical, string[] Aliases, CompletionArgTarget ArgTarget);
+
+  /// The ONE place the command vocabulary is stated. Both faces classify through <see cref="ParseCommand"/>,
+  /// completion draws its command pool and argument pools from <see cref="CommandWords"/> /
+  /// <see cref="ArgTargetFor"/>, and "did you mean" suggests over <see cref="CommandWords"/> — all derived
+  /// from this table, so a copy in one place and not another cannot happen.
+  private static readonly CommandSpec[] CommandTable = [
+    new(DebugCommand.Break,     "break",     ["b"],             CompletionArgTarget.FunctionsAndFiles),
+    new(DebugCommand.Run,       "run",       ["r"],             CompletionArgTarget.None),
+    new(DebugCommand.Continue,  "continue",  ["c"],             CompletionArgTarget.None),
+    new(DebugCommand.Step,      "step",      ["s"],             CompletionArgTarget.None),
+    new(DebugCommand.Next,      "next",      ["n"],             CompletionArgTarget.None),
+    new(DebugCommand.Finish,    "finish",    [],                CompletionArgTarget.None),
+    new(DebugCommand.Until,     "until",     ["u"],             CompletionArgTarget.None),
+    new(DebugCommand.Backtrace, "backtrace", ["bt", "where"],   CompletionArgTarget.None),
+    new(DebugCommand.Print,     "print",     ["p"],             CompletionArgTarget.Locals),
+    new(DebugCommand.Locals,    "locals",    [],                CompletionArgTarget.Locals),
+    new(DebugCommand.Help,      "help",      ["?", "commands"], CompletionArgTarget.None),
+    new(DebugCommand.Quit,      "quit",      ["q", "exit"],     CompletionArgTarget.None),
+  ];
+
+  /// The spec a command WORD (canonical or alias) names, or null. The single scan both the classifier and
+  /// the completion argument-target resolver share.
+  private static CommandSpec? FindSpec(string word) {
+    foreach (var spec in CommandTable)
+      if (word == spec.Canonical || Array.IndexOf(spec.Aliases, word) >= 0) return spec;
+    return null;
+  }
+
   private static (DebugCommand Command, string Word, string Args) ParseCommand(string input) {
     var (word, args) = SplitFirst(input.Trim());
-    var command = word switch {
-      "" => DebugCommand.Empty,
-      "break" or "b" => DebugCommand.Break,
-      "run" or "r" => DebugCommand.Run,
-      "continue" or "c" => DebugCommand.Continue,
-      "step" or "s" => DebugCommand.Step,
-      "next" or "n" => DebugCommand.Next,
-      "finish" => DebugCommand.Finish,
-      "until" or "u" => DebugCommand.Until,
-      "backtrace" or "bt" or "where" => DebugCommand.Backtrace,
-      "print" or "p" => DebugCommand.Print,
-      "locals" => DebugCommand.Locals,
-      "help" or "?" or "commands" => DebugCommand.Help,
-      "quit" or "q" or "exit" => DebugCommand.Quit,
-      _ => DebugCommand.Unknown,
-    };
-    return (command, word, args);
+    if (word.Length == 0) return (DebugCommand.Empty, word, args);
+    return (FindSpec(word)?.Command ?? DebugCommand.Unknown, word, args);
   }
+
+  /// The canonical command words, sorted — the completion pool at the command position and the "did you
+  /// mean" pool for an unknown command.
+  internal static readonly IReadOnlyList<string> CommandWords =
+    [.. CommandTable.Select(s => s.Canonical).OrderBy(w => w, StringComparer.Ordinal)];
+
+  /// The pool a command's argument completes against, resolved through the ONE classifier so the alias set
+  /// is never restated inside the completion engine.
+  internal static CompletionArgTarget ArgTargetFor(string firstWord) =>
+    FindSpec(firstWord)?.ArgTarget ?? CompletionArgTarget.None;
+
+  /// The one wording of the "did you mean" hint — a leading-space suffix so a caller appends it to a
+  /// message unconditionally. Shared by the unknown-command suffix and the function-break no-match hint so
+  /// the phrase cannot drift between them. Empty when there is nothing to suggest.
+  internal static string DidYouMeanSuffix(string? suggestion) =>
+    suggestion is { Length: > 0 } ? $" Did you mean '{suggestion}'?" : "";
+
+  /// The " Did you mean 'x'?" suffix for an unknown or unresolved COMMAND word, through the ONE fuzzy
+  /// matcher the function-break suggestion also uses — empty when nothing is close enough.
+  private static string DidYouMeanCommandSuffix(string word) =>
+    DidYouMeanSuffix(DebugFuzzy.ClosestMatch(word, CommandWords, DebugFuzzy.MaxEditDistance));
+
+  /// The JSON `action` string for a break outcome — the ONE spelling of the break-action vocabulary, so the
+  /// file:line and function batch renderers cannot emit a differently-spelled action for the same outcome.
+  private static string BreakActionName(MaxonDebugger.BreakKind kind) => kind switch {
+    MaxonDebugger.BreakKind.NoCode => "no-code",
+    MaxonDebugger.BreakKind.Set => "set",
+    MaxonDebugger.BreakKind.Unacknowledged => "unacked",
+    MaxonDebugger.BreakKind.Ambiguous => "ambiguous",
+    MaxonDebugger.BreakKind.NoMatch => "no-match",
+    _ => throw new InvalidOperationException($"Unhandled break kind {kind}"),
+  };
 
   private static string ReasonText(long reason) => reason switch {
     Compiler.Ir.Runtime.RuntimeEmitter.DbgStopReasonBreakpoint => "breakpoint",

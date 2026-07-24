@@ -67,6 +67,8 @@ class Program {
     Console.WriteLine("  <exe> [args...]          Interactive REPL: break file:line, run, continue, backtrace, quit");
     Console.WriteLine("  --batch --commands=<spec> <exe>");
     Console.WriteLine("                           Drive the REPL non-interactively (spec: ';'-separated or @file); JSON stops");
+    Console.WriteLine("  --complete '<partial>' <exe>");
+    Console.WriteLine("                           List the completion candidates for a partial input line (one per line)");
     Console.WriteLine("  --dump-info <exe|.mxdbg> Print the sidecar's files, functions, and line table");
     Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
     Console.WriteLine("                           Map .text code offsets to file:line:col");
@@ -111,6 +113,7 @@ class Program {
     if (args.Length == 0) {
       Console.Error.WriteLine("Usage: maxon debug <exe> [args...]                 (interactive REPL)");
       Console.Error.WriteLine("       maxon debug --batch --commands=<spec> <exe>  (JSON, non-interactive)");
+      Console.Error.WriteLine("       maxon debug --complete '<partial>' <exe>     (list completion candidates)");
       Console.Error.WriteLine("       maxon debug --dump-info <exe|.mxdbg>");
       Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
       Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
@@ -121,6 +124,18 @@ class Program {
     switch (args[0]) {
       case "--batch":
         return RunDebugBatch(args[1..]);
+
+      case "--complete": {
+        // Non-interactive completion: `maxon debug --complete '<partial line>' <exe>`. Prints the
+        // candidates the interactive Tab key would offer, so the pure completion engine is batch-testable.
+        if (args.Length < 3) {
+          Console.Error.WriteLine("maxon debug --complete needs a partial input line and a target executable "
+            + "('maxon debug --complete \"<partial>\" <exe>').");
+          return 1;
+        }
+        return MaxonDebugRepl.RunComplete(args[2], args[1]);
+      }
+
       case "--dump-info": {
         if (args.Length < 2) {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
