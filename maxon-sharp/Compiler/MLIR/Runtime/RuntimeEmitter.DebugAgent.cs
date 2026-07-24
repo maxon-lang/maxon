@@ -770,10 +770,10 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffCmdArg);   // src = the debuggee address to read
     _b.StoreLocal(slotSrc, VReg.Scratch2);
 
-    // dst = base + DbgOffReadBuf, computed ONCE. The copy then stores each byte at [dst + i] with a
-    // ZERO displacement: StoreIndirectByte encodes an 8-bit displacement only, so DbgOffReadBuf (0x280)
-    // must NOT be passed as its offset — a large disp there would silently truncate to disp8. Advancing
-    // a base pointer is both correct and the idiomatic copy-loop form.
+    // dst = base + DbgOffReadBuf, computed ONCE, then advanced by i each iteration. The copy stores each
+    // byte at [dst + i] with a ZERO displacement because StoreIndirectByte offers only a [base + constant
+    // disp] form — there is no base-plus-index addressing here — so the varying per-byte index must be
+    // folded into a base register regardless. Advancing a base pointer is the idiomatic copy-loop form.
     _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
     _b.AddRegImm(VReg.Scratch2, DbgOffReadBuf);
     _b.StoreLocal(slotDst, VReg.Scratch2);
