@@ -215,6 +215,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'gtGlobals'
+	// The IOCP substrate's `.data` slots ride their OWN bit (P1.5 slice 1a-ii), so a plain async/timer/proc program's
+	// `.data` layout is unchanged — only a pipe-reading program lays them out.
+	if usage.usesIocp 'ioGlobals'
+		for entry in ioRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'ioGlobals'
 	project.globalData.layOut(declaredGlobals)
 
 	var pipeline = PassPipeline.create(project, maxonModule: module)
@@ -237,7 +244,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule)
+		installGtRuntime(pipeline.stdModule, usesIocp: usage.usesIocp)
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline so it is never re-optimized — but it is

@@ -296,6 +296,12 @@ export type RuntimeUsage
 	// GT struct + arg buffer), from the `asyncCall`/`await` Maxon ops rather than a callee name — the async
 	// ops are their own op kind, and their `__gt_*` calls do not exist until lowering.
 	export var usesGt as bool
+	// The program issues a YIELDING overlapped pipe read (`__gt_io_read`, the `spawnReadLine` probe, P1.5 slice
+	// 1a-ii). A SUPERSET of `usesGt` (a read yields the green thread, so it needs the whole scheduler), plus the
+	// IOCP substrate: `installIoRuntime` (`__io_init` + `__gt_io_read`), the hand-assembled `__io_completion_loop`
+	// chunk, the six `__io_*` `.data` slots, and the run-queue CRITICAL_SECTION that guards the completion thread's
+	// cross-thread `__gt_enqueue`. Set by `recordCallUsage` on a `__gt_io_read` call (which also sets `usesGt`).
+	export var usesIocp as bool
 	export var usesPrint as bool
 	export var usesStrEq as bool
 	export var usesStrCopy as bool
@@ -361,7 +367,7 @@ export type RuntimeUsage
 	export var neededCloners as ClonerSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -453,6 +459,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isGtRuntimeCallee(callee) 'gt'
 		recordGtUsage(usage)
 	end 'gt'
+	// A `__gt_io_read` call (the `spawnReadLine` probe, P1.5 slice 1a-ii) additionally carries the IOCP substrate:
+	// the completion port + completion thread + wake event + run-queue lock. `usesGt` is already set by the `__gt_`
+	// prefix above; this bit installs the IOCP-only pieces.
+	if callee.equals(IoReadName) 'ioread'
+		usage.usesIocp = true
+	end 'ioread'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

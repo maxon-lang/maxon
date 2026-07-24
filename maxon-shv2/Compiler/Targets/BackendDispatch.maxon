@@ -150,7 +150,10 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// the program spawns a green thread — asked of the MODULE (does it carry `__gt_spawn`?) rather than
 	// threaded down as a flag, exactly as the leak gate asks about `__mm_leak_check`.
 	if moduleUsesGt 'gtChunks'
-		appendX64GtRuntimeChunks(chunks)
+		// P1.5 slice 1a-ii: the IOCP completion-drain thread joins only when the module carries the read runtime —
+		// asked of the MODULE (does it carry `__gt_io_read`?), the same way `moduleUsesGt` is.
+		let moduleUsesIocp = moduleHasFunction(targetModule, name: IoReadName)
+		appendX64GtRuntimeChunks(chunks, usesIocp: moduleUsesIocp)
 	end 'gtChunks'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 

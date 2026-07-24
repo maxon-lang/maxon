@@ -1351,6 +1351,17 @@ let RunProcessBuiltinName = b"runProcess"
 // code), so unlike `sleep` its result IS usable in value position.
 let RunProcessArity = 1 as ParamCount
 
+// **THE `spawnReadLine` BUILTIN** (P1.5 dogfood slice 1a-ii — the IOCP overlapped-read PROBE). A TEMPORARY probe
+// surface (not the final async-subprocess-stdio API, which arrives with the stdlib in slice 1b): like `runProcess`,
+// ordinary call syntax routing to a scheduler runtime entry — `__gt_io_read(strPtr)` — which spawns the command with
+// its stdout redirected to a fresh overlapped pipe, issues a YIELDING overlapped ReadFile, and returns the byte count
+// once the read completes. Non-throwing (returns an INTEGER, not the dual-register error ABI), so a bare
+// `spawnReadLine(cmd)` needs no `try`.
+let SpawnReadLineBuiltinName = b"spawnReadLine"
+
+// `spawnReadLine` takes exactly one STRING argument (the command line) and returns an INTEGER (the bytes read).
+let SpawnReadLineArity = 1 as ParamCount
+
 // **THE ARITY-1 FLOAT MATH INTRINSICS** (P1.0d.4-C) — `specs/{floor,ceil,round,sqrt}.md`. Builtins for the
 // same reason `trunc` is: each lowers to ONE instruction on every target, so a stdlib function would be a
 // call/ret wrapped around a single `sqrtsd`/`roundsd`/`fsqrt`/`frint`/`f64.sqrt`. Both reference compilers
@@ -18836,6 +18847,10 @@ export type Parser
 			return try self.emitRunProcess(args, calleeTok: anchor)
 		end 'runProcessBuiltin'
 
+		if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineBuiltin'
+			return try self.emitSpawnReadLine(args, calleeTok: anchor)
+		end 'spawnReadLineBuiltin'
+
 		// The four MATH INTRINSICS. Only the DISPATCH repeats — the emit itself (arity, operand class,
 		// the int→float promotion, the op) is written once in `emitMathIntrinsic`, so each of these is
 		// a single line naming its opcode. They are the same `if callee.equals(…)` entries the four
@@ -19024,6 +19039,28 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(GtProcessRunName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitRunProcess'
+
+	// `spawnReadLine(cmd)` — **THE IOCP OVERLAPPED-READ PROBE** (P1.5 slice 1a-ii). A compiler BUILTIN like
+	// `runProcess`: ordinary call syntax routing to the `__gt_io_read(strPtr)` scheduler runtime entry (spawn the
+	// command with stdout → a fresh overlapped pipe, issue a YIELDING overlapped read, return the byte count). It
+	// requires exactly one STRING argument (the command line; a non-String is refused, mirroring `emitRunProcess`)
+	// and returns an INTEGER. NON-throwing (a plain integer result, not the dual-register error ABI), so no `try`.
+	// The String is BORROWED exactly as `runProcess` borrows it (`__gt_io_read` reads buffer/length, never owns).
+	function emitSpawnReadLine(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != SpawnReadLineArity 'arity'
+			throw ParseError.builtinArity(String.from(SpawnReadLineBuiltinName), expected: SpawnReadLineArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let arg = try args.get(0) otherwise panic("emitSpawnReadLine: args.count() == SpawnReadLineArity just checked but get(0) failed")
+		let argTag = self.tagOf(arg)
+		if not tagIsText(argTag) 'notAString'
+			throw ParseError.builtinOperandType(String.from(SpawnReadLineBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAString'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(arg)
+		return self.emitRuntimeCall(IoReadName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitSpawnReadLine'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves

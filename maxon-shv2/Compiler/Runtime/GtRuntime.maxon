@@ -106,6 +106,29 @@ export let GtOffTibStackLimit = 0x98
 // multi-M park-gate the reference uses it for.
 export let GtOffIoYielded = 0xA8
 
+// --- P1.5 dogfood slice 1a-ii: the IOCP overlapped-read handshake fields ---
+// The 32-byte Win32 OVERLAPPED the yielding ReadFile is issued against, EMBEDDED in the GT struct's reserved
+// 0x60-0x7F window (four words). The completion thread recovers the parked GT from the completion packet's
+// lpOverlapped by CONTAINING_RECORD (`gt = ovlPtr - GtOffOverlapped`), so no per-read allocation and no separate
+// waiter table is needed. EXPORTED because the hand-assembled `__io_completion_loop` chunk (X64GtRuntime) reads
+// it to recover the GT and the read builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited
+// before each ReadFile (a dirty `hEvent` low bit suppresses the completion packet) — the read builtin zeroes it.
+export let GtOffOverlapped = 0x60
+
+// The bytes-read result the completion thread writes (from GetQueuedCompletionStatus's lpNumberOfBytesTransferred)
+// and the resumed read builtin reads back. 0x88 is the free word between `io_handle@0x80` and `tib_base@0x90`,
+// so no field moves. v1's `io_result_val` maps here. EXPORTED — the completion loop writes it.
+export let GtOffIoResult = 0x88
+
+// ⭐ THE CROSS-THREAD PARK HANDSHAKE FLAG (P1.5 slice 1a-ii). The reading GT sets this to 1 only AFTER it has
+// committed to parking (`status = waiting` already stored); the completion thread SPIN-WAITS until it reads 1
+// before it sets `status = ready` / enqueues, so the completion thread's ready-write can never LAND BEFORE the
+// GT's own waiting-write (a torn status / lost wakeup — the exact publish-before-park race the PLAN documents, and
+// the one shv2's single-M child-exit netpoll never had to face because the completion thread is its FIRST
+// cross-thread actor). Cleared to 0 on resume. 0xA0 is the free word between `tib_limit@0x98` and
+// `io_yielded@0xA8`, so no field moves. EXPORTED — the completion loop's spin reads it.
+export let GtOffIoParked = 0xA0
+
 // ⭐ THE INLINE ARGUMENT REGION (P1.5-B1c #87). MaxAsyncArgs i64 slots living at the END of the GT struct,
 // so a spawn needs NO separate `__slab_alloc`'d argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a
 // SELF-POINTER `gt + GtOffArgInline`, and the trampoline dereferences that self-pointer exactly as it read a
@@ -131,7 +154,7 @@ export let GtStructSize = GtOffArgInline + ArgBufBytes
 // but is unused here — nothing reads it in single-M. `waiting` MUST be distinct from `completed` so the drive
 // loop's `status == completed` recycle gate NEVER recycles a merely-parked GT's stack (the #1 mid-body-yield
 // trap: recycling a yielded GT's stack is a use-after-free when it resumes).
-let GtStatusReady = 0
+export let GtStatusReady = 0
 export let GtStatusCompleted = 2
 let GtStatusWaiting = 3
 
@@ -340,6 +363,14 @@ let GtProcAddName = b"__gt_proc_add"
 let GtProcCountName = b"__gt_proc_count"
 let GtProcCheckName = b"__gt_proc_check"
 
+// P1.5 dogfood slice 1a-ii — the IOCP overlapped-read substrate. `__gt_io_read` is the front-end target for the
+// `spawnReadLine` probe builtin; `__io_init` lazily creates the IOCP + completion thread + event + lock;
+// `__io_completion_loop` is the hand-assembled completion-drain thread entry (X64GtRuntime). Named in the `__gt_`
+// / `__io_` bands so `isGtRuntimeCallee`/`isIoRuntimeCallee` catch them and they stay out of the goldens.
+export let IoReadName = b"__gt_io_read"
+export let IoInitName = b"__io_init"
+export let IoCompletionLoopName = b"__io_completion_loop"
+
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
 // MmRuntime's zeroed slab cursor means "no arena yet". So there is nothing to run before `main`.
@@ -412,6 +443,65 @@ let GtClockFreqLabel = b"__gt_clock_freq"
 let GtProcCountLabel = b"__gt_proc_count"
 let GtProcHandlesBaseLabel = b"__gt_proc_handles_base"
 let GtProcGtsBaseLabel = b"__gt_proc_gts_base"
+
+// P1.5 dogfood slice 1a-ii IOCP substrate `.data` slots. `__io_iocp` = the process-wide completion port;
+// `__io_done_event` = the AUTO-reset event the completion thread signals to wake the netpoll's WaitForSingleObject;
+// `__io_lock` = the CRITICAL_SECTION (40 bytes on x64) guarding the run queue's head/tail across the completion
+// thread's cross-thread `__gt_enqueue`; `__io_init_done` = the idempotency guard for `__io_init`; `__io_pending`
+// = the count of in-flight overlapped reads (main-thread-only: ++ before a park, -- on resume), which the netpoll
+// reads to decide whether to block on `__io_done_event`. `__io_lock` is a `.data` region large enough for a
+// CRITICAL_SECTION; the rest are single i64 slots. EXPORTED where the hand-assembled completion loop reads them.
+export let IoIocpLabel = b"__io_iocp"
+export let IoDoneEventLabel = b"__io_done_event"
+export let IoLockLabel = b"__io_lock"
+let IoInitDoneLabel = b"__io_init_done"
+let IoPendingLabel = b"__io_pending"
+
+// The CRITICAL_SECTION struct is 40 bytes on x64 (5 i64 words). `__io_lock` reserves that many `.data` words so
+// InitializeCriticalSection has a valid region to initialize in place.
+let CriticalSectionWords = 5
+let CriticalSectionSlotBytes = 8
+
+// The `.data` slab-region size the read buffer / scratch structs are `__slab_alloc`'d per read (see `__gt_io_read`).
+// A read buffer big enough for one line of child stdout; the probe reads `cmd /c echo hello` (~7 bytes).
+let IoReadBufferBytes = 4096
+// SECURITY_ATTRIBUTES: nLength=24 @0, lpSecurityDescriptor=0 @8, bInheritHandle=1 @16 — the inheritable SA the
+// child WRITE end (CreateFileW) is opened with, so CreateProcessA(bInheritHandles=TRUE) passes it to the child.
+let SecurityAttributesSize = 24
+let SecurityAttributesNLengthOffset = 0
+let SecurityAttributesLpSdOffset = 8
+let SecurityAttributesBInheritOffset = 16
+let SecurityAttributesInheritable = 1
+// STARTUPINFOA fields the read builtin sets so the child's stdout is the pipe write end. `cb`=0x68, `dwFlags`
+// STARTF_USESTDHANDLES (0x100) @0x3C, hStdInput @0x50, hStdOutput @0x58, hStdError @0x60. Every other field 0.
+let StartfUseStdHandles = 0x100
+let StartupInfoDwFlagsOffset = 0x3C
+let StartupInfoHStdInputOffset = 0x50
+let StartupInfoHStdOutputOffset = 0x58
+let StartupInfoHStdErrorOffset = 0x60
+// ReadFile / GetLastError classification: ERROR_IO_PENDING (997) → the read yields; ERROR_BROKEN_PIPE (109) →
+// clean EOF (0 bytes). Any other GetLastError value is treated as EOF/0 for the slice-1a probe.
+let ErrorIoPending = 997
+let ErrorBrokenPipe = 109
+// The wide pipe-name buffer: prefix `\\.\pipe\mx` (11 wchars) + a 16-wchar hex uniquifier + NUL, in a `__slab_alloc`
+// buffer. `PipeNamePrefixWchars` counts the prefix wide chars; `PipeNameHexDigits` the uniquifier digits (a 64-bit
+// value); `WideCharBytes` is 2 (UTF-16). The uniquifier is a monotonic global counter XORed with the GT pointer, so
+// two concurrent reads (different GTs) and two sequential reads (same recycled GT struct) all get distinct names.
+// The wide-char index into the pipe-name buffer a prefix store targets (0..the prefix length).
+typealias PipeWcharIndex = int(0 to 63)
+let PipeNamePrefixWchars = 11
+let PipeNameHexDigits = 16
+let WideCharBytes = 2
+let PipeNameTrailingNulBytes = 2
+let HexRadix = 16
+let HexDigitZero = 48 as ParsedInt  // '0'
+let HexDigitLetterBase = 97 as ParsedInt  // 'a' - 10, so 10..15 map to 'a'..'f'
+let HexAlphaThreshold = 10 as ParsedInt
+let NibbleBits = 4
+let TopNibbleShift = 60  // (PipeNameHexDigits - 1) * NibbleBits — the highest nibble of a 64-bit value
+let NibbleMask = 0xF
+// The global pipe-name uniquifier counter's `.data` slot (main-thread-only increment, single-M).
+let IoPipeSeqLabel = b"__io_pipe_seq"
 
 // ⭐ P1.5-B1c #92 — the REUSABLE subprocess scratch buffers. `__gt_process_run` used to `__slab_alloc` four
 // scratch buffers PER CALL (STARTUPINFOA, PROCESS_INFORMATION, the mutable cmdline copy, the exit-code slot),
@@ -502,28 +592,81 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	return out
 end 'gtRuntimeGlobals'
 
+// The IOCP substrate's `.data` slots (P1.5 slice 1a-ii) — laid out ONLY when the module reads a pipe (`usesIocp`),
+// so a plain timer/proc/async program's `.data` is byte-identical to the pre-slice form. The completion port, the
+// wake event, the run-queue lock (a slot holding the slab-allocated CRITICAL_SECTION's pointer), the init guard, the
+// in-flight-read count, and the pipe-name uniquifier counter. All 0 until `__io_init` seeds them.
+export function ioRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	out.push(DataSectionEntry.create(String.from(IoIocpLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(IoDoneEventLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(IoLockLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(IoInitDoneLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(IoPendingLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(IoPipeSeqLabel), valueType: StdType.i64, value: 0))
+	return out
+end 'ioRuntimeGlobals'
+
 // Install the GT scheduler into the lowered Std module. Called only when `moduleUsesGt` held. The three
 // hand-assembled chunks (`__gt_context_switch`, `__gt_trampoline`, `__gt_morestack`) are appended separately at
 // the Target tier (X64GtRuntime.appendX64GtRuntimeChunks) — they are bytes, not Std ops.
-export function installGtRuntime(module StdModule)
-	buildGtInit(module)
-	buildGtSpawn(module)
+// Install the GT scheduler into the lowered Std module. `usesIocp` (P1.5 slice 1a-ii) adds the IOCP overlapped-read
+// substrate: `__io_init` seeds the completion port/thread/event/lock in `__gt_init`, the run-queue mutations take the
+// CRITICAL_SECTION that excludes the completion thread's cross-thread `__gt_enqueue`, the netpoll wakes on the event,
+// and `__gt_io_read` is built. A non-IOCP GT program stays byte-identical (no lock, no event wait, no io functions).
+export function installGtRuntime(module StdModule, usesIocp bool)
+	buildGtInit(module, usesIocp: usesIocp)
+	buildGtSpawn(module, usesIocp: usesIocp)
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
 	buildGtNowNs(module)
 	buildGtTimerAdd(module)
 	buildGtTimerEarliest(module)
-	buildGtTimerCheck(module)
-	buildGtDriveUntil(module)
+	buildGtTimerCheck(module, usesIocp: usesIocp)
+	buildGtDriveUntil(module, usesIocp: usesIocp)
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true)
-	buildGtPromiseDrop(module)
+	buildGtPromiseDrop(module, usesIocp: usesIocp)
 	buildGtSleep(module)
 	buildGtProcAdd(module)
 	buildGtProcCount(module)
-	buildGtProcCheck(module)
+	buildGtProcCheck(module, usesIocp: usesIocp)
 	buildGtProcessRun(module)
+
+	if usesIocp 'io'
+		buildIoInit(module)
+		buildGtIoRead(module)
+	end 'io'
 end 'installGtRuntime'
+
+// ⭐ Emit the run-queue lock ACQUIRE around a main-thread head/tail mutation, ONLY when `usesIocp` (the completion
+// thread is the sole cross-thread queue mutator; without one, the run queue is single-M and needs no lock). The
+// `__gt_enqueue`/`__gt_dequeue`/run-queue-remove primitives stay PURE MEMORY (no `iatCall`), so the completion
+// thread's hand-assembled loop can call them without the syscall shim mis-firing; the lock is taken by the CALLER
+// instead — shimmed here on the main thread (correct: `__gt_current_gt` is consistent), direct in the completion
+// loop. Loads the slab-allocated CRITICAL_SECTION's pointer from `__io_lock` and `EnterCriticalSection`s it.
+function emitRunQueueLock(module StdModule, block IrBlock, ids ValueMinter, usesIocp bool)
+	if not usesIocp 'noLock'
+		return
+	end 'noLock'
+	let lockAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(lockAddr, label: IoLockLabel))
+	let lockPtr = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(lockPtr, addrId: lockAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.osLockEnter(lockPtr))
+end 'emitRunQueueLock'
+
+// The RELEASE twin of `emitRunQueueLock`.
+function emitRunQueueUnlock(module StdModule, block IrBlock, ids ValueMinter, usesIocp bool)
+	if not usesIocp 'noLock'
+		return
+	end 'noLock'
+	let lockAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(lockAddr, label: IoLockLabel))
+	let lockPtr = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(lockPtr, addrId: lockAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.osLockLeave(lockPtr))
+end 'emitRunQueueUnlock'
 
 // A two-argument `ValueIdArray` — the shape `__gt_spawn(funcPtr, argBuf)` and `__gt_context_switch(from, to)`
 // share. MmRuntime's `argsOf` is the one-argument twin; the zero-argument call (`__gt_init`, `__gt_dequeue`)
@@ -539,7 +682,7 @@ end 'args2'
 // will hold the MAIN thread's execution context: the first `__gt_await`'s `__gt_context_switch(GT0, g)`
 // saves main's real rsp/rbp into GT0, so GT0 IS main from then on) and publishes it as the current GT.
 // GT0 has stackBase 0 — it runs on the real OS stack and is never freed.
-function buildGtInit(module StdModule)
+function buildGtInit(module StdModule, usesIocp bool)
 	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -638,6 +781,13 @@ function buildGtInit(module StdModule)
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
 	module.appendOp(doInit, op: StdOp.storeIndirect(initDoneAddr, offset: 0, valueId: oneConst, valueType: StdType.i64))
+	// P1.5 slice 1a-ii: seed the IOCP substrate (port + completion thread + event + run-queue lock) HERE, at the
+	// first scheduler init — BEFORE any `__gt_spawn`/`__gt_enqueue` can take the run-queue lock, and before any read
+	// completes on the thread. A void call mints an unread result id.
+	if usesIocp 'ioInit'
+		let ioInitResult = ids.mint()
+		module.appendOp(doInit, op: StdOp.call(ioInitResult, callee: IoInitName, args: ValueIdArray.create()))
+	end 'ioInit'
 	module.setTerminator(doInit, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -663,7 +813,7 @@ end 'buildGtInit'
 // with a whole-struct memzero on the recycle arm; the bootstrap's field-by-field re-init is the WEAKER version.
 //
 // It does NOT run the GT — a spawned GT runs only when a driver (`__gt_await`) dequeues and switches into it.
-function buildGtSpawn(module StdModule)
+function buildGtSpawn(module StdModule, usesIocp bool)
 	var func = IrFunction.createFromStd(GtSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -796,9 +946,12 @@ function buildGtSpawn(module StdModule)
 	module.appendOp(initBlock, op: StdOp.binOp(liveRaised, lhs: liveCount, rhs: liveOneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(liveCountAddr, offset: 0, valueId: liveRaised, valueType: StdType.i64))
 
-	// Enqueue as ready and return the GT as the promise handle.
+	// Enqueue as ready and return the GT as the promise handle. Under `usesIocp`, the enqueue takes the run-queue
+	// lock so it excludes the completion thread's cross-thread `__gt_enqueue`.
+	emitRunQueueLock(module, block: initBlock, ids: ids, usesIocp: usesIocp)
 	let enqResult = ids.mint()
 	module.appendOp(initBlock, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	emitRunQueueUnlock(module, block: initBlock, ids: ids, usesIocp: usesIocp)
 	module.setTerminator(initBlock, op: StdOp.ret(gt))
 
 	module.functions.push(func)
@@ -1090,7 +1243,7 @@ end 'emitProcSwapDown'
 // its stack, so status=ready alone wakes it and enqueueing would double-schedule it), and remove its entry
 // from the store (swap the last entry into the hole, count--; re-examine the same index). Deadline order is
 // preserved by the netpoll waking on the earliest deadline first, so the shorter sleeper resumes first.
-function buildGtTimerCheck(module StdModule)
+function buildGtTimerCheck(module StdModule, usesIocp bool)
 	var func = IrFunction.createFromStd(GtTimerCheckName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1169,9 +1322,11 @@ function buildGtTimerCheck(module StdModule)
 	module.appendOp(fire, op: StdOp.cmp(isCurrent, lhs: gt, rhs: curGt, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(fire, op: StdOp.condBranch(isCurrent, thenBlockId: afterFire.id, elseBlockId: doEnqueue.id))
 
-	// doEnqueue: put the woken GT back on the run queue.
+	// doEnqueue: put the woken GT back on the run queue (under the run-queue lock when `usesIocp`).
+	emitRunQueueLock(module, block: doEnqueue, ids: ids, usesIocp: usesIocp)
 	let enqResult = ids.mint()
 	module.appendOp(doEnqueue, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	emitRunQueueUnlock(module, block: doEnqueue, ids: ids, usesIocp: usesIocp)
 	module.setTerminator(doEnqueue, op: StdOp.branch(afterFire.id))
 
 	// afterFire: remove entry i — copy the last live entry over it, count--, re-examine i (don't advance).
@@ -1228,6 +1383,18 @@ end 'emitCeilMs'
 // when no timer bounds the wait, else the timer delta. The handle array is the store's `procHandles` array itself
 // — parallel-array storage keeps it contiguous, so no gather copy is needed. Factored so the two blocks that
 // block on children (bounded and unbounded) share one spelling of the wait+recheck.
+// Emit the netpoll's block on the IOCP wake event into `block`: `WaitForSingleObject(__io_done_event, timeoutMs)`
+// (P1.5 slice 1a-ii). The completion thread SetEvents this AUTO-reset event after it re-readies a completed read, so
+// the main M wakes as soon as any overlapped read finishes (never a busy-spin). `timeoutMs` is INFINITE when no timer
+// bounds the wait, else the timer delta. The wait result is ignored (the drive loop re-checks status / the run queue).
+function emitIoEventWait(module StdModule, block IrBlock, ids ValueMinter, timeoutMs ValueId)
+	let eventAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(eventAddr, label: IoDoneEventLabel))
+	let eventHandle = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(eventHandle, addrId: eventAddr, offset: 0, valueType: StdType.i64))
+	let waitResult = ids.mint()
+	module.appendOp(block, op: StdOp.osWaitHandle(waitResult, handleId: eventHandle, timeoutMsId: timeoutMs))
+end 'emitIoEventWait'
 function emitProcWait(module StdModule, block IrBlock, ids ValueMinter, pc ValueId, timeoutMs ValueId)
 	let handlesBaseAddr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
@@ -1251,7 +1418,7 @@ end 'emitProcWait'
 // `__gt_await(p)` drives until the promise's GT is `completed`; a top-level `__gt_sleep`/`__gt_process_run` drives
 // until its own GT is `ready` (woken by its timer / its child's exit). The loop state lives entirely in memory
 // (the current GT, the run queue, the timer + process stores), so this is phi-free — each iteration reloads it.
-function buildGtDriveUntil(module StdModule)
+function buildGtDriveUntil(module StdModule, usesIocp bool)
 	var func = IrFunction.createFromStd(GtDriveUntilName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
@@ -1291,9 +1458,12 @@ function buildGtDriveUntil(module StdModule)
 	module.appendOp(loopHdr, op: StdOp.cmp(reached, lhs: status, rhs: targetStatus, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(loopHdr, op: StdOp.condBranch(reached, thenBlockId: doneBlock.id, elseBlockId: drive.id))
 
-	// drive: g = __gt_dequeue(); if g == 0 → netpoll, else → run.
+	// drive: g = __gt_dequeue(); if g == 0 → netpoll, else → run. Under `usesIocp` the dequeue takes the run-queue
+	// lock — it mutates head/tail, which the completion thread's cross-thread `__gt_enqueue` also mutates.
+	emitRunQueueLock(module, block: drive, ids: ids, usesIocp: usesIocp)
 	let g = ids.mint()
 	module.appendOp(drive, op: StdOp.call(g, callee: GtDequeueName, args: ValueIdArray.create()))
+	emitRunQueueUnlock(module, block: drive, ids: ids, usesIocp: usesIocp)
 	let gNull = ids.mint()
 	module.appendOp(drive, op: StdOp.cmp(gNull, lhs: g, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(drive, op: StdOp.condBranch(gNull, thenBlockId: netpoll.id, elseBlockId: run.id))
@@ -1345,7 +1515,58 @@ function buildGtDriveUntil(module StdModule)
 	module.appendOp(netpoll, op: StdOp.call(earliest, callee: GtTimerEarliestName, args: ValueIdArray.create()))
 	let noProcs = ids.mint()
 	module.appendOp(netpoll, op: StdOp.cmp(noProcs, lhs: pc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(netpoll, op: StdOp.condBranch(noProcs, thenBlockId: timerOnly.id, elseBlockId: haveProcs.id))
+	// ⭐ P1.5 slice 1a-ii: when the module reads pipes, the pc==0 arm first checks whether an OVERLAPPED read is
+	// in flight (`__io_pending > 0`) and, if so, BLOCKS ON `__io_done_event` (bounded by the earliest timer, else
+	// INFINITE) instead of on the timer alone — the completion thread wakes it. `pc >= 1` (a parked child) keeps
+	// the existing `haveProcs` path unchanged: the slice-1a probe never parks a proc while reading, so io and proc
+	// never co-schedule here (that combined wait set is a later slice). Without `usesIocp` the arm is byte-identical
+	// to the pre-slice form (straight to `timerOnly`).
+	var pcZeroTargetId = timerOnly.id
+	if usesIocp 'ioNetpoll'
+		var checkIo = module.addBlock(func, label: b"checkio")
+		var ioPending = module.addBlock(func, label: b"iopending")
+		var ioInfinite = module.addBlock(func, label: b"ioinfinite")
+		var ioTimerDecide = module.addBlock(func, label: b"iotimerdecide")
+		var ioBounded = module.addBlock(func, label: b"iobounded")
+		pcZeroTargetId = checkIo.id
+
+		// checkIo: ioc = *__io_pending; no read in flight → timerOnly (the existing timer-only path), else → ioPending.
+		let ioPendingAddr = ids.mint()
+		module.appendOp(checkIo, op: StdOp.globalAddr(ioPendingAddr, label: IoPendingLabel))
+		let ioc = ids.mint()
+		module.appendOp(checkIo, op: StdOp.loadIndirect(ioc, addrId: ioPendingAddr, offset: 0, valueType: StdType.i64))
+		let noIo = ids.mint()
+		module.appendOp(checkIo, op: StdOp.cmp(noIo, lhs: ioc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+		module.setTerminator(checkIo, op: StdOp.condBranch(noIo, thenBlockId: timerOnly.id, elseBlockId: ioPending.id))
+
+		// ioPending: a read is in flight → block on __io_done_event. No timer → INFINITE; else bound by the timer.
+		let noTimersIo = ids.mint()
+		module.appendOp(ioPending, op: StdOp.cmp(noTimersIo, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+		module.setTerminator(ioPending, op: StdOp.condBranch(noTimersIo, thenBlockId: ioInfinite.id, elseBlockId: ioTimerDecide.id))
+
+		// ioInfinite: no timer → block on the event with INFINITE; a read completion is the only thing that wakes us.
+		// After the wait the completion thread has set our status / enqueued the woken read GT, so re-check via loopHdr.
+		let ioInfiniteConst = ids.mint()
+		module.appendOp(ioInfinite, op: StdOp.const(ioInfiniteConst, value: WaitInfinite, valueType: StdType.i64))
+		emitIoEventWait(module, block: ioInfinite, ids: ids, timeoutMs: ioInfiniteConst)
+		module.setTerminator(ioInfinite, op: StdOp.branch(loopHdr.id))
+
+		// ioTimerDecide: a timer exists. Already due → fire it first (firenow); else block on the event bounded by it.
+		let ioIsDue = ids.mint()
+		module.appendOp(ioTimerDecide, op: StdOp.cmp(ioIsDue, lhs: earliest, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
+		module.setTerminator(ioTimerDecide, op: StdOp.condBranch(ioIsDue, thenBlockId: firenow.id, elseBlockId: ioBounded.id))
+
+		// ioBounded: wait on the event for at most the timer delta, then re-check timers with a FRESH clock (either
+		// a read completed OR the timer expired during the wait) → loopHdr.
+		let ioMs = emitCeilMs(module, block: ioBounded, ids: ids, earliest: earliest, now: now)
+		emitIoEventWait(module, block: ioBounded, ids: ids, timeoutMs: ioMs)
+		let ioNowAfter = ids.mint()
+		module.appendOp(ioBounded, op: StdOp.call(ioNowAfter, callee: GtNowNsName, args: ValueIdArray.create()))
+		let ioTimerCheckResult = ids.mint()
+		module.appendOp(ioBounded, op: StdOp.call(ioTimerCheckResult, callee: GtTimerCheckName, args: argsOf(ioNowAfter)))
+		module.setTerminator(ioBounded, op: StdOp.branch(loopHdr.id))
+	end 'ioNetpoll'
+	module.setTerminator(netpoll, op: StdOp.condBranch(noProcs, thenBlockId: pcZeroTargetId, elseBlockId: haveProcs.id))
 
 	// timerOnly (pc == 0): the pre-subprocess path, byte-for-byte the same behaviour — no timer → deadlock done,
 	// else decide.
@@ -1507,7 +1728,7 @@ end 'emitGtStructReclaim'
 // Every arm ends at the shared struct reclaim (`emitGtStructReclaim` — decrement the live count, push onto
 // the free-list). shv2's polling scheduler has no in-flight OVERLAPPED I/O to abort, so "deregister" reduces
 // to the array/queue splice, and the ordering trap reduces to store-remove → free.
-function buildGtPromiseDrop(module StdModule)
+function buildGtPromiseDrop(module StdModule, usesIocp bool)
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
@@ -1539,8 +1760,19 @@ function buildGtPromiseDrop(module StdModule)
 	module.appendOp(checkReady, op: StdOp.cmp(isReady, lhs: status, rhs: readyConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(checkReady, op: StdOp.condBranch(isReady, thenBlockId: readyArm.id, elseBlockId: waitingArm.id))
 
-	// ready arm: splice the never-run GT out of the FIFO run queue, then free its seed stack.
-	emitGtRunQueueRemove(module, func: func, ids: ids, startBlock: readyArm, gt: gt, cont: freeStack)
+	// ready arm: splice the never-run GT out of the FIFO run queue, then free its seed stack. Under `usesIocp` the
+	// splice takes the run-queue lock (it walks head/tail, which the completion thread's `__gt_enqueue` mutates), and
+	// a dedicated unlock block releases before the shared `freeStack`. Without `usesIocp` it is byte-identical to the
+	// pre-slice-1a-ii form (no lock, straight to `freeStack`).
+	if usesIocp 'lockedRemove'
+		var readyUnlock = module.addBlock(func, label: b"readyunlock")
+		emitRunQueueLock(module, block: readyArm, ids: ids, usesIocp: usesIocp)
+		emitGtRunQueueRemove(module, func: func, ids: ids, startBlock: readyArm, gt: gt, cont: readyUnlock)
+		emitRunQueueUnlock(module, block: readyUnlock, ids: ids, usesIocp: usesIocp)
+		module.setTerminator(readyUnlock, op: StdOp.branch(freeStack.id))
+	end 'lockedRemove' else 'plainRemove'
+		emitGtRunQueueRemove(module, func: func, ids: ids, startBlock: readyArm, gt: gt, cont: freeStack)
+	end 'plainRemove'
 
 	// waiting arm: remove from the timer store, then the process store (CloseHandle-on-cancel), then free.
 	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingArm, gt: gt, cont: waitingProc)
@@ -1973,7 +2205,7 @@ end 'buildGtProcCount'
 // it is `__gt_current_gt`, a self-driving GT0 already on its own stack), and remove the entry (swap the last live
 // entry into the hole across BOTH parallel arrays, count--, re-examine the same index). Mirrors
 // `__gt_timer_check`'s fire/afterfire, with a zero-timeout wait poll in place of the deadline compare.
-function buildGtProcCheck(module StdModule)
+function buildGtProcCheck(module StdModule, usesIocp bool)
 	var func = IrFunction.createFromStd(GtProcCheckName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var ids = ValueMinter.create(0)
 
@@ -2057,9 +2289,11 @@ function buildGtProcCheck(module StdModule)
 	module.appendOp(fire, op: StdOp.cmp(isCurrent, lhs: gt, rhs: curGt, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(fire, op: StdOp.condBranch(isCurrent, thenBlockId: afterFire.id, elseBlockId: doEnqueue.id))
 
-	// doEnqueue: put the woken GT back on the run queue.
+	// doEnqueue: put the woken GT back on the run queue (under the run-queue lock when `usesIocp`).
+	emitRunQueueLock(module, block: doEnqueue, ids: ids, usesIocp: usesIocp)
 	let enqResult = ids.mint()
 	module.appendOp(doEnqueue, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	emitRunQueueUnlock(module, block: doEnqueue, ids: ids, usesIocp: usesIocp)
 	module.setTerminator(doEnqueue, op: StdOp.branch(afterFire.id))
 
 	// afterFire: remove entry i — copy the last live entry over it in BOTH arrays, count--, re-examine i.
@@ -2325,3 +2559,459 @@ function buildGtProcessRun(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtProcessRun'
+
+// ⭐ `__io_init()` — one-time IOCP substrate init (P1.5 slice 1a-ii), idempotent via `__io_init_done`. Creates the
+// process-wide completion port, the AUTO-reset wake event, the run-queue CRITICAL_SECTION (slab-allocated, its
+// pointer published to `__io_lock`), and — LAST, once the port + lock exist — the completion-drain thread. Called
+// from `__gt_init` when the module reads pipes, so the port/lock/thread are all up before any `__gt_spawn` can take
+// the run-queue lock or any read can complete. Runs on GT0 (`stackBase == 0`), so its shimmed kernel calls run
+// direct.
+function buildIoInit(module StdModule)
+	var func = IrFunction.createFromStd(IoInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doInit = module.addBlock(func, label: b"doinit")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	let initDoneAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(initDoneAddr, label: IoInitDoneLabel))
+	let initDone = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(initDone, addrId: initDoneAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let already = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(already, lhs: initDone, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(already, thenBlockId: doneBlock.id, elseBlockId: doInit.id))
+
+	// __io_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1).
+	let iocp = ids.mint()
+	module.appendOp(doInit, op: StdOp.osIocpCreate(iocp))
+	let iocpAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(iocpAddr, label: IoIocpLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(iocpAddr, offset: 0, valueId: iocp, valueType: StdType.i64))
+	// __io_done_event = CreateEventA(NULL, FALSE=auto-reset, FALSE, NULL).
+	let event = ids.mint()
+	module.appendOp(doInit, op: StdOp.osEventCreate(event))
+	let eventAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(eventAddr, label: IoDoneEventLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(eventAddr, offset: 0, valueId: event, valueType: StdType.i64))
+	// __io_lock = &(InitializeCriticalSection(__slab_alloc(40))). The CRITICAL_SECTION lives in a slab region; its
+	// pointer is published so `osLockEnter`/`osLockLeave` (and the completion loop's direct Enter/Leave) address it.
+	let lockSizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(lockSizeConst, value: CriticalSectionWords * CriticalSectionSlotBytes, valueType: StdType.i64))
+	let lock = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockSizeConst)))
+	module.appendOp(doInit, op: StdOp.osLockInit(lock))
+	let lockAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(lockAddr, label: IoLockLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(lockAddr, offset: 0, valueId: lock, valueType: StdType.i64))
+	// Start the completion-drain thread LAST — the port + lock it uses now exist. The thread handle is unneeded
+	// (the thread runs for the whole program and is torn down at process exit), so its result id is left unread.
+	let entryPtr = ids.mint()
+	module.appendOp(doInit, op: StdOp.funcAddr(entryPtr, funcName: IoCompletionLoopName))
+	let threadHandle = ids.mint()
+	module.appendOp(doInit, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr))
+	// __io_init_done = 1.
+	let oneConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	module.appendOp(doInit, op: StdOp.storeIndirect(initDoneAddr, offset: 0, valueId: oneConst, valueType: StdType.i64))
+	module.setTerminator(doInit, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildIoInit'
+
+// Store the LOW byte of wide char `wcharIndex` in `bufPtr` to `asciiCode` (the high byte stays the slab-zero, so a
+// wide char with an ASCII low byte results). The pipe-name buffer is freshly slab-zeroed, so only the non-zero low
+// bytes are written and the wide NUL after the last digit is automatic.
+function emitStoreWideCharLowByte(module StdModule, block IrBlock, ids ValueMinter, bufPtr ValueId, wcharIndex PipeWcharIndex, asciiCode ParsedInt)
+	let offConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(offConst, value: (wcharIndex * WideCharBytes) as ParsedInt, valueType: StdType.i64))
+	let slotAddr = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(slotAddr, lhs: bufPtr, rhs: offConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let chConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(chConst, value: asciiCode, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(slotAddr, offset: 0, valueId: chConst, valueType: StdType.u8))
+end 'emitStoreWideCharLowByte'
+
+// Fill the freshly slab-zeroed wide `bufPtr` with `\\.\pipe\mx<uniquifier-hex>` (a valid Win32 named-pipe name),
+// then branch to `cont`. `uniquifier = gt XOR seq`, where `seq` is a monotonic per-process counter (`__io_pipe_seq`,
+// incremented here; single-M so a plain load/add/store is race-free) and `gt` is the reading GT's slab pointer — so
+// two CONCURRENT reads (different GTs) and two SEQUENTIAL reads (same recycled GT struct, different seq) and two
+// separate PROCESSES (ASLR'd GT pointers) all get distinct names. The 16 hex digits are written MSB-first with a
+// small loop.
+function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, bufPtr ValueId, gt ValueId, cont IrBlock)
+	var hexHdr = module.addBlock(func, label: b"pnhexhdr")
+	var hexBody = module.addBlock(func, label: b"pnhexbody")
+	var digitArm = module.addBlock(func, label: b"pndigit")
+	var letterArm = module.addBlock(func, label: b"pnletter")
+	var storeArm = module.addBlock(func, label: b"pnstore")
+
+	// seq = (*__io_pipe_seq)++ ; uniquifier = gt XOR seq.
+	let seqAddr = ids.mint()
+	module.appendOp(startBlock, op: StdOp.globalAddr(seqAddr, label: IoPipeSeqLabel))
+	let seq = ids.mint()
+	module.appendOp(startBlock, op: StdOp.loadIndirect(seq, addrId: seqAddr, offset: 0, valueType: StdType.i64))
+	let oneConst = ids.mint()
+	module.appendOp(startBlock, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let seqNext = ids.mint()
+	module.appendOp(startBlock, op: StdOp.binOp(seqNext, lhs: seq, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(startBlock, op: StdOp.storeIndirect(seqAddr, offset: 0, valueId: seqNext, valueType: StdType.i64))
+	let uniquifier = ids.mint()
+	module.appendOp(startBlock, op: StdOp.binOp(uniquifier, lhs: gt, rhs: seq, opcode: StdBinOpcode.bitXor, operandType: StdType.i64))
+
+	// The prefix `\\.\pipe\mx` — 11 wide chars, low bytes only (the buffer is zeroed).
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 0, asciiCode: 92 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 1, asciiCode: 92 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 2, asciiCode: 46 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 3, asciiCode: 92 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 4, asciiCode: 112 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 5, asciiCode: 105 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 6, asciiCode: 112 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 7, asciiCode: 101 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 8, asciiCode: 92 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 9, asciiCode: 109 as ParsedInt)
+	emitStoreWideCharLowByte(module, block: startBlock, ids: ids, bufPtr: bufPtr, wcharIndex: 10, asciiCode: 120 as ParsedInt)
+	let zeroIdx = ids.mint()
+	module.appendOp(startBlock, op: StdOp.const(zeroIdx, value: 0, valueType: StdType.i64))
+	module.setTerminator(startBlock, op: StdOp.branch(hexHdr.id))
+	startBlock.branchEdges.push(BranchEdge.create(hexHdr.id, argIds: argsOf(zeroIdx)))
+
+	// hexHdr(i): if i >= 16 → cont, else write hex digit i.
+	let i = ids.mint()
+	hexHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let hexCountConst = ids.mint()
+	module.appendOp(hexHdr, op: StdOp.const(hexCountConst, value: PipeNameHexDigits as ParsedInt, valueType: StdType.i64))
+	let atEnd = ids.mint()
+	module.appendOp(hexHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: hexCountConst, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(hexHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: hexBody.id))
+
+	// hexBody(i): nibble = (uniquifier >>logical (60 - i*4)) & 0xF ; digit vs letter?
+	let nibbleBitsConst = ids.mint()
+	module.appendOp(hexBody, op: StdOp.const(nibbleBitsConst, value: NibbleBits as ParsedInt, valueType: StdType.i64))
+	let iShift = ids.mint()
+	module.appendOp(hexBody, op: StdOp.binOp(iShift, lhs: i, rhs: nibbleBitsConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let topShiftConst = ids.mint()
+	module.appendOp(hexBody, op: StdOp.const(topShiftConst, value: TopNibbleShift as ParsedInt, valueType: StdType.i64))
+	let shift = ids.mint()
+	module.appendOp(hexBody, op: StdOp.binOp(shift, lhs: topShiftConst, rhs: iShift, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let shifted = ids.mint()
+	module.appendOp(hexBody, op: StdOp.binOp(shifted, lhs: uniquifier, rhs: shift, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
+	let maskConst = ids.mint()
+	module.appendOp(hexBody, op: StdOp.const(maskConst, value: NibbleMask as ParsedInt, valueType: StdType.i64))
+	let nibble = ids.mint()
+	module.appendOp(hexBody, op: StdOp.binOp(nibble, lhs: shifted, rhs: maskConst, opcode: StdBinOpcode.bitAnd, operandType: StdType.i64))
+	let alphaThreshold = ids.mint()
+	module.appendOp(hexBody, op: StdOp.const(alphaThreshold, value: HexAlphaThreshold, valueType: StdType.i64))
+	let isDigit = ids.mint()
+	module.appendOp(hexBody, op: StdOp.cmp(isDigit, lhs: nibble, rhs: alphaThreshold, pred: StdCmpPred.lt, operandType: StdType.i64))
+	// `i` (hexHdr's loop-carried block arg) DOMINATES hexBody/digitArm/letterArm/storeArm, so it is read directly
+	// there — only `ch` (defined in one of the two arms) is a merge that needs a storeArm block arg.
+	module.setTerminator(hexBody, op: StdOp.condBranch(isDigit, thenBlockId: digitArm.id, elseBlockId: letterArm.id))
+	hexBody.branchEdges.push(BranchEdge.create(digitArm.id, argIds: argsOf(nibble)))
+	hexBody.branchEdges.push(BranchEdge.create(letterArm.id, argIds: argsOf(nibble)))
+
+	// digitArm(nibble): ch = nibble + '0' → storeArm(ch).
+	let dNibble = ids.mint()
+	digitArm.blockArgs.push(IrBlockArg.create(dNibble, argType: StdType.i64))
+	let digitZero = ids.mint()
+	module.appendOp(digitArm, op: StdOp.const(digitZero, value: HexDigitZero, valueType: StdType.i64))
+	let digitCh = ids.mint()
+	module.appendOp(digitArm, op: StdOp.binOp(digitCh, lhs: dNibble, rhs: digitZero, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(digitArm, op: StdOp.branch(storeArm.id))
+	digitArm.branchEdges.push(BranchEdge.create(storeArm.id, argIds: argsOf(digitCh)))
+
+	// letterArm(nibble): ch = nibble + ('a' - 10) → storeArm(ch).
+	let lNibble = ids.mint()
+	letterArm.blockArgs.push(IrBlockArg.create(lNibble, argType: StdType.i64))
+	let letterBase = ids.mint()
+	module.appendOp(letterArm, op: StdOp.const(letterBase, value: HexDigitLetterBase, valueType: StdType.i64))
+	let letterCh = ids.mint()
+	module.appendOp(letterArm, op: StdOp.binOp(letterCh, lhs: lNibble, rhs: letterBase, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(letterArm, op: StdOp.branch(storeArm.id))
+	letterArm.branchEdges.push(BranchEdge.create(storeArm.id, argIds: argsOf(letterCh)))
+
+	// storeArm(ch): buf[(PipeNamePrefixWchars + i)*2] low byte = ch ; loop to hexHdr(i+1). `ch` merges the two arms
+	// (a block arg); `i` is read directly from hexHdr's block arg (it dominates here).
+	let ch = ids.mint()
+	storeArm.blockArgs.push(IrBlockArg.create(ch, argType: StdType.i64))
+	let prefixWcharsConst = ids.mint()
+	module.appendOp(storeArm, op: StdOp.const(prefixWcharsConst, value: PipeNamePrefixWchars as ParsedInt, valueType: StdType.i64))
+	let wcharIdx = ids.mint()
+	module.appendOp(storeArm, op: StdOp.binOp(wcharIdx, lhs: prefixWcharsConst, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let wideBytesConst = ids.mint()
+	module.appendOp(storeArm, op: StdOp.const(wideBytesConst, value: WideCharBytes as ParsedInt, valueType: StdType.i64))
+	let byteOff = ids.mint()
+	module.appendOp(storeArm, op: StdOp.binOp(byteOff, lhs: wcharIdx, rhs: wideBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let slotAddr = ids.mint()
+	module.appendOp(storeArm, op: StdOp.binOp(slotAddr, lhs: bufPtr, rhs: byteOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(storeArm, op: StdOp.storeIndirect(slotAddr, offset: 0, valueId: ch, valueType: StdType.u8))
+	let oneStep = ids.mint()
+	module.appendOp(storeArm, op: StdOp.const(oneStep, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(storeArm, op: StdOp.binOp(iNext, lhs: i, rhs: oneStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(storeArm, op: StdOp.branch(hexHdr.id))
+	storeArm.branchEdges.push(BranchEdge.create(hexHdr.id, argIds: argsOf(iNext)))
+end 'buildPipeName'
+
+
+// ⭐ `__gt_io_read(strPtr) -> bytesRead` — THE YIELDING OVERLAPPED PIPE READ (P1.5 slice 1a-ii, the `spawnReadLine`
+// probe). Spawns the Windows child named by the command String with its stdout redirected to a fresh overlapped pipe,
+// issues an overlapped ReadFile that YIELDS the green thread (via the IOCP completion thread) when the read is pending,
+// and returns the byte count. The command String is BORROWED (buffer/length read like `__print_string`); ownership
+// stays with the caller. Per-read buffers are `__slab_alloc`'d fresh (concurrency-safe; slab-invisible to the `__mm`
+// leak gate) rather than the #92 one-time reuse `__gt_process_run` uses — a read YIELDS, so a concurrent read must not
+// share scratch. On any spawn/pipe failure the read returns 0 (an environment error the slice-1a probe treats as EOF).
+function buildGtIoRead(module StdModule)
+	var func = IrFunction.createFromStd(IoReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var afterName = module.addBlock(func, label: b"aftername")
+	var copyHdr = module.addBlock(func, label: b"copyhdr")
+	var copyBody = module.addBlock(func, label: b"copybody")
+	var afterCopy = module.addBlock(func, label: b"aftercopy")
+	var spawnFail = module.addBlock(func, label: b"spawnfail")
+	var spawnOk = module.addBlock(func, label: b"spawnok")
+	var syncDone = module.addBlock(func, label: b"syncdone")
+	var checkErr = module.addBlock(func, label: b"checkerr")
+	var eofOrErr = module.addBlock(func, label: b"eoforerr")
+	var park = module.addBlock(func, label: b"park")
+	var selfDrive = module.addBlock(func, label: b"selfdrive")
+	var parkSwitch = module.addBlock(func, label: b"parkswitch")
+	var resume = module.addBlock(func, label: b"resume")
+
+	emitParams(module, block: entry, count: 1)
+	let strPtr = 0 as ValueId
+
+	// Lazy scheduler + IOCP init (a top-level `spawnReadLine` may reach here first; `__gt_init` runs `__io_init`).
+	let initResult = ids.mint()
+	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+
+	// selfGt = __gt_current_gt (the reading GT — needed for the OVERLAPPED, the park, and the pipe-name uniquifier).
+	let curAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	let selfGt = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
+
+	// The wide pipe-name buffer: (prefix + hex)*2 + NUL bytes, slab-zeroed.
+	let nameBytesConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(nameBytesConst, value: ((PipeNamePrefixWchars + PipeNameHexDigits) * WideCharBytes + PipeNameTrailingNulBytes) as ParsedInt, valueType: StdType.i64))
+	let namePtr = ids.mint()
+	module.appendOp(entry, op: StdOp.call(namePtr, callee: SlabAllocName, args: argsOf(nameBytesConst)))
+	buildPipeName(module, func: func, ids: ids, startBlock: entry, bufPtr: namePtr, gt: selfGt, cont: afterName)
+
+	// afterName: SECURITY_ATTRIBUTES (inheritable) for the child write end; the two out-handle slots; create the pipe.
+	let saSizeConst = ids.mint()
+	module.appendOp(afterName, op: StdOp.const(saSizeConst, value: SecurityAttributesSize as ParsedInt, valueType: StdType.i64))
+	let saPtr = ids.mint()
+	module.appendOp(afterName, op: StdOp.call(saPtr, callee: SlabAllocName, args: argsOf(saSizeConst)))
+	let saLenConst = ids.mint()
+	module.appendOp(afterName, op: StdOp.const(saLenConst, value: SecurityAttributesSize as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterName, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesNLengthOffset, valueId: saLenConst, valueType: StdType.i64))
+	let saInheritConst = ids.mint()
+	module.appendOp(afterName, op: StdOp.const(saInheritConst, value: SecurityAttributesInheritable as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterName, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesBInheritOffset, valueId: saInheritConst, valueType: StdType.i64))
+	// A 16-byte region: readPtr slot @0, writePtr slot @8 — the two out-params for osPipeCreate.
+	let slotsSizeConst = ids.mint()
+	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: 16, valueType: StdType.i64))
+	let readPtr = ids.mint()
+	module.appendOp(afterName, op: StdOp.call(readPtr, callee: SlabAllocName, args: argsOf(slotsSizeConst)))
+	let eightConst = ids.mint()
+	module.appendOp(afterName, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
+	let writePtr = ids.mint()
+	module.appendOp(afterName, op: StdOp.binOp(writePtr, lhs: readPtr, rhs: eightConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let iocpAddr = ids.mint()
+	module.appendOp(afterName, op: StdOp.globalAddr(iocpAddr, label: IoIocpLabel))
+	let iocp = ids.mint()
+	module.appendOp(afterName, op: StdOp.loadIndirect(iocp, addrId: iocpAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(afterName, op: StdOp.osPipeCreate(namePtr, saPtrId: saPtr, iocpId: iocp, readPtrId: readPtr, writePtrId: writePtr))
+	let readEnd = ids.mint()
+	module.appendOp(afterName, op: StdOp.loadIndirect(readEnd, addrId: readPtr, offset: 0, valueType: StdType.i64))
+	let writeEnd = ids.mint()
+	module.appendOp(afterName, op: StdOp.loadIndirect(writeEnd, addrId: writePtr, offset: 0, valueType: StdType.i64))
+	// The mutable NUL-terminated cmdline copy (CreateProcessA may write to lpCommandLine; the .rdata String blob is
+	// neither writable nor NUL-terminated).
+	let cmdlinePtr = ids.mint()
+	module.appendOp(afterName, op: StdOp.loadIndirect(cmdlinePtr, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	let cmdlineLen = ids.mint()
+	module.appendOp(afterName, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
+	let cmBufNulConst = ids.mint()
+	module.appendOp(afterName, op: StdOp.const(cmBufNulConst, value: TrailingNulBytes as ParsedInt, valueType: StdType.i64))
+	let cmBufSize = ids.mint()
+	module.appendOp(afterName, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: cmBufNulConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let cmBuf = ids.mint()
+	module.appendOp(afterName, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	module.setTerminator(afterName, op: StdOp.branch(copyHdr.id))
+	afterName.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroConst)))
+
+	// copyHdr(i): copy the borrowed command bytes into the mutable buffer (cmdlines are short — a byte loop is fine).
+	let ci = ids.mint()
+	copyHdr.blockArgs.push(IrBlockArg.create(ci, argType: StdType.i64))
+	let atCopyEnd = ids.mint()
+	module.appendOp(copyHdr, op: StdOp.cmp(atCopyEnd, lhs: ci, rhs: cmdlineLen, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(copyHdr, op: StdOp.condBranch(atCopyEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
+
+	// copyBody: cmBuf[i] = (u8) cmdlinePtr[i] ; i+1 → copyHdr.
+	let srcAddr = ids.mint()
+	module.appendOp(copyBody, op: StdOp.binOp(srcAddr, lhs: cmdlinePtr, rhs: ci, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let srcByte = ids.mint()
+	module.appendOp(copyBody, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = ids.mint()
+	module.appendOp(copyBody, op: StdOp.binOp(dstAddr, lhs: cmBuf, rhs: ci, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(copyBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
+	let ciOne = ids.mint()
+	module.appendOp(copyBody, op: StdOp.const(ciOne, value: 1, valueType: StdType.i64))
+	let ciNext = ids.mint()
+	module.appendOp(copyBody, op: StdOp.binOp(ciNext, lhs: ci, rhs: ciOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
+	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(ciNext)))
+
+	// afterCopy: NUL-terminate the cmdline; build STARTUPINFOA (stdout/stderr → pipe write end); spawn (inherit).
+	let nulAddr = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.binOp(nulAddr, lhs: cmBuf, rhs: cmdlineLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroConst, valueType: StdType.u8))
+	let startupSizeConst = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.const(startupSizeConst, value: StartupInfoSize as ParsedInt, valueType: StdType.i64))
+	let startupPtr = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(startupSizeConst)))
+	let cbConst = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.const(cbConst, value: StartupInfoSize as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: cbConst, valueType: StdType.i64))
+	let flagsConst = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.const(flagsConst, value: StartfUseStdHandles as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoDwFlagsOffset, valueId: flagsConst, valueType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdOutputOffset, valueId: writeEnd, valueType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdErrorOffset, valueId: writeEnd, valueType: StdType.i64))
+	let procInfoSizeConst = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize as ParsedInt, valueType: StdType.i64))
+	let procInfoPtr = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	module.appendOp(afterCopy, op: StdOp.osProcessSpawnInherit(cmBuf, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	let hProcess = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
+	let spawnFailed = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailed, lhs: hProcess, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
+
+	// spawnFail: the command names no runnable executable — close BOTH pipe ends and return 0.
+	module.appendOp(spawnFail, op: StdOp.osCloseHandle(readEnd))
+	module.appendOp(spawnFail, op: StdOp.osCloseHandle(writeEnd))
+	module.setTerminator(spawnFail, op: StdOp.ret(zeroConst))
+
+	// spawnOk: close the child thread handle, the process handle (we do not reap — we read its stdout), and the
+	// PARENT's copy of the write end (so the pipe reaches EOF once the child's inherited copy closes). Then issue the
+	// overlapped read against the OVERLAPPED embedded in the GT struct (zeroed first — a dirty hEvent low bit would
+	// suppress the completion packet).
+	let hThread = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hProcess))
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(writeEnd))
+	let ovlOffConst = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.const(ovlOffConst, value: GtOffOverlapped as ParsedInt, valueType: StdType.i64))
+	let ovlPtr = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.binOp(ovlPtr, lhs: selfGt, rhs: ovlOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 16, valueId: zeroConst, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 24, valueId: zeroConst, valueType: StdType.i64))
+	let readBufSizeConst = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.const(readBufSizeConst, value: IoReadBufferBytes as ParsedInt, valueType: StdType.i64))
+	let readBuf = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.call(readBuf, callee: SlabAllocName, args: argsOf(readBufSizeConst)))
+	let bytesOutSizeConst = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.const(bytesOutSizeConst, value: 8, valueType: StdType.i64))
+	let bytesOutPtr = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.call(bytesOutPtr, callee: SlabAllocName, args: argsOf(bytesOutSizeConst)))
+	let readResult = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.osReadOverlapped(readResult, handleId: readEnd, bufId: readBuf, capId: readBufSizeConst, bytesOutPtrId: bytesOutPtr, ovlId: ovlPtr))
+	let syncOk = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.cmp(syncOk, lhs: readResult, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.setTerminator(spawnOk, op: StdOp.condBranch(syncOk, thenBlockId: syncDone.id, elseBlockId: checkErr.id))
+
+	// syncDone: the read completed SYNCHRONOUSLY (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS => no IOCP packet, no yield) —
+	// read the count directly and return.
+	let syncBytes = ids.mint()
+	module.appendOp(syncDone, op: StdOp.loadIndirect(syncBytes, addrId: bytesOutPtr, offset: 0, valueType: StdType.i64))
+	module.appendOp(syncDone, op: StdOp.osCloseHandle(readEnd))
+	module.setTerminator(syncDone, op: StdOp.ret(syncBytes))
+
+	// checkErr: ReadFile returned FALSE — classify GetLastError. 997 ERROR_IO_PENDING → yield; anything else (109
+	// ERROR_BROKEN_PIPE = the child already exited/closed, or a real error) → EOF/0.
+	let err = ids.mint()
+	module.appendOp(checkErr, op: StdOp.osLastError(err))
+	let pendingConst = ids.mint()
+	module.appendOp(checkErr, op: StdOp.const(pendingConst, value: ErrorIoPending as ParsedInt, valueType: StdType.i64))
+	let isPending = ids.mint()
+	module.appendOp(checkErr, op: StdOp.cmp(isPending, lhs: err, rhs: pendingConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: park.id, elseBlockId: eofOrErr.id))
+
+	// eofOrErr: no data (EOF) or a non-pending error — return 0.
+	module.appendOp(eofOrErr, op: StdOp.osCloseHandle(readEnd))
+	module.setTerminator(eofOrErr, op: StdOp.ret(zeroConst))
+
+	// ⭐ park: the read is queued — YIELD the green thread. `__io_pending++` (the netpoll reads it to decide to block
+	// on the event), `status = waiting`, THEN `ioParked = 1` (the publish-after-commit half of the cross-thread
+	// handshake: the completion thread spins on `ioParked == 1` before it sets `status = ready`, so its ready-write
+	// can never land before this waiting-write). Then hand control to the scheduler — a top-level GT0 (waiter == 0)
+	// SELF-DRIVES until its own read completes; a spawned GT switches back to its driver.
+	let pendingAddr = ids.mint()
+	module.appendOp(park, op: StdOp.globalAddr(pendingAddr, label: IoPendingLabel))
+	let pendingCur = ids.mint()
+	module.appendOp(park, op: StdOp.loadIndirect(pendingCur, addrId: pendingAddr, offset: 0, valueType: StdType.i64))
+	let pendingOne = ids.mint()
+	module.appendOp(park, op: StdOp.const(pendingOne, value: 1, valueType: StdType.i64))
+	let pendingRaised = ids.mint()
+	module.appendOp(park, op: StdOp.binOp(pendingRaised, lhs: pendingCur, rhs: pendingOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(park, op: StdOp.storeIndirect(pendingAddr, offset: 0, valueId: pendingRaised, valueType: StdType.i64))
+	let waitingConst = ids.mint()
+	module.appendOp(park, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
+	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
+	let parkedConst = ids.mint()
+	module.appendOp(park, op: StdOp.const(parkedConst, value: 1, valueType: StdType.i64))
+	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: parkedConst, valueType: StdType.i64))
+	let waiter = ids.mint()
+	module.appendOp(park, op: StdOp.loadIndirect(waiter, addrId: selfGt, offset: GtOffWaiter, valueType: StdType.i64))
+	let waiterNull = ids.mint()
+	module.appendOp(park, op: StdOp.cmp(waiterNull, lhs: waiter, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(park, op: StdOp.condBranch(waiterNull, thenBlockId: selfDrive.id, elseBlockId: parkSwitch.id))
+
+	// selfDrive: drive the scheduler until our own read completes (our status → ready), then resume.
+	let readyConst = ids.mint()
+	module.appendOp(selfDrive, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
+	let driveResult = ids.mint()
+	module.appendOp(selfDrive, op: StdOp.call(driveResult, callee: GtDriveUntilName, args: args2(selfGt, second: readyConst)))
+	module.setTerminator(selfDrive, op: StdOp.branch(resume.id))
+
+	// parkSwitch: a spawned GT — switch back to the driver; the completion thread re-enqueues us, the driver
+	// re-schedules us, and we resume HERE.
+	let switchResult = ids.mint()
+	module.appendOp(parkSwitch, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: args2(selfGt, second: waiter)))
+	module.setTerminator(parkSwitch, op: StdOp.branch(resume.id))
+
+	// resume: the read completed. Clear the park flag, drop the in-flight count, read the byte count the completion
+	// thread stored, close the read end, and return.
+	let clearParkedConst = ids.mint()
+	module.appendOp(resume, op: StdOp.const(clearParkedConst, value: 0, valueType: StdType.i64))
+	module.appendOp(resume, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: clearParkedConst, valueType: StdType.i64))
+	let pendingAddr2 = ids.mint()
+	module.appendOp(resume, op: StdOp.globalAddr(pendingAddr2, label: IoPendingLabel))
+	let pendingCur2 = ids.mint()
+	module.appendOp(resume, op: StdOp.loadIndirect(pendingCur2, addrId: pendingAddr2, offset: 0, valueType: StdType.i64))
+	let pendingOne2 = ids.mint()
+	module.appendOp(resume, op: StdOp.const(pendingOne2, value: 1, valueType: StdType.i64))
+	let pendingLowered = ids.mint()
+	module.appendOp(resume, op: StdOp.binOp(pendingLowered, lhs: pendingCur2, rhs: pendingOne2, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(resume, op: StdOp.storeIndirect(pendingAddr2, offset: 0, valueId: pendingLowered, valueType: StdType.i64))
+	let bytesRead = ids.mint()
+	module.appendOp(resume, op: StdOp.loadIndirect(bytesRead, addrId: selfGt, offset: GtOffIoResult, valueType: StdType.i64))
+	module.appendOp(resume, op: StdOp.osCloseHandle(readEnd))
+	module.setTerminator(resume, op: StdOp.ret(bytesRead))
+
+	module.functions.push(func)
+end 'buildGtIoRead'
+

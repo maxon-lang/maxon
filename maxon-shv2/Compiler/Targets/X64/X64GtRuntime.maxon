@@ -247,6 +247,27 @@ function gtShimStackArgWords(slotIndex RelocSlotIndex) returns StackSize
 		return WriteFileStackArgWords as StackSize
 	end 'writeFile'
 
+	// P1.5 slice 1a-ii: the IOCP-substrate imports a SHIMMED (main-thread) call reaches — the pipe creation and the
+	// overlapped read run on the reading GT (possibly a spawned GT, so the switched path copies stack args), and
+	// CreateThread runs in `__io_init` on GT0 (direct path, but a correct count is still required). GetQueuedComplet-
+	// ionStatus / SetEvent are NOT here — they are called only from the hand-assembled completion loop (direct, never
+	// shimmed). Each count is the import's single source (StdToX64Conversion), so the copy cannot drift from the layout.
+	if slotIndex == iatSlotIndex(IatSlot.CreateNamedPipeW) 'createNamedPipe'
+		return CreateNamedPipeStackArgWords as StackSize
+	end 'createNamedPipe'
+
+	if slotIndex == iatSlotIndex(IatSlot.CreateFileW) 'createFile'
+		return CreateFileStackArgWords as StackSize
+	end 'createFile'
+
+	if slotIndex == iatSlotIndex(IatSlot.CreateThread) 'createThread'
+		return CreateThreadStackArgWords as StackSize
+	end 'createThread'
+
+	if slotIndex == iatSlotIndex(IatSlot.ReadFile) 'readFile'
+		return ReadFileStackArgWords as StackSize
+	end 'readFile'
+
 	return 0
 end 'gtShimStackArgWords'
 
@@ -628,8 +649,149 @@ end 'emitGtStackGuard'
 // Append the three hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread,
 // alongside `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other
 // runtime chunk, so `mrt_start` stays at `.text` offset 0.
-export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray)
+
+// --- The IOCP completion-drain thread (P1.5 slice 1a-ii) ---
+//
+// ⭐ A HAND-ASSEMBLED chunk, NOT builder-built Std — like `__gt_context_switch`/`__gt_trampoline`/`__gt_morestack`,
+// and for the same reason both references hand-assemble it: it runs OUTSIDE the GT model, on its OWN OS-thread stack,
+// so its kernel calls must be DIRECT (never the syscall shim, which would read the main thread's `__gt_current_gt`
+// and race the single system stack). A builder-built version would be shimmed and stack-guarded — both wrong here.
+//
+// `__io_completion_loop(rcx = lpParameter, ignored)` — the Win64 ThreadProc `__io_init` starts with CreateThread.
+// It loops: `GetQueuedCompletionStatus` blocks until an overlapped read completes; the completing packet's
+// lpOverlapped IS the reading GT's embedded OVERLAPPED, so `gt = lpOverlapped - GtOffOverlapped` (CONTAINING_RECORD).
+// It writes the byte count to `gt.io_result`, then — THE HANDSHAKE — SPIN-WAITS on `gt.ioParked == 1` (the reading GT
+// sets it only AFTER `status = waiting`, so this ordering guarantees the `status = ready` below lands AFTER the GT's
+// own waiting-write: no torn status, no lost wakeup). It sets `status = ready`; for a SPAWNED GT (`stackBase != 0`)
+// it re-enqueues under `__io_lock` (the run queue's sole cross-thread mutation); a GT0 self-driver (`stackBase == 0`)
+// is left for its own drive loop to notice via `status`. Either way it `SetEvent`s `__io_done_event` to wake the
+// netpoll's `WaitForSingleObject`. `__gt_enqueue` is PURE MEMORY (no shim), so calling it from this thread is safe.
+//
+// gt is spilled to a frame local (not a callee-saved register) and reloaded after each call, mirroring the bootstrap
+// (`X86CodeEmitter.Runtime.cs` EmitIoCompletionLoop), which keeps the frame layout — and the 16-byte alignment at
+// every `call` — trivial.
+
+// Frame locals (rbp-relative) and the GQCS 5th-argument stack slot (rsp-relative). The frame is 0x50 bytes: with the
+// `push rbp` it lands RSP 16-aligned at every `call` (entry RSP ≡ 8 mod 16; push rbp ⇒ 0; sub 0x50 ⇒ 0).
+let IoLoopFrameBytes = 0x50 as StackSize
+let IoLoopBytesLocalDisp = (0 - 0x08) as Imm32  // lpNumberOfBytesTransferred out-param
+let IoLoopKeyLocalDisp = (0 - 0x10) as Imm32  // lpCompletionKey out-param (unused)
+let IoLoopOverlappedLocalDisp = (0 - 0x18) as Imm32  // lpOverlapped out-param → the completing GT's OVERLAPPED
+let IoLoopGtLocalDisp = (0 - 0x20) as Imm32  // the recovered GT pointer, spilled across the Win32/enqueue calls
+let IoLoopFifthArgDisp = 0x20 as Imm32  // GetQueuedCompletionStatus's 5th argument (dwMilliseconds) on the stack
+let IoLoopInfiniteTimeout = 0xFFFFFFFF  // INFINITE
+
+// The completion loop's own forward/backward branch targets, resolved against a LOOP-LOCAL fixup list + offset map
+// (the same machinery the shim and the block assembler use), scoped so the ids never collide with anything else.
+let IoLoopTopLabel = 0 as BlockId
+let IoLoopSpinLabel = 1 as BlockId
+let IoLoopSpunLabel = 2 as BlockId
+let IoLoopSignalLabel = 3 as BlockId
+let IoLoopExitLabel = 4 as BlockId
+
+// The completion loop's scratch: r11 shuttles a `.data` global's address, rax/rcx are general scratch. None is read
+// across the loop's own iterations (gt lives in the frame), so any caller-saved use is invisible.
+let IoLoopGlobalPtrReg = X64Register.r11
+
+// Load a `.data` global's VALUE into `dest` — `lea r11, [rip+label] ; mov dest, [r11]`. The completion loop reads
+// `__io_iocp`/`__io_lock`/`__io_done_event` this way, through the ordinary rdata-relocation path.
+function emitIoLoopLoadGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: IoLoopGlobalPtrReg, label: label)
+	encodeLoadRegBaseDisp(code, destReg: dest, base: IoLoopGlobalPtrReg, disp: 0, wide: true)
+end 'emitIoLoopLoadGlobal'
+
+function buildIoCompletionLoopChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var iatRelocs = RelocationArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+	var loopFixups = ChunkRel32FixupArray.create()
+	var loopLabels = ChunkLabelOffsetMap.create()
+
+	// Prologue: push rbp ; mov rbp, rsp ; sub rsp, 0x50.
+	encodePushReg(code, reg: X64Register.rbp)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rsp, imm: IoLoopFrameBytes as Imm32)
+
+	// loop_top:
+	loopLabels.upsert(IoLoopTopLabel, value: code.count())
+	// Zero the bytes slot (GQCS writes only the low DWORD; the runtime reads a full i64).
+	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
+	// GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped, INFINITE).
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoIocpLabel)
+	encodeLeaRegRegImm32(code, dest: X64Register.rdx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp)
+	encodeLeaRegRegImm32(code, dest: X64Register.r8, base: X64Register.rbp, disp: IoLoopKeyLocalDisp)
+	encodeLeaRegRegImm32(code, dest: X64Register.r9, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp)
+	encodeMovRegImm32(code, dest: X64Register.rax, value: IoLoopInfiniteTimeout)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: IoLoopFifthArgDisp, srcReg: X64Register.rax)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetQueuedCompletionStatus))
+	// overlapped == NULL → shutdown sentinel → exit (defensive; the slice never posts one).
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopOverlappedLocalDisp, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopExitLabel)
+	// gt = overlapped - GtOffOverlapped ; spill to the frame.
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtOffOverlapped as Imm32)
+	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopGtLocalDisp, srcReg: X64Register.rax)
+	// gt.io_result = bytes  (rax still holds gt).
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
+
+	// spin: wait until gt.ioParked == 1 (the reading GT has committed to parking; see the handshake note).
+	loopLabels.upsert(IoLoopSpinLabel, value: code.count())
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.notEqual, targetBlockId: IoLoopSpunLabel)
+	code.push(0xF3)  // PAUSE (F3 90) — spin hint, reduces power and HT contention.
+	code.push(0x90)
+	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopSpinLabel)
+
+	// spun: gt.status = ready(0). rax = gt.
+	loopLabels.upsert(IoLoopSpunLabel, value: code.count())
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStatusReady)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffStatus as Imm32, srcReg: X64Register.rcx)
+	// A GT0 self-driver (stackBase == 0) is NOT enqueued — its drive loop notices `status` — but IS signalled.
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopSignalLabel)
+	// Spawned GT → EnterCriticalSection(__io_lock) ; __gt_enqueue(gt) ; LeaveCriticalSection(__io_lock).
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtEnqueueName)
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
+
+	// signal: SetEvent(__io_done_event) → loop_top.
+	loopLabels.upsert(IoLoopSignalLabel, value: code.count())
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoDoneEventLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetEvent))
+	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
+
+	// exit: return 0.
+	loopLabels.upsert(IoLoopExitLabel, value: code.count())
+	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: IoLoopFrameBytes as Imm32)
+	encodePopReg(code, reg: X64Register.rbp)
+	code.push(OpcodeRet)
+
+	resolveChunkRel32Fixups(code, labelOffsets: loopLabels, rel32Fixups: loopFixups)
+
+	return FunctionCodeChunk.createWith(IoCompletionLoopName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+end 'buildIoCompletionLoopChunk'
+
+// Append the hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread, alongside
+// `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
+// `mrt_start` stays at `.text` offset 0. `usesIocp` (P1.5 slice 1a-ii) additionally appends the IOCP completion-drain
+// thread entry.
+export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, usesIocp bool)
 	chunks.push(buildGtContextSwitchChunk())
 	chunks.push(buildGtTrampolineChunk())
 	chunks.push(buildGtMorestackChunk())
+
+	if usesIocp 'io'
+		chunks.push(buildIoCompletionLoopChunk())
+	end 'io'
 end 'appendX64GtRuntimeChunks'
