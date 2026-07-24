@@ -7781,6 +7781,14 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("__dbg_on_breakpoint");
     EmitCbz(ARM64Register.X0, "__dbg_th_chain");
 
+    // The driver may have CLEARED this breakpoint while parked. __dbg_clear_bp already restored the
+    // instruction, so re-check slot PRESENCE (not orig != 0): if it is gone, resume at pc with no
+    // disarm and no temp-bp single-step (the word is already the real instruction).
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitBranchLink("__dbg_bp_slot");                // X0 = idx (-1 if cleared while parked)
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, "__dbg_th_bp_cleared");
+
     // Begin single-step-over: restore the original instruction at pc, plant a temp bp at pc+4.
     EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
     EmitBranchLink("__dbg_bp_orig_of_addr");        // X0 = orig
@@ -7797,6 +7805,10 @@ public partial class ARM64CodeEmitter {
     EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
     EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
     EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepAddrGlobal);
+    EmitRuntimeFunctionEnd();
+
+    // Breakpoint cleared while parked: word already restored, pc unchanged — just resume.
+    DefineLabel("__dbg_th_bp_cleared");
     EmitRuntimeFunctionEnd();
 
     DefineLabel("__dbg_th_chain");

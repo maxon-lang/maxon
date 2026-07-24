@@ -8124,7 +8124,10 @@ public partial class X86CodeEmitter {
   // process) exactly as GetCurrentProcess would return.
   private const long PageExecuteReadWrite = 0x40;
   private const long CurrentProcessPseudoHandle = -1;
-  private const long BreakpointPatchLen = 8; // one aligned qword covers the single 0xCC byte.
+  // INT3 is exactly one byte. A larger length would make VirtualProtect span into an adjacent page
+  // when a breakpoint lands within a few bytes of a page end — and it returns only the FIRST page's
+  // old protection, so the restore would force the neighbour to RX. One byte keeps it to one page.
+  private const long BreakpointPatchLen = 1;
 
   // VEH return values.
   private const int VehContinueSearch = 0;
@@ -8215,6 +8218,14 @@ public partial class X86CodeEmitter {
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("z", "__dbg_th_defer");
 
+    // The driver may have CLEARED this breakpoint while we were parked. __dbg_clear_bp already restored
+    // the original byte, so re-check slot PRESENCE (not orig != 0 — a saved byte can legitimately be
+    // 0x00): if the breakpoint is gone, resume at bpaddr with no disarm and no single-step-over.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);           // bpaddr
+    EmitCallRuntimeLabel("__dbg_bp_slot");              // RAX = idx (-1 if cleared while parked)
+    EmitCmpRegImm(X86Register.Rax, 0);
+    EmitJcc("l", "__dbg_th_bp_cleared");
+
     // Single-step-over setup: orig = bp_orig_of_addr(bpaddr); disarm(bpaddr, orig); step_addr=bpaddr.
     EmitMovRegMem(X86Register.Rcx, -0x18, 8);
     EmitCallRuntimeLabel("__dbg_bp_orig_of_addr");      // RAX = orig
@@ -8231,6 +8242,11 @@ public partial class X86CodeEmitter {
     EmitMovRegDwordIndirect(X86Register.Rcx, X86Register.Rax, ContextOffEFlags);
     EmitOrRegImm(X86Register.Rcx, EflagsTrapFlag);
     EmitMovDwordIndirectReg(X86Register.Rax, ContextOffEFlags, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rax, VehContinueExecution);
+    EmitRuntimeFunctionEnd();
+
+    // Breakpoint cleared while parked: byte already restored, Rip at bpaddr — just resume.
+    DefineLabel("__dbg_th_bp_cleared");
     EmitMovRegImm(X86Register.Rax, VehContinueExecution);
     EmitRuntimeFunctionEnd();
 

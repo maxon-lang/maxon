@@ -590,6 +590,7 @@ public partial class X86CodeEmitter {
     // ---- Platform-specific labels ----
 
     public string WriteStderrLabel => "maxon_write_stderr";
+    public string SymbolTableLabel => "__symtable";
 
     // ---- Local address / byte memory ----
 

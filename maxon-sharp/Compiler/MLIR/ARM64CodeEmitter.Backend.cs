@@ -718,6 +718,7 @@ public partial class ARM64CodeEmitter {
     // ---- Platform-specific labels ----
 
     public string WriteStderrLabel => "rt_write_cstr_stderr";
+    public string SymbolTableLabel => "__symtab";
 
     // ---- Local address / byte memory ----
 

@@ -144,18 +144,20 @@ class Program {
 
       case "--bp-test": {
         // P3b breakpoint driver: set a breakpoint at a raw code offset, run, observe the stop, and
-        // continue to completion. The offset is a function's codeStart from `--dump-info`. The
-        // symbolizing REPL (file:line -> address) is P3c.
+        // continue to completion. The offset is a function's codeStart from `--dump-info`. A trailing
+        // "clear" additionally removes the breakpoint while stopped at it (exercises the
+        // cleared-while-parked path). The symbolizing REPL (file:line -> address) is P3c.
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --bp-test needs an executable and a code offset "
-            + "(a function's codeStart from --dump-info).");
+            + "(a function's codeStart from --dump-info); an optional trailing 'clear' removes it at the stop.");
           return 1;
         }
         if (!TryParseCodeOffset(args[2], out var bpOffset)) {
           Console.Error.WriteLine($"Not a code offset: '{args[2]}' (use decimal or 0x-prefixed hex).");
           return 1;
         }
-        return DebugAgentProbe.RunBpTest(args[1], bpOffset);
+        bool clearAtStop = args.Length > 3 && args[3] == "clear";
+        return DebugAgentProbe.RunBpTest(args[1], bpOffset, clearAtStop);
       }
 
       default:

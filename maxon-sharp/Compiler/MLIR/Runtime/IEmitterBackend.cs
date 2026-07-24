@@ -391,6 +391,15 @@ public interface IEmitterBackend {
   /// x86: "maxon_write_stderr"; ARM64: "rt_write_cstr_stderr".</summary>
   string WriteStderrLabel { get; }
 
+  /// <summary>
+  /// Label of the embedded runtime symbol table, which the panic backtrace reads and which sits
+  /// immediately past `.text` — so <c>&amp;SymbolTableLabel − &amp;mrt_start</c> is the exact `.text`
+  /// size bound the symbolizer trusts. The name differs by backend (x86: "__symtable"; ARM64:
+  /// "__symtab"), so the debug agent's set-breakpoint bounds check reads it from here rather than
+  /// hard-coding one spelling.
+  /// </summary>
+  string SymbolTableLabel { get; }
+
   // ---- Local address / byte memory ----
 
   /// <summary>Load address of a stack frame slot into dest.

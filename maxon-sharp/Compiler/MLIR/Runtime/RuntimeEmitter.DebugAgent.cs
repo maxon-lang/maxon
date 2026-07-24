@@ -417,14 +417,24 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// __dbg_set_bp(codeOffset) — arm a breakpoint at &mrt_start + codeOffset. A no-op if one is
-  /// already set there (re-arming would save the trap byte itself as the "original"). Silently
-  /// ignored if the table is full — the driver caps how many it sets.
+  /// __dbg_set_bp(codeOffset) — arm a breakpoint at &mrt_start + codeOffset. Ignored (but still acked
+  /// by the park loop) when the offset is outside `.text`, when one is already set there (re-arming
+  /// would save the trap byte itself as the "original"), or when the table is full.
   /// </summary>
   private void EmitDbgSetBp() {
     _b.FunctionStart("__dbg_set_bp", 1, 0x80);
 
     var doneLabel = UniqueLabel("dbg_set_bp_done");
+
+    // BOUNDS: a driver-supplied offset must never let the patch below write 0xCC/BRK outside `.text`.
+    // textsize = &symtable - &mrt_start is the exact bound the panic symbolizer trusts (the symbol
+    // table sits immediately past `.text`); an UNSIGNED compare rejects negatives as huge values too.
+    _b.LeaSymdata(VReg.Scratch1, _b.SymbolTableLabel);
+    _b.LeaFuncAddr(VReg.Scratch2, "mrt_start");
+    _b.SubRegReg(VReg.Scratch1, VReg.Scratch2);           // textsize
+    _b.LoadLocal(VReg.Scratch2, 0);                       // codeOffset
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, doneLabel);           // outside .text -> ignore
 
     EmitDbgAbsFromOffset();
 
