@@ -300,6 +300,17 @@ end 'stdlibWhitelistSkipSet'
 // — it only asks "is one present?". Both matches are guarded by the same band-append invariant.
 function moduleReferencesWhitelisted(module MaxonModule, whitelisted FunctionNameSet) returns bool
 	for func in module.functions 'eachFunc'
+		// ⭐ SKIP the whitelisted functions' OWN bodies. The whitelisted set is internally connected
+		// (`Clock.elapsedMs` calls `Clock.nowMs`), so scanning their bodies would find an intra-whitelist
+		// edge on EVERY compile and defeat this short-circuit. The exact question is "does the USER
+		// program cross INTO the whitelist?", and the first edge into the whitelisted set on any path
+		// from `main` is made by a NON-whitelisted caller — so scanning only non-whitelisted bodies is
+		// the exact condition. (A whitelisted-only reference is unreachable-from-`main` anyway, so a
+		// false negative here is impossible; a false positive would merely trigger the exact full walk.)
+		if whitelisted.contains(func.name) 'skipWhitelistedBody'
+			continue
+		end 'skipWhitelistedBody'
+
 		// Direct `block.opRefs` walk — allocation-free, and safe for the same reason `markMaxonCallees`
 		// and `scanRuntimeUsage` use it at this tier (pre-pipeline: no orphan ops; callees are body ops).
 		for blockRef in func.blockRefs 'eachBlock'
