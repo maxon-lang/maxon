@@ -120,13 +120,14 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 end 'checkOneInstantiation'
 
 // ⭐ **DOES `typeName` CONFORM TO `interfaceName`? THE ONE predicate every conformance site consults (P1.7a
-// slice 2b).** An intrinsic primitive conformance (`int` implements `Hashable`/`Equatable`, synthesized
-// natively) ORed with the user-declared registry — so "int conforms to Hashable" is decided in exactly one
-// place, never split between an intrinsic answer and a registry answer that could drift. `typeName` is the
-// CANONICAL conformer name (`conformerTypeArgName`); the registry is keyed by the declared struct name, which
-// a ranged-int alias's `int` never collides with, so the OR is unambiguous.
+// slice 2b + P1.7b).** An intrinsic builtin-type conformance (`int`/`String` implements `Hashable`/`Equatable`,
+// synthesized natively) ORed with the user-declared registry — so "int conforms to Hashable" is decided in
+// exactly one place, never split between an intrinsic answer and a registry answer that could drift. `typeName`
+// is the CANONICAL conformer name (`conformerTypeArgName`); the registry is keyed by the declared struct name,
+// which a ranged-int alias's `int` or a `String` argument's `String` never collides with, so the OR is
+// unambiguous.
 function typeConformsTo(declared DeclaredConformanceMap, typeName ByteArray, interfaceName ByteArray) returns bool
-	if isIntrinsicPrimitiveConformance(typeName, interfaceName: interfaceName) 'intrinsic'
+	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName) 'intrinsic'
 		return true
 	end 'intrinsic'
 	return typeDeclaresInterface(declared, typeName: typeName, interfaceName: interfaceName)

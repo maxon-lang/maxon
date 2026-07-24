@@ -1,0 +1,261 @@
+// Test: string-conformance.hashable-and-equatable
+type Key uses T where T is Hashable and Equatable
+	export var value as T
+	export static function create(value T) returns Self
+		return Self{ value: value }
+	end 'create'
+	export function digest() returns HashValue
+		return self.value.hash()
+	end 'digest'
+	export function matches(other T) returns bool
+		return self.value.equals(other)
+	end 'matches'
+end 'Key'
+
+typealias StringKey = Key with String
+
+function main() returns ExitCode
+	let k = StringKey.create("hi")
+	if k.digest() != 5863446 'h'
+		return 1
+	end 'h'
+	if not k.matches("hi") 'e1'
+		return 2
+	end 'e1'
+	if k.matches("no") 'e2'
+		return 3
+	end 'e2'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Key.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Key.digest {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Key.matches {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, r9
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callMem [rbx + 24]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r14, r13, 48
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r14, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect Key.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __witness_String_Hashable]
+    x64.leaRegRdata rax, [rip + __witness_String_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Key.digest
+    x64.cmpRegImm32 r8, 5863446
+    x64.jcc notEqual, h
+    x64.jmp ifcont
+  h:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Key_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __witness_String_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_String_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Key.matches
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, e1
+    x64.jmp ifcont
+  e1:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Key_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __witness_String_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_String_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Key.matches
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, e2
+    x64.jmp ifcont
+  e2:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Key_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Key_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.movRegImm32 rdx, 5381
+    x64.movRegImm32 rsi, 0
+    x64.jmp header
+  header:
+    x64.cmpRegReg rsi, rcx
+    x64.jcc greaterEqual, done
+    x64.jmp body
+  done:
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rdx
+    x64.andRegReg r8, rdx, rax
+    x64.popReg rbp
+    x64.ret
+  body:
+    x64.leaRegRegReg rdi, rax, rsi
+    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
+    x64.movRegImm32 r8, 33
+    x64.imulRegReg rdx, rdx, r8
+    x64.leaRegRegReg rdx, rdx, rdi
+    x64.movRegImm32 rdi, 1
+    x64.leaRegRegReg rsi, rsi, rdi
+    x64.jmp header
+}
+
+func @String.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+    x64.movRegImm32 rdi, 0
+    x64.cmpRegReg rax, rsi
+    x64.jcc equal, critsplit
+    x64.jmp notEqual
+  critsplit:
+    x64.jmp header
+  header:
+    x64.cmpRegReg rdi, rax
+    x64.jcc greaterEqual, allMatch
+    x64.jmp body
+  allMatch:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  body:
+    x64.leaRegRegReg rsi, rcx, rdi
+    x64.loadRegBaseDisp.byte rsi, [rsi + 0]
+    x64.leaRegRegReg r8, rdx, rdi
+    x64.loadRegBaseDisp.byte r8, [r8 + 0]
+    x64.movRegImm32 r9, 1
+    x64.leaRegRegReg rdi, rdi, r9
+    x64.cmpRegReg rsi, r8
+    x64.jcc equal, critsplit
+    x64.jmp notEqual
+  critsplit:
+    x64.jmp header
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

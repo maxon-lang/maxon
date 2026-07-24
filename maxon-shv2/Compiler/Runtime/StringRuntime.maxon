@@ -611,7 +611,7 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 		buildPrintString(module)
 	end 'print'
 	if usage.usesStrEq 'streq'
-		buildStrEq(module)
+		buildStrEq(module, name: StrEqName)
 	end 'streq'
 	if usage.usesStrCopy 'strcopy'
 		buildStrCopy(module)
@@ -660,7 +660,15 @@ function buildPrintString(module StdModule)
 	module.functions.push(func)
 end 'buildPrintString'
 
-// `__str_eq(a, b) -> i64(bool)` — content equality: equal LENGTHS and equal BYTES.
+// `<name>(a, b) -> i64(bool)` — content equality: equal LENGTHS and equal BYTES. BOTH String operands are
+// BORROWED (read through, never freed), so this allocation-free body is the equality both the `==` operator
+// and the `Equatable` witness need.
+//
+// ⭐ **PARAMETERIZED BY NAME so ONE graph serves TWO symbols.** It is emitted under `__str_eq` for the `==`
+// operator path (`installStringRuntime`) AND under `String.equals` for the `Equatable` witness path
+// (`installBuiltinConformanceRuntime`), because the witness reloc names the impl `String.equals`
+// (`qualifiedMethodName("String", "equals")`), NOT `__str_eq`. Same byte-compare, two `.text` symbols — the
+// `buildIntEquals` pattern (which builds `int.equals` fresh), so the two paths cannot drift a byte apart.
 //
 // This is the bootstrap's `bytesEqual` (a length check, then a byte loop), NOT the enum `memcmp`
 // helper. It allocates nothing. Empty strings: length 0 == length 0 → the loop runs zero times →
@@ -671,8 +679,8 @@ end 'buildPrintString'
 // for a `while`, here built directly because a runtime function has no parser. The header's phi
 // `argType` is set to i64 explicitly: `retypeBlockArgs` runs in `lowerMaxonToStd`, which these
 // post-pipeline functions never pass through.
-function buildStrEq(module StdModule)
-	var func = IrFunction.createFromStd(StrEqName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+export function buildStrEq(module StdModule, name ByteArray)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
