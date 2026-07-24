@@ -231,9 +231,10 @@ end 'main'
 <!-- test: where-clauses.witness-temporary-arg -->
 <!-- targets: x64-windows, x64-linux -->
 The element passed to the container is a TEMPORARY (an rvalue constructor result, not a named binding).
-Its borrow escapes into the container's field, so it is materialized as a hidden scope-local that outlives
-the container — the later witness dispatch reads a live element, and the element is freed exactly once at
-scope exit (reverse order: the container first, freeing nothing, then the element).
+Its borrow escapes into the container's field, so it is RETAINED (co-owned) at the constructor feed — the
+box holds a real second reference that outlives the temporary's statement, the later witness dispatch reads
+a live element, and the element is freed exactly once: the box's destructor decrefs its co-owned reference,
+then the temporary's own drop releases the last one.
 ```maxon
 typealias Code = int(0 to u32.max)
 typealias Coord = int(0 to 1000)

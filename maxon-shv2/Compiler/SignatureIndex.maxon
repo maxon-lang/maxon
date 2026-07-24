@@ -508,6 +508,25 @@ enum DeclKind
 	mutable
 end 'DeclKind'
 
+// The per-argument classification the three "does any interned instance of `baseName` classify its type
+// parameter at `position` as …?" instance-scan gates in `ProgramSignatures` differ on — the ONE thing that
+// varies between them, named here so the registry SCAN (match base name, bounds-guard the arg) lives in one
+// place (`anyInstanceTypeArgHasKind`) and a fix to the loop or the bound cannot reach one gate and silently
+// miss the other two.
+enum TypeArgInstantiationKind
+	// The box MOVES the argument in and the caller may not reuse it (`typeArgIsOwned`): a String, an owning
+	// struct, a boxed union, a managed generic instance — the managed-field DROP and the reassign's
+	// descriptor-gated old-value drop.
+	consumeMoved
+	// The box CO-OWNS a BORROWED trivial struct/instance (`typeIsManaged and not typeArgIsOwned`): the
+	// retain-escaping rung's `__mm_incref`-at-feed + destructor-decref pair, which a shared-body reassign
+	// cannot re-balance and therefore rejects.
+	coOwnedTrivial
+	// Not deep-cloneable through the single-`copyFunc` element mechanism (`not typeSupportsDeepClone(as
+	// element)`): a managed-element array or a non-Array generic instance — the opaque-copy front-end reject.
+	uncopyableElement
+end 'TypeArgInstantiationKind'
+
 // The `StdType` a global of `tag` occupies its `.data` slot as — which is to say WHICH TAGS MAY BE
 // A GLOBAL AT ALL, because the width itself is not this function's to know.
 //
@@ -3128,7 +3147,7 @@ export type ProgramSignatures
 	// `pInner` at the inner scope while `b` still pointed at it — a use-after-free the witness dispatch first
 	// made reachable). The user ruling (2026-07-23) fixes it by RETAIN, generalizing OPEN #40's `__mm_retain`
 	// co-ownership: a trivial struct/instance stored into a generic field is `__mm_retain`'d at the constructor
-	// feed (`Parser.retainEscapingConstructorFeed`), so the box holds a REAL second reference — CO-OWNED, not
+	// feed (`Parser.handleEscapingBorrowFeed`), so the box holds a REAL second reference — CO-OWNED, not
 	// borrowed. The DROP boundary therefore moved to `typeIsManaged` (`genericInstanceFieldIsManaged`), which
 	// releases that reference at the box's destruction, while THIS consume boundary stays put so the caller's
 	// own `p` is still live and dropped once. So the three questions now split three ways on a trivial struct:
@@ -3158,6 +3177,34 @@ export type ProgramSignatures
 		return (try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeArgIsOwned: enumTypes.contains({String.from(name)}) is true but get failed")).isBoxed()
 	end 'typeArgIsOwned'
 
+	// Does ANY interned instance of generic type `baseName` classify its type argument at `position` as
+	// `kind`? The ONE instance-registry scan the three type-parameter-instantiation gates
+	// (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`) delegate to — so the loop and
+	// the `position < args.count()` bound are written once for all three and cannot drift between them. The
+	// per-kind predicate is the only thing that varies, in `typeArgHasKind`.
+	function anyInstanceTypeArgHasKind(baseName ByteArray, position TypeParamId, kind TypeArgInstantiationKind) returns bool
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
+				let args = self.genericInstances.instanceArgs(id)
+				if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.anyInstanceTypeArgHasKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
+					return true
+				end 'match'
+			end 'sameBase'
+		end 'eachInstance'
+		return false
+	end 'anyInstanceTypeArgHasKind'
+
+	// The per-kind argument predicate the instance-scan gates read (see `anyInstanceTypeArgHasKind`). Each arm
+	// reads off the SAME `typeArgIsOwned` / `typeArgIsCoOwnedTrivial` / `typeSupportsDeepClone` boundary the
+	// corresponding drop, consume or copy site decides on, so a gate and the emission it guards cannot disagree.
+	function typeArgHasKind(t MaxonType, kind TypeArgInstantiationKind) returns bool
+		match kind 'kind'
+			consumeMoved then return self.typeArgIsOwned(t)
+			coOwnedTrivial then return self.typeArgIsCoOwnedTrivial(t)
+			uncopyableElement then return not self.typeSupportsDeepClone(t, asElement: true, visited: ClonerSet.create())
+		end 'kind'
+	end 'typeArgHasKind'
+
 	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS TYPE PARAMETER AT `position`
 	// MANAGED (P1.7 slice 3b-vii)?** A shared generic body reassigns a bare `T` field opaquely; the OLD value's
 	// descriptor-gated drop (`__drop_type_param`) is needed ONLY when some instantiation makes that field
@@ -3169,15 +3216,7 @@ export type ProgramSignatures
 	// instance's argument at `position` through the SAME `typeArgIsOwned` boundary the box's own per-field drop
 	// gate (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
 	export function genericTypeFieldHasManagedInstantiation(baseName ByteArray, position TypeParamId) returns bool
-		for id in 0 upto self.genericInstances.count() 'eachInstance'
-			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
-				let args = self.genericInstances.instanceArgs(id)
-				if position < args.count() and self.typeArgIsOwned(try args.get(position) otherwise panic("ProgramSignatures.genericTypeFieldHasManagedInstantiation: instanceArgs.get OOB at {position} despite the range guard")) 'managed'
-					return true
-				end 'managed'
-			end 'sameBase'
-		end 'eachInstance'
-		return false
+		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.consumeMoved)
 	end 'genericTypeFieldHasManagedInstantiation'
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS TYPE PARAMETER AT `position` A
@@ -3194,15 +3233,7 @@ export type ProgramSignatures
 	// managed instantiation (`Box with String`, both true) reassigns through the descriptor as before; a scalar
 	// (both false) is inert; only the borrowed-and-dropped trivial struct — the co-ownership gap — is rejected.
 	export function genericTypeFieldHasCoOwnedTrivialInstantiation(baseName ByteArray, position TypeParamId) returns bool
-		for id in 0 upto self.genericInstances.count() 'eachInstance'
-			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
-				let args = self.genericInstances.instanceArgs(id)
-				if position < args.count() and self.typeArgIsCoOwnedTrivial(try args.get(position) otherwise panic("ProgramSignatures.genericTypeFieldHasCoOwnedTrivialInstantiation: instanceArgs.get OOB at {position} despite the range guard")) 'coOwnedTrivial'
-					return true
-				end 'coOwnedTrivial'
-			end 'sameBase'
-		end 'eachInstance'
-		return false
+		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.coOwnedTrivial)
 	end 'genericTypeFieldHasCoOwnedTrivialInstantiation'
 
 	// Is `t` a CO-OWNED TRIVIAL type argument — a heap aggregate the box drops (`typeIsManaged`) but that the
@@ -3228,15 +3259,7 @@ export type ProgramSignatures
 	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
 	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
 	export function genericTypeFieldHasUncopyableInstantiation(baseName ByteArray, position TypeParamId) returns bool
-		for id in 0 upto self.genericInstances.count() 'eachInstance'
-			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
-				let args = self.genericInstances.instanceArgs(id)
-				if position < args.count() and not self.typeSupportsDeepClone(try args.get(position) otherwise panic("ProgramSignatures.genericTypeFieldHasUncopyableInstantiation: instanceArgs.get OOB at {position} despite the range guard"), asElement: true, visited: ClonerSet.create()) 'uncopyable'
-					return true
-				end 'uncopyable'
-			end 'sameBase'
-		end 'eachInstance'
-		return false
+		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.uncopyableElement)
 	end 'genericTypeFieldHasUncopyableInstantiation'
 
 	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
@@ -3268,7 +3291,7 @@ export type ProgramSignatures
 	// A type-PARAMETER field is dropped iff its substituted argument is a HEAP AGGREGATE (`typeIsManaged`), the
 	// SAME gate a DIRECT field uses. That is DELIBERATELY BROADER than the CONSUME boundary (`typeArgIsOwned`):
 	// a trivial `Box with Point` is CO-OWNED, not consumed — its `Point` is `__mm_retain`'d at the constructor
-	// feed (`Parser.retainEscapingConstructorFeed`), so the box holds a real second reference the caller keeps
+	// feed (`Parser.handleEscapingBorrowFeed`), so the box holds a real second reference the caller keeps
 	// usable (`generic-trivial-struct-arg`), and this decref RELEASES that reference at the box's destruction.
 	// The retain and this drop are the two ends of one co-ownership (OPEN #40's `__mm_retain` thesis applied to
 	// the generic-field escape — the RED `PointBox.create(pInner)` outliving `pInner`'s scope). The two
