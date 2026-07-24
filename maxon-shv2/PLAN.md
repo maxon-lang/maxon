@@ -1897,7 +1897,40 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   synthetic probe edits use `__`-prefixed identifiers (`__warmRebuildProbe*`, `VerifyWarmRebuild.maxon:264-302`) and
   the parser rejects those with **E2051**, so the gate can never report `PASS invalidation` — it reports *"a synthetic
   probe edit made &lt;file&gt; stop parsing"*. Its DETERMINISM and CACHE properties do pass. **A gate that cannot fire is
-  worthless** — fix the probe to use legal identifiers. Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
+  worthless** — fix the probe to use legal identifiers.
+- **✅ STEP (2) `__Builtins.*` RECOGNITION — CLOSED 2026-07-24** (main `1c36c1ba8`; feat `233c01045`; 1513→**1529/0**
+  x64 (1525 on the branch + upstream Set-B), wasm **1366/0**). A `__Builtins.<name>` recognizer as a SEPARATE arm of
+  the bare-name builtin table in `Parser.maxon`'s `parseCallNamed`, gated behind one `bytesStartWith(callee,
+  BuiltinsQualifierPrefix)` (a qualified callee arrives already mangled `__Builtins.currentTimeMs`, so the bare table
+  can never match it — hence a separate arm, not more rows). Three Clock intrinsics: `currentTimeNanos()` →
+  `__gt_now_ns` verbatim (0 new codegen); `currentTimeMs()` → `__gt_now_ns()/1_000_000` inline (⚠ **COORDINATOR
+  RULING:** the stdlib doc says a COARSE `GetTickCount64` backing — a QPC-derived ms is strictly better, finer +
+  monotonic; `stdlib/` untouched, pinned by `ms-resolves-sub-tick` which a `GetTickCount64` backing would fail at
+  15/16); `currentUnixTimeSeconds()` → a new `__clock_now_unix_s` (`ClockRuntime.maxon`, `osReadWallClock`,
+  `IatSlot.GetSystemTimeAsFileTime`; epoch const `FileTimeTicksFrom1601To1970 = 116444736000000000`, review-verified
+  decoding to the exact host `date +%s`). x64-windows only; a clock read on wasm/arm64/x64-linux refuses at its span
+  with the NEW **E3104** (`SemanticTargetUnsupportedConstruct`, registry process followed) via a positive-capability
+  `isClockSubstrateCallee` test — NARROWED after the wasm suite showed a whole-`__gt_`-band gate also fired on
+  `__gt_promise_drop` (a COMPILER-inserted scope-exit call), which would have blamed the drop instead of the `async`.
+  ⭐ **FIXED THE REACHABLE PANIC (three panics, one root cause)** the recon flagged: `__Builtins.anything()` /
+  `__whatever()` in plain user code died at `resolveCallFixups`/`lowerAsyncCall`/`valueTagToStdType` with NO
+  diagnostic. Now a clean **E3004** (reused, not a new code — `__whatever()` and `whatever()` are ONE mistake) at the
+  callee's span. ⚠ **DEVIATION FROM BRIEF, correct:** the brief said put the check in SemanticCheck; the implementer
+  put it in the PARSER (`requireCalleeIsNotReservedName` at `emitCall` + `emitAsyncCall`, the complete source-call-door
+  set) because SemanticCheck STRUCTURALLY CANNOT distinguish a parser-emitted `call __mm_decref` from a user-written
+  `call __whatever` — by then both are the same `MaxonOp.call` and nothing records which door the name came through.
+  This RESTORES `validateCall`'s early-return premise instead of papering over it. The independent review ran ~40
+  constructed programs through every call door (method, type-qualified, `try`/`async`, function-value → E2004, closure
+  body, interpolation, arity, builtin-name collision) — all clean-diagnostic, no panic escaped — and confirmed
+  compiler-inserted calls unaffected (double-await on wasm still E3100 not E3104). ⭐ **DFE COMPOSITION MEASURED
+  (review):** `currentTimeNanos` sets `usesGt` (one counter shared by scheduler deadlines + user measurements), so a
+  clock-only program installs the scheduler — then **DFE prunes 19 of 23 functions**, residual ~1.35 KB code + 176 B
+  `.data` (the wall clock has its own `usesWallClock` bit and installs a leaf `.data` slot only). scale: FLAT +5 allocs
+  / +232 bytes per compile = the ONE new import name (proven by adding a temp 2nd import → exactly +10/+448); the
+  recognizer itself allocates nothing. **⭐⭐ HEADLINE (independently re-verified): `stdlib/Clock.maxon` compiles with
+  shv2 UNMODIFIED** — byte-identical copy + a driver over all 5 API surfaces builds + runs, printing a correct current
+  date. **⇒ STEP (3) — the whitelist loader with Clock as entry #1 — IS READY.**
+- Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
 lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
 intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
 QPC/QPF monotonic nanos): `currentTimeNanos()` ≡ `__gt_now_ns()`; `currentTimeMs()` = `__gt_now_ns()/1e6` (⚠ the
