@@ -260,9 +260,13 @@ end 'verifyCacheHit'
 //   • a FUNCTION changes both.
 //
 // The probe function is named for what it is, and it is `bool`-returning and trivial so that no
-// program it is appended to can fail to parse because of it.
+// program it is appended to can fail to parse because of it. ⚠ Its name must NOT begin with `__`:
+// that prefix is reserved for compiler internals and a source-level declaration using it is E2051 —
+// a diagnostic the invalidation check reads as "the probe broke the program" (`stop parsing`). The
+// name is distinctive enough that a collision with a real declaration in the edited file is not a
+// practical concern, which is what the reserved prefix was reaching for the wrong way.
 let BytesOnlyEditText = "// verify-warm-rebuild: bytes moved, declarations did not."
-let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn true\nend '__warmRebuildProbe'"
+let DeclarationEditText = "function warmRebuildProbe() returns bool\n\treturn true\nend 'warmRebuildProbe'"
 
 // ⭐ **THE CONSTANT-VALUE PROBE: the same declaration twice, differing ONLY in the NUMBER.**
 //
@@ -279,8 +283,8 @@ let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn 
 // and the spec suite still reported 295/0. Both gates were blind, because both edits ADD A NAME
 // and a name-only key moves on that. Only an edit that holds the name FIXED and moves the number
 // can tell the two keys apart, which is what these two are for.
-let ConstantValueEditBefore = "let __warmRebuildProbeConstant = 7"
-let ConstantValueEditAfter = "let __warmRebuildProbeConstant = 8"
+let ConstantValueEditBefore = "let warmRebuildProbeConstant = 7"
+let ConstantValueEditAfter = "let warmRebuildProbeConstant = 8"
 
 // ⭐ **THE `var` PROBE: the SAME edit as the constant probe, asserting the OPPOSITE — and that
 // is the whole point of it.**
@@ -298,8 +302,8 @@ let ConstantValueEditAfter = "let __warmRebuildProbeConstant = 8"
 // and NOTHING ELSE HERE CAN SEE IT. The constant probe asserts `fileCount` and would keep passing,
 // because a pessimal key re-parses everything for everything. Only an assertion that a var's value
 // edit re-parses ONE file can tell a correct key from an over-broad one.
-let GlobalValueEditBefore = "var __warmRebuildProbeGlobal = 7"
-let GlobalValueEditAfter = "var __warmRebuildProbeGlobal = 8"
+let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7"
+let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
 // reason is arithmetic rather than taste: the property's halves assert "a declaration edit

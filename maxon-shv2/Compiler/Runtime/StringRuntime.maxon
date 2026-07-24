@@ -387,9 +387,16 @@ export type RuntimeUsage
 	end 'create'
 end 'RuntimeUsage'
 
-export function scanRuntimeUsage(module MaxonModule) returns RuntimeUsage
+// `skip` names the functions this scan must ignore — the stdlib-whitelist functions the program
+// does not reach (see StdlibWhitelist.stdlibWhitelistSkipSet). It is EMPTY for user-only code and
+// never contains a user function, so the answer for every non-whitelist program is unchanged; it
+// exists solely so an unused injected module (Clock) installs no runtime floor.
+export function scanRuntimeUsage(module MaxonModule, skip FunctionNameSet) returns RuntimeUsage
 	var usage = RuntimeUsage.create()
 	for func in module.functions 'eachFunc'
+		if skip.contains(func.name) 'skipWhitelisted'
+			continue
+		end 'skipWhitelisted'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("scanRuntimeUsage: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'

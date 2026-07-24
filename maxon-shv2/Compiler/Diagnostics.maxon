@@ -61,6 +61,14 @@ export union CompileError implements Error
 	directoryNotFound(path FilePath)
 	noSourceFiles(root FilePath)
 	readError(path FilePath)
+	// The compiler could not locate its `stdlib/` directory by walking up from its own
+	// executable (see StdlibWhitelist.locateStdlibDir). Every compile now depends on the stdlib
+	// whitelist, so a missing stdlib is a loud, hard failure rather than a silent skip.
+	stdlibNotFound
+	// A path named by the stdlib whitelist does not exist under `stdlib/` (see
+	// StdlibWhitelist.loadStdlibWhitelist) — a whitelist that names a module the checkout does
+	// not have. Carries the resolved path so the message names the missing module.
+	whitelistModuleMissing(path FilePath)
 	compileError
 end 'CompileError'
 

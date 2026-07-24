@@ -214,11 +214,18 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
 	// for dropped functions are never read (the remap consults `reached` first).
 	var newIndexOfOld = FuncIndexArray.create()
+	// Did dropping renumber any function that SURVIVES? Only a survivor whose index moved has an origin
+	// row to relocate; a drop with no survivor after it moves nothing (see the trailing-drop skip below).
+	var keptNumberingShifted = false
 	for i in 0 upto total 'eachFunc'
 		let func = module.getFunc(i)
 		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
-		newIndexOfOld.push(kept.count())
+		let newIndex = kept.count()
+		newIndexOfOld.push(newIndex)
 		if isLive 'live'
+			if newIndex != i 'moved'
+				keptNumberingShifted = true
+			end 'moved'
 			kept.push(func)
 		end 'live' else 'dead'
 			// `String.from` runs INSIDE the lazy message, never beside it: this arm is taken once per
@@ -241,6 +248,22 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 	if dropped == 0 'numberingUnchanged'
 		return
 	end 'numberingUnchanged'
+
+	// ⭐ TRAILING DROPS ARE FREE TOO. When every dropped function sits AFTER every survivor — no
+	// survivor's index moved — the remap would keep each survivor's rows at their existing index and
+	// merely discard the trailing dropped rows. But those rows are `lookup`ed by (funcIndex, valueId)
+	// and a dropped function's index is now beyond `module.functions`, so no survivor's lookup can ever
+	// match one: leaving them costs a few extra iterations on the cold E5001 path and nothing else,
+	// where rebuilding the program-sized columns costs the same linear bytes the `dropped == 0` case
+	// avoids. The stdlib whitelist makes this the common case: an unused whitelisted module (e.g. Clock
+	// in a program that reads no clock) merges after the user source and drops as a block, so a program
+	// that installs no emitted runtime (the runtime functions append AFTER it) drops ONLY trailing
+	// functions — without this skip every such compile would pay the full rebuild the whitelist newly
+	// forced on it. A program that DOES install runtime drops the whitelisted module from the MIDDLE
+	// (the runtime sits after it), a survivor's index moves, and the remap correctly runs.
+	if not keptNumberingShifted 'trailingDropsOnly'
+		return
+	end 'trailingDropsOnly'
 
 	project.valueOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
 end 'sweepUnreachedFunctions'

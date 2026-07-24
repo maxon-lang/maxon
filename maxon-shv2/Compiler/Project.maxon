@@ -886,6 +886,18 @@ end 'slotCallArgs'
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
+	// The whitelisted stdlib module files loaded into THIS compile (see StdlibWhitelist).
+	// Recorded at load time so the runtime-floor scan can identify the injected functions and skip
+	// the ones the program does not reach (`stdlibWhitelistSkipSet`); empty until
+	// `loadStdlibWhitelist` registers them.
+	export var stdlibWhitelistPaths as WhitelistPathArray
+	// The whitelisted functions THIS program does not reach (`stdlibWhitelistSkipSet`), computed
+	// once per compile after the module is merged. Every PRE-elimination pass that examines function
+	// BODIES for a target/runtime decision — `scanRuntimeUsage`'s floor scan, `checkCalls`'s E3104
+	// target-support gate — consults this to leave the injected-but-unused Clock exactly as invisible
+	// as dead-function elimination will later make it. Empty for user-only code and never holds a
+	// user function, so no non-whitelist program's checks change.
+	export var whitelistSkipSet as FunctionNameSet
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
 	// Declared function parameter signatures (names + types), keyed by name.
@@ -974,6 +986,8 @@ export type Project
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
 			db: db,
+			stdlibWhitelistPaths: WhitelistPathArray.create(),
+			whitelistSkipSet: FunctionNameSet.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),

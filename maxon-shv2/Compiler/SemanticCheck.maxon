@@ -513,6 +513,15 @@ end 'pushSuccessorPair'
 // ops (never terminators), so only `block.opRefs` is scanned.
 function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary)
 	for func in module.functions 'eachFunc'
+		// A whitelisted stdlib function the program does not reach is dead trusted code that
+		// dead-function elimination will drop before the back end. Its only target-relevant call check
+		// is E3104 — Clock's body reaches `__gt_now_ns`/`__clock_now_unix_s`, x64-only — and firing that
+		// on a wasm/arm64 program that never uses the clock would refuse a compile the whitelist must
+		// leave untouched (see Compiler.maxon / StdlibWhitelist). A REACHABLE Clock on wasm is NOT in
+		// this set, so a program that genuinely reads the clock still gets its E3104.
+		if project.whitelistSkipSet.contains(func.name) 'skipWhitelisted'
+			continue
+		end 'skipWhitelisted'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
