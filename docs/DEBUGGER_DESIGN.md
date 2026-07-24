@@ -318,7 +318,8 @@ first; port the lessons, not the cost.
 |---|-----------|-----------|
 | P0 | This design doc + format spec | doc committed |
 | P1 | Source spans; `.mxdbg` header/strings/files/funcs/line table + `__build_id`; retire COFF; sidecar default-on (`--no-debug-info` opts out) once scale-test clears the cost; `maxon debug --dump-info`/`--symbolize` | exe byte-identical with/without `--no-debug-info`; PC↔file:line round-trips; span-capture cost measured (scale-test); suite green |
-| P2 | Locals loclists + type table | dump shows each local's location(s)+type |
+| P2a ✅ | Type table + fields + per-function frame size (v1→v2 format); folds in the P1 line-precision fix | dump shows each type's kind/size/fields + each function's frame size; byte-identical; deterministic |
+| P2b ◑ | **Local location-list capture** (the deferred slice). The name→slot map (`varOffsets`) is clean, but a local's SOURCE TYPE is erased by emit (Standard ops carry only `i64`/`f64`/`ptr`), so this needs a per-function `(name→sourceType)` side-table carried from `MaxonToStandard` (single-threaded) down to the machine function and joined with `varOffsets`. The v2 sidecar already defines and round-trips the local records; only the compiler-side capture remains. Also filter the type table to types reachable from functions/locals (the ~150-type stdlib dump is size-only, no correctness risk). | dump shows each local's location + type |
 | P3 | Always-emit dormant agent + substrate; activation/handler/breakpoints/continue/stop; driver; rich REPL core with auto source-context | agent dark when unset; breakpoint hits; source window + GT-aware backtrace render on stop |
 | P4 | Stepping + per-GT park/resume; value trees; fuzzy targeting + completion; conditional breakpoints; `threads`/`gt`; batch/JSON; DebugStream correlation | step + navigate a value tree by path; `break … if`; break one GT while others run |
 | P5 | MCP `debug_run` + inspection | agent sets bp, gets stop+locals |
