@@ -283,16 +283,13 @@ function emitSetStoreEntry(module StdModule, block IrBlock, set ValueId, index V
 end 'emitSetStoreEntry'
 
 // --- Managed-key drop helpers (P1.7b String keys) ---
-
-// ⭐ **CALL THE KEY DESTRUCTOR on `elem` through the `drop` function pointer.** THE one home of the set's
-// key-destructor ABI — a key destructor is `(i64) -> void`, so its result slot is an unused i64 and its single
-// key-pointer argument is never a float (mask 0). The `Set` twin of `ArrayRuntime`'s `emitElementDestructorCall`,
-// invoked by every set drop site (insert's dup-drop, remove, decref's teardown walk) so the ABI lives in ONE
-// place. The caller has already loaded `drop` and confirmed it non-null; this only emits the indirect call.
-function emitSetElementDrop(module StdModule, block IrBlock, drop ValueId, elem ValueId, ids ValueMinter)
-	let dropped = ids.mint()
-	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: drop, resultType: StdReturnType.void, argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
-end 'emitSetElementDrop'
+//
+// The key-destructor CALL ABI itself (`callIndirect(drop, key)`, `(i64) -> void`, mask 0) is NOT restated here:
+// a managed set's stored key destructor IS its source array's element destructor (same `funcAddr(__str_decref)`,
+// read from `ArrElementDestroyOffset` by `__set_from`), so both drop through ArrayRuntime's shared
+// `emitElementDestructorCall` — the ONE home of that ABI, which a third copy here would let silently drift into a
+// miscompiled indirect call. These helpers only add the set-specific gating (test `elemDrop@40 != 0`) and the
+// slot walk around it.
 
 // ⭐ **DROP ONE KEY `elem` IFF the set carries a key destructor.** Load `elemDrop@40` and, when it is non-zero
 // (a MANAGED-key set), call it on `elem`; a trivial-key set (elemDrop 0) skips it untouched. The single-value
@@ -308,7 +305,7 @@ function emitSetDropKeyIfManaged(module StdModule, func IrFunction, cur IrBlock,
 	let cont = module.addBlock(func, label: b"setdropc")
 	module.setTerminator(cur, op: StdOp.condBranch(hasDrop, thenBlockId: doDrop.id, elseBlockId: cont.id))
 
-	emitSetElementDrop(module, block: doDrop, drop: drop, elem: elem, ids: ids)
+	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: elem, ids: ids)
 	module.setTerminator(doDrop, op: StdOp.branch(cont.id))
 
 	return cont
@@ -368,7 +365,7 @@ function emitSetOccupiedDropRange(module StdModule, func IrFunction, cur IrBlock
 	module.setTerminator(body, op: StdOp.condBranch(isOccupied, thenBlockId: doDrop.id, elseBlockId: step.id))
 
 	let elem = emitSetSlotLoad(module, block: doDrop, base: elements, index: i, ids: ids)
-	emitSetElementDrop(module, block: doDrop, drop: drop, elem: elem, ids: ids)
+	emitElementDestructorCall(module, block: doDrop, destroy: drop, elem: elem, ids: ids)
 	module.setTerminator(doDrop, op: StdOp.branch(step.id))
 
 	// step: `i = i + 1`.

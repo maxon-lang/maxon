@@ -30,8 +30,9 @@ boxed `String` neither double-frees nor leaks it.
 The witness dispatch rides the x64 rdata function-pointer relocation, so these cases are x64-only (as the
 `primitive-conformance` and `where-clauses` witness cases are).
 
-Direct `s.hash()` on a concrete `String` value, `Character` conformance, and `Set`-with-`String` keys are
-separate future slices and are NOT covered here.
+Direct `s.hash()` on a concrete `String` value and `Character` conformance are separate future slices and are
+NOT covered here. `Set with String` keys — which reuse exactly this `String` `Hashable`/`Equatable`
+conformance — ship in P1.7b and are covered by `set-string`.
 
 ## Tests
 
