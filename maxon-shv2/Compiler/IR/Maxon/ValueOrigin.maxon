@@ -197,37 +197,39 @@ export type ParamOriginTable
 	end 'appendFrom'
 
 	// The `ValueOriginTable.remapFunctionIndices` half for parameter spans — see that header for WHY a
-	// renumbering has to reach these rows at all. Same rule: a row whose function was dropped goes, and
-	// a survivor's key moves to the function's new position.
+	// renumbering has to reach these rows at all, and for the in-place compaction rationale (allocates
+	// nothing; byte-identical to a rebuild). Same rule: a row whose function was dropped goes, and a
+	// survivor's key moves to the function's new position.
 	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
-		var keptFuncs = FuncIndexArray.create()
-		var keptValues = ValueIdArray.create()
-		var keptStarts = ByteOffsetArray.create()
-		var keptEnds = ByteOffsetArray.create()
-		var keptLines = LineNumberArray.create()
-		var keptColumns = ColumnNumberArray.create()
-
-		for i in 0 upto self.count() 'each'
-			let f = try self.funcIndices.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.get OOB at {i}")
-			let isLive = try reached.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: row {i} names function index {f}, which is not a function of the module being swept — the parameter-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+		var write = 0 as OpCount
+		for read in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.get OOB at {read}")
+			let isLive = try reached.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the parameter-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
 			if not isLive 'droppedFunc'
 				continue
 			end 'droppedFunc'
 
-			keptFuncs.push(try newIndexOfOld.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}"))
-			keptValues.push(try self.valueIds.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: valueIds.get OOB at {i}"))
-			keptStarts.push(try self.startBytes.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: startBytes.get OOB at {i}"))
-			keptEnds.push(try self.endBytes.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: endBytes.get OOB at {i}"))
-			keptLines.push(try self.lines.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: lines.get OOB at {i}"))
-			keptColumns.push(try self.columns.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: columns.get OOB at {i}"))
+			let newFunc = try newIndexOfOld.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}")
+			let valueId = try self.valueIds.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: valueIds.get OOB at {read}")
+			let startByte = try self.startBytes.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: startBytes.get OOB at {read}")
+			let endByte = try self.endBytes.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: endBytes.get OOB at {read}")
+			let line = try self.lines.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: lines.get OOB at {read}")
+			let column = try self.columns.get(read) otherwise panic("ParamOriginTable.remapFunctionIndices: columns.get OOB at {read}")
+			try self.funcIndices.set(write, value: newFunc) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.set OOB at {write}")
+			try self.valueIds.set(write, value: valueId) otherwise panic("ParamOriginTable.remapFunctionIndices: valueIds.set OOB at {write}")
+			try self.startBytes.set(write, value: startByte) otherwise panic("ParamOriginTable.remapFunctionIndices: startBytes.set OOB at {write}")
+			try self.endBytes.set(write, value: endByte) otherwise panic("ParamOriginTable.remapFunctionIndices: endBytes.set OOB at {write}")
+			try self.lines.set(write, value: line) otherwise panic("ParamOriginTable.remapFunctionIndices: lines.set OOB at {write}")
+			try self.columns.set(write, value: column) otherwise panic("ParamOriginTable.remapFunctionIndices: columns.set OOB at {write}")
+			write = write + 1
 		end 'each'
 
-		self.funcIndices = keptFuncs
-		self.valueIds = keptValues
-		self.startBytes = keptStarts
-		self.endBytes = keptEnds
-		self.lines = keptLines
-		self.columns = keptColumns
+		self.funcIndices.resize(write)
+		self.valueIds.resize(write)
+		self.startBytes.resize(write)
+		self.endBytes.resize(write)
+		self.lines.resize(write)
+		self.columns.resize(write)
 	end 'remapFunctionIndices'
 end 'ParamOriginTable'
 
@@ -318,26 +320,38 @@ export type ValueOriginTable
 	// `RegisterPressureDiagnostic`'s "resolves to NO source span … This is a COMPILER BUG" panic on what
 	// is really an ordinary user program. (Measured: identical program, 5 unreachable functions ahead of
 	// the pressure-failing one, E5001 → that panic.)
+	// ⭐ COMPACTED IN PLACE — a survivor row's remapped key is written back over the leftmost free slot
+	// and the trailing dropped rows are resized away, rather than pushed into three fresh columns. This
+	// allocates NOTHING: the columns are sized by the program's value count, so a push-built rebuild costs
+	// O(rows) bytes (2–5× the survivor count under the geometric growth policy, see Array's header) on
+	// EVERY compile that drops a function from the middle — which the stdlib whitelist made the common case
+	// (an unused Clock drops while the emitted runtime, appended after it, survives; measured at ~2.6% of
+	// total compile bytes across the scale ladder). The result is byte-identical to the rebuild — same
+	// survivor rows in the same order with the same remapped `funcIndex` — so E5001 span resolution is
+	// unchanged; this is a memory optimization, not a semantic one. The `write <= read` invariant holds at
+	// every step (a survivor consumes at most one slot per row scanned), so a slot is always read before it
+	// can be overwritten.
 	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
-		var keptFuncs = FuncIndexArray.create()
-		var keptValues = ValueIdArray.create()
-		var keptOps = OpIndexArray.create()
-
-		for i in 0 upto self.count() 'each'
-			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.get OOB at {i}")
-			let isLive = try reached.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: row {i} names function index {f}, which is not a function of the module being swept — the value-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+		var write = 0 as OpCount
+		for read in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.get OOB at {read}")
+			let isLive = try reached.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: row {read} names function index {f}, which is not a function of the module being swept — the value-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
 			if not isLive 'droppedFunc'
 				continue
 			end 'droppedFunc'
 
-			keptFuncs.push(try newIndexOfOld.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}"))
-			keptValues.push(try self.valueIds.get(i) otherwise panic("ValueOriginTable.remapFunctionIndices: valueIds.get OOB at {i}"))
-			keptOps.push(try self.opIndices.get(i) otherwise panic("ValueOriginTable.remapFunctionIndices: opIndices.get OOB at {i}"))
+			let newFunc = try newIndexOfOld.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}")
+			let valueId = try self.valueIds.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: valueIds.get OOB at {read}")
+			let opIndex = try self.opIndices.get(read) otherwise panic("ValueOriginTable.remapFunctionIndices: opIndices.get OOB at {read}")
+			try self.funcIndices.set(write, value: newFunc) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.set OOB at {write}")
+			try self.valueIds.set(write, value: valueId) otherwise panic("ValueOriginTable.remapFunctionIndices: valueIds.set OOB at {write}")
+			try self.opIndices.set(write, value: opIndex) otherwise panic("ValueOriginTable.remapFunctionIndices: opIndices.set OOB at {write}")
+			write = write + 1
 		end 'each'
 
-		self.funcIndices = keptFuncs
-		self.valueIds = keptValues
-		self.opIndices = keptOps
+		self.funcIndices.resize(write)
+		self.valueIds.resize(write)
+		self.opIndices.resize(write)
 
 		self.paramOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
 	end 'remapFunctionIndices'
