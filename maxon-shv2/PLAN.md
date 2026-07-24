@@ -1777,6 +1777,61 @@ gate**.
   (the #92 reuse pattern, adapted for the read's yield). **⇒ NEXT = slice 1b** (the full StreamingSubprocess surface:
   `readStdoutLine`/`readStderrLine` line-buffering + `writeStdinAll`/`closeStdin`/`waitExit`/`release` + the 7 native
   builtins + making shv2 compile the stdlib `StreamingSubprocess` API + specs).
+- **✅ SLICE 1b — the StreamingSubprocess handle-table API (NATIVE surface) — CLOSED 2026-07-24** (main `2a382664d`;
+  5 commits `8869ca445` feat + `afeaac53e` drop-fix + `37b400970` perf + `33cc4090e` review + `2a382664d` P1b-fix;
+  1462→1471/0 on the branch, **1496/0** on the merged tree after rebasing over upstream P1.7a-2b-i + retain-escaping +
+  debugger P3). A `__subp_table` of 64 fixed slots (handle = slot index, main-thread-only ⇒ **no lock**: the completion
+  thread reaches a parked GT only through its OVERLAPPED, never the table), `__gt_subp_spawn` (3 pipes: sync stdin +
+  2 overlapped IOCP stdout/stderr), buffered `__gt_subp_read_line` (stdout/stderr share ONE body-builder), write/
+  close/wait/release, and **7 bare-name builtins** (`subpSpawn`/`subpReadLine`/`subpReadErrLine`/`subpWriteLine`/
+  `subpCloseStdin`/`subpWait`/`subpRelease`), `usesStreaming`-gated. 1a's yielding read was **factored into ONE copy**
+  (`__gt_subp_yield_read`) shared by the probe and the streaming reader. 1a's ~4.2 KB/call slab debt is FIXED (slot
+  buffers REUSED across respawn — reuse, not free, is the fix for a no-free bump slab). 9 bespoke
+  `streaming-subprocess.md` tests. **⭐ THREE reachable defects were found and FIXED before merge, none deferred:**
+  (1) **drop a streaming reader mid-read** broke the handle — 1a's cancel arm `CloseHandle`d the TABLE-owned pipe, so
+  a later read got EOF forever (silent wrong answer, control=4 vs drop=0). Fixed by an ownership tag; the optimizer
+  then moved it onto **`io_handle@0x80`'s spare LOW BIT** (kernel handles are 4-aligned; the completion thread
+  provably never touches `io_handle`), which REVERTED a +8 GT-struct growth and its 17-golden churn. (2) the committed
+  **`write-echo` test was RED** and it was the TEST, not a race: it hard-coded an LF-only exit 23 while `sort`'s
+  terminator is inherited from the launching environment (CRLF→34) — PROVEN not a race (60/60 in-process, content
+  always correctly sorted; 30/30 standalone LF) and rewritten to assert terminator-INVARIANT round-trip + ordering
+  facts. (3) **FINDING P1b — release-while-parked + slot reuse** corrupted a DIFFERENT handle (a stale reader resumed
+  and wrote EOF into a reused slot; repro 0 vs expected 80). ⚠ **COORDINATOR RULING: FIXED, not accepted as a
+  documented constraint** (the review recommended documenting it as out-of-contract misuse of a temporary probe
+  surface; the project's "fix it properly, no workarounds" + "never defer a reachable wrong answer" rules govern) —
+  a per-slot **GENERATION** (`SubpSlotGeneration@128`, stride 136) bumped when spawn claims a slot, captured
+  immediately before the single park point, checked on resume with a `staleExit` that writes NO slot state; the other
+  entries (write/wait/close/release) are synchronous and cannot park, so one guard covers the set. Repro 0→80, 8/8.
+  Review also fixed a **cross-file fused-String duplication** (`buildStrFromBytes` hand-rolled `buildStrClone` → one
+  shared `emitBuildOwnedInlineString`, byte-identical codegen). scale: **+8 bytes/compile FLAT** (the `usesStreaming`
+  bool), A/B-proven — the larger raw delta vs the 1a row was BUILD PROVENANCE, not 1b. No runtime superlinearity
+  (handle table O(1) indexed; the line read re-scans only NEW bytes; buffers DOUBLE; tail compaction ≤1 chunk).
+
+### 🔴 THE DOGFOOD'S REAL BLOCKER, discovered by slice 1b — the missing STDLIB CONE
+
+**shv2 cannot compile `stdlib/Subprocess.maxon` AT ALL** — it panics immediately (`SignatureIndex.maxon:3073: base
+struct 'Map' is not declared`). The harness calls the *stdlib* `StreamingSubprocess` API, so **the harness cannot
+compile until a whole stdlib cone lands that shv2 lacks: `Map`, `FilePath`, `__ManagedMemory`, `.cstr()`,
+`.addressableBytes()`, `String.init(__ManagedMemory)`, and `__Builtins.*` QUALIFIED-CALL recognition.** ⚠ Correcting
+a wrong assumption in the slice-1b brief: shv2's own source uses `__Builtins.floatToBits`/`mmAllocTotal`, but those
+are **BOOTSTRAP** intrinsics (maxon-sharp compiles shv2) — **shv2 has NO `__Builtins.*` recognizer for the programs
+IT compiles** (a qualified callee can never match the bare-name builtin table, `Parser.maxon:18830`), which is why
+1b correctly used bare-name builtins. When the cone lands, the stdlib method bodies wire to the `__gt_subp_*` runtime
+with minimal churn (the read builtin already returns the natural owned String; names/shapes mirror the stdlib ops).
+**⇒ This cone — not more subprocess runtime — is now the dogfood's dominant remaining cost, and `Map` (a generic hash
+map) is its largest piece.** Slice 2 (Set/Hashable/witness) is meanwhile being landed UPSTREAM by the parallel repo
+(P1.7a-2a witness dispatch `a507e6b24`, 2b-i integer Hashable+Equatable `f1d6690ca`).
+
+### Bootstrap / front-end robustness findings filed by the dogfood slices (not their rung to fix)
+- **The register-pressure diagnostic PANICS** (`RegisterPressureDiagnostic.maxon:361`) whenever ANY hand-built runtime
+  function raises E5001: runtime-function values are span-less, so the message backstop has no user code to blame and
+  panics instead of degrading. Reachable by any sufficiently register-hungry runtime function (slice 1b hit it and
+  restructured to dodge it). An allocator-robustness gap.
+- **An undeclared generic base panics** (`SignatureIndex.maxon:3073`, `Map with …`) instead of emitting a clean
+  diagnostic — a general front-end robustness gap, not subprocess-specific.
+- Probe-surface deviations deliberately left on the temporary bare builtins: `subpSpawn` returns a `-1` sentinel
+  (CLAUDE.md "no sentinel returns") and the handle ops do not guard an invalid handle; the real error-union API
+  resolves both.
 
 Per the runtime-binding decision (Context): shv2 **excludes `Internals.maxon` and emits natively**
 — builtin registration for the `__Managed*` surface replaces v1's `__Internals` mechanism +
