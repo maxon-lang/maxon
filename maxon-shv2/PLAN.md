@@ -1822,6 +1822,63 @@ with minimal churn (the read builtin already returns the natural owned String; n
 map) is its largest piece.** Slice 2 (Set/Hashable/witness) is meanwhile being landed UPSTREAM by the parallel repo
 (P1.7a-2a witness dispatch `a507e6b24`, 2b-i integer Hashable+Equatable `f1d6690ca`).
 
+### ⭐ STDLIB WHITELIST (user-directed 2026-07-24: *"use a whitelist for loading stdlib so we don't have to implement all of it at once"*) — RECON DONE, PREMISE CORRECTED, SEQUENCED
+
+The idea is right and it is the plan of record: shv2 should PREPEND a **listed subset** of the real `stdlib/*.maxon`
+source (the bootstrap prepends ALL of it — `StdlibLoader.LoadStdlibModules()`/`PrependStdlib`,
+`maxon-sharp/BuildCache.cs:30-32`), so stdlib support grows incrementally instead of every type being reimplemented
+as a builtin. **shv2 loads NO stdlib today** (`loadSourceFiles`, `Compiler.maxon:328`, registers only the project's
+rootPath; `String`/`Array` are compiler BUILTINS — PLAN's "the road not taken"). A recon rung STOPPED before landing
+it, correctly, because three measured facts invalidate a naive whitelist:
+
+1. **ZERO of the 48 files under `stdlib/` compile with shv2 today** (all 34 top-level + 14 `helpers/` probed
+   individually). There is no candidate set for a non-empty whitelist yet.
+2. ⭐ **shv2 has NO DEAD-FUNCTION ELIMINATION — measured.** An uncalled `unusedHelper` is still emitted,
+   register-allocated, encoded and linked. So whitelisting a module drags EVERY function in it into EVERY program:
+   (a) all 221+ committed fragments gain them (`writeTargetIr` passes `includeRuntime: false`, which excludes only
+   `__`-prefixed runtime — stdlib functions are not `__`-prefixed) = a suite-wide `M` with no reviewable content;
+   (b) **the whole wasm + arm64 suites break**, because the GT/clock/IOCP substrate is x64-windows-only and nothing
+   prunes it (confirmed: a `sleep(1)` program dies on wasm at `StdToWasm.maxon:1500: emitFuncAddr: no wasm function
+   index for '__gt_trampoline'`); (c) every compile pays. **⇒ DFE is the PREREQUISITE, and its own rung.**
+3. **`__Builtins.*` is the universal floor** — every leaf module bottoms out there (`Print`→`writeStdout`,
+   `Sleep`→`sleep`, `Clock`→3 clock intrinsics) and **shv2 has no `__Builtins.*` recognizer for programs it
+   compiles** (the ones in shv2's OWN source are BOOTSTRAP intrinsics; a qualified callee can never match the
+   bare-name builtin table, `Parser.maxon:18830`).
+
+**⇒ SEQUENCE: (1) dead-function elimination → (2) `__Builtins.*` recognition → (3) the whitelist mechanism with
+`stdlib/Clock.maxon` as entry #1.** Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
+lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
+intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
+QPC/QPF monotonic nanos): `currentTimeNanos()` ≡ `__gt_now_ns()`; `currentTimeMs()` = `__gt_now_ns()/1e6` (⚠ the
+stdlib documents a COARSE `GetTickCount64` backing — QPC-derived ms is strictly better but changes the documented
+backing, a small ruling); only `currentUnixTimeSeconds()` needs a wall clock (`GetSystemTimeAsFileTime`, one IAT slot).
+For the whitelist mechanism itself, take the **bootstrap's exe-dir walk** (`0-Compiler.cs:929`) to locate `stdlib/`,
+NOT v1's `Directory.currentPath()` walk (which fails for a program compiled in a temp dir).
+
+**First blocker per module** (the roadmap for widening the whitelist): undeclared base struct
+(`__ManagedMemory`/`Map`/`Set`/`__ManagedList`) → PANIC at `SignatureIndex.maxon:3129` — Array, Character, String,
+Vector, Map, CharacterSet, List, Subprocess, HttpClient, Interfaces · `__Builtins.*` unknown → link PANIC — Clock,
+Print, PrintError, Sleep · missing String methods (`addressableBytes`/`byteAt`/`trim`) — File, TcpClient, URL, utf8,
+grapheme, urlHelpers · `for` statement — CommandLine, string/hash · top-level `extension` — PrimitiveExtensions, all 6
+`helpers/sort/*` · top-level `#if os(...)` — FilePath, Process · non-literal field default — Json, Set · `try
+(parenthesized-expr)` + `for` — Math (the only intrinsic-free near-miss) · misc — Builtins, Unicode/utf16, Sha256,
+unicodeCategory, withIterator, Ascii.
+
+⚠ **A REACHABLE PRE-EXISTING DEFECT found by the recon, SEQUENCED onto rung (2), not dropped:** `__Builtins.anything()`
+in PLAIN user code panics at link with no file/line/diagnostic — `panic at X64Backend.maxon:1793: resolveCallFixups:
+call to unknown function '__Builtins.currentTimeMs'`. ROOT CAUSE: `isCompilerInternalCallee` (`MmRuntime.maxon:137`)
+returns true for ANY `__`-prefixed callee and `SemanticCheck.validateCall` (`SemanticCheck.maxon:642`) returns EARLY
+on it, skipping E3004 — its stated premise ("no user name can be DECLARED with this prefix, so a `__` CALLEE is
+provably compiler-owned") is FALSE: E2051 governs DECLARATIONS, not a callee declared nowhere
+(`reserved-double-underscore.md:17` even says user code may reference internal names). `undeclaredThing()` and
+`Undeclared.thing()` both correctly give E3004; only `__`-prefixed callees slip through. The fix is an explicit
+"unknown intrinsic" arm on the recognizer rung (2) builds — rejecting all source-written `__` callees would be wrong
+at the code, since shv2 must eventually ACCEPT a recognized set. (`resolveCallFixups` cannot host the diagnostic: it
+has only `targetName`/`codeOffset`, no span, no `project`.)
+⏭ Two diagnostic-quality bugs also found: `Log.maxon:27` and `Range.maxon:23` report `Expected ''min' or 'max''` for
+an unknown qualified name — the top-level-initializer parser emits a PRIMITIVE-LIMIT message for any unknown
+qualified name. Misleading, not wrong.
+
 ### Bootstrap / front-end robustness findings filed by the dogfood slices (not their rung to fix)
 - **The register-pressure diagnostic PANICS** (`RegisterPressureDiagnostic.maxon:361`) whenever ANY hand-built runtime
   function raises E5001: runtime-function values are span-less, so the message backstop has no user code to blame and
