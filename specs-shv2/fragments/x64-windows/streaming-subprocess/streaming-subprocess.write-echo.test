@@ -8,7 +8,11 @@ function main() returns ExitCode
 	let second = subpReadLine(h)
 	let code = subpWait(h)
 	subpRelease(h)
-	return (first.byteLength() * 10 + second.byteLength() + w1 + w2) as ExitCode
+	var result = 0
+	if w1 == 0 and w2 == 0 and first.byteLength() > 0 and first.byteLength() < second.byteLength() 'roundtrip'
+		result = 23
+	end 'roundtrip'
+	return result as ExitCode
 end 'main'
 ---
 ExitCode: 23
@@ -78,12 +82,54 @@ func @main {
     x64.callDirect __gt_subp_wait
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_subp_release
+    x64.movRegImm32 rbx, 0
+    x64.cmpRegImm32 r12, 0
+    x64.movRegImm32 rax, 0
+    x64.jcc equal, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 r13, 0
+    x64.setccReg equal, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
-    x64.imulRegRegImm32 rax, rax, 10
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg greater, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rax, rcx
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r15 + 8]
-    x64.leaRegRegReg rax, rax, rcx
-    x64.leaRegRegReg rax, rax, r12
-    x64.leaRegRegReg rbx, rax, r13
+    x64.cmpRegReg rax, rcx
+    x64.setccReg less, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rax, rcx
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, roundtrip
+    x64.jmp critsplit
+  roundtrip:
+    x64.movRegImm32 rbx, 23
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
     x64.movRegReg rcx, r15
     x64.callDirect __str_decref
     x64.movRegReg rcx, r14

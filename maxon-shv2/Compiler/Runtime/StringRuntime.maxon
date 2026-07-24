@@ -1121,6 +1121,39 @@ function buildStrDecref(module StdModule)
 	module.functions.push(func)
 end 'buildStrDecref'
 
+// ⭐ **THE ONE ENCODER of shv2's fused OWNED inline String record** — record + inline bytes + a trailing NUL in
+// ONE `__mm_alloc`, `buffer@0` pointing at the inline region, `capacity@16 = InlineBufferCapacity`, `parent@32`
+// left 0 by the slab zeroing, and `isAscii@40 = isAscii`. Emits the ops into `block` and returns the record.
+// Shared so the record layout has exactly ONE construction site: `__str_clone` (passes the SOURCE's `isAscii`)
+// and `__gt_subp_str_from_bytes` (passes 0 — child output is arbitrary bytes, `not-ascii` is the safe class)
+// were byte-for-byte copies of this sequence, and a field the record later gains must be initialized once, here,
+// not silently in one path and not the other.
+export function emitBuildOwnedInlineString(module StdModule, block IrBlock, ids ValueMinter, srcBuf ValueId, srcLen ValueId, isAscii ValueId) returns ValueId
+	// One `__mm_alloc` for the record + the bytes + a trailing NUL (the slab zeroes it), sized exactly as an
+	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
+	let overhead = emitConst(module, block: block, value: StringInterpOverheadBytes, ids: ids)
+	let allocSize = emitBin(module, block: block, a: srcLen, b: overhead, opcode: StdBinOpcode.add, ids: ids)
+	let zeroDtor = emitConst(module, block: block, value: 0, ids: ids)
+	let newRec = ids.mint()
+	module.appendOp(block, op: StdOp.call(newRec, callee: MmAllocName, args: twoArgs(allocSize, second: zeroDtor)))
+
+	// The inline byte region begins right after the record; blit the source's live bytes into it.
+	let recordBytes = emitConst(module, block: block, value: StringRecordBytes as ParsedInt, ids: ids)
+	let inlineBuf = emitBin(module, block: block, a: newRec, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
+	let copied = ids.mint()
+	module.appendOp(block, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(inlineBuf, second: srcBuf, third: srcLen)))
+
+	emitStoreField(module, block: block, record: newRec, offset: StringBufferOffset, value: inlineBuf)
+	emitStoreField(module, block: block, record: newRec, offset: StringLengthOffset, value: srcLen)
+	let capacity = emitConst(module, block: block, value: InlineBufferCapacity as ParsedInt, ids: ids)
+	emitStoreField(module, block: block, record: newRec, offset: StringCapacityOffset, value: capacity)
+	let elementSize = emitConst(module, block: block, value: StringElementSize, ids: ids)
+	emitStoreField(module, block: block, record: newRec, offset: StringElementSizeOffset, value: elementSize)
+	emitStoreField(module, block: block, record: newRec, offset: StringIsAsciiOffset, value: isAscii)
+
+	return newRec
+end 'emitBuildOwnedInlineString'
+
 // ⭐ **`__str_clone(src) -> newStr` — A STRING'S DEEP CLONE (P1.7 slice 3b-vi-b).** A fresh OWNED heap String,
 // an independent copy of `src` that `__str_decref` reclaims without touching `src`. It is the SAME single-
 // `__mm_alloc` fused-record path an interpolation builds (`Parser.emitStringInterp` / `promoteToOwnedString`,
@@ -1142,30 +1175,12 @@ function buildStrClone(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	// One `__mm_alloc` for the record + the bytes + a trailing NUL (the slab zeroes it), sized exactly as an
-	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
+	// A clone PRESERVES the source's `isAscii` classification (the bytes are copied verbatim), unlike a
+	// raw-bytes construction which cannot know it.
 	let srcLen = emitLoadField(module, block: entry, record: src, offset: StringLengthOffset, ids: ids)
 	let srcBuf = emitLoadField(module, block: entry, record: src, offset: StringBufferOffset, ids: ids)
 	let srcAscii = emitLoadField(module, block: entry, record: src, offset: StringIsAsciiOffset, ids: ids)
-	let overhead = emitConst(module, block: entry, value: StringInterpOverheadBytes, ids: ids)
-	let allocSize = emitBin(module, block: entry, a: srcLen, b: overhead, opcode: StdBinOpcode.add, ids: ids)
-	let zeroDtor = emitConst(module, block: entry, value: 0, ids: ids)
-	let newRec = ids.mint()
-	module.appendOp(entry, op: StdOp.call(newRec, callee: MmAllocName, args: twoArgs(allocSize, second: zeroDtor)))
-
-	// The inline byte region begins right after the record; blit the source's live bytes into it.
-	let recordBytes = emitConst(module, block: entry, value: StringRecordBytes as ParsedInt, ids: ids)
-	let inlineBuf = emitBin(module, block: entry, a: newRec, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
-	let copied = ids.mint()
-	module.appendOp(entry, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(inlineBuf, second: srcBuf, third: srcLen)))
-
-	emitStoreField(module, block: entry, record: newRec, offset: StringBufferOffset, value: inlineBuf)
-	emitStoreField(module, block: entry, record: newRec, offset: StringLengthOffset, value: srcLen)
-	let capacity = emitConst(module, block: entry, value: InlineBufferCapacity as ParsedInt, ids: ids)
-	emitStoreField(module, block: entry, record: newRec, offset: StringCapacityOffset, value: capacity)
-	let elementSize = emitConst(module, block: entry, value: StringElementSize, ids: ids)
-	emitStoreField(module, block: entry, record: newRec, offset: StringElementSizeOffset, value: elementSize)
-	emitStoreField(module, block: entry, record: newRec, offset: StringIsAsciiOffset, value: srcAscii)
+	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, isAscii: srcAscii)
 
 	module.setTerminator(entry, op: StdOp.ret(newRec))
 

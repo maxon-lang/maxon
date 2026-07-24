@@ -30,6 +30,15 @@ non-negative integer handle indexing a runtime table, and every later call names
   slot's reusable line buffers persist across spawn/release cycles, so a spawn+read+release loop is
   memory-bounded rather than leaking a fresh buffer per iteration (slice 1a's measured debt).
 
+⚠ **Handle lifetime is the CALLER's responsibility on this bare-builtin probe surface: do not `subpRelease(h)`
+while another green thread still has a read parked in flight on `h`.** A parked reader holds a raw pointer into
+the slot and writes buffered/EOF state into it when its read resumes; if the release frees the slot and a later
+`subpSpawn` reuses that index in the meantime, the resumed reader corrupts the NEW handle's stream state (a
+silent cross-handle wrong answer — it is memory-safe, never a use-after-free). Dropping an un-awaited reader
+promise is safe (the drop tears the reader GT down before it can resume — see the drop-reader test); only an
+explicit release out from under a live reader is not. The real scope-owned `StreamingSubprocess` API removes the
+footgun structurally (the handle cannot be released while a borrow is outstanding).
+
 The read line-buffers per handle: each stdout/stderr stream carries a growable byte buffer that a read
 appends into; the reader scans for `\n`, returns everything through the first one, and keeps the tail
 buffered for the next call. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
@@ -151,10 +160,12 @@ end 'main'
 <!-- test: streaming-subprocess.write-echo -->
 <!-- targets: x64-windows -->
 A `sort` child echoes stdin after EOF, sorted. The parent writes `22` then `1`, closes stdin, then reads
-the sorted output back: `sort` orders them lexicographically to `1\n` then `22\n` (it preserves the LF-only
-line endings the writer sent, so the lines are 2 and 3 bytes). The distinct lengths verify BOTH the write→
-child→read round trip AND the ordering (an unsorted or dropped line would not give `1`-before-`22`). Returns
-`first.byteLength()*10 + second.byteLength() + w1 + w2` = 2×10 + 3 + 0 + 0 = 23.
+the sorted output back: `sort` orders them lexicographically, so the shorter `1` line returns before the longer
+`22` line. The test asserts the line-terminator-INVARIANT round-trip facts — both writes succeeded (`w1==w2==0`),
+the round trip delivered a non-empty first line, and it is SHORTER than the second (`1`-before-`22`) — not exact
+byte counts, because the line ending `sort` emits is environment-dependent (LF under some consoles, CRLF under
+others: `1\n`/`22\n` are 2/3 bytes, `1\r\n`/`22\r\n` are 3/4 — `first < second` holds either way). An unsorted,
+dropped, or failed-write outcome breaks at least one clause. Returns `23` on a good round trip.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c sort")
@@ -165,7 +176,11 @@ function main() returns ExitCode
 	let second = subpReadLine(h)
 	let code = subpWait(h)
 	subpRelease(h)
-	return (first.byteLength() * 10 + second.byteLength() + w1 + w2) as ExitCode
+	var result = 0
+	if w1 == 0 and w2 == 0 and first.byteLength() > 0 and first.byteLength() < second.byteLength() 'roundtrip'
+		result = 23
+	end 'roundtrip'
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode
