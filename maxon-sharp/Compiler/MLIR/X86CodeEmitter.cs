@@ -487,6 +487,15 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, "__io_init"));
     EmitDword(0);
 
+    // Initialize the always-present debug agent (checks MAXON_DEBUG; dark and ~free if unset).
+    // Emitted after __io_init so the trap handler it may arm lands in front of __gt_init's fault
+    // handler in the VEH chain.
+    if (!Compiler.NoDebugAgent) {
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "__dbg_init"));
+      EmitDword(0);
+    }
+
     // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory)
     if (Compiler.DebugStream) {
       EmitByte(0xE8);
@@ -529,6 +538,13 @@ public partial class X86CodeEmitter() {
     if (Compiler.DebugStream) {
       EmitByte(0xE8);
       _relCallFixups.Add((_code.Count, "__debugstream_shutdown"));
+      EmitDword(0);
+    }
+
+    // Shut down the debug agent (clears the "agent alive" flag so a consumer sees it detach).
+    if (!Compiler.NoDebugAgent) {
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "__dbg_shutdown"));
       EmitDword(0);
     }
 

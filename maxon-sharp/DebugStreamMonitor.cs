@@ -83,7 +83,7 @@ public class DebugStreamMonitor {
     // number to choose — it is the shared layout contract, and it has one definition.
     long totalSize = RuntimeEmitter.DsSharedMemorySize;
 
-    using var mapping = SharedMapping.Create(totalSize);
+    using var mapping = SharedMapping.Create(totalSize, SharedSegmentPrefix);
     using var accessor = mapping.Map.CreateViewAccessor(0, totalSize);
 
     // Write header
@@ -118,7 +118,7 @@ public class DebugStreamMonitor {
     foreach (var arg in exeArgs) {
       psi.ArgumentList.Add(arg);
     }
-    psi.EnvironmentVariables["MAXON_DEBUGSTREAM"] = mapping.DebugStreamName;
+    psi.EnvironmentVariables[RuntimeEmitter.DsActivationEnvVar] = mapping.SegmentName;
 
     var process = new System.Diagnostics.Process { StartInfo = psi };
     process.Start();
@@ -323,64 +323,6 @@ public class DebugStreamMonitor {
   /// The stem of the segment name / backing-file name. Carries the monitor's pid and a random
   /// suffix so that concurrent spec-test workers cannot collide on it.
   private const string SharedSegmentPrefix = "maxon_ds_";
-
-  /// <summary>
-  /// The shared segment the monitor writes and the producer maps, whatever backs it, and the
-  /// MAXON_DEBUGSTREAM value that tells the producer where to find it.
-  ///
-  /// The two platforms name a shared mapping differently, and .NET implements only one of them.
-  /// <c>MemoryMappedFile.CreateNew(name, ...)</c> creates a Win32 SECTION OBJECT — a Windows
-  /// concept — and everywhere else it throws `PlatformNotSupportedException: Named maps are not
-  /// supported`. The monitor died on that line before it ever spawned the child, so every
-  /// mm-trace test on macOS saw an EMPTY TRACE and read it as "the program allocated nothing".
-  ///
-  /// So off Windows the segment is a plain temp FILE mapped MAP_SHARED, and MAXON_DEBUGSTREAM
-  /// carries its PATH instead of a name. That costs the producer exactly one token — `open(path,
-  /// O_RDWR)` where Windows opens a section by name — because file-backed MAP_SHARED pages are
-  /// shared between processes in precisely the way a named segment's are. It deliberately does
-  /// NOT use POSIX `shm_open`: that is variadic, and on Apple arm64 a variadic call made through
-  /// the fixed-register path silently passes garbage for `mode`, creating the object with mode 0
-  /// and failing every subsequent open with EACCES.
-  /// </summary>
-  private sealed class SharedMapping : IDisposable {
-    public required MemoryMappedFile Map { get; init; }
-
-    /// The MAXON_DEBUGSTREAM value: a segment NAME on Windows, a file PATH everywhere else.
-    public required string DebugStreamName { get; init; }
-
-    /// The temp file backing the mapping off Windows, to be unlinked when the monitor is done.
-    /// Null on Windows, where a section object has no filesystem presence to clean up.
-    private string? BackingFilePath { get; init; }
-
-    public static SharedMapping Create(long totalSize) {
-      var id = $"{SharedSegmentPrefix}{Environment.ProcessId}_{Random.Shared.Next():x8}";
-
-      if (OperatingSystem.IsWindows()) {
-        return new SharedMapping {
-          Map = MemoryMappedFile.CreateNew(id, totalSize),
-          DebugStreamName = id,
-          BackingFilePath = null
-        };
-      }
-
-      var path = Path.Combine(Path.GetTempPath(), id);
-      return new SharedMapping {
-        Map = MemoryMappedFile.CreateFromFile(path, FileMode.CreateNew, mapName: null, totalSize,
-          MemoryMappedFileAccess.ReadWrite),
-        DebugStreamName = path,
-        BackingFilePath = path
-      };
-    }
-
-    public void Dispose() {
-      Map.Dispose();
-
-      // Unlink the backing file so a monitor run does not leave DsSharedMemorySize bytes behind in
-      // the temp directory. Unix keeps the pages alive until the last munmap regardless of the
-      // directory entry, so this is safe even if the child is somehow still mapped.
-      if (BackingFilePath != null) File.Delete(BackingFilePath);
-    }
-  }
 
   /// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
   private const uint MillisecondsPerSecond = 1000;

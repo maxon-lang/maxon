@@ -1319,6 +1319,11 @@ public partial class ARM64CodeEmitter() {
     // Initialize kqueue I/O subsystem
     EmitBranchLink("__io_init");
 
+    // Initialize the always-present debug agent (checks MAXON_DEBUG; dark and ~free if unset).
+    if (!Compiler.NoDebugAgent) {
+      EmitBranchLink("__dbg_init");
+    }
+
     // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory)
     if (Compiler.DebugStream) {
       EmitBranchLink("__debugstream_init");
@@ -1344,6 +1349,11 @@ public partial class ARM64CodeEmitter() {
     // Shut down debugstream before leak check
     if (Compiler.DebugStream) {
       EmitBranchLink("__debugstream_shutdown");
+    }
+
+    // Shut down the debug agent (clears the "agent alive" flag so a consumer sees it detach).
+    if (!Compiler.NoDebugAgent) {
+      EmitBranchLink("__dbg_shutdown");
     }
 
     // mm_leak_check(exit_code) — returns 101 if leaked, original exit_code otherwise

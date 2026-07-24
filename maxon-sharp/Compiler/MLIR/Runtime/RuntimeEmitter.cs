@@ -37,6 +37,12 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
     if (Compiler.DebugStream) {
       EmitDebugStreamFunctions(tagNames ?? [], logNames ?? []);
     }
+    // The debug agent is emitted into EVERY binary (dark unless MAXON_DEBUG is set), unlike the
+    // opt-in DebugStream family — only --no-debug-agent omits it. Its target-specific trap-handler
+    // thunk is emitted alongside the fault thunk by each backend.
+    if (!Compiler.NoDebugAgent) {
+      EmitDebugAgentFunctions();
+    }
   }
 
   // GreenThread (gt) and ProcContext (P) struct layouts live in GtLayout.cs.
@@ -109,6 +115,11 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   // DebugStream shared memory constants
   // =========================================================================
   public const long DsMagic = unchecked((long)0x4D58444253545200); // "MXDBSTR\0"
+
+  /// The env var the monitor sets and `__debugstream_init` reads; its VALUE names the ring segment.
+  /// Stated ONCE: the emitted `__ds_env_name` symdata and the monitor that sets the var both derive
+  /// from this, so a drift that would leave the producer looking at the wrong segment is impossible.
+  public const string DsActivationEnvVar = "MAXON_DEBUGSTREAM";
 
   /// The wire schema version — the one number the two ends of this format must agree on, and the
   /// only thing standing between a mismatch and a trace that LIES.

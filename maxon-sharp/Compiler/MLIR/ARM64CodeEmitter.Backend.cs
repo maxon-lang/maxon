@@ -750,6 +750,10 @@ public partial class ARM64CodeEmitter {
       _e.EmitInstallFaultHandler(thunkLabel);
     }
 
+    public void OsInstallTrapHandler(string thunkLabel) {
+      _e.EmitInstallTrapHandler(thunkLabel);
+    }
+
     public void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel) {
       _e.EmitFaultHandlerProlog(thunkLabel, sharedHandlerLabel);
     }

@@ -413,6 +413,19 @@ public interface IEmitterBackend {
   void InstallFaultHandler(string thunkLabel);
 
   /// <summary>
+  /// Emit code that registers <paramref name="thunkLabel"/> as the debug agent's TRAP handler,
+  /// chaining with — never shadowing — the CPU-fault handler.
+  /// Windows: AddVectoredExceptionHandler(1, thunkLabel) — installed AFTER the fault handler, so it
+  ///          sits at the FRONT of the VEH chain and defers what it does not own (P3a: everything)
+  ///          to the fault thunk by returning EXCEPTION_CONTINUE_SEARCH.
+  /// macOS:   sigaction(SIGTRAP, thunkLabel) — a signal distinct from the fault handler's
+  ///          SIGSEGV/SIGFPE/SIGBUS, so the two never contend.
+  /// Called only from __dbg_init, so it runs only when MAXON_DEBUG activated the agent.
+  /// Clobbers Arg0..Arg5.
+  /// </summary>
+  void OsInstallTrapHandler(string thunkLabel);
+
+  /// <summary>
   /// Emit the entry trampoline of the fault handler thunk. Called by the OS with
   /// platform-specific arguments; this method's job is to extract the fault context
   /// (faultCode, faultRip, faultRsp, faultFp) into VReg Arg0..Arg3 and tail-call the

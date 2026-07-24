@@ -18,6 +18,10 @@ static class BuildCache {
     public bool MmDebug { get; init; }
     public bool AsyncTrace { get; init; }
     public bool DebugStream { get; init; }
+    // --no-debug-agent omits the debug agent from the emitted binary, so — unlike --debug-info, which
+    // touches only the sidecar — it changes the exe bytes and must key the cache, or toggling it
+    // returns a stale binary.
+    public bool NoDebugAgent { get; init; }
     public string OutputPath { get; init; } = "";
     public Dictionary<string, long> Sources { get; init; } = [];
   }
@@ -60,6 +64,7 @@ static class BuildCache {
     if (manifest.MmDebug != Compiler.Compiler.MmDebug) return false;
     if (manifest.AsyncTrace != Compiler.Compiler.AsyncTrace) return false;
     if (manifest.DebugStream != Compiler.Compiler.DebugStream) return false;
+    if (manifest.NoDebugAgent != Compiler.Compiler.NoDebugAgent) return false;
 
     if (outputPath != null && manifest.OutputPath != Path.GetFullPath(outputPath)) return false;
     if (!File.Exists(manifest.OutputPath)) return false;
@@ -116,6 +121,7 @@ static class BuildCache {
       MmDebug = Compiler.Compiler.MmDebug,
       AsyncTrace = Compiler.Compiler.AsyncTrace,
       DebugStream = Compiler.Compiler.DebugStream,
+      NoDebugAgent = Compiler.Compiler.NoDebugAgent,
       OutputPath = Path.GetFullPath(outputPath),
       Sources = sourcesMap
     };

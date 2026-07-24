@@ -59,6 +59,7 @@ class Program {
     Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
     Console.WriteLine("  --debug-info             Force-write the <output>.mxdbg debug-info sidecar (on by default; exe stays byte-identical)");
     Console.WriteLine("  --no-debug-info          Do not write the <output>.mxdbg debug-info sidecar");
+    Console.WriteLine("  --no-debug-agent         Omit the in-process debug agent entirely (hardened build; smaller binary)");
     Console.WriteLine("  --timing                 Print per-stage compile timings to stderr");
     Console.WriteLine("  --timing-functions=N     Also print top-N hottest functions per heavy pass (implies --timing)");
     Console.WriteLine();
@@ -66,6 +67,7 @@ class Program {
     Console.WriteLine("  --dump-info <exe|.mxdbg> Print the sidecar's files, functions, and line table");
     Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
     Console.WriteLine("                           Map .text code offsets to file:line:col");
+    Console.WriteLine("  --attach-probe <exe>     Attach the in-process debug agent and read its handshake (P3a)");
     Console.WriteLine("  <exe>                    Interactive debugging (lands in P3)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
@@ -104,6 +106,7 @@ class Program {
     if (args.Length == 0) {
       Console.Error.WriteLine("Usage: maxon debug --dump-info <exe|.mxdbg>");
       Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
+      Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
       return 1;
     }
 
@@ -125,6 +128,16 @@ class Program {
         var reader = LoadSidecarOrReport(args[1]);
         if (reader == null) return 1;
         return SymbolizeOffsets(reader, args[2..]);
+      }
+
+      case "--attach-probe": {
+        // P3a substrate check: attach the in-process debug agent and read back its handshake.
+        // The interactive session (breakpoints, stepping, REPL) that this grows into lands in P3b+.
+        if (args.Length < 2) {
+          Console.Error.WriteLine("maxon debug --attach-probe needs a path to a Maxon executable.");
+          return 1;
+        }
+        return DebugAgentProbe.Run(args[1]);
       }
 
       default:
@@ -283,6 +296,8 @@ class Program {
         _debugInfoOverride = true;
       } else if (arg == "--no-debug-info") {
         _debugInfoOverride = false;
+      } else if (arg == "--no-debug-agent") {
+        Compiler.Compiler.NoDebugAgent = true;
       } else if (arg == "--timing") {
         Compiler.StageTimer.Enabled = true;
       } else if (arg.StartsWith("--timing-functions=")) {

@@ -63,8 +63,9 @@ public partial class RuntimeEmitter {
     // Release: atomic_xadd(__ds_reserve_now, 1).
     _b.DefineGlobal("__ds_reserve_next", 8, 0);
     _b.DefineGlobal("__ds_reserve_now", 8, 0);
-    // Env var name
-    _b.DefineSymdata("__ds_env_name", "MAXON_DEBUGSTREAM\0"u8.ToArray());
+    // Env var name (the same DsActivationEnvVar the monitor sets — one definition, no drift).
+    _b.DefineSymdata("__ds_env_name",
+      System.Text.Encoding.UTF8.GetBytes(DsActivationEnvVar + "\0"));
   }
 
   // =========================================================================
@@ -90,30 +91,9 @@ public partial class RuntimeEmitter {
     var disabledLabel = UniqueLabel("ds_init_disabled");
     var doneLabel = UniqueLabel("ds_init_done");
 
-    if (_b.IsWindows) {
-      // Windows: GetEnvironmentVariableA("MAXON_DEBUGSTREAM", buf, 128)
-      // buf occupies slots 16..31 (128 bytes). LeaLocal(31) = [RBP - 256], buffer grows upward to [RBP - 129].
-      _b.LeaSymdata(VReg.Arg0, "__ds_env_name");   // lpName
-      _b.LeaLocal(VReg.Arg1, 31);                   // lpBuffer
-      _b.MovRegImm(VReg.Arg2, 128);                 // nSize
-      _b.CallImport("GetEnvironmentVariableA");
-      // Ret = chars copied, 0 if not set
-      _b.JumpIfZero(VReg.Ret, disabledLabel);
-    } else {
-      _b.LeaSymdata(VReg.Arg0, "__ds_env_name");
-      _b.CallImport("getenv");
-      _b.JumpIfZero(VReg.Ret, disabledLabel);
-    }
-
-    // Open the named shared memory
-    if (_b.IsWindows) {
-      _b.LeaLocal(VReg.Arg0, 31); // buffer with env var value
-    } else {
-      _b.MovRegReg(VReg.Arg0, VReg.Ret);
-    }
-    _b.MovRegImm(VReg.Arg1, DsSharedMemorySize);
-    _b.OsOpenAndMapSharedMemory(VReg.Ret, VReg.Arg0, VReg.Arg1);
-    _b.JumpIfZero(VReg.Ret, disabledLabel);
+    // Read MAXON_DEBUGSTREAM and, if set, open + map the named ring. Shared with the debug agent's
+    // __dbg_init (EmitOpenActivatedSegment) so the two cannot drift on how a segment is opened.
+    EmitOpenActivatedSegment("__ds_env_name", DsSharedMemorySize, disabledLabel);
 
     // Ret = mapped base pointer. Save to slot 17 and to global.
     _b.StoreLocal(17, VReg.Ret);
@@ -195,29 +175,9 @@ public partial class RuntimeEmitter {
   /// Called during process shutdown. Sets producer_alive=0, unmaps the shared memory.
   /// </summary>
   public void EmitDebugStreamShutdown() {
-    _b.FunctionStart("__debugstream_shutdown", 0, 0x30);
-
-    var doneLabel = UniqueLabel("ds_shutdown_done");
-
-    // Load base pointer
-    _b.LoadGlobal(VReg.Scratch0, "__ds_base");
-    _b.JumpIfZero(VReg.Scratch0, doneLabel);
-
-    // Clear producer_alive flag
-    _b.ZeroReg(VReg.Scratch1);
-    _b.StoreIndirect(VReg.Scratch0, DsOffFlags, VReg.Scratch1);
-
-    // Unmap
-    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
-    _b.MovRegImm(VReg.Arg1, DsSharedMemorySize);
-    _b.OsUnmapSharedMemory(VReg.Arg0, VReg.Arg1);
-
-    // Clear global
-    _b.ZeroReg(VReg.Scratch0);
-    _b.StoreGlobal("__ds_base", VReg.Scratch0);
-
-    _b.DefineLabel(doneLabel);
-    _b.FunctionEnd();
+    // Clearing DsOffFlags clears producer_alive without touching the version (a separate field),
+    // which a monitor draining a dead producer still needs. Shared with the agent's __dbg_shutdown.
+    EmitSharedSegmentShutdown("__debugstream_shutdown", "__ds_base", DsOffFlags, DsSharedMemorySize);
   }
 
   // =========================================================================

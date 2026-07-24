@@ -3492,6 +3492,11 @@ public partial class ARM64CodeEmitter {
     // Epilog continues from there and emits the function exit (returns to OS).
     EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
     EmitFaultHandlerEpilog();
+    // Debug agent trap-handler thunk — emitted into every binary unless --no-debug-agent. __dbg_init
+    // arms it (sigaction SIGTRAP) only when MAXON_DEBUG is set; a P3a stub that just returns.
+    if (!Compiler.NoDebugAgent) {
+      EmitDbgTrapHandlerThunk();
+    }
     // Go-style dieFromSignal handler for SIGTERM/SIGINT so the process terminates
     // cleanly on kill instead of wedging in macOS uninterruptible ('UE') state.
     EmitDieFromSignalThunk("__gt_die_from_signal_thunk");
@@ -7407,6 +7412,9 @@ public partial class ARM64CodeEmitter {
   private const int SignalSegv = 11;
   private const int SignalBus = 10;
   private const int SignalFpe = 8;
+  // SIGTRAP — a BRK #0 raises it. The debug agent owns this signal (distinct from the fault
+  // handler's SEGV/BUS/FPE), so its handler never contends with the fault path.
+  private const int SignalTrap = 5;
   // Terminating signals handled by the Go-style dieFromSignal thunk so the process
   // exits cleanly (correct WIFSIGNALED status) instead of wedging in macOS 'UE' state.
   private const int SignalTerm = 15;
@@ -7637,12 +7645,32 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// Install the dieFromSignal thunk for SIGTERM(15) and SIGINT(2). Reuses the
-  /// EmitInstallFaultHandler sigaction machinery but with SA_RESTART only (NO
-  /// SA_ONSTACK — these are asynchronous signals, not stack-overflow faults, so the
-  /// normal stack is fine and there is no altstack dependency). Process-global, so
-  /// installing once on the main thread in __gt_init covers every M.
+  /// Install the dieFromSignal thunk for SIGTERM(15) and SIGINT(2) — asynchronous signals, so no
+  /// SA_ONSTACK (the normal stack is fine; there is no altstack dependency). Process-global, so
+  /// installing once on the main thread in __gt_init covers every M. Shares its sigaction machinery
+  /// with the debug agent's trap install via <see cref="EmitInstallSignalHandler"/>.
   internal void EmitInstallDieFromSignalHandler(string thunkLabel) {
+    EmitInstallSignalHandler(thunkLabel, SignalTerm, SignalInt);
+  }
+
+  /// <summary>
+  /// Install the debug agent's trap handler: sigaction(SIGTRAP, &amp;thunk). SIGTRAP is distinct from
+  /// the fault handler's SEGV/BUS/FPE, so the two coexist by owning different signals — the POSIX
+  /// analogue of the Windows VEH chaining. NO SA_ONSTACK: a breakpoint is not a stack-overflow fault,
+  /// so the normal stack is fine and there is no altstack dependency. Called only from __dbg_init.
+  /// </summary>
+  internal void EmitInstallTrapHandler(string thunkLabel) {
+    EmitInstallSignalHandler(thunkLabel, SignalTrap);
+  }
+
+  /// <summary>
+  /// Register <paramref name="thunkLabel"/> as an SA_SIGINFO|SA_RESTART handler for each of
+  /// <paramref name="signals"/> (no SA_ONSTACK — these are not stack-overflow faults, so no altstack
+  /// is required). Shared by the dieFromSignal install (SIGTERM/SIGINT) and the debug agent's trap
+  /// install (SIGTRAP): identical sigaction machinery, different signal set. Process-global, so
+  /// installing once on the main thread covers every M.
+  /// </summary>
+  private void EmitInstallSignalHandler(string thunkLabel, params int[] signals) {
     // Carve 0x20 of SP scratch for the struct sigaction (24 bytes).
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
 
@@ -7658,7 +7686,7 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, SaSiginfo | SaRestart);
     EmitStoreIndirect(ARM64Register.Sp, SigactionOffFlags, ARM64Register.X0, 4);
 
-    foreach (var sig in new[] { SignalTerm, SignalInt }) {
+    foreach (var sig in signals) {
       EmitMovRegImm(ARM64Register.X0, sig);
       EmitMovRegReg(ARM64Register.X1, ARM64Register.Sp);
       EmitMovRegImm(ARM64Register.X2, 0);
@@ -7666,6 +7694,16 @@ public partial class ARM64CodeEmitter {
     }
 
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: true);
+  }
+
+  /// <summary>
+  /// The debug agent's SIGTRAP handler thunk. P3a substrate: no breakpoints exist yet, so it simply
+  /// returns. P3b inserts the "is the trapping PC a known breakpoint? → debug logic, advance past the
+  /// BRK" dispatch here. sigaction handler ABI: void handler(int, siginfo_t*, void*).
+  /// </summary>
+  internal void EmitDbgTrapHandlerThunk() {
+    EmitRuntimeFunctionStart("__dbg_trap_handler_thunk", 0, 0x20);
+    EmitRuntimeFunctionEnd();
   }
 
   // ============================================================================

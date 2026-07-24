@@ -4254,6 +4254,12 @@ public partial class X86CodeEmitter {
     // Epilog continues from there and emits the function exit (returns to OS).
     EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
     EmitFaultHandlerEpilog();
+    // Debug agent trap-handler thunk — emitted alongside the fault thunk (and, like the rest of the
+    // agent, into every binary unless --no-debug-agent). __dbg_init arms it only when MAXON_DEBUG is
+    // set, and it defers to the fault thunk for everything in P3a.
+    if (!Compiler.NoDebugAgent) {
+      EmitDbgTrapHandlerThunk();
+    }
   }
 
   /// <summary>
@@ -8112,10 +8118,40 @@ public partial class X86CodeEmitter {
     EmitLeaFuncAddr(X86Register.Rax, "__gt_fault_diagnostic");
     EmitGlobalStoreReg(X86Register.Rax, "__gt_fault_diagnostic_addr");
 
-    // AddVectoredExceptionHandler(first=1, handler=thunk).
+    EmitAddVectoredExceptionHandler(thunkLabel);
+  }
+
+  /// <summary>
+  /// Install the debug agent's trap handler. On Windows a VEH IS the chaining mechanism: the debug
+  /// thunk is registered AFTER __gt_fault_handler_thunk (which __gt_init installed) and __dbg_init
+  /// runs after __gt_init, so it lands at the FRONT of the chain. In P3a it returns
+  /// EXCEPTION_CONTINUE_SEARCH for everything, deferring each exception to the fault thunk behind it
+  /// — the panic backtrace path is untouched. P3b inserts the breakpoint dispatch ahead of that.
+  /// </summary>
+  internal void EmitInstallTrapHandler(string thunkLabel) {
+    EmitAddVectoredExceptionHandler(thunkLabel);
+  }
+
+  /// <summary>AddVectoredExceptionHandler(first=1, handler=thunk) — shared by the fault and trap
+  /// installs so the two cannot disagree on how a VEH is registered.</summary>
+  private void EmitAddVectoredExceptionHandler(string thunkLabel) {
     EmitMovRegImm(X86Register.Rcx, 1);
     EmitLeaFuncAddr(X86Register.Rdx, thunkLabel);
     EmitCallImport("kernel32.dll", "AddVectoredExceptionHandler");
+  }
+
+  /// <summary>
+  /// The debug agent's VEH trap handler thunk. P3a substrate: no breakpoints exist yet, so it defers
+  /// EVERY exception to the rest of the chain by returning EXCEPTION_CONTINUE_SEARCH (0) — which is
+  /// what keeps __gt_fault_handler_thunk (and the panic backtrace) working with the agent armed. P3b
+  /// inserts, ahead of this return, the "is this an INT3 at a known breakpoint? → debug logic"
+  /// dispatch; anything not a breakpoint still falls through to CONTINUE_SEARCH.
+  /// VEH ABI: LONG handler(EXCEPTION_POINTERS* p), RCX = p (unused here).
+  /// </summary>
+  internal void EmitDbgTrapHandlerThunk() {
+    EmitRuntimeFunctionStart("__dbg_trap_handler_thunk", 0, 0x20);
+    EmitMovRegImm(X86Register.Rax, VehContinueSearch);
+    EmitRuntimeFunctionEnd();
   }
 
   internal void EmitFaultHandlerProlog(string thunkLabel, string sharedHandlerLabel) {

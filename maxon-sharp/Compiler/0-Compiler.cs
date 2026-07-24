@@ -100,6 +100,14 @@ public class Compiler {
   [ThreadStatic] private static bool _debugInfo;
   public static bool DebugInfo { get => _debugInfo; set => _debugInfo = value; }
 
+  // The dormant in-process debug agent (the `__dbg_*` runtime family) is emitted into EVERY binary
+  // by default — always present, dark until MAXON_DEBUG is set (see docs/DEBUGGER_DESIGN.md Part 3).
+  // Set (via --no-debug-agent) it is omitted entirely: the ONE sanctioned case where two binaries
+  // differ, for hardened deployments that refuse an env-activated debug-control channel. Because the
+  // agent is emitted regardless of --debug-info, --debug-info vs --no-debug-info stay byte-identical.
+  [ThreadStatic] private static bool _noDebugAgent;
+  public static bool NoDebugAgent { get => _noDebugAgent; set => _noDebugAgent = value; }
+
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
