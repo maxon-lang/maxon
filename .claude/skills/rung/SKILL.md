@@ -134,6 +134,25 @@ return **FACTS**: file + line ranges, how it works, what it costs, which specs e
 an agent deep in v1 is the *worst* placed to judge whether shv2 should copy it, and because **you** are
 the one who must state this plan to the user and integrate against it. **You own what it says.**
 
+> ### Survey agents run on SONNET. The three rung agents do not.
+>
+> **Spawn the survey agents as `Explore` with `model: "sonnet"`.** They have no frontmatter file of their
+> own, so this line is the only place that fact lives — say it here, not in each brief.
+>
+> **The reason is the paragraph above, not the price.** This role has already had its judgment removed by
+> design: it returns citations, and *you* decide. It is also the one delegation whose output you can
+> CHECK — a wrong `file:line` fails the moment the implementer opens the file, and a wrong spec port list
+> fails when the specs do not go RED before the wave (step 2's ⭐ section). A cheaper model on a
+> judgment-free, verifiable, highest-volume job is the trade this step was built for.
+>
+> ⚠ **Do NOT extend this to `maxon-rung-implementer`, `maxon-rung-optimizer`, or
+> `maxon-rung-reviewer`.** Their model is declared in their own frontmatter and it is not Sonnet —
+> **the reviewer least of all.** It runs LAST (step 7), and it is the gate that has actually fired: a
+> reachable SEGFAULT at P1.4b Wave 2c, a reachable PANIC at P1.7, a bug an 8th rung running at P1.7a,
+> the owned-String leak at P1.2 — every one of them in code an Opus implementer had just called done.
+> **A weaker auditor over a stronger author is the one arrangement guaranteed not to catch what the
+> author missed.**
+
 > **Two reference compilers already implement what you are about to build. They answer DIFFERENT
 > questions, and the plan must consult BOTH.**
 >
