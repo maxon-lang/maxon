@@ -932,6 +932,16 @@ export union StdOp
 	// pipe write end its STARTUPINFO names as hStdOutput. Three VALUE operands, no result — identical marshalling to
 	// `osProcessSpawn` save the one TRUE flag (shared lowering).
 	osProcessSpawnInherit(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read (P1.5 slice
+	// 1a-ii, the in-flight-reader-promise DROP path). Two VALUE operands (the pipe read handle + the OVERLAPPED whose
+	// operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED completion packet the
+	// completion thread drains, which is how the drop arm knows the completion thread is DONE with the GT before it
+	// frees it. x64-windows only, like every IOCP op.
+	osCancelIo(handleId ValueId, ovlId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osGetPid()` = `GetCurrentProcessId()` — the current process id, DEFINING the result (captured from RAX). Used
+	// to make the overlapped pipe name CROSS-PROCESS unique (the high 32 bits of the name's hex uniquifier; the low
+	// 32 are a per-process counter), so two concurrent test processes never collide on a FIRST_PIPE_INSTANCE name.
+	osGetPid(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1068,6 +1078,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osReadOverlapped(_, handle, buf, cap, bytesOutPtr, ovl) then insertUseQuint(referenced, a: handle, b: buf, c: cap, d: bytesOutPtr, e: ovl)
 		osLastError then break 'u'
 		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) then insertUseTriple(referenced, a: cmdlinePtr, b: startupPtr, c: procInfoPtr)
+		osCancelIo(handle, ovl) then insertUsePair(referenced, a: handle, b: ovl)
+		osGetPid then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1198,6 +1210,8 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osReadOverlapped(resultId, handle, buf, cap, bytesOutPtr, ovl) gives StdOp.osReadOverlapped(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osLastError gives op
 		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
+		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
+		osGetPid gives op
 	end 'r'
 end 'remapStdOpUses'
 

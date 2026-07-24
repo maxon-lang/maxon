@@ -688,6 +688,7 @@ let IoLoopSpinLabel = 1 as BlockId
 let IoLoopSpunLabel = 2 as BlockId
 let IoLoopSignalLabel = 3 as BlockId
 let IoLoopExitLabel = 4 as BlockId
+let IoLoopAbandonedLabel = 5 as BlockId
 
 // The completion loop's scratch: r11 shuttles a `.data` global's address, rax/rcx are general scratch. None is read
 // across the loop's own iterations (gt lives in the frame), so any caller-saved use is invisible.
@@ -733,11 +734,16 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	// gt = overlapped - GtOffOverlapped ; spill to the frame.
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtOffOverlapped as Imm32)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopGtLocalDisp, srcReg: X64Register.rax)
-	// gt.io_result = bytes  (rax still holds gt).
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
-	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
+	// ⭐ LOCK __io_lock, held across the WHOLE decision below — so the completion thread's abandoned-vs-normal
+	// branch and the `__gt_promise_drop` IO arm's in-flight-vs-already-fired branch are SERIALIZED, guaranteeing
+	// exactly one side frees the GT and neither dereferences it after free. `bytes` is still in [rbp-bytes]; gt in
+	// [rbp-gt].
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
 
-	// spin: wait until gt.ioParked == 1 (the reading GT has committed to parking; see the handshake note).
+	// spin: wait until gt.ioParked != 0 — the reader committed to parking (state IoParkedInFlight, 1) or the drop
+	// arm abandoned it (IoParkedAbandoned, 2). Holding __io_lock does not block the reader (it sets ioParked without
+	// the lock), so this cannot deadlock; in practice ioParked is already set (the packet arrives long after park).
 	loopLabels.upsert(IoLoopSpinLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
@@ -747,27 +753,44 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	code.push(0x90)
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopSpinLabel)
 
-	// spun: gt.status = ready(0). rax = gt.
+	// spun: rax = gt, rcx = gt.ioParked. ABANDONED (2) → the drop arm cancelled this read: signal drain-done and
+	// touch the GT no further (the drop arm frees it). Else (1) → NORMAL completion.
 	loopLabels.upsert(IoLoopSpunLabel, value: code.count())
-	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: IoParkedAbandoned as Imm32)
+	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopAbandonedLabel)
+	// NORMAL: gt.io_result = bytes ; gt.status = ready.
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, wide: true)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoResult as Imm32, srcReg: X64Register.rcx)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: GtStatusReady)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffStatus as Imm32, srcReg: X64Register.rcx)
 	// A GT0 self-driver (stackBase == 0) is NOT enqueued — its drive loop notices `status` — but IS signalled.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffStackBase as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopSignalLabel)
-	// Spawned GT → EnterCriticalSection(__io_lock) ; __gt_enqueue(gt) ; LeaveCriticalSection(__io_lock).
-	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.EnterCriticalSection))
+	// Spawned GT → __gt_enqueue(gt) (under the outer __io_lock; __gt_enqueue is pure memory).
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtEnqueueName)
+
+	// signal (normal): gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and
+	// unlinks the enqueued GT — then Leave __io_lock and SetEvent __io_done_event → loop_top.
+	loopLabels.upsert(IoLoopSignalLabel, value: code.count())
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
-
-	// signal: SetEvent(__io_done_event) → loop_top.
-	loopLabels.upsert(IoLoopSignalLabel, value: code.count())
 	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoDoneEventLabel)
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.SetEvent))
+	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
+
+	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __io_lock, loop. No enqueue,
+	// no SetEvent — the drop arm spins on ioParked==3 on the main thread and owns the free.
+	loopLabels.upsert(IoLoopAbandonedLabel, value: code.count())
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
+	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedDrainDone)
+	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
+	emitIoLoopLoadGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rcx, label: IoLockLabel)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.LeaveCriticalSection))
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
 
 	// exit: return 0.

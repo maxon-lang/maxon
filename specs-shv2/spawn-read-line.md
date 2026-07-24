@@ -99,3 +99,36 @@ end 'main'
 ```exitcode
 8
 ```
+
+<!-- test: spawn-read-line.drop-in-flight -->
+<!-- targets: x64-windows -->
+An `async` reader promise is DROPPED (un-awaited) while its overlapped read is still in flight — the IOCP
+completion thread still holds the reader's OVERLAPPED. Dropping it must NOT free the green thread out from under
+the completion thread (a cross-thread use-after-free). The drop path cancels the read (`CancelIoEx`), drains the
+completion through the `ioParked` abandon/drain handshake so the completion thread is provably done with the GT,
+closes the read handle, and only then frees. Five in-flight drops, then one clean read (7 bytes) — a recurrence
+of the bug crashes with 0xC0000005 instead of returning 7.
+```maxon
+function reader() returns int
+	return spawnReadLine("cmd /c echo hello")
+end 'reader'
+
+function dropInFlight() returns int
+	let r = async reader()
+	sleep(1)
+	return 0
+end 'dropInFlight'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 5 'loop'
+		let d = dropInFlight()
+		i = i + 1
+	end 'loop'
+	let n = spawnReadLine("cmd /c echo hello")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
