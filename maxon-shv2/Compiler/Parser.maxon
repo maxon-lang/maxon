@@ -17123,6 +17123,19 @@ export type Parser
 			throw ParseError.unsupported("reassigning the opaque type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' from a value that is not an owned parameter — the shared generic body cannot copy an opaque `T` value, so assign it from a parameter the method consumes; aliasing one opaque field into another needs the descriptor-gated copy a later slice adds", line: anchor.line, column: anchor.column)
 		end 'notOwned'
 
+		// ⭐ A CO-OWNED TRIVIAL STRUCT instantiation (`Box with Point`, the retain-escaping rung) cannot be
+		// reassigned in a shared body: the box CO-OWNS its trivial `T` field (retained at the constructor feed,
+		// dropped by its destructor), but this opaque reassignment has no way to drop the field's OLD co-owned
+		// value — a trivial struct's `__mm_decref` cannot be emitted from the opaque body, and the descriptor-
+		// gated `__drop_type_param` is inert for a trivial instantiation (`destroyFunc@40` is 0). Storing the
+		// new value over the old would LEAK it. Rejected cleanly rather than shipping the leak; the trivial-
+		// struct single-value drop is a later slice (the descriptor infrastructure this rung deliberately leaves
+		// untouched). A managed instantiation reassigns through the descriptor as before, and a scalar is inert —
+		// neither is a co-owned trivial, so this fires on exactly the co-ownership gap.
+		if self.signatures.genericTypeFieldHasCoOwnedTrivialInstantiation(layout.name, position: typeNameIdOf(fieldType)) 'coOwnedTrivialReassign'
+			throw ParseError.unsupported("reassigning the type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type", line: anchor.line, column: anchor.column)
+		end 'coOwnedTrivialReassign'
+
 		if self.signatures.genericTypeFieldHasManagedInstantiation(layout.name, position: typeNameIdOf(fieldType)) 'managedDrop'
 			let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
 			self.emitDecref(old, range: range)
@@ -19306,10 +19319,10 @@ export type Parser
 			// none — the shared body does not know the concrete instance). The CONCRETE call site's own argument is
 			// never opaque-owned, so it stays on the existing instance-feed path untouched.
 			if not self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) and not self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue) 'borrowed'
-				// ⭐ A borrowed TEMPORARY whose borrow ESCAPES into the constructed instance's field must outlive
-				// that instance (P1.7a slice 2a): give it a SCOPE lifetime so the container's later read of the
-				// element is not a use-after-free.
-				self.materializeEscapingBorrowTemp(info, position: position, argValue: argValue)
+				// ⭐ A borrowed argument whose borrow ESCAPES into a durable instance field must not dangle when the
+				// container OUTLIVES the source (the retain-escaping rung — the RED cross-scope UAF): a static
+				// constructor feed RETAINS a co-owned trivial struct, an instance-method feed materializes a temp.
+				self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)
 				continue
 			end 'borrowed'
 			// Only an OWNED managed value can double-free: it MOVES (no per-position copy), so the same value at a
@@ -19364,24 +19377,46 @@ export type Parser
 		return info.typeParamFeedOf(position).isFeed() and self.valueIsOpaqueOwned(argValue)
 	end 'isOpaqueOwnedFeedArg'
 
-	// ⭐ **GIVE A BORROWED TEMPORARY A SCOPE LIFETIME WHEN ITS BORROW ESCAPES INTO A GENERIC FIELD (P1.7a slice
-	// 2a — the user ruling).** A `T`-typed FEED position of a generic constructor STORES its argument into the
-	// constructed instance's field (`Box.create(item T)` → `Self{ item: item }`); when that argument is a
-	// TRIVIAL-managed struct (`Box with Point`) the store is a BORROW — the container does NOT own or drop the
-	// element, the caller does. That is sound for a NAMED binding the container outlives (`create(p); …` keeps
-	// `p` usable, `generic-trivial-struct-arg`), but a TEMPORARY (`create(Point.create(3, y: 4))`) is otherwise
-	// dropped at the STATEMENT's end — while the container it is borrowed into outlives it, so a later read of
-	// the element (`b.itemDigest()`) reads freed memory. Materializing the temporary as a hidden scope-local
-	// (a nameless owned binding, exactly as a temporary `match` scrutinee is enrolled) moves its drop to SCOPE
-	// exit: it now behaves as if the user wrote `let __tmp = Point.create(…); let b = Box.create(__tmp)`, the
-	// borrow the user's ruling keeps. Reverse drop order makes it sound — the container drops FIRST (its
-	// borrowed field frees nothing), then the temporary frees the element exactly once. A NON-feed borrow does
-	// not escape (the callee only reads the argument for the call's duration), so it is left dropping at
-	// statement end; only an escaping FEED borrow of an unconsumed temporary is promoted.
-	function materializeEscapingBorrowTemp(info ParamConsumeInfo, position ParamCount, argValue ValueId)
+	// ⭐ **KEEP A BORROWED ARGUMENT ALIVE WHEN ITS BORROW ESCAPES INTO A DURABLE INSTANCE FIELD (the
+	// retain-escaping rung — the user ruling, 2026-07-23).** A `T`-typed FEED position stores its argument into
+	// an instance field the enclosing container OUTLIVES, so a later read of that field must not see freed
+	// memory. Two feed shapes reach here, and they DIFFER in who owns the stored value — the STATIC-vs-INSTANCE
+	// split `ParamConsumeInfo.isInstanceMethod` reads:
+	//
+	//   • A STATIC CONSTRUCTOR feed (`Box.create(item T)` → `Self{ item: item }`) makes the BOX co-own the
+	//     element. For a trivial struct/instance (`Box with Point`), which the call site BORROWS rather than
+	//     consumes, `__mm_retain` raises the box's refcount so it holds a REAL second reference — generalizing
+	//     OPEN #40's aggregate co-ownership. The box's destructor decref (`genericInstanceFieldIsManaged` now
+	//     `typeIsManaged`) releases it, and the caller's OWN drop releases the caller's reference: freed exactly
+	//     once whether the source is a temporary, a named inner binding, or an outer binding the box outlives —
+	//     all uniformly, which is why no scope-local materialization is needed for this shape. A SCALAR feed
+	//     owns no heap and needs no retain.
+	//   • An INSTANCE-METHOD feed (`self.items.push(item)`, `self.saved = next` — the slice-3b mechanism) moves
+	//     the argument into durable storage the CALLEE owns. A trivial `Array with T` element the array does not
+	//     per-element drop is still a BORROW the caller keeps; a borrowed TEMPORARY of it is otherwise freed at
+	//     statement end while the array points at it, so it is materialized as a hidden scope-local (a nameless
+	//     owned binding, as a temporary `match` scrutinee is) to move its drop to scope exit. (A shared-body
+	//     REASSIGN feed of a co-owned trivial struct is rejected up front at `emitOpaqueFieldReassign`, so it
+	//     never reaches this materialization.)
+	function handleEscapingBorrowFeed(info ParamConsumeInfo, position ParamCount, argValue ValueId, anchor Token)
 		if not info.typeParamFeedOf(position).isFeed() 'notEscapingFeed'
 			return
 		end 'notEscapingFeed'
+		if not info.isInstanceMethod() 'constructorFeed'
+			if self.valueIsNonTextAggregate(argValue) 'coOwnedAggregate'
+				self.emitIncref(argValue, range: SourceRange.ofToken(anchor))
+			end 'coOwnedAggregate'
+			return
+		end 'constructorFeed'
+		self.materializeEscapingBorrowTemp(argValue)
+	end 'handleEscapingBorrowFeed'
+
+	// Give a borrowed instance-method-feed TEMPORARY a scope lifetime (see `handleEscapingBorrowFeed`): the
+	// callee borrows it into durable storage (a trivial `Array with T` element) the container outlives, so a
+	// statement-end drop would dangle. Enrolling it as a nameless owned binding moves its drop to scope exit;
+	// reverse drop order frees the element after the container that borrowed it. A NON-temporary source (a named
+	// binding) already drops at its own scope and needs nothing.
+	function materializeEscapingBorrowTemp(argValue ValueId)
 		if not self.pendingTempsContain(argValue) 'notTemporary'
 			return
 		end 'notTemporary'

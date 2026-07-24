@@ -1,4 +1,4 @@
-// Test: where-clauses.witness-temporary-arg
+// Test: loop-carried-reassignment
 typealias Code = int(0 to u32.max)
 typealias Coord = int(0 to 1000)
 
@@ -30,14 +30,17 @@ end 'Box'
 typealias PointBox = Box with Point
 
 function main() returns ExitCode
-	let b = PointBox.create(Point.create(3, y: 4))
-	if b.itemDigest() == 97 'ok'
-		return 0
-	end 'ok'
-	return 1
+	var b = PointBox.create(Point.create(0, y: 0))
+	var i = 0
+	while i < 5 'loop'
+		let pIn = Point.create(3, y: 4)
+		b = PointBox.create(pIn)
+		i = i + 1
+	end 'loop'
+	return b.itemDigest()
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 97
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -151,9 +154,11 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
     x64.prologue 32
-    x64.movRegImm32 rcx, 3
-    x64.movRegImm32 rdx, 4
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
     x64.callDirect Point.create
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
@@ -163,28 +168,40 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 4
+    x64.callDirect Point.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.callDirect Box.create
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Box_Point
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r12, r14
+    x64.jmp whilehdr
+  whileexit:
     x64.leaRegRdata rdx, [rip + __witness_Point_Digest]
     x64.movRegReg rcx, r12
     x64.callDirect Box.itemDigest
-    x64.cmpRegImm32 r8, 97
-    x64.jcc equal, ok
-    x64.jmp ifcont
-  ok:
-    x64.movRegImm32 rbx, 0
+    x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Box_Point
     x64.movRegReg r8, rbx
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  ifcont:
-    x64.movRegImm32 rbx, 1
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Box_Point
-    x64.movRegReg r8, rbx
-    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

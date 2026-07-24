@@ -941,6 +941,17 @@ export type ParamConsumeInfo
 		end 'past'
 		return try self.feeds.get(index) otherwise panic("ParamConsumeInfo.typeParamFeedOf: feeds.get OOB at {index} despite index < count")
 	end 'typeParamFeedOf'
+
+	// Does this function TAKE A RECEIVER — is it an instance method rather than a static/top-level function?
+	// The sweep prepends `SelfParamName` at slot 0 for an instance method's CALL-ALIGNED parameter list
+	// (`callAlignedInstanceParams`) and never for a receiverless function, so the first name IS the whole test.
+	// The distinction the escaping-borrow store reads: a type-parameter FEED in a STATIC constructor is a
+	// `Self{item: item}` store the box CO-OWNS (retained), while a feed in an INSTANCE method is a
+	// callee-owns-and-moves store into durable storage (`self.items.push(item)`, `self.saved = next` — the
+	// slice-3b mechanism) whose lifetime is handled by the callee, never by a caller-side retain.
+	export function isInstanceMethod() returns bool
+		return self.paramNames.count() > 0 and (try self.paramNames.get(0) otherwise panic("ParamConsumeInfo.isInstanceMethod: paramNames.get(0) on a non-empty list")).equals(SelfParamName)
+	end 'isInstanceMethod'
 end 'ParamConsumeInfo'
 
 export type ParamConsumeEntry
@@ -3104,32 +3115,28 @@ export type ProgramSignatures
 		return self.baseLayoutOf(id).offsetOfField(index)
 	end 'genericInstanceFieldOffset'
 
-	// ⭐ **DOES A TYPE ARGUMENT OWN MANAGED HEAP THE BOX MUST DROP (P1.6-B2)?** — the OWN/BORROW boundary,
-	// and DELIBERATELY NARROWER than `typeIsManaged`. A `T` field is a BORROW at P1.6-A: a TRIVIAL type
-	// argument (a scalar, or an all-scalar struct/instance like `Point`/`IntBox`) is passed opaque and the
-	// caller keeps + drops it, so `Box with Point` must NOT drop its `value` field (or it double-frees the
-	// caller's `p`, and `PointBox.create(p); … p.getX()` would need a use-after-move consume). B2 flips this
-	// ONLY for an argument that itself owns managed heap — a `String`, a struct WITH a managed field, a
-	// boxed union, or a nested instance that owns managed heap — which the box then consumes and drops. This
-	// is exactly the boundary P1.6-A's managed-argument rejection used (a String or a struct-with-a-managed-
-	// field), now extended over `self.typeNames` and recursed into a nested instance rather than rejecting.
-	// (Contrast `typeIsManaged`: a DIRECT struct/instance FIELD is always owned — only a type PARAMETER field
-	// borrows a trivial argument.)
+	// ⭐ **DOES A TYPE ARGUMENT REQUIRE A CALL-SITE CONSUME (a MOVE into the box)?** — the CONSUME boundary,
+	// DELIBERATELY NARROWER than both `typeIsManaged` and the box's own field DROP. A TRIVIAL type argument (a
+	// scalar, or an all-scalar struct/instance like `Point`/`IntBox`) is NOT consumed: the caller keeps it
+	// usable (`PointBox.create(p); … p.getX()`, `generic-trivial-struct-arg`). B2 flips this ONLY for an
+	// argument that itself owns managed heap — a `String`, a struct WITH a managed field, a boxed union, or a
+	// nested instance that owns managed heap — which the box MOVES in and the caller may not reuse.
 	//
-	// ⚠ **THIS BORROW STILL DANGLES ACROSS SCOPES (P1.7a slice 2a finding — residual, borrow-liveness class).**
-	// A SAME-SCOPE temporary is now sound: `Parser.materializeEscapingBorrowTemp` enrolls it as a hidden
-	// scope-local so it outlives the container (the `where-clauses.witness-temporary-arg` test). But when the
-	// container binding lives in an OUTER scope and its borrowed element's source lives in an INNER scope —
-	// `var b = …; if c then b = PointBox.create(Point.create(…)) end; b.itemDigest()`, or a loop-carried
-	// reassignment, or a NAMED inner binding — the element is freed at the inner scope's exit while `b` borrows
-	// it, so a later read of `b`'s element (the witness dispatch slice 2a first enables) is a use-after-free.
-	// This is not the materialization's incompleteness (the named-inner form dangles identically, and that form
-	// the temp fix never touched) — it is the general borrow-liveness gap of the P1.6-B2 borrow-not-consume
-	// model. The complete fix — CONSUME any struct arg (route this to `typeIsManaged`) — makes it sound but
-	// changes `PointBox.create(p); p.getX()` to a use-after-move E3102, which `generic-types/generic-trivial-
-	// struct-arg` deliberately relies on; the two are irreconcilable under all-or-nothing per-instance
-	// ownership, so it is a language-semantics decision (MOVE vs BORROW-COPY a struct into a generic) or a
-	// borrow-liveness rejection left to the coordinator.
+	// ⚠ **THIS IS NO LONGER THE DROP BOUNDARY.** Before the retain-escaping rung a trivial `T` argument was a
+	// pure BORROW — not consumed AND not dropped — which dangled when the container OUTLIVED the borrowed
+	// source (`var b = …; { let pInner = Point.create(…); b = PointBox.create(pInner) }; b.itemDigest()` freed
+	// `pInner` at the inner scope while `b` still pointed at it — a use-after-free the witness dispatch first
+	// made reachable). The user ruling (2026-07-23) fixes it by RETAIN, generalizing OPEN #40's `__mm_retain`
+	// co-ownership: a trivial struct/instance stored into a generic field is `__mm_retain`'d at the constructor
+	// feed (`Parser.retainEscapingConstructorFeed`), so the box holds a REAL second reference — CO-OWNED, not
+	// borrowed. The DROP boundary therefore moved to `typeIsManaged` (`genericInstanceFieldIsManaged`), which
+	// releases that reference at the box's destruction, while THIS consume boundary stays put so the caller's
+	// own `p` is still live and dropped once. So the three questions now split three ways on a trivial struct:
+	// NOT consumed (borrowed-and-kept), YES dropped (co-owned via retain), and the retain fills the gap between
+	// them — freed exactly once on every path. A managed argument is BOTH consumed and dropped (unchanged); a
+	// scalar is neither. (The one construct co-ownership cannot yet balance — a SHARED-body reassignment of a
+	// co-owned trivial field — is rejected at `emitOpaqueFieldReassign` rather than leaked; the true E3070 NLL
+	// borrow-liveness pass, `arr.get(0); arr.push(x)`, is a SEPARATE future rung this did not build.)
 	export function typeArgIsOwned(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
 		if tagIsText(tag) 'string'
@@ -3172,6 +3179,40 @@ export type ProgramSignatures
 		end 'eachInstance'
 		return false
 	end 'genericTypeFieldHasManagedInstantiation'
+
+	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS TYPE PARAMETER AT `position` A
+	// CO-OWNED TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
+	// Point`) is BORROWED at the call site (`typeArgIsOwned` false — the caller keeps it) yet CO-OWNED by the
+	// box (`typeIsManaged` true — `genericInstanceFieldIsManaged` drops it, balanced by the constructor-feed
+	// `__mm_retain`). That co-ownership is sound for a field set ONCE at construction, but a SHARED-body
+	// REASSIGNMENT of it (`self.saved = next`) has no way to drop the field's OLD co-owned value: the opaque
+	// body cannot emit a trivial struct's `__mm_decref` directly, and the descriptor-gated `__drop_type_param`
+	// is inert for a trivial instantiation (its `destroyFunc@40` is 0). So a reassignment would LEAK the old
+	// value. This gate lets `emitOpaqueFieldReassign` REJECT that combination up front rather than ship the
+	// leak — read off the SAME `typeIsManaged`/`typeArgIsOwned` boundaries the drop and the consume decide on,
+	// so the reject fires on exactly the fields the destructor co-owns but the reassign cannot re-balance. A
+	// managed instantiation (`Box with String`, both true) reassigns through the descriptor as before; a scalar
+	// (both false) is inert; only the borrowed-and-dropped trivial struct — the co-ownership gap — is rejected.
+	export function genericTypeFieldHasCoOwnedTrivialInstantiation(baseName ByteArray, position TypeParamId) returns bool
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
+				let args = self.genericInstances.instanceArgs(id)
+				if position < args.count() and self.typeArgIsCoOwnedTrivial(try args.get(position) otherwise panic("ProgramSignatures.genericTypeFieldHasCoOwnedTrivialInstantiation: instanceArgs.get OOB at {position} despite the range guard")) 'coOwnedTrivial'
+					return true
+				end 'coOwnedTrivial'
+			end 'sameBase'
+		end 'eachInstance'
+		return false
+	end 'genericTypeFieldHasCoOwnedTrivialInstantiation'
+
+	// Is `t` a CO-OWNED TRIVIAL type argument — a heap aggregate the box drops (`typeIsManaged`) but that the
+	// call site borrows rather than consumes (`typeArgIsOwned` false)? The one-type predicate the co-ownership
+	// gates read: the constructor-feed retain fires for exactly this class of argument (a trivial struct or
+	// trivial instance), and the reassign reject refuses it. A String/owning aggregate (`typeArgIsOwned` true)
+	// is consumed, not co-owned-by-retain, and a scalar owns no heap — both answer false.
+	export function typeArgIsCoOwnedTrivial(t MaxonType) returns bool
+		return self.typeIsManaged(t) and not self.typeArgIsOwned(t)
+	end 'typeArgIsCoOwnedTrivial'
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF GENERIC TYPE `baseName` MAKE ITS OPAQUE ARRAY ELEMENT AT `position`
 	// UNCOPYABLE (P1.7 slice 3b-vi-b-β)?** The FRONT-END gate for an opaque `slice`/`clone`/`append`: the shared
@@ -3224,14 +3265,23 @@ export type ProgramSignatures
 	end 'isManagedOpaqueTypeParamField'
 
 	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
-	// A type-PARAMETER field is dropped iff its substituted argument OWNS managed heap (`typeArgIsOwned` — a
-	// trivial `Box with Point` borrows its `Point`); a DIRECT field (a base struct's own `tag as String`) is
-	// owned by the box and dropped like any struct field (`typeIsManaged`). The two classifiers differ only
-	// on a trivial struct/instance, which a type parameter borrows and a direct field owns.
+	// A type-PARAMETER field is dropped iff its substituted argument is a HEAP AGGREGATE (`typeIsManaged`), the
+	// SAME gate a DIRECT field uses. That is DELIBERATELY BROADER than the CONSUME boundary (`typeArgIsOwned`):
+	// a trivial `Box with Point` is CO-OWNED, not consumed — its `Point` is `__mm_retain`'d at the constructor
+	// feed (`Parser.retainEscapingConstructorFeed`), so the box holds a real second reference the caller keeps
+	// usable (`generic-trivial-struct-arg`), and this decref RELEASES that reference at the box's destruction.
+	// The retain and this drop are the two ends of one co-ownership (OPEN #40's `__mm_retain` thesis applied to
+	// the generic-field escape — the RED `PointBox.create(pInner)` outliving `pInner`'s scope). The two
+	// classifiers therefore differ exactly on a trivial struct/instance: consumed = borrowed-and-kept, dropped =
+	// co-owned. A managed argument (`String`, an owning struct) is BOTH consumed and dropped, unchanged; a
+	// scalar is neither. A shared-body reassignment of a co-owned trivial field would break this balance (the
+	// old value cannot be decref'd through the descriptor-gated `__drop_type_param` without a trivial-struct
+	// descriptor), so it is REJECTED at the reassign site (`emitOpaqueFieldReassign`) — leaving every field this
+	// drop fires on either construct-only (co-owned once) or managed/scalar (the pre-existing model).
 	export function genericInstanceFieldIsManaged(id GenericInstanceId, index FieldIndex) returns bool
 		let baseFieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.genericInstanceFieldIsManaged: field {index} out of range for instance {id}'s base struct")
 		if maxonTypeTag(baseFieldType) == ValueTypeTag.typeParameter 'typeParamField'
-			return self.typeArgIsOwned(self.substituteInstanceFieldType(id, index: index))
+			return self.typeIsManaged(self.substituteInstanceFieldType(id, index: index))
 		end 'typeParamField'
 		return self.typeIsManaged(baseFieldType)
 	end 'genericInstanceFieldIsManaged'

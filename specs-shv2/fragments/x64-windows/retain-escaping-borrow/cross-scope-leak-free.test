@@ -1,4 +1,4 @@
-// Test: generic-trivial-struct-arg
+// Test: cross-scope-leak-free
 typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
@@ -10,16 +10,19 @@ type Point
 	end 'getX'
 end 'Point'
 type Box uses T
-	export var value as T
+	export var item as T
 	export static function create(v T) returns Self
-		return Self{value: v}
+		return Self{item: v}
 	end 'create'
 end 'Box'
 typealias PointBox = Box with Point
 function main() returns ExitCode
-	let p = Point.create(7)
-	let pb = PointBox.create(p)
-	return p.getX() - 7
+	var b = PointBox.create(Point.create(0))
+	if true 'inner'
+		let pInner = Point.create(41)
+		b = PointBox.create(pInner)
+	end 'inner'
+	return 0
 end 'main'
 ---
 ExitCode: 0
@@ -81,7 +84,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rcx, 0
     x64.callDirect Point.create
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
@@ -90,13 +93,33 @@ func @main {
     x64.callDirect Box.create
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect Point.getX
-    x64.leaRegRegImm32 r13, r8, -7
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, inner
+    x64.jmp critsplit
+  inner:
+    x64.movRegImm32 rcx, 41
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.create
+    x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Box_Point
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
-    x64.movRegReg r8, r13
+    x64.movRegReg rcx, r13
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rcx, r12
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rbx, 0
+    x64.callDirect __destruct_Box_Point
+    x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
