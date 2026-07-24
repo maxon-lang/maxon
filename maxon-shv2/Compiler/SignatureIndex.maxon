@@ -1185,6 +1185,18 @@ let ByteElementTypeName = b"Byte"
 // validates a `Array with …` against.
 export let ArrayTypeParamCount = 1 as FieldIndex
 
+// The name of the builtin `Set` generic type (`Set with Element`, P1.7b slice A) — the hash-table twin of
+// `ArrayBuiltinBaseName`. `Set` has no `type Set uses Element` declaration (shv2 reads no stdlib; its
+// runtime is synthesized like `Array`'s), so every `genericInstance*` query that would read a base
+// `StructLayout` (`baseLayoutOf`, box size, per-instance drop) special-cases a `Set` instance exactly as it
+// does an `Array` one — its box is the fixed `SetRecordBytes` fused record and it drops through
+// `__set_decref`. One speller, shared by the parser's `Base with Args` check and every `Set`-instance query.
+export let SetBuiltinBaseName = b"Set"
+
+// The single type parameter `Set` declares (`Set with Element`) — the arity `checkGenericInstance`
+// validates a `Set with …` against, the `Array` twin.
+export let SetTypeParamCount = 1 as FieldIndex
+
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
 // NOT the element's full logical size. A trivial element is stored inline and strides by its own size (an
@@ -2867,6 +2879,24 @@ export type ProgramSignatures
 		return try args.get(0) otherwise panic("ProgramSignatures.arrayElementType: `Array` instance {id} has no type argument — arity (1) was checked at instantiation")
 	end 'arrayElementType'
 
+	// --- The `Set` builtin generic (P1.7b slice A) ---
+	//
+	// The hash-table twin of the `Array` section above: `Set` is a BUILTIN generic with one type parameter
+	// `Element`, synthesized rather than declared, so its instances (`Set with Int`) intern like any other but
+	// have no base `StructLayout`. The same three query doors an `Array` instance special-cases — box size,
+	// per-instance drop, the managed-field gate — special-case a `Set` instance here (its box is the fixed
+	// `SetRecordBytes` fused record, and it drops through `__set_decref`).
+
+	// Is `name` the builtin `Set` type — the base of every set instance.
+	export function isSetBaseName(name ByteArray) returns bool
+		return name.equals(SetBuiltinBaseName)
+	end 'isSetBaseName'
+
+	// Is generic instance `id` a `Set with T`? (Reads the base NAME, which needs no base struct.)
+	export function isSetInstance(id GenericInstanceId) returns bool
+		return self.isSetBaseName(self.genericInstanceBaseName(id))
+	end 'isSetInstance'
+
 	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
 	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
 	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
@@ -3013,6 +3043,11 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) 'array'
 			return ArrRecordBytes as ByteOffset
 		end 'array'
+		// A `Set` instance's box is the fixed fused hash-table record (P1.7b slice A), no base struct — the
+		// `Array` twin above.
+		if self.isSetInstance(id) 'set'
+			return SetRecordBytes as ByteOffset
+		end 'set'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base is not a declared struct")
@@ -3352,6 +3387,13 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) 'array'
 			return false
 		end 'array'
+		// A `Set` instance, like an `Array` one, has no base struct to iterate and is dropped through
+		// `__set_decref` (routed below), NOT a synthesized `__destruct_<mangled>` — keeping it out of the
+		// destructor-synthesis instance loop (which would call `baseLayoutOf` and panic). Its elements are
+		// scalar this slice, so `__set_decref` frees the three buffers and the record, no element walk.
+		if self.isSetInstance(id) 'set'
+			return false
+		end 'set'
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
 				return true
@@ -3383,6 +3425,12 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) 'array'
 			return ArrDecrefName
 		end 'array'
+		// A `Set` drops through `__set_decref` — the hash-table twin of `__arr_decref`: it frees the three
+		// external buffers (elements/states/hashes, none of which a generic `__mm_decref` can reach) and then
+		// the record. Its keys are scalar this slice, so there is no per-element walk.
+		if self.isSetInstance(id) 'set'
+			return SetDecrefName
+		end 'set'
 		if self.genericInstanceHasManagedField(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id).toByteArray())
 		end 'managed'
@@ -3624,7 +3672,11 @@ export type ProgramSignatures
 	// public predicates keep their "Array" names for their out-of-tree call sites; the mechanism now spans array
 	// elements AND bare fields.)
 	function managedOpaqueArrayElementOf(id GenericInstanceId) returns ManagedOpaqueArrayElement
-		if self.isArrayInstance(id) 'notStruct'
+		// An `Array` or `Set` instance has no base struct to iterate (both are synthesized builtins), so reading
+		// `baseLayoutOf` below would panic. `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls
+		// this over EVERY interned instance, so a `Set with Int` in the program reaches here — it holds no
+		// managed opaque `T` field (its keys are scalar, its buffers freed by `__set_decref`), so it is absent.
+		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
 			return ManagedOpaqueArrayElement.absent
 		end 'notStruct'
 		let layout = self.baseLayoutOf(id)

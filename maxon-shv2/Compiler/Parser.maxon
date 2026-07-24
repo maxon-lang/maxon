@@ -5197,6 +5197,15 @@ export type Parser
 			end 'wrongArity'
 			return
 		end 'array'
+		// `Set` is a BUILTIN generic with one type parameter `Element` (P1.7b slice A) — like `Array`, no `type
+		// Set uses Element` declaration exists, so validate its arity here; the int-key-only restriction is
+		// enforced where a set method receives its element (which has the resolved key type in hand).
+		if self.signatures.isSetBaseName(baseTok.value) 'set'
+			if argCount != SetTypeParamCount 'wrongArity'
+				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {SetTypeParamCount} type argument(s), but {argCount} were supplied", tok: baseTok)
+			end 'wrongArity'
+			return
+		end 'set'
 		match self.signatures.structOf(baseTok.value) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
@@ -15695,6 +15704,13 @@ export type Parser
 			return try self.parseArrayStaticCall(typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
 		end 'arrayStatic'
 
+		// `IntSet.create()` — a static call on a `Set` instance alias (P1.7b slice A), intercepted before the
+		// generic-alias → base rewrite (which would mangle it to `Set.create`, a callee no file declares):
+		// `Set` has no base struct, so its statics lower to the set runtime, not a user method.
+		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isSetInstance(self.signatures.genericAliasInstance(typeTok.value)) 'setStatic'
+			return try self.parseSetStaticCall(typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
+		end 'setStatic'
+
 		// `ElementArray.create()` — a static call on a NESTED generic-instance alias inside the enclosing
 		// generic body (P1.7 slice 3b-i). The bare member is recognized against `enclosingInnerAliases` and
 		// qualified to the whole-program `Container.ElementArray` key (the same name the field type carries),
@@ -15831,6 +15847,12 @@ export type Parser
 			if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
 				return try self.parseArrayMethodCall(func, binding: binding, baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
 			end 'arrayMethod'
+
+			// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) is dispatched to the set runtime, like an array
+			// receiver — the split is on the binding's genericInstance TAG being a `Set` instance (P1.7b slice A).
+			if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
+				return try self.parseSetMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+			end 'setMethod'
 
 			self.advance()
 			try self.consume(TokenKind.dot)
@@ -16216,6 +16238,102 @@ export type Parser
 		self.trackOwnedTemp(arr)
 		return arr
 	end 'parseArrayStaticCall'
+
+	// `IntSet.create()` — the one `Set` static factory at this slice (P1.7b slice A). Yields an OWNED empty set
+	// (`__set_create`), tracked so its scope-exit drop routes through `genericInstanceBoxDropCallee` →
+	// `__set_decref`, which frees the record and its three buffers. The `Set` twin of `parseArrayStaticCall`.
+	function parseSetStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		if not methodTok.value.equals(SetCreateMethod) 'unknownStatic'
+			throw ParseError.unsupported("`Set` static method '{String.from(methodTok.value)}' — P1.7b slice A provides `create()` only", line: methodTok.line, column: methodTok.column)
+		end 'unknownStatic'
+		try self.consume(TokenKind.leftParen)
+		try self.consume(TokenKind.rightParen)
+		try self.requireSetIntKeyType(giid, tok: aliasTok)
+		let set = self.emitSetCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
+		self.trackOwnedTemp(set)
+		return set
+	end 'parseSetStaticCall'
+
+	// Emit `__set_create()` for instance `giid`, yielding the empty set record (P1.7b slice A). The record is
+	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers.
+	function emitSetCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		return self.emitRuntimeCall(SetCreateName, args: ValueIdArray.create(), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitSetCreateOp'
+
+	// ⭐ **THE INT-KEY-ONLY GATE (P1.7b slice A).** A `Set`'s key type must be `int` (or a ranged-int alias):
+	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` witnesses, and only `int`
+	// has those synthesized (2b-i). A managed key (String / struct / `ByteArray`) rides a sibling slice, so a
+	// non-int `Set` is a clean E2015 here rather than a link failure at the missing witness impl. The key type
+	// is read through `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
+	// (`LowerMaxonToStd.appendSetWitnessArgs`), so the gate and the dispatch agree on what "int-keyed" means.
+	function requireSetIntKeyType(giid GenericInstanceId, tok Token) throws ParseError
+		let keyType = self.signatures.conformerTypeArgName(giid, position: 0 as TypeParamId).toByteArray()
+		if not keyType.equals(IntPrimitiveConformerName) 'notInt'
+			throw ParseError.unsupported("`Set` supports INT scalar keys only at P1.7b slice A — a '{String.from(keyType)}' key (String / struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
+		end 'notInt'
+	end 'requireSetIntKeyType'
+
+	// ⭐ **DISPATCH A `Set` METHOD off a binding receiver (P1.7b slice A)** — the set twin of
+	// `parseArrayMethodCall`. `s.insert(e)` / `s.contains(e)` / `s.remove(e)` / `s.count()`; the receiver is a
+	// live `Set` instance (a moved-from set is use-after-move, E3102). The set record's address is stable across
+	// a grow (only its buffer pointers move), so a mutating method never rebinds the receiver.
+	function parseSetMethodCall(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		try self.requireBindingLive(binding, nameTok: baseTok)
+		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed)
+	end 'parseSetMethodCall'
+
+	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b
+	// slice A). `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator
+	// (rejected in value position, E3059) that returns the receiver — what the statement still denotes, like
+	// `emitArrayVoidCall`. `insert`/`contains`/`remove` carry the key's witness tables, appended by
+	// `LowerMaxonToStd.appendSetWitnessArgs`; the parser passes only `[set, elem]`.
+	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+
+		if methodTok.value.equals(SetCountMethod) 'count'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(SetCountName, args: singletonArgs(set), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'count'
+		if methodTok.value.equals(SetContainsMethod) 'contains'
+			let elem = try self.parseSetKeyArg(func)
+			return self.emitRuntimeCall(SetContainsName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'contains'
+		if methodTok.value.equals(SetRemoveMethod) 'remove'
+			let elem = try self.parseSetKeyArg(func)
+			return self.emitRuntimeCall(SetRemoveName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'remove'
+
+		// `insert` is a non-throwing VOID mutator — rejected in value position (E3059, the shared check).
+		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
+		if methodTok.value.equals(SetInsertMethod) 'insert'
+			let elem = try self.parseSetKeyArg(func)
+			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return set
+		end 'insert'
+
+		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — P1.7b slice A provides create/insert/contains/remove/count; `from`-construction and iteration are later slices", line: methodTok.line, column: methodTok.column)
+	end 'dispatchSetMethod'
+
+	// `( key )` — a single positional INT key argument for `insert`/`contains`/`remove` (P1.7b slice A). An int
+	// key is a scalar, so there is no move-in (unlike a managed array element); it is type-checked here so a
+	// non-int value (a String pointer that would be hashed as an integer) is a clean E2015 rather than a wrong
+	// answer. `requireSetIntKeyType` at `create` already fixed the set's KEY type to int; this rejects a
+	// mismatched VALUE at the call.
+	function parseSetKeyArg(func IrFunction) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let keyTok = self.current()
+		let key = try self.parseExpression(func, block: self.currentBlock)
+		if self.tagOf(key) != ValueTypeTag.integer 'notInt'
+			throw ParseError.unsupported("`Set` supports INT scalar keys only at P1.7b slice A — got a '{typeTagName(self.tagOf(key))}' key", line: keyTok.line, column: keyTok.column)
+		end 'notInt'
+		try self.consume(TokenKind.rightParen)
+		return key
+	end 'parseSetKeyArg'
 
 	// ⭐ **DISPATCH A BUILTIN `Array` METHOD off an instance receiver (P1.7 slice 1).** The array twin of
 	// `parseStringMethodCall`: the receiver is a live `Array` instance (a moved-from array touched here is

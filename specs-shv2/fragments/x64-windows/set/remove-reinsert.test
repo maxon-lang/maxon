@@ -1,0 +1,189 @@
+// Test: remove-reinsert
+typealias Int = int(i64.min to i64.max)
+typealias IntSet = Set with Int
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	s.insert(7)
+	s.insert(8)
+	if not s.remove(7) 'r'
+		return 1
+	end 'r'
+	if s.count() != 1 'c1'
+		return 2
+	end 'c1'
+	s.insert(7)
+	if s.count() != 2 'c2'
+		return 3
+	end 'c2'
+	if not s.contains(7) 'has7'
+		return 4
+	end 'has7'
+	if not s.contains(8) 'has8'
+		return 5
+	end 'has8'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __set_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_insert
+    x64.movRegImm32 rdx, 8
+    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_insert
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_remove
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, r
+    x64.jmp ifcont
+  r:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_count
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, c1
+    x64.jmp ifcont
+  c1:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_insert
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_count
+    x64.cmpRegImm32 r8, 2
+    x64.jcc notEqual, c2
+    x64.jmp ifcont
+  c2:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_contains
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, has7
+    x64.jmp ifcont
+  has7:
+    x64.movRegImm32 r12, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rdx, 8
+    x64.leaRegRdata rax, [rip + __witness_int_Hashable]
+    x64.leaRegRdata r9, [rip + __witness_int_Equatable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_contains
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, has8
+    x64.jmp ifcont
+  has8:
+    x64.movRegImm32 r12, 5
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __set_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

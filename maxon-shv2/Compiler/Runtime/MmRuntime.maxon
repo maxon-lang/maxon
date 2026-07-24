@@ -231,12 +231,11 @@ export function threeI64Params() returns StdTypeArray
 	return types
 end 'threeI64Params'
 
-// Four i64 parameters — `__arr_slice_managed(arr, start, end, cloneFn)`.
+// Four i64 parameters — the Array runtime's `__arr_slice_managed(arr, start, end, cloneFn)` and the Set
+// runtime's witness-carrying `__set_insert(set, elem, hashWitness, eqWitness)` / `contains` / `remove`. It
+// joins the 1/2/3-param family here (rather than beside a single caller) now that two runtimes need it.
 export function fourI64Params() returns StdTypeArray
-	var types = StdTypeArray.create()
-	types.push(StdType.i64)
-	types.push(StdType.i64)
-	types.push(StdType.i64)
+	var types = threeI64Params()
 	types.push(StdType.i64)
 	return types
 end 'fourI64Params'
@@ -251,7 +250,6 @@ export function fiveI64Params() returns StdTypeArray
 	types.push(StdType.i64)
 	return types
 end 'fiveI64Params'
-
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
 // incoming ABI register into its virtual register. Parameter `k` is ValueId `k`. All-i64: every

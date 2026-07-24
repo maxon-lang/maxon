@@ -318,6 +318,11 @@ export type RuntimeUsage
 	// backing record and its element buffer inside their Std bodies, which this Maxon-module scan cannot
 	// see. It drives `installArrayRuntime` (all the array helpers, appended already-lowered).
 	export var usesArray as bool
+	// The program touches a `Set` (P1.7b slice A). Any `__set_*` runtime call turns this on — and, like
+	// `usesArray`, turns on `usesHeap` too, because the set helpers `__mm_alloc`/`__mm_free` the record and
+	// its three external buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives
+	// `installSetRuntime`. Its own bit so a set-free program stays golden-neutral (installs nothing).
+	export var usesSet as bool
 	// The program DROPS a single opaque type-parameter value (`__drop_type_param`, P1.7 slice 3b-v /
 	// Finding A) — a consumed feed binding left live at a scope exit, an opaque array element moved out
 	// (`.pop()`), OR a bare opaque `T` field reassignment (`self.saved = next`). Its OWN bit, decoupled from
@@ -371,7 +376,7 @@ export type RuntimeUsage
 	export var neededCloners as ClonerSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -529,6 +534,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesArray = true
 		usage.usesHeap = true
 	end 'array'
+	// Any `__set_*` call carries the whole set runtime, and the heap under it: `__set_create`/`__set_grow`
+	// `__mm_alloc` the record and its three buffers, `__set_decref` `__mm_free`s them — none of which this
+	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
+	// declares both bits, exactly as the `__arr_*` arm above does (P1.7b slice A).
+	if isSetRuntimeCallee(callee) 'set'
+		usage.usesSet = true
+		usage.usesHeap = true
+	end 'set'
 	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesArray` so an
 	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so
 	// none of the arms above sees it. Its body only reads the descriptor and `callIndirect`s the destructor

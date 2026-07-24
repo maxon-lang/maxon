@@ -1124,8 +1124,45 @@ type MaxonToStdLowering
 			self.appendDropTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'dropTypeParam'
+		// A set runtime call that hashes/compares its key (`__set_insert`/`__set_contains`/`__set_remove`,
+		// P1.7b slice A) gets the key's `Hashable`/`Equatable` witness-table addresses appended as its two
+		// hidden trailing arguments — the receiver's concrete key type is known here, so `ensureWitnessTable`
+		// materializes them, the dictionary-passing twin of `appendWitnessArgs` for a generic instance method.
+		if isSetWitnessCallee(callee) 'setWitness'
+			self.appendSetWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'setWitness'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args)))
 	end 'lowerRuntimeCall'
+
+	// ⭐ **APPEND THE KEY-WITNESS ARGUMENTS to a set runtime call (P1.7b slice A).** `insert`/`contains`/
+	// `remove` on a `Set with T` dispatch the key's `hash`/`equals` through witnesses, so the concrete key
+	// type's `Hashable`/`Equatable` tables ride as the trailing two arguments (`[set, elem, hashWitness,
+	// eqWitness]`). The receiver `args[0]` is a concrete `Set` instance, so its key type is read off the gid
+	// through `conformerTypeArgName` — the SAME canonical-conformer reducer `materializeWitnessArg` uses, so a
+	// `Set with Integer` and a `Box with Integer` name their `int` witness table identically — and
+	// `materializeKeyWitness` takes each table's `rdataAddr`.
+	function appendSetWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		let setReceiver = try args.get(0) otherwise panic("appendSetWitnessArgs: set runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the set record")
+		let gid = try self.valueNameIds.get(setReceiver) otherwise panic("appendSetWitnessArgs: set receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` value is always a concrete generic instance")
+		let keyType = self.signatures.conformerTypeArgName(gid, position: 0 as TypeParamId).toByteArray()
+		var fullArgs = ValueIdArray.create()
+		fullArgs.append(args)
+		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: SetHashableInterfaceName, dstBlock: dstBlock))
+		fullArgs.push(self.materializeKeyWitness(keyType, interfaceName: SetEquatableInterfaceName, dstBlock: dstBlock))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
+	end 'appendSetWitnessArgs'
+
+	// The `rdataAddr` of the `__witness_<keyType>_<interface>` table (P1.7b slice A) — the address a set runtime
+	// call passes for the key's `Hashable` or `Equatable` witness. `ensureWitnessTable` registers the blob and
+	// its `funcAbs64` slot reloc (to the synthesized `int.hash`/`int.equals`) on first reference, idempotent by
+	// label, so many set operations on one key type build ONE table per interface.
+	function materializeKeyWitness(keyType ByteArray, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
+		let label = self.ensureWitnessTable(keyType, interfaceName: interfaceName)
+		let addrId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(addrId, label: label.toByteArray()))
+		return addrId
+	end 'materializeKeyWitness'
 
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments (P1.7 slice
 	// 3b-vi-b-β) — the LAST argument the `__arr_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,

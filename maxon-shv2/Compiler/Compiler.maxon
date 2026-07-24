@@ -268,6 +268,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking (P1.7).
 	installArrayRuntime(pipeline.stdModule, usage: usage)
 
+	// The Set runtime (`__set_create`/`__set_insert`/`__set_contains`/…) — installed the same already-lowered
+	// way, keyed on its own `usesSet` bit (any `__set_*` reference, which also set `usesHeap` above). Its
+	// `insert`/`contains`/`remove` bodies dispatch the key's `hash`/`equals` through the SAME `witnessCall`
+	// machinery a constrained type-parameter method uses; the int witness tables + `int.hash`/`int.equals`
+	// impls those calls reach are built by `ensureWitnessTable` at the concrete call site (during lowering)
+	// and `installPrimitiveConformanceRuntime` below, so this install order is neutral — the linker resolves
+	// the cross-references by name (P1.7b slice A).
+	installSetRuntime(pipeline.stdModule, usage: usage)
+
 	// The single-value descriptor-gated drop (`__drop_type_param`, P1.7 slice 3b-v / Finding A) — installed on
 	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesArray`, so a bare opaque `T` field reassignment in an
 	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the
