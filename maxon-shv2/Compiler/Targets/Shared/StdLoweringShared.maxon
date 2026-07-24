@@ -401,6 +401,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		osProcessSpawnInherit then break 'result'
 		osCancelIo then break 'result'
 		osGetPid(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// P1.5 dogfood slice 1b: osWriteFile defines the WriteFile BOOL (an integer, GPR); osPipeCreateOutbound defines nothing.
+		osPipeCreateOutbound then break 'result'
+		osWriteFile(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

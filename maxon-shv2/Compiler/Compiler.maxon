@@ -222,6 +222,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'ioGlobals'
+	// The streaming subprocess handle-table pointer (P1.5 slice 1b) rides its OWN bit, so a non-streaming IOCP
+	// program's `.data` layout is unchanged — only a streaming program lays out `__subp_table`.
+	if usage.usesStreaming 'subpGlobals'
+		for entry in subpRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'subpGlobals'
 	project.globalData.layOut(declaredGlobals)
 
 	var pipeline = PassPipeline.create(project, maxonModule: module)
@@ -244,7 +251,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, usesIocp: usage.usesIocp)
+		installGtRuntime(pipeline.stdModule, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming)
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline so it is never re-optimized — but it is

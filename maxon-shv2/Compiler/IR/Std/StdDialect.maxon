@@ -942,6 +942,29 @@ export union StdOp
 	// to make the overlapped pipe name CROSS-PROCESS unique (the high 32 bits of the name's hex uniquifier; the low
 	// 32 are a per-process counter), so two concurrent test processes never collide on a FIRST_PIPE_INSTANCE name.
 	osGetPid(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// --- P1.5 dogfood slice 1b: the STREAMING subprocess stdin pipe + synchronous write ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osGetPid` (the last slice-1a `system`-band op), per the
+	// band-append invariant: a mid-band insert is silently swallowed by a `… to X` range arm. Both carry
+	// `category: system` (metadata placing them logically in the system band, independent of this tail
+	// position) — the same shape and rationale as the slice-1a IOCP ops. ⭐ x64-WINDOWS ONLY, like the whole
+	// green-thread substrate; every other backend REJECTS them (emitted only inside the x64-windows-gated
+	// streaming runtime). Full call-barrier metadata: each IS one or more indirect calls once lowered.
+	//
+	// `osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr)` = the STDIN pipe, the direction
+	// mirror of `osPipeCreate`: CreateNamedPipeW(name, OUTBOUND|FIRST_PIPE_INSTANCE, … NO OVERLAPPED, NO IOCP)
+	// → the parent WRITE end (a synchronous server end) stored to `[parentWritePtr]`; CreateFileW(name,
+	// GENERIC_READ, …, saPtr=inheritable, OPEN_EXISTING, …) → the inheritable child READ end stored to
+	// `[childReadPtr]`; SetHandleInformation strips inheritance from the parent write end. Four VALUE operands,
+	// no result (the two handles land in memory). Ports v1's `__subp_create_overlapped_pipe` stdin (dir 0) path.
+	osPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osWriteFile(handle, buf, len, bytesOutPtr)` = `WriteFile(handle, buf, len, bytesOutPtr, NULL)` — a
+	// SYNCHRONOUS write to the child's stdin pipe (the sync outbound pipe is not overlapped, so the write
+	// blocks until the pipe buffer accepts the bytes). FOUR args (`bytesOutPtr` is the 4th, a valid out-param
+	// pointer WriteFile requires; the 5th, lpOverlapped, is NULL, a stack arg like `osWriteStdout`'s); DEFINES
+	// the BOOL result (captured from RAX) — nonzero success, zero a broken pipe. Distinct from `osWriteStdout`,
+	// which writes to the process's OWN stdout via GetStdHandle and takes no explicit handle.
+	osWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1080,6 +1103,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) then insertUseTriple(referenced, a: cmdlinePtr, b: startupPtr, c: procInfoPtr)
 		osCancelIo(handle, ovl) then insertUsePair(referenced, a: handle, b: ovl)
 		osGetPid then break 'u'
+		// P1.5 dogfood slice 1b: the streaming stdin pipe reads four value operands (its two out-pointers are
+		// still live operands); `osWriteFile` reads handle+buf+len+bytesOutPtr, its `resultId` a def skipped here.
+		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) then insertUseQuad(referenced, a: namePtr, b: saPtr, c: childReadPtr, d: parentWritePtr)
+		osWriteFile(_, handle, buf, len, bytesOutPtr) then insertUseQuad(referenced, a: handle, b: buf, c: len, d: bytesOutPtr)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1103,6 +1130,15 @@ function insertUseTriple(referenced StdValueUseSet, a ValueId, b ValueId, c Valu
 	referenced.insert(b)
 	referenced.insert(c)
 end 'insertUseTriple'
+
+// The four-operand twin — for the P1.5 streaming ops that read four value operands (`osPipeCreateOutbound`'s
+// name + SA + two out-pointers; `osWriteFile`'s handle + buf + len + bytesOut-pointer).
+function insertUseQuad(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId, d ValueId)
+	referenced.insert(a)
+	referenced.insert(b)
+	referenced.insert(c)
+	referenced.insert(d)
+end 'insertUseQuad'
 
 // The five-operand twin — for the P1.5 IOCP ops that read five value operands (`osPipeCreate`'s name + SA + iocp +
 // two out-pointers; `osReadOverlapped`'s handle + buf + cap + bytesOut-pointer + overlapped).
@@ -1212,6 +1248,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
 		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osGetPid gives op
+		// P1.5 dogfood slice 1b: the streaming stdin pipe + write, rewriting exactly the value operands they read.
+		osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr) gives StdOp.osPipeCreateOutbound(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), childReadPtrId: remappedValue(childReadPtr, subst: subst), parentWritePtrId: remappedValue(parentWritePtr, subst: subst))
+		osWriteFile(resultId, handle, buf, len, bytesOutPtr) gives StdOp.osWriteFile(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), lenId: remappedValue(len, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

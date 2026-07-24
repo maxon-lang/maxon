@@ -231,6 +231,17 @@ export function threeI64Params() returns StdTypeArray
 	return types
 end 'threeI64Params'
 
+// Four i64 parameters — `__arr_slice_managed(arr, start, end, cloneFn)` and `__gt_subp_yield_read(readEnd, buf,
+// cap, bytesOutPtr)`. Two users now, so it lives here in the base helpers beside 1/2/3-param rather than beside one.
+export function fourI64Params() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	return types
+end 'fourI64Params'
+
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
 // incoming ABI register into its virtual register. Parameter `k` is ValueId `k`. All-i64: every
@@ -1289,3 +1300,14 @@ export function threeArgs(first ValueId, second ValueId, third ValueId) returns 
 	args.push(third)
 	return args
 end 'threeArgs'
+
+// Four positional call arguments — `__arr_slice_managed` and `__gt_subp_yield_read`. Homed here beside its
+// `argsOf`/`twoArgs`/`threeArgs` siblings now that a second user (the streaming reader) needs it too.
+export function fourArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	args.push(third)
+	args.push(fourth)
+	return args
+end 'fourArgs'

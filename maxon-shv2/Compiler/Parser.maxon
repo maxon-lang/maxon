@@ -1375,6 +1375,27 @@ let SpawnReadLineBuiltinName = b"spawnReadLine"
 // `spawnReadLine` takes exactly one STRING argument (the command line) and returns an INTEGER (the bytes read).
 let SpawnReadLineArity = 1 as ParamCount
 
+// **THE STREAMING SUBPROCESS BUILTINS** (P1.5 dogfood slice 1b) — the real long-lived-child API `StreamingSubprocess`
+// wants, exposed as bare-name compiler builtins (like `spawnReadLine`) because shv2 cannot yet compile the stdlib
+// cone the stdlib method bodies need (Map/FilePath/`__ManagedMemory`/`cstr`/the union cone — see the slice report).
+// Each routes to a `__gt_subp_*` runtime entry: `subpSpawn(cmd)` spawns a child with three pipes and returns a
+// handle (or -1); `subpReadLine(h)`/`subpReadErrLine(h)` yield a stdout/stderr line as an OWNED String; `subpWriteLine
+// (h, line: s)` writes `s\n` to stdin (0 ok, nonzero fail); `subpCloseStdin(h)` / `subpWait(h)` / `subpRelease(h)`
+// close stdin / block for exit code / free the handle. x64-windows only, like the whole subprocess substrate.
+let SubpSpawnBuiltinName = b"subpSpawn"
+let SubpReadLineBuiltinName = b"subpReadLine"
+let SubpReadErrLineBuiltinName = b"subpReadErrLine"
+let SubpWriteLineBuiltinName = b"subpWriteLine"
+let SubpCloseStdinBuiltinName = b"subpCloseStdin"
+let SubpWaitBuiltinName = b"subpWait"
+let SubpReleaseBuiltinName = b"subpRelease"
+
+// Arities: spawn/read/close/wait/release take one argument; writeLine takes two (handle, line).
+let SubpSpawnArity = 1 as ParamCount
+let SubpReadArity = 1 as ParamCount
+let SubpWriteArity = 2 as ParamCount
+let SubpHandleArity = 1 as ParamCount
+
 // **THE ARITY-1 FLOAT MATH INTRINSICS** (P1.0d.4-C) — `specs/{floor,ceil,round,sqrt}.md`. Builtins for the
 // same reason `trunc` is: each lowers to ONE instruction on every target, so a stdlib function would be a
 // call/ret wrapped around a single `sqrtsd`/`roundsd`/`fsqrt`/`frint`/`f64.sqrt`. Both reference compilers
@@ -18994,6 +19015,36 @@ export type Parser
 			return try self.emitSpawnReadLine(args, calleeTok: anchor)
 		end 'spawnReadLineBuiltin'
 
+		// The seven streaming subprocess builtins (P1.5 slice 1b). Each is recognized by name after its arguments
+		// are parsed, exactly like `spawnReadLine`, and routes to a `__gt_subp_*` runtime entry.
+		if callee.equals(SubpSpawnBuiltinName) 'subpSpawnBuiltin'
+			return try self.emitSubpSpawn(args, calleeTok: anchor)
+		end 'subpSpawnBuiltin'
+
+		if callee.equals(SubpReadLineBuiltinName) 'subpReadLineBuiltin'
+			return try self.emitSubpReadLine(args, runtimeName: SubpReadLineName, builtinName: SubpReadLineBuiltinName, calleeTok: anchor)
+		end 'subpReadLineBuiltin'
+
+		if callee.equals(SubpReadErrLineBuiltinName) 'subpReadErrLineBuiltin'
+			return try self.emitSubpReadLine(args, runtimeName: SubpReadErrLineName, builtinName: SubpReadErrLineBuiltinName, calleeTok: anchor)
+		end 'subpReadErrLineBuiltin'
+
+		if callee.equals(SubpWriteLineBuiltinName) 'subpWriteLineBuiltin'
+			return try self.emitSubpWriteLine(args, calleeTok: anchor)
+		end 'subpWriteLineBuiltin'
+
+		if callee.equals(SubpCloseStdinBuiltinName) 'subpCloseStdinBuiltin'
+			return try self.emitSubpHandleOp(args, runtimeName: SubpCloseStdinName, builtinName: SubpCloseStdinBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+		end 'subpCloseStdinBuiltin'
+
+		if callee.equals(SubpWaitBuiltinName) 'subpWaitBuiltin'
+			return try self.emitSubpHandleOp(args, runtimeName: SubpWaitName, builtinName: SubpWaitBuiltinName, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
+		end 'subpWaitBuiltin'
+
+		if callee.equals(SubpReleaseBuiltinName) 'subpReleaseBuiltin'
+			return try self.emitSubpHandleOp(args, runtimeName: SubpReleaseName, builtinName: SubpReleaseBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
+		end 'subpReleaseBuiltin'
+
 		// The four MATH INTRINSICS. Only the DISPATCH repeats — the emit itself (arity, operand class,
 		// the int→float promotion, the op) is written once in `emitMathIntrinsic`, so each of these is
 		// a single line naming its opcode. They are the same `if callee.equals(…)` entries the four
@@ -19204,6 +19255,96 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(IoReadName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSpawnReadLine'
+
+	// `subpSpawn(cmd)` — **SPAWN A STREAMING CHILD** (P1.5 slice 1b): route to `__gt_subp_spawn`, which creates three
+	// pipes, spawns the child, and returns a non-negative handle (or -1). One BORROWED String argument (the command
+	// line, read like `spawnReadLine`'s), an INTEGER result (the handle) usable in value position.
+	function emitSubpSpawn(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != SubpSpawnArity 'arity'
+			throw ParseError.builtinArity(String.from(SubpSpawnBuiltinName), expected: SubpSpawnArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let arg = try args.get(0) otherwise panic("emitSubpSpawn: args.count() == SubpSpawnArity just checked but get(0) failed")
+		let argTag = self.tagOf(arg)
+		if not tagIsText(argTag) 'notAString'
+			throw ParseError.builtinOperandType(String.from(SubpSpawnBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAString'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(arg)
+		return self.emitRuntimeCall(SubpSpawnName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitSubpSpawn'
+
+	// Validate a streaming builtin's single INTEGER handle argument (arity 1, integer, not float) and return it —
+	// the shared front of `subpReadLine`/`subpReadErrLine`/`subpCloseStdin`/`subpWait`/`subpRelease`, so the arity +
+	// operand-class diagnostics are produced in one place.
+	function requireHandleArg(args ValueIdArray, builtinName ByteArray, arity ParamCount, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != arity 'arity'
+			throw ParseError.builtinArity(String.from(builtinName), expected: arity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let handle = try args.get(0) otherwise panic("requireHandleArg: arity just checked but get(0) failed")
+		let handleTag = self.tagOf(handle)
+		if not typeClassAdmits(TypeClass.numeric, tag: handleTag) or tagIsFloat(handleTag) 'notAnInt'
+			throw ParseError.builtinOperandType(String.from(builtinName), required: "integer", got: typeTagName(handleTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAnInt'
+
+		return handle
+	end 'requireHandleArg'
+
+	// `subpReadLine(h)` / `subpReadErrLine(h)` — **READ ONE STDOUT/STDERR LINE** (P1.5 slice 1b): route to
+	// `__gt_subp_read_line` / `__gt_subp_read_err_line`, which yield the green thread while the read is in flight and
+	// return an OWNED String (the line INCLUDING its '\n', or "" on EOF). The result is enrolled as a pending owned
+	// temporary (`trackOwnedTemp`) so ownership drops it exactly as an interpolation result — the same door.
+	function emitSubpReadLine(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, calleeTok Token) returns ValueId throws ParseError
+		let handle = try self.requireHandleArg(args, builtinName: builtinName, arity: SubpReadArity, calleeTok: calleeTok)
+		var callArgs = ValueIdArray.create()
+		callArgs.push(handle)
+		let result = self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+		self.trackOwnedTemp(result)
+		return result
+	end 'emitSubpReadLine'
+
+	// `subpWriteLine(h, line: s)` — **WRITE A LINE TO STDIN** (P1.5 slice 1b): route to `__gt_subp_write_line`, which
+	// appends '\n' and does a synchronous WriteFile. Two arguments: an INTEGER handle and a BORROWED String line;
+	// an INTEGER result (0 success, nonzero broken pipe).
+	function emitSubpWriteLine(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != SubpWriteArity 'arity'
+			throw ParseError.builtinArity(String.from(SubpWriteLineBuiltinName), expected: SubpWriteArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let handle = try args.get(0) otherwise panic("emitSubpWriteLine: args.count() == SubpWriteArity just checked but get(0) failed")
+		let handleTag = self.tagOf(handle)
+		if not typeClassAdmits(TypeClass.numeric, tag: handleTag) or tagIsFloat(handleTag) 'notAnInt'
+			throw ParseError.builtinOperandType(String.from(SubpWriteLineBuiltinName), required: "integer", got: typeTagName(handleTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAnInt'
+
+		let line = try args.get(1) otherwise panic("emitSubpWriteLine: args.count() == SubpWriteArity just checked but get(1) failed")
+		let lineTag = self.tagOf(line)
+		if not tagIsText(lineTag) 'notAString'
+			throw ParseError.builtinOperandType(String.from(SubpWriteLineBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(lineTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAString'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(handle)
+		callArgs.push(line)
+		return self.emitRuntimeCall(SubpWriteLineName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitSubpWriteLine'
+
+	// `subpCloseStdin(h)` (void) / `subpWait(h)` (integer exit code) / `subpRelease(h)` (void) — **THE HANDLE-OP
+	// BUILTINS** (P1.5 slice 1b): one INTEGER handle argument, routing to the named `__gt_subp_*` entry. A void
+	// result used in value position is rejected exactly as a void user-call is.
+	function emitSubpHandleOp(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, resultTag ValueTypeTag, resultUsed bool, calleeTok Token) returns ValueId throws ParseError
+		let handle = try self.requireHandleArg(args, builtinName: builtinName, arity: SubpHandleArity, calleeTok: calleeTok)
+
+		if resultTag == ValueTypeTag.void and resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(builtinName), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(handle)
+		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitSubpHandleOp'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves

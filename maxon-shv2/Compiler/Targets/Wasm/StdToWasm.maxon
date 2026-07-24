@@ -432,7 +432,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// wasm functype here.
 		witnessCall then break 'k'
 		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only and pull in no wasm import.
-		osPipeCreate to osGetPid then break 'k'
+		osPipeCreate to osWriteFile then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -725,7 +725,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		// A witness call is x64-only (P1.7a slice 2a); `emitBodyOp` loudly refuses it, so no valtype here.
 		witnessCall then break 'def'
 		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only — no wasm valtype to record.
-		osPipeCreate to osGetPid then break 'def'
+		osPipeCreate to osWriteFile then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -969,7 +969,7 @@ type WasmFuncEmitter
 			// the loop+br_table dispatcher — it never reaches the straight-line terminator path.
 			switch then panic("emitStraightLineTerminator: a `switch` (multiway) block always takes the dispatcher path, never straight-line")
 			witnessCall then panic("emitStraightLineTerminator: a `witnessCall` is a value-producing body op, never a terminator")
-			osPipeCreate to osGetPid then panic("emitStraightLineTerminator: a P1.5 IOCP op is a body op, never a terminator")
+			osPipeCreate to osWriteFile then panic("emitStraightLineTerminator: a P1.5 IOCP op is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1040,7 +1040,7 @@ type WasmFuncEmitter
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 			osRangePanic to osFreePages then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
 			witnessCall then panic("emitDispatcherTerminator: a `witnessCall` is a value-producing body op, never a terminator")
-			osPipeCreate to osGetPid then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
+			osPipeCreate to osWriteFile then panic("emitDispatcherTerminator: a P1.5 IOCP op is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1104,7 +1104,7 @@ type WasmFuncEmitter
 			witnessCall then panic("emitBodyOp: a `witnessCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the wasm writer refuses; constrained-type-parameter dispatch on wasm is P1.7a slice 2b (a `call_indirect` funcref-table route)")
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — wasm rejects rather
 			// than inventing an untested lowering (it is emitted only inside the x64-windows-gated IOCP runtime).
-			osPipeCreate to osGetPid then panic("emitBodyOp: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
+			osPipeCreate to osWriteFile then panic("emitBodyOp: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2116,7 +2116,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		switch then return true
 		// A witness call is a single-successor body op — it forces no dispatcher (it is refused at emission).
 		witnessCall then break 'k'
-		osPipeCreate to osGetPid then panic("decideDispatcher: a P1.5 IOCP op is a body op, never a terminator")
+		osPipeCreate to osWriteFile then panic("decideDispatcher: a P1.5 IOCP op is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

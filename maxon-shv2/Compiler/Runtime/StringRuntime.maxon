@@ -302,6 +302,10 @@ export type RuntimeUsage
 	// chunk, the six `__io_*` `.data` slots, and the run-queue CRITICAL_SECTION that guards the completion thread's
 	// cross-thread `__gt_enqueue`. Set by `recordCallUsage` on a `__gt_io_read` call (which also sets `usesGt`).
 	export var usesIocp as bool
+	// The STREAMING subprocess API (P1.5 dogfood slice 1b) — the handle table + `__gt_subp_*` functions. A SUPERSET
+	// of `usesIocp` (the yielding line read rides the completion thread), set by `recordCallUsage` on any
+	// `__gt_subp_*` call. Drives `installSubpRuntime` + the `__subp_table` `.data` slot.
+	export var usesStreaming as bool
 	export var usesPrint as bool
 	export var usesStrEq as bool
 	export var usesStrCopy as bool
@@ -367,7 +371,7 @@ export type RuntimeUsage
 	export var neededCloners as ClonerSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -465,6 +469,16 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(IoReadName) 'ioread'
 		usage.usesIocp = true
 	end 'ioread'
+	// A `__gt_subp_*` call (the P1.5 streaming subprocess API, slice 1b) carries the whole streaming runtime: the
+	// handle table + the `__gt_subp_*` functions, which ride the IOCP substrate (`usesIocp`) and build owned Strings
+	// from raw bytes (`__mm_alloc`/`__str_copy` inside their bodies — `usesHeap`/`usesStrCopy`, declared here because
+	// this Maxon-module scan cannot see those transitive calls). `usesGt`/`usesHeap` are already set by the `__gt_`
+	// prefix above; these bits install the streaming-only pieces.
+	if bytesStartWith(callee, prefix: SubpCalleePrefix) 'streaming'
+		usage.usesStreaming = true
+		usage.usesIocp = true
+		usage.usesStrCopy = true
+	end 'streaming'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

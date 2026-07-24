@@ -1815,17 +1815,6 @@ end 'buildArrDecref'
 
 // --- The MANAGED-element deep-clone copies (P1.7 slice 3b-vi-b) ---
 
-// `__arr_slice_managed(arr, start, end, cloneFn)`'s four-i64 signature — the FIRST 4-parameter runtime
-// function, so it lives beside its sole user rather than in `MmRuntime`'s 1/2/3-param base helpers.
-function fourI64Params() returns StdTypeArray
-	var types = StdTypeArray.create()
-	types.push(StdType.i64)
-	types.push(StdType.i64)
-	types.push(StdType.i64)
-	types.push(StdType.i64)
-	return types
-end 'fourI64Params'
-
 // ⭐ **DEEP-CLONE `count` ELEMENTS from `srcBase` into `destBase` (P1.7 slice 3b-vi-b).** Walk `[0, count)`
 // (stride `elementSize`, always 8 for a managed element — a heap pointer), load each source slot and, when it
 // is NON-NULL, `callIndirect` the per-element `cloneFn` on it (a `(box) -> newBox`) and store the fresh clone
@@ -1996,18 +1985,6 @@ end 'buildArrAppendManaged'
 // helper; a non-zero slot (a MANAGED instantiation) routes to the α deep-clone helper with the descriptor's
 // cloner as `elemCloneFn`. The branch is the run-time analogue of `emitDestroyRangeIfManaged`'s
 // `destroyFunc@40 == 0` skip, so the wrapper NEVER `callIndirect(0)`.
-
-// Four positional call arguments — `__arr_slice_managed` is the only 4-argument runtime call, and MmRuntime's
-// arg-builder home (which already exports `argsOf`/`twoArgs`/`threeArgs`) is out of this rung's scope, so this
-// one extra arity lives here beside its sole user (like `fourI64Params`).
-function fourArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(first)
-	args.push(second)
-	args.push(third)
-	args.push(fourth)
-	return args
-end 'fourArgs'
 
 // Load `copyFunc@32` from the wrapper's `descriptor` parameter and set `entry`'s terminator to branch to
 // `managedId` when it is non-zero (a managed instantiation with a real element cloner) or `trivialId` when it

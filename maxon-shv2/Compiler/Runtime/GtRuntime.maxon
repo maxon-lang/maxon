@@ -633,7 +633,7 @@ end 'ioRuntimeGlobals'
 // substrate: `__io_init` seeds the completion port/thread/event/lock in `__gt_init`, the run-queue mutations take the
 // CRITICAL_SECTION that excludes the completion thread's cross-thread `__gt_enqueue`, the netpoll wakes on the event,
 // and `__gt_io_read` is built. A non-IOCP GT program stays byte-identical (no lock, no event wait, no io functions).
-export function installGtRuntime(module StdModule, usesIocp bool)
+export function installGtRuntime(module StdModule, usesIocp bool, usesStreaming bool)
 	buildGtInit(module, usesIocp: usesIocp)
 	buildGtSpawn(module, usesIocp: usesIocp)
 	buildGtEnqueue(module)
@@ -654,8 +654,15 @@ export function installGtRuntime(module StdModule, usesIocp bool)
 
 	if usesIocp 'io'
 		buildIoInit(module)
+		buildSubpYieldRead(module)
 		buildGtIoRead(module)
 	end 'io'
+
+	// The streaming subprocess API (slice 1b) rides the same IOCP substrate (`usesStreaming` implies `usesIocp`),
+	// so `__gt_subp_yield_read` is already installed above; only the API surface is added here.
+	if usesStreaming 'streaming'
+		installSubpRuntime(module)
+	end 'streaming'
 end 'installGtRuntime'
 
 // ⭐ Emit the run-queue lock ACQUIRE around a main-thread head/tail mutation, ONLY when `usesIocp` (the completion
@@ -2917,13 +2924,6 @@ function buildGtIoRead(module StdModule)
 	var afterCopy = module.addBlock(func, label: b"aftercopy")
 	var spawnFail = module.addBlock(func, label: b"spawnfail")
 	var spawnOk = module.addBlock(func, label: b"spawnok")
-	var syncDone = module.addBlock(func, label: b"syncdone")
-	var checkErr = module.addBlock(func, label: b"checkerr")
-	var eofOrErr = module.addBlock(func, label: b"eoforerr")
-	var park = module.addBlock(func, label: b"park")
-	var selfDrive = module.addBlock(func, label: b"selfdrive")
-	var parkSwitch = module.addBlock(func, label: b"parkswitch")
-	var resume = module.addBlock(func, label: b"resume")
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0 as ValueId
@@ -2934,17 +2934,8 @@ function buildGtIoRead(module StdModule)
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 
-	// selfGt = __gt_current_gt (the reading GT — needed for the OVERLAPPED at selfGt+0x60 and the park).
-	let curAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
-	let selfGt = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
-
 	// The wide pipe-name buffer: (prefix + hex)*2 + NUL bytes, slab-zeroed.
-	let nameBytesConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(nameBytesConst, value: ((PipeNamePrefixWchars + PipeNameHexDigits) * WideCharBytes + PipeNameTrailingNulBytes) as ParsedInt, valueType: StdType.i64))
-	let namePtr = ids.mint()
-	module.appendOp(entry, op: StdOp.call(namePtr, callee: SlabAllocName, args: argsOf(nameBytesConst)))
+	let namePtr = emitSubpAllocPipeName(module, block: entry, ids: ids)
 	buildPipeName(module, func: func, ids: ids, startBlock: entry, bufPtr: namePtr, cont: afterName)
 
 	// afterName: SECURITY_ATTRIBUTES (inheritable) for the child write end; the two out-handle slots; create the pipe.
@@ -3054,14 +3045,6 @@ function buildGtIoRead(module StdModule)
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hProcess))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(writeEnd))
-	let ovlOffConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(ovlOffConst, value: GtOffOverlapped as ParsedInt, valueType: StdType.i64))
-	let ovlPtr = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.binOp(ovlPtr, lhs: selfGt, rhs: ovlOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
-	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
-	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 16, valueId: zeroConst, valueType: StdType.i64))
-	module.appendOp(spawnOk, op: StdOp.storeIndirect(ovlPtr, offset: 24, valueId: zeroConst, valueType: StdType.i64))
 	let readBufSizeConst = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.const(readBufSizeConst, value: IoReadBufferBytes as ParsedInt, valueType: StdType.i64))
 	let readBuf = ids.mint()
@@ -3070,94 +3053,861 @@ function buildGtIoRead(module StdModule)
 	module.appendOp(spawnOk, op: StdOp.const(bytesOutSizeConst, value: 8, valueType: StdType.i64))
 	let bytesOutPtr = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(bytesOutPtr, callee: SlabAllocName, args: argsOf(bytesOutSizeConst)))
-	let readResult = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.osReadOverlapped(readResult, handleId: readEnd, bufId: readBuf, capId: readBufSizeConst, bytesOutPtrId: bytesOutPtr, ovlId: ovlPtr))
-	let syncOk = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.cmp(syncOk, lhs: readResult, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
-	module.setTerminator(spawnOk, op: StdOp.condBranch(syncOk, thenBlockId: syncDone.id, elseBlockId: checkErr.id))
+	// The yielding overlapped read — the shared `__gt_subp_yield_read`, which owns the cross-thread park/resume
+	// handshake the streaming reader also uses (one copy of the completion-thread coordination). It returns the byte
+	// count, 0 on EOF/error (the slice-1a probe treats an environment error as EOF). The probe keeps its per-CALL
+	// `__slab_alloc` (its accepted debt); the streaming API allocs the buffer per HANDLE and reuses it across reads.
+	let bytesRead = ids.mint()
+	module.appendOp(spawnOk, op: StdOp.call(bytesRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readBuf, third: readBufSizeConst, fourth: bytesOutPtr)))
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
+	module.setTerminator(spawnOk, op: StdOp.ret(bytesRead))
 
-	// syncDone: the read completed SYNCHRONOUSLY (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS => no IOCP packet, no yield) —
-	// read the count directly and return.
-	let syncBytes = ids.mint()
-	module.appendOp(syncDone, op: StdOp.loadIndirect(syncBytes, addrId: bytesOutPtr, offset: 0, valueType: StdType.i64))
-	module.appendOp(syncDone, op: StdOp.osCloseHandle(readEnd))
+	module.functions.push(func)
+end 'buildGtIoRead'
+
+// ============================================================================================
+// ⭐ STREAMING SUBPROCESS runtime (P1.5 dogfood slice 1b) — a long-lived child with caller-driven stdio.
+// ============================================================================================
+//
+// Generalizes the one-shot `__gt_io_read` probe into a handle-table API. A `__subp_table` (.data) slot points at a
+// slab region of `SubpMaxHandles` fixed slots (0 until the first spawn lazily allocs it); a HANDLE is a slot index.
+// Single-M cooperative scheduling makes the table MAIN-THREAD-ONLY — the IOCP completion thread only ever touches
+// the parked GT (via the OVERLAPPED), never the table — so the table needs no lock (1a's rule: keep per-handle
+// state GT-local). A slot's OS handles are closed at release; its reusable line/write buffers PERSIST across
+// release+respawn (a spawn reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded — the fix
+// for slice 1a's per-READ `__slab_alloc` that never freed (shv2's slab has no free, so REUSE, not free, is the fix).
+//
+// Each stream (stdout/stderr) carries a growable line buffer holding unconsumed bytes; a read appends a chunk into
+// it (the yielding overlapped read the streaming reader shares with the probe), the reader returns through the
+// first '\n' INCLUDING it, and compacts the tail forward for the next call. EOF (a 0-byte read) is latched per
+// stream. stderr is read post-exit only in the harness, so it never multiplexes against a live stdout read.
+export let SubpTableLabel = b"__subp_table"
+let SubpMaxHandles = 64
+let SubpSlotBytes = 128
+// Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
+// the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
+// survive release for reuse; the OS handles are cleared at release.
+let SubpSlotInUse = 0
+let SubpSlotHProcess = 8
+let SubpSlotStdinWrite = 16
+let SubpSlotBytesOut = 24
+let SubpStdoutBase = 32
+let SubpStderrBase = 72
+let SubpSlotWriteBuf = 112
+let SubpSlotWriteCap = 120
+let SubpStreamReadEnd = 0
+let SubpStreamBufPtr = 8
+let SubpStreamBufCap = 16
+let SubpStreamBufLen = 24
+let SubpStreamEof = 32
+let SubpReadChunkBytes = 4096
+let SubpInitialLineBufBytes = 4096
+let SubpMaxLineBytes = 1048576  // 1 MiB per-line cap — a newline-less child cannot grow the buffer without bound
+let SubpBytesOutBytes = 8
+let SubpPipeScratchBytes = 16  // the two handle out-param slots for a single osPipeCreate*, reused across the 3 pipes
+// The 3 CHILD-side pipe ends are parked in a slab region across pipe creation so they do not occupy registers across
+// the (register-hungry) pipe-name-formatting loops — the "keep values off the working set" discipline a hand-built
+// runtime function must observe (its values are span-less, so a register-pressure E5001 has no user code to blame).
+let SubpChildScratchBytes = 24
+let SubpChildStdinReadOff = 0
+let SubpChildStdoutWriteOff = 8
+let SubpChildStderrWriteOff = 16
+let SubpNewlineByte = 10
+let SubpWaitInfinite = 0xFFFFFFFF as ParsedInt
+
+export let SubpYieldReadName = b"__gt_subp_yield_read"
+export let SubpSpawnName = b"__gt_subp_spawn"
+export let SubpReadLineName = b"__gt_subp_read_line"
+export let SubpReadErrLineName = b"__gt_subp_read_err_line"
+export let SubpWriteLineName = b"__gt_subp_write_line"
+export let SubpCloseStdinName = b"__gt_subp_close_stdin"
+export let SubpWaitName = b"__gt_subp_wait"
+export let SubpReleaseName = b"__gt_subp_release"
+let SubpStrFromBytesName = b"__gt_subp_str_from_bytes"
+// The prefix `scanRuntimeUsage` matches to turn on the whole streaming runtime for any `__gt_subp_*` call.
+export let SubpCalleePrefix = b"__gt_subp_"
+
+// The `.data` slots the streaming runtime owns — laid out only when the program spawns a streaming child
+// (`usesStreaming`). Just the table pointer; the table itself and every buffer are `__slab_alloc`'d lazily.
+export function subpRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	out.push(DataSectionEntry.create(String.from(SubpTableLabel), valueType: StdType.i64, value: 0))
+	return out
+end 'subpRuntimeGlobals'
+
+// slot = __subp_table's region + handle * SubpSlotBytes. `table` is the already-loaded region base.
+function emitSubpSlotAddr(module StdModule, block IrBlock, ids ValueMinter, table ValueId, handle ValueId) returns ValueId
+	let strideConst = emitConst(module, block: block, value: SubpSlotBytes as ParsedInt, ids: ids)
+	let off = emitBin(module, block: block, a: handle, b: strideConst, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: table, b: off, opcode: StdBinOpcode.add, ids: ids)
+end 'emitSubpSlotAddr'
+
+// If `record[fieldOffset]` is 0 (a per-slot buffer never allocated on a FRESH slot), `__slab_alloc(size)` it and
+// store the pointer (and `size` into `capField`); else reuse the buffer persisted from a prior use. Returns the
+// continuation block. This is the per-HANDLE reuse that bounds a spawn/read/release loop's memory.
+function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size ParsedInt, capField ByteOffset) returns IrBlock
+	var doAlloc = module.addBlock(func, label: b"subpalloc")
+	let cont = module.addBlock(func, label: b"subpallocd")
+	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let isNull = emitCmp(module, block: cur, a: existing, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isNull, thenBlockId: doAlloc.id, elseBlockId: cont.id))
+
+	let sizeConst = emitConst(module, block: doAlloc, value: size, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(doAlloc, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+	emitStoreField(module, block: doAlloc, record: record, offset: fieldOffset, value: buf)
+	emitStoreField(module, block: doAlloc, record: record, offset: capField, value: sizeConst)
+	module.setTerminator(doAlloc, op: StdOp.branch(cont.id))
+	return cont
+end 'emitEnsureSlotBuffer'
+
+// ⭐ `__gt_subp_yield_read(readEnd, buf, cap, bytesOutPtr) -> bytesRead` — THE YIELDING OVERLAPPED READ, factored
+// out of the `__gt_io_read` probe so the cross-thread park/resume handshake has exactly ONE copy (both the probe
+// and the streaming line reader call it). Zero the OVERLAPPED embedded in the current GT, issue the overlapped
+// ReadFile; on SYNCHRONOUS success (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS ⇒ no IOCP packet) return the count; on
+// ERROR_IO_PENDING park+yield (the completion thread wakes us), returning the count it stored; on any other error
+// (ERROR_BROKEN_PIPE = EOF, or a real error) return 0. Does NOT close `readEnd` — the caller owns the handle's
+// lifetime (the probe closes its one-shot pipe after; the streaming reader keeps its table-owned pipe).
+//
+// ⚠ It stores `readEnd` into `gt.io_handle` and sets `ioParked`, so a promise DROPPED while parked here runs the
+// existing `__gt_promise_drop` IO cancel arm (CancelIoEx + CloseHandle of `readEnd`). For the probe's one-shot pipe
+// that is correct; for a STREAMING read the pipe is table-owned, so dropping a streaming reader mid-read is out of
+// this slice's scope (the acceptance reads on GT0 or an AWAITED GT, never a dropped one) — a distinct concurrency
+// shape (the cancel arm would need to distinguish a shared-handle read) left for a follow-up.
+function buildSubpYieldRead(module StdModule)
+	var func = IrFunction.createFromStd(SubpYieldReadName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var syncDone = module.addBlock(func, label: b"syncdone")
+	var checkErr = module.addBlock(func, label: b"checkerr")
+	var eofOrErr = module.addBlock(func, label: b"eoforerr")
+	var park = module.addBlock(func, label: b"park")
+	var selfDrive = module.addBlock(func, label: b"selfdrive")
+	var parkSwitch = module.addBlock(func, label: b"parkswitch")
+	var resume = module.addBlock(func, label: b"resume")
+
+	emitParams(module, block: entry, count: 4)
+	let readEnd = 0 as ValueId
+	let buf = 1 as ValueId
+	let cap = 2 as ValueId
+	let bytesOutPtr = 3 as ValueId
+
+	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
+	let curAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	let selfGt = emitLoadField(module, block: entry, record: curAddr, offset: 0, ids: ids)
+	let ovlOffConst = emitConst(module, block: entry, value: GtOffOverlapped as ParsedInt, ids: ids)
+	let ovlPtr = emitBin(module, block: entry, a: selfGt, b: ovlOffConst, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 16, valueId: zeroConst, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 24, valueId: zeroConst, valueType: StdType.i64))
+	let readResult = ids.mint()
+	module.appendOp(entry, op: StdOp.osReadOverlapped(readResult, handleId: readEnd, bufId: buf, capId: cap, bytesOutPtrId: bytesOutPtr, ovlId: ovlPtr))
+	let syncOk = emitCmp(module, block: entry, a: readResult, b: zeroConst, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(syncOk, thenBlockId: syncDone.id, elseBlockId: checkErr.id))
+
+	let syncBytes = emitLoadField(module, block: syncDone, record: bytesOutPtr, offset: 0, ids: ids)
 	module.setTerminator(syncDone, op: StdOp.ret(syncBytes))
 
-	// checkErr: ReadFile returned FALSE — classify GetLastError. 997 ERROR_IO_PENDING → yield; anything else (109
-	// ERROR_BROKEN_PIPE = the child already exited/closed, or a real error) → EOF/0.
 	let err = ids.mint()
 	module.appendOp(checkErr, op: StdOp.osLastError(err))
-	let pendingConst = ids.mint()
-	module.appendOp(checkErr, op: StdOp.const(pendingConst, value: ErrorIoPending as ParsedInt, valueType: StdType.i64))
-	let isPending = ids.mint()
-	module.appendOp(checkErr, op: StdOp.cmp(isPending, lhs: err, rhs: pendingConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	let pendingConst = emitConst(module, block: checkErr, value: ErrorIoPending as ParsedInt, ids: ids)
+	let isPending = emitCmp(module, block: checkErr, a: err, b: pendingConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: park.id, elseBlockId: eofOrErr.id))
 
-	// eofOrErr: no data (EOF) or a non-pending error — return 0.
-	module.appendOp(eofOrErr, op: StdOp.osCloseHandle(readEnd))
 	module.setTerminator(eofOrErr, op: StdOp.ret(zeroConst))
 
-	// ⭐ park: the read is queued — YIELD the green thread. `__io_pending++` (the netpoll reads it to decide to block
-	// on the event), `status = waiting`, THEN `ioParked = 1` (the publish-after-commit half of the cross-thread
-	// handshake: the completion thread spins on `ioParked == 1` before it sets `status = ready`, so its ready-write
-	// can never land before this waiting-write). Then hand control to the scheduler — a top-level GT0 (waiter == 0)
-	// SELF-DRIVES until its own read completes; a spawned GT switches back to its driver.
+	// park: __io_pending++ ; status=waiting ; io_handle=readEnd ; ioParked=1 (publish AFTER waiting) ; yield.
 	let pendingAddr = ids.mint()
 	module.appendOp(park, op: StdOp.globalAddr(pendingAddr, label: IoPendingLabel))
-	let pendingCur = ids.mint()
-	module.appendOp(park, op: StdOp.loadIndirect(pendingCur, addrId: pendingAddr, offset: 0, valueType: StdType.i64))
-	let pendingOne = ids.mint()
-	module.appendOp(park, op: StdOp.const(pendingOne, value: 1, valueType: StdType.i64))
-	let pendingRaised = ids.mint()
-	module.appendOp(park, op: StdOp.binOp(pendingRaised, lhs: pendingCur, rhs: pendingOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(park, op: StdOp.storeIndirect(pendingAddr, offset: 0, valueId: pendingRaised, valueType: StdType.i64))
-	let waitingConst = ids.mint()
-	module.appendOp(park, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
+	let pendingCur = emitLoadField(module, block: park, record: pendingAddr, offset: 0, ids: ids)
+	let pendingOne = emitConst(module, block: park, value: 1, ids: ids)
+	let pendingRaised = emitBin(module, block: park, a: pendingCur, b: pendingOne, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: park, record: pendingAddr, offset: 0, value: pendingRaised)
+	let waitingConst = emitConst(module, block: park, value: GtStatusWaiting, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
-	// Record the pipe read handle in `io_handle@0x80` so the drop path can CancelIoEx + CloseHandle it if this
-	// promise is dropped while the read is in flight (the completion thread still holds the OVERLAPPED at gt+0x60).
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoHandle, valueId: readEnd, valueType: StdType.i64))
-	let parkedConst = ids.mint()
-	module.appendOp(park, op: StdOp.const(parkedConst, value: IoParkedInFlight, valueType: StdType.i64))
+	let parkedConst = emitConst(module, block: park, value: IoParkedInFlight, ids: ids)
 	module.appendOp(park, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: parkedConst, valueType: StdType.i64))
-	let waiter = ids.mint()
-	module.appendOp(park, op: StdOp.loadIndirect(waiter, addrId: selfGt, offset: GtOffWaiter, valueType: StdType.i64))
-	let waiterNull = ids.mint()
-	module.appendOp(park, op: StdOp.cmp(waiterNull, lhs: waiter, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	let waiter = emitLoadField(module, block: park, record: selfGt, offset: GtOffWaiter, ids: ids)
+	let waiterNull = emitCmp(module, block: park, a: waiter, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(park, op: StdOp.condBranch(waiterNull, thenBlockId: selfDrive.id, elseBlockId: parkSwitch.id))
 
-	// selfDrive: drive the scheduler until our own read completes (our status → ready), then resume.
-	let readyConst = ids.mint()
-	module.appendOp(selfDrive, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
+	let readyConst = emitConst(module, block: selfDrive, value: GtStatusReady, ids: ids)
 	let driveResult = ids.mint()
 	module.appendOp(selfDrive, op: StdOp.call(driveResult, callee: GtDriveUntilName, args: args2(selfGt, second: readyConst)))
 	module.setTerminator(selfDrive, op: StdOp.branch(resume.id))
 
-	// parkSwitch: a spawned GT — switch back to the driver; the completion thread re-enqueues us, the driver
-	// re-schedules us, and we resume HERE.
 	let switchResult = ids.mint()
 	module.appendOp(parkSwitch, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: args2(selfGt, second: waiter)))
 	module.setTerminator(parkSwitch, op: StdOp.branch(resume.id))
 
-	// resume: the read completed. Clear the park flag, drop the in-flight count, read the byte count the completion
-	// thread stored, close the read end, and return.
-	let clearParkedConst = ids.mint()
-	module.appendOp(resume, op: StdOp.const(clearParkedConst, value: 0, valueType: StdType.i64))
-	module.appendOp(resume, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: clearParkedConst, valueType: StdType.i64))
+	// resume: clear ioParked ; __io_pending-- ; return the count the completion thread stored.
+	let clearParked = emitConst(module, block: resume, value: 0, ids: ids)
+	module.appendOp(resume, op: StdOp.storeIndirect(selfGt, offset: GtOffIoParked, valueId: clearParked, valueType: StdType.i64))
 	let pendingAddr2 = ids.mint()
 	module.appendOp(resume, op: StdOp.globalAddr(pendingAddr2, label: IoPendingLabel))
-	let pendingCur2 = ids.mint()
-	module.appendOp(resume, op: StdOp.loadIndirect(pendingCur2, addrId: pendingAddr2, offset: 0, valueType: StdType.i64))
-	let pendingOne2 = ids.mint()
-	module.appendOp(resume, op: StdOp.const(pendingOne2, value: 1, valueType: StdType.i64))
-	let pendingLowered = ids.mint()
-	module.appendOp(resume, op: StdOp.binOp(pendingLowered, lhs: pendingCur2, rhs: pendingOne2, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(resume, op: StdOp.storeIndirect(pendingAddr2, offset: 0, valueId: pendingLowered, valueType: StdType.i64))
-	let bytesRead = ids.mint()
-	module.appendOp(resume, op: StdOp.loadIndirect(bytesRead, addrId: selfGt, offset: GtOffIoResult, valueType: StdType.i64))
-	module.appendOp(resume, op: StdOp.osCloseHandle(readEnd))
+	let pendingCur2 = emitLoadField(module, block: resume, record: pendingAddr2, offset: 0, ids: ids)
+	let pendingOne2 = emitConst(module, block: resume, value: 1, ids: ids)
+	let pendingLowered = emitBin(module, block: resume, a: pendingCur2, b: pendingOne2, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: resume, record: pendingAddr2, offset: 0, value: pendingLowered)
+	let bytesRead = emitLoadField(module, block: resume, record: selfGt, offset: GtOffIoResult, ids: ids)
 	module.setTerminator(resume, op: StdOp.ret(bytesRead))
 
 	module.functions.push(func)
-end 'buildGtIoRead'
+end 'buildSubpYieldRead'
+
+// `__gt_subp_str_from_bytes(srcBuf, srcLen) -> ownedString` — a fresh OWNED inline String (record + bytes in ONE
+// `__mm_alloc`, `capacity@16 = InlineBufferCapacity`, `parent@32 = 0`), independently droppable through
+// `__str_decref`. The raw-bytes twin of `__str_clone` (same fused-record encoding `emitStringInterp` publishes);
+// `isAscii@40` is left 0 (the slab zeroes it) — child output is arbitrary bytes, and false is always the safe
+// classification. Used by the line reader to hand a caller-droppable String back across the builtin boundary.
+function buildStrFromBytes(module StdModule)
+	var func = IrFunction.createFromStd(SubpStrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let srcBuf = 0 as ValueId
+	let srcLen = 1 as ValueId
+
+	let overhead = emitConst(module, block: entry, value: StringInterpOverheadBytes, ids: ids)
+	let allocSize = emitBin(module, block: entry, a: srcLen, b: overhead, opcode: StdBinOpcode.add, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: 0, ids: ids)
+	let newRec = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newRec, callee: MmAllocName, args: twoArgs(allocSize, second: zeroDtor)))
+	let recordBytes = emitConst(module, block: entry, value: StringRecordBytes as ParsedInt, ids: ids)
+	let inlineBuf = emitBin(module, block: entry, a: newRec, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
+	let copied = ids.mint()
+	module.appendOp(entry, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(inlineBuf, second: srcBuf, third: srcLen)))
+	emitStoreField(module, block: entry, record: newRec, offset: StringBufferOffset, value: inlineBuf)
+	emitStoreField(module, block: entry, record: newRec, offset: StringLengthOffset, value: srcLen)
+	let capacity = emitConst(module, block: entry, value: InlineBufferCapacity as ParsedInt, ids: ids)
+	emitStoreField(module, block: entry, record: newRec, offset: StringCapacityOffset, value: capacity)
+	let elementSize = emitConst(module, block: entry, value: StringElementSize, ids: ids)
+	emitStoreField(module, block: entry, record: newRec, offset: StringElementSizeOffset, value: elementSize)
+	module.setTerminator(entry, op: StdOp.ret(newRec))
+
+	module.functions.push(func)
+end 'buildStrFromBytes'
+
+// The cap-free twin of `emitEnsureSlotBuffer` — for the `bytesOut` out-param slot, a fixed 8 bytes with no grow, so
+// there is no capacity slot to write. Alloc-if-zero then reuse across the handle's life.
+function emitEnsureSlotPtr(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size ParsedInt) returns IrBlock
+	var doAlloc = module.addBlock(func, label: b"subpptr")
+	let cont = module.addBlock(func, label: b"subpptrd")
+	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let isNull = emitCmp(module, block: cur, a: existing, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isNull, thenBlockId: doAlloc.id, elseBlockId: cont.id))
+
+	let sizeConst = emitConst(module, block: doAlloc, value: size, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(doAlloc, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+	emitStoreField(module, block: doAlloc, record: record, offset: fieldOffset, value: buf)
+	module.setTerminator(doAlloc, op: StdOp.branch(cont.id))
+	return cont
+end 'emitEnsureSlotPtr'
+
+// `__slab_alloc` a fresh (prefix + hex)*2 + NUL wide-char pipe-name buffer and return its pointer — the buffer
+// `buildPipeName` formats a unique `\\.\pipe\<hex>` name into. Spelled once for the probe read and the three
+// streaming pipes rather than repeating the size arithmetic at each site.
+function emitSubpAllocPipeName(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let nameSize = emitConst(module, block: block, value: ((PipeNamePrefixWchars + PipeNameHexDigits) * WideCharBytes + PipeNameTrailingNulBytes) as ParsedInt, ids: ids)
+	let nameBuf = ids.mint()
+	module.appendOp(block, op: StdOp.call(nameBuf, callee: SlabAllocName, args: argsOf(nameSize)))
+	return nameBuf
+end 'emitSubpAllocPipeName'
+
+// Fill a fresh SECURITY_ATTRIBUTES (nLength + bInheritHandle=TRUE) into a slab region and return its pointer — the
+// inheritable SA every child-facing pipe end is created with, spelled once for the three pipes.
+function emitSubpSecurityAttributes(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let saSizeConst = emitConst(module, block: block, value: SecurityAttributesSize as ParsedInt, ids: ids)
+	let saPtr = ids.mint()
+	module.appendOp(block, op: StdOp.call(saPtr, callee: SlabAllocName, args: argsOf(saSizeConst)))
+	let saLenConst = emitConst(module, block: block, value: SecurityAttributesSize as ParsedInt, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesNLengthOffset, valueId: saLenConst, valueType: StdType.i64))
+	let saInheritConst = emitConst(module, block: block, value: SecurityAttributesInheritable as ParsedInt, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesBInheritOffset, valueId: saInheritConst, valueType: StdType.i64))
+	return saPtr
+end 'emitSubpSecurityAttributes'
+
+// ⭐ `__gt_subp_spawn(cmdStrPtr) -> handle` — spawn a Windows child with THREE pipes (a synchronous outbound stdin
+// pipe the parent writes; two overlapped IOCP-registered pipes the parent reads for stdout and stderr), allocate a
+// handle-table slot, and return its index (or -1 on spawn failure). The command String is BORROWED (buffer/length
+// read like `__print_string`). Lazily allocs the table on first call; reuses a released slot (and its persistent
+// buffers) so the loop stays memory-bounded.
+//
+// ⭐ REGISTER-PRESSURE DISCIPLINE. A hand-built runtime function's values are SPAN-LESS, so a register-pressure
+// E5001 has no user code to blame and PANICS. This function is therefore structured to keep only a handful of
+// non-constant values live across each loop (constants are rematerialized, so they are free): the command bytes are
+// copied FIRST, before any pipe exists, so the copy loop carries no handles; then each pipe's handles are stored
+// STRAIGHT TO MEMORY (parent ends into the slot, child ends into a slab scratch), so the register-hungry
+// pipe-name-formatting loops carry only the pointers to those regions, never the six live handles.
+function buildSubpSpawn(module StdModule)
+	var func = IrFunction.createFromStd(SubpSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var allocTbl = module.addBlock(func, label: b"alloctbl")
+	var haveTbl = module.addBlock(func, label: b"havetbl")
+	var slotHdr = module.addBlock(func, label: b"slothdr")
+	var slotCheck = module.addBlock(func, label: b"slotcheck")
+	var slotNext = module.addBlock(func, label: b"slotnext")
+	var noSlot = module.addBlock(func, label: b"noslot")
+	var gotSlot = module.addBlock(func, label: b"gotslot")
+	var copyHdr = module.addBlock(func, label: b"copyhdr")
+	var copyBody = module.addBlock(func, label: b"copybody")
+	var afterCopy = module.addBlock(func, label: b"aftercopy")
+	var afterName1 = module.addBlock(func, label: b"aftername1")
+	var afterName2 = module.addBlock(func, label: b"aftername2")
+	var afterName3 = module.addBlock(func, label: b"aftername3")
+	var spawnFail = module.addBlock(func, label: b"spawnfail")
+	var spawnOk = module.addBlock(func, label: b"spawnok")
+
+	emitParams(module, block: entry, count: 1)
+	let cmdStrPtr = 0 as ValueId
+	let initResult = ids.mint()
+	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
+	// Read the borrowed command bytes NOW so `cmdStrPtr` (value 0) does not stay live across the loops below.
+	let cmdBuffer = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringBufferOffset, ids: ids)
+	let cmdLen = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringLengthOffset, ids: ids)
+	let negOne = emitConst(module, block: entry, value: 0 - 1, ids: ids)
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
+	let tableInit = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let zeroE = emitConst(module, block: entry, value: 0, ids: ids)
+	let tableNull = emitCmp(module, block: entry, a: tableInit, b: zeroE, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(tableNull, thenBlockId: allocTbl.id, elseBlockId: haveTbl.id))
+
+	// allocTbl: lazily create the zero-filled slot region (slab zeroing seeds every slot's inUse=0 and null buffers).
+	let tblSize = emitConst(module, block: allocTbl, value: (SubpMaxHandles * SubpSlotBytes) as ParsedInt, ids: ids)
+	let newTable = ids.mint()
+	module.appendOp(allocTbl, op: StdOp.call(newTable, callee: SlabAllocName, args: argsOf(tblSize)))
+	let tableAddr2 = ids.mint()
+	module.appendOp(allocTbl, op: StdOp.globalAddr(tableAddr2, label: SubpTableLabel))
+	emitStoreField(module, block: allocTbl, record: tableAddr2, offset: 0, value: newTable)
+	module.setTerminator(allocTbl, op: StdOp.branch(haveTbl.id))
+
+	// haveTbl: reload the table pointer (valid on both paths) and scan for a free slot from index 0.
+	let tableAddr3 = ids.mint()
+	module.appendOp(haveTbl, op: StdOp.globalAddr(tableAddr3, label: SubpTableLabel))
+	let table = emitLoadField(module, block: haveTbl, record: tableAddr3, offset: 0, ids: ids)
+	module.setTerminator(haveTbl, op: StdOp.branch(slotHdr.id))
+	haveTbl.branchEdges.push(BranchEdge.create(slotHdr.id, argIds: argsOf(zeroE)))
+
+	// slotHdr(i): out of slots → -1; else check slot i.
+	let slotIdx = ids.mint()
+	slotHdr.blockArgs.push(IrBlockArg.create(slotIdx, argType: StdType.i64))
+	let maxConst = emitConst(module, block: slotHdr, value: SubpMaxHandles as ParsedInt, ids: ids)
+	let atMax = emitCmp(module, block: slotHdr, a: slotIdx, b: maxConst, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(slotHdr, op: StdOp.condBranch(atMax, thenBlockId: noSlot.id, elseBlockId: slotCheck.id))
+
+	let probeSlot = emitSubpSlotAddr(module, block: slotCheck, ids: ids, table: table, handle: slotIdx)
+	let inUse = emitLoadField(module, block: slotCheck, record: probeSlot, offset: SubpSlotInUse, ids: ids)
+	let isFree = emitCmp(module, block: slotCheck, a: inUse, b: zeroE, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(slotCheck, op: StdOp.condBranch(isFree, thenBlockId: gotSlot.id, elseBlockId: slotNext.id))
+
+	let oneS = emitConst(module, block: slotNext, value: 1, ids: ids)
+	let nextIdx = emitBin(module, block: slotNext, a: slotIdx, b: oneS, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(slotNext, op: StdOp.branch(slotHdr.id))
+	slotNext.branchEdges.push(BranchEdge.create(slotHdr.id, argIds: argsOf(nextIdx)))
+
+	module.setTerminator(noSlot, op: StdOp.ret(negOne))
+
+	// gotSlot: alloc the mutable NUL-terminated cmdline buffer and copy the borrowed bytes into it — FIRST, before
+	// any pipe handle exists, so the copy loop below carries only `cmBuf`/`cmdBuffer`/`cmdLen`/`table`/`slotIdx`.
+	let cmBufNulConst = emitConst(module, block: gotSlot, value: TrailingNulBytes as ParsedInt, ids: ids)
+	let cmBufSize = emitBin(module, block: gotSlot, a: cmdLen, b: cmBufNulConst, opcode: StdBinOpcode.add, ids: ids)
+	let cmBuf = ids.mint()
+	module.appendOp(gotSlot, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	module.setTerminator(gotSlot, op: StdOp.branch(copyHdr.id))
+	gotSlot.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroE)))
+
+	let ci = ids.mint()
+	copyHdr.blockArgs.push(IrBlockArg.create(ci, argType: StdType.i64))
+	let atCopyEnd = emitCmp(module, block: copyHdr, a: ci, b: cmdLen, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(copyHdr, op: StdOp.condBranch(atCopyEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
+
+	let srcAddr = emitBin(module, block: copyBody, a: cmdBuffer, b: ci, opcode: StdBinOpcode.add, ids: ids)
+	let srcByte = ids.mint()
+	module.appendOp(copyBody, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = emitBin(module, block: copyBody, a: cmBuf, b: ci, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(copyBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
+	let ciOne = emitConst(module, block: copyBody, value: 1, ids: ids)
+	let ciNext = emitBin(module, block: copyBody, a: ci, b: ciOne, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
+	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(ciNext)))
+
+	// afterCopy: NUL-terminate cmBuf; allocate the SA, the pipe out-param scratch, the child-ends scratch, and the
+	// first pipe name; format it; create the stdin pipe in afterName1.
+	let nulAddr = emitBin(module, block: afterCopy, a: cmBuf, b: cmdLen, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(afterCopy, op: StdOp.storeIndirect(nulAddr, offset: 0, valueId: zeroE, valueType: StdType.u8))
+	let saPtr = emitSubpSecurityAttributes(module, block: afterCopy, ids: ids)
+	let scratchSizeConst = emitConst(module, block: afterCopy, value: SubpPipeScratchBytes as ParsedInt, ids: ids)
+	let scratch = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
+	let childScratchSizeConst = emitConst(module, block: afterCopy, value: SubpChildScratchBytes as ParsedInt, ids: ids)
+	let childScratch = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.call(childScratch, callee: SlabAllocName, args: argsOf(childScratchSizeConst)))
+	let name1 = emitSubpAllocPipeName(module, block: afterCopy, ids: ids)
+	buildPipeName(module, func: func, ids: ids, startBlock: afterCopy, bufPtr: name1, cont: afterName1)
+
+	// afterName1: stdin pipe (parent WRITE, child READ) — store the child-read end into the child scratch and the
+	// parent-write end into the slot, so neither occupies a register across the next pipe-name loop.
+	let scratchB1 = emitBin(module, block: afterName1, a: scratch, b: emitConst(module, block: afterName1, value: 8, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(afterName1, op: StdOp.osPipeCreateOutbound(name1, saPtrId: saPtr, childReadPtrId: scratch, parentWritePtrId: scratchB1))
+	let childStdinRead = emitLoadField(module, block: afterName1, record: scratch, offset: 0, ids: ids)
+	emitStoreField(module, block: afterName1, record: childScratch, offset: SubpChildStdinReadOff, value: childStdinRead)
+	let parentStdinWrite = emitLoadField(module, block: afterName1, record: scratchB1, offset: 0, ids: ids)
+	let slot1 = emitSubpSlotAddr(module, block: afterName1, ids: ids, table: table, handle: slotIdx)
+	emitStoreField(module, block: afterName1, record: slot1, offset: SubpSlotStdinWrite, value: parentStdinWrite)
+	let name2 = emitSubpAllocPipeName(module, block: afterName1, ids: ids)
+	buildPipeName(module, func: func, ids: ids, startBlock: afterName1, bufPtr: name2, cont: afterName2)
+
+	// afterName2: stdout pipe (parent overlapped READ, child WRITE) — parent read into the slot, child write into scratch.
+	let scratchB2 = emitBin(module, block: afterName2, a: scratch, b: emitConst(module, block: afterName2, value: 8, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let iocpAddr2 = ids.mint()
+	module.appendOp(afterName2, op: StdOp.globalAddr(iocpAddr2, label: IoIocpLabel))
+	let iocp2 = emitLoadField(module, block: afterName2, record: iocpAddr2, offset: 0, ids: ids)
+	module.appendOp(afterName2, op: StdOp.osPipeCreate(name2, saPtrId: saPtr, iocpId: iocp2, readPtrId: scratch, writePtrId: scratchB2))
+	let parentStdoutRead = emitLoadField(module, block: afterName2, record: scratch, offset: 0, ids: ids)
+	let slot2 = emitSubpSlotAddr(module, block: afterName2, ids: ids, table: table, handle: slotIdx)
+	let stdoutBase2 = emitConst(module, block: afterName2, value: SubpStdoutBase as ParsedInt, ids: ids)
+	let stdoutStream2 = emitBin(module, block: afterName2, a: slot2, b: stdoutBase2, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterName2, record: stdoutStream2, offset: SubpStreamReadEnd, value: parentStdoutRead)
+	let childStdoutWrite = emitLoadField(module, block: afterName2, record: scratchB2, offset: 0, ids: ids)
+	emitStoreField(module, block: afterName2, record: childScratch, offset: SubpChildStdoutWriteOff, value: childStdoutWrite)
+	let name3 = emitSubpAllocPipeName(module, block: afterName2, ids: ids)
+	buildPipeName(module, func: func, ids: ids, startBlock: afterName2, bufPtr: name3, cont: afterName3)
+
+	// afterName3: stderr pipe; then STARTUPINFO (child ends reloaded from the scratch) and the spawn — no loop from
+	// here on, so the straight-line spill is free of the E5001 hazard.
+	let scratchB3 = emitBin(module, block: afterName3, a: scratch, b: emitConst(module, block: afterName3, value: 8, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let iocpAddr3 = ids.mint()
+	module.appendOp(afterName3, op: StdOp.globalAddr(iocpAddr3, label: IoIocpLabel))
+	let iocp3 = emitLoadField(module, block: afterName3, record: iocpAddr3, offset: 0, ids: ids)
+	module.appendOp(afterName3, op: StdOp.osPipeCreate(name3, saPtrId: saPtr, iocpId: iocp3, readPtrId: scratch, writePtrId: scratchB3))
+	let parentStderrRead = emitLoadField(module, block: afterName3, record: scratch, offset: 0, ids: ids)
+	let slot3 = emitSubpSlotAddr(module, block: afterName3, ids: ids, table: table, handle: slotIdx)
+	let stderrBase3 = emitConst(module, block: afterName3, value: SubpStderrBase as ParsedInt, ids: ids)
+	let stderrStream3 = emitBin(module, block: afterName3, a: slot3, b: stderrBase3, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterName3, record: stderrStream3, offset: SubpStreamReadEnd, value: parentStderrRead)
+	let childStderrWrite = emitLoadField(module, block: afterName3, record: scratchB3, offset: 0, ids: ids)
+	emitStoreField(module, block: afterName3, record: childScratch, offset: SubpChildStderrWriteOff, value: childStderrWrite)
+	let startupSizeConst = emitConst(module, block: afterName3, value: StartupInfoSize as ParsedInt, ids: ids)
+	let startupPtr = ids.mint()
+	module.appendOp(afterName3, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(startupSizeConst)))
+	let cbConst = emitConst(module, block: afterName3, value: StartupInfoSize as ParsedInt, ids: ids)
+	module.appendOp(afterName3, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: cbConst, valueType: StdType.i64))
+	let flagsConst = emitConst(module, block: afterName3, value: StartfUseStdHandles as ParsedInt, ids: ids)
+	module.appendOp(afterName3, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoDwFlagsOffset, valueId: flagsConst, valueType: StdType.i64))
+	let hStdIn = emitLoadField(module, block: afterName3, record: childScratch, offset: SubpChildStdinReadOff, ids: ids)
+	module.appendOp(afterName3, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdInputOffset, valueId: hStdIn, valueType: StdType.i64))
+	let hStdOut = emitLoadField(module, block: afterName3, record: childScratch, offset: SubpChildStdoutWriteOff, ids: ids)
+	module.appendOp(afterName3, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdOutputOffset, valueId: hStdOut, valueType: StdType.i64))
+	let hStdErr = emitLoadField(module, block: afterName3, record: childScratch, offset: SubpChildStderrWriteOff, ids: ids)
+	module.appendOp(afterName3, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdErrorOffset, valueId: hStdErr, valueType: StdType.i64))
+	let procInfoSizeConst = emitConst(module, block: afterName3, value: ProcInfoSize as ParsedInt, ids: ids)
+	let procInfoPtr = ids.mint()
+	module.appendOp(afterName3, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	module.appendOp(afterName3, op: StdOp.osProcessSpawnInherit(cmBuf, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	let hProcess = emitLoadField(module, block: afterName3, record: procInfoPtr, offset: ProcInfoHProcessOffset, ids: ids)
+	let spawnFailed = emitCmp(module, block: afterName3, a: hProcess, b: zeroE, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterName3, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
+
+	// spawnFail: close every pipe end (reloaded from the slot + child scratch) — the slot stays free — return -1.
+	let slotF = emitSubpSlotAddr(module, block: spawnFail, ids: ids, table: table, handle: slotIdx)
+	emitSubpCloseSlotHandles(module, block: spawnFail, ids: ids, slot: slotF, childScratch: childScratch)
+	module.setTerminator(spawnFail, op: StdOp.ret(negOne))
+
+	// spawnOk: close the child thread handle and the PARENT's copies of the three CHILD ends; store the process
+	// handle; reset per-stream buffered state; ensure the reusable buffers; mark the slot live and return the index.
+	let hThread = emitLoadField(module, block: spawnOk, record: procInfoPtr, offset: ProcInfoHThreadOffset, ids: ids)
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
+	let closeStdinRead = emitLoadField(module, block: spawnOk, record: childScratch, offset: SubpChildStdinReadOff, ids: ids)
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(closeStdinRead))
+	let closeStdoutWrite = emitLoadField(module, block: spawnOk, record: childScratch, offset: SubpChildStdoutWriteOff, ids: ids)
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(closeStdoutWrite))
+	let closeStderrWrite = emitLoadField(module, block: spawnOk, record: childScratch, offset: SubpChildStderrWriteOff, ids: ids)
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(closeStderrWrite))
+	let slot = emitSubpSlotAddr(module, block: spawnOk, ids: ids, table: table, handle: slotIdx)
+	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotHProcess, value: hProcess)
+	let stdoutBaseConst = emitConst(module, block: spawnOk, value: SubpStdoutBase as ParsedInt, ids: ids)
+	let stdoutStream = emitBin(module, block: spawnOk, a: slot, b: stdoutBaseConst, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: spawnOk, record: stdoutStream, offset: SubpStreamBufLen, value: zeroE)
+	emitStoreField(module, block: spawnOk, record: stdoutStream, offset: SubpStreamEof, value: zeroE)
+	let stderrBaseConst = emitConst(module, block: spawnOk, value: SubpStderrBase as ParsedInt, ids: ids)
+	let stderrStream = emitBin(module, block: spawnOk, a: slot, b: stderrBaseConst, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamBufLen, value: zeroE)
+	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamEof, value: zeroE)
+	var afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpStreamBufCap)
+	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpStreamBufCap)
+	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpSlotWriteCap)
+	var afterBytesOut = emitEnsureSlotPtr(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as ParsedInt)
+	let liveConst = emitConst(module, block: afterBytesOut, value: 1, ids: ids)
+	emitStoreField(module, block: afterBytesOut, record: slot, offset: SubpSlotInUse, value: liveConst)
+	module.setTerminator(afterBytesOut, op: StdOp.ret(slotIdx))
+
+	module.functions.push(func)
+end 'buildSubpSpawn'
+
+// Close all four OS handles a live/failed slot holds — the three parent ends stored in the slot (stdin write,
+// stdout read, stderr read) plus the process handle — AND the three child ends parked in `childScratch`. Shared by
+// `spawnFail` (a failed spawn) and, minus the process handle, would-be release paths. Each handle is reloaded from
+// memory so no handle occupies a register here.
+function emitSubpCloseSlotHandles(module StdModule, block IrBlock, ids ValueMinter, slot ValueId, childScratch ValueId)
+	let stdinWrite = emitLoadField(module, block: block, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	module.appendOp(block, op: StdOp.osCloseHandle(stdinWrite))
+	let stdoutBase = emitConst(module, block: block, value: SubpStdoutBase as ParsedInt, ids: ids)
+	let stdoutStream = emitBin(module, block: block, a: slot, b: stdoutBase, opcode: StdBinOpcode.add, ids: ids)
+	let stdoutRead = emitLoadField(module, block: block, record: stdoutStream, offset: SubpStreamReadEnd, ids: ids)
+	module.appendOp(block, op: StdOp.osCloseHandle(stdoutRead))
+	let stderrBase = emitConst(module, block: block, value: SubpStderrBase as ParsedInt, ids: ids)
+	let stderrStream = emitBin(module, block: block, a: slot, b: stderrBase, opcode: StdBinOpcode.add, ids: ids)
+	let stderrRead = emitLoadField(module, block: block, record: stderrStream, offset: SubpStreamReadEnd, ids: ids)
+	module.appendOp(block, op: StdOp.osCloseHandle(stderrRead))
+	let childStdinRead = emitLoadField(module, block: block, record: childScratch, offset: SubpChildStdinReadOff, ids: ids)
+	module.appendOp(block, op: StdOp.osCloseHandle(childStdinRead))
+	let childStdoutWrite = emitLoadField(module, block: block, record: childScratch, offset: SubpChildStdoutWriteOff, ids: ids)
+	module.appendOp(block, op: StdOp.osCloseHandle(childStdoutWrite))
+	let childStderrWrite = emitLoadField(module, block: block, record: childScratch, offset: SubpChildStderrWriteOff, ids: ids)
+	module.appendOp(block, op: StdOp.osCloseHandle(childStderrWrite))
+end 'emitSubpCloseSlotHandles'
+
+// ⭐ `<name>(handle) -> ownedString` — read one line (INCLUDING the trailing '\n') from the stream at `streamBase`
+// (SubpStdoutBase or SubpStderrBase, baked in per instance so stdout and stderr share this ONE body-builder),
+// yielding while a chunk read is in flight. Scans the handle's growable line buffer for '\n'; returns everything
+// through the first one and compacts the tail forward. When none is buffered, reads a chunk into the buffer
+// (growing it, PRESERVING the buffered bytes) and re-scans only the new bytes. A 0-byte read latches EOF; at EOF
+// the remaining bytes (or "") are returned. The result is a fresh OWNED String the caller drops (the parser marks
+// it a pending owned temp). `i` (the scan resume index) is `scanHdr`'s loop arg; everything else flows by dominance.
+function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var scanHdr = module.addBlock(func, label: b"scanhdr")
+	var scanCheck = module.addBlock(func, label: b"scancheck")
+	var scanInc = module.addBlock(func, label: b"scaninc")
+	var found = module.addBlock(func, label: b"found")
+	var noNewline = module.addBlock(func, label: b"nonewline")
+	var emitRemainder = module.addBlock(func, label: b"remainder")
+	var readMore = module.addBlock(func, label: b"readmore")
+	var growCheck = module.addBlock(func, label: b"growcheck")
+	var doGrow = module.addBlock(func, label: b"dogrow")
+	var doRead = module.addBlock(func, label: b"doread")
+	var setEof = module.addBlock(func, label: b"seteof")
+	var didRead = module.addBlock(func, label: b"didread")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
+	let table = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let slot = emitSubpSlotAddr(module, block: entry, ids: ids, table: table, handle: handle)
+	let streamBaseConst = emitConst(module, block: entry, value: streamBase as ParsedInt, ids: ids)
+	let streamPtr = emitBin(module, block: entry, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
+	let readEnd = emitLoadField(module, block: entry, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
+	let bytesOutPtr = emitLoadField(module, block: entry, record: slot, offset: SubpSlotBytesOut, ids: ids)
+	let zeroStart = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(scanHdr.id))
+	entry.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroStart)))
+
+	// scanHdr(i): i reached the buffered length with no '\n' → noNewline; else look at byte i.
+	let i = ids.mint()
+	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let bufLenH = emitLoadField(module, block: scanHdr, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	let atEnd = emitCmp(module, block: scanHdr, a: i, b: bufLenH, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: noNewline.id, elseBlockId: scanCheck.id))
+
+	let bufPtrC = emitLoadField(module, block: scanCheck, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
+	let byteAddr = emitBin(module, block: scanCheck, a: bufPtrC, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let scanByte = ids.mint()
+	module.appendOp(scanCheck, op: StdOp.loadIndirect(scanByte, addrId: byteAddr, offset: 0, valueType: StdType.u8))
+	let nlConst = emitConst(module, block: scanCheck, value: SubpNewlineByte as ParsedInt, ids: ids)
+	let isNl = emitCmp(module, block: scanCheck, a: scanByte, b: nlConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanCheck, op: StdOp.condBranch(isNl, thenBlockId: found.id, elseBlockId: scanInc.id))
+
+	let scanOne = emitConst(module, block: scanInc, value: 1, ids: ids)
+	let scanNext = emitBin(module, block: scanInc, a: i, b: scanOne, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(scanInc, op: StdOp.branch(scanHdr.id))
+	scanInc.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(scanNext)))
+
+	// found(i = the '\n' index): the line is buf[0 .. i] inclusive. Build the owned String (a COPY), then compact
+	// the tail forward so the next call starts fresh.
+	let bufPtrF = emitLoadField(module, block: found, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
+	let foundOne = emitConst(module, block: found, value: 1, ids: ids)
+	let lineLen = emitBin(module, block: found, a: i, b: foundOne, opcode: StdBinOpcode.add, ids: ids)
+	let resultFound = ids.mint()
+	module.appendOp(found, op: StdOp.call(resultFound, callee: SubpStrFromBytesName, args: twoArgs(bufPtrF, second: lineLen)))
+	let bufLenF = emitLoadField(module, block: found, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	let remaining = emitBin(module, block: found, a: bufLenF, b: lineLen, opcode: StdBinOpcode.sub, ids: ids)
+	let tailSrc = emitBin(module, block: found, a: bufPtrF, b: lineLen, opcode: StdBinOpcode.add, ids: ids)
+	let compacted = ids.mint()
+	module.appendOp(found, op: StdOp.call(compacted, callee: StrCopyName, args: threeArgs(bufPtrF, second: tailSrc, third: remaining)))
+	emitStoreField(module, block: found, record: streamPtr, offset: SubpStreamBufLen, value: remaining)
+	module.setTerminator(found, op: StdOp.ret(resultFound))
+
+	// noNewline: no '\n' in the buffer. If EOF is latched, return the remaining bytes; else read more.
+	let eofFlag = emitLoadField(module, block: noNewline, record: streamPtr, offset: SubpStreamEof, ids: ids)
+	let zeroN = emitConst(module, block: noNewline, value: 0, ids: ids)
+	let isEof = emitCmp(module, block: noNewline, a: eofFlag, b: zeroN, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(noNewline, op: StdOp.condBranch(isEof, thenBlockId: emitRemainder.id, elseBlockId: readMore.id))
+
+	// emitRemainder: return buf[0 .. bufLen] (possibly "" = EOF) and reset the buffer.
+	let bufPtrR = emitLoadField(module, block: emitRemainder, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
+	let bufLenR = emitLoadField(module, block: emitRemainder, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	let resultRem = ids.mint()
+	module.appendOp(emitRemainder, op: StdOp.call(resultRem, callee: SubpStrFromBytesName, args: twoArgs(bufPtrR, second: bufLenR)))
+	let zeroRem = emitConst(module, block: emitRemainder, value: 0, ids: ids)
+	emitStoreField(module, block: emitRemainder, record: streamPtr, offset: SubpStreamBufLen, value: zeroRem)
+	module.setTerminator(emitRemainder, op: StdOp.ret(resultRem))
+
+	// readMore: coarse per-line cap (a newline-less stream cannot grow unbounded) → treat as a line; else grow-check.
+	let bufLenM = emitLoadField(module, block: readMore, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	let maxLineConst = emitConst(module, block: readMore, value: SubpMaxLineBytes as ParsedInt, ids: ids)
+	let overCap = emitCmp(module, block: readMore, a: bufLenM, b: maxLineConst, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(readMore, op: StdOp.condBranch(overCap, thenBlockId: emitRemainder.id, elseBlockId: growCheck.id))
+
+	// growCheck: ensure room for one more chunk past the current length.
+	let bufCapG = emitLoadField(module, block: growCheck, record: streamPtr, offset: SubpStreamBufCap, ids: ids)
+	let chunkConst = emitConst(module, block: growCheck, value: SubpReadChunkBytes as ParsedInt, ids: ids)
+	let neededG = emitBin(module, block: growCheck, a: bufLenM, b: chunkConst, opcode: StdBinOpcode.add, ids: ids)
+	let tooSmall = emitCmp(module, block: growCheck, a: neededG, b: bufCapG, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(growCheck, op: StdOp.condBranch(tooSmall, thenBlockId: doGrow.id, elseBlockId: doRead.id))
+
+	// doGrow: newCap = needed*2 ; copy the buffered bytes into the fresh buffer (PRESERVE) ; update ptr + cap.
+	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
+	let newCap = emitBin(module, block: doGrow, a: neededG, b: twoConst, opcode: StdBinOpcode.mul, ids: ids)
+	let newBuf = ids.mint()
+	module.appendOp(doGrow, op: StdOp.call(newBuf, callee: SlabAllocName, args: argsOf(newCap)))
+	let oldBuf = emitLoadField(module, block: doGrow, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
+	let grownCopy = ids.mint()
+	module.appendOp(doGrow, op: StdOp.call(grownCopy, callee: StrCopyName, args: threeArgs(newBuf, second: oldBuf, third: bufLenM)))
+	emitStoreField(module, block: doGrow, record: streamPtr, offset: SubpStreamBufPtr, value: newBuf)
+	emitStoreField(module, block: doGrow, record: streamPtr, offset: SubpStreamBufCap, value: newCap)
+	module.setTerminator(doGrow, op: StdOp.branch(doRead.id))
+
+	// doRead: append one chunk at buf[bufLen]. 0 bytes → latch EOF and re-scan (which lands on emitRemainder).
+	let bufPtrD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
+	let bufLenD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
+	let readDst = emitBin(module, block: doRead, a: bufPtrD, b: bufLenD, opcode: StdBinOpcode.add, ids: ids)
+	let chunkConst2 = emitConst(module, block: doRead, value: SubpReadChunkBytes as ParsedInt, ids: ids)
+	let nRead = ids.mint()
+	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr)))
+	let zeroD = emitConst(module, block: doRead, value: 0, ids: ids)
+	let isZero = emitCmp(module, block: doRead, a: nRead, b: zeroD, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(doRead, op: StdOp.condBranch(isZero, thenBlockId: setEof.id, elseBlockId: didRead.id))
+
+	// setEof / didRead: `i` (the scan resume index) equals `bufLenD` here — no '\n' was found in [0, bufLenD), so
+	// re-entering `scanHdr(i)` scans only the new bytes [bufLenD, bufLenD+n), keeping the whole read O(total bytes).
+	let oneEof = emitConst(module, block: setEof, value: 1, ids: ids)
+	emitStoreField(module, block: setEof, record: streamPtr, offset: SubpStreamEof, value: oneEof)
+	module.setTerminator(setEof, op: StdOp.branch(scanHdr.id))
+	setEof.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(i)))
+
+	let newLen = emitBin(module, block: didRead, a: bufLenD, b: nRead, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: didRead, record: streamPtr, offset: SubpStreamBufLen, value: newLen)
+	module.setTerminator(didRead, op: StdOp.branch(scanHdr.id))
+	didRead.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(i)))
+
+	_ = readDst
+	module.functions.push(func)
+end 'buildSubpReadLine'
+
+// `__gt_subp_write_line(handle, strPtr) -> rc` — write `strPtr`'s bytes + '\n' to the child's stdin (a synchronous
+// WriteFile on the sync outbound pipe). Uses the per-handle write buffer (grown on demand, reused across writes) so
+// a line's bytes + the newline are one contiguous WriteFile. Returns 0 on success, 1 on a broken pipe.
+function buildSubpWriteLine(module StdModule)
+	var func = IrFunction.createFromStd(SubpWriteLineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var growCheck = module.addBlock(func, label: b"growcheck")
+	var doGrow = module.addBlock(func, label: b"dogrow")
+	var doWrite = module.addBlock(func, label: b"dowrite")
+	var wrote = module.addBlock(func, label: b"wrote")
+	var failed = module.addBlock(func, label: b"failed")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let strPtr = 1 as ValueId
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
+	let table = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let slot = emitSubpSlotAddr(module, block: entry, ids: ids, table: table, handle: handle)
+	let stdinWrite = emitLoadField(module, block: entry, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let strBuf = emitLoadField(module, block: entry, record: strPtr, offset: StringBufferOffset, ids: ids)
+	let strLen = emitLoadField(module, block: entry, record: strPtr, offset: StringLengthOffset, ids: ids)
+	let oneW = emitConst(module, block: entry, value: 1, ids: ids)
+	let needed = emitBin(module, block: entry, a: strLen, b: oneW, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(growCheck.id))
+
+	let writeCap = emitLoadField(module, block: growCheck, record: slot, offset: SubpSlotWriteCap, ids: ids)
+	let tooSmall = emitCmp(module, block: growCheck, a: needed, b: writeCap, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(growCheck, op: StdOp.condBranch(tooSmall, thenBlockId: doGrow.id, elseBlockId: doWrite.id))
+
+	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
+	let newCap = emitBin(module, block: doGrow, a: needed, b: twoConst, opcode: StdBinOpcode.mul, ids: ids)
+	let newBuf = ids.mint()
+	module.appendOp(doGrow, op: StdOp.call(newBuf, callee: SlabAllocName, args: argsOf(newCap)))
+	emitStoreField(module, block: doGrow, record: slot, offset: SubpSlotWriteBuf, value: newBuf)
+	emitStoreField(module, block: doGrow, record: slot, offset: SubpSlotWriteCap, value: newCap)
+	module.setTerminator(doGrow, op: StdOp.branch(doWrite.id))
+
+	// doWrite: copy the line into the write buffer, append '\n', WriteFile the whole thing.
+	let writeBuf = emitLoadField(module, block: doWrite, record: slot, offset: SubpSlotWriteBuf, ids: ids)
+	let wcopy = ids.mint()
+	module.appendOp(doWrite, op: StdOp.call(wcopy, callee: StrCopyName, args: threeArgs(writeBuf, second: strBuf, third: strLen)))
+	let nlAddr = emitBin(module, block: doWrite, a: writeBuf, b: strLen, opcode: StdBinOpcode.add, ids: ids)
+	let nlByte = emitConst(module, block: doWrite, value: SubpNewlineByte as ParsedInt, ids: ids)
+	module.appendOp(doWrite, op: StdOp.storeIndirect(nlAddr, offset: 0, valueId: nlByte, valueType: StdType.u8))
+	let bytesOutW = emitLoadField(module, block: doWrite, record: slot, offset: SubpSlotBytesOut, ids: ids)
+	let writeOk = ids.mint()
+	module.appendOp(doWrite, op: StdOp.osWriteFile(writeOk, handleId: stdinWrite, bufId: writeBuf, lenId: needed, bytesOutPtrId: bytesOutW))
+	let zeroW = emitConst(module, block: doWrite, value: 0, ids: ids)
+	let succeeded = emitCmp(module, block: doWrite, a: writeOk, b: zeroW, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(doWrite, op: StdOp.condBranch(succeeded, thenBlockId: wrote.id, elseBlockId: failed.id))
+
+	let rcZero = emitConst(module, block: wrote, value: 0, ids: ids)
+	module.setTerminator(wrote, op: StdOp.ret(rcZero))
+	let rcOne = emitConst(module, block: failed, value: 1, ids: ids)
+	module.setTerminator(failed, op: StdOp.ret(rcOne))
+
+	module.functions.push(func)
+end 'buildSubpWriteLine'
+
+// `__gt_subp_close_stdin(handle)` — close the parent's stdin write end so the child sees EOF. Idempotent: it
+// zeroes the field after closing, so a second call (or release) does not double-close.
+function buildSubpCloseStdin(module StdModule)
+	var func = IrFunction.createFromStd(SubpCloseStdinName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doClose = module.addBlock(func, label: b"doclose")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
+	let table = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let slot = emitSubpSlotAddr(module, block: entry, ids: ids, table: table, handle: handle)
+	let stdinWrite = emitLoadField(module, block: entry, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let zeroC = emitConst(module, block: entry, value: 0, ids: ids)
+	let isOpen = emitCmp(module, block: entry, a: stdinWrite, b: zeroC, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isOpen, thenBlockId: doClose.id, elseBlockId: done.id))
+
+	module.appendOp(doClose, op: StdOp.osCloseHandle(stdinWrite))
+	let zeroClose = emitConst(module, block: doClose, value: 0, ids: ids)
+	emitStoreField(module, block: doClose, record: slot, offset: SubpSlotStdinWrite, value: zeroClose)
+	module.setTerminator(doClose, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSubpCloseStdin'
+
+// `__gt_subp_wait(handle) -> exitCode` — block until the child exits and return its exit code. A blocking
+// WaitForSingleObject (the harness waits after draining output, so the child is already exiting); GetExitCodeProcess
+// writes the code into the handle's reusable bytesOut slot.
+function buildSubpWait(module StdModule)
+	var func = IrFunction.createFromStd(SubpWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
+	let table = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let slot = emitSubpSlotAddr(module, block: entry, ids: ids, table: table, handle: handle)
+	let hProcess = emitLoadField(module, block: entry, record: slot, offset: SubpSlotHProcess, ids: ids)
+	let infinite = emitConst(module, block: entry, value: SubpWaitInfinite, ids: ids)
+	let waitResult = ids.mint()
+	module.appendOp(entry, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: infinite))
+	let codePtr = emitLoadField(module, block: entry, record: slot, offset: SubpSlotBytesOut, ids: ids)
+	module.appendOp(entry, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
+	let exitCode = emitLoadField(module, block: entry, record: codePtr, offset: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(exitCode))
+
+	module.functions.push(func)
+end 'buildSubpWait'
+
+// `__gt_subp_release(handle)` — close every OS handle and mark the slot free (its buffers persist for reuse).
+// Idempotent via the `inUse` guard; every closed handle field is zeroed so a stale/duplicate close cannot hit a
+// reused OS handle.
+function buildSubpRelease(module StdModule)
+	var func = IrFunction.createFromStd(SubpReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doRelease = module.addBlock(func, label: b"dorelease")
+	var closeStdin = module.addBlock(func, label: b"closestdin")
+	var afterStdin = module.addBlock(func, label: b"afterstdin")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+	let tableAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
+	let table = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let slot = emitSubpSlotAddr(module, block: entry, ids: ids, table: table, handle: handle)
+	let inUse = emitLoadField(module, block: entry, record: slot, offset: SubpSlotInUse, ids: ids)
+	let zeroR = emitConst(module, block: entry, value: 0, ids: ids)
+	let isLive = emitCmp(module, block: entry, a: inUse, b: zeroR, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isLive, thenBlockId: doRelease.id, elseBlockId: done.id))
+
+	// doRelease: close the stdin write end only if still open (closeStdin may have already closed it).
+	let stdinWrite = emitLoadField(module, block: doRelease, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let zeroD = emitConst(module, block: doRelease, value: 0, ids: ids)
+	let stdinOpen = emitCmp(module, block: doRelease, a: stdinWrite, b: zeroD, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(doRelease, op: StdOp.condBranch(stdinOpen, thenBlockId: closeStdin.id, elseBlockId: afterStdin.id))
+
+	module.appendOp(closeStdin, op: StdOp.osCloseHandle(stdinWrite))
+	let zeroCS = emitConst(module, block: closeStdin, value: 0, ids: ids)
+	emitStoreField(module, block: closeStdin, record: slot, offset: SubpSlotStdinWrite, value: zeroCS)
+	module.setTerminator(closeStdin, op: StdOp.branch(afterStdin.id))
+
+	// afterStdin: close the two read ends and the process handle, zero every handle field, free the slot.
+	let stdoutBaseConst = emitConst(module, block: afterStdin, value: SubpStdoutBase as ParsedInt, ids: ids)
+	let stdoutStream = emitBin(module, block: afterStdin, a: slot, b: stdoutBaseConst, opcode: StdBinOpcode.add, ids: ids)
+	let stdoutRead = emitLoadField(module, block: afterStdin, record: stdoutStream, offset: SubpStreamReadEnd, ids: ids)
+	module.appendOp(afterStdin, op: StdOp.osCloseHandle(stdoutRead))
+	let zeroA = emitConst(module, block: afterStdin, value: 0, ids: ids)
+	emitStoreField(module, block: afterStdin, record: stdoutStream, offset: SubpStreamReadEnd, value: zeroA)
+	let stderrBaseConst = emitConst(module, block: afterStdin, value: SubpStderrBase as ParsedInt, ids: ids)
+	let stderrStream = emitBin(module, block: afterStdin, a: slot, b: stderrBaseConst, opcode: StdBinOpcode.add, ids: ids)
+	let stderrRead = emitLoadField(module, block: afterStdin, record: stderrStream, offset: SubpStreamReadEnd, ids: ids)
+	module.appendOp(afterStdin, op: StdOp.osCloseHandle(stderrRead))
+	emitStoreField(module, block: afterStdin, record: stderrStream, offset: SubpStreamReadEnd, value: zeroA)
+	let hProcess = emitLoadField(module, block: afterStdin, record: slot, offset: SubpSlotHProcess, ids: ids)
+	module.appendOp(afterStdin, op: StdOp.osCloseHandle(hProcess))
+	emitStoreField(module, block: afterStdin, record: slot, offset: SubpSlotHProcess, value: zeroA)
+	emitStoreField(module, block: afterStdin, record: slot, offset: SubpSlotInUse, value: zeroA)
+	module.setTerminator(afterStdin, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSubpRelease'
+
+// Install the streaming subprocess runtime (P1.5 slice 1b). Called from `installGtRuntime` when `usesStreaming`,
+// which also implies `usesIocp` (the yielding read rides the completion thread + `__io_init`) — so
+// `buildSubpYieldRead` is installed under `usesIocp` alongside `__gt_io_read`, and only the streaming API surface
+// lives here.
+function installSubpRuntime(module StdModule)
+	buildStrFromBytes(module)
+	buildSubpSpawn(module)
+	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase)
+	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase)
+	buildSubpWriteLine(module)
+	buildSubpCloseStdin(module)
+	buildSubpWait(module)
+	buildSubpRelease(module)
+end 'installSubpRuntime'
 

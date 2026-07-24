@@ -143,6 +143,8 @@ let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
 let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB, v1's SubpPipeBufferSize)
 let PipeDefaultTimeout = 0x0  // nDefaultTimeOut (0 = the 50 ms system default; unused for a byte-mode read)
 let GenericWrite = 0x40000000  // the child write end's dwDesiredAccess (CreateFileW)
+let GenericRead = 0x80000000  // the child stdin-read end's dwDesiredAccess (CreateFileW, streaming slice 1b)
+let PipeWriteOpenMode = 0x00080002  // PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE — the sync stdin server pipe (no OVERLAPPED)
 let FileShareNone = 0x0  // dwShareMode (the pipe is not shared)
 let OpenExisting = 3  // dwCreationDisposition — connect to the already-created named pipe
 let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
@@ -272,6 +274,11 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		osLastError gives 0
 		// CancelIoEx (2 args) and GetCurrentProcessId (0 args) are register-only — no outgoing stack space.
 		osCancelIo to osGetPid gives 0
+		// P1.5 dogfood slice 1b: the stdin pipe reserves the same CreateNamedPipeW/CreateFileW region as
+		// `osPipeCreate`; `osWriteFile` reserves ONE word for WriteFile's `lpOverlapped` (its bytes-written
+		// out-param is a caller-supplied pointer passed in r9, not a stack scratch like `osWriteStdout`'s).
+		osPipeCreateOutbound gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
+		osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -843,7 +850,7 @@ type StdToX64Lowering
 				// A witness call is a call — like `tryCall` it is not the compare, so it fuses nothing.
 				witnessCall then break 'term'
 				// P1.5 dogfood slice 1a: the IOCP ops are value-consuming/void body ops, never terminators.
-				osPipeCreate to osGetPid then break 'term'
+				osPipeCreate to osWriteFile then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -901,7 +908,7 @@ type StdToX64Lowering
 				// P1.5 dogfood slice 1a: the IOCP ops declare `clobbersFlags: true` (they lower to calls), so one
 				// CAN land here as the last flag-writer before a branch; like a `call`, it is not the compare, so
 				// the scan stops and no fusion is recorded (declining is always safe).
-				osPipeCreate to osGetPid then break 'isTheCompare'
+				osPipeCreate to osWriteFile then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -972,7 +979,7 @@ type StdToX64Lowering
 			// A witness call is a value-producing body op, never a terminator that reads fused flags.
 			witnessCall gives false
 			// P1.5 dogfood slice 1a: an IOCP op is never a terminator — none reads fused compare flags.
-			osPipeCreate to osGetPid gives false
+			osPipeCreate to osWriteFile gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -1036,6 +1043,9 @@ type StdToX64Lowering
 			osProcessSpawnInherit(cmdlinePtrId, startupPtrId, procInfoPtrId) then self.lowerOsProcessSpawnWin64(cmdlinePtrId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, inheritHandles: true, dstBlock: dstBlock)
 			osCancelIo(handleId, ovlId) then self.lowerOsCancelIo(handleId, ovlId: ovlId, dstBlock: dstBlock)
 			osGetPid(resultId) then self.lowerOsGetPid(resultId, dstBlock: dstBlock)
+			// P1.5 dogfood slice 1b: the streaming subprocess stdin pipe + synchronous write.
+			osPipeCreateOutbound(namePtrId, saPtrId, childReadPtrId, parentWritePtrId) then self.lowerOsPipeCreateOutbound(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
+			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsWriteFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1079,7 +1089,7 @@ type StdToX64Lowering
 			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 			witnessCall then panic("lowerStdToX64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
-			osPipeCreate to osGetPid then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
+			osPipeCreate to osWriteFile then panic("lowerStdToX64: a P1.5 IOCP op appeared as a block terminator (lowering bug — pipe/iocp/event/thread/lock/read/last-error/spawn/cancel/pid are all body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2056,6 +2066,67 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsGetPidWin64'
 
+	// Lower `osPipeCreateOutbound(namePtr, saPtr, childReadPtr, parentWritePtr)` (streaming slice 1b) — the
+	// direction MIRROR of `osPipeCreate`. The parent WRITE end is a synchronous OUTBOUND server pipe (no
+	// FILE_FLAG_OVERLAPPED, no IOCP); the child READ end is a GENERIC_READ inheritable client end.
+	function lowerOsPipeCreateOutbound(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsPipeCreateOutboundWin64(namePtrId, saPtrId: saPtrId, childReadPtrId: childReadPtrId, parentWritePtrId: parentWritePtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsPipeCreateOutbound: the streaming stdin pipe is x64-windows only — the subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsPipeCreateOutbound'
+
+	function lowerOsPipeCreateOutboundWin64(namePtrId ValueId, saPtrId ValueId, childReadPtrId ValueId, parentWritePtrId ValueId, dstBlock IrBlock)
+		// 1) CreateNamedPipeW(name, PipeWriteOpenMode, PipeMessageMode, PipeMaxInstances, nOutBuf, nInBuf, timeout, NULL) → parent WRITE end.
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: PipeBufferSize)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: PipeBufferSize)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: PipeDefaultTimeout)
+		self.emitWin64StackArgImm(dstBlock, slot: 3, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: PipeWriteOpenMode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PipeMessageMode))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: PipeMaxInstances))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateNamedPipeW)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(parentWritePtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		// 2) CreateFileW(name, GenericRead, FileShareNone, saPtr, OpenExisting, FileAttributeNormal, NULL) → inheritable child READ end.
+		self.emitWin64StackArgImm(dstBlock, slot: 0, value: OpenExisting)
+		self.emitWin64StackArgImm(dstBlock, slot: 1, value: FileAttributeNormal)
+		self.emitWin64StackArgImm(dstBlock, slot: 2, value: NullPointer)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: GenericRead))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: FileShareNone))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(saPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateFileW)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(childReadPtrId), disp: 0, src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		// 3) SetHandleInformation(parentWriteEnd, HandleFlagInherit, HandleFlagClear) — strip inheritance from the parent write end.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rcx), base: TargetVReg.virtual(parentWritePtrId), disp: 0, width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: HandleFlagInherit))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: HandleFlagClear))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.SetHandleInformation)))
+	end 'lowerOsPipeCreateOutboundWin64'
+
+	// Lower `osWriteFile(handle, buf, len, bytesOutPtr)` (streaming slice 1b) to `WriteFile(handle, buf, len,
+	// bytesOutPtr, NULL)` — a synchronous write to the child's stdin pipe. `bytesOutPtr` (the caller's out-param
+	// slot) goes in r9; the 5th arg (lpOverlapped = NULL) is the one stack argument (slot 0). The BOOL is captured.
+	function lowerOsWriteFile(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWriteFileWin64(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsWriteFile: the streaming stdin write is x64-windows only — the subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsWriteFile'
+
+	function lowerOsWriteFileWin64(resultId ValueId, handleId ValueId, bufId ValueId, lenId ValueId, bytesOutPtrId ValueId, dstBlock IrBlock)
+		// The one stack arg (`lpOverlapped = NULL`, slot 0) FIRST via rax scratch, then the four register args.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(bytesOutPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsWriteFileWin64'
+
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
@@ -2386,7 +2457,7 @@ type StdToX64Lowering
 			// A witness call is a body op, never a float-equality condBranch.
 			witnessCall gives false
 			// P1.5 dogfood slice 1a: an IOCP op is never a terminator, let alone a float-equality condBranch.
-			osPipeCreate to osGetPid gives false
+			osPipeCreate to osWriteFile gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2523,7 +2594,7 @@ type StdToX64Lowering
 			tryCall to osFreePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			switch panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a jump table, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			witnessCall panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a witness call, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			osPipeCreate to osGetPid panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osPipeCreate to osWriteFile panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a P1.5 IOCP op, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

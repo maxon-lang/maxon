@@ -380,7 +380,7 @@ type RangeCheckEmitter
 				// A witness call's result is a call return, not a foldable constant — nothing to record.
 				witnessCall then break 'c'
 				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
-				osPipeCreate to osGetPid then break 'c'
+				osPipeCreate to osWriteFile then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -469,7 +469,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		// A witness call is a body op, not a `ret` — it is not the return whose value this checks.
 		witnessCall gives false
 		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
-		osPipeCreate to osGetPid gives false
+		osPipeCreate to osWriteFile gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -537,6 +537,9 @@ function stdOpDefinesValue(op StdOp) returns bool
 		osProcessSpawnInherit gives false
 		osCancelIo gives false
 		osGetPid gives true
+		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
+		osPipeCreateOutbound gives false
+		osWriteFile gives true
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -587,6 +590,9 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		osProcessSpawnInherit gives 0
 		osCancelIo gives 0
 		osGetPid(resultId) gives resultId
+		// P1.5 dogfood slice 1b: osWriteFile returns its captured RAX BOOL id; osPipeCreateOutbound defines nothing.
+		osPipeCreateOutbound gives 0
+		osWriteFile(resultId, _, _, _, _) gives resultId
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 
