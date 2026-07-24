@@ -1,0 +1,35 @@
+P4b source-line-stepping gate — reproducible transcript over DebugSamples/step.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/step.maxon
+  maxon debug --batch --commands='break step.maxon:21; run; step; next; finish' maxon-sharp/DebugSamples/step.exe
+
+RED (the same command against a pre-P4b binary, before this rung): step/next/finish were unknown words,
+so each emitted `{"event":"error","message":"unknown command '<word>'"}` in place of a stop, e.g.
+  {"event":"error","message":"unknown command \u0027step\u0027"}
+  {"event":"error","message":"unknown command \u0027next\u0027"}
+  {"event":"error","message":"unknown command \u0027finish\u0027"}
+
+WHAT EACH COMMAND PROVES (asserted by the JSON below):
+  * break step.maxon:21 / run  -> stop at main:21 (the `let a = helper(3)` call), reason "breakpoint".
+  * step   -> DESCENDS INTO the call: reason "step", function "helper", line 15 (helper's first statement).
+  * next   -> STEPS OVER the deeper(n) call: reason "step", function "helper", line 16 (the next statement
+              in the same function; deeper() ran to completion via a temp bp, never single-stepped).
+  * finish -> RETURNS to the caller: function "main", line 21 (the return point after helper(3)). Its
+              reason is "breakpoint" because finish runs to a temp breakpoint at the return address — the
+              location is what matters, and it is honestly the caller frame.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The event shapes, functions, lines, and reasons are the P4b subject and are STABLE.
+  * The `.text` offsets (0x9f/0xab the main call+return, 0x1cb/0x1d3 helper's two statements, 0x4c the
+    entry-stub return) are build-specific and move only if codegen for main/helper/deeper moves.
+  * Exit code is 8 (helper(3) = deeper(3)+1 = 7; then the loop adds 0 and 1 -> 8). In --batch the target
+    has no stdout of its own here, so the JSON channel on stdout is the whole transcript.
+
+--- EXPECTED --batch STDOUT (newline-delimited JSON, one event per line) ---
+{"event":"breakpoint","action":"set","file":"step.maxon","line":21,"offset":"0x9f","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x9f","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0x9f"},{"frame":1,"offset":"0x4c"}]}
+{"event":"stop","reason":"step","offset":"0x1cb","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"col":2,"source":[{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":true},{"line":16,"text":"\treturn inner \u002B 1","current":false},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1cb"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"stop","reason":"step","offset":"0x1d3","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":16,"col":2,"source":[{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":false},{"line":16,"text":"\treturn inner \u002B 1","current":true},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":16,"offset":"0x1d3"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"stop","reason":"breakpoint","offset":"0xab","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":1,"offset":"0x4c"}]}
+{"event":"exit","code":8}

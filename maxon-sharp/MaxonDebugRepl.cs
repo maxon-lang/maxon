@@ -67,6 +67,10 @@ internal static class MaxonDebugRepl {
     private bool _finished;
     private StopReport? _stop;
 
+    /// The one wording of "you must be stopped first", shared by every command that reads the parked
+    /// frame (backtrace / print / locals / step / next / finish / until).
+    private const string NotStoppedText = "Not stopped — run to a breakpoint first.";
+
     public int Loop() {
       while (!_finished) {
         Console.Out.Write(Prompt());
@@ -104,6 +108,18 @@ internal static class MaxonDebugRepl {
           break;
         case DebugCommand.Continue:
           DoContinue(isRun: false);
+          break;
+        case DebugCommand.Step:
+          DoStepCommand(dbg.StepInto);
+          break;
+        case DebugCommand.Next:
+          DoStepCommand(dbg.StepOver);
+          break;
+        case DebugCommand.Finish:
+          DoStepCommand(dbg.Finish);
+          break;
+        case DebugCommand.Until:
+          DoUntil(rest);
           break;
         case DebugCommand.Backtrace:
           DoBacktrace();
@@ -178,7 +194,7 @@ internal static class MaxonDebugRepl {
 
     private void DoBacktrace() {
       if (_stop is null) {
-        Console.Out.WriteLine("Not stopped — run to a breakpoint first.");
+        Console.Out.WriteLine(NotStoppedText);
         return;
       }
       // The target is still parked at the same stop, so a fresh request is authoritative.
@@ -187,7 +203,7 @@ internal static class MaxonDebugRepl {
 
     private void DoPrint(string rest) {
       if (_stop is not { } report) {
-        Console.Out.WriteLine("Not stopped — run to a breakpoint first.");
+        Console.Out.WriteLine(NotStoppedText);
         return;
       }
       if (rest.Length == 0) {
@@ -207,7 +223,7 @@ internal static class MaxonDebugRepl {
 
     private void DoLocals() {
       if (_stop is not { } report) {
-        Console.Out.WriteLine("Not stopped — run to a breakpoint first.");
+        Console.Out.WriteLine(NotStoppedText);
         return;
       }
       if (MakeValueRenderer(dbg, out var reason) is not { } renderer) {
@@ -227,11 +243,59 @@ internal static class MaxonDebugRepl {
       }
     }
 
+    /// Run a step op that needs the current parked frame (step / next / finish) and render its outcome.
+    private void DoStepCommand(Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op) {
+      if (_stop is not { } report) {
+        Console.Out.WriteLine(NotStoppedText);
+        return;
+      }
+      ApplyStepOutcome(op(report.Stop));
+    }
+
+    private void DoUntil(string rest) {
+      if (_stop is not { } report) {
+        Console.Out.WriteLine(NotStoppedText);
+        return;
+      }
+      if (!uint.TryParse(rest.Trim(), out var line) || line == 0) {
+        Console.Out.WriteLine("Usage: until <line>");
+        return;
+      }
+      ApplyStepOutcome(dbg.Until(report.Stop, line));
+    }
+
+    /// Render a step outcome the same way every step command does: a Stopped auto-renders the new stop
+    /// (source window + location + backtrace, reusing the P3c/P4a renderer) and becomes the new location;
+    /// an Exited closes the session; anything else is a one-line reason.
+    private void ApplyStepOutcome(MaxonDebugger.StepOutcome outcome) {
+      switch (outcome.Kind) {
+        case MaxonDebugger.StepOutcomeKind.Stopped:
+          var report = BuildStopReport(dbg, exePath, outcome.Stop);
+          _stop = report;
+          RenderStopText(report, Console.Out);
+          break;
+        case MaxonDebugger.StepOutcomeKind.Exited:
+          _stop = null;
+          _finished = true;
+          dbg.WaitForExit(2000);
+          dbg.JoinIo();
+          Console.Out.WriteLine($"Program exited with code {ExitCodeText(dbg)}.");
+          break;
+        default:
+          Console.Out.WriteLine($"{StepUnavailableReason(outcome.Kind)}.");
+          break;
+      }
+    }
+
     private static void PrintHelp() {
       Console.Out.WriteLine("Commands:");
       Console.Out.WriteLine("  break <file>:<line>   (b)   set a breakpoint at a source line");
       Console.Out.WriteLine("  run                   (r)   start the program (continue from entry)");
       Console.Out.WriteLine("  continue              (c)   resume from a breakpoint");
+      Console.Out.WriteLine("  step                  (s)   step into: advance one statement, entering calls");
+      Console.Out.WriteLine("  next                  (n)   step over: advance one statement, running calls to completion");
+      Console.Out.WriteLine("  finish                      run until the current function returns");
+      Console.Out.WriteLine("  until <line>          (u)   run until a line in the current function (or it returns)");
       Console.Out.WriteLine("  backtrace             (bt)  show the stopped call stack");
       Console.Out.WriteLine("  locals                      list the stopped function's locals with values");
       Console.Out.WriteLine("  print <expr>          (p)   render a value; dotted paths navigate (person.home.name)");
@@ -298,6 +362,18 @@ internal static class MaxonDebugRepl {
       case DebugCommand.Continue:
         BatchContinue(dbg, exePath, ref finished, ref currentStop);
         break;
+      case DebugCommand.Step:
+        BatchStepCommand(dbg, exePath, dbg.StepInto, ref finished, ref currentStop);
+        break;
+      case DebugCommand.Next:
+        BatchStepCommand(dbg, exePath, dbg.StepOver, ref finished, ref currentStop);
+        break;
+      case DebugCommand.Finish:
+        BatchStepCommand(dbg, exePath, dbg.Finish, ref finished, ref currentStop);
+        break;
+      case DebugCommand.Until:
+        BatchUntil(dbg, exePath, rest, ref finished, ref currentStop);
+        break;
       case DebugCommand.Backtrace:
         EmitBacktrace(dbg.Backtrace());
         break;
@@ -361,8 +437,49 @@ internal static class MaxonDebugRepl {
     dbg.WaitForExit(2000);
   }
 
+  /// The batch face's wording of "you must be stopped first", shared by locals / print / step / next /
+  /// finish / until so they cannot drift.
+  private const string NotStoppedBatchText = "not stopped — run to a breakpoint first";
+
+  /// Run a step op that needs the current parked frame (step / next / finish) and emit its outcome.
+  private static void BatchStepCommand(MaxonDebugger dbg, string exePath,
+      Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op, ref bool finished,
+      ref MaxonDebugger.StopInfo? currentStop) {
+    if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
+    ApplyBatchStepOutcome(dbg, exePath, op(stop), ref finished, ref currentStop);
+  }
+
+  private static void BatchUntil(MaxonDebugger dbg, string exePath, string rest, ref bool finished,
+      ref MaxonDebugger.StopInfo? currentStop) {
+    if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
+    if (!uint.TryParse(rest.Trim(), out var line) || line == 0) { EmitError("until needs a line number"); return; }
+    ApplyBatchStepOutcome(dbg, exePath, dbg.Until(stop, line), ref finished, ref currentStop);
+  }
+
+  /// Emit one step outcome the same way every batch step command does: a Stopped emits the same
+  /// `{event:"stop",…}` shape a breakpoint stop does (so a consumer parses steps and breakpoints
+  /// identically) and becomes the new parked frame; an Exited ends the run; anything else is an error
+  /// event with the shared reason.
+  private static void ApplyBatchStepOutcome(MaxonDebugger dbg, string exePath, MaxonDebugger.StepOutcome outcome,
+      ref bool finished, ref MaxonDebugger.StopInfo? currentStop) {
+    switch (outcome.Kind) {
+      case MaxonDebugger.StepOutcomeKind.Stopped:
+        currentStop = outcome.Stop;
+        EmitStop(BuildStopReport(dbg, exePath, outcome.Stop));
+        break;
+      case MaxonDebugger.StepOutcomeKind.Exited:
+        currentStop = null;
+        finished = true;
+        dbg.WaitForExit(2000);
+        break;
+      default:
+        EmitError(StepUnavailableReason(outcome.Kind));
+        break;
+    }
+  }
+
   private static void BatchLocals(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
-    if (currentStop is not { } stop) { EmitError("not stopped — run to a breakpoint first"); return; }
+    if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
     if (MakeValueRenderer(dbg, out var reason) is not { } renderer) { EmitError(reason); return; }
     try {
       var values = renderer.Locals(stop);
@@ -378,7 +495,7 @@ internal static class MaxonDebugRepl {
   }
 
   private static void BatchPrint(MaxonDebugger dbg, string rest, MaxonDebugger.StopInfo? currentStop) {
-    if (currentStop is not { } stop) { EmitError("not stopped — run to a breakpoint first"); return; }
+    if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
     if (rest.Length == 0) { EmitError("print needs an expression (e.g. print person.home.name)"); return; }
     if (MakeValueRenderer(dbg, out var reason) is not { } renderer) { EmitError(reason); return; }
     try {
@@ -714,8 +831,11 @@ internal static class MaxonDebugRepl {
   }
 
   /// The canonical commands both faces dispatch on. `Run` and `Continue` are the same MECHANISM
-  /// (continue) but stay distinct here so the interactive prompt can word them differently.
-  private enum DebugCommand { Empty, Break, Run, Continue, Backtrace, Print, Locals, Help, Quit, Unknown }
+  /// (continue) but stay distinct here so the interactive prompt can word them differently. `Step`/`Next`/
+  /// `Finish`/`Until` are the P4b source-line stepping commands.
+  private enum DebugCommand {
+    Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Print, Locals, Help, Quit, Unknown,
+  }
 
   /// The ONE place the command vocabulary (canonical words + aliases) is stated. Both the interactive
   /// REPL and the batch runner classify through this, so adding a P4 command (`step`, `threads`, …)
@@ -728,6 +848,10 @@ internal static class MaxonDebugRepl {
       "break" or "b" => DebugCommand.Break,
       "run" or "r" => DebugCommand.Run,
       "continue" or "c" => DebugCommand.Continue,
+      "step" or "s" => DebugCommand.Step,
+      "next" or "n" => DebugCommand.Next,
+      "finish" => DebugCommand.Finish,
+      "until" or "u" => DebugCommand.Until,
       "backtrace" or "bt" or "where" => DebugCommand.Backtrace,
       "print" or "p" => DebugCommand.Print,
       "locals" => DebugCommand.Locals,
@@ -740,7 +864,26 @@ internal static class MaxonDebugRepl {
 
   private static string ReasonText(long reason) => reason switch {
     Compiler.Ir.Runtime.RuntimeEmitter.DbgStopReasonBreakpoint => "breakpoint",
+    Compiler.Ir.Runtime.RuntimeEmitter.DbgStopReasonStep => "step",
     _ => $"reason#{reason}",
+  };
+
+  /// The message a non-Stopped/non-Exited step outcome renders — stated ONCE (like
+  /// <see cref="BacktraceUnavailableReason"/>) so the text and JSON faces cannot word "rebuild" or
+  /// "no caller frame" differently. Stopped and Exited are handled per-face (a stop renders, an exit
+  /// closes the session).
+  private static string StepUnavailableReason(MaxonDebugger.StepOutcomeKind kind) => kind switch {
+    MaxonDebugger.StepOutcomeKind.UnsupportedByAgent =>
+      "stepping is not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.StepOutcomeKind.NotAcknowledged =>
+      "step command not acknowledged (the target may have exited)",
+    MaxonDebugger.StepOutcomeKind.LimitReached =>
+      "step limit reached before the next source line (the target is parked mid-statement)",
+    MaxonDebugger.StepOutcomeKind.NoCallerFrame =>
+      "cannot finish: no caller frame (a frameless leaf or the outermost frame)",
+    MaxonDebugger.StepOutcomeKind.NoCode =>
+      "no code at that line in the current function",
+    _ => throw new InvalidOperationException($"Unhandled step outcome {kind}"),
   };
 
   private static string HexOffset(long offset) => $"0x{offset:x}";

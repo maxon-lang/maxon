@@ -393,6 +393,224 @@ internal sealed class MaxonDebugger : IDisposable {
     return new BacktraceResult(BacktraceStatus.Ok, frames);
   }
 
+  // ---- Source-line stepping (P4b) ----
+
+  /// True when this binary's agent understands source-line stepping (control version ≥ DbgStepMinVersion).
+  /// The four step surfaces check this once, so a pre-v5 binary gets one clean "rebuild to enable" message
+  /// rather than a hang on a step the agent would ack-and-ignore — the P3c/P4a UnsupportedByAgent lesson.
+  public bool SteppingSupported => AgentVersion >= RuntimeEmitter.DbgStepMinVersion;
+
+  /// The absolute `.text` load address the agent published at init (<see cref="RuntimeEmitter.DbgOffTextBase"/>).
+  /// Only meaningful once the agent is alive (v5+).
+  private ulong TextBase => (ulong)_accessor.ReadInt64(RuntimeEmitter.DbgOffTextBase);
+
+  /// Convert an absolute `.text` address (e.g. a return address read off the debuggee's stack) into the
+  /// code offset the sidecar and every DbgOff* PC field use — ASLR-independent, since it subtracts the
+  /// agent's own reported load base.
+  public long OffsetOf(ulong absCodeAddr) => (long)(absCodeAddr - TextBase);
+
+  /// Why a step produced no stop, or Stopped with the new location. The kinds stay DISTINCT (as
+  /// <see cref="BacktraceStatus"/> and <see cref="ReadMemoryStatus"/> do) so each surface words its own
+  /// advice: an unsupported agent (rebuild), an unacked command (target may have exited), the target
+  /// running to completion, a runaway that hit the instruction cap, a <c>finish</c> with no caller frame,
+  /// and an <c>until</c> whose line has no code each need different messages, not one "failed".
+  public enum StepOutcomeKind {
+    Stopped, Exited, UnsupportedByAgent, NotAcknowledged, LimitReached, NoCallerFrame, NoCode,
+  }
+
+  public readonly record struct StepOutcome(StepOutcomeKind Kind, StopInfo Stop);
+
+  /// A generous cap on machine instructions single-stepped for ONE source step, so a statement compiling
+  /// to a pathological amount of code — or a step-INTO that descends into a runtime function with no line
+  /// info and single-steps all of it — stops honestly rather than spinning the driver forever.
+  private const int MaxStepInstructions = 500_000;
+
+  /// A generous cap on Continue passes <see cref="RunUntilReturn"/> makes before giving up, so a callee
+  /// (or finish target) whose frames never unwind past the guard cannot loop the driver forever.
+  private const int MaxReturnContinues = 100_000;
+
+  /// <summary>
+  /// Single-step ONE debuggee instruction and return the new stop. Posts <see cref="RuntimeEmitter.DbgCmdStep"/>
+  /// (the agent acks it, exits the park loop, arms a hardware single-step, and publishes a step stop when
+  /// it completes), then waits for that stop. Version-gated; a pre-v5 agent would ack-and-ignore, so it is
+  /// refused rather than hung on. <see cref="StepOutcomeKind.Exited"/> when the stepped instruction ran the
+  /// program to completion.
+  /// </summary>
+  public StepOutcome Step() {
+    if (!SteppingSupported) return new StepOutcome(StepOutcomeKind.UnsupportedByAgent, default);
+    if (!PostCommand(RuntimeEmitter.DbgCmdStep, 0))
+      return new StepOutcome(_process.HasExited ? StepOutcomeKind.Exited : StepOutcomeKind.NotAcknowledged, default);
+    return WaitForStop(out var stop)
+      ? new StepOutcome(StepOutcomeKind.Stopped, stop)
+      : new StepOutcome(StepOutcomeKind.Exited, default);
+  }
+
+  /// <summary>
+  /// Step INTO the next source statement: single-step (descending into any call) until the PC lands on a
+  /// statement-boundary line row whose line differs from the start line, or the start function returns to
+  /// a shallower frame. <paramref name="start"/> is the frame being stepped from.
+  /// </summary>
+  public StepOutcome StepInto(StopInfo start) => WalkToNextLine(start, stepOver: false);
+
+  /// <summary>
+  /// Step OVER the next source statement: like <see cref="StepInto"/>, but a call is run to completion (a
+  /// temp bp at its return address) instead of descended into.
+  /// </summary>
+  public StepOutcome StepOver(StopInfo start) => WalkToNextLine(start, stepOver: true);
+
+  /// <summary>
+  /// The shared step-into / step-over walk: single-step until the next source statement in view. Stops
+  /// when (a) the PC lands on a statement-boundary line row differing from the start line, or (b) the
+  /// start function returns to a shallower frame (Sp above the start Sp). For step-over, a step that lands
+  /// in a DEEPER frame outside the start function is a call we entered — it is run to its return address
+  /// (via a temp bp) and stepping resumes in the start frame. Bounded by <see cref="MaxStepInstructions"/>.
+  /// </summary>
+  private StepOutcome WalkToNextLine(StopInfo start, bool stepOver) {
+    if (!SteppingSupported) return new StepOutcome(StepOutcomeKind.UnsupportedByAgent, default);
+    if (Sidecar is not { } s) throw new DebuggerException("no debug info loaded; cannot step");
+
+    uint startLine = s.PcToLine((uint)start.PcOffset)?.Line ?? 0;
+    var startFn = s.FunctionAt((uint)start.PcOffset);
+    long startSp = start.Sp;
+
+    StopInfo cur = start;
+    for (int i = 0; i < MaxStepInstructions; i++) {
+      var stepped = Step();
+      if (stepped.Kind != StepOutcomeKind.Stopped) return stepped;   // Exited / NotAcked / Unsupported
+      cur = stepped.Stop;
+
+      // Returned to a shallower frame: we stepped OUT of the start function; stop in the caller.
+      if (cur.Sp > startSp) return new StepOutcome(StepOutcomeKind.Stopped, cur);
+
+      uint off = (uint)cur.PcOffset;
+
+      // step-over: a deeper frame OUTSIDE the start function means we entered a callee. Run it to its
+      // return address, then re-evaluate in the start frame.
+      if (stepOver && cur.Sp < startSp && OutsideFunction(off, startFn)) {
+        var ran = RunCalleeToReturn(cur);
+        if (ran.Kind != StepOutcomeKind.Stopped) return ran;
+        cur = ran.Stop;
+        if (cur.Sp > startSp) return new StepOutcome(StepOutcomeKind.Stopped, cur);   // returned past start too
+        off = (uint)cur.PcOffset;
+      }
+
+      if (IsStatementStop(off, startLine)) return new StepOutcome(StepOutcomeKind.Stopped, cur);
+    }
+    return new StepOutcome(StepOutcomeKind.LimitReached, cur);
+  }
+
+  /// <summary>
+  /// Run out of the current function: the caller's return address is <see cref="Backtrace"/> frame 1's
+  /// RAW code offset (the biased form is only for symbolizing it, not for planting a bp). Arm a temp bp
+  /// there, run to it, and report the caller-frame stop. <see cref="StepOutcomeKind.NoCallerFrame"/> when
+  /// there is no caller (a frameless leaf the rbp-walk cannot unwind, or the top frame).
+  /// </summary>
+  public StepOutcome Finish(StopInfo start) {
+    if (!SteppingSupported) return new StepOutcome(StepOutcomeKind.UnsupportedByAgent, default);
+    var bt = Backtrace();
+    if (bt.Status != BacktraceStatus.Ok || bt.Frames.Count < 2)
+      return new StepOutcome(StepOutcomeKind.NoCallerFrame, default);
+    return RunUntilReturn(bt.Frames[1].CodeOffset, start.Sp);
+  }
+
+  /// <summary>
+  /// Run until <paramref name="line"/> in the CURRENT function, or the frame returns first. Resolves the
+  /// line to an offset in the current function's file; <see cref="StepOutcomeKind.NoCode"/> when the line
+  /// carries no statement or is not in this function. Arms a temp bp at the line AND (when there is a
+  /// caller) at the return address, so a frame that returns before reaching the line stops honestly in the
+  /// caller rather than running away.
+  /// </summary>
+  public StepOutcome Until(StopInfo start, uint line) {
+    if (!SteppingSupported) return new StepOutcome(StepOutcomeKind.UnsupportedByAgent, default);
+    if (Sidecar is not { } s) throw new DebuggerException("no debug info loaded; cannot run until");
+
+    var loc = Symbolize(start.PcOffset);
+    if (!loc.HasLine || s.LineToOffset(loc.File, line) is not { } untilOff)
+      return new StepOutcome(StepOutcomeKind.NoCode, default);
+
+    // The target line must live in the current function (until runs to a line in THIS frame, gdb-style).
+    if (s.FunctionAt((uint)start.PcOffset) is { } fn && (untilOff < fn.CodeStart || untilOff >= fn.CodeEnd))
+      return new StepOutcome(StepOutcomeKind.NoCode, default);
+
+    long? retOff = null;
+    var bt = Backtrace();
+    if (bt.Status == BacktraceStatus.Ok && bt.Frames.Count >= 2) retOff = bt.Frames[1].CodeOffset;
+
+    return RunToLineOrReturn(untilOff, retOff);
+  }
+
+  /// True when <paramref name="off"/> is exactly a statement-boundary line row whose line differs from
+  /// <paramref name="startLine"/> — the stop condition both step-into and step-over share. Exact
+  /// (row.CodeOffset == off) because single-stepping lands on arbitrary instructions; only a landing ON a
+  /// statement's entry offset is a source stop, matching where `break file:line` plants.
+  private bool IsStatementStop(uint off, uint startLine) {
+    if (Sidecar is not { } s || s.PcToLine(off) is not { } row) return false;
+    return row.CodeOffset == off
+      && (row.Flags & MxdbgFormat.LineFlagStatement) != 0
+      && row.Line != startLine;
+  }
+
+  /// True when <paramref name="off"/> is outside <paramref name="fn"/>'s `.text` range (or there is no
+  /// enclosing function) — the "we entered a callee / returned out" test step-over uses.
+  private static bool OutsideFunction(uint off, MxdbgReader.FuncInfo? fn) =>
+    fn is not { } f || off < f.CodeStart || off >= f.CodeEnd;
+
+  /// <summary>
+  /// The callee we just stepped into is parked at its entry, so [Sp] is the absolute return address the
+  /// CALL pushed (no prologue has run yet). Read it, and run the callee to completion via a temp bp there.
+  /// Recursion inside the callee is absorbed by <see cref="RunUntilReturn"/>'s frame guard.
+  /// </summary>
+  private StepOutcome RunCalleeToReturn(StopInfo calleeEntry) {
+    var read = ReadMemory((ulong)calleeEntry.Sp, 8);
+    if (read.Status != ReadMemoryStatus.Ok) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+    ulong retAbs = BitConverter.ToUInt64(read.Data, 0);
+    return RunUntilReturn(OffsetOf(retAbs), calleeEntry.Sp);
+  }
+
+  /// <summary>
+  /// Arm a temp bp at <paramref name="retOff"/>, Continue until the stop is in a frame shallower than
+  /// <paramref name="innerSp"/> (skipping a hit in an equal-or-deeper frame, which is recursion re-entering
+  /// the same return address), and clear the temp bp — even on early return, so no patch leaks.
+  /// </summary>
+  private StepOutcome RunUntilReturn(long retOff, long innerSp) {
+    if (!SetBreakpointAtOffset(retOff)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+    try {
+      for (int i = 0; i < MaxReturnContinues; i++) {
+        if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+        if (!WaitForStop(out var stop)) return new StepOutcome(StepOutcomeKind.Exited, default);
+        if (stop.Sp > innerSp) return new StepOutcome(StepOutcomeKind.Stopped, stop);
+        // else: a hit at an equal-or-deeper frame (recursion) — keep unwinding.
+      }
+      return new StepOutcome(StepOutcomeKind.LimitReached, default);
+    } finally {
+      ClearBreakpointAtOffset(retOff);
+    }
+  }
+
+  /// <summary>
+  /// Arm a temp bp at <paramref name="lineOff"/> and (when a caller exists) at <paramref name="returnOff"/>,
+  /// Continue once, and report the resulting stop — the caller reads the stop's location to see whether the
+  /// line was reached or the frame returned first. Both temp bps are always cleared, so no patch leaks.
+  /// Unlike <see cref="RunUntilReturn"/> the first stop is the answer (no deeper-frame skipping).
+  /// </summary>
+  private StepOutcome RunToLineOrReturn(long lineOff, long? returnOff) {
+    var armed = new List<long>();
+    try {
+      if (!SetBreakpointAtOffset(lineOff)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+      armed.Add(lineOff);
+      if (returnOff is { } r && r != lineOff) {
+        if (!SetBreakpointAtOffset(r)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+        armed.Add(r);
+      }
+      if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+      return WaitForStop(out var stop)
+        ? new StepOutcome(StepOutcomeKind.Stopped, stop)
+        : new StepOutcome(StepOutcomeKind.Exited, default);
+    } finally {
+      foreach (var off in armed) ClearBreakpointAtOffset(off);
+    }
+  }
+
   // ---- Process lifetime ----
 
   public bool HasExited => _process.HasExited;

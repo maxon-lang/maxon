@@ -1,0 +1,31 @@
+// P4b source-line-stepping gate sample. Deterministic: pure integer arithmetic, no stdlib in the
+// stepped region (so `step` descends only into user code, never single-steps a runtime helper), and a
+// distinct exit code (8). `main` calls `helper`, which calls the deeper `deeper`, then runs a short
+// loop — so `step` descends into a call, `next` runs a call to completion, and `finish` returns.
+
+typealias ExitCode = int(0 to 255)
+typealias Small = int(0 to 1000000)
+
+function deeper(n Small) returns Small
+	let doubled = n + n
+	return doubled
+end 'deeper'
+
+function helper(n Small) returns Small
+	let inner = deeper(n)
+	return inner + 1
+end 'helper'
+
+function main() returns ExitCode
+	var total = 0
+	let a = helper(3)  // step from here descends into helper; next over here runs helper fully
+	total = total + a  // finish from inside helper returns to about here
+
+	var i = 0
+	while i < 2 'loop'
+		total = total + i
+		i = i + 1
+	end 'loop'
+
+	return total
+end 'main'

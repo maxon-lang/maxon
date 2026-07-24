@@ -53,7 +53,16 @@ public partial class RuntimeEmitter {
   /// field moves. Same honesty gate as v3: a v3 agent would ACK the unknown read command without filling
   /// the buffer, so the driver gates value inspection on version ≥ 4 and reports "needs a rebuilt agent"
   /// rather than reading zeroed garbage as if it were the debuggee's memory.
-  public const long DbgControlVersion = 4;
+  ///
+  /// v5 (P4b) adds the <see cref="DbgCmdStep"/> command (single-step one debuggee instruction, then
+  /// publish a <see cref="DbgStopReasonStep"/> stop and re-park) and the <see cref="DbgOffTextBase"/>
+  /// field <c>__dbg_init</c> now fills (the absolute `.text` base, so the driver can turn a return
+  /// address it reads off the stack into a code offset). <see cref="DbgOffTextBase"/> is a
+  /// previously-zero byte after the read buffer, so no earlier field moves. Same honesty gate: a v4 agent
+  /// would ACK the unknown step command without single-stepping, so the driver gates the four step
+  /// commands (step/next/finish/until) on version ≥ 5 and reports "needs a rebuilt agent" rather than
+  /// hanging on a step that never publishes.
+  public const long DbgControlVersion = 5;
 
   /// The control-segment version at which the agent first understood <see cref="DbgCmdBacktrace"/>.
   /// The driver refuses to trust the frame array from an older agent (which would ack-and-ignore).
@@ -63,6 +72,11 @@ public partial class RuntimeEmitter {
   /// driver refuses to read the result buffer from an older agent (which would ack-and-ignore, leaving
   /// the buffer whatever it was) — the same UnsupportedByAgent discipline the backtrace gate uses.
   public const long DbgReadMemMinVersion = 4;
+
+  /// The control-segment version at which the agent first understood <see cref="DbgCmdStep"/> and filled
+  /// <see cref="DbgOffTextBase"/>. The driver refuses source-line stepping against an older agent (which
+  /// would ack-and-ignore the step, publishing no stop) — the same UnsupportedByAgent discipline.
+  public const long DbgStepMinVersion = 5;
 
   /// The whole agent control segment: one page. The P3a handshake header and the P3b command/stop
   /// mailbox both live in this one page, so a consumer that maps this much needs no re-mapping.
@@ -123,6 +137,14 @@ public partial class RuntimeEmitter {
   public const int DbgOffReadStatus = 0x278;  // i64 — 1 = the agent performed the copy
   public const int DbgOffReadBuf = 0x280;     // result buffer, DbgReadBufCap bytes (0x280..0x480)
 
+  // Text-base field (agent writes once at init, driver reads once) — v5. Placed at the first free offset
+  // after the read buffer (DbgOffReadBuf + DbgReadBufCap = 0x480), so it was previously zero. __dbg_init
+  // stores the ABSOLUTE `.text` base (&mrt_start) here; the driver subtracts it from an absolute return
+  // address it reads off the debuggee's stack (via DbgCmdReadMem) to get a code OFFSET — the base the
+  // sidecar resolves against, ASLR-independent. Dark-when-unset is unaffected (one store, only when
+  // attached). 0x480 + 8 = 0x488 &lt; 4096, so it stays inside the one control page.
+  public const int DbgOffTextBase = 0x480;    // i64 — absolute &mrt_start (the `.text` load address)
+
   /// The read-memory result-buffer capacity: the most bytes one DbgCmdReadMem copies. The driver chunks
   /// a larger read into ≤ this many bytes per command; the agent clamps ReadLen to it so a driver bug
   /// can never make the copy run past DbgOffReadBuf. 512 keeps DbgOffReadBuf..+512 = 0x280..0x480 well
@@ -141,10 +163,13 @@ public partial class RuntimeEmitter {
   public const long DbgCmdContinue = 3;
   public const long DbgCmdBacktrace = 4;
   public const long DbgCmdReadMem = 5;
+  public const long DbgCmdStep = 6;
 
-  // Stop reasons written to DbgOffStopReason by the agent. Only "breakpoint" exists in P3b; stepping
-  // and async-break reasons join it at P4.
+  // Stop reasons written to DbgOffStopReason by the agent. "breakpoint" (P3b) and "step" (P4b, published
+  // after a DbgCmdStep single-step completes) — kept DISTINCT so the driver's step loop can tell a step
+  // stop from a breakpoint it happened to land on, and each renders with its own reason text.
   public const long DbgStopReasonBreakpoint = 1;
+  public const long DbgStopReasonStep = 2;
 
   /// The frame-array capacity (DbgOffBtFrames holds this many i64 code offsets). ONE number both ends
   /// step by — the agent stops walking at it, the driver reads no more than it — so they cannot
@@ -272,6 +297,20 @@ public partial class RuntimeEmitter {
   public const string DbgStepTempAddrGlobal = "__dbg_step_temp_addr";
   public const string DbgStepTempOrigGlobal = "__dbg_step_temp_orig";
 
+  // Single-step DISPOSITION (agent .data). Both the step-over-a-breakpoint machinery (continue past a
+  // bp) and a user source-step arm the SAME hardware single-step (x86 EFLAGS.TF; arm64 a temp bp at
+  // pc+4); this flag is what the trap handler reads to decide what to do once that step completes. It is
+  // a TRI-STATE, not the two-value flag the P4b brief sketched, because user-stepping broke the old
+  // ownership signal: the step-over path could rely on `__dbg_step_addr != 0` to mean "this single-step
+  // is ours", but a user step from a NON-breakpoint location legitimately has step_addr == 0, so a
+  // distinct "none" state is needed to still reject a stray single-step (x86) / decide the disposition
+  // (arm64). The park loop sets it from the releasing command; the trap handler consumes it and resets
+  // to None.
+  public const string DbgStepModeGlobal = "__dbg_step_mode";
+  public const long DbgStepModeNone = 0;    // no single-step armed by us: a stray step defers to the fault chain
+  public const long DbgStepModeOverBp = 1;  // continue past a breakpoint: resume silently once the step completes
+  public const long DbgStepModeUser = 2;    // a user source-step: publish a step stop and re-park once it completes
+
   /// <summary>Emit the agent's globals: the mapped-base pointer (0 = dark), the env-var name, the
   /// breakpoint table, and the single-step-over state.</summary>
   public void EmitDebugAgentGlobals() {
@@ -286,6 +325,7 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal(DbgStepAddrGlobal, 8, 0);
     _b.DefineGlobal(DbgStepTempAddrGlobal, 8, 0);
     _b.DefineGlobal(DbgStepTempOrigGlobal, 8, 0);
+    _b.DefineGlobal(DbgStepModeGlobal, 8, 0);   // 0 = DbgStepModeNone: no user/over-bp single-step armed
   }
 
   /// <summary>
@@ -317,6 +357,11 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch1, DbgOffMagic, VReg.Scratch2);
     _b.MovRegImm(VReg.Scratch2, DbgControlVersion);
     _b.StoreIndirect(VReg.Scratch1, DbgOffVersion, VReg.Scratch2);
+
+    // Publish the absolute `.text` base (&mrt_start) so the driver can turn an absolute return address it
+    // reads off the stack into a code offset (needed by step-over/finish). One store, only when attached.
+    _b.LeaFuncAddr(VReg.Scratch2, "mrt_start");
+    _b.StoreIndirect(VReg.Scratch1, DbgOffTextBase, VReg.Scratch2);
 
     // Arm the trap handler. It CHAINS with __gt_fault_handler rather than shadowing it: on Windows
     // it is a VEH installed at the FRONT that defers every exception it does not own (in P3a, all of
@@ -836,6 +881,8 @@ public partial class RuntimeEmitter {
     var readLabel = UniqueLabel("dbg_park_read");
     var ackLabel = UniqueLabel("dbg_park_ack");
     var contLabel = UniqueLabel("dbg_park_continue");
+    var stepLabel = UniqueLabel("dbg_park_step");
+    var exitLabel = UniqueLabel("dbg_park_exit");
     var doneLabel = UniqueLabel("dbg_park_done");
 
     _b.DefineLabel(loopLabel);
@@ -858,6 +905,8 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Equal, btLabel);
     _b.CmpRegImm(VReg.Ret, DbgCmdReadMem);
     _b.JumpIf(Condition.Equal, readLabel);
+    _b.CmpRegImm(VReg.Ret, DbgCmdStep);
+    _b.JumpIf(Condition.Equal, stepLabel);
     _b.Jump(ackLabel);                                   // unknown command: ack and keep waiting
 
     _b.DefineLabel(setLabel);
@@ -888,7 +937,21 @@ public partial class RuntimeEmitter {
     _b.OsYield();
     _b.Jump(loopLabel);
 
-    _b.DefineLabel(contLabel);                           // ack the continue (no call clobbered our regs), return
+    // continue / step both EXIT the loop; they differ only in the single-step disposition they leave for
+    // the trap handler. The breakpoint path re-arms a single-step-over after park returns REGARDLESS, so
+    // continue must leave OverBp (else the handler would defer its own step-over trap), and step leaves
+    // User (the handler then publishes a step stop). Scratch1=base and Scratch2=seq are untouched by the
+    // dispatch compares, so the ack below still has them; Ret is free to carry the mode immediate.
+    _b.DefineLabel(contLabel);
+    _b.MovRegImm(VReg.Ret, DbgStepModeOverBp);
+    _b.StoreGlobal(DbgStepModeGlobal, VReg.Ret);
+    _b.Jump(exitLabel);
+
+    _b.DefineLabel(stepLabel);
+    _b.MovRegImm(VReg.Ret, DbgStepModeUser);
+    _b.StoreGlobal(DbgStepModeGlobal, VReg.Ret);
+
+    _b.DefineLabel(exitLabel);                           // ack (no call clobbered base/seq), return
     _b.StoreRelease(VReg.Scratch1, DbgOffAckSeq, VReg.Scratch2);
 
     _b.DefineLabel(doneLabel);
@@ -932,6 +995,69 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
+  /// __dbg_on_step(absPc, sp, fp) — the step twin of <see cref="EmitDbgOnBreakpoint"/>: publish a
+  /// <see cref="DbgStopReasonStep"/> stop for the just-completed single-step and park until the next
+  /// command. Unlike on_breakpoint it does NO slot lookup — a step stop is unconditional, not "is this
+  /// address one of ours" — so it only converts the absolute PC to a code offset (the base the sidecar
+  /// resolves) and publishes. Called from each backend's trap thunk, which supplies the stepped
+  /// context's PC/SP/FP; the publish+park pair lives here so the two backends cannot word a step stop
+  /// differently.
+  /// </summary>
+  private void EmitDbgOnStep() {
+    _b.FunctionStart("__dbg_on_step", 3, 0x40);
+
+    // pcOffset = absPc − &mrt_start (same base __dbg_on_breakpoint and the panic symbolizer subtract).
+    _b.LeaFuncAddr(VReg.Scratch1, "mrt_start");
+    _b.LoadLocal(VReg.Scratch2, 0);                      // absPc
+    _b.SubRegReg(VReg.Scratch2, VReg.Scratch1);          // pcOffset
+
+    _b.MovRegImm(VReg.Arg0, DbgStopReasonStep);
+    _b.MovRegReg(VReg.Arg1, VReg.Scratch2);
+    _b.LoadLocal(VReg.Arg2, 1);                          // sp
+    _b.LoadLocal(VReg.Arg3, 2);                          // fp
+    _b.Call("__dbg_publish_stop");
+
+    _b.Call("__dbg_park_loop");
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// __dbg_prepare_step_at(absPc) — arm the DATA side of a user single-step that is about to execute the
+  /// instruction at absPc: if a user breakpoint sits there, DISARM it (so the real instruction runs, not
+  /// the trap) and record it in <see cref="DbgStepAddrGlobal"/> so the trap handler re-arms it once the
+  /// step completes; otherwise leave step_addr 0 (nothing to re-arm). It does NOT touch the hardware
+  /// single-step itself (EFLAGS.TF / the temp bp) — that is per-backend and the thunk sets it after this
+  /// returns. Shared by x86 and arm64 so the "step past a breakpoint we happen to be sitting on" logic is
+  /// written once. The first user step from a breakpoint stop needs no call here — the breakpoint path
+  /// already disarmed the bp it parked on — but every SUBSEQUENT step lands on an arbitrary instruction
+  /// that may coincide with another breakpoint, which this handles.
+  /// </summary>
+  private void EmitDbgPrepareStepAt() {
+    _b.FunctionStart("__dbg_prepare_step_at", 1, 0x40);
+
+    var noBpLabel = UniqueLabel("dbg_prep_no_bp");
+
+    _b.LoadLocal(VReg.Arg0, 0);                          // absPc
+    _b.Call("__dbg_bp_slot");
+    _b.CmpRegImm(VReg.Ret, 0);
+    _b.JumpIf(Condition.Less, noBpLabel);                // no breakpoint here → step_addr stays 0
+
+    _b.LoadLocal(VReg.Arg0, 0);
+    _b.Call("__dbg_bp_orig_of_addr");                    // Ret = original code unit
+    _b.MovRegReg(VReg.Arg1, VReg.Ret);                   // arg1 = orig
+    _b.LoadLocal(VReg.Arg0, 0);                          // arg0 = absPc
+    _b.Call("__dbg_disarm_bp");                          // restore the real instruction so the step runs it
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.StoreGlobal(DbgStepAddrGlobal, VReg.Scratch1);    // remember it for the post-step re-arm
+    _b.FunctionEnd();
+
+    _b.DefineLabel(noBpLabel);
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreGlobal(DbgStepAddrGlobal, VReg.Scratch1);    // no bp to re-arm after this step
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
   /// Emit the always-present debug agent. Called UNCONDITIONALLY (unless --no-debug-agent), unlike
   /// the DebugStream family, because the agent is dark-by-default rather than opt-in — its only
   /// startup cost when MAXON_DEBUG is unset is a single env-var read. The target-specific trap-handler
@@ -949,6 +1075,8 @@ public partial class RuntimeEmitter {
     EmitDbgReadMem();
     EmitDbgParkLoop();
     EmitDbgOnBreakpoint();
+    EmitDbgOnStep();
+    EmitDbgPrepareStepAt();
     EmitDebugAgentInit();
     EmitDebugAgentShutdown();
   }

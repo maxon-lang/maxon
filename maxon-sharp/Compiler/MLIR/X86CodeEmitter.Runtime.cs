@@ -8170,10 +8170,18 @@ public partial class X86CodeEmitter {
   ///
   /// Two codes it DOES own:
   ///   STATUS_BREAKPOINT   — a hit INT3. If RIP-1 is a known breakpoint, publish a stop event, park
-  ///                         until continue, then set up single-step-over: restore the original byte,
-  ///                         rewind RIP over the INT3, set EFLAGS.TF, remember the breakpoint, resume.
-  ///   STATUS_SINGLE_STEP  — the trap-flag step after that. Re-arm the breakpoint, clear TF, resume.
-  ///                         This is why continue does not re-hit the same breakpoint.
+  ///                         until continue/step, then set up single-step-over: restore the original
+  ///                         byte, rewind RIP over the INT3, set EFLAGS.TF, remember the breakpoint,
+  ///                         resume. This setup is the SAME whether the release was continue or step —
+  ///                         both must get past the byte we parked on.
+  ///   STATUS_SINGLE_STEP  — the trap-flag step after that. It re-arms the breakpoint (if any) and
+  ///                         clears TF, then splits on the disposition the park loop left in
+  ///                         <see cref="DbgStepModeGlobal"/>: OverBp (continue) resumes silently — this
+  ///                         is why continue does not re-hit the same breakpoint — while User (a source
+  ///                         step) publishes a step stop and re-parks, arming another single-step if the
+  ///                         next command is also a step. A single-step with mode None is not ours and
+  ///                         defers (a user step from a non-bp location has step_addr 0, so step_addr can
+  ///                         no longer be the ownership guard — the tri-state mode is).
   ///
   /// Shutdown guard (P3a-review contract): if the agent has detached (__dbg_base == 0) the control
   /// segment is unmapped and the breakpoint table stale, so the handler defers immediately rather than
@@ -8233,7 +8241,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x18, 8);           // arg0 = bpaddr
     EmitCallRuntimeLabel("__dbg_disarm_bp");
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
-    EmitGlobalStoreReg(X86Register.Rax, "__dbg_step_addr");
+    EmitGlobalStoreReg(X86Register.Rax, DbgStepAddrGlobal);
 
     // ctx.EFlags |= TF to single-step the restored instruction. Rip already points at bpaddr (Windows
     // reports the INT3's own address), so with the original byte restored there, the resume needs no
@@ -8245,25 +8253,89 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, VehContinueExecution);
     EmitRuntimeFunctionEnd();
 
-    // Breakpoint cleared while parked: byte already restored, Rip at bpaddr — just resume.
+    // Breakpoint cleared while parked: the byte is already restored and Rip is at bpaddr. A continue just
+    // resumes; a user STEP that raced a clear (the driver never interleaves the two, so this is
+    // belt-and-braces against a hang) still owes a step stop, so it arms a single-step from here instead.
     DefineLabel("__dbg_th_bp_cleared");
+    EmitGlobalLoadReg(X86Register.Rax, DbgStepModeGlobal);
+    EmitMovRegImm(X86Register.Rdx, DbgStepModeUser);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__dbg_th_arm_userstep");               // ctx is spilled at [rbp-0x10]
     EmitMovRegImm(X86Register.Rax, VehContinueExecution);
     EmitRuntimeFunctionEnd();
 
-    // --- single-step: re-arm the breakpoint we stepped over, clear TF ---
+    // --- single-step: we armed this (mode != None). Re-arm any bp we stepped over, clear TF, then split
+    // on the disposition. ---
     DefineLabel("__dbg_th_singlestep");
-    EmitGlobalLoadReg(X86Register.Rax, "__dbg_step_addr");
+    // Ownership: a single-step with mode == None is not ours and defers. step_addr can no longer be the
+    // guard — a user step from a non-bp location has step_addr == 0 — so the tri-state mode is.
+    EmitGlobalLoadReg(X86Register.Rax, DbgStepModeGlobal);
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "__dbg_th_defer");                      // not a step we set up
-    EmitMovMemReg(-0x18, X86Register.Rax, 8);
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg0 = step_addr
-    EmitCallRuntimeLabel("__dbg_arm_bp");               // re-arm (table still holds the original byte)
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitGlobalStoreReg(X86Register.Rax, "__dbg_step_addr");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);           // p
+    EmitJcc("z", "__dbg_th_defer");
+
+    // Spill the CONTEXT pointer: the rest reads/writes EFlags/Rip through it, across calls that clobber
+    // every volatile register.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);            // p
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);            // [rbp-0x10] = ctx
+
+    // Re-arm the breakpoint we stepped over, if any (step_addr != 0). The table still holds its original
+    // byte, so arm_bp restores the trap.
+    EmitGlobalLoadReg(X86Register.Rax, DbgStepAddrGlobal);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "__dbg_th_ss_no_rearm");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg0 = step_addr
+    EmitCallRuntimeLabel("__dbg_arm_bp");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitGlobalStoreReg(X86Register.Rax, DbgStepAddrGlobal);
+    DefineLabel("__dbg_th_ss_no_rearm");
+
+    // Clear TF — this one instruction has executed.
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);            // ctx
     EmitMovRegDwordIndirect(X86Register.Rcx, X86Register.Rax, ContextOffEFlags);
     EmitAndRegImm(X86Register.Rcx, ~EflagsTrapFlag);
+    EmitMovDwordIndirectReg(X86Register.Rax, ContextOffEFlags, X86Register.Rcx);
+
+    // Disposition: a user step publishes a stop + parks; anything else (step-over-a-bp for continue)
+    // resumes silently.
+    EmitGlobalLoadReg(X86Register.Rax, DbgStepModeGlobal);
+    EmitMovRegImm(X86Register.Rdx, DbgStepModeUser);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__dbg_th_userstep");
+
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitGlobalStoreReg(X86Register.Rax, DbgStepModeGlobal);   // mode = None
+    EmitMovRegImm(X86Register.Rax, VehContinueExecution);
+    EmitRuntimeFunctionEnd();
+
+    // User step: publish a step stop at the new Rip, then park. Reset mode to None first — the park loop
+    // re-sets it from the releasing command.
+    DefineLabel("__dbg_th_userstep");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitGlobalStoreReg(X86Register.Rax, DbgStepModeGlobal);
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);            // ctx
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, ContextOffRip);   // arg0 = new pc (abs)
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, ContextOffRsp);   // arg1 = sp
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, ContextOffRbp);    // arg2 = fp
+    EmitCallRuntimeLabel("__dbg_on_step");              // publish reason=step + park until next command
+    // Park returned. If the next command is also a step, arm the next single-step; else resume (TF clear).
+    EmitGlobalLoadReg(X86Register.Rax, DbgStepModeGlobal);
+    EmitMovRegImm(X86Register.Rdx, DbgStepModeUser);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__dbg_th_arm_userstep");
+    EmitMovRegImm(X86Register.Rax, VehContinueExecution);
+    EmitRuntimeFunctionEnd();
+
+    // Arm the next user single-step from the current ctx.Rip: disarm any breakpoint sitting there (so the
+    // real instruction runs, not the trap) and set EFLAGS.TF. ctx is spilled at [rbp-0x10]. Shared by the
+    // post-park re-step and the (defensive) bp-cleared-mid-step path.
+    DefineLabel("__dbg_th_arm_userstep");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);            // ctx
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, ContextOffRip);  // arg0 = current pc (abs)
+    EmitCallRuntimeLabel("__dbg_prepare_step_at");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);            // ctx
+    EmitMovRegDwordIndirect(X86Register.Rcx, X86Register.Rax, ContextOffEFlags);
+    EmitOrRegImm(X86Register.Rcx, EflagsTrapFlag);
     EmitMovDwordIndirectReg(X86Register.Rax, ContextOffEFlags, X86Register.Rcx);
     EmitMovRegImm(X86Register.Rax, VehContinueExecution);
     EmitRuntimeFunctionEnd();

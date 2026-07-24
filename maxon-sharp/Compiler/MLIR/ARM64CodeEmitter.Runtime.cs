@@ -7717,13 +7717,17 @@ public partial class ARM64CodeEmitter {
   /// The debug agent's SIGTRAP handler thunk (P3b). A `BRK #0` raises a synchronous SIGTRAP whose
   /// ucontext pc points AT the BRK. Dispatch:
   ///
-  ///   * A temp-bp step in progress (pc == __dbg_step_temp_addr): single-step-over is complete —
-  ///     remove the temp bp, re-arm the original, and return (the kernel resumes at pc, now the
-  ///     restored instruction). This is macOS's stand-in for x86's trap flag: userspace has no
-  ///     hardware single-step, so the agent plants a temporary BRK at pc+4 and lets it fire.
-  ///   * A known breakpoint (pc in the table): publish a stop event, park until continue, then begin
+  ///   * A temp-bp step in progress (pc == __dbg_step_temp_addr): the single-stepped instruction is
+  ///     complete and we are stopped AT the temp address. Remove the temp bp, re-arm the original (if
+  ///     any), then split on the disposition the park loop left in __dbg_step_mode: OverBp (continue)
+  ///     resumes silently; User (a source step) publishes a step stop and re-parks, planting the next
+  ///     temp bp if the next command is also a step. This is macOS's stand-in for x86's trap flag:
+  ///     userspace has no hardware single-step, so the agent plants a temporary BRK at pc+4 and lets it
+  ///     fire.
+  ///   * A known breakpoint (pc in the table): publish a stop event, park until continue/step, then begin
   ///     single-step-over — restore the original word at pc and plant the temp bp at pc+4. Returning
-  ///     with pc unchanged re-executes the restored instruction, then hits the temp bp.
+  ///     with pc unchanged re-executes the restored instruction, then hits the temp bp. The setup is the
+  ///     same whether the release was continue or step; __dbg_step_mode decides what the temp-bp hit does.
   ///   * Anything else (an unowned BRK, or a fault after the agent detached — __dbg_base == 0):
   ///     CHAIN to the default disposition (signal(SIGTRAP, SIG_DFL); raise). This is what resolves the
   ///     P3a re-trap-loop residual: a bare return would re-execute the BRK forever, so an unhandled
@@ -7761,15 +7765,60 @@ public partial class ARM64CodeEmitter {
     EmitCmpRegReg(ARM64Register.X6, ARM64Register.X5);
     EmitBranchCond(ARM64ConditionCode.Ne, "__dbg_th_check_known");
 
-    // Step-over complete: disarm the temp bp, re-arm the original, clear the step state.
+    // Temp-bp hit: the single-stepped instruction completed and we are stopped AT the temp address
+    // (= the prior pc + 4). newPc == slotPc here (the guard above only fell through when pc equals the
+    // temp address), so slotPc IS the location we stopped at.
+    // Disarm the temp bp (restore the real instruction at newPc).
     EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
     EmitGlobalLoadReg(ARM64Register.X1, Runtime.RuntimeEmitter.DbgStepTempOrigGlobal);
     EmitBranchLink("__dbg_disarm_bp");
+    // Re-arm the original breakpoint we stepped over, if any (step_addr != 0 — a user step from a non-bp
+    // location has step_addr 0, so arming it unconditionally would patch address 0).
     EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepAddrGlobal);
+    EmitCbz(ARM64Register.X0, "__dbg_th_ss_no_rearm");
     EmitBranchLink("__dbg_arm_bp");
+    DefineLabel("__dbg_th_ss_no_rearm");
+    // Clear the step state (temp + addr).
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
     EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepAddrGlobal);
+
+    // Disposition: a user step publishes a stop + parks; step-over-a-bp (continue) resumes silently.
+    EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepModeGlobal);
+    EmitMovRegImm(ARM64Register.X1, Runtime.RuntimeEmitter.DbgStepModeUser);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__dbg_th_userstep");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepModeGlobal);  // mode = None
+    EmitRuntimeFunctionEnd();
+
+    // User step: publish a step stop at newPc (= slotPc), then park. Reset mode to None first (the park
+    // loop re-sets it from the releasing command).
+    DefineLabel("__dbg_th_userstep");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepModeGlobal);
+    EmitLoadFromStack(ARM64Register.X4, slotMcontext, 8);
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);                             // arg0 = newPc (abs)
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X4, McontextOffSsSp, 8);   // arg1 = sp
+    EmitLoadIndirect(ARM64Register.X2, ARM64Register.X4, McontextOffSsFp, 8);   // arg2 = fp
+    EmitBranchLink("__dbg_on_step");                    // publish reason=step + park until next command
+    // Park returned. If the next command is a step, plant the next single-step; else resume.
+    EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepModeGlobal);
+    EmitMovRegImm(ARM64Register.X1, Runtime.RuntimeEmitter.DbgStepModeUser);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__dbg_th_userstep_resume");
+    // prepare_step_at(newPc): disarm a bp at newPc if present, set step_addr for the post-step re-arm.
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitBranchLink("__dbg_prepare_step_at");
+    // Plant a temp bp at newPc + 4 to single-step the next instruction (arm64 has no hardware trap flag).
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, DbgBreakpointPatchLen, isAdd: true);
+    EmitStoreToSp(slotTemp, ARM64Register.X0);
+    EmitBranchLink("__dbg_arm_bp");                     // X0 = temp's original word
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempOrigGlobal);
+    EmitLoadFromStack(ARM64Register.X0, slotTemp, 8);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
+    DefineLabel("__dbg_th_userstep_resume");
     EmitRuntimeFunctionEnd();
 
     DefineLabel("__dbg_th_check_known");
