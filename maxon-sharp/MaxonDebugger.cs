@@ -174,11 +174,22 @@ internal sealed class MaxonDebugger : IDisposable {
 
   // ---- Commands ----
 
-  public bool SetBreakpointAtOffset(long codeOffset) =>
-    PostCommand(RuntimeEmitter.DbgCmdSetBp, codeOffset);
+  /// The offsets where the USER (not a transient step temp bp) has armed a breakpoint. The agent stores
+  /// one 0xCC/BRK per offset, so a step's temp bp set where a user bp already sits would SHARE that byte
+  /// and the temp's cleanup would silently delete the user's bp. The step temp-bp runners consult this to
+  /// leave a coinciding user bp untouched. Populated by the user-facing arm/clear below; the temp runners
+  /// arm/clear through PostCommand directly, so a temp never enters this set.
+  private readonly HashSet<long> _userBreakpointOffsets = [];
 
-  public bool ClearBreakpointAtOffset(long codeOffset) =>
-    PostCommand(RuntimeEmitter.DbgCmdClearBp, codeOffset);
+  public bool SetBreakpointAtOffset(long codeOffset) {
+    _userBreakpointOffsets.Add(codeOffset);
+    return PostCommand(RuntimeEmitter.DbgCmdSetBp, codeOffset);
+  }
+
+  public bool ClearBreakpointAtOffset(long codeOffset) {
+    _userBreakpointOffsets.Remove(codeOffset);
+    return PostCommand(RuntimeEmitter.DbgCmdClearBp, codeOffset);
+  }
 
   public bool Continue() => PostCommand(RuntimeEmitter.DbgCmdContinue, 0);
 
@@ -568,12 +579,35 @@ internal sealed class MaxonDebugger : IDisposable {
   }
 
   /// <summary>
+  /// Arm a TEMP breakpoint at <paramref name="offset"/> unless a USER breakpoint already sits there — in
+  /// which case the user's bp already stops execution at that offset, so we must not arm (the agent would
+  /// share the single 0xCC/BRK) nor later clear it (which would silently delete the user's bp). Appends to
+  /// <paramref name="armed"/> only what WE armed, so the caller's cleanup touches only its own temps.
+  /// Returns false only on a genuine arm failure. Arms/clears through <see cref="PostCommand"/> directly so
+  /// a temp never enters <see cref="_userBreakpointOffsets"/>.
+  /// </summary>
+  private bool ArmTempIfNeeded(long offset, List<long> armed) {
+    if (_userBreakpointOffsets.Contains(offset)) return true;   // a user bp already stops here; leave it
+    if (!PostCommand(RuntimeEmitter.DbgCmdSetBp, offset)) return false;
+    armed.Add(offset);
+    return true;
+  }
+
+  /// Clear every temp bp WE armed (never a coinciding user bp, which was not added to the list) — the one
+  /// cleanup both step runners share.
+  private void ClearTempBreakpoints(List<long> armed) {
+    foreach (var off in armed) PostCommand(RuntimeEmitter.DbgCmdClearBp, off);
+  }
+
+  /// <summary>
   /// Arm a temp bp at <paramref name="retOff"/>, Continue until the stop is in a frame shallower than
   /// <paramref name="innerSp"/> (skipping a hit in an equal-or-deeper frame, which is recursion re-entering
-  /// the same return address), and clear the temp bp — even on early return, so no patch leaks.
+  /// the same return address), and clear the temp bp — even on early return, so no patch leaks. If a user
+  /// bp already sits at <paramref name="retOff"/> it is used as-is (and left intact).
   /// </summary>
   private StepOutcome RunUntilReturn(long retOff, long innerSp) {
-    if (!SetBreakpointAtOffset(retOff)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+    var armed = new List<long>();
+    if (!ArmTempIfNeeded(retOff, armed)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
     try {
       for (int i = 0; i < MaxReturnContinues; i++) {
         if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
@@ -583,31 +617,29 @@ internal sealed class MaxonDebugger : IDisposable {
       }
       return new StepOutcome(StepOutcomeKind.LimitReached, default);
     } finally {
-      ClearBreakpointAtOffset(retOff);
+      ClearTempBreakpoints(armed);
     }
   }
 
   /// <summary>
   /// Arm a temp bp at <paramref name="lineOff"/> and (when a caller exists) at <paramref name="returnOff"/>,
   /// Continue once, and report the resulting stop — the caller reads the stop's location to see whether the
-  /// line was reached or the frame returned first. Both temp bps are always cleared, so no patch leaks.
-  /// Unlike <see cref="RunUntilReturn"/> the first stop is the answer (no deeper-frame skipping).
+  /// line was reached or the frame returned first. Temp bps WE armed are always cleared, so no patch leaks;
+  /// a coinciding user bp is used as-is and left intact. Unlike <see cref="RunUntilReturn"/> the first stop
+  /// is the answer (no deeper-frame skipping).
   /// </summary>
   private StepOutcome RunToLineOrReturn(long lineOff, long? returnOff) {
     var armed = new List<long>();
     try {
-      if (!SetBreakpointAtOffset(lineOff)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
-      armed.Add(lineOff);
-      if (returnOff is { } r && r != lineOff) {
-        if (!SetBreakpointAtOffset(r)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
-        armed.Add(r);
-      }
+      if (!ArmTempIfNeeded(lineOff, armed)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+      if (returnOff is { } r && r != lineOff && !ArmTempIfNeeded(r, armed))
+        return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
       if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
       return WaitForStop(out var stop)
         ? new StepOutcome(StepOutcomeKind.Stopped, stop)
         : new StepOutcome(StepOutcomeKind.Exited, default);
     } finally {
-      foreach (var off in armed) ClearBreakpointAtOffset(off);
+      ClearTempBreakpoints(armed);
     }
   }
 
