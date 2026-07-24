@@ -83,7 +83,12 @@ public sealed class DebugInfoBuilder {
       // so the id resolves; a local whose type could not be placed is SKIPPED rather than pointed at a
       // wrong id — omission is honest ("capture what you can"), a wrong typeId would be the design
       // doc's "instrument that lies".
-      foreach (var (name, offset, typeName) in EmittableLocals(func)) {
+      //
+      // Sorted by name HERE (not in EmittableLocals): these AddLocal calls become the on-disk local
+      // table, so their order must be deterministic regardless of the slot dictionary's enumeration
+      // order. RegisterTypes consumes the same locals only as an unordered type-name set, so the sort
+      // belongs on this one order-sensitive path rather than in the shared filter (see EmittableLocals).
+      foreach (var (name, offset, typeName) in EmittableLocals(func).OrderBy(l => l.Name, StringComparer.Ordinal)) {
         if (_typeNameToId.TryGetValue(typeName, out var typeId))
           _writer.AddLocal(funcId, name, MxdbgLocKind.StackSlotRbpRel, offset, typeId, (uint)start, (uint)end);
       }
@@ -94,14 +99,19 @@ public sealed class DebugInfoBuilder {
   /// The named locals of a function that earn a sidecar record: each entry of the machine
   /// conversion's name -> slot-offset table that is a real user/parameter variable — not a compiler
   /// temp (`__`-prefixed), not a struct-field sub-slot (`name.field`) — and whose source type was
-  /// captured. Yielded name-sorted so the local table is deterministic regardless of the offset
-  /// dictionary's enumeration order. Empty when the function carries no debug side-tables (a release
-  /// build, or a synthetic function the capture never ran for).
+  /// captured. Empty when the function carries no debug side-tables (a release build, or a synthetic
+  /// function the capture never ran for).
   ///
-  /// One home for the local-emission filter, shared by <see cref="RegisterTypes"/> (which folds each
-  /// local's type name into the type table) and <see cref="RegisterFunctions"/> (which emits the
-  /// records) so the two cannot disagree about which locals exist — the identical type-name set is
-  /// what guarantees every resolved id is present.
+  /// Yielded in the slot dictionary's enumeration order, deliberately UNSORTED: only
+  /// <see cref="RegisterFunctions"/> needs a deterministic order (its per-local AddLocal calls become
+  /// the on-disk local table), and it sorts this stream itself. <see cref="RegisterTypes"/> consumes
+  /// only the SET of type names and is order-independent, so sorting here would sort every function's
+  /// locals twice — once for a caller that discards the order.
+  ///
+  /// One home for the local-emission filter, shared by RegisterTypes (which folds each local's type
+  /// name into the type table) and RegisterFunctions (which emits the records) so the two cannot
+  /// disagree about which locals exist — the identical (name, type) set is what guarantees every id
+  /// RegisterFunctions resolves was folded into the table by RegisterTypes.
   /// </summary>
   private static IEnumerable<(string Name, int Offset, string TypeName)> EmittableLocals<TOp>(
       IrFunction<TOp> func) where TOp : IPrintableOp {
@@ -109,9 +119,9 @@ public sealed class DebugInfoBuilder {
     var types = func.LocalSourceTypes;
     if (slots == null || types == null) yield break;
 
-    foreach (var name in slots.Keys.OrderBy(n => n, StringComparer.Ordinal)) {
+    foreach (var (name, offset) in slots) {
       if (name.StartsWith("__", StringComparison.Ordinal) || name.Contains('.')) continue;
-      if (types.TryGetValue(name, out var typeName)) yield return (name, slots[name], typeName);
+      if (types.TryGetValue(name, out var typeName)) yield return (name, offset, typeName);
     }
   }
 
