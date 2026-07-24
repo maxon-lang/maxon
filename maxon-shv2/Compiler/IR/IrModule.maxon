@@ -15,8 +15,6 @@ export typealias BlockIndex = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 export typealias BlockRefIndex = int(0 to u64.max)
 
-typealias DroppedNameSet = Set with ByteArray
-
 // Thrown by IrModule.findBlockRef when the given block isn't registered in
 // the function's block list — used by the parser's statement-line recorder
 // to silently skip detached sink blocks produced by newDetachedBlock.
@@ -163,14 +161,18 @@ export type IrModule uses Op
 	// Reclaim orphaned blocks from `self.blocks` (and the parallel
 	// `self.blockSourceInfo`) in place.
 	//
-	// Dead-code elimination prunes unreachable blocks by rebuilding
-	// `func.blockRefs` without their flat indices (see
-	// `DeadCodeElimination.pruneUnreachableBlocks`), but the pruned blocks stay
-	// resident in the shared `self.blocks` array — they are simply no longer
-	// referenced by any function. Like the orphan ops `compactOps` reclaims,
-	// these accumulate across the per-function pass loop and inflate the
-	// committed-but-live block storage during the long backend phase of a large
-	// compile (the compiler compiling itself). This compactor drops them.
+	// A pass that drops a function (`eliminateDeadFunctions`) or a block leaves
+	// the blocks it dropped resident in the shared `self.blocks` array — they
+	// are simply no longer referenced by any function. Like the orphan ops
+	// `compactOps` reclaims, these accumulate and inflate the committed-but-live
+	// block storage during the long backend phase of a large compile (the
+	// compiler compiling itself). This compactor drops them.
+	//
+	// ⚠ NOTHING CALLS IT YET, and nor does `compactOps`. Both are ported ahead of
+	// the pass that will want them; dead-function elimination deliberately does
+	// NOT, because an O(ops) walk plus two ops-sized arrays to release memory the
+	// module frees milliseconds later at the end of the compile is a bad trade
+	// (see DeadFunctionElimination's header).
 	//
 	// In-place, mirroring `compactOps`: live blocks are swapped leftward within
 	// the existing `self.blocks` / `self.blockSourceInfo` arrays and the tails
@@ -394,36 +396,6 @@ export type IrModule uses Op
 			block.assertTerminated()
 		end 'eachBlock'
 	end 'assertAllBlocksTerminated'
-
-	// Phase 11.6 cross-module inlining: drop every function whose name
-	// appears in `names` from `self.functions`. Used after the inliner
-	// merges the stdlib snapshot in: any stdlib function whose body got
-	// spliced has no remaining callers in the user module, but the
-	// snapshot's other (non-spliced) stdlib functions would force the
-	// backend to re-emit symbols that the linker-side stdlib cache
-	// already provides. The dropped functions' blocks/ops stay in
-	// `self.blocks` / `self.ops` as orphans because the backend walks
-	// `self.functions[].blockRefs[]`, never the global blocks array.
-	export function dropFunctionsByName(names ByteArrayArray)
-		// Intern the drop list into a set (O(1) membership) and rebuild
-		// `self.functions` in one pass, keeping survivors. The old form did a
-		// linear `names` scan per function AND an O(count) `remove(i)` per drop,
-		// so dropping the stdlib snapshot (functions in the thousands) was
-		// O(F² + F·N); this is O(F + N).
-		var dropSet = DroppedNameSet.create()
-		for n in names 'eachName'
-			dropSet.insert(n)
-		end 'eachName'
-
-		var kept = IrFunctionArray.create()
-		for f in self.functions 'eachFunc'
-			if dropSet.contains(f.name) 'drop'
-				continue
-			end 'drop'
-			kept.push(f)
-		end 'eachFunc'
-		self.functions = kept
-	end 'dropFunctionsByName'
 
 	// Merge all data from a source module into this module.
 	// Adjusts block indices in functions and op indices in blocks to account

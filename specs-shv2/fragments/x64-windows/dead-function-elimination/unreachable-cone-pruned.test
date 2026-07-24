@@ -1,0 +1,25 @@
+// Test: unreachable-cone-pruned
+typealias Integer = int(i64.min to i64.max)
+
+function deadInner(x Integer) returns Integer
+	return x + 1
+end 'deadInner'
+
+function deadOuter(x Integer) returns Integer
+	return deadInner(x) * 2
+end 'deadOuter'
+
+function main() returns ExitCode
+	return 5
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 5
+    x64.popReg rbp
+    x64.ret
+}

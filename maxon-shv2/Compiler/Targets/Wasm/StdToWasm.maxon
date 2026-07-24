@@ -334,8 +334,10 @@ end 'appendRunEntry'
 // invisibly. `__mm_leak_check` is an ordinary i64→i64 Std function, so a narrower ExitCode is widened
 // to i64 first. Without the MM runtime the program cannot leak (nothing was allocated), so the gate
 // is skipped and the code passes straight through — keeping the non-heap path byte-identical. The MM
-// runtime is present ⟺ `__mm_leak_check` is a callee, so `calleeFuncIdx` answers the same question
-// the native gate asks `moduleHasFunction`, and hands back the func index in one lookup. Returns the
+// runtime is present ⟺ `__mm_leak_check` is in the module, so `calleeFuncIdx` decides the gate and hands
+// back the func index in ONE lookup — and unlike the native backends this is not a proxy question, since
+// the index is what the emitted `call` needs anyway. (Dead-function elimination roots `__mm_leak_check`
+// precisely because nothing in the module calls it; see DeadFunctionElimination's root set.) Returns the
 // valtype now on the stack: i64 after the gate, else main's own return valtype.
 function appendLeakGate(runBody WasmBody, mainReturnValType WasmValType, calleeFuncIdx CalleeFuncIdxMap) returns WasmValType
 	let leakCheckIdx = try calleeFuncIdx.get(MmLeakCheckName) otherwise return mainReturnValType

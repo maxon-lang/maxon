@@ -1525,9 +1525,10 @@ end 'emitTargetOp'
 // rel32 is chunk-local and independent of where concat places the chunk. Each block's
 // chunk-local start offset is recorded as it is emitted, then `resolveChunkRel32Fixups`
 // patches every pending branch (including forward jumps to blocks emitted later).
-// `usesGt` (whether the MODULE carries the GT scheduler) is passed in — computed ONCE by the caller from
-// `moduleHasFunction(GtSpawnName)`, never re-derived per function, so this stays O(1) per function. It gates
-// the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`).
+// `usesGt` (whether the program carries the GT scheduler) is passed in — it is `RuntimeUsage.usesGt`, the
+// bit `installGtRuntime` was gated on, read once by the caller and never re-derived per function, so this
+// stays O(1) per function. It gates the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`)
+// and the per-function morestack guard below.
 export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()

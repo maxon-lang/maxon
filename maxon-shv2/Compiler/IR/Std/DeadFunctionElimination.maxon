@@ -1,0 +1,214 @@
+// DeadFunctionElimination — the reachability prune that decides WHICH functions reach the back end.
+//
+// A function nothing can reach is still register-allocated, framed, encoded and linked: the whole
+// expensive half of the compiler runs on code that can never execute. This pass runs ONCE, at the
+// target-neutral backend entry (`buildBackend`, immediately after the sugar gate), so x64, arm64 and
+// wasm all inherit it rather than each having to remember to re-add it — the same argument that put
+// `assertNoSugarOps` there.
+//
+// ⭐ **WHY IT IS A PREREQUISITE, not a nicety.** The user-directed stdlib whitelist loads a listed
+// subset of `stdlib/*.maxon` so stdlib support can grow module by module. Without this pass,
+// whitelisting one module drags EVERY function in it into EVERY program — which adds them to all 221+
+// committed goldens, costs every compile, and BREAKS the wasm and arm64 suites outright, because the
+// GT/clock/IOCP substrate those modules reach is x64-windows-only (a `sleep(1)` program dies on wasm at
+// `StdToWasm: emitFuncAddr: no wasm function index for '__gt_trampoline'`). Reachability fixes all
+// three at once.
+//
+// ⭐ **WHO DECIDES WHAT, AND WHY THE TWO DECIDERS CANNOT DISAGREE.** `RuntimeUsage`
+// (`StringRuntime.scanRuntimeUsage` + `noteDestructorUsage`/`noteClonerUsage`) and this pass answer two
+// DIFFERENT questions, in that order:
+//
+//   * `RuntimeUsage` owns INSTALLATION — *does this program carry the allocator / the GT scheduler /
+//     the IOCP substrate / this `__destruct_<T>` at all?* It must run BEFORE lowering, because its
+//     `usesHeap`/`usesGt`/`usesIocp`/`usesStreaming` bits also gate the `.data` slots the backend
+//     resolves a `globalAddr` against, and a slot cannot be laid out after the fact.
+//   * This pass owns REACHABILITY — *of what was installed, what can actually be reached from the
+//     program's roots?* It runs LAST, on the finished Std module, and it never installs anything.
+//
+// So the composition is one-way and total: usage decides the FLOOR, DFE prunes within it, and DFE can
+// only ever REMOVE. There is no question both answer, hence nothing for them to disagree about. That
+// asymmetry is what makes an all-or-nothing install (`installArrayRuntime` installs the whole array
+// runtime as one closure, because the helpers call each other) both correct and cheap: the closure is
+// the safe over-approximation, and this pass takes the slack back.
+//
+// ⭐ **CONSERVATIVE BEATS CLEVER.** A missed prune costs bytes; a wrong prune is a link-time panic or,
+// worse, a silently missing side effect. Every reference this pass cannot SEE is therefore a ROOT, and
+// there are exactly three kinds of them — see `seedRoots`. A wrong prune does at least fail LOUD on
+// every backend (`resolveCallFixups: call to unknown function`, `emitCall: no wasm function index`,
+// `bakeFuncAbs64Relocs: … is in no debug symbol`), never silently.
+//
+// ⭐ **WHAT IT DOES NOT DO: it prunes FUNCTIONS, never `.rdata`.** v1's twin (`StdDeadFunctionElimination`)
+// also ran `pruneDeadGlobalData`, dropping witness/layout blobs whose label no live function loaded, and
+// paid for it with a `witnessConditionalRoots` sidetable, an `initToStoredVars` write-set map, a
+// second "live vars excluding inits" pre-walk, and a hand-maintained `shouldKeepGlobal` allow-list of
+// name prefixes. shv2 keeps the data and prunes only code, which is what lets the root set below stay
+// three lines long: because every `.rdata` function slot survives, every function a slot NAMES must
+// survive too, and "is this label reachable?" never has to be asked. Dead-DATA elimination is a
+// separate rung with its own goldens (`.rdata` offsets move, so `RequiredData` moves with them).
+//
+// Orphaned blocks and ops are LEFT BEHIND, exactly as every block-rebuilding pass leaves them
+// (`IrModule.liveOpIndices`' header). `compactOps`/`compactBlocks` would reclaim them, but they cost
+// an O(ops) walk plus two ops-sized arrays to release memory the module drops a few milliseconds
+// later, at the end of the compile that allocated it. Nothing downstream walks the flat arrays.
+
+// `module.functions` index → was it reached? DENSE over `0 .. funcCount-1`, which is the whole
+// divergence from v1's walk: a name is hashed EXACTLY ONCE per call-graph edge — at the lookup that
+// resolves it to an index — and the worklist then carries scalars. v1 pushed name STRINGS and re-hashed
+// one on every pop plus a `seen` insert per edge (`StdDeadFunctionElimination.maxon:88-105`), so its
+// walk paid three byte-sequence hashes per edge where this pays one.
+typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
+
+// Drop every function unreachable from the program's roots, in place. Rebuilds `module.functions`;
+// the dropped functions' blocks and ops stay in the flat arrays as orphans (see the header).
+export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable)
+	let byName = indexFunctionsByName(module)
+
+	var reached = BoolArray.create()
+	reached.resize(module.funcCount())
+	var worklist = FuncIndexArray.create()
+
+	seedRoots(globalData, byName: byName, reached: reached, worklist: worklist)
+
+	while worklist.count() > 0 'walk'
+		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
+		markCalleesOf(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist)
+	end 'walk'
+
+	sweepUnreachedFunctions(module, reached: reached)
+end 'eliminateDeadFunctions'
+
+// Name → `module.functions` index. Built once: without it, resolving a callee would be a linear scan of
+// every function and the whole walk would be O(functions × edges).
+//
+// A duplicate name cannot reach here — `mergeArtifact` raises E3006 on a duplicate user function, and
+// every installed runtime symbol is `__`-prefixed and installed at exactly one site — so `upsert`'s
+// last-wins has no case to decide.
+function indexFunctionsByName(module StdModule) returns FuncIndexByName
+	var byName = FuncIndexByName.create()
+	for i in 0 upto module.funcCount() 'eachFunc'
+		byName.upsert(module.getFunc(i).name, value: i)
+	end 'eachFunc'
+	return byName
+end 'indexFunctionsByName'
+
+// ⭐ **THE ROOT SET — the three reference kinds no Std op in this module spells.** Everything else is an
+// ordinary call-graph edge and is found by the walk.
+//
+// 1. **`main`** — the program's entry. The entry stub that calls it (`prependEntryStub`,
+//    `prependLinuxEntryStub`, arm64's hand-assembled chunk, wasm's synthesized `$run`) is built AFTER
+//    this pass, at the Target tier, so its call is invisible here.
+//
+// 2. **The two functions a hand-assembled Target-tier CHUNK calls by name.** Chunks are raw bytes with
+//    `CallFixup`s resolved at concat, built in the encode phase — after this pass — so their edges
+//    likewise cannot be walked. There are exactly two, and they were found by enumerating every
+//    `targetName:` in the chunk builders:
+//      * `__mm_leak_check` — both entry stubs' leak gate (`appendLeakGate`, `Arm64Runtime:103`). It is
+//        called from NOWHERE else, so pruning it would not fail the link: it would silently DELETE the
+//        leak gate and turn every exit-101 leak test green. The one root whose absence is invisible.
+//      * `__gt_enqueue` — the IOCP completion thread's cross-thread wake (`X64GtRuntime:772`).
+//    They are rooted unconditionally: a name absent from this module is simply not found (a program
+//    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
+//    belongs to was never installed.
+//
+// 3. **Every function named by an `.rdata` slot** (`GlobalDataTable.pendingRdataRelocs`) — a layout
+//    descriptor's `destroyFunc@40`/`copyFunc@48` and every witness-table method slot. These are
+//    reached through DATA, not code: `witnessCall` loads a `.rdata` table and jumps, and the element
+//    drop walk `callIndirect`s a pointer baked into `.rdata` by `bakeFuncAbs64Relocs`. This is exactly
+//    the precedent `noteDestructorUsage` already set — "referenced from data = live" — and because
+//    this pass never prunes `.rdata` (see the header), rooting ALL of them is not conservatism, it is
+//    the only correct answer: the slot survives, so its target must be there to fill it.
+function seedRoots(globalData GlobalDataTable, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	markLiveFunction(UserEntryName.toByteArray(), byName: byName, reached: reached, worklist: worklist)
+	markLiveFunction(MmLeakCheckName, byName: byName, reached: reached, worklist: worklist)
+	markLiveFunction(GtEnqueueName, byName: byName, reached: reached, worklist: worklist)
+
+	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
+		markLiveFunction(reloc.funcName, byName: byName, reached: reached, worklist: worklist)
+	end 'eachRdataSlot'
+end 'seedRoots'
+
+// Mark `name` reachable and queue its body for the walk. A name this module does not define is not an
+// error and not a miss: it is a hand-assembled chunk (`__gt_context_switch`, `__gt_trampoline`,
+// `__gt_morestack`, `__io_completion_loop`) or a root whose runtime this program never installed. There
+// is nothing to keep and nothing to drop, so it is simply not queued.
+function markLiveFunction(name ByteArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	let idx = try byName.get(name) otherwise 'notAModuleFunction'
+		return
+	end 'notAModuleFunction'
+
+	let alreadyReached = try reached.get(idx) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {idx}")
+	if alreadyReached 'already'
+		return
+	end 'already'
+
+	try reached.set(idx, value: true) otherwise panic("eliminateDeadFunctions: reached.set OOB at function index {idx}")
+	worklist.push(idx)
+end 'markLiveFunction'
+
+// Every static callee edge out of one live function. Walks LIVE ops (`IrModule.liveOpIndices`), never
+// the flat `module.ops` array: that array is append-only and holds the ops every prior block-rebuilding
+// pass replaced, so scanning it would resurrect callees from IR that no longer exists.
+function markCalleesOf(module StdModule, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("eliminateDeadFunctions: live op index {opIdx} not in module.ops")
+		markCalleeOf(op, byName: byName, reached: reached, worklist: worklist)
+	end 'eachOp'
+end 'markCalleesOf'
+
+// The static reachability edge one `StdOp` names, if any. THREE variants carry a function NAME —
+// `call`, `tryCall` and `funcAddr` — and every one of them is an edge:
+//
+//   * `call` / `tryCall` — the direct call graph.
+//   * `funcAddr` — a function's ADDRESS, and it is a STATIC edge even though the call that consumes it
+//     is indirect. It is the whole of shv2's first-class-function support: `let f = triple` lowers to
+//     `funcAddr(__fnref_triple)`, whose thunk body then `call`s `triple`; an async spawn takes the
+//     spawned function's bare address; an element destructor is stamped into a descriptor slot the same
+//     way. ⚠ v1 shipped this arm MISSING (its `funcAddrCalleeEdge` header records the fix): it assumed
+//     a `funcAddr` target was already rooted by the `funcRef` that produced its value, which is false
+//     for a directly-emitted one, and pruned the destructor.
+//
+// `callIndirect` and `witnessCall` deliberately name NO callee: they consume a code pointer that some
+// `funcAddr` (marked above) or some `.rdata` slot (rooted in `seedRoots`) already produced, so crediting
+// them would be crediting the same edge twice with no name to credit it to.
+//
+// The arms RANGE over the whole union in declaration order, ending at the current last variant, so a
+// variant appended past it FAILS TO COMPILE here rather than being silently swallowed — the band-append
+// invariant working in the reviewer's favour (StdDialect's header). A new variant that carries a callee
+// name must be added as its own arm.
+function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
+	match op 'op'
+		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.
+		const to param then break 'op'
+		call(_, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
+		// stores, and the two OS primitives that name no Maxon function.
+		retVoid to rdataAddr then break 'op'
+		tryCall(_, _, callee, _) then markLiveFunction(callee, byName: byName, reached: reached, worklist: worklist)
+		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
+		errorReturn to osExit then break 'op'
+		funcAddr(_, funcName) then markLiveFunction(funcName, byName: byName, reached: reached, worklist: worklist)
+		// `callIndirect`/`witnessCall` (see above) plus every appended `os*` primitive and `switch`,
+		// none of which names a Maxon function.
+		callIndirect to osWriteFile then break 'op'
+	end 'op'
+end 'markCalleeOf'
+
+// Rebuild `module.functions` keeping only what the walk reached.
+function sweepUnreachedFunctions(module StdModule, reached BoolArray)
+	let total = module.funcCount()
+	var kept = IrFunctionArray.create()
+	for i in 0 upto total 'eachFunc'
+		let func = module.getFunc(i)
+		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
+		if isLive 'live'
+			kept.push(func)
+		end 'live' else 'dead'
+			let name = String.from(func.name)
+			logTrace(LogCategory.ir, message: function() gives "dfe: dropping unreachable function '{name}'")
+		end 'dead'
+	end 'eachFunc'
+
+	let dropped = total - kept.count()
+	logDebug(LogCategory.ir, message: function() gives "dfe: dropped {dropped} unreachable function(s) of {total}")
+	module.functions = kept
+end 'sweepUnreachedFunctions'

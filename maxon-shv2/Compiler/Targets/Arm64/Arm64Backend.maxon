@@ -1449,7 +1449,7 @@ end 'arm64ResolveFuncAdrpRelocs'
 // TargetOp channel, so it is hand-assembled as a chunk in the encode phase (`appendArm64RuntimeChunks`)
 // and laid out first. `throws CompileError` because register allocation can fail for a real reason
 // (E5001), exactly as the x64 backend does.
-export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
+export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
 	// `target` reaches the ISEL because the three OS-primitive lowerings differ per OS: macOS routes
 	// them through libSystem GOT imports, Linux through raw `svc #0` (see `arm64OsCallKind`), and the
@@ -1473,7 +1473,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// is 0, exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime`
 	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
 	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
-	appendArm64RuntimeChunks(chunks, leakCheck: moduleHasFunction(targetModule, name: MmLeakCheckName), os: target.os)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, os: target.os)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
 	end 'eachFunc'
