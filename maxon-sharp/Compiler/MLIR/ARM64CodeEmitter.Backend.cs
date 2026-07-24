@@ -729,20 +729,19 @@ public partial class ARM64CodeEmitter {
     }
 
     public void StoreIndirectByte(VReg baseReg, int offset, VReg src) {
-      // STRB W(src), [R(base), #offset] — unsigned offset form
-      // Encoding: size=00, V=0, opc=00, imm12=offset, Rn=base, Rt=src
-      // 0011 1001 000 | imm12 | Rn | Rt
-      uint imm12 = (uint)offset & 0xFFF;
-      uint instr = 0x39000000u | (imm12 << 10) | (Reg(R(baseReg)) << 5) | Reg(R(src));
-      _e.EmitWord(instr);
+      // STRB W(src), [R(base), #offset]. Routed through the shared narrow load/store
+      // encoder (size 1): it keeps the scaled unsigned-offset form — byte-identical to
+      // the previous hand-rolled STRB — for 0..4095, drops to the unscaled signed form
+      // for small negatives, and materializes the address into X16 for anything wider.
+      // The old `imm12 = offset & 0xFFF` masked any offset past 4095 (and every negative
+      // offset), silently storing to the wrong byte.
+      _e.EmitStoreIndirect(R(baseReg), offset, R(src), 1);
     }
 
     public void LoadIndirectByte(VReg dest, VReg baseReg, int offset) {
-      // LDRB W(dest), [R(base), #offset] — unsigned offset form
-      // 0011 1001 010 | imm12 | Rn | Rt
-      uint imm12 = (uint)offset & 0xFFF;
-      uint instr = 0x39400000u | (imm12 << 10) | (Reg(R(baseReg)) << 5) | Reg(R(dest));
-      _e.EmitWord(instr);
+      // LDRB W(dest), [R(base), #offset]. See StoreIndirectByte: the shared encoder
+      // covers the full offset range instead of masking to a 12-bit immediate.
+      _e.EmitLoadIndirect(R(dest), R(baseReg), offset, 1);
     }
 
     // ---- Platform info ----

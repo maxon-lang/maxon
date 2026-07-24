@@ -209,52 +209,70 @@ public partial class X86CodeEmitter {
       _e.EmitBytes(0xFF, (byte)(0xD0 + ((int)reg & 7)));
     }
 
+    // ---- ModR/M displacement encoding (shared) ----
+
+    // The hand-encoded [base + offset] memory forms below (byte MOV / MOVZX, and the
+    // LOCK FF /0, FF /1, and 0F C1 group forms) select their displacement width here,
+    // in ONE place, rather than each writing a single displacement byte. A lone disp8
+    // silently truncates any offset outside a signed byte (200 becomes -56), so those
+    // sites read/wrote the wrong address for a field more than 127 bytes from its base.
+    // These forms have always emitted an EXPLICIT displacement (mod=01 even at offset 0),
+    // so keeping mod=01 for the in-range case leaves every offset in [Disp8Min, Disp8Max]
+    // byte-identical to prior output; only a larger offset now widens to mod=10 + disp32
+    // instead of truncating. This mirrors EmitModRmWithBase's disp8/disp32/SIB selection;
+    // it stays separate only because these forms never elide the displacement at offset 0.
+    private const int Disp8Min = -128;
+    private const int Disp8Max = 127;
+    private const byte ModRmModDisp8 = 0x40;   // mod=01: [base + disp8]
+    private const byte ModRmModDisp32 = 0x80;  // mod=10: [base + disp32]
+    private const int ModRmRmSibEscape = 4;    // r/m=100 escapes to a SIB byte (RSP/R12 base)
+    private const byte SibBaseNoIndex = 0x24;  // scale=0, index=none(100), base=100
+    private const int FfExtInc = 0;            // FF /0 = INC
+    private const int FfExtDec = 1;            // FF /1 = DEC
+
+    /// Emit the ModR/M byte (plus a SIB byte for an RSP/R12 base) and the base-relative
+    /// displacement for a [base + offset] operand. `regField` is a real register's low
+    /// 3 bits (MOV / XADD) or an opcode-group extension (INC /0, DEC /1). disp8 when the
+    /// offset fits a signed byte, else disp32 — never the truncating single byte.
+    private void EmitByteMemModRm(int regField, X86Register baseReg, int offset) {
+      int baseCode = (int)baseReg & 7;
+      bool needsSib = baseCode == ModRmRmSibEscape;
+      byte mod = offset >= Disp8Min && offset <= Disp8Max ? ModRmModDisp8 : ModRmModDisp32;
+      _e.EmitByte((byte)(mod | ((regField & 7) << 3) | baseCode));
+      if (needsSib)
+        _e.EmitByte(SibBaseNoIndex);
+      if (mod == ModRmModDisp8)
+        _e.EmitByte((byte)(offset & 0xFF));
+      else
+        _e.EmitDword(offset);
+    }
+
     // ---- Atomics ----
 
-    public void AtomicInc(VReg baseAddr, int offset) {
-      // LOCK INC qword [reg + offset]
+    // LOCK-prefixed unary group form: F0 + REX.W(.B) + FF /ext + [base + disp].
+    // Shared by INC (/0) and DEC (/1); the displacement widens to disp32 as needed.
+    private void EmitLockFfUnary(int ext, VReg baseAddr, int offset) {
       var reg = R(baseAddr);
       _e.EmitByte(0xF0); // LOCK prefix
-      if (offset >= -128 && offset <= 127) {
-        // REX.W + FF /0 [reg+disp8]
-        if (reg >= X86Register.R8)
-          _e.EmitBytes(0x49, 0xFF, (byte)(0x40 + ((int)reg & 7)), (byte)offset);
-        else
-          _e.EmitBytes(0x48, 0xFF, (byte)(0x40 + ((int)reg & 7)), (byte)offset);
-      } else {
-        throw new NotImplementedException("AtomicInc with large offset not yet implemented");
-      }
+      _e.EmitBytes((byte)(reg >= X86Register.R8 ? 0x49 : 0x48), 0xFF);
+      EmitByteMemModRm(ext, reg, offset);
     }
 
-    public void AtomicDec(VReg baseAddr, int offset) {
-      // LOCK DEC qword [reg + offset]
-      var reg = R(baseAddr);
-      _e.EmitByte(0xF0); // LOCK prefix
-      if (offset >= -128 && offset <= 127) {
-        // REX.W + FF /1 [reg+disp8]
-        if (reg >= X86Register.R8)
-          _e.EmitBytes(0x49, 0xFF, (byte)(0x48 + ((int)reg & 7)), (byte)offset);
-        else
-          _e.EmitBytes(0x48, 0xFF, (byte)(0x48 + ((int)reg & 7)), (byte)offset);
-      } else {
-        throw new NotImplementedException("AtomicDec with large offset not yet implemented");
-      }
-    }
+    public void AtomicInc(VReg baseAddr, int offset) => EmitLockFfUnary(FfExtInc, baseAddr, offset);
+
+    public void AtomicDec(VReg baseAddr, int offset) => EmitLockFfUnary(FfExtDec, baseAddr, offset);
 
     public void AtomicXadd(VReg baseAddr, int offset, VReg val) {
-      // LOCK XADD [baseAddr + offset], val
-      // For now, delegate to existing code pattern
+      // LOCK XADD [base + offset], val: F0 + REX.W(.R,.B) + 0F C1 /r
       var baseReg = R(baseAddr);
       var valReg = R(val);
       _e.EmitByte(0xF0); // LOCK
-      // REX.W + 0F C1 /r [base+disp8]
       byte rex = 0x48;
       if (baseReg >= X86Register.R8) rex |= 0x01; // REX.B
       if (valReg >= X86Register.R8) rex |= 0x04; // REX.R
       _e.EmitByte(rex);
       _e.EmitBytes(0x0F, 0xC1);
-      _e.EmitByte((byte)(0x40 | (((int)valReg & 7) << 3) | ((int)baseReg & 7)));
-      _e.EmitByte((byte)offset);
+      EmitByteMemModRm((int)valReg & 7, baseReg, offset);
     }
 
     public void AtomicCAS(VReg destBase, int offset, VReg expected, VReg desired) {
@@ -600,8 +618,7 @@ public partial class X86CodeEmitter {
     }
 
     public void StoreIndirectByte(VReg baseReg, int offset, VReg src) {
-      // MOV BYTE [R(base) + offset], R(src) low byte
-      // REX + 88 /r [base + disp8]
+      // MOV BYTE [R(base) + offset], R(src) low byte: [REX] 88 /r
       var baseReg_ = R(baseReg);
       var srcReg_ = R(src);
       byte rex = 0x40;
@@ -611,15 +628,12 @@ public partial class X86CodeEmitter {
       // REX must be emitted whenever src is RSP/RBP/RSI/RDI to reach their low bytes.
       bool needRex = rex != 0x40 || (srcReg_ >= X86Register.Rsp && srcReg_ <= X86Register.Rdi);
       if (needRex) _e.EmitByte(rex);
-      // 88 /r ModRM(01, reg, base) + disp8
       _e.EmitByte(0x88);
-      _e.EmitByte((byte)(0x40 | (((int)srcReg_ & 7) << 3) | ((int)baseReg_ & 7)));
-      _e.EmitByte((byte)offset);
+      EmitByteMemModRm((int)srcReg_ & 7, baseReg_, offset);
     }
 
     public void LoadIndirectByte(VReg dest, VReg baseReg, int offset) {
-      // MOVZX R(dest), BYTE [R(base) + offset]
-      // REX.W + 0F B6 /r ModRM(01, dest, base) + disp8
+      // MOVZX R(dest), BYTE [R(base) + offset]: REX.W + 0F B6 /r
       var destReg = R(dest);
       var baseReg_ = R(baseReg);
       byte rex = 0x48;
@@ -627,8 +641,7 @@ public partial class X86CodeEmitter {
       if (baseReg_ >= X86Register.R8) rex |= 0x01; // REX.B
       _e.EmitByte(rex);
       _e.EmitBytes(0x0F, 0xB6);
-      _e.EmitByte((byte)(0x40 | (((int)destReg & 7) << 3) | ((int)baseReg_ & 7)));
-      _e.EmitByte((byte)offset);
+      EmitByteMemModRm((int)destReg & 7, baseReg_, offset);
     }
 
     // ---- Platform info ----
