@@ -39,7 +39,18 @@ public partial class RuntimeEmitter {
   /// DbgOff* offsets below). The header fields v1 defined (magic/version/flags) keep their meaning and
   /// offsets, so a v1 consumer still reads the handshake correctly — the driver reports whatever
   /// version it finds rather than refusing a v2 agent, and only the P3b mailbox commands need v2.
-  public const long DbgControlVersion = 2;
+  ///
+  /// v3 (P3c) adds the <see cref="DbgCmdBacktrace"/> command and the frame-count / frame-array fields
+  /// it fills (<see cref="DbgOffBtCount"/> / <see cref="DbgOffBtFrames"/>) — previously-zero segment
+  /// bytes, so no existing field's meaning changes. The version matters here for HONESTY, not layout: a
+  /// v2 agent (a binary built before P3c) has no backtrace handler and its park loop would ACK the
+  /// unknown command without filling the array, so the driver gates <c>backtrace</c> on version ≥ 3 and
+  /// reports "not supported by this binary" rather than showing an empty trace it would read as real.
+  public const long DbgControlVersion = 3;
+
+  /// The control-segment version at which the agent first understood <see cref="DbgCmdBacktrace"/>.
+  /// The driver refuses to trust the frame array from an older agent (which would ack-and-ignore).
+  public const long DbgBacktraceMinVersion = 3;
 
   /// The whole agent control segment: one page. The P3a handshake header and the P3b command/stop
   /// mailbox both live in this one page, so a consumer that maps this much needs no re-mapping.
@@ -81,6 +92,15 @@ public partial class RuntimeEmitter {
   public const int DbgOffStopSp = 0x58;
   public const int DbgOffStopFp = 0x60;
 
+  // Backtrace-result channel (agent writes, driver reads) — v3:
+  //   In response to DbgCmdBacktrace the agent walks the STOPPED frame's saved-rbp chain (reusing the
+  //   mrt_fault_backtrace discipline) and writes a bounded array of `.text` code offsets — frame 0 is
+  //   the exact stop PC offset, frames 1..N are return-address offsets (the driver applies the −1
+  //   call-site bias when it symbolizes those). DbgOffBtCount holds how many were written. The park
+  //   loop's ack store-release publishes both, so a driver that has seen the ack sees a complete array.
+  public const int DbgOffBtCount = 0x68;
+  public const int DbgOffBtFrames = 0x70;
+
   /// flags bit 0: the in-process agent has mapped the segment and armed its trap handler. Released
   /// with a store-release AFTER the magic/version, so a consumer that sees this bit also sees them.
   public const long DbgFlagAgentAlive = 1;
@@ -91,10 +111,19 @@ public partial class RuntimeEmitter {
   public const long DbgCmdSetBp = 1;
   public const long DbgCmdClearBp = 2;
   public const long DbgCmdContinue = 3;
+  public const long DbgCmdBacktrace = 4;
 
   // Stop reasons written to DbgOffStopReason by the agent. Only "breakpoint" exists in P3b; stepping
   // and async-break reasons join it at P4.
   public const long DbgStopReasonBreakpoint = 1;
+
+  /// The frame-array capacity (DbgOffBtFrames holds this many i64 code offsets). ONE number both ends
+  /// step by — the agent stops walking at it, the driver reads no more than it — so they cannot
+  /// disagree on the array's length. Its real bound is the control PAGE, not the fault backtrace's
+  /// walk cap (deliberately NOT coupled to <see cref="GtLayout.MaxBacktraceFrames"/>: raising that
+  /// anti-spin cap must not silently overflow this page). 64 is generous for a debug trace and fits
+  /// with room to spare: 0x70 + 64*8 = 0x270 &lt; 4096.
+  public const int DbgMaxBacktraceFrames = 64;
 
   /// The breakpoint table capacity. Held in agent .data (NOT the shared segment — the driver does not
   /// need the saved original bytes, and code bytes should not sit in a same-user-readable segment).
@@ -559,9 +588,126 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
+  /// __dbg_backtrace() — walk the STOPPED frame's saved-rbp chain and write a bounded array of `.text`
+  /// code offsets into the control segment (DbgOffBtFrames), with the count in DbgOffBtCount. Frame 0
+  /// is the exact stop-PC offset; frames 1..N are the return addresses up the chain (the driver applies
+  /// the −1 call-site bias when symbolizing those). Reads the stopped fp/sp/pc the last stop event
+  /// published into the segment, so it is only meaningful at a breakpoint stop; at the entry stop (no
+  /// stop published, fp == 0) it writes count 0.
+  ///
+  /// It reuses mrt_fault_backtrace's frame discipline — range-validate each frame against the stopped
+  /// [sp, sp + FaultStackWindowBytes) window, require the chain to strictly ascend, and reject a
+  /// return address outside `.text` — so a corrupt rbp degrades to a short trace, never a wild read or
+  /// a second fault. It is a stopped-thread walk (the single-M MVP); per-GT switching is P4.
+  ///
+  /// Contains no Call, so its persistent state (base, current fp, count, the stack window, the text
+  /// base + size) lives in frame slots and the loop uses scratch registers freely.
+  /// </summary>
+  private void EmitDbgBacktrace() {
+    _b.FunctionStart("__dbg_backtrace", 0, 0x80);
+
+    var walkLabel = UniqueLabel("dbg_bt_walk");
+    var emptyLabel = UniqueLabel("dbg_bt_empty");
+    var storeCountLabel = UniqueLabel("dbg_bt_store_count");
+    var doneLabel = UniqueLabel("dbg_bt_done");
+
+    // Frame slots: 0=base 1=fp 2=count 3=stackLow 4=stackHigh 5=textBase 6=textSize.
+    const int slotBase = 0;
+    const int slotFp = 1;
+    const int slotCount = 2;
+    const int slotStackLow = 3;
+    const int slotStackHigh = 4;
+    const int slotTextBase = 5;
+    const int slotTextSize = 6;
+
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: write nothing
+    _b.StoreLocal(slotBase, VReg.Scratch1);
+
+    // fp = the stopped frame pointer. Zero at the entry stop (no stop event published) -> empty trace.
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopFp);
+    _b.StoreLocal(slotFp, VReg.Scratch2);
+    _b.JumpIfZero(VReg.Scratch2, emptyLabel);
+
+    // Frame 0 = the exact stop-PC offset (already a validated `.text` code offset). BtFrames[0] = it.
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch1, DbgOffStopPc);
+    _b.StoreIndirect(VReg.Scratch1, DbgOffBtFrames, VReg.Scratch3);
+    _b.MovRegImm(VReg.Scratch2, 1);
+    _b.StoreLocal(slotCount, VReg.Scratch2);
+
+    // stackLow = stopped sp; stackHigh = stackLow + FaultStackWindowBytes (the same sane window the
+    // fault backtrace trusts, larger than any thread or grown green-thread stack).
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopSp);
+    _b.StoreLocal(slotStackLow, VReg.Scratch2);
+    _b.AddRegImm(VReg.Scratch2, GtLayout.FaultStackWindowBytes);
+    _b.StoreLocal(slotStackHigh, VReg.Scratch2);
+
+    // textBase = &mrt_start; textSize = &symtable − textBase (the exact `.text` bound the symbolizer
+    // trusts; an UNSIGNED compare below then rejects a negative offset as a huge value in one test).
+    _b.LeaFuncAddr(VReg.Scratch2, "mrt_start");
+    _b.StoreLocal(slotTextBase, VReg.Scratch2);
+    _b.LeaSymdata(VReg.Scratch3, _b.SymbolTableLabel);
+    _b.SubRegReg(VReg.Scratch3, VReg.Scratch2);
+    _b.StoreLocal(slotTextSize, VReg.Scratch3);
+
+    _b.DefineLabel(walkLabel);
+    _b.LoadLocal(VReg.Scratch0, slotCount);
+    _b.CmpRegImm(VReg.Scratch0, DbgMaxBacktraceFrames);
+    _b.JumpIf(Condition.AboveEqual, storeCountLabel);     // array full
+
+    _b.LoadLocal(VReg.Scratch1, slotFp);                  // current frame
+    _b.JumpIfZero(VReg.Scratch1, storeCountLabel);
+    _b.LoadLocal(VReg.Scratch2, slotStackLow);
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.JumpIf(Condition.Below, storeCountLabel);          // below the stopped sp
+    _b.LoadLocal(VReg.Scratch2, slotStackHigh);
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.JumpIf(Condition.AboveEqual, storeCountLabel);     // beyond the sane window
+
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, 8);     // ra = [fp + 8]
+    _b.JumpIfZero(VReg.Scratch2, storeCountLabel);
+    _b.LoadLocal(VReg.Scratch3, slotTextBase);
+    _b.SubRegReg(VReg.Scratch2, VReg.Scratch3);           // off = ra − textBase
+    _b.LoadLocal(VReg.Scratch3, slotTextSize);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.JumpIf(Condition.AboveEqual, storeCountLabel);     // outside .text (unsigned: catches negative)
+
+    // BtFrames[count] = off  ->  [base + DbgOffBtFrames + count*8] = off
+    _b.LoadLocal(VReg.Scratch0, slotBase);
+    _b.LoadLocal(VReg.Scratch3, slotCount);
+    _b.ShlRegImm(VReg.Scratch3, 3);
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch3);
+    _b.StoreIndirect(VReg.Scratch0, DbgOffBtFrames, VReg.Scratch2);
+    _b.LoadLocal(VReg.Scratch0, slotCount);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(slotCount, VReg.Scratch0);
+
+    // Advance with the ascending guard: next = [fp]; a non-ascending link ends the walk AFTER this
+    // frame (already stored), so a corrupt chain yields a short trace, not a wild one.
+    _b.LoadLocal(VReg.Scratch1, slotFp);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, 0);     // next = [fp]
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.JumpIf(Condition.BelowEqual, storeCountLabel);     // next <= fp -> stop
+    _b.StoreLocal(slotFp, VReg.Scratch2);
+    _b.Jump(walkLabel);
+
+    _b.DefineLabel(emptyLabel);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(slotCount, VReg.Scratch0);
+
+    _b.DefineLabel(storeCountLabel);
+    _b.LoadLocal(VReg.Scratch1, slotBase);
+    _b.LoadLocal(VReg.Scratch2, slotCount);
+    _b.StoreIndirect(VReg.Scratch1, DbgOffBtCount, VReg.Scratch2);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
   /// __dbg_park_loop() — the stop-the-world pause. Spin on the command doorbell (CmdSeq), dispatching
-  /// set-breakpoint / clear-breakpoint (and acking each), until the driver sends continue; yield the
-  /// slice between polls so the pause does not peg a core. Reused by the entry stop and the
+  /// set-breakpoint / clear-breakpoint / backtrace (and acking each), until the driver sends continue;
+  /// yield the slice between polls so the pause does not peg a core. Reused by the entry stop and the
   /// breakpoint-hit stop. Returns when continue arrives (or the agent detaches).
   /// </summary>
   private void EmitDbgParkLoop() {
@@ -571,6 +717,7 @@ public partial class RuntimeEmitter {
     var idleLabel = UniqueLabel("dbg_park_idle");
     var setLabel = UniqueLabel("dbg_park_set");
     var clearLabel = UniqueLabel("dbg_park_clear");
+    var btLabel = UniqueLabel("dbg_park_backtrace");
     var ackLabel = UniqueLabel("dbg_park_ack");
     var contLabel = UniqueLabel("dbg_park_continue");
     var doneLabel = UniqueLabel("dbg_park_done");
@@ -591,6 +738,8 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Equal, setLabel);
     _b.CmpRegImm(VReg.Ret, DbgCmdClearBp);
     _b.JumpIf(Condition.Equal, clearLabel);
+    _b.CmpRegImm(VReg.Ret, DbgCmdBacktrace);
+    _b.JumpIf(Condition.Equal, btLabel);
     _b.Jump(ackLabel);                                   // unknown command: ack and keep waiting
 
     _b.DefineLabel(setLabel);
@@ -601,6 +750,10 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(clearLabel);
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, DbgOffCmdArg);
     _b.Call("__dbg_clear_bp");
+    _b.Jump(ackLabel);
+
+    _b.DefineLabel(btLabel);                             // fill the frame array, then ack (below)
+    _b.Call("__dbg_backtrace");
     _b.Jump(ackLabel);
 
     _b.DefineLabel(ackLabel);                            // reload base (a call clobbered it), ack, loop
@@ -670,6 +823,7 @@ public partial class RuntimeEmitter {
     EmitDbgClearBp();
     EmitDbgBpOrigOfAddr();
     EmitDbgPublishStop();
+    EmitDbgBacktrace();
     EmitDbgParkLoop();
     EmitDbgOnBreakpoint();
     EmitDebugAgentInit();

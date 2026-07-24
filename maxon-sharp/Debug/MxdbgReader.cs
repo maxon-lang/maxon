@@ -162,6 +162,36 @@ public sealed class MxdbgReader {
     return null;
   }
 
+  /// <summary>
+  /// The smallest `.text` code offset whose line row is EXACTLY <paramref name="fileName"/>:<paramref
+  /// name="line"/> — the address `break file:line` plants a breakpoint at. Null when the line carries
+  /// no statement (a blank line, an `end`/brace line, a comment): the honest "no code at that line" the
+  /// driver reports rather than a breakpoint at the wrong place. This is the inverse of
+  /// <see cref="PcToLine"/> over the same line table, so the two never disagree.
+  ///
+  /// The file is matched by trailing path component (case-insensitively), so `break foo.maxon:N` finds
+  /// a row the sidecar recorded under an absolute or differently-rooted path. The smallest matching
+  /// offset is the statement's entry, past the prologue for any non-first statement.
+  /// </summary>
+  public uint? LineToOffset(string fileName, uint line) {
+    var wantLeaf = LeafName(fileName);
+    uint? best = null;
+    for (uint i = 0; i < _lineCount; i++) {
+      var row = Line(i);
+      if (row.Line != line || !LeafName(row.File).Equals(wantLeaf, StringComparison.OrdinalIgnoreCase))
+        continue;
+      if (best is null || row.CodeOffset < best) best = row.CodeOffset;
+    }
+    return best;
+  }
+
+  /// The trailing path component, split on both separators so a Windows-rooted sidecar path and a
+  /// forward-slash command-line spelling compare equal.
+  private static string LeafName(string path) {
+    int cut = path.LastIndexOfAny(['/', '\\']);
+    return cut < 0 ? path : path[(cut + 1)..];
+  }
+
   /// Map a `.text` code offset to its source position: the greatest line row at or before the offset
   /// within the enclosing function. Null when no function/line covers it.
   public LineInfo? PcToLine(uint codeOffset) {

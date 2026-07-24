@@ -64,12 +64,14 @@ class Program {
     Console.WriteLine("  --timing-functions=N     Also print top-N hottest functions per heavy pass (implies --timing)");
     Console.WriteLine();
     Console.WriteLine("Debugger options (debug):");
+    Console.WriteLine("  <exe> [args...]          Interactive REPL: break file:line, run, continue, backtrace, quit");
+    Console.WriteLine("  --batch --commands=<spec> <exe>");
+    Console.WriteLine("                           Drive the REPL non-interactively (spec: ';'-separated or @file); JSON stops");
     Console.WriteLine("  --dump-info <exe|.mxdbg> Print the sidecar's files, functions, and line table");
     Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
     Console.WriteLine("                           Map .text code offsets to file:line:col");
     Console.WriteLine("  --attach-probe <exe>     Attach the in-process debug agent and read its handshake (P3a)");
     Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
-    Console.WriteLine("  <exe>                    Interactive debugging (lands in P3)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -99,13 +101,17 @@ class Program {
   }
 
   /// <summary>
-  /// The `maxon debug` command. P1 implements the two read-only sidecar surfaces —
-  /// `--dump-info &lt;exe|.mxdbg&gt;` and `--symbolize &lt;.mxdbg&gt; &lt;codeOffset...&gt;`. The
-  /// interactive REPL is a later phase (P3); a bare `maxon debug &lt;exe&gt;` says so.
+  /// The `maxon debug` command. Read-only sidecar surfaces — `--dump-info &lt;exe|.mxdbg&gt;` and
+  /// `--symbolize &lt;.mxdbg&gt; &lt;codeOffset...&gt;` (P1) — plus the substrate harnesses
+  /// `--attach-probe` (P3a) / `--bp-test` (P3b). A bare `maxon debug &lt;exe&gt; [args]` launches the
+  /// interactive REPL (P3c); `--batch --commands=&lt;file|inline&gt; &lt;exe&gt;` drives the same engine
+  /// non-interactively, emitting one JSON event per stop.
   /// </summary>
   static int RunDebug(string[] args) {
     if (args.Length == 0) {
-      Console.Error.WriteLine("Usage: maxon debug --dump-info <exe|.mxdbg>");
+      Console.Error.WriteLine("Usage: maxon debug <exe> [args...]                 (interactive REPL)");
+      Console.Error.WriteLine("       maxon debug --batch --commands=<spec> <exe>  (JSON, non-interactive)");
+      Console.Error.WriteLine("       maxon debug --dump-info <exe|.mxdbg>");
       Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
       Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
       Console.Error.WriteLine("       maxon debug --bp-test <exe> <codeOffset>");
@@ -113,6 +119,8 @@ class Program {
     }
 
     switch (args[0]) {
+      case "--batch":
+        return RunDebugBatch(args[1..]);
       case "--dump-info": {
         if (args.Length < 2) {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
@@ -165,11 +173,41 @@ class Program {
           Console.Error.WriteLine($"Unknown 'maxon debug' option: {args[0]}");
           return 1;
         }
-        // A bare target path: the interactive session is a later phase.
-        Console.WriteLine("Interactive debugging (breakpoints, stepping, the REPL) lands in P3.");
-        Console.WriteLine("For now: 'maxon debug --dump-info <exe>' and 'maxon debug --symbolize <.mxdbg> <offset...>'.");
-        return 0;
+        // A bare target path (plus any args to forward): launch the interactive REPL.
+        return MaxonDebugRepl.RunInteractive(args[0], args[1..]);
     }
+  }
+
+  /// <summary>
+  /// `maxon debug --batch --commands=&lt;spec&gt; &lt;exe&gt; [args...]` — the non-interactive face of
+  /// the REPL engine. <c>--commands</c> is a `;`-separated inline list or `@file`; the first non-option
+  /// arg is the target, the rest are forwarded to it. Emits one JSON event per stop to stdout.
+  /// </summary>
+  static int RunDebugBatch(string[] args) {
+    string? commands = null;
+    string? exe = null;
+    var targetArgs = new List<string>();
+
+    foreach (var arg in args) {
+      if (arg.StartsWith("--commands=")) {
+        commands = arg["--commands=".Length..];
+      } else if (exe == null && !arg.StartsWith('-')) {
+        exe = arg;
+      } else {
+        // Everything after the target is forwarded to it verbatim (including any leading '-').
+        targetArgs.Add(arg);
+      }
+    }
+
+    if (commands == null) {
+      Console.Error.WriteLine("maxon debug --batch needs --commands=<;-separated spec | @file>.");
+      return 1;
+    }
+    if (exe == null) {
+      Console.Error.WriteLine("maxon debug --batch needs a target executable.");
+      return 1;
+    }
+    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands);
   }
 
   /// Load a `.mxdbg` sidecar for the given path (a `.mxdbg` file, or a binary whose sidecar is
