@@ -2989,7 +2989,7 @@ export type Parser
 				hasByteStringLiteral = true
 			end 'byteStringToken'
 
-			if self.at(TokenKind.identifier) and self.current().value.equals(SetBuiltinBaseName) and self.kindAt(self.pos + 1) == TokenKind.from 'setFromToken'
+			if self.atSetFromConstruction() 'setFromToken'
 				hasIntSetFromLiteral = true
 			end 'setFromToken'
 
@@ -3057,7 +3057,7 @@ export type Parser
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
 		if hasIntArrayLiteral 'internArrayLiteral'
-			_ = index.internArrayIntegerInstance()
+			_ = index.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
 		end 'internArrayLiteral'
 
 		// Intern the `Array with Byte` instance if this file materializes a byte-string literal — after
@@ -3081,7 +3081,7 @@ export type Parser
 		// after `foldFile`, exactly as the int-array literal instance above, so its giid follows the file's named
 		// generic instances (a stable, source-path-ordered assignment).
 		if hasIntSetFromLiteral 'internSetFromLiteral'
-			_ = index.internSetIntegerInstance()
+			_ = index.internBuiltinIntegerInstance(SetBuiltinBaseName)
 		end 'internSetFromLiteral'
 	end 'foldDeclaredSignaturesInto'
 
@@ -3095,6 +3095,20 @@ export type Parser
 	function atTopLevelBindingKeyword() returns bool
 		return self.at(TokenKind.let) or self.at(TokenKind.var)
 	end 'atTopLevelBindingKeyword'
+
+	// Is the cursor on a `Set from` construction — a bare `Set` identifier immediately followed by `from`
+	// (P1.7b slice B)?
+	//
+	// ONE predicate, read by BOTH the declaration sweep (which PRE-INTERNS `Set with integer` so the parser's
+	// own read is never the first to mutate the shared registry) and `parsePrimary`'s construction arm (which
+	// BUILDS the `__set_from`), for the reason `atTopLevelBindingKeyword` is one predicate. Taught to one and
+	// not the other — a broadened `from`-construction trigger the parser builds but the sweep does not recognize
+	// — a `Set from` would go un-pre-interned, and the parser's `internBuiltinIntegerInstance` read would become
+	// the FIRST write to the shared registry mid-parse: an order-dependent gid no drift guard can see. Teaching
+	// this one predicate teaches both.
+	function atSetFromConstruction() returns bool
+		return self.at(TokenKind.identifier) and self.current().value.equals(SetBuiltinBaseName) and self.peekKind() == TokenKind.from
+	end 'atSetFromConstruction'
 
 	// The block depth after the token at the cursor. `end` FLOORS at zero rather than underflowing: a
 	// stray `end` is malformed source, and the sweep is tolerant — the real parse reports it, with a
@@ -14340,7 +14354,7 @@ export type Parser
 			// `Set` identifier followed by `from` is a construction, NOT a variable reference (`Set` names no
 			// binding, so the plain path below reports E2004 `Undefined variable 'Set'`). Its element type is
 			// inferred from the literal. This is the ONLY `<Type> from […]` form shv2 parses this slice.
-			if self.current().value.equals(SetBuiltinBaseName) and self.peekKind() == TokenKind.from 'setFromConstruction'
+			if self.atSetFromConstruction() 'setFromConstruction'
 				return try self.parseSetFromConstruction(func)
 			end 'setFromConstruction'
 
@@ -16136,7 +16150,7 @@ export type Parser
 	// slice 1's exact op order, kept so the pre-existing int-literal goldens do not move; the shared
 	// `pushArrayLiteralElement`/`requireArrayLiteralElementMatches` emit the same ops a trivial element always did.
 	function parseIntArrayLiteralBody(func IrFunction, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.internArrayIntegerInstance()
+		let giid = self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
 		let arr = self.emitArrayCreateOp(giid, range: range)
 		while true 'elements'
 			let elemTok = self.current()
@@ -16164,12 +16178,12 @@ export type Parser
 
 	// The `Array with T` instance a literal's FIRST element fixes (P1.7 slice 3) — an integer element → the
 	// int instance, a String → `Array with String`, a struct/boxed-union → `Array with <name>`. All are
-	// interned by the sweep (`internArrayIntegerInstance` / `internArrayLiteralAggregateInstances`), so this is a
+	// interned by the sweep (`internBuiltinIntegerInstance` / `internArrayLiteralAggregateInstances`), so this is a
 	// pure lookup. A float/function/other element is not a supported literal element yet (E2015).
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
 		let tag = self.tagOf(elem)
 		if tag == ValueTypeTag.integer 'int'
-			return self.signatures.internArrayIntegerInstance()
+			return self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
 		end 'int'
 		if tagIsText(tag) 'string'
 			return self.signatures.arrayInstanceForString()
@@ -16326,16 +16340,16 @@ export type Parser
 	end 'parseSetFromConstruction'
 
 	// The `Set with <elem>` instance a `Set from [<literal>]` constructs — its key type is the array literal's
-	// ELEMENT type, so a `Set from [ints]` is the `Set with integer` instance (`internSetIntegerInstance`, whose
-	// `integer` element canonicalizes to the `int` witness, matching the array's own element). INT-element only
-	// this slice: the literal must be `Array with integer`, so a String / managed-element literal (`Set from
+	// ELEMENT type, so a `Set from [ints]` is the `Set with integer` instance (`internBuiltinIntegerInstance`,
+	// whose `integer` element canonicalizes to the `int` witness, matching the array's own element). INT-element
+	// only this slice: the literal must be `Array with integer`, so a String / managed-element literal (`Set from
 	// ["a"]`) is a clean E2015 here rather than a link failure at the missing key witness. Both instances are
 	// pre-interned by the sweep, so these are pure reads.
 	function setInstanceForArrayLiteral(arrGid GenericInstanceId, setTok Token) returns GenericInstanceId throws ParseError
-		if arrGid != self.signatures.internArrayIntegerInstance() 'notInt'
+		if arrGid != self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName) 'notInt'
 			throw ParseError.unsupported("`Set from […]` supports INT scalar keys only at P1.7b slice B — a String / managed-element literal is a later slice", line: setTok.line, column: setTok.column)
 		end 'notInt'
-		return self.signatures.internSetIntegerInstance()
+		return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
 	end 'setInstanceForArrayLiteral'
 
 	// ⭐ **DISPATCH A `Set` METHOD off a binding receiver (P1.7b slice A)** — the set twin of

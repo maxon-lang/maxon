@@ -2897,19 +2897,6 @@ export type ProgramSignatures
 		return self.isSetBaseName(self.genericInstanceBaseName(id))
 	end 'isSetInstance'
 
-	// ⭐ **THE `Set with integer` INSTANCE FOR A `Set from [ints]` CONSTRUCTION (P1.7b slice B).** The hash-table
-	// twin of `internArrayIntegerInstance`: a `Set from [1,2,3]` has no typealias to intern its element from (the
-	// int element is inferred from the literal), so the SWEEP interns this ONE well-known instance whenever a
-	// file's tokens contain a `Set from` construct (`Parser.foldDeclaredSignaturesInto`), and the parser reads
-	// the same giid back at construction time. Interning is IDEMPOTENT, so the sweep's call is the WRITE and every
-	// parser call is a pure READ — the instance is always interned before any file is parsed, which is what keeps
-	// a per-file parse from being the first to mutate the shared registry. Its `integer` element canonicalizes to
-	// the `int` conformer (`conformerTypeArgName`), so its witnesses are `__witness_int_*`, exactly as the array
-	// literal's element does.
-	export function internSetIntegerInstance() returns GenericInstanceId
-		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: singletonInteger())
-	end 'internSetIntegerInstance'
-
 	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
 	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
 	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
@@ -2961,19 +2948,22 @@ export type ProgramSignatures
 		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
 	end 'arrayElementCloneStrategy'
 
-	// ⭐ **THE `Array with integer` INSTANCE FOR A BARE `[…]` ARRAY LITERAL (P1.7 slice 1).** A literal has
-	// no typealias to intern from, so the SWEEP interns this ONE well-known instance whenever a file's tokens
-	// contain a `[` (`Parser.foldDeclaredSignaturesInto`), and the parser reads the same giid back at literal
-	// time. Interning is IDEMPOTENT — `TypeNameInterner.intern` and `GenericInstanceRegistry.intern` both
-	// return the existing entry without mutating when present — so the sweep's call is the WRITE and every
-	// parser call is a pure READ (the instance is always interned before any file is parsed). At this slice a
-	// literal's elements are all integer (a non-integer element literal is a later slice, rejected E2015), so
-	// one instance suffices; a wider element set would intern more here. It is deliberately NOT folded into
-	// the content hash: a file gaining an array literal re-parses on its OWN bytes, and no OTHER file's
-	// meaning depends on this shared, deterministic instance.
-	export function internArrayIntegerInstance() returns GenericInstanceId
-		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: singletonInteger())
-	end 'internArrayIntegerInstance'
+	// ⭐ **THE `<Base> with integer` INSTANCE FOR AN INFERRED-INT LITERAL CONSTRUCTION.** A bare `[…]` int-array
+	// literal (`baseName` = `Array`, P1.7 slice 1) and a `Set from [ints]` construction (`baseName` = `Set`,
+	// P1.7b slice B) both infer their `integer` element from the literal, so neither has a typealias to intern
+	// its instance from. The SWEEP interns the one well-known instance for its base whenever a file's tokens
+	// contain the construct (`Parser.foldDeclaredSignaturesInto`: a `[` for the array, a `Set from` for the set),
+	// and the parser reads the same giid back at construction time. Interning is IDEMPOTENT — `TypeNameInterner.intern`
+	// and `GenericInstanceRegistry.intern` both return the existing entry without mutating when present — so the
+	// sweep's call is the WRITE and every parser call is a pure READ (the instance is always interned before any
+	// file is parsed, which keeps a per-file parse from being the first to mutate the shared registry). At this
+	// slice the elements are all integer (a non-integer element is a later slice, rejected E2015), so one instance
+	// per base suffices. The `integer` element canonicalizes to the `int` conformer (`conformerTypeArgName`), so
+	// the witnesses are `__witness_int_*`. It is deliberately NOT folded into the content hash: a file gaining the
+	// construct re-parses on its OWN bytes, and no OTHER file's meaning depends on this shared, deterministic instance.
+	export function internBuiltinIntegerInstance(baseName ByteArray) returns GenericInstanceId
+		return self.genericInstances.intern(self.typeNames.intern(baseName), args: singletonInteger())
+	end 'internBuiltinIntegerInstance'
 
 	// ⭐ **THE `Array with Byte` INSTANCE FOR A `b"…"` BYTE-STRING LITERAL (P1.7 slice 2).** A byte-string
 	// literal has no typealias to intern from (`b"hi"` names no type), so — like the `[…]` int-array literal
