@@ -499,8 +499,9 @@ let ErrorIoPending = 997
 let ErrorBrokenPipe = 109
 // The wide pipe-name buffer: prefix `\\.\pipe\mx` (11 wchars) + a 16-wchar hex uniquifier + NUL, in a `__slab_alloc`
 // buffer. `PipeNamePrefixWchars` counts the prefix wide chars; `PipeNameHexDigits` the uniquifier digits (a 64-bit
-// value); `WideCharBytes` is 2 (UTF-16). The uniquifier is a monotonic global counter XORed with the GT pointer, so
-// two concurrent reads (different GTs) and two sequential reads (same recycled GT struct) all get distinct names.
+// value); `WideCharBytes` is 2 (UTF-16). The uniquifier packs GetCurrentProcessId in the high 32 bits and a
+// per-process monotonic counter in the low 32, so two concurrent reads (different seq), two sequential reads (same
+// recycled GT struct, different seq), and two separate PROCESSES (different pid) all get distinct names.
 // The wide-char index into the pipe-name buffer a prefix store targets (0..the prefix length).
 // The pipe-name uniquifier packs GetCurrentProcessId (cross-process) in the high 32 bits and a per-process
 // monotonic counter (within-process) in the low 32 bits, so FILE_FLAG_FIRST_PIPE_INSTANCE never collides.
@@ -2768,11 +2769,11 @@ function emitStoreWideCharLowByte(module StdModule, block IrBlock, ids ValueMint
 end 'emitStoreWideCharLowByte'
 
 // Fill the freshly slab-zeroed wide `bufPtr` with `\\.\pipe\mx<uniquifier-hex>` (a valid Win32 named-pipe name),
-// then branch to `cont`. `uniquifier = gt XOR seq`, where `seq` is a monotonic per-process counter (`__io_pipe_seq`,
-// incremented here; single-M so a plain load/add/store is race-free) and `gt` is the reading GT's slab pointer — so
-// two CONCURRENT reads (different GTs) and two SEQUENTIAL reads (same recycled GT struct, different seq) and two
-// separate PROCESSES (ASLR'd GT pointers) all get distinct names. The 16 hex digits are written MSB-first with a
-// small loop.
+// then branch to `cont`. `uniquifier = (pid << 32) | (seq & 0xFFFFFFFF)`, where `seq` is a monotonic per-process
+// counter (`__io_pipe_seq`, incremented here; single-M so a plain load/add/store is race-free) and `pid` is
+// GetCurrentProcessId — so two CONCURRENT reads (different seq) and two SEQUENTIAL reads (same recycled GT struct,
+// different seq) and two separate PROCESSES (different pid) all get distinct names. The 16 hex digits are written
+// MSB-first with a small loop.
 function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, bufPtr ValueId, cont IrBlock)
 	var hexHdr = module.addBlock(func, label: b"pnhexhdr")
 	var hexBody = module.addBlock(func, label: b"pnhexbody")
@@ -2933,7 +2934,7 @@ function buildGtIoRead(module StdModule)
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
 
-	// selfGt = __gt_current_gt (the reading GT — needed for the OVERLAPPED, the park, and the pipe-name uniquifier).
+	// selfGt = __gt_current_gt (the reading GT — needed for the OVERLAPPED at selfGt+0x60 and the park).
 	let curAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
 	let selfGt = ids.mint()
