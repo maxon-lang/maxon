@@ -132,7 +132,10 @@ public class ARM64CodeEmitterStage {
     var ucddata = emitter.GetUcddata();
     var symdata = emitter.GetSymdata();
 
-    dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length);
+    // The prologue op the emitter turned into the frame setup carries the real frame size (x29/x30
+    // save area + locals); a frameless function has no prologue op and reports 0.
+    dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length, FrameSizeOf);
+    dbg?.RegisterTypes(module.TypeDefs);
 
     Logger.Debug(LogCategory.Codegen, $"ARM64: Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata");
 
@@ -140,6 +143,16 @@ public class ARM64CodeEmitterStage {
       emitter.HasImports ? gotRaw : null,
       emitter.HasImports ? importNamesList : null,
       dbg?.Writer);
+  }
+
+  /// The function's real frame size for debug info: the bytes the prologue reserves (the x29/x30
+  /// save area plus locals and spills). A frameless function has no prologue op and reports 0.
+  /// Read-only.
+  private static uint FrameSizeOf(IrFunction<ARM64Op> func) {
+    foreach (var block in func.Body.Blocks)
+      foreach (var op in block.Operations)
+        if (op is ARM64PrologueOp p) return (uint)p.StackSize;
+    return 0;
   }
 
   private static void EmitFunction(ARM64CodeEmitter emitter, IrFunction<ARM64Op> func,

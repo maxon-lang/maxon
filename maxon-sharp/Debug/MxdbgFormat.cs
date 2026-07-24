@@ -18,9 +18,18 @@ namespace MaxonSharp.Debug;
 /// stride bug would not fail to load; it would slide the parse one word and turn every later record
 /// into garbage.
 ///
-/// This is P1 scope: header + string pool + file/function/line tables + build-id. Local-variable
-/// location lists (P2), the type table (P2), and the coverage-point table (P6) have reserved header
-/// slots (written as 0) and are added without a format-version bump only if their records append.
+/// P2 scope adds the type table, its field sub-table, the local-variable location table, and each
+/// function's real frame size. The coverage-point table (P6) still has reserved header slots
+/// (written as 0). The P2 additions change the header layout and grow the function record, so this is
+/// an INCOMPATIBLE change and <see cref="FormatVersion"/> is bumped — a reader that speaks only the
+/// P1 layout refuses the file rather than misreading the moved fields.
+///
+/// The compiler populates the type/field tables and each function's frame size. It does not yet
+/// populate the local table (that binding of a local NAME to its source-level TYPE is erased by the
+/// Standard dialect and needs a per-function side-table carried from the Maxon→Standard pass — the
+/// P2b slice); every function therefore reports `localCount == 0` for now. The format, writer, reader
+/// and self-test fully support the local records, so P2b lands the capture without another version
+/// bump.
 /// </summary>
 public static class MxdbgFormat {
   /// 8 bytes so the header stays 4/8-byte aligned. A reader that does not see this refuses the file.
@@ -28,8 +37,8 @@ public static class MxdbgFormat {
 
   /// Bumped only on an INCOMPATIBLE layout change. The driver refuses a version it does not speak
   /// rather than misread it — the "an instrument that lies is worse than none" rule the DebugStream
-  /// handshake established.
-  public const uint FormatVersion = 1;
+  /// handshake established. v2: type table + field sub-table + local table + per-function frame size.
+  public const uint FormatVersion = 2;
 
   /// The one true width of every count/offset/length word in the file.
   public const int FieldSize = 4;
@@ -52,18 +61,26 @@ public static class MxdbgFormat {
   public const int OffFuncCount = 52;
   public const int OffLineTableOff = 56;
   public const int OffLineCount = 60;
-  public const int OffLocalTableOff = 64; // P2 (0 until then)
+  public const int OffLocalTableOff = 64; // local-variable location table
   public const int OffLocalCount = 68;
-  public const int OffTypeTableOff = 72;  // P2
+  public const int OffTypeTableOff = 72;  // type table
   public const int OffTypeCount = 76;
-  public const int OffCovTableOff = 80;   // P6
+  public const int OffCovTableOff = 80;   // P6 (0 until then)
   public const int OffCovCount = 84;
+  public const int OffFieldTableOff = 88; // type-field sub-table (indexed by the type table)
+  public const int OffFieldCount = 92;
   public const int HeaderSize = 96;       // padded to an 8-byte multiple
 
   // Fixed record strides.
   public const int FileEntrySize = 8;   // pathOff(4) pathLen(4)
-  public const int FuncEntrySize = 32;  // nameOff nameLen codeStart codeEnd frameSize paramCount lineFirst lineCount
+  // nameOff nameLen codeStart codeEnd frameSize paramCount lineFirst lineCount localFirst localCount
+  public const int FuncEntrySize = 40;
   public const int LineEntrySize = 20;  // codeOffset fileId line col flags
+  public const int TypeEntrySize = 28;  // nameOff nameLen kind size align fieldFirst fieldCount
+  public const int FieldEntrySize = 16; // nameOff nameLen offset typeId
+  // nameOff nameLen locKind locValue typeId scopeStart scopeEnd. locValue is a SIGNED rbp-relative
+  // offset for a stack slot (stored as its two's-complement u32); read it back through a cast.
+  public const int LocalEntrySize = 28;
 
   // Line-entry flag bits.
   public const uint LineFlagStatement = 1 << 0; // a statement boundary (a valid step/breakpoint stop)
@@ -111,4 +128,47 @@ public static class MxdbgFormat {
 
   internal static uint U32(ReadOnlySpan<byte> bytes, int offset) =>
     BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(offset, FieldSize));
+}
+
+/// <summary>
+/// What a type-table entry describes, so the driver renders bytes as the right shape (a String's
+/// fused record as text, an enum by discriminant, a struct as named fields). Serialized as the
+/// <see cref="MxdbgFormat.FieldSize"/>-byte `kind` word of a type record.
+/// </summary>
+public enum MxdbgTypeKind : uint {
+  /// A machine scalar with no source-level range (i8..u64, f32/f64, bool, void, cstring, a raw
+  /// pointer). No fields.
+  Primitive = 0,
+  /// A ranged integer alias (`int(0 to 150)` / a named `typealias`). `size` is the optimal backing width.
+  IntRanged = 1,
+  /// A ranged float alias.
+  FloatRanged = 2,
+  /// A user struct. `fieldFirst`/`fieldCount` index the field sub-table; each field is a named,
+  /// offset value of another type.
+  Struct = 3,
+  /// A plain or associated-value enum. Its "fields" are the CASES: field offset = the case ordinal,
+  /// field type = the case's single payload type (or void).
+  Enum = 4,
+  /// An enum declared with the `union` keyword. Same field encoding as <see cref="Enum"/>.
+  Union = 5,
+  /// The fused heap String/Character record (conforms to BuiltinStringLiteral / BuiltinCharLiteral).
+  String = 6,
+  /// The fused heap Array/Vector record (conforms to BuiltinArrayLiteral).
+  Array = 7,
+  /// A heap-allocated record reached through an 8-byte pointer whose layout the sidecar does not
+  /// further describe here (an interface value, a function value, an unresolved type parameter). It
+  /// exists so a struct field or local of such a type has a valid `typeId` to point at.
+  ManagedRecord = 8,
+}
+
+/// <summary>
+/// Where a local lives at a given PC, serialized as the `locKind` word of a local record. The
+/// accompanying `locValue` is interpreted per kind: a signed rbp-relative byte offset for
+/// <see cref="StackSlotRbpRel"/>, a target register number for <see cref="Register"/>, and unused
+/// (0) for <see cref="OptimizedOut"/>.
+/// </summary>
+public enum MxdbgLocKind : uint {
+  StackSlotRbpRel = 0,
+  Register = 1,
+  OptimizedOut = 2,
 }

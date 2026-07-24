@@ -28,10 +28,27 @@ public static class MxdbgSelfTest {
     uint fileA = w.AddFile("account.maxon");
     uint fileB = w.AddFile("io.maxon");
 
+    // Type table: primitives, a struct with two fields, and an enum with two cases. Type ids are
+    // add-order; fields/locals reference them by that id.
+    uint tVoid = w.AddType("void", MxdbgTypeKind.Primitive, 0, 1);
+    uint tI64 = w.AddType("i64", MxdbgTypeKind.Primitive, 8, 8);
+    uint tPoint = w.AddType("Point", MxdbgTypeKind.Struct, 16, 8);
+    w.AddField("x", 0, tI64);
+    w.AddField("y", 8, tI64);
+    uint tColor = w.AddType("Color", MxdbgTypeKind.Enum, 8, 8);
+    w.AddField("red", 0, tVoid);   // enum case: offset = ordinal, type = payload (none → void)
+    w.AddField("green", 1, tVoid);
+
     // Function A occupies [0,100); B occupies [100,200). Lines are added OUT OF ORDER on purpose,
     // to prove Build sorts them and still assigns each function its contiguous window.
-    w.AddFunction("withdraw", codeStart: 0, codeEnd: 100, frameSize: 0x40, paramCount: 1);
-    w.AddFunction("parseBatch", codeStart: 100, codeEnd: 200, frameSize: 0x20, paramCount: 2);
+    uint fnWithdraw = w.AddFunction("withdraw", codeStart: 0, codeEnd: 100, frameSize: 0x40, paramCount: 1);
+    uint fnParseBatch = w.AddFunction("parseBatch", codeStart: 100, codeEnd: 200, frameSize: 0x20, paramCount: 2);
+
+    // Locals belong to a function and reference the type table; a NEGATIVE rbp-relative slot must
+    // survive the u32 round-trip.
+    w.AddLocal(fnWithdraw, "amount", MxdbgLocKind.StackSlotRbpRel, -8, tI64, 0, 100);
+    w.AddLocal(fnWithdraw, "p", MxdbgLocKind.StackSlotRbpRel, -24, tPoint, 0, 100);
+    w.AddLocal(fnParseBatch, "count", MxdbgLocKind.Register, 3, tI64, 100, 200);
 
     w.AddLine(40, fileA, 12, 5, MxdbgFormat.LineFlagStatement);
     w.AddLine(0, fileA, 10, 1, MxdbgFormat.LineFlagStatement);
@@ -51,10 +68,38 @@ public static class MxdbgSelfTest {
     Check(r.FileName(fileB) == "io.maxon", "file name B");
 
     var fa = r.FunctionAt(0);
-    Check(fa is { Name: "withdraw", CodeStart: 0, CodeEnd: 100, LineCount: 3 }, "function A range + line window");
+    Check(fa is { Name: "withdraw", CodeStart: 0, CodeEnd: 100, FrameSize: 0x40, LineCount: 3, LocalCount: 2 },
+      "function A range + frame + line/local windows");
     var fb = r.FunctionAt(150);
-    Check(fb is { Name: "parseBatch", CodeStart: 100, CodeEnd: 200, LineCount: 2 }, "function B range + line window");
+    Check(fb is { Name: "parseBatch", CodeStart: 100, CodeEnd: 200, FrameSize: 0x20, LineCount: 2, LocalCount: 1 },
+      "function B range + frame + line/local windows");
     Check(r.FunctionAt(250) is null, "no function in a gap");
+
+    // Type table round-trip.
+    Check(r.TypeCount == 4, "type count");
+    Check(r.FieldCount == 4, "field count");
+    Check(r.Type(tPoint) is { Name: "Point", Kind: MxdbgTypeKind.Struct, Size: 16, FieldCount: 2 }, "struct type");
+    Check(r.Type(tColor) is { Name: "Color", Kind: MxdbgTypeKind.Enum, FieldCount: 2 }, "enum type");
+    var pointType = r.Type(tPoint);
+    var fx = r.Field(pointType.FieldFirst);
+    var fy = r.Field(pointType.FieldFirst + 1);
+    Check(fx is { Name: "x", Offset: 0 } && r.TypeName(fx.TypeId) == "i64", "struct field x : i64");
+    Check(fy is { Name: "y", Offset: 8 } && r.TypeName(fy.TypeId) == "i64", "struct field y : i64");
+    var colorType = r.Type(tColor);
+    var caseGreen = r.Field(colorType.FieldFirst + 1);
+    Check(caseGreen is { Name: "green", Offset: 1 }, "enum case green = ordinal 1");
+
+    // Local table round-trip, including the negative slot and the func→local window.
+    Check(r.LocalCount == 3, "local count");
+    var fnW = r.FunctionAt(10)!.Value;
+    var lAmount = r.Local(fnW.LocalFirst);
+    var lP = r.Local(fnW.LocalFirst + 1);
+    Check(lAmount is { Name: "amount", LocKind: MxdbgLocKind.StackSlotRbpRel, LocValue: -8 }
+      && r.TypeName(lAmount.TypeId) == "i64", "local amount @ [rbp-8] : i64");
+    Check(lP is { Name: "p", LocValue: -24 } && r.TypeName(lP.TypeId) == "Point", "local p @ [rbp-24] : Point");
+    var fnP = r.FunctionAt(150)!.Value;
+    var lCount = r.Local(fnP.LocalFirst);
+    Check(lCount is { Name: "count", LocKind: MxdbgLocKind.Register, LocValue: 3 }, "local count in register 3");
 
     void Line(uint pc, uint expLine, string expFile) {
       var li = r.PcToLine(pc);
@@ -76,7 +121,8 @@ public static class MxdbgSelfTest {
     Check(rMismatch.BuildId != MxdbgFormat.ComputeBuildId("different"u8), "build-id mismatch is detectable");
 
     if (failures == 0) {
-      Console.WriteLine($"mxdbg-selftest OK ({image.Length} bytes, {r.FunctionCount} funcs, {r.LineCount} lines)");
+      Console.WriteLine($"mxdbg-selftest OK ({image.Length} bytes, {r.FunctionCount} funcs, "
+        + $"{r.LineCount} lines, {r.TypeCount} types, {r.FieldCount} fields, {r.LocalCount} locals)");
       return 0;
     }
 

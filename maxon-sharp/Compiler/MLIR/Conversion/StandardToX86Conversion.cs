@@ -382,9 +382,12 @@ public static class StandardToX86Conversion {
       }
 
       foreach (var op in srcBlock.Operations) {
-        DebugSpanFlow.Mark(spanMarks, func, op, x86Block);
-
+        // Mark AFTER the skip checks: a preHandled op (its X86 output was already emitted during the
+        // entry-block param-save pass) or a twoJump-folded cmp emits nothing HERE, so marking it at
+        // the current block size would attribute its source line to where the NEXT op's bytes land.
+        // Its output's line is recorded where that output actually begins.
         if (preHandledOps.Contains(op) || twoJumpSkipOps.Contains(op)) { currentOpIndex++; continue; }
+        DebugSpanFlow.Mark(spanMarks, func, op, x86Block);
         // If there's a pending comparison result and this op is NOT a condBr
         // that uses it, materialize the comparison into a register via setcc.
         if (lastCmpResult != null && !(op is StdCondBrOp cb && cb.Condition == lastCmpResult)) {

@@ -22,12 +22,26 @@ public sealed class MxdbgReader {
   private readonly uint _funcCount;
   private readonly uint _lineTableOff;
   private readonly uint _lineCount;
+  private readonly uint _typeTableOff;
+  private readonly uint _typeCount;
+  private readonly uint _fieldTableOff;
+  private readonly uint _fieldCount;
+  private readonly uint _localTableOff;
+  private readonly uint _localCount;
 
   public readonly record struct FuncInfo(
     string Name, uint CodeStart, uint CodeEnd, uint FrameSize, uint ParamCount,
-    uint LineFirst, uint LineCount);
+    uint LineFirst, uint LineCount, uint LocalFirst, uint LocalCount);
 
   public readonly record struct LineInfo(uint CodeOffset, string File, uint Line, uint Col, uint Flags);
+
+  public readonly record struct TypeInfo(
+    string Name, MxdbgTypeKind Kind, uint Size, uint Align, uint FieldFirst, uint FieldCount);
+
+  public readonly record struct FieldInfo(string Name, uint Offset, uint TypeId);
+
+  public readonly record struct LocalInfo(
+    string Name, MxdbgLocKind LocKind, int LocValue, uint TypeId, uint ScopeStart, uint ScopeEnd);
 
   public MxdbgReader(byte[] bytes) {
     _b = bytes;
@@ -48,6 +62,12 @@ public sealed class MxdbgReader {
     _funcCount = MxdbgFormat.U32(_b, MxdbgFormat.OffFuncCount);
     _lineTableOff = MxdbgFormat.U32(_b, MxdbgFormat.OffLineTableOff);
     _lineCount = MxdbgFormat.U32(_b, MxdbgFormat.OffLineCount);
+    _typeTableOff = MxdbgFormat.U32(_b, MxdbgFormat.OffTypeTableOff);
+    _typeCount = MxdbgFormat.U32(_b, MxdbgFormat.OffTypeCount);
+    _fieldTableOff = MxdbgFormat.U32(_b, MxdbgFormat.OffFieldTableOff);
+    _fieldCount = MxdbgFormat.U32(_b, MxdbgFormat.OffFieldCount);
+    _localTableOff = MxdbgFormat.U32(_b, MxdbgFormat.OffLocalTableOff);
+    _localCount = MxdbgFormat.U32(_b, MxdbgFormat.OffLocalCount);
 
     Triple = Str(MxdbgFormat.U32(_b, MxdbgFormat.OffTripleOff), MxdbgFormat.U32(_b, MxdbgFormat.OffTripleLen));
   }
@@ -55,6 +75,9 @@ public sealed class MxdbgReader {
   public uint FileCount => _fileCount;
   public uint FunctionCount => _funcCount;
   public uint LineCount => _lineCount;
+  public uint TypeCount => _typeCount;
+  public uint FieldCount => _fieldCount;
+  public uint LocalCount => _localCount;
 
   /// Read a string-pool slice as UTF-8. `(0,0)` is the empty string.
   private string Str(uint off, uint len) =>
@@ -76,7 +99,9 @@ public sealed class MxdbgReader {
       MxdbgFormat.U32(_b, rec + 16),
       MxdbgFormat.U32(_b, rec + 20),
       MxdbgFormat.U32(_b, rec + 24),
-      MxdbgFormat.U32(_b, rec + 28));
+      MxdbgFormat.U32(_b, rec + 28),
+      MxdbgFormat.U32(_b, rec + 32),
+      MxdbgFormat.U32(_b, rec + 36));
   }
 
   public LineInfo Line(uint index) {
@@ -89,6 +114,43 @@ public sealed class MxdbgReader {
       MxdbgFormat.U32(_b, rec + 12),
       MxdbgFormat.U32(_b, rec + 16));
   }
+
+  public TypeInfo Type(uint index) {
+    if (index >= _typeCount) throw new ArgumentOutOfRangeException(nameof(index));
+    int rec = (int)(_typeTableOff + index * MxdbgFormat.TypeEntrySize);
+    return new TypeInfo(
+      Str(MxdbgFormat.U32(_b, rec), MxdbgFormat.U32(_b, rec + 4)),
+      (MxdbgTypeKind)MxdbgFormat.U32(_b, rec + 8),
+      MxdbgFormat.U32(_b, rec + 12),
+      MxdbgFormat.U32(_b, rec + 16),
+      MxdbgFormat.U32(_b, rec + 20),
+      MxdbgFormat.U32(_b, rec + 24));
+  }
+
+  public FieldInfo Field(uint index) {
+    if (index >= _fieldCount) throw new ArgumentOutOfRangeException(nameof(index));
+    int rec = (int)(_fieldTableOff + index * MxdbgFormat.FieldEntrySize);
+    return new FieldInfo(
+      Str(MxdbgFormat.U32(_b, rec), MxdbgFormat.U32(_b, rec + 4)),
+      MxdbgFormat.U32(_b, rec + 8),
+      MxdbgFormat.U32(_b, rec + 12));
+  }
+
+  public LocalInfo Local(uint index) {
+    if (index >= _localCount) throw new ArgumentOutOfRangeException(nameof(index));
+    int rec = (int)(_localTableOff + index * MxdbgFormat.LocalEntrySize);
+    return new LocalInfo(
+      Str(MxdbgFormat.U32(_b, rec), MxdbgFormat.U32(_b, rec + 4)),
+      (MxdbgLocKind)MxdbgFormat.U32(_b, rec + 8),
+      unchecked((int)MxdbgFormat.U32(_b, rec + 12)),
+      MxdbgFormat.U32(_b, rec + 16),
+      MxdbgFormat.U32(_b, rec + 20),
+      MxdbgFormat.U32(_b, rec + 24));
+  }
+
+  /// The name of the type at <paramref name="typeId"/>, or "" when the id is out of range. Used to
+  /// render a field's or local's type without the caller re-indexing the type table.
+  public string TypeName(uint typeId) => typeId < _typeCount ? Type(typeId).Name : "";
 
   /// The function whose `.text` range contains <paramref name="codeOffset"/>, or null in a gap
   /// (padding, runtime helpers with no source).

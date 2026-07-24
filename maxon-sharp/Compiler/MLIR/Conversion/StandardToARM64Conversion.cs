@@ -175,10 +175,12 @@ public static class StandardToARM64Conversion {
       }
 
       foreach (var op in srcBlock.Operations) {
-        DebugSpanFlow.Mark(spanMarks, func, op, armBlock);
-
+        // Mark AFTER the skip checks: a dead store and an entry-block param op emit nothing HERE (the
+        // param was spilled in the pre-pass above), so marking at the current block size would
+        // attribute their source line to where the NEXT op's bytes land. Mark only ops that emit.
         if (deadStoreOps.Contains(op)) { currentOpIndex++; continue; }
         if (op is StdParamOp && blockIdx == 0) { currentOpIndex++; continue; }
+        DebugSpanFlow.Mark(spanMarks, func, op, armBlock);
         ConvertOp(op, armBlock, varOffsets, regManager, outputModule, floatConstants, float32Constants,
           func.Name, lastUseOfValue, currentOpIndex, func.ThrowsType != null);
         FreeDeadValues(regManager, lastUseOfValue, currentOpIndex, op.ReadValues);

@@ -3,13 +3,15 @@ using System.Text;
 namespace MaxonSharp.Debug;
 
 /// <summary>
-/// Builds a `.mxdbg` byte image. The compiler feeds it interned strings, files, functions, and line
-/// records at emit time (all read-only observations of the already-emitted `.text`), then calls
-/// <see cref="Build"/>. Strictly additive — nothing here influences a single emitted code byte.
+/// Builds a `.mxdbg` byte image. The compiler feeds it interned strings, files, functions, types,
+/// fields, locals, and line records at emit time (all read-only observations of the already-emitted
+/// `.text`), then calls <see cref="Build"/>. Strictly additive — nothing here influences a single
+/// emitted code byte.
 ///
 /// Line records may be added in any order; <see cref="Build"/> sorts them by code offset so the
-/// reader can binary-search. Strings are interned, so a name repeated across records costs its bytes
-/// once.
+/// reader can binary-search. Types are added by the compiler in a deterministic (name-sorted) order,
+/// so a type's index — the `typeId` a field or local points at — is its add order. Strings are
+/// interned, so a name repeated across records costs its bytes once.
 /// </summary>
 public sealed class MxdbgWriter {
   private readonly List<byte> _stringPool = [];
@@ -17,12 +19,23 @@ public sealed class MxdbgWriter {
 
   private readonly List<(uint pathOff, uint pathLen)> _files = [];
   private readonly List<FuncRec> _funcs = [];
+  private readonly List<List<LocalRec>> _funcLocals = [];
   private readonly List<LineRec> _lines = [];
+  private readonly List<TypeRec> _types = [];
+  private readonly List<FieldRec> _fields = [];
 
   private readonly record struct FuncRec(
     uint NameOff, uint NameLen, uint CodeStart, uint CodeEnd, uint FrameSize, uint ParamCount);
 
   private readonly record struct LineRec(uint CodeOffset, uint FileId, uint Line, uint Col, uint Flags);
+
+  private readonly record struct TypeRec(
+    uint NameOff, uint NameLen, uint Kind, uint Size, uint Align, uint FieldFirst, uint FieldCount);
+
+  private readonly record struct FieldRec(uint NameOff, uint NameLen, uint Offset, uint TypeId);
+
+  private readonly record struct LocalRec(
+    uint NameOff, uint NameLen, uint LocKind, uint LocValue, uint TypeId, uint ScopeStart, uint ScopeEnd);
 
   /// Intern a string into the shared pool, returning its `(offset,len)`. The empty string interns to
   /// `(0,0)` and writes nothing.
@@ -44,16 +57,52 @@ public sealed class MxdbgWriter {
     return (uint)(_files.Count - 1);
   }
 
-  /// Register a function with its `.text` code-offset range.
-  public void AddFunction(string name, uint codeStart, uint codeEnd, uint frameSize, uint paramCount) {
+  /// Register a function with its `.text` code-offset range and real emitted frame size. Returns the
+  /// function id (index into the function table), used by <see cref="AddLocal"/>.
+  public uint AddFunction(string name, uint codeStart, uint codeEnd, uint frameSize, uint paramCount) {
     var (off, len) = Intern(name);
     _funcs.Add(new FuncRec(off, len, codeStart, codeEnd, frameSize, paramCount));
+    _funcLocals.Add([]);
+    return (uint)(_funcs.Count - 1);
   }
 
   /// Register one line-table row: at <paramref name="codeOffset"/> in `.text`, execution is at
   /// <paramref name="fileId"/>:<paramref name="line"/>:<paramref name="col"/>.
   public void AddLine(uint codeOffset, uint fileId, uint line, uint col, uint flags) {
     _lines.Add(new LineRec(codeOffset, fileId, line, col, flags));
+  }
+
+  /// Register a type-table entry; returns its typeId (index into the type table), which fields and
+  /// locals reference. <see cref="AddField"/> calls that follow attach to THIS type until the next
+  /// <see cref="AddType"/>, so a caller adds a type and then its fields.
+  public uint AddType(string name, MxdbgTypeKind kind, uint size, uint align) {
+    var (off, len) = Intern(name);
+    _types.Add(new TypeRec(off, len, (uint)kind, size, align, (uint)_fields.Count, 0));
+    return (uint)(_types.Count - 1);
+  }
+
+  /// Append a field to the most recently added type. <paramref name="typeId"/> indexes the type table
+  /// (the field's own type). For an enum/union the "field" is a case: <paramref name="offset"/> is the
+  /// case ordinal and <paramref name="typeId"/> is the case's payload type (or void).
+  public void AddField(string name, uint offset, uint typeId) {
+    if (_types.Count == 0)
+      throw new InvalidOperationException("AddField called before any AddType.");
+    var (off, len) = Intern(name);
+    _fields.Add(new FieldRec(off, len, offset, typeId));
+    var t = _types[^1];
+    _types[^1] = t with { FieldCount = t.FieldCount + 1 };
+  }
+
+  /// Record where a named local lives across `[scopeStart, scopeEnd)` code offsets.
+  /// <paramref name="locValue"/> is a signed rbp-relative offset for a stack slot; it is stored as its
+  /// two's-complement bit pattern. <paramref name="typeId"/> indexes the type table.
+  public void AddLocal(uint funcIndex, string name, MxdbgLocKind locKind, int locValue, uint typeId,
+      uint scopeStart, uint scopeEnd) {
+    if (funcIndex >= _funcLocals.Count)
+      throw new ArgumentOutOfRangeException(nameof(funcIndex));
+    var (off, len) = Intern(name);
+    _funcLocals[(int)funcIndex].Add(
+      new LocalRec(off, len, (uint)locKind, unchecked((uint)locValue), typeId, scopeStart, scopeEnd));
   }
 
   /// Serialize the accumulated tables into a `.mxdbg` image bound to <paramref name="buildId"/>.
@@ -70,23 +119,40 @@ public sealed class MxdbgWriter {
       .Select(t => t.rec)
       .ToList();
 
-    // Sections are laid out header → files → funcs → lines → string pool. Offsets are absolute.
-    uint fileTableOff = HeaderEnd();
+    // Locals are laid out grouped by function, in function order, so each function's rows form a
+    // contiguous [localFirst, localFirst+localCount) window addressable from its function record.
+    var localFirst = new uint[_funcs.Count];
+    var localCount = new uint[_funcs.Count];
+    var locals = new List<LocalRec>();
+    for (int i = 0; i < _funcs.Count; i++) {
+      localFirst[i] = (uint)locals.Count;
+      localCount[i] = (uint)_funcLocals[i].Count;
+      locals.AddRange(_funcLocals[i]);
+    }
+
+    // Sections are laid out header → files → funcs → lines → types → fields → locals → string pool.
+    // Offsets are absolute.
+    uint fileTableOff = MxdbgFormat.HeaderSize;
     uint funcTableOff = fileTableOff + (uint)(_files.Count * MxdbgFormat.FileEntrySize);
     uint lineTableOff = funcTableOff + (uint)(_funcs.Count * MxdbgFormat.FuncEntrySize);
-    uint stringPoolOff = lineTableOff + (uint)(lines.Count * MxdbgFormat.LineEntrySize);
+    uint typeTableOff = lineTableOff + (uint)(lines.Count * MxdbgFormat.LineEntrySize);
+    uint fieldTableOff = typeTableOff + (uint)(_types.Count * MxdbgFormat.TypeEntrySize);
+    uint localTableOff = fieldTableOff + (uint)(_fields.Count * MxdbgFormat.FieldEntrySize);
+    uint stringPoolOff = localTableOff + (uint)(locals.Count * MxdbgFormat.LocalEntrySize);
 
     var buf = new List<byte>((int)stringPoolOff + _stringPool.Count);
 
-    WriteHeader(buf, buildId, tripleOff, tripleLen,
-      stringPoolOff, fileTableOff, funcTableOff, lineTableOff, (uint)lines.Count);
+    WriteHeader(buf, buildId, tripleOff, tripleLen, stringPoolOff,
+      fileTableOff, funcTableOff, lineTableOff, (uint)lines.Count,
+      typeTableOff, fieldTableOff, localTableOff, (uint)locals.Count);
 
     foreach (var (pathOff, pathLen) in _files) {
       MxdbgFormat.Put(buf, pathOff);
       MxdbgFormat.Put(buf, pathLen);
     }
 
-    foreach (var f in _funcs) {
+    for (int i = 0; i < _funcs.Count; i++) {
+      var f = _funcs[i];
       var (lineFirst, lineCount) = FunctionLineSpan(lines, f);
       MxdbgFormat.Put(buf, f.NameOff);
       MxdbgFormat.Put(buf, f.NameLen);
@@ -96,6 +162,8 @@ public sealed class MxdbgWriter {
       MxdbgFormat.Put(buf, f.ParamCount);
       MxdbgFormat.Put(buf, lineFirst);
       MxdbgFormat.Put(buf, lineCount);
+      MxdbgFormat.Put(buf, localFirst[i]);
+      MxdbgFormat.Put(buf, localCount[i]);
     }
 
     foreach (var l in lines) {
@@ -106,11 +174,36 @@ public sealed class MxdbgWriter {
       MxdbgFormat.Put(buf, l.Flags);
     }
 
+    foreach (var t in _types) {
+      MxdbgFormat.Put(buf, t.NameOff);
+      MxdbgFormat.Put(buf, t.NameLen);
+      MxdbgFormat.Put(buf, t.Kind);
+      MxdbgFormat.Put(buf, t.Size);
+      MxdbgFormat.Put(buf, t.Align);
+      MxdbgFormat.Put(buf, t.FieldFirst);
+      MxdbgFormat.Put(buf, t.FieldCount);
+    }
+
+    foreach (var fld in _fields) {
+      MxdbgFormat.Put(buf, fld.NameOff);
+      MxdbgFormat.Put(buf, fld.NameLen);
+      MxdbgFormat.Put(buf, fld.Offset);
+      MxdbgFormat.Put(buf, fld.TypeId);
+    }
+
+    foreach (var lc in locals) {
+      MxdbgFormat.Put(buf, lc.NameOff);
+      MxdbgFormat.Put(buf, lc.NameLen);
+      MxdbgFormat.Put(buf, lc.LocKind);
+      MxdbgFormat.Put(buf, lc.LocValue);
+      MxdbgFormat.Put(buf, lc.TypeId);
+      MxdbgFormat.Put(buf, lc.ScopeStart);
+      MxdbgFormat.Put(buf, lc.ScopeEnd);
+    }
+
     buf.AddRange(_stringPool);
     return [.. buf];
   }
-
-  private static uint HeaderEnd() => MxdbgFormat.HeaderSize;
 
   /// The [first,count) window of sorted line rows whose code offset lies in this function's range.
   /// The line table is sorted by code offset, so a function's rows are the contiguous block
@@ -125,24 +218,36 @@ public sealed class MxdbgWriter {
   }
 
   private void WriteHeader(List<byte> buf, ulong buildId, uint tripleOff, uint tripleLen,
-      uint stringPoolOff, uint fileTableOff, uint funcTableOff, uint lineTableOff, uint lineCount) {
+      uint stringPoolOff, uint fileTableOff, uint funcTableOff, uint lineTableOff, uint lineCount,
+      uint typeTableOff, uint fieldTableOff, uint localTableOff, uint localCount) {
     // The header is fixed-size and written positionally; grow the buffer, then patch fields by offset.
+    // Each field is one FieldSize-byte little-endian word, written through the shared primitive so the
+    // stride is stated once (matching how the reader consumes them).
     buf.AddRange(new byte[MxdbgFormat.HeaderSize]);
     var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(buf);
 
     MxdbgFormat.Magic.CopyTo(span[MxdbgFormat.OffMagic..]);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffVersion..], MxdbgFormat.FormatVersion);
+    Hdr(span, MxdbgFormat.OffVersion, MxdbgFormat.FormatVersion);
     System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(span[MxdbgFormat.OffBuildId..], buildId);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffTripleOff..], tripleOff);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffTripleLen..], tripleLen);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffStringPoolOff..], stringPoolOff);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffStringPoolSize..], (uint)_stringPool.Count);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffFileTableOff..], fileTableOff);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffFileCount..], (uint)_files.Count);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffFuncTableOff..], funcTableOff);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffFuncCount..], (uint)_funcs.Count);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffLineTableOff..], lineTableOff);
-    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[MxdbgFormat.OffLineCount..], lineCount);
-    // Local/type/coverage section slots stay 0 until P2/P6.
+    Hdr(span, MxdbgFormat.OffTripleOff, tripleOff);
+    Hdr(span, MxdbgFormat.OffTripleLen, tripleLen);
+    Hdr(span, MxdbgFormat.OffStringPoolOff, stringPoolOff);
+    Hdr(span, MxdbgFormat.OffStringPoolSize, (uint)_stringPool.Count);
+    Hdr(span, MxdbgFormat.OffFileTableOff, fileTableOff);
+    Hdr(span, MxdbgFormat.OffFileCount, (uint)_files.Count);
+    Hdr(span, MxdbgFormat.OffFuncTableOff, funcTableOff);
+    Hdr(span, MxdbgFormat.OffFuncCount, (uint)_funcs.Count);
+    Hdr(span, MxdbgFormat.OffLineTableOff, lineTableOff);
+    Hdr(span, MxdbgFormat.OffLineCount, lineCount);
+    Hdr(span, MxdbgFormat.OffLocalTableOff, localTableOff);
+    Hdr(span, MxdbgFormat.OffLocalCount, localCount);
+    Hdr(span, MxdbgFormat.OffTypeTableOff, typeTableOff);
+    Hdr(span, MxdbgFormat.OffTypeCount, (uint)_types.Count);
+    Hdr(span, MxdbgFormat.OffFieldTableOff, fieldTableOff);
+    Hdr(span, MxdbgFormat.OffFieldCount, (uint)_fields.Count);
+    // Coverage section slots stay 0 until P6.
   }
+
+  private static void Hdr(Span<byte> span, int at, uint value) =>
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span[at..], value);
 }

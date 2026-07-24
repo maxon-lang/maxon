@@ -173,7 +173,10 @@ public class X86CodeEmitter {
     var symdata = emitter.GetSymdata();
     var imports = emitter.Imports;
 
-    dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length);
+    // The prologue op the emitter turned into `sub rsp, N` carries the real frame size; a function
+    // with no frame has no prologue op and reports 0.
+    dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length, FrameSizeOf);
+    dbg?.RegisterTypes(module.TypeDefs);
 
     Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata, {imports.Count} imports");
 
@@ -204,6 +207,15 @@ public class X86CodeEmitter {
 
   private static uint AlignUp(uint value, uint alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
+  }
+
+  /// The function's real frame size for debug info: the bytes the prologue reserves below rbp
+  /// (`sub rsp, N`). A frameless function has no prologue op and reports 0. Read-only.
+  private static uint FrameSizeOf(IrFunction<X86Op> func) {
+    foreach (var block in func.Body.Blocks)
+      foreach (var op in block.Operations)
+        if (op is X86PrologueOp p) return (uint)p.StackSize;
+    return 0;
   }
 
 }

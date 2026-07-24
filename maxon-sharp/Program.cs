@@ -174,7 +174,21 @@ class Program {
     for (uint i = 0; i < r.FunctionCount; i++) {
       var f = r.Function(i);
       Console.WriteLine($"    {f.Name,-32} [0x{f.CodeStart:x4}, 0x{f.CodeEnd:x4})  "
-        + $"frame=0x{f.FrameSize:x}  params={f.ParamCount}  lines={f.LineCount}");
+        + $"frame=0x{f.FrameSize:x}  params={f.ParamCount}  lines={f.LineCount}  locals={f.LocalCount}");
+      for (uint k = f.LocalFirst; k < f.LocalFirst + f.LocalCount; k++) {
+        var lc = r.Local(k);
+        Console.WriteLine($"        {lc.Name,-20} {FormatLocation(lc)}  : {r.TypeName(lc.TypeId)}");
+      }
+    }
+
+    Console.WriteLine($"  types ({r.TypeCount}):");
+    for (uint i = 0; i < r.TypeCount; i++) {
+      var t = r.Type(i);
+      Console.WriteLine($"    [{i}] {t.Name,-28} {t.Kind}  size={t.Size} align={t.Align}  fields={t.FieldCount}");
+      for (uint k = t.FieldFirst; k < t.FieldFirst + t.FieldCount; k++) {
+        var fld = r.Field(k);
+        Console.WriteLine($"        +0x{fld.Offset:x2}  {fld.Name,-20} : {r.TypeName(fld.TypeId)}");
+      }
     }
 
     Console.WriteLine($"  line table ({r.LineCount}):");
@@ -185,6 +199,13 @@ class Program {
 
     return 0;
   }
+
+  static string FormatLocation(Debug.MxdbgReader.LocalInfo lc) => lc.LocKind switch {
+    Debug.MxdbgLocKind.StackSlotRbpRel => lc.LocValue >= 0 ? $"[rbp+0x{lc.LocValue:x}]" : $"[rbp-0x{-lc.LocValue:x}]",
+    Debug.MxdbgLocKind.Register => $"reg{lc.LocValue}",
+    Debug.MxdbgLocKind.OptimizedOut => "<optimized out>",
+    _ => throw new InvalidOperationException($"Unknown local location kind {lc.LocKind}"),
+  };
 
   static int SymbolizeOffsets(Debug.MxdbgReader r, string[] offsetArgs) {
     int exitCode = 0;
