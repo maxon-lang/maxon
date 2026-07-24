@@ -68,6 +68,7 @@ class Program {
     Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
     Console.WriteLine("                           Map .text code offsets to file:line:col");
     Console.WriteLine("  --attach-probe <exe>     Attach the in-process debug agent and read its handshake (P3a)");
+    Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
     Console.WriteLine("  <exe>                    Interactive debugging (lands in P3)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
@@ -107,6 +108,7 @@ class Program {
       Console.Error.WriteLine("Usage: maxon debug --dump-info <exe|.mxdbg>");
       Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
       Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
+      Console.Error.WriteLine("       maxon debug --bp-test <exe> <codeOffset>");
       return 1;
     }
 
@@ -138,6 +140,22 @@ class Program {
           return 1;
         }
         return DebugAgentProbe.Run(args[1]);
+      }
+
+      case "--bp-test": {
+        // P3b breakpoint driver: set a breakpoint at a raw code offset, run, observe the stop, and
+        // continue to completion. The offset is a function's codeStart from `--dump-info`. The
+        // symbolizing REPL (file:line -> address) is P3c.
+        if (args.Length < 3) {
+          Console.Error.WriteLine("maxon debug --bp-test needs an executable and a code offset "
+            + "(a function's codeStart from --dump-info).");
+          return 1;
+        }
+        if (!TryParseCodeOffset(args[2], out var bpOffset)) {
+          Console.Error.WriteLine($"Not a code offset: '{args[2]}' (use decimal or 0x-prefixed hex).");
+          return 1;
+        }
+        return DebugAgentProbe.RunBpTest(args[1], bpOffset);
       }
 
       default:

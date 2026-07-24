@@ -3492,10 +3492,13 @@ public partial class ARM64CodeEmitter {
     // Epilog continues from there and emits the function exit (returns to OS).
     EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
     EmitFaultHandlerEpilog();
-    // Debug agent trap-handler thunk — emitted into every binary unless --no-debug-agent. __dbg_init
-    // arms it (sigaction SIGTRAP) only when MAXON_DEBUG is set; a P3a stub that just returns.
+    // Debug agent trap-handler thunk + the two `.text`-patch primitives — emitted into every binary
+    // unless --no-debug-agent. __dbg_init arms the thunk (sigaction SIGTRAP) only when MAXON_DEBUG is
+    // set; the patch primitives are called by __dbg_set_bp / __dbg_clear_bp / the single-step-over.
     if (!Compiler.NoDebugAgent) {
       EmitDbgTrapHandlerThunk();
+      EmitDbgArmBp();
+      EmitDbgDisarmBp();
     }
     // Go-style dieFromSignal handler for SIGTERM/SIGINT so the process terminates
     // cleanly on kill instead of wedging in macOS uninterruptible ('UE') state.
@@ -7421,6 +7424,20 @@ public partial class ARM64CodeEmitter {
   private const int SignalInt = 2;
   // sigprocmask(how) — Darwin: SIG_BLOCK=1, SIG_UNBLOCK=2, SIG_SETMASK=3.
   private const int SigUnblock = 2;
+  // signal(sig, SIG_DFL) resets a signal to its default disposition. Used by the debug trap handler's
+  // chain path (an unknown BRK, or a fault after agent shutdown): reset SIGTRAP to default and
+  // re-raise so the process terminates via the default disposition instead of re-executing the BRK
+  // forever — the arm64 counterpart of the x86 handler returning EXCEPTION_CONTINUE_SEARCH.
+  private const int SigDfl = 0;
+
+  // Debug-agent `.text` patching (P3b). macOS/arm64 pages are 16 KB and a 4-byte aligned instruction
+  // never spans a page boundary, so one page covers the BRK. PROT_READ|WRITE to patch it in,
+  // PROT_READ|EXEC to restore W^X. pageBase = addr & ~(pageSize-1), computed as (addr >> 14) << 14.
+  private const long DbgArm64PageSize = 0x4000;
+  private const int DbgArm64PageShift = 14;
+  private const long DbgProtReadWrite = 0x3;
+  private const long DbgProtReadExec = 0x5;
+  private const int DbgBreakpointPatchLen = 4; // a BRK is one 4-byte instruction.
 
   // 32 KB altstack — enough room for a handful of diagnostic frames.
   private const long SigaltstackSize = 0x8000;
@@ -7697,12 +7714,170 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
-  /// The debug agent's SIGTRAP handler thunk. P3a substrate: no breakpoints exist yet, so it simply
-  /// returns. P3b inserts the "is the trapping PC a known breakpoint? → debug logic, advance past the
-  /// BRK" dispatch here. sigaction handler ABI: void handler(int, siginfo_t*, void*).
+  /// The debug agent's SIGTRAP handler thunk (P3b). A `BRK #0` raises a synchronous SIGTRAP whose
+  /// ucontext pc points AT the BRK. Dispatch:
+  ///
+  ///   * A temp-bp step in progress (pc == __dbg_step_temp_addr): single-step-over is complete —
+  ///     remove the temp bp, re-arm the original, and return (the kernel resumes at pc, now the
+  ///     restored instruction). This is macOS's stand-in for x86's trap flag: userspace has no
+  ///     hardware single-step, so the agent plants a temporary BRK at pc+4 and lets it fire.
+  ///   * A known breakpoint (pc in the table): publish a stop event, park until continue, then begin
+  ///     single-step-over — restore the original word at pc and plant the temp bp at pc+4. Returning
+  ///     with pc unchanged re-executes the restored instruction, then hits the temp bp.
+  ///   * Anything else (an unowned BRK, or a fault after the agent detached — __dbg_base == 0):
+  ///     CHAIN to the default disposition (signal(SIGTRAP, SIG_DFL); raise). This is what resolves the
+  ///     P3a re-trap-loop residual: a bare return would re-execute the BRK forever, so an unhandled
+  ///     BRK must terminate via the default action instead.
+  ///
+  /// sigaction handler ABI: void handler(int sig, siginfo_t* info, void* ucontext) — X0/X1/X2.
+  ///
+  /// ⚠ macOS/arm64 host-unverifiable: this project's arm64 target cannot be run here. The mechanism
+  /// mirrors the verified x86 path; the temp-bp-at-pc+4 step assumes the breakpointed instruction
+  /// falls through (true for a function-entry/prologue breakpoint, the --bp-test target). A
+  /// branch-first-instruction breakpoint would need displaced stepping — a P4 residual.
   /// </summary>
   internal void EmitDbgTrapHandlerThunk() {
-    EmitRuntimeFunctionStart("__dbg_trap_handler_thunk", 0, 0x20);
+    EmitRuntimeFunctionStart("__dbg_trap_handler_thunk", 3, 0x60);
+
+    const int slotMcontext = 0x38;
+    const int slotPc = 0x40;
+    const int slotTemp = 0x48;
+
+    // mcontext = *(ucontext + UcontextOffMcontext); pc = mcontext->__ss.__pc.
+    EmitLoadFromStack(ARM64Register.X4, 32, 8);
+    EmitLoadIndirect(ARM64Register.X4, ARM64Register.X4, UcontextOffMcontext, 8);
+    EmitStoreToSp(slotMcontext, ARM64Register.X4);
+    EmitLoadIndirect(ARM64Register.X5, ARM64Register.X4, McontextOffSsPc, 8);
+    EmitStoreToSp(slotPc, ARM64Register.X5);
+
+    // Shutdown guard: detached agent (segment unmapped, table stale) → chain to default.
+    EmitGlobalLoadReg(ARM64Register.X6, "__dbg_base");
+    EmitCbz(ARM64Register.X6, "__dbg_th_chain");
+
+    // Temp-bp step in progress and this trap is it? (pc == step_temp_addr)
+    EmitGlobalLoadReg(ARM64Register.X6, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
+    EmitCbz(ARM64Register.X6, "__dbg_th_check_known");
+    EmitLoadFromStack(ARM64Register.X5, slotPc, 8);
+    EmitCmpRegReg(ARM64Register.X6, ARM64Register.X5);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__dbg_th_check_known");
+
+    // Step-over complete: disarm the temp bp, re-arm the original, clear the step state.
+    EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
+    EmitGlobalLoadReg(ARM64Register.X1, Runtime.RuntimeEmitter.DbgStepTempOrigGlobal);
+    EmitBranchLink("__dbg_disarm_bp");
+    EmitGlobalLoadReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepAddrGlobal);
+    EmitBranchLink("__dbg_arm_bp");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepAddrGlobal);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__dbg_th_check_known");
+    // found = __dbg_on_breakpoint(pc, sp, fp).
+    EmitLoadFromStack(ARM64Register.X4, slotMcontext, 8);
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitLoadIndirect(ARM64Register.X1, ARM64Register.X4, McontextOffSsSp, 8);
+    EmitLoadIndirect(ARM64Register.X2, ARM64Register.X4, McontextOffSsFp, 8);
+    EmitBranchLink("__dbg_on_breakpoint");
+    EmitCbz(ARM64Register.X0, "__dbg_th_chain");
+
+    // Begin single-step-over: restore the original instruction at pc, plant a temp bp at pc+4.
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitBranchLink("__dbg_bp_orig_of_addr");        // X0 = orig
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0);
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitBranchLink("__dbg_disarm_bp");
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, DbgBreakpointPatchLen,
+      isAdd: true);                                 // temp = pc + 4 (the next instruction)
+    EmitStoreToSp(slotTemp, ARM64Register.X0);
+    EmitBranchLink("__dbg_arm_bp");                 // X0 = temp's original word
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempOrigGlobal);
+    EmitLoadFromStack(ARM64Register.X0, slotTemp, 8);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepTempAddrGlobal);
+    EmitLoadFromStack(ARM64Register.X0, slotPc, 8);
+    EmitGlobalStoreReg(ARM64Register.X0, Runtime.RuntimeEmitter.DbgStepAddrGlobal);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__dbg_th_chain");
+    // signal(SIGTRAP, SIG_DFL); raise(SIGTRAP) — terminate via default disposition (no re-trap loop).
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);     // sig
+    EmitMovRegImm(ARM64Register.X1, SigDfl);
+    EmitCallImport("signal");
+    EmitLoadFromStack(ARM64Register.X0, 16, 8);
+    EmitCallImport("raise");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // Shared frame layout of the two `.text`-patch primitives below: the absolute patch address is the
+  // spilled first arg, and (for arm) the original word the second slot. The W^X helpers depend on the
+  // abs slot, so both primitives must use this frame.
+  private const int DbgArm64PatchAbsSlot = 16;
+  private const int DbgArm64PatchOrigSlot = 24;
+
+  /// <summary>mprotect the page holding the patch address (page-aligned down) to <paramref name="prot"/>.
+  /// Assumes the patch frame layout above.</summary>
+  private void EmitDbgMprotectCodePage(long prot) {
+    EmitLoadFromStack(ARM64Register.X0, DbgArm64PatchAbsSlot, 8);
+    EmitLsrImm(ARM64Register.X0, ARM64Register.X0, DbgArm64PageShift);
+    EmitLslImm(ARM64Register.X0, ARM64Register.X0, DbgArm64PageShift);
+    EmitMovRegImm(ARM64Register.X1, DbgArm64PageSize);
+    EmitMovRegImm(ARM64Register.X2, prot);
+    EmitCallImport("mprotect");
+  }
+
+  /// <summary>sys_icache_invalidate(abs, 4) so the CPU fetches the patched instruction.</summary>
+  private void EmitDbgIcacheInvalidate() {
+    EmitLoadFromStack(ARM64Register.X0, DbgArm64PatchAbsSlot, 8);
+    EmitMovRegImm(ARM64Register.X1, DbgBreakpointPatchLen);
+    EmitCallImport("sys_icache_invalidate");
+  }
+
+  /// <summary>
+  /// __dbg_arm_bp(X0 = abs) -> X0 = the original 4-byte word. W^X patch: mprotect the containing page
+  /// to READ|WRITE, save the word at `abs` and overwrite it with `BRK #0`, mprotect back to READ|EXEC,
+  /// and invalidate the instruction cache. The arm64 mirror of the x86 primitive; called from
+  /// __dbg_set_bp and from the trap thunk's re-arm. Host-unverifiable (arm64 target cannot run here);
+  /// on a hardened-runtime binary the mprotect may need the JIT entitlement (allow-jit / MAP_JIT).
+  /// Frame: [x29+16] = abs (spilled arg), [x29+24] = orig.
+  /// </summary>
+  internal void EmitDbgArmBp() {
+    EmitRuntimeFunctionStart("__dbg_arm_bp", 1, 0x40);
+
+    EmitDbgMprotectCodePage(DbgProtReadWrite);
+
+    // orig = *(u32*)abs ; *(u32*)abs = BRK #0
+    EmitLoadFromStack(ARM64Register.X2, DbgArm64PatchAbsSlot, 8);
+    EmitLoadIndirect(ARM64Register.X3, ARM64Register.X2, 0, DbgBreakpointPatchLen);
+    EmitStoreToSp(DbgArm64PatchOrigSlot, ARM64Register.X3);
+    EmitMovRegImm(ARM64Register.X4, Runtime.RuntimeEmitter.DbgArm64BreakpointWord);
+    EmitStoreIndirect(ARM64Register.X2, 0, ARM64Register.X4, DbgBreakpointPatchLen);
+
+    EmitDbgMprotectCodePage(DbgProtReadExec);
+    EmitDbgIcacheInvalidate();
+
+    EmitLoadFromStack(ARM64Register.X0, DbgArm64PatchOrigSlot, 8);     // return orig
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __dbg_disarm_bp(X0 = abs, X1 = orig) — the dual of __dbg_arm_bp: W^X-patch the saved original
+  /// word back over the BRK and invalidate the icache. Leaves `.text` executable and pristine.
+  /// Frame: [x29+16] = abs, [x29+24] = orig (spilled args).
+  /// </summary>
+  internal void EmitDbgDisarmBp() {
+    EmitRuntimeFunctionStart("__dbg_disarm_bp", 2, 0x40);
+
+    EmitDbgMprotectCodePage(DbgProtReadWrite);
+
+    // *(u32*)abs = orig
+    EmitLoadFromStack(ARM64Register.X2, DbgArm64PatchAbsSlot, 8);
+    EmitLoadFromStack(ARM64Register.X3, DbgArm64PatchOrigSlot, 8);
+    EmitStoreIndirect(ARM64Register.X2, 0, ARM64Register.X3, DbgBreakpointPatchLen);
+
+    EmitDbgMprotectCodePage(DbgProtReadExec);
+    EmitDbgIcacheInvalidate();
+
     EmitRuntimeFunctionEnd();
   }
 

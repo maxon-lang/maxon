@@ -130,6 +130,9 @@ public partial class ARM64CodeEmitter {
     public void LeaSymdata(VReg dest, string symdataLabel) =>
       _e.EmitAdrpAddFixup(R(dest), _e._symdataAdrpFixups, symdataLabel);
 
+    public void LeaFuncAddr(VReg dest, string codeLabel) =>
+      _e.EmitAdrpAddFixup(R(dest), _e._funcAddrAdrpFixups, codeLabel);
+
     // ---- Arithmetic ----
 
     public void AddRegImm(VReg dest, long imm) =>
@@ -575,6 +578,8 @@ public partial class ARM64CodeEmitter {
       var resolvedMunmap = ResolveImport("munmap");
       _e.EmitCallImport(resolvedMunmap);
     }
+
+    public void OsYield() => _e.EmitCallImport(ResolveImport("sched_yield"));
 
     // ---- Bulk memory ----
 

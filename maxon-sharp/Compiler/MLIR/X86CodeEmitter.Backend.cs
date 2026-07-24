@@ -115,6 +115,9 @@ public partial class X86CodeEmitter {
     public void LeaSymdata(VReg dest, string symdataLabel) =>
       _e.EmitLeaRegSymdataRel(R(dest), symdataLabel);
 
+    public void LeaFuncAddr(VReg dest, string codeLabel) =>
+      _e.EmitLeaFuncAddr(R(dest), codeLabel);
+
     // ---- Arithmetic ----
 
     public void AddRegImm(VReg dest, long imm) => _e.EmitAddRegImm(R(dest), imm);
@@ -411,6 +414,9 @@ public partial class X86CodeEmitter {
       _e.EmitMovRegReg(X86Register.Rcx, R(base_ptr));
       _e.EmitCallImportOnSystemStack("kernel32.dll", "UnmapViewOfFile");
     }
+
+    public void OsYield() =>
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "SwitchToThread");
 
     // ---- Bulk memory ----
 

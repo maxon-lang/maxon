@@ -83,6 +83,16 @@ public interface IEmitterBackend {
   /// <summary>Load address of symdata label into register.</summary>
   void LeaSymdata(VReg dest, string symdataLabel);
 
+  /// <summary>
+  /// Load the absolute runtime address of a CODE label (a runtime/emitted function) into
+  /// <paramref name="dest"/> (RIP-relative LEA on x86; ADRP+ADD on ARM64). Distinct from
+  /// <see cref="LeaSymdata"/> / <see cref="LeaGlobal"/>, which address the read-only and mutable data
+  /// sections; this addresses <c>.text</c>. The debug agent uses it to read <c>&amp;mrt_start</c> (the
+  /// text base) so a driver-supplied code offset can be turned into an absolute breakpoint address —
+  /// the same base the panic symbolizer subtracts.
+  /// </summary>
+  void LeaFuncAddr(VReg dest, string codeLabel);
+
   // ---- Arithmetic ----
 
   void AddRegImm(VReg dest, long imm);
@@ -366,6 +376,14 @@ public interface IEmitterBackend {
   /// Clobbers Arg0..Arg1.
   /// </summary>
   void OsUnmapSharedMemory(VReg base_ptr, VReg size);
+
+  /// <summary>
+  /// Yield the current OS thread's remaining time slice (Windows: SwitchToThread; POSIX: sched_yield).
+  /// The debug agent's park loop calls this between polls of the control mailbox so a stop-the-world
+  /// pause does not busy-spin a core while the driver decides what to do next. Clobbers the call-clobbered
+  /// register set.
+  /// </summary>
+  void OsYield();
 
   // ---- Platform-specific labels ----
 

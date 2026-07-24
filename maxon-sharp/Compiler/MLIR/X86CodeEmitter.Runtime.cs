@@ -4254,11 +4254,14 @@ public partial class X86CodeEmitter {
     // Epilog continues from there and emits the function exit (returns to OS).
     EmitFaultHandlerProlog("__gt_fault_handler_thunk", "__gt_fault_handler");
     EmitFaultHandlerEpilog();
-    // Debug agent trap-handler thunk — emitted alongside the fault thunk (and, like the rest of the
-    // agent, into every binary unless --no-debug-agent). __dbg_init arms it only when MAXON_DEBUG is
-    // set, and it defers to the fault thunk for everything in P3a.
+    // Debug agent trap-handler thunk + the two `.text`-patch primitives — emitted alongside the fault
+    // thunk (and, like the rest of the agent, into every binary unless --no-debug-agent). __dbg_init
+    // arms the thunk only when MAXON_DEBUG is set; the patch primitives are called by __dbg_set_bp /
+    // __dbg_clear_bp / the thunk's single-step-over.
     if (!Compiler.NoDebugAgent) {
       EmitDbgTrapHandlerThunk();
+      EmitDbgArmBp();
+      EmitDbgDisarmBp();
     }
   }
 
@@ -8095,6 +8098,7 @@ public partial class X86CodeEmitter {
   private const int ExceptionPointersOffContextRecord = 0x08;
 
   // x64 CONTEXT struct (winnt.h).
+  private const int ContextOffEFlags = 0x044; // 32-bit field; TF (bit 8) drives single-step.
   private const int ContextOffRsp = 0x098;
   private const int ContextOffRbp = 0x0A0;
   private const int ContextOffRip = 0x0F8;
@@ -8106,6 +8110,21 @@ public partial class X86CodeEmitter {
   private const long ExceptionCodeIntDivideByZero = 0xC0000094L;
   private const long ExceptionCodeIntOverflow = 0xC0000095L;
   private const long ExceptionCodeStackOverflow = 0xC00000FDL;
+  // The debug agent's two trap codes: a hit INT3 (breakpoint) and, after single-step-over is armed,
+  // the trap-flag step (STATUS_SINGLE_STEP). Same L-suffix reason as the fault codes above.
+  private const long ExceptionCodeBreakpoint = 0x80000003L;
+  private const long ExceptionCodeSingleStep = 0x80000004L;
+
+  // x86 EFLAGS.TF (trap flag): set it in the resumed CONTEXT to single-step exactly one instruction,
+  // which raises STATUS_SINGLE_STEP so the agent can re-arm the breakpoint it stepped over.
+  private const long EflagsTrapFlag = 0x100;
+
+  // VirtualProtect page-protection constants (winnt.h): make the page writable to patch the trap
+  // byte, then restore executable-read. FlushInstructionCache takes the pseudo-handle -1 (current
+  // process) exactly as GetCurrentProcess would return.
+  private const long PageExecuteReadWrite = 0x40;
+  private const long CurrentProcessPseudoHandle = -1;
+  private const long BreakpointPatchLen = 8; // one aligned qword covers the single 0xCC byte.
 
   // VEH return values.
   private const int VehContinueSearch = 0;
@@ -8141,16 +8160,176 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// The debug agent's VEH trap handler thunk. P3a substrate: no breakpoints exist yet, so it defers
-  /// EVERY exception to the rest of the chain by returning EXCEPTION_CONTINUE_SEARCH (0) — which is
-  /// what keeps __gt_fault_handler_thunk (and the panic backtrace) working with the agent armed. P3b
-  /// inserts, ahead of this return, the "is this an INT3 at a known breakpoint? → debug logic"
-  /// dispatch; anything not a breakpoint still falls through to CONTINUE_SEARCH.
-  /// VEH ABI: LONG handler(EXCEPTION_POINTERS* p), RCX = p (unused here).
+  /// The debug agent's VEH trap handler thunk (P3b). Sits at the FRONT of the VEH chain (installed
+  /// after __gt_fault_handler_thunk), so it inspects every exception first and DEFERS what it does not
+  /// own — anything but its own INT3 / trap-flag step returns EXCEPTION_CONTINUE_SEARCH (0), which is
+  /// what keeps the fault thunk and the panic backtrace working with the agent armed.
+  ///
+  /// Two codes it DOES own:
+  ///   STATUS_BREAKPOINT   — a hit INT3. If RIP-1 is a known breakpoint, publish a stop event, park
+  ///                         until continue, then set up single-step-over: restore the original byte,
+  ///                         rewind RIP over the INT3, set EFLAGS.TF, remember the breakpoint, resume.
+  ///   STATUS_SINGLE_STEP  — the trap-flag step after that. Re-arm the breakpoint, clear TF, resume.
+  ///                         This is why continue does not re-hit the same breakpoint.
+  ///
+  /// Shutdown guard (P3a-review contract): if the agent has detached (__dbg_base == 0) the control
+  /// segment is unmapped and the breakpoint table stale, so the handler defers immediately rather than
+  /// touch either. VEH ABI: LONG handler(EXCEPTION_POINTERS* p), RCX = p (spilled to [rbp-0x08]).
   /// </summary>
   internal void EmitDbgTrapHandlerThunk() {
-    EmitRuntimeFunctionStart("__dbg_trap_handler_thunk", 0, 0x20);
+    EmitRuntimeFunctionStart("__dbg_trap_handler_thunk", 1, 0x60);
+
+    // Shutdown guard: detached agent → defer to the fault chain without touching the segment/table.
+    EmitGlobalLoadReg(X86Register.Rax, "__dbg_base");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "__dbg_th_defer");
+
+    // EAX = p->ExceptionRecord->ExceptionCode (DWORD at +0).
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffExceptionRecord);
+    EmitMovRegDwordIndirect(X86Register.Rax, X86Register.Rax, 0);
+
+    EmitMovRegImm(X86Register.Rdx, ExceptionCodeSingleStep);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__dbg_th_singlestep");
+    EmitMovRegImm(X86Register.Rdx, ExceptionCodeBreakpoint);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rdx);
+    EmitJcc("e", "__dbg_th_breakpoint");
+    EmitJmp("__dbg_th_defer");
+
+    // --- breakpoint hit: is the trapping PC one of ours? ---
+    // Windows reports ContextRecord->Rip pointing AT the INT3 for STATUS_BREAKPOINT (it pre-decrements
+    // past the byte the CPU advanced over), so the breakpoint address is Rip itself — no -1. That is
+    // also where execution must resume once the original byte is restored, so Rip is left unchanged.
+    DefineLabel("__dbg_th_breakpoint");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);            // p
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);           // [rbp-0x10] = ctx
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, ContextOffRip);
+    EmitMovMemReg(-0x18, X86Register.Rcx, 8);           // [rbp-0x18] = bpaddr
+
+    // __dbg_on_breakpoint(bpaddr, ctx.Rsp, ctx.Rbp) -> found. RCX already = bpaddr.
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, ContextOffRsp);
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, ContextOffRbp);
+    EmitCallRuntimeLabel("__dbg_on_breakpoint");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "__dbg_th_defer");
+
+    // Single-step-over setup: orig = bp_orig_of_addr(bpaddr); disarm(bpaddr, orig); step_addr=bpaddr.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitCallRuntimeLabel("__dbg_bp_orig_of_addr");      // RAX = orig
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);    // arg1 = orig
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);           // arg0 = bpaddr
+    EmitCallRuntimeLabel("__dbg_disarm_bp");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitGlobalStoreReg(X86Register.Rax, "__dbg_step_addr");
+
+    // ctx.EFlags |= TF to single-step the restored instruction. Rip already points at bpaddr (Windows
+    // reports the INT3's own address), so with the original byte restored there, the resume needs no
+    // Rip rewrite — the CPU re-executes the real instruction and then raises STATUS_SINGLE_STEP.
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);           // ctx
+    EmitMovRegDwordIndirect(X86Register.Rcx, X86Register.Rax, ContextOffEFlags);
+    EmitOrRegImm(X86Register.Rcx, EflagsTrapFlag);
+    EmitMovDwordIndirectReg(X86Register.Rax, ContextOffEFlags, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rax, VehContinueExecution);
+    EmitRuntimeFunctionEnd();
+
+    // --- single-step: re-arm the breakpoint we stepped over, clear TF ---
+    DefineLabel("__dbg_th_singlestep");
+    EmitGlobalLoadReg(X86Register.Rax, "__dbg_step_addr");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "__dbg_th_defer");                      // not a step we set up
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg0 = step_addr
+    EmitCallRuntimeLabel("__dbg_arm_bp");               // re-arm (table still holds the original byte)
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitGlobalStoreReg(X86Register.Rax, "__dbg_step_addr");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);           // p
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, ExceptionPointersOffContextRecord);
+    EmitMovRegDwordIndirect(X86Register.Rcx, X86Register.Rax, ContextOffEFlags);
+    EmitAndRegImm(X86Register.Rcx, ~EflagsTrapFlag);
+    EmitMovDwordIndirectReg(X86Register.Rax, ContextOffEFlags, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rax, VehContinueExecution);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__dbg_th_defer");
     EmitMovRegImm(X86Register.Rax, VehContinueSearch);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // Shared frame layout of the two `.text`-patch primitives below: the absolute patch address is the
+  // spilled first arg, and oldProtect is VirtualProtect's out-param scratch. The W^X flip helpers
+  // depend on these slots, so both primitives must use this frame.
+  private const int DbgPatchAbsDisp = -0x08;
+  private const int DbgPatchOldProtectDisp = -0x20;
+
+  /// <summary>Make the code page holding the patch address writable (PAGE_EXECUTE_READWRITE), saving
+  /// its prior protection into the oldProtect slot. Assumes the patch frame layout above.</summary>
+  private void EmitDbgUnprotectCodePage() {
+    EmitMovRegMem(X86Register.Rcx, DbgPatchAbsDisp, 8);
+    EmitMovRegImm(X86Register.Rdx, BreakpointPatchLen);
+    EmitMovRegImm(X86Register.R8, PageExecuteReadWrite);
+    EmitLeaRegMem(X86Register.R9, DbgPatchOldProtectDisp);
+    EmitCallImportOnSystemStack("kernel32.dll", "VirtualProtect");
+  }
+
+  /// <summary>Restore the page's prior protection (from the oldProtect slot) and flush the instruction
+  /// cache so the CPU fetches the patched byte. The dual of <see cref="EmitDbgUnprotectCodePage"/>.</summary>
+  private void EmitDbgReprotectAndFlushCodePage() {
+    EmitMovRegMem(X86Register.Rcx, DbgPatchAbsDisp, 8);
+    EmitMovRegImm(X86Register.Rdx, BreakpointPatchLen);
+    EmitMovRegMem(X86Register.R8, DbgPatchOldProtectDisp, 8);
+    EmitLeaRegMem(X86Register.R9, DbgPatchOldProtectDisp);
+    EmitCallImportOnSystemStack("kernel32.dll", "VirtualProtect");
+
+    EmitMovRegImm(X86Register.Rcx, CurrentProcessPseudoHandle);
+    EmitMovRegMem(X86Register.Rdx, DbgPatchAbsDisp, 8);
+    EmitMovRegImm(X86Register.R8, BreakpointPatchLen);
+    EmitCallImportOnSystemStack("kernel32.dll", "FlushInstructionCache");
+  }
+
+  /// <summary>
+  /// __dbg_arm_bp(RCX = abs) -> RAX = the original byte. W^X patch: flip the containing page writable,
+  /// save the byte at `abs` and overwrite it with INT3 (0xCC), restore the page's prior protection, and
+  /// flush the instruction cache. Called both from __dbg_set_bp and from the trap thunk's re-arm, so
+  /// the W^X flip lives in one place. Frame: [rbp-0x08]=abs (spilled arg), [rbp-0x10]=orig,
+  /// [rbp-0x20]=oldProtect out-param.
+  /// </summary>
+  internal void EmitDbgArmBp() {
+    EmitRuntimeFunctionStart("__dbg_arm_bp", 1, 0x40);
+
+    EmitDbgUnprotectCodePage();
+
+    // orig = *(byte*)abs ; *(byte*)abs = 0xCC
+    EmitMovRegMem(X86Register.Rcx, DbgPatchAbsDisp, 8);
+    EmitMovzxRegByteIndirect(X86Register.Rax, X86Register.Rcx, 0);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rdx, DbgX86BreakpointOpcode);
+    EmitMovByteIndirectReg(X86Register.Rcx, 0, X86Register.Rdx);
+
+    EmitDbgReprotectAndFlushCodePage();
+
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);           // return orig
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __dbg_disarm_bp(RCX = abs, RDX = orig) — the dual of __dbg_arm_bp: W^X-patch the saved original
+  /// byte back over the INT3 and flush the icache. Leaves `.text` executable and pristine.
+  /// Frame: [rbp-0x08]=abs, [rbp-0x10]=orig (spilled args), [rbp-0x20]=oldProtect out-param.
+  /// </summary>
+  internal void EmitDbgDisarmBp() {
+    EmitRuntimeFunctionStart("__dbg_disarm_bp", 2, 0x40);
+
+    EmitDbgUnprotectCodePage();
+
+    // *(byte*)abs = orig
+    EmitMovRegMem(X86Register.Rcx, DbgPatchAbsDisp, 8);
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);           // orig
+    EmitMovByteIndirectReg(X86Register.Rcx, 0, X86Register.Rax);
+
+    EmitDbgReprotectAndFlushCodePage();
+
     EmitRuntimeFunctionEnd();
   }
 
