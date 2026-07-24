@@ -183,7 +183,7 @@ let WasmRdataAlignment = 8 as ByteCount
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool) returns ByteArray
 	// A managed-opaque-`T` `Array` descriptor's `destroyFunc@40` reloc is wired for x64 only (P1.7 slice
 	// 3b-ii); the wasm backend has no `.text` VA to bake, and wasm managed-opaque arrays are deferred. The
 	// target boundary keeps such programs off wasm, so a non-empty list here is a boundary bug — refuse loudly
@@ -242,7 +242,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
 	end 'eachFunc'
 
-	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx)
+	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks)
 
 	// The memory must cover BOTH images; `.rdata` sits above `.data`, so `rdataBase + rdataSize`
 	// is the high-water mark (and `rdataBase >= WasmDataBaseOffset` even with no globals, so the
@@ -304,7 +304,7 @@ end 'wasmRdataBase'
 // Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
 // entry's wasm function index (for the export).
-function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncIdx CalleeFuncIdxMap) returns Wasm32Index
+function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool) returns Wasm32Index
 	let mainFuncIdx = try calleeFuncIdx.get(WasmMainFunctionName) otherwise panic("buildWasmCoreModule: no `main` function in the module — the wasm `run` entry has nothing to call")
 	let mainReturnValType = mainReturnValueType(module)
 
@@ -316,7 +316,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncI
 	// exit code is routed through it before exit; a leaked program comes back as 101. `exit-with-code`
 	// takes an i32, so the resulting code — i64 after the gate, else main's own return width — is
 	// wrapped last. `main` returns `ExitCode` (i64 in the corpus); a narrower ExitCode is already i32.
-	let exitCodeVt = appendLeakGate(runBody, mainReturnValType: mainReturnValType, calleeFuncIdx: calleeFuncIdx)
+	let exitCodeVt = appendLeakGate(runBody, mainReturnValType: mainReturnValType, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks)
 	if exitCodeVt == WasmValType.i64 'wrap'
 		runBody.i32WrapI64()
 	end 'wrap'
@@ -333,14 +333,25 @@ end 'appendRunEntry'
 // allocation outlived the program — so a leaking heap program FAILS with 101 rather than passing
 // invisibly. `__mm_leak_check` is an ordinary i64→i64 Std function, so a narrower ExitCode is widened
 // to i64 first. Without the MM runtime the program cannot leak (nothing was allocated), so the gate
-// is skipped and the code passes straight through — keeping the non-heap path byte-identical. The MM
-// runtime is present ⟺ `__mm_leak_check` is in the module, so `calleeFuncIdx` decides the gate and hands
-// back the func index in ONE lookup — and unlike the native backends this is not a proxy question, since
-// the index is what the emitted `call` needs anyway. (Dead-function elimination roots `__mm_leak_check`
-// precisely because nothing in the module calls it; see DeadFunctionElimination's root set.) Returns the
-// valtype now on the stack: i64 after the gate, else main's own return valtype.
-function appendLeakGate(runBody WasmBody, mainReturnValType WasmValType, calleeFuncIdx CalleeFuncIdxMap) returns WasmValType
-	let leakCheckIdx = try calleeFuncIdx.get(MmLeakCheckName) otherwise return mainReturnValType
+// is skipped and the code passes straight through — keeping the non-heap path byte-identical.
+//
+// ⚠ **`checkLeaks` IS `RuntimeUsage.usesHeap` — THE SAME BIT THE NATIVE GATES READ, AND IT IS NOT
+// OPTIONAL HERE.** Whether a gate belongs and which func index to call are two different questions, and
+// this used to answer BOTH from `calleeFuncIdx.get(MmLeakCheckName)`: a miss silently meant "no heap, no
+// gate". That is safe only while nothing can take an installed `__mm_leak_check` back out — the premise
+// dead-function elimination removed. Because nothing CALLS the leak check, it survives DFE only by being
+// an explicit root; had that root ever been narrowed, x64 and arm64 would have failed LOUD at their
+// entry-stub `call`/`bl` fixup while wasm alone silently emitted no gate, turning every exit-101 leak
+// test green on this target only. So installation is read from the one place it is decided, and a
+// missing function under `usesHeap` is an impossible state that PANICS.
+//
+// Returns the valtype now on the stack: i64 after the gate, else main's own return valtype.
+function appendLeakGate(runBody WasmBody, mainReturnValType WasmValType, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool) returns WasmValType
+	if not checkLeaks 'noHeap'
+		return mainReturnValType
+	end 'noHeap'
+
+	let leakCheckIdx = try calleeFuncIdx.get(MmLeakCheckName) otherwise panic("appendLeakGate: `RuntimeUsage.usesHeap` says the MM runtime was installed, so `__mm_leak_check` must be in this module — its absence means the leak-gate ROOT was pruned (see DeadFunctionElimination's root set), which would silently disable the 101 leak gate on wasm")
 	coerceOnStack(runBody, from: mainReturnValType, to: WasmValType.i64)
 	runBody.call(leakCheckIdx)
 	return WasmValType.i64

@@ -60,7 +60,7 @@ typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
 
 // Drop every function unreachable from the program's roots, in place. Rebuilds `module.functions`;
 // the dropped functions' blocks and ops stay in the flat arrays as orphans (see the header).
-export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable)
+export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project)
 	let byName = indexFunctionsByName(module)
 
 	var reached = BoolArray.create()
@@ -74,7 +74,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 		markCalleesOf(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist)
 	end 'walk'
 
-	sweepUnreachedFunctions(module, reached: reached)
+	sweepUnreachedFunctions(module, reached: reached, project: project)
 end 'eliminateDeadFunctions'
 
 // Name → `module.functions` index. Built once: without it, resolving a callee would be a linear scan of
@@ -102,9 +102,16 @@ end 'indexFunctionsByName'
 //    `CallFixup`s resolved at concat, built in the encode phase — after this pass — so their edges
 //    likewise cannot be walked. There are exactly two, and they were found by enumerating every
 //    `targetName:` in the chunk builders:
-//      * `__mm_leak_check` — both entry stubs' leak gate (`appendLeakGate`, `Arm64Runtime:103`). It is
-//        called from NOWHERE else, so pruning it would not fail the link: it would silently DELETE the
-//        leak gate and turn every exit-101 leak test green. The one root whose absence is invisible.
+//      * `__mm_leak_check` — both entry stubs' leak gate (`appendLeakGate`, `Arm64Runtime:103`). Nothing
+//        in the module CALLS it, so it survives only by being rooted here. ⭐ Its absence is LOUD on
+//        every backend, and that is a property worth keeping deliberately: each gate emits its call from
+//        `RuntimeUsage.usesHeap` — where installation is decided — never from "is the function still
+//        there?", so a pruned root leaves a call with no callee. MEASURED by deleting this line:
+//        x64 `resolveCallFixups: call to unknown function '__mm_leak_check'` (X64Backend:1794), arm64
+//        `arm64ResolveCallFixups: bl to unknown function` (Arm64Backend:1420), wasm the `usesHeap` panic
+//        in `StdToWasm.appendLeakGate`. ⚠ Restore that property if you touch a gate: no committed spec
+//        makes the leak gate FIRE, so a gate that decided from the module instead would let this root's
+//        removal turn every exit-101 test silently green.
 //      * `__gt_enqueue` — the IOCP completion thread's cross-thread wake (`X64GtRuntime:772`).
 //    They are rooted unconditionally: a name absent from this module is simply not found (a program
 //    with no heap has no `__mm_leak_check` to keep), so the root costs nothing where the runtime it
@@ -194,12 +201,21 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 end 'markCalleeOf'
 
 // Rebuild `module.functions` keeping only what the walk reached.
-function sweepUnreachedFunctions(module StdModule, reached BoolArray)
+//
+// ⚠ **A REBUILD IS A RENUMBERING, and `module.functions` is not the only thing keyed by that numbering.**
+// `Project.valueOrigins` (and the parameter spans inside it) file every row under a function's POSITION
+// in this array, so dropping a function silently re-points every later row at its neighbour. The remap
+// below is part of the sweep, not a courtesy after it — see `ValueOriginTable.remapFunctionIndices`.
+function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Project)
 	let total = module.funcCount()
 	var kept = IrFunctionArray.create()
+	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
+	// for dropped functions are never read (the remap consults `reached` first).
+	var newIndexOfOld = FuncIndexArray.create()
 	for i in 0 upto total 'eachFunc'
 		let func = module.getFunc(i)
 		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
+		newIndexOfOld.push(kept.count())
 		if isLive 'live'
 			kept.push(func)
 		end 'live' else 'dead'
@@ -214,4 +230,15 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray)
 	let dropped = total - kept.count()
 	logDebug(LogCategory.ir, message: function() gives "dfe: dropped {dropped} unreachable function(s) of {total}")
 	module.functions = kept
+
+	// Nothing dropped ⇒ `newIndexOfOld` is the identity and no row loses its function, so the remap could
+	// only rebuild the origin columns into an exact copy of themselves. Skipped rather than absorbed into
+	// `remapFunctionIndices`, because the saving is the whole REBUILD (the columns are sized by the
+	// program's value count, so the copy is linear in program size): measured +487,704 … +20,528,128 bytes
+	// across the scale ladder, all of it on a corpus that drops nothing.
+	if dropped == 0 'numberingUnchanged'
+		return
+	end 'numberingUnchanged'
+
+	project.valueOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
 end 'sweepUnreachedFunctions'

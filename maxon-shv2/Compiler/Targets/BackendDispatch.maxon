@@ -89,13 +89,13 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// re-adding it. `globalData` reaches it because an `.rdata` slot is a reference this module's ops do
 	// not spell (see DeadFunctionElimination's root set).
 	let dfeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.deadFunctions)
-	eliminateDeadFunctions(stdModule, globalData: globalData)
+	eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
 
 	match target.cpu 'cpu'
 		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage)
 		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage)
-		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project)
+		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage)
 	end 'cpu'
 end 'buildBackend'
 
@@ -110,9 +110,12 @@ end 'buildBackend'
 // the CodeResult's `wasmCoreModule` field; every machine-code field is empty (see
 // `CodeResult.forWasm`), and `writeWasm` wraps the bytes into a component. It takes no `target`: the
 // sole wasm target is wasm32-wasi, and `buildBackend` has already dispatched on it.
-function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project) returns CodeResult
+// `usage` reaches it for the ONE reason the native backends need it: the leak gate. `usesHeap` is
+// where "was the MM runtime installed?" is decided, so wasm reads that bit rather than re-deriving it
+// from the module — see `StdToWasm.appendLeakGate`.
+function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)

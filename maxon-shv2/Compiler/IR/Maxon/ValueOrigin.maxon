@@ -195,6 +195,40 @@ export type ParamOriginTable
 			self.record(f + funcOffset, valueId: v, range: SourceRange.create(startByte, endByte: endByte, line: line, column: column))
 		end 'each'
 	end 'appendFrom'
+
+	// The `ValueOriginTable.remapFunctionIndices` half for parameter spans — see that header for WHY a
+	// renumbering has to reach these rows at all. Same rule: a row whose function was dropped goes, and
+	// a survivor's key moves to the function's new position.
+	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
+		var keptFuncs = FuncIndexArray.create()
+		var keptValues = ValueIdArray.create()
+		var keptStarts = ByteOffsetArray.create()
+		var keptEnds = ByteOffsetArray.create()
+		var keptLines = LineNumberArray.create()
+		var keptColumns = ColumnNumberArray.create()
+
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: funcIndices.get OOB at {i}")
+			let isLive = try reached.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: row {i} names function index {f}, which is not a function of the module being swept — the parameter-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+			if not isLive 'droppedFunc'
+				continue
+			end 'droppedFunc'
+
+			keptFuncs.push(try newIndexOfOld.get(f) otherwise panic("ParamOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}"))
+			keptValues.push(try self.valueIds.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: valueIds.get OOB at {i}"))
+			keptStarts.push(try self.startBytes.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: startBytes.get OOB at {i}"))
+			keptEnds.push(try self.endBytes.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: endBytes.get OOB at {i}"))
+			keptLines.push(try self.lines.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: lines.get OOB at {i}"))
+			keptColumns.push(try self.columns.get(i) otherwise panic("ParamOriginTable.remapFunctionIndices: columns.get OOB at {i}"))
+		end 'each'
+
+		self.funcIndices = keptFuncs
+		self.valueIds = keptValues
+		self.startBytes = keptStarts
+		self.endBytes = keptEnds
+		self.lines = keptLines
+		self.columns = keptColumns
+	end 'remapFunctionIndices'
 end 'ParamOriginTable'
 
 // ValueOriginTable — the (funcIndex, ValueId) -> Maxon OpIndex store, as three dense
@@ -271,6 +305,43 @@ export type ValueOriginTable
 	// whole-program module. `mergeArtifact` calls this in lockstep with that merge, so
 	// the shifted entries name the merged module's function + op indices. ValueIds pass
 	// through verbatim (they are function-local and the merge preserves them).
+	// ⭐ **FOLLOW A RENUMBERING OF `module.functions`** — drop the rows of functions that went, and move
+	// each survivor's key to its new position.
+	//
+	// These rows are keyed POSITIONALLY (see `appendFrom`, which files them by shifting each artifact's
+	// indices onto the merged module's numbering), so the key is only meaningful against the exact
+	// function array it was filed against. `eliminateDeadFunctions` REBUILDS that array, and the register
+	// allocator asks these tables using a function's post-prune position — so without this, every
+	// function after the first pruned one resolves its values against a DIFFERENT function's rows. That is
+	// not a missing answer but a WRONG one: the E5001 register-pressure diagnostic reports a span from
+	// the wrong function, or — when the wrong function has no row for that ValueId — trips
+	// `RegisterPressureDiagnostic`'s "resolves to NO source span … This is a COMPILER BUG" panic on what
+	// is really an ordinary user program. (Measured: identical program, 5 unreachable functions ahead of
+	// the pressure-failing one, E5001 → that panic.)
+	export function remapFunctionIndices(reached BoolArray, newIndexOfOld FuncIndexArray)
+		var keptFuncs = FuncIndexArray.create()
+		var keptValues = ValueIdArray.create()
+		var keptOps = OpIndexArray.create()
+
+		for i in 0 upto self.count() 'each'
+			let f = try self.funcIndices.get(i) otherwise panic("ValueOriginTable.remapFunctionIndices: funcIndices.get OOB at {i}")
+			let isLive = try reached.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: row {i} names function index {f}, which is not a function of the module being swept — the value-origin key space and `module.functions` are the same positional numbering (see appendFrom)")
+			if not isLive 'droppedFunc'
+				continue
+			end 'droppedFunc'
+
+			keptFuncs.push(try newIndexOfOld.get(f) otherwise panic("ValueOriginTable.remapFunctionIndices: newIndexOfOld.get OOB at {f}"))
+			keptValues.push(try self.valueIds.get(i) otherwise panic("ValueOriginTable.remapFunctionIndices: valueIds.get OOB at {i}"))
+			keptOps.push(try self.opIndices.get(i) otherwise panic("ValueOriginTable.remapFunctionIndices: opIndices.get OOB at {i}"))
+		end 'each'
+
+		self.funcIndices = keptFuncs
+		self.valueIds = keptValues
+		self.opIndices = keptOps
+
+		self.paramOrigins.remapFunctionIndices(reached, newIndexOfOld: newIndexOfOld)
+	end 'remapFunctionIndices'
+
 	export function appendFrom(source ValueOriginTable, funcOffset FuncIndex, opOffset OpIndex)
 		for i in 0 upto source.count() 'each'
 			let f = try source.funcIndices.get(i) otherwise panic("ValueOriginTable.appendFrom: funcIndices.get OOB at {i}")
