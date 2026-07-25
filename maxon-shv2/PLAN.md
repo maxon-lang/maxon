@@ -2208,7 +2208,75 @@ leaves the compiler CHEAPER at scale than before it**, because the boxing fix re
 `classifyUnionPayload`. Path-spelling hazard probed across 7 spellings — **negative**, and structurally so: one
 `FilePath` value per file, writer and reader taking it from the same object.
 
-### ⬜ FILED BY THIS RUNG — three, none of them its to fix
+### ✅ A CAST TO AN UNDECLARED TYPE IS E3011 — CLOSED 2026-07-25 (x64 1604→**1610/0**, wasm 1413→**1419/0**)
+`5 as CompletelyMadeUpNameXyz` **compiled clean and returned 5** — the cast to a type that exists nowhere silently
+evaporated. ⇒ **E3011** (an EXISTING code, CLAIMED with an `shv2` line, not minted: using the oracle's `E2003` would
+have made shv2 report two codes for one fact depending on where it was written, since `f(x Bogus)` already says
+E3011). A **second** silent no-op in the same lookup also fixed: `5 as Point`, a declared `type` named from outside
+its body ⇒ **E3009**; `applyCast`'s header had *claimed* to reject that spelling and was false for the one users
+actually write.
+
+⭐ **WHY IT MATTERED MORE THAN IT LOOKED: it made a committed test GREEN FOR THE WRONG REASON.**
+`ranged-typealias.md`'s `cast-to-stdlib-internal-typealias` asserts a real property — a stdlib-INTERNAL alias must
+be nameable as a cast target — but verified it against `ElementCount` from the **un-whitelisted** `stdlib/Array.maxon`.
+The name resolved to nothing, the cast vanished, and the exit code came out right anyway. **A test that passes
+because a lookup FAILS.** It was the ONLY regression in 1,611 tests once the fix landed — which is itself the
+confirmation of the diagnosis.
+
+⚠ **THE COORDINATOR'S RULING WAS REFUTED AT THE CODE — AGAIN, AND ON TWO POINTS.** I ruled "rewrite that case
+in place against a loaded alias, do not disable it", and specified a negative-value discriminator.
+1. **`Milliseconds` is `int(0 to u64.max)` and a negative value is NOT out of that range** — the corpus's own
+   `unsigned-domain-negative-sentinel-cast` pins that `(-1) as Slot` WRAPS and is in range. The implementer went
+   further and MEASURED that `x as Milliseconds` and `x as NoSuchName` emit **byte-identical Target IR** for a
+   runtime operand, and that all six whitelisted stdlib aliases share that full range ⇒ **no exit code and no
+   golden can discriminate; the diagnostic this rung installs is the ONLY possible discriminator.**
+2. **The file is a BYTE-IDENTICAL PORT** of `/specs/ranged-typealias.md` (coordinator-verified: the diff is only
+   the marker line). Rewriting a ported case's body makes shv2's copy silently stop being a port, and a future
+   re-port reconciles to OUR invention — the one-fact-twice bug, in the spec corpus.
+⇒ **RULE, now standing: PORTS STAY PORTS; NEW COVERAGE GOES IN A NEW FILE.** The port is `disabled-test:` with a
+reason naming its blocker (`Array.maxon`, behind the `Map`/`__ManagedMemory` cone); the property is re-tested in
+**`specs-shv2/cast-target-type-resolution.md`** against `Sleep.maxon`'s internal+whitelisted `Milliseconds`, with a
+**one-character discriminating pair** (`Milliseconds` → exit 5 · `Millisecond` → E3011). ⭐ **The review audited that
+chain and found the replacement STRICTLY STRONGER than the port**: the port could not discriminate resolved from
+vanished — that IS the bug — whereas the replacement now FAILS if `Sleep.maxon` ever leaves the whitelist.
+
+⭐ **THE REVIEW FOUND THE RUNG'S OWN FAILURE MODE ONE LEVEL UP.** The two cast sites (`castTargetTag`/`applyCast`
+and `requireConstCastTargetKind`) **shared the FACT but each kept its own copy of the DECISION** — name→tag, and
+`castHasNoLegalConversion`→`invalidCast` — in a `named`-`MaxonType` arm and a `ConstValue`/`Token` arm, with nothing
+forcing agreement. They agreed *today*; a clause added to one (an enum ruling, per-instance wording) becomes a
+**wrong answer at the other** — `let X = 5 as T` accepted where `x as T` is refused, and a compile error at neither.
+Fixed by extracting `denotedCastTargetTag` + `requireCastKindsConvert`, following **this file's own existing shape**
+(`requireConstOperands`) rather than an invented one. It also killed a second already-diverged pair: `evalConstPostfix`'s
+header said the target RANGE is not checked while `applyConstCast` 15 lines below said it is — **measured false**
+(`256 as Octet` IS E3005).
+
+⭐⭐ **A STANDING FACT ABOUT THE INSTRUMENT, measured and then independently reproduced: THE BYTES COLUMN CARRIES
+THE CHECKOUT PATH.** `ScaleTestRunner`'s `CorpusRelativeRoot = ".scale-tmp"` is relative to the working directory,
+so a longer worktree path costs bytes. Measured **204 bytes per path character** (the rung's own "+408 flat"
+headline was refuted: base and HEAD are identical in EVERY column at all six rungs when built at the same path —
+408 ÷ 204 = exactly 2 characters), then reproduced by the review from a second worktree 13 characters shorter:
+**−2,652 = 13 × 204, flat at all six rungs, allocations delta 0.** ⇒ **BYTES ARE NOT COMPARABLE ACROSS WORKTREES;
+ALLOCATIONS ARE.** This retroactively explains phantom flat constants this log has chased more than once.
+Measured wins: per-reference cost of the new cascade is **0 allocations** (the payload-free-union choice holds at
+runtime), and a qualified-alias program is now **−125 ns/reference, −3.4% of the phase**.
+
+### ⬜ FILED BY THIS RUNG — four
+- **`5 as Color` (declared enum) is accepted.** shv2 erases an enum to `integer`, so it is `5 as int` and coherent;
+  the bootstrap refuses it, but via its `as` parser accepting a fixed list of type FORMS, not a rule about what an
+  int may become. **Whether Maxon permits `int` ↔ `enum` casts is a LANGUAGE question** — documented in the new
+  spec's prose rather than silently left.
+- **`p as OtherStruct` (struct → different struct) is accepted** — pre-existing, both sides already reached the
+  gate; distinct from "the target denotes nothing".
+- **A declared `interface` reports `Unknown type 'Shape'`** — pre-existing (`f(s Shape)` already said it); this rung
+  made the cast position CONSISTENT with it rather than introducing it. The message is wrong for a declared
+  interface and belongs with interface-typed values.
+- **⏭ MEASURED DEBT — the QUALIFIED arm costs 18 allocations / 700 bytes PER REFERENCE** (`splitQualifiedName` +
+  `joinQualifiedName` rebuild the `Base.Member` key each time, and `DeclaredAlias` boxes on both hit and miss).
+  Measured LINEAR (×2.00 at three sizes) ⇒ debt, not defect. **Re-measure trigger: generic-heavy code once P1.7
+  Array lands.** ⚠ This is the FOURTH rung in which "a Maxon union value is a HEAP OBJECT" has been the cost —
+  check it first when a per-call term appears.
+
+### ⬜ FILED BY THE TYPEALIAS RUNG — three, none of them its to fix
 - **⭐ `5 as MadeUpName` COMPILES SILENTLY** and returns 5 (oracle: `E2003`). Identical on base and branch. **It is
   why `cast-to-stdlib-internal-typealias` is GREEN — for the wrong reason**: `ElementCount` lives in the
   un-whitelisted `stdlib/Array.maxon`, so nothing resolves and the cast vanishes. **A test that passes because a
