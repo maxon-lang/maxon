@@ -98,7 +98,7 @@ end 'main'
 ```
 
 <!-- disabled-test: float.hash.nonzero -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- float.hash — needs a Std-tier BIT REINTERPRETATION, which shv2 has no route to: `floatToBits`/`bitsToFloat` are HOST-only constant folding, `StdUnaryOpcode` carries only the numeric `siToFp`/`fpToSi`, x64's `emitRegRegMove` refuses a cross-register-file move, and there is no `alloca` for a store-then-load round trip. Its own future rung (`float` is Equatable + Comparable today, NOT Hashable — `isIntrinsicBuiltinConformance`) -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.14
@@ -114,7 +114,7 @@ end 'main'
 ```
 
 <!-- disabled-test: float.hash.zero-normalization -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- float.hash — needs a Std-tier BIT REINTERPRETATION plus the explicit `-0.0` normalization that rides on it; see float.hash.nonzero above. Its own future rung -->
 ```maxon
 function main() returns ExitCode
 	let pos = 0.0
@@ -161,8 +161,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.equals -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.equals -->
 ```maxon
 function main() returns ExitCode
 	let a = 3.14

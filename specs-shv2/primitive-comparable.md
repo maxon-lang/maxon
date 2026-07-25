@@ -95,8 +95,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bool.compare.false-true -->
-<!-- P1.7a primitive-dispatch rung 2 — `bool` conformance (`isIntrinsicBuiltinConformance` gives `int` and `String` only, so there is no `bool.compare` impl to dispatch to) -->
+<!-- test: bool.compare.false-true -->
 ```maxon
 function main() returns ExitCode
 	let a = false
@@ -113,8 +112,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bool.compare.equal -->
-<!-- P1.7a primitive-dispatch rung 2 — `bool` conformance (`isIntrinsicBuiltinConformance` gives `int` and `String` only, so there is no `bool.compare` impl to dispatch to) -->
+<!-- test: bool.compare.equal -->
 ```maxon
 function main() returns ExitCode
 	let a = true
@@ -131,8 +129,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.less -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.less -->
 ```maxon
 function main() returns ExitCode
 	let a = 1.5
@@ -149,8 +146,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.greater -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.greater -->
 ```maxon
 function main() returns ExitCode
 	let a = 3.14
@@ -167,8 +163,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.nan-less-than-normal -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.nan-less-than-normal -->
 ```maxon
 function main() returns ExitCode
 	// NaN from overflow (inf - inf), NOT `0.0 / 0.0` — a literal zero divisor is now a compile
@@ -188,8 +183,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.normal-greater-than-nan -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.normal-greater-than-nan -->
 ```maxon
 function main() returns ExitCode
 	// NaN from overflow (inf - inf), not division — see nan-less-than-normal.
@@ -208,8 +202,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.nan-nan-equal -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.nan-nan-equal -->
 ```maxon
 function main() returns ExitCode
 	// Two NaNs from overflow (inf - inf), not division — see nan-less-than-normal.
@@ -229,8 +222,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.nan-less-than-negative -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.nan-less-than-negative -->
 ```maxon
 function main() returns ExitCode
 	// NaN from overflow (inf - inf), not division — see nan-less-than-normal.
@@ -249,8 +241,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.compare.positive-negative-zero -->
-<!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
+<!-- test: float.compare.positive-negative-zero -->
 ```maxon
 function main() returns ExitCode
 	let pos = 0.0

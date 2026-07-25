@@ -143,18 +143,19 @@ let CompilerInternalPrefix = b"__"
 // just as much as of `__mm_alloc`.
 //
 // ⭐⭐ **"COMPILER-OWNED" IS NOT THE SAME FACT AS "`__`-PREFIXED", AND THE SECOND CLAUSE IS WHERE THEY PART.**
-// The synthesized builtin-conformance impls (`int.hash`/`int.equals`/`int.compare`) are as compiler-owned as
-// `__str_eq` — no file declares them, and they are built at the Std tier after the pipeline — but they
-// deliberately wear NO prefix, because a witness-table reloc has to name a real `.text` symbol
-// (`BuiltinConformanceRuntime`'s header). The prefix test was therefore ALREADY wrong about them; it simply
-// never mattered while nothing called one by NAME. Direct dispatch (`i.compare(j)`) does, and the first
-// reader to notice reported **E3004 "call to undefined function 'int.compare'"** against a call the user
-// never wrote — the exact failure this predicate exists to prevent for `__mm_alloc`.
+// The synthesized builtin-conformance impls (`int.hash`/`int.equals`/`int.compare`, `float.equals`/
+// `float.compare`, `bool.compare`) are as compiler-owned as `__str_eq` — no file declares them, and they are
+// built at the Std tier after the pipeline — but they deliberately wear NO prefix, because a witness-table
+// reloc has to name a real `.text` symbol (`BuiltinConformanceRuntime`'s header). The prefix test was
+// therefore ALREADY wrong about them; it simply never mattered while nothing called one by NAME. Direct
+// dispatch (`i.compare(j)`) does, and the first reader to notice reported **E3004 "call to undefined
+// function 'int.compare'"** against a call the user never wrote — the exact failure this predicate exists to
+// prevent for `__mm_alloc`.
 //
-// ⚠ The second clause is `int.`-QUALIFIED ONLY, and that bound is load-bearing rather than conservative —
-// see `isBuiltinConformanceImplName` for why `String.` must stay out and why a keyword qualifier is what
-// makes the claim sound. It is allocation-free (`isQualifiedUnderTypeName`), because this sits on the
-// per-call path of `validateCall` and `lowerCall`.
+// ⚠ The second clause covers the PRIMITIVE-KEYWORD qualifiers only (`int.`/`float.`/`bool.`), and that bound
+// is load-bearing rather than conservative — see `isBuiltinConformanceImplName` for why `String.` must stay
+// out and why a keyword qualifier is what makes the claim sound. It is allocation-free
+// (`isQualifiedUnderTypeName`), because this sits on the per-call path of `validateCall` and `lowerCall`.
 export function isCompilerInternalCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: CompilerInternalPrefix) or isBuiltinConformanceImplName(callee)
 end 'isCompilerInternalCallee'
@@ -241,6 +242,17 @@ export function twoI64Params() returns StdTypeArray
 	types.push(StdType.i64)
 	return types
 end 'twoI64Params'
+
+// Two f64 parameters — the synthesized `float.equals(self, other)` / `float.compare(self, other)`
+// (P1.7a slice 2b-iii). It joins the i64 family here rather than beside its caller for that family's
+// reason, and the DECLARED f64 is what makes the ABI agree at both ends: `calleeParamClass` reads these
+// types to route each ARGUMENT into an XMM register, and `lowerParam` reads them to capture it from one.
+export function twoF64Params() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.f64)
+	types.push(StdType.f64)
+	return types
+end 'twoF64Params'
 
 // Three i64 parameters — `__str_copy(dest, src, len)` and the Array runtime's `__arr_set(arr, index,
 // value)` / `__arr_insert(arr, index, value)`. Shared here so a runtime builder does not mint its own.
@@ -330,9 +342,16 @@ export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids 
 end 'emitConst'
 
 // `a <pred> b` into a fresh value (a flag).
-export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter) returns ValueId
+//
+// ⚠ `operandType` DEFAULTS to i64 rather than being spelled at each of its eighty-odd call sites, and the
+// default is the GPR-only internal ABI this file's `emitParams` already states: every hand-assembled runtime
+// chunk compares machine words. The only callers that do not are the FLOAT builtin-conformance impls
+// (`BuiltinConformanceRuntime.buildFloatCompare` and `buildBuiltinEquals` under an f64 operand), and they
+// pass `operandType` explicitly. Parameterized rather than FORKED into an `emitFloatCmp`: a fork would be
+// this three-line body copied, so the day `StdOp.cmp` gains a field only one copy would learn about it.
+export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter, operandType StdType = StdType.i64) returns ValueId
 	let v = ids.mint()
-	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: operandType))
 	return v
 end 'emitCmp'
 

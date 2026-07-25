@@ -1,10 +1,12 @@
 // BuiltinConformanceRuntime.maxon — the synthesized `int.hash`/`int.equals` (P1.7a slice 2b),
-// `int.compare` (P1.7a slice 2b-ii) and `String.hash`/`String.equals` (P1.7b) impls that make the BUILTIN
-// types `int` and `String` conform to `Hashable`/`Equatable`, and `int` additionally to `Comparable`.
+// `int.compare` (P1.7a slice 2b-ii), `float.equals`/`float.compare` + `bool.compare` (P1.7a slice 2b-iii)
+// and `String.hash`/`String.equals` (P1.7b) impls that make the BUILTIN types conform to
+// `Hashable`/`Equatable`/`Comparable`. WHICH type conforms to WHICH protocol is not restated here — it is
+// `IrInterface.isIntrinsicBuiltinConformance`, and the eight impls below are exactly its true entries.
 //
-// ⭐ **`int` and `String` conform NATIVELY, the type-side twin of the synthesized
+// ⭐ **The builtin types conform NATIVELY, the type-side twin of the synthesized
 // `Hashable`/`Equatable`/`Comparable` interfaces (`builtinInterface`).** shv2 reads no stdlib, so there is no
-// user `int.hash` / `int.compare` / `String.equals` to point a witness slot at — these are hand-built Std
+// user `int.hash` / `float.compare` / `String.equals` to point a witness slot at — these are hand-built Std
 // bodies, exactly like `__str_eq` / the array runtime, installed after the pipeline so they are never
 // re-optimized. They are NOT `__`-prefixed, so they carry a real `.text` symbol the witness-table reloc
 // (`recordFuncAbs64InRdata`) can name — the SAME funcAbs64 reloc that stamps `__witness_<Struct>_Digest`, only
@@ -37,20 +39,21 @@
 //
 // The SEMANTICS match the reference compilers' monomorphizing source (`stdlib/PrimitiveExtensions.maxon`,
 // `stdlib/helpers/string/hash.maxon`): `int.hash() = self & 0xFFFFFFFF` (the low-32 mask — identity for a
-// value that already fits u32); `int.equals(other) = self == other`; `int.compare(other)` = the
-// `lessThan`/`greaterThan`/`equalTo` cascade; `String.hash() = djb2` over the bytes; `String.equals(other) =
-// __str_eq`'s content compare. x64-only rides the witness reloc, which the arm64/wasm writers already refuse.
+// value that already fits u32); `<scalar>.equals(other) = self == other`; `<scalar>.compare(other)` = the
+// `lessThan`/`greaterThan`/`equalTo` cascade, which `float.compare` precedes with a NaN preamble
+// (`buildFloatCompare`); `String.hash() = djb2` over the bytes; `String.equals(other) = __str_eq`'s content
+// compare. x64-only rides the witness reloc, which the arm64/wasm writers already refuse.
 
 // The low-32-bit mask `int.hash`/`String.hash` fold their result through — `HashValue` is `int(0 to u32.max)`,
 // so a hash is the low 32 bits. The one place the mask is spelled, shared by both hashers (it IS `HashValue`'s
 // width, one fact).
 let HashLow32Mask = 0xFFFFFFFF
 
-// `int.equals` returns a materialized bool (0 or 1) — there is no `setcc` at this tier, so the two verdicts
-// are two `const`-returning blocks off a fused `cmp`+`jcc`, exactly as `__str_eq` returns its length/byte
-// verdicts. Named for the same reason `StrEqEqual`/`StrEqNotEqual` are.
-let IntEqualsTrue = 1
-let IntEqualsFalse = 0
+// A builtin `equals` returns a materialized bool (0 or 1) — there is no `setcc` at this tier, so the two
+// verdicts are two `const`-returning blocks off a fused `cmp`+`jcc`, exactly as `__str_eq` returns its
+// length/byte verdicts. Named for the same reason `StrEqEqual`/`StrEqNotEqual` are.
+let EqualsTrue = 1
+let EqualsFalse = 0
 
 // djb2 over `String`'s bytes: `h = Djb2Seed`, then `h = h * Djb2Multiplier + b` per byte. The two magic
 // numbers of the algorithm, named rather than bare so the loop reads as djb2. `""` -> `5381`, `"abc"` ->
@@ -65,29 +68,65 @@ let Djb2Multiplier = 33
 export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable)
 	let intHash = qualifiedMethodName(IntConformerName, methodName: HashMethodName)
 	let intEquals = qualifiedMethodName(IntConformerName, methodName: EqualsMethodName)
-	// `int.compare` (P1.7a slice 2b-ii). `String` has NO `Comparable` conformance (a byte record has no
-	// ordering — `isIntrinsicBuiltinConformance`), so there is no `String.compare` twin to install.
 	let intCompare = qualifiedMethodName(IntConformerName, methodName: CompareMethodName)
+	// `float` has NO `Hashable` conformance (a bit reinterpretation shv2 cannot yet spell) and `bool` has
+	// neither `Hashable` nor `Equatable`, so there is no `float.hash`/`bool.hash`/`bool.equals` to install —
+	// and `String` has no `Comparable`, so no `String.compare`. Those four holes are one fact, stated in
+	// `isIntrinsicBuiltinConformance` and read from there rather than restated here.
+	let floatEquals = qualifiedMethodName(FloatConformerName, methodName: EqualsMethodName)
+	let floatCompare = qualifiedMethodName(FloatConformerName, methodName: CompareMethodName)
+	let boolCompare = qualifiedMethodName(BoolConformerName, methodName: CompareMethodName)
 	let strHash = qualifiedMethodName(StringConformerName, methodName: HashMethodName)
 	let strEquals = qualifiedMethodName(StringConformerName, methodName: EqualsMethodName)
 
-	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the five answers independent of the
-	// order they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very
-	// function had already appended; none of the five bodies calls another today, but that is a property of
-	// their current shape rather than of the mechanism, and the single up-front call needs no such promise.
-	let referenced = referencedBuiltinImpls(module, globalData: globalData, impls: builtinImplNames(intHash, intEquals: intEquals, intCompare: intCompare, strHash: strHash, strEquals: strEquals))
+	// The candidate list the reference walk matches against, built from the very `ByteArray`s the builders
+	// are installed under — one join per symbol, so the name the walk looks for and the name the function
+	// carries cannot be two joins that happen to agree.
+	var impls = ByteArrayArray.create()
+	impls.push(intHash)
+	impls.push(intEquals)
+	impls.push(intCompare)
+	impls.push(floatEquals)
+	impls.push(floatCompare)
+	impls.push(boolCompare)
+	impls.push(strHash)
+	impls.push(strEquals)
+
+	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the answers independent of the order
+	// they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very function
+	// had already appended; none of the bodies calls another today, but that is a property of their current
+	// shape rather than of the mechanism, and the single up-front call needs no such promise.
+	let referenced = referencedBuiltinImpls(module, globalData: globalData, impls: impls)
 
 	if referenced.contains(intHash) 'intHash'
 		buildIntHash(module, name: intHash)
 	end 'intHash'
 
 	if referenced.contains(intEquals) 'intEquals'
-		buildIntEquals(module, name: intEquals)
+		buildBuiltinEquals(module, name: intEquals, operandType: StdType.i64)
 	end 'intEquals'
 
 	if referenced.contains(intCompare) 'intCompare'
-		buildIntCompare(module, name: intCompare)
+		buildOrderingCompare(module, name: intCompare, operandType: StdType.i64)
 	end 'intCompare'
+
+	if referenced.contains(floatEquals) 'floatEquals'
+		buildBuiltinEquals(module, name: floatEquals, operandType: StdType.f64)
+	end 'floatEquals'
+
+	if referenced.contains(floatCompare) 'floatCompare'
+		buildFloatCompare(module, name: floatCompare)
+	end 'floatCompare'
+
+	// ⭐ `bool.compare` IS `int.compare`'s graph, and that is a fact about the STD TIER rather than a
+	// shortcut. Both reference compilers write bool's body as `if self then a = 1` twice over an int pair
+	// (`stdlib/PrimitiveExtensions.maxon:73-90`) only because the SOURCE language has no bool→int cast; a
+	// Std `i1` already IS 0 or 1 in its machine word, so the mapping is the identity and the cascade is
+	// literally the same ops. One builder, two symbols — the symbol must still be `bool.compare`, because
+	// that is what the parser mints and what a `__witness_bool_Comparable` slot would name.
+	if referenced.contains(boolCompare) 'boolCompare'
+		buildOrderingCompare(module, name: boolCompare, operandType: StdType.i64)
+	end 'boolCompare'
 
 	if referenced.contains(strHash) 'strHash'
 		buildStrHash(module, name: strHash)
@@ -100,21 +139,8 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	end 'strEquals'
 end 'installBuiltinConformanceRuntime'
 
-// The five synthesized impl symbols, as the candidate list the reference walk matches against. Taken as
-// parameters rather than re-minted here so the names the walk looks for and the names the builders are
-// installed under are the SAME `ByteArray`s, not two joins that happen to agree.
-function builtinImplNames(intHash ByteArray, intEquals ByteArray, intCompare ByteArray, strHash ByteArray, strEquals ByteArray) returns ByteArrayArray
-	var impls = ByteArrayArray.create()
-	impls.push(intHash)
-	impls.push(intEquals)
-	impls.push(intCompare)
-	impls.push(strHash)
-	impls.push(strEquals)
-	return impls
-end 'builtinImplNames'
-
 // ⭐ **WHICH OF `impls` THIS PROGRAM NAMES BUT DOES NOT DEFINE** — the install's ONE question, answered for
-// all five at once so the module is walked ONCE rather than once per impl. Both reference kinds are
+// every candidate at once so the module is walked ONCE rather than once per impl. Both reference kinds are
 // collected here (see the header): every pending `.rdata` funcAbs64 slot target, and every function name the
 // emitted ops spell.
 //
@@ -154,7 +180,7 @@ end 'referencedBuiltinImpls'
 
 // The candidate impls no function in the module already defines — see `referencedBuiltinImpls`' second
 // warning for the wrong answer this exists to prevent. `module.functions` is walked once, and the inner test
-// is five byte compares that almost always fail on length.
+// is one byte compare per candidate, almost all of which fail on length.
 function undefinedImplNames(module StdModule, impls ByteArrayArray) returns ByteArrayArray
 	var undefined = ByteArrayArray.create()
 	for impl in impls 'eachImpl'
@@ -215,8 +241,8 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 	end 'op'
 end 'noteOpBuiltinImplReference'
 
-// Credit `name` if it is one of the candidate impls. A linear scan of five, which is why the candidates are
-// an array rather than a set: at five entries the compare is cheaper than a hash, and this runs per op.
+// Credit `name` if it is one of the candidate impls. A linear scan, which is why the candidates are an array
+// rather than a set: at a handful of entries the compare is cheaper than a hash, and this runs per op.
 function noteBuiltinImplReference(name ByteArray, impls ByteArrayArray, referenced FunctionNameSet)
 	for impl in impls 'eachImpl'
 		if name.equals(impl) 'match'
@@ -244,46 +270,94 @@ function buildIntHash(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildIntHash'
 
-// `int.equals(self, other) -> bool` — `self == other`, materialized as 1/0 off a fused `cmp`+`jcc` (there is
-// no `setcc` at this tier). The `__str_eq` verdict shape: a compare terminates the entry into a true block
-// and a false block, each returning its constant. Both receivers are by-value scalar i64s in arg-0/arg-1.
-function buildIntEquals(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+// The two-operand Std function every builtin `equals`/`compare` impl is: two parameters of its OWN operand
+// type, returning one i64 (a 0/1 bool, or an `Ordering` tag — an `Ordering` value IS its tag). ONE place
+// where the declared ABI and the operand width meet, so a caller cannot pair an f64 compare with i64
+// parameters — which would route the arguments through the WRONG register file at every call site
+// (`calleeParamClass` reads exactly these declared types) with nothing to report it.
+function createTwoOperandImpl(name ByteArray, operandType StdType) returns IrFunction
+	return IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoOperandParams(operandType), returnLine: 0)
+end 'createTwoOperandImpl'
+
+// The parameter list for `createTwoOperandImpl`, routed through `MmRuntime`'s shared param shapes rather
+// than minting a third array builder. An integer operand of ANY width declares i64 parameters: every
+// synthesized chunk uses the GPR-only internal ABI, in which a machine word carries a `bool` as readily as
+// an `int` (see `MmRuntime.emitParams`).
+function twoOperandParams(operandType StdType) returns StdTypeArray
+	match operandType 'shape'
+		i1 to u64 then return twoI64Params()
+		f32 then panic("twoOperandParams: shv2's `float` is f64 throughout — nothing produces an f32, so no builtin conformance impl declares one")
+		f64 then return twoF64Params()
+	end 'shape'
+end 'twoOperandParams'
+
+// `<conformer>.equals(self, other) -> bool` — `self == other`, materialized as 1/0 off a fused `cmp`+`jcc`
+// (there is no `setcc` at this tier). The `__str_eq` verdict shape: a compare terminates the entry into a
+// true block and a false block, each returning its constant. Both operands are by-value scalars in
+// arg-0/arg-1.
+//
+// ⭐ ONE BODY FOR `int.equals` AND `float.equals`, differing only in the operand width — which is exactly
+// what `StdOp.cmp`'s `operandType` is for, and what makes the f64 form a `ucomisd` rather than a `cmp`.
+//
+// ⚠ **`float.equals` IS IEEE `==`, SO `NaN.equals(NaN)` IS FALSE — and that is deliberately NOT what
+// `float.compare` says about the same pair.** `compare` implements a TOTAL order (NaN at the bottom, two
+// NaNs `equalTo`); `equals` implements IEEE equality. Both reference compilers pin the split
+// (`stdlib/PrimitiveExtensions.maxon:39-41` is a bare `self == other` beside a NaN-aware `compare`) and the
+// canonical corpus pins both halves, so the asymmetry is the specification rather than an oversight here.
+function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdType)
+	var func = createTwoOperandImpl(name, operandType: operandType)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var equalBlock = module.addBlock(func, label: b"equal")
 	var notEqualBlock = module.addBlock(func, label: b"notEqual")
 
-	emitParams(module, block: entry, count: 2)
+	emitTypedParams(module, block: entry, paramTypes: twoOperandParams(operandType))
 	let receiver = 0 as ValueId
 	let other = 1 as ValueId
 
-	let isEqual = emitCmp(module, block: entry, a: receiver, b: other, pred: StdCmpPred.eq, ids: ids)
+	let isEqual = emitCmp(module, block: entry, a: receiver, b: other, pred: StdCmpPred.eq, ids: ids, operandType: operandType)
 	module.setTerminator(entry, op: StdOp.condBranch(isEqual, thenBlockId: equalBlock.id, elseBlockId: notEqualBlock.id))
 
-	let trueResult = emitConst(module, block: equalBlock, value: IntEqualsTrue, ids: ids)
+	let trueResult = emitConst(module, block: equalBlock, value: EqualsTrue, ids: ids)
 	module.setTerminator(equalBlock, op: StdOp.ret(trueResult))
 
-	let falseResult = emitConst(module, block: notEqualBlock, value: IntEqualsFalse, ids: ids)
+	let falseResult = emitConst(module, block: notEqualBlock, value: EqualsFalse, ids: ids)
 	module.setTerminator(notEqualBlock, op: StdOp.ret(falseResult))
 
 	module.functions.push(func)
-end 'buildIntEquals'
+end 'buildBuiltinEquals'
 
-// `int.compare(self, other) -> Ordering` (P1.7a slice 2b-ii) — `lessThan` when `self < other`, `greaterThan`
-// when `self > other`, `equalTo` otherwise. Both reference compilers state exactly that cascade
-// (`stdlib/PrimitiveExtensions.maxon:11-19`), and its `<`/`>` are plain int compares, so there is no
-// recursion back into `Comparable`. An `Ordering` value IS its i64 tag, so the shape is `buildIntEquals`'s
-// verdict shape with a third exit: two fused `cmp`+`jcc` tests, each falling through to the next, and one
-// `const`-returning block per case.
+// One `a <pred> b` test terminating `block` into two successors — the fused `cmp`+`jcc` every compare impl
+// is built out of. Its result is read ONLY by the branch, so the backend materializes no register for it.
+function emitOrderingTest(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, operandType StdType, thenBlock IrBlock, elseBlock IrBlock, ids ValueMinter)
+	let verdict = emitCmp(module, block: block, a: a, b: b, pred: pred, ids: ids, operandType: operandType)
+	module.setTerminator(block, op: StdOp.condBranch(verdict, thenBlockId: thenBlock.id, elseBlockId: elseBlock.id))
+end 'emitOrderingTest'
+
+// ⭐ A block that RETURNS one `Ordering` case's tag — the exit every compare impl's verdict paths land on.
 //
-// ⭐ The three returned tags come from `orderingTagOf` — read OFF the `Ordering` layout, so reordering the
-// transcription in `Project.builtinOrderingEnum` moves this body and the `<`/`>`/`<=`/`>=` lowering's tag tests
-// together. The bootstrap writes them as literals at its consumer sites with nothing tying them back to the
-// declaration; that is a latent coupling shv2 deliberately does not copy.
-function buildIntCompare(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+// ⭐ The tag comes from `orderingTagOf` — read OFF the `Ordering` layout, so reordering the transcription in
+// `Project.builtinOrderingEnum` moves these bodies and the `<`/`>`/`<=`/`>=` lowering's tag tests together.
+// The bootstrap writes them as literals at its consumer sites with nothing tying them back to the
+// declaration; that is a latent coupling shv2 deliberately does not copy. Naming the CASE here rather than
+// passing a number is what keeps that derivation at one call per verdict, across both compare impls.
+function emitOrderingVerdict(module StdModule, block IrBlock, ordering EnumLayout, caseName ByteArray, ids ValueMinter)
+	let tag = emitConst(module, block: block, value: orderingTagOf(ordering, caseName: caseName), ids: ids)
+	module.setTerminator(block, op: StdOp.ret(tag))
+end 'emitOrderingVerdict'
+
+// `<conformer>.compare(self, other) -> Ordering` for a TOTALLY-ORDERED scalar (P1.7a slices 2b-ii/2b-iii) —
+// `lessThan` when `self < other`, `greaterThan` when `self > other`, `equalTo` otherwise. Both reference
+// compilers state exactly that cascade (`stdlib/PrimitiveExtensions.maxon:11-19`), and its `<`/`>` are plain
+// integer compares, so there is no recursion back into `Comparable`. Two fused `cmp`+`jcc` tests, each
+// falling through to the next, and one `const`-returning block per case.
+//
+// It serves `int.compare` AND `bool.compare` (the installer states why bool's graph IS int's). `float`
+// cannot use it alone: IEEE `<`/`>` are false for every NaN pair, so `buildFloatCompare` puts a NaN preamble
+// in front of this same cascade.
+function buildOrderingCompare(module StdModule, name ByteArray, operandType StdType)
+	var func = createTwoOperandImpl(name, operandType: operandType)
 	var ids = ValueMinter.create(2)
 	let ordering = builtinOrderingEnum()
 
@@ -293,27 +367,76 @@ function buildIntCompare(module StdModule, name ByteArray)
 	var greaterBlock = module.addBlock(func, label: b"greater")
 	var equalBlock = module.addBlock(func, label: b"equal")
 
-	emitParams(module, block: entry, count: 2)
+	emitTypedParams(module, block: entry, paramTypes: twoOperandParams(operandType))
 	let receiver = 0 as ValueId
 	let other = 1 as ValueId
 
-	let isLess = emitCmp(module, block: entry, a: receiver, b: other, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isLess, thenBlockId: lessBlock.id, elseBlockId: notLessBlock.id))
-
-	let lessTag = emitConst(module, block: lessBlock, value: orderingTagOf(ordering, caseName: OrderingLessThanCaseName), ids: ids)
-	module.setTerminator(lessBlock, op: StdOp.ret(lessTag))
-
-	let isGreater = emitCmp(module, block: notLessBlock, a: receiver, b: other, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(notLessBlock, op: StdOp.condBranch(isGreater, thenBlockId: greaterBlock.id, elseBlockId: equalBlock.id))
-
-	let greaterTag = emitConst(module, block: greaterBlock, value: orderingTagOf(ordering, caseName: OrderingGreaterThanCaseName), ids: ids)
-	module.setTerminator(greaterBlock, op: StdOp.ret(greaterTag))
-
-	let equalTag = emitConst(module, block: equalBlock, value: orderingTagOf(ordering, caseName: OrderingEqualToCaseName), ids: ids)
-	module.setTerminator(equalBlock, op: StdOp.ret(equalTag))
+	emitOrderingTest(module, block: entry, a: receiver, b: other, pred: StdCmpPred.lt, operandType: operandType, thenBlock: lessBlock, elseBlock: notLessBlock, ids: ids)
+	emitOrderingVerdict(module, block: lessBlock, ordering: ordering, caseName: OrderingLessThanCaseName, ids: ids)
+	emitOrderingTest(module, block: notLessBlock, a: receiver, b: other, pred: StdCmpPred.gt, operandType: operandType, thenBlock: greaterBlock, elseBlock: equalBlock, ids: ids)
+	emitOrderingVerdict(module, block: greaterBlock, ordering: ordering, caseName: OrderingGreaterThanCaseName, ids: ids)
+	emitOrderingVerdict(module, block: equalBlock, ordering: ordering, caseName: OrderingEqualToCaseName, ids: ids)
 
 	module.functions.push(func)
-end 'buildIntCompare'
+end 'buildOrderingCompare'
+
+// ⭐⭐ `float.compare(self, other) -> Ordering` (P1.7a slice 2b-iii) — a **TOTAL** order over f64, which IEEE
+// `<`/`>`/`==` do not give: they answer FALSE for every NaN pair, so the bare cascade above would call a NaN
+// `equalTo` everything. NaN is placed at the BOTTOM — below every non-NaN including `-inf` — and two NaNs
+// compare `equalTo`. Both references agree exactly (`stdlib/PrimitiveExtensions.maxon:46-64`; the bootstrap
+// documents it as Swift's `isTotallyOrdered(belowOrEqualTo:)`), and the canonical corpus pins all four NaN
+// cases plus the signed-zero one.
+//
+// ⭐ **THE NaN TEST IS `x != x`** — the canonical IEEE spelling, true only when an operand is UNORDERED with
+// itself. It is a `StdCmpPred.ne` over f64 and nothing more: x64 already builds a float `!=` as `setne OR
+// setp` (and its branch-side `ordered`-block split), documented `unordered ⇒ != is TRUE`, and wasm's
+// `f64.ne` carries the same semantics natively. A hand-rolled parity test here would be a second, weaker
+// copy of a lowering the whole float suite already exercises.
+//
+// ⭐ **`-0.0` REACHES `equalTo` BY FALLING THROUGH, and there is deliberately no branch for it.** Under IEEE
+// neither `-0.0 < 0.0` nor `-0.0 > 0.0` holds, so the cascade's final exit is already the right answer, and
+// both references do exactly this. (`float.hash` WOULD need an explicit `-0.0` normalization — one of the
+// two reasons it is a future rung, the other being the bit reinterpretation it rests on.)
+//
+// The `other != other` test is written TWICE, once per side of the `self` test, exactly as both references
+// write it. Hoisting it would make it a VALUE two blocks read rather than a branch, which on x64 costs the
+// `setne`+`setp`+`lea` materialization instead of a fused jump — a bigger body, to save a duplicated compare.
+function buildFloatCompare(module StdModule, name ByteArray)
+	var func = createTwoOperandImpl(name, operandType: StdType.f64)
+	var ids = ValueMinter.create(2)
+	let ordering = builtinOrderingEnum()
+
+	var entry = module.addBlock(func, label: b"entry")
+	var selfIsNanBlock = module.addBlock(func, label: b"selfIsNan")
+	var selfNotNanBlock = module.addBlock(func, label: b"selfNotNan")
+	var orderedBlock = module.addBlock(func, label: b"ordered")
+	var lessBlock = module.addBlock(func, label: b"less")
+	var notLessBlock = module.addBlock(func, label: b"notLess")
+	var greaterBlock = module.addBlock(func, label: b"greater")
+	var equalBlock = module.addBlock(func, label: b"equal")
+
+	emitTypedParams(module, block: entry, paramTypes: twoOperandParams(StdType.f64))
+	let receiver = 0 as ValueId
+	let other = 1 as ValueId
+
+	// The NaN preamble settles two of the three answers before any ordered comparison is meaningful, and
+	// branches STRAIGHT INTO the cascade's own verdict blocks rather than minting a second `ret` of a tag
+	// those blocks already return.
+	emitOrderingTest(module, block: entry, a: receiver, b: receiver, pred: StdCmpPred.ne, operandType: StdType.f64, thenBlock: selfIsNanBlock, elseBlock: selfNotNanBlock, ids: ids)
+	// `self` is NaN: both NaN ⇒ `equalTo`; else `self` is the bottom ⇒ `lessThan`.
+	emitOrderingTest(module, block: selfIsNanBlock, a: other, b: other, pred: StdCmpPred.ne, operandType: StdType.f64, thenBlock: equalBlock, elseBlock: lessBlock, ids: ids)
+	// `self` is not NaN: `other` NaN ⇒ `self` outranks the bottom ⇒ `greaterThan`; else both are ordered.
+	emitOrderingTest(module, block: selfNotNanBlock, a: other, b: other, pred: StdCmpPred.ne, operandType: StdType.f64, thenBlock: greaterBlock, elseBlock: orderedBlock, ids: ids)
+
+	emitOrderingTest(module, block: orderedBlock, a: receiver, b: other, pred: StdCmpPred.lt, operandType: StdType.f64, thenBlock: lessBlock, elseBlock: notLessBlock, ids: ids)
+	emitOrderingTest(module, block: notLessBlock, a: receiver, b: other, pred: StdCmpPred.gt, operandType: StdType.f64, thenBlock: greaterBlock, elseBlock: equalBlock, ids: ids)
+
+	emitOrderingVerdict(module, block: lessBlock, ordering: ordering, caseName: OrderingLessThanCaseName, ids: ids)
+	emitOrderingVerdict(module, block: greaterBlock, ordering: ordering, caseName: OrderingGreaterThanCaseName, ids: ids)
+	emitOrderingVerdict(module, block: equalBlock, ordering: ordering, caseName: OrderingEqualToCaseName, ids: ids)
+
+	module.functions.push(func)
+end 'buildFloatCompare'
 
 // `String.hash(self) -> HashValue` — djb2 over the String's bytes. `self` is a by-value String POINTER in
 // arg-0 (the witness dispatch passes `self.item`, an opaque `T` field read, straight in — a `String` rides

@@ -91,18 +91,21 @@ let ErrorInterfaceName = b"Error"
 // stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
 export let HashMethodName = b"hash"
 export let EqualsMethodName = b"equals"
-// All three are exported for ONE reason: `BuiltinConformanceRuntime` names the SYNTHESIZED impl it installs
-// (`int.hash`/`int.equals`/`int.compare`, `String.hash`/`String.equals`) by joining a conformer name to the
-// method name, and that symbol must be the one the witness-table reloc points at. The operator lowerings do
-// NOT name them — they read the method off the protocol `builtinInterface` synthesizes
+// All three are exported for ONE reason: `BuiltinConformanceRuntime` names each SYNTHESIZED impl it installs
+// (`int.hash`, `<scalar>.equals`, `<scalar>.compare`, `String.hash`/`String.equals`) by joining a conformer
+// name to the method name, and that symbol must be the one the witness-table reloc points at. The operator
+// lowerings do NOT name them — they read the method off the protocol `builtinInterface` synthesizes
 // (`requireBuiltinInterface`), so the method searched for and its result type stay one fact.
 export let CompareMethodName = b"compare"
 let CloneMethodName = b"clone"
 let FormatParamName = b"format"
 let OtherParamName = b"other"
-let StringTypeName = b"String"
 export let HashValueTypeName = b"HashValue"
-let BoolTypeName = b"bool"
+// ⚠ There is deliberately no `StringTypeName`/`BoolTypeName` beside these: the rendered spelling of
+// `String` in `Stringable.toString() returns String` and of `bool` in `Equatable.equals(…) returns bool`
+// IS the CONFORMER NAME of that type (`StringConformerName` / `BoolConformerName` below) — one fact, "how
+// this type is spelled in source", wearing an interface signature's hat. They were two constants holding
+// the same bytes for `String`, which is precisely the shape that drifts.
 // Exported: `Comparable.compare`'s result type is a COMPILER-KNOWN ENUM, and the enum registries are
 // seeded with its layout under this exact name (`Project.builtinOrderingEnum`). One spelling for the
 // interface's rendered return type, the seeded layout's name, and the declaration reject that keeps a
@@ -257,11 +260,11 @@ end 'markerInterface'
 // (associated types) are slice-2 territory and are deliberately not synthesized here.
 export function builtinInterface(name ByteArray) returns InterfaceLookup
 	if name.equals(StringableInterfaceName) 'stringable'
-		return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringTypeName)))
+		return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName)))
 	end 'stringable'
 
 	if name.equals(FormattedStringableInterfaceName) 'formatted'
-		return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringTypeName, returnTypeName: StringTypeName)))
+		return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName)))
 	end 'formatted'
 
 	if name.equals(HashableInterfaceName) 'hashable'
@@ -269,7 +272,7 @@ export function builtinInterface(name ByteArray) returns InterfaceLookup
 	end 'hashable'
 
 	if name.equals(EquatableInterfaceName) 'equatable'
-		return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolTypeName)))
+		return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName)))
 	end 'equatable'
 
 	if name.equals(ComparableInterfaceName) 'comparable'
@@ -340,11 +343,22 @@ end 'isSynthesizedIntAliasName'
 // witness-table label, and the impl symbol cannot drift on how they spell it.
 export let StringConformerName = b"String"
 
-// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slice 2b/2b-ii + P1.7b) — the SINGLE source of "does a
-// builtin type conform to this protocol?"** The primitive `int` AND the managed concrete `String` conform to
-// `Hashable` and `Equatable` with NO user `implements`, and `int` alone additionally conforms to
-// `Comparable`: shv2 synthesizes their `int.hash`/`int.equals`/`int.compare` and `String.hash`/`String.equals`
-// impls natively (the type-side twin of the synthesized `Hashable`/`Equatable`/`Comparable` interfaces), so
+// The canonical conformer name of the primitive `float` (P1.7a slice 2b-iii) — the key of its synthesized
+// `float.equals`/`float.compare` impls, and, like its two siblings, it MUST equal
+// `primitiveTypeTagName(ValueTypeTag.float)`.
+export let FloatConformerName = b"float"
+
+// The canonical conformer name of the primitive `bool` (P1.7a slice 2b-iii) — the key of its synthesized
+// `bool.compare` impl, and it MUST equal `primitiveTypeTagName(ValueTypeTag.boolean)`. It doubles as the
+// rendered spelling of `Equatable.equals`'s `bool` RESULT type (`builtinInterface`), which is the same fact
+// and so must not become a second constant.
+export let BoolConformerName = b"bool"
+
+// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slice 2b/2b-ii/2b-iii + P1.7b) — the SINGLE source of
+// "does a builtin type conform to this protocol?"** The primitives `int`/`float`/`bool` AND the managed
+// concrete `String` conform with NO user `implements`: shv2 synthesizes their `int.hash`/`int.equals`/
+// `int.compare`, `float.equals`/`float.compare`, `bool.compare` and `String.hash`/`String.equals` impls
+// natively (the type-side twin of the synthesized `Hashable`/`Equatable`/`Comparable` interfaces), so
 // `Box with Integer where T is Hashable`, `Pair with Integer where T is Comparable` and `Box with String
 // where T is Hashable and Equatable` are legal and their witness slots resolve to real `.text` symbols.
 // `typeConformsTo` ORs this with the user registry, and the install-need decision reads it too, so the E3017
@@ -352,22 +366,32 @@ export let StringConformerName = b"String"
 // name (`Integer` already collapsed to `int`; a `String` argument already named `String`). `String` is a
 // MANAGED type, not a primitive — hence the neutral "builtin" spelling.
 //
-// ⚠ **`String` is deliberately NOT `Comparable`** — a byte record has no ordering, and neither reference
-// compiler gives it one (`stdlib/String.maxon:34` lists `BuiltinStringLiteral, Hashable, Equatable, Iterable,
-// Cloneable`, and no extension adds `Comparable`). That asymmetry is why the interface test below is per
-// conformer rather than one shared disjunction.
+// ⚠ **THE TABLE IS DELIBERATELY RAGGED, and each hole is a mechanism that does not exist rather than an
+// oversight** — which is why the interface test is per conformer rather than one shared disjunction:
 //
-// ⭐ **DIRECT DISPATCH ON A CONCRETE VALUE (`i.compare(j)`, `i.hash()`, `i.equals(j)`) SHIPS**, and it is
+//   • **`String` is NOT `Comparable`** — a byte record has no ordering, and neither reference compiler gives
+//     it one (`stdlib/String.maxon:34` lists `BuiltinStringLiteral, Hashable, Equatable, Iterable,
+//     Cloneable`, and no extension adds `Comparable`).
+//   • **`float` is NOT `Hashable`** — `float.hash` is a BIT REINTERPRETATION (`stdlib/PrimitiveExtensions
+//     .maxon:31-37` masks `floatToBits(self)` and normalizes `-0.0`), and shv2 has no Std-tier route to one:
+//     `floatToBits`/`bitsToFloat` are HOST-only constant folding, `StdUnaryOpcode` carries only the NUMERIC
+//     `siToFp`/`fpToSi`, x64's `emitRegRegMove` PANICS on a cross-register-file move, and there is no
+//     `alloca` for a store-then-load round trip. Admitting it here would route `f.hash()` to a symbol nothing
+//     installs. It is its own future rung, together with the bitcast it needs.
+//   • **`bool` is NEITHER `Hashable` NOR `Equatable`** — both reference compilers omit them (`bool` arrays
+//     bit-pack, `specs/primitive-hashable.md:13`), and the canonical corpus contains no `bool.hash`/
+//     `bool.equals` case at all, positive or negative.
+//   • **`Character` has no row** because no `Character` type exists yet.
+//
+// ⭐ **DIRECT DISPATCH ON A CONCRETE VALUE (`i.compare(j)`, `i.hash()`, `f.equals(g)`) SHIPS**, and it is
 // gated on THIS predicate — see `builtinConformerMethod` below and `Parser.dispatchBuiltinConformanceMethod`.
 // So a receiver whose type has no intrinsic conformance gets a diagnostic instead of a call to a symbol
 // nothing installs, and the parser's dispatch, the E3017 conformance answer and the installed impl set
 // cannot drift: they are one function's three readers.
 //
-// Still DELIBERATELY excluded, each its own future slice: FLOAT conformance (needs a NaN total order and a
-// `floatToBits` intrinsic), `bool` and `Character` conformance (no `Character` type exists yet), and direct
-// dispatch on a `String` VALUE (`s.hash()` — a String receiver is routed to `parseStringMethodCall` before
-// the conformer classifier is asked). (`Set`-with-`String` keys SHIP, P1.7b, riding exactly this `String`
-// Hashable/Equatable answer.)
+// Still deliberately excluded: direct dispatch on a `String` VALUE (`s.hash()` — a String receiver is routed
+// to `parseStringMethodCall` before the conformer classifier is asked). (`Set`-with-`String` keys SHIP,
+// P1.7b, riding exactly this `String` Hashable/Equatable answer.)
 export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray) returns bool
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
@@ -375,6 +399,12 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	if typeName.equals(StringConformerName) 'string'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
 	end 'string'
+	if typeName.equals(FloatConformerName) 'float'
+		return interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+	end 'float'
+	if typeName.equals(BoolConformerName) 'bool'
+		return interfaceName.equals(ComparableInterfaceName)
+	end 'bool'
 	return false
 end 'isIntrinsicBuiltinConformance'
 
@@ -396,6 +426,8 @@ end 'isIntrinsicBuiltinConformance'
 export enum BuiltinConformer
 	notAConformer
 	intConformer
+	floatConformer
+	boolConformer
 end 'BuiltinConformer'
 
 // ⭐ **THE BUILTIN CONFORMER A RESOLVED VALUE TAG CARRIES** — the ONE place a receiver's TYPE becomes the
@@ -405,14 +437,23 @@ end 'BuiltinConformer'
 // `ProgramSignatures.conformerTypeArgName` reduces a witness type ARGUMENT — so `Integer`, `Byte` and a bare
 // `int` all arrive here as `integer` and all dispatch `int.*`.
 //
-// ⚠ **EVERY OTHER TAG ANSWERS `notAConformer`, INCLUDING TAGS THAT WILL LATER HAVE ONE.** `float`
-// and `boolean` have no synthesized impls (their rung is next) and `string` is routed to
-// `parseStringMethodCall` before this is asked, so admitting either here would name a symbol nothing
+// ⚠ **EVERY OTHER TAG ANSWERS `notAConformer`, INCLUDING TAGS THAT WILL LATER HAVE ONE.** `string` is
+// routed to `parseStringMethodCall` before this is asked, so admitting it here would name a symbol nothing
 // installs — a link-time panic in place of a clean diagnostic. A tag joins this map when its impl does.
+//
+// ⚠ A tag admitted here answers for the CONFORMER, not for a method: `float` carries `equals`/`compare` and
+// NO `hash`, and that hole is `isIntrinsicBuiltinConformance`'s to state — `builtinConformerMethod` reads it
+// and turns `f.hash()` into a positioned reject.
 export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
 	if tag == ValueTypeTag.integer 'int'
 		return BuiltinConformer.intConformer
 	end 'int'
+	if tag == ValueTypeTag.float 'float'
+		return BuiltinConformer.floatConformer
+	end 'float'
+	if tag == ValueTypeTag.boolean 'bool'
+		return BuiltinConformer.boolConformer
+	end 'bool'
 	return BuiltinConformer.notAConformer
 end 'builtinConformerOfTag'
 
@@ -425,10 +466,10 @@ export function isBuiltinConformer(conformer BuiltinConformer) returns bool
 end 'isBuiltinConformer'
 
 // ⭐ **THE CANONICAL NAME A CONFORMER IS KEYED BY** — the key of the intrinsic-conformance answer, of the
-// `__witness_int_*` tables and of the `int.hash`/`int.equals`/`int.compare` impl symbols, so a direct
-// dispatch and a witness dispatch on the same type reach the same body. `IntConformerName`'s own header
-// states the invariant this rests on: it MUST equal `primitiveTypeTagName(ValueTypeTag.integer)`, i.e. `int`
-// is what a resolved `integer` is called everywhere in the compiler.
+// `__witness_<conformer>_*` tables and of the `<conformer>.<method>` impl symbols, so a direct dispatch and a
+// witness dispatch on the same type reach the same body. Each name's own header states the invariant this
+// rests on: it MUST equal `primitiveTypeTagName` of the tag it answers for, i.e. `int`/`float`/`bool` are
+// what resolved `integer`/`float`/`boolean` tags are called everywhere in the compiler.
 //
 // Fetched only where a name is actually spelled — a dispatch that is going to be emitted, or a diagnostic
 // naming the receiver's type — never on the classification path. The match is EXHAUSTIVE, so a conformer
@@ -440,6 +481,8 @@ end 'isBuiltinConformer'
 export function builtinConformerName(conformer BuiltinConformer) returns ByteArray
 	match conformer 'c'
 		intConformer then return IntConformerName
+		floatConformer then return FloatConformerName
+		boolConformer then return BoolConformerName
 		notAConformer then panic("builtinConformerName: asked for the name of a value that carries no builtin conformance — every caller is gated on `isBuiltinConformer`, so the gate and the name must read one classifier")
 	end 'c'
 end 'builtinConformerName'
@@ -450,11 +493,12 @@ end 'builtinConformerName'
 // name it (BuiltinConformanceRuntime's header) — so the prefix test cannot see it, and every reader that
 // asks "is this the compiler's own callee?" was answering `false` for `int.compare`.
 //
-// **It is a QUALIFIER test, and the qualifier is the whole soundness argument.** `int` is a KEYWORD, so no
-// user type may be declared under it and no user method symbol can ever wear `int.` — every callee under
-// that qualifier is one the compiler minted. That is why no method LIST is needed here and why one must not
-// be added: the fact being stated is *"the `int.` qualifier belongs to the compiler"*, which is one fact,
-// where "and these three methods" would be a second copy of `builtinConformerMethod`'s answer.
+// **It is a QUALIFIER test, and the qualifier is the whole soundness argument.** `int`, `float` and `bool`
+// are KEYWORDS (`Lexer.keywordTable`), so no user type may be declared under one and no user method symbol
+// can ever wear `int.`/`float.`/`bool.` — every callee under those qualifiers is one the compiler minted.
+// That is why no method LIST is needed here and why one must not be added: the fact being stated is *"these
+// primitive qualifiers belong to the compiler"*, which is one fact, where "and these three methods" would be
+// a second copy of `builtinConformerMethod`'s answer.
 //
 // ⚠ **`String.` IS DELIBERATELY ABSENT AND MUST STAY SO UNTIL DIRECT STRING DISPATCH SHIPS.** `String` is
 // NOT in `TypeResolution.isCompilerOwnedTypeName`, so a user `type String` with its own `hash()` legitimately
@@ -466,7 +510,7 @@ end 'builtinConformerName'
 // The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
 // only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
 export function isBuiltinConformanceImplName(name ByteArray) returns bool
-	return isQualifiedUnderTypeName(name, typeName: IntConformerName)
+	return isQualifiedUnderTypeName(name, typeName: IntConformerName) or isQualifiedUnderTypeName(name, typeName: FloatConformerName) or isQualifiedUnderTypeName(name, typeName: BoolConformerName)
 end 'isBuiltinConformanceImplName'
 
 // The protocol method a builtin conformer supplies under a given name, or `notSupplied`.
@@ -512,3 +556,27 @@ export function builtinConformerMethod(typeName ByteArray, methodName ByteArray)
 
 	return BuiltinConformerMethodLookup.notSupplied
 end 'builtinConformerMethod'
+
+// ⭐ **THE METHODS A BUILTIN CONFORMER ACTUALLY SUPPLIES, RENDERED** — what the reject for a method it does
+// NOT supply prints. DERIVED from the very walk `builtinConformerMethod` searches, so a diagnostic can never
+// advertise a method the dispatch would then fail to find. That is not hypothetical: the reject used to name
+// "`hash`, `equals` and `compare`" as a fixed list, which became a WRONG answer the moment a conformer with
+// a ragged conformance row arrived — `f.hash()` would have been told `float` supplies `hash` while
+// `isIntrinsicBuiltinConformance` withholds `Hashable` from it (see that predicate's ragged-table warning).
+export function builtinConformerMethodNames(typeName ByteArray) returns String
+	var rendered = ""
+	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
+		if not isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'doesNotConform'
+			continue
+		end 'doesNotConform'
+
+		let iface = requireBuiltinInterface(protocolName)
+		for method in iface.methods 'eachMethod'
+			if not rendered.isEmpty() 'separator'
+				rendered = "{rendered}, "
+			end 'separator'
+			rendered = "{rendered}`{String.from(method.name)}`"
+		end 'eachMethod'
+	end 'eachProtocol'
+	return rendered
+end 'builtinConformerMethodNames'

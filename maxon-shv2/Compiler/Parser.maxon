@@ -1016,9 +1016,9 @@ let MethodNameSeparator = "."
 // What makes the duplication safe is not this comment: it is that the two copies have a TEST between them.
 // Every direct builtin-conformance dispatch resolves through `isCompilerInternalCallee` →
 // `isBuiltinConformanceImplName` → `isQualifiedUnderTypeName`, so a byte here that disagrees with the join
-// above makes every `int.compare`/`int.hash`/`int.equals` call fail to be recognized as compiler-owned and
-// the eight `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` cases go RED with
-// E3004. The copies cannot drift silently.
+// above makes every `int.compare`/`float.compare`/`bool.compare`/`int.hash`/`*.equals` call fail to be
+// recognized as compiler-owned and the eighteen `primitive-comparable`/`primitive-hashable`/
+// `method-call-on-call-result` cases go RED with E3004. The copies cannot drift silently.
 let MethodNameSeparatorBytes = b"."
 
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
@@ -8123,10 +8123,11 @@ export type Parser
 	// a bare `int` one conformer rather than four: `Byte.compare` does not exist and never will — the
 	// witness path already collapses a ranged type ARGUMENT the same way
 	// (`ProgramSignatures.conformerTypeArgName` → `canonicalizeRangedAlias`), so both dispatch paths key the
-	// same `int.compare` symbol off the same type.
+	// same `int.compare` symbol off the same type. A ranged FLOAT alias reduces to `float` by the very same
+	// step, so `Percent.compare` is `float.compare`.
 	//
 	// Every tag with no synthesized impl answers `notAConformer` (`builtinConformerOfTag`), which is what
-	// keeps a `float`/`bool` receiver a clean diagnostic instead of a call to a symbol nothing installs.
+	// keeps a `String`-valued receiver out of here and a struct receiver on the struct path.
 	//
 	// ⚠ It answers with the CONFORMER and not its name, and that is a measured decision rather than a
 	// stylistic one — see `BuiltinConformer`'s header for the 16-byte box this used to allocate at every
@@ -16607,7 +16608,7 @@ export type Parser
 		let typeName = builtinConformerName(conformer)
 		match builtinConformerMethod(typeName, methodName: methodTok.value) 'lookup'
 			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, conformer: conformer, method: method, baseTok: baseTok, methodTok: methodTok)
-			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — the builtin conformances supply `hash`, `equals` and `compare`; `toString`/`clone` need the Stringable/Cloneable impls, which are not built", line: methodTok.line, column: methodTok.column)
+			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — its builtin conformances supply {builtinConformerMethodNames(typeName)}; `toString`/`clone` need the Stringable/Cloneable impls, which are not built", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
 	end 'dispatchBuiltinConformanceMethod'
 
