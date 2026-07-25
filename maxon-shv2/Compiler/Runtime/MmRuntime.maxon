@@ -851,6 +851,10 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 	// heap) and, for a directly-substituted String field, calls `__str_decref` — both inside the synthesized
 	// body the Maxon scan cannot see, so the bits are declared here. A String inside a nested struct/instance
 	// field is dropped by that nested destructor, so only a DIRECT substituted String turns on `usesStrDecref`.
+	// ⚠ `neededDestructors` is keyed by SYMBOL NAME, so a hit here does NOT prove this instance put it there:
+	// a DECLARED `type Array_Foo` claims the very name `Array with Foo` mangles to, which is the collision
+	// `checkTypeSymbolNamespace` reports. The queries below must therefore be safe to ask of ANY instance,
+	// builtin included — see `genericInstanceHasStringField`.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id))) 'referenced'
 			usage.usesHeap = true
@@ -910,6 +914,9 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 		work.register(destructorSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
 	end 'eachUnion'
 
+	// ⚠ A node is keyed by its SYMBOL, and a symbol does not identify its claimant: a declared `type Array_Foo`
+	// registers under the very name an `Array with Foo` instance mangles to. Both are registered, one wins the
+	// key, and whichever it is must be safe to EXPAND — see `addNestedInstanceDestructors`.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 		work.register(destructorSymbol(signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
 	end 'eachInstance'
@@ -971,6 +978,20 @@ end 'addNestedUnionDestructors'
 // field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
 // every fact is answered inside `signatures`, over its own interner.
 function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
+	// ⚠ The third site needing the builtin early-out `genericInstanceHasManagedField` and (now)
+	// `genericInstanceHasStringField` make. A node is expanded as soon as its SYMBOL is needed, and the needed
+	// set is keyed by name — so a declared `type Array_Foo` that owns a String expands the base-less
+	// `Array with Foo` node registered under the identical string, and the field walk below reads a base
+	// struct that does not exist. Measured: `panic ProgramSignatures.baseLayoutOf`, no diagnostic, on the
+	// program `checkTypeSymbolNamespace` had already recorded an E3006 for.
+	//
+	// Nothing is lost by returning: an `Array`/`Set` instance synthesizes no cascade for its nesting to
+	// close over. Its elements are dropped by `__arr_decref`/`__set_decref`, whose own element destructor is
+	// rooted separately (`rootManagedOpaqueArrayElementDrops`).
+	if signatures.isArrayInstance(id) or signatures.isSetInstance(id) 'noSynthesizedCascade'
+		return
+	end 'noSynthesizedCascade'
+
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue

@@ -3571,6 +3571,7 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
 			return false
 		end 'notStruct'
+
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
 				return true
@@ -3583,6 +3584,23 @@ export type ProgramSignatures
 	// destructor. A String inside a nested struct/instance field is dropped by that nested destructor, not
 	// this one, so only a directly-substituted String counts (the struct/union `structHasStringField` twin).
 	export function genericInstanceHasStringField(id GenericInstanceId) returns bool
+		// ⚠ **THE SAME BUILTIN EARLY-OUT `genericInstanceHasManagedField` MAKES, AND FOR THE SAME REASON.**
+		// These two are read as a pair by the destructor passes, and only one of them had the guard — so the
+		// pair agreed exactly until something asked this one on its own. Something does: `noteDestructorUsage`
+		// reaches it for any instance whose `__destruct_<mangled>` is in the needed set, and that set is keyed
+		// by NAME, so a declared `type Array_Foo` owning a String puts `__destruct_Array_Foo` there and pulls
+		// the base-less `Array with Foo` instance in behind it. Measured, on this compiler and on its base:
+		// `panic ProgramSignatures.baseLayoutOf: generic instance 3's base struct 'Array' is not declared` —
+		// a compiler stack trace with no diagnostic, on the very program `checkTypeSymbolNamespace` had
+		// already recorded an E3006 for. The crash came first, so that E3006 could never be printed.
+		//
+		// `false` is the ANSWER, not a dodge: an `Array`/`Set` instance owns no substituted String field. Its
+		// elements are released by `__arr_decref`/`__set_decref` walking the record, never by a synthesized
+		// per-instance cascade — which is exactly why it has no `__destruct_<mangled>` to gate.
+		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
+			return false
+		end 'notStruct'
+
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if tagIsText(maxonTypeTag(self.substituteInstanceFieldType(id, index: i))) 'string'
 				return true
