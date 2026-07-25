@@ -1073,7 +1073,13 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 	// into a shared generic body just to be matched and dropped (measured: 1 allocation / 16 bytes per such
 	// call, on a path that becomes every array operation at P1.7 Array). A `ValueId` is a scalar.
 	let subject = callInstanceSubject(sig, result: result, argIds: argIds)
-	let tag = try func.valueTags.get(subject) otherwise return
+	// ⚠ **PANIC, NOT `otherwise return`.** `subject` is an SSA value of THIS function — a call's `result`
+	// (minted for every call, `void`-tagged when the callee returns nothing) or its first argument — so a
+	// missing tag is the same broken invariant the two reads below name, and it must fail the same way.
+	// Spelled as a silent `return` it would delete THIS ENTIRE CHECK for the call, restoring in silence the
+	// wild free this rung exists to refuse; a green suite could never show it, because the check that
+	// vanished is the one that reports.
+	let tag = try func.valueTags.get(subject) otherwise panic("checkTypeParameterArgs: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	if tag != ValueTypeTag.genericInstance 'notAnInstance'
 		return
 	end 'notAnInstance'

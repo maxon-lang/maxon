@@ -1,12 +1,18 @@
 // CsrGraph — compressed-sparse-row adjacency over a dense integer key space, and the
 // counting-sort that builds one from a parallel (key, value) edge list.
 //
-// It lives at the IR level, not inside one tier, because THREE consumers across two tiers
-// need exactly this shape and each had grown its own copy of the same counting sort:
+// It lives at the IR level, not inside one tier, because consumers in ALL THREE — front end, Std and
+// Target — need exactly this shape, and each had grown its own copy of the same counting sort:
 //
-//   • the CFG's successor / predecessor lists    (TargetLiveness.FuncCfg)
+//   • the CFG's successor / predecessor lists    (TargetLiveness.FuncTopology.succ/.pred)
 //   • which values die at each op of a block     (RegisterAllocator.BlockDeaths)
-//   • which values feed each phi                 (PruneDeadBlockArgs.phiFeeders)
+//   • which values feed each phi                 (PruneDeadBlockArgs, ElimTrivialBlockArgs)
+//   • which methods call a method                (Parser: descriptor-need + array-feed fixpoints)
+//   • which stdlib functions need the substrate  (StdlibSource.SubstrateFixpoint)
+//   • which instances a type argument denotes    (SignatureIndex.buildInstanceArgGraph)
+//
+// ⚠ That list is the POINT of the file, so keep it true: `buildCsr` is the only counting sort in the
+// compiler, and a new adjacency belongs here rather than hand-rolled at its call site.
 //
 // One flat pair of columns instead of `Array with (a per-node array)`, which in Maxon is one
 // heap-boxed, refcounted object per node — the trap `SourceRange.maxon` documents and the
