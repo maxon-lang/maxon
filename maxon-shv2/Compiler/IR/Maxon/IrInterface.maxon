@@ -310,6 +310,28 @@ end 'requireBuiltinInterface'
 // `primitiveTypeTagName(ValueTypeTag.integer)` — the one place a resolved `integer` is rendered to a name.
 export let IntConformerName = b"int"
 
+// ⭐ **THE COMPILER'S OWN SYNTHESIZED RANGED INT ALIAS — the ONE name that erases to `integer` without
+// appearing in ANY alias registry.** `HashValue` is the declared result type of the synthesized
+// `Hashable.hash()` (`builtinInterface`), and shv2 reads no stdlib, so its `typealias HashValue =
+// int(0 to u32.max)` is nowhere a reader can look it up: every reduction that goes THROUGH an alias
+// registry answers "not an alias" and leaves the name nominal.
+//
+// TWO readers reduce a `named` type that way, and they must not answer differently:
+//
+//   • `TypeResolution.resolveNamedType` — erases it to `integer`, or every user `hash() returns HashValue`
+//     is E3011. It has known this since P1.7a slice 2a.
+//   • `Parser.rangedAliasTag` — the parse-time reduction the direct builtin-conformance dispatch classifies
+//     a receiver by (`builtinConformerOfType`).
+//
+// ⚠ **MEASURED: THEY DID DISAGREE.** The parser's copy knew only the registry, so `i.hash()`'s own result —
+// a `HashValue`, i.e. an int — was not an int to it, and `i.hash().hash()` was **E2015 "Unsupported: .
+// statement"** on a program the language has no rule against, while the header of `rangedAliasTag` named
+// `HashValue` as one of the four spellings that reduce to ONE conformer. The `→ integer` half of the fact
+// is stated in this function's NAME, which is what both readers now spell instead of the erasure.
+export function isSynthesizedIntAliasName(name ByteArray) returns bool
+	return name.equals(HashValueTypeName)
+end 'isSynthesizedIntAliasName'
+
 // The canonical conformer name of the managed concrete `String` — the twin of `IntConformerName` for the
 // String intrinsic conformance (P1.7b). It keys `String`'s witness tables (`__witness_String_*`) and its
 // synthesized `String.hash`/`String.equals` impls, and it MUST equal

@@ -69,6 +69,34 @@ end 'main'
 42
 ```
 
+<!-- test: int.hash.chained -->
+`hash()` returns a `HashValue`, and a `HashValue` IS an int — so a hash of a hash is an ordinary chained
+dispatch, and so are `.equals`/`.compare` on a binding that holds one. `HashValue` is the one ranged int
+alias the COMPILER declares rather than the program, so it is in NO alias registry: the receiver classifier
+must reduce it through the same name set `TypeResolution.resolveNamedType` erases to `integer`
+(`isSynthesizedIntAliasName`) or it reads the name as nominal and rejects the second hop.
+```maxon
+function main() returns ExitCode
+	let i = 42
+	let once = i.hash()
+	let twice = i.hash().hash()
+	if once != twice 'chainDiffers'
+		return 1
+	end 'chainDiffers'
+	if not once.equals(42) 'hashValueEquals'
+		return 2
+	end 'hashValueEquals'
+	match once.compare(41) 'cmp'
+		lessThan then return 3
+		equalTo then return 4
+		greaterThan then return 0
+	end 'cmp'
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- disabled-test: float.hash.nonzero -->
 <!-- P1.7a primitive-dispatch rung 2 — float conformance (needs a `floatToBits` intrinsic, -0.0 normalization and a NaN total order) -->
 ```maxon

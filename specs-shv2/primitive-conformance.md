@@ -40,8 +40,10 @@ operators (see `comparable.md`):
 The witness dispatch rides the x64 rdata function-pointer relocation, so these cases are x64-only (as the
 `where-clauses` witness cases are); the E3005 reject is a compile error and is target-independent.
 
-Float `hash`, `Comparable`/`Ordering`, and direct `i.hash()` dispatch on a concrete `int` value are separate
-future mechanisms and are NOT covered here.
+Float `hash` is a separate future mechanism and is NOT covered here. `Comparable`/`Ordering` and DIRECT
+dispatch on a concrete value (`i.hash()`, `i.equals(j)`, `i.compare(j)`, reaching the very same synthesized
+impls without a witness table) have both shipped and have their own specs — `comparable.md`,
+`primitive-hashable.md` and `primitive-comparable.md`.
 
 ## Tests
 

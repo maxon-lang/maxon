@@ -196,16 +196,20 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 		return MaxonType.exitCode
 	end 'isExitCode'
 
-	// ⭐ `HashValue` is the SYNTHESIZED result type of `Hashable.hash()` — the type-side analogue of the
-	// synthesized `Hashable` interface (`builtinInterface`). shv2 reads no stdlib, so its `typealias
-	// HashValue = int(0 to u32.max)` is not in `project.typeAliases`; without this it is E3011 on every user
-	// `hash() returns HashValue`. It resolves to width-free `integer` exactly as a ranged int alias does
-	// (`alias.underlying` drops the range) — the u32 mask lives in the synthesized `int.hash` body, not the
-	// type. Handled inline like `ExitCode` rather than seeded into `typeAliases`, which `resetMergeTargets`
-	// recreates empty per warm-rebuild miss.
-	if name.equals(HashValueTypeName) 'isHashValue'
+	// ⭐ A COMPILER-SYNTHESIZED RANGED INT ALIAS — `HashValue`, the result type of `Hashable.hash()`. It is in
+	// no alias registry (shv2 reads no stdlib, so its `typealias HashValue = int(0 to u32.max)` is not in
+	// `project.typeAliases`), and without this arm it is E3011 on every user `hash() returns HashValue`. It
+	// resolves to width-free `integer` exactly as a ranged int alias does (`alias.underlying` drops the
+	// range) — the u32 mask lives in the synthesized `int.hash` body, not the type. Handled inline like
+	// `ExitCode` rather than seeded into `typeAliases`, which `resetMergeTargets` recreates empty per
+	// warm-rebuild miss.
+	//
+	// The NAME SET is `isSynthesizedIntAliasName`'s, not this arm's, because `Parser.rangedAliasTag` reduces
+	// the same names at parse time and the two answered differently until it was named once — see that
+	// function's header for the `i.hash().hash()` this cost.
+	if isSynthesizedIntAliasName(name) 'isSynthesizedIntAlias'
 		return MaxonType.integer
-	end 'isHashValue'
+	end 'isSynthesizedIntAlias'
 
 	// ⭐ A DECLARED `type` KEEPS ITS NAME ID, and that one line is the difference between the two
 	// registries this function consults. An alias RESOLVES AWAY — `Score` becomes `int`, and

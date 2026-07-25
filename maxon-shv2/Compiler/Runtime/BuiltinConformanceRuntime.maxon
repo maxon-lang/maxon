@@ -178,10 +178,23 @@ end 'moduleDefinesFunction'
 // one — `call`, `tryCall` and `funcAddr` — the same three `DeadFunctionElimination.markCalleeOf` walks for
 // its reachability edges, and for the same reason: those are the ops that can make a symbol required.
 //
-// The arms RANGE over the whole union in declaration order, ending at the current last variant, so a variant
-// appended past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
-// working in the reviewer's favour (StdDialect's header). A new variant carrying a callee name must be added
-// as its own arm.
+// ⚠ **YES, THAT MATCH IS WRITTEN TWICE OVER THE SAME UNION, AND THE FOLD IS REFUSED FOR A COST REASON, NOT
+// A TIDINESS ONE.** The shared half is *"which variant carries a callee name, and in which field"*; the
+// halves that differ are what each does with it (mark-and-queue there, credit-into-a-set here). Sharing it
+// needs a per-op extractor answering "a name, or nothing", and this language has no free spelling of that:
+// a payload union BOXES (16 bytes per op — the exact cost the optimizer just deleted from this rung's
+// receiver classifier, see `BuiltinConformer`'s header), an out-`ByteArrayArray` pushes a MANAGED ByteArray
+// per hit, a closure parameter captures, and an empty-name sentinel is a wrong answer waiting for a callee
+// the module really does not name. `markCalleeOf` walks every LIVE op of every function; a box per op there
+// is not a refactor, it is a regression.
+//
+// What binds the copies instead is a COMPILE-TIME CHECK, not this comment. The arms RANGE over the whole
+// union in declaration order, ending at the current last variant, so a variant appended past it makes BOTH
+// matches non-exhaustive — **verified: E2026 "match on enum 'Op' is not exhaustive, missing: dd"**, which
+// names the variant. A new variant carrying a callee name must be added as its own arm in both, and neither
+// can be forgotten silently. (The residual is the human who *extends the last band* instead of adding an
+// arm; that mistake is equally available in `markCalleeOf` and is what these per-band comments exist to
+// make loud in review.)
 function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced FunctionNameSet)
 	match op 'op'
 		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.

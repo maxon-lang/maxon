@@ -8056,8 +8056,20 @@ export type Parser
 	// is a FLOAT alias (F2a — the tag `named` was too coarse to carry), and whether it is an INT alias
 	// (the builtin-conformance receiver classifier, which must see `Byte` and `Integer` as `int` exactly
 	// as `ProgramSignatures.conformerTypeArgName` does for a witness type argument).
+	//
+	// ⚠ **THE REGISTRY IS NOT THE WHOLE ALIAS SET, AND THE ONE NAME OUTSIDE IT IS THIS RUNG'S OWN RESULT
+	// TYPE.** `HashValue` — what `hash()` returns — is a ranged int alias the COMPILER declares, so it is in
+	// no registry `aliasOf` can see (`isSynthesizedIntAliasName`). Asked through the registry alone it
+	// answered `named`, and `i.hash().hash()` — an int method on an int, which the header of
+	// `builtinConformerOfType` claims is one conformer with `Integer`/`Byte`/`int` — was E2015 while
+	// `TypeResolution.resolveNamedType` had erased the very same name to `integer` since slice 2a.
 	function rangedAliasTag(nameId TypeNameId) returns ValueTypeTag
-		return match self.signatures.aliasOf(self.internedName(nameId)) 'a'
+		let name = self.internedName(nameId)
+		if isSynthesizedIntAliasName(name) 'compilerDeclaredIntAlias'
+			return ValueTypeTag.integer
+		end 'compilerDeclaredIntAlias'
+
+		return match self.signatures.aliasOf(name) 'a'
 			declared(alias) gives maxonTypeTag(alias.underlying)
 			undeclared gives ValueTypeTag.named
 		end 'a'
