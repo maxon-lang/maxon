@@ -112,12 +112,12 @@ function escapingParamBits(func IrFunction, module MaxonModule) returns BoolArra
 	var bits = BoolArray.create()
 	for i in 0 upto func.paramCount 'eachParam'
 		let isFunctionParam = i < func.valueTags.count() and (try func.valueTags.get(i) otherwise ValueTypeTag.void) == ValueTypeTag.function
-		bits.push(isFunctionParam and escapeSiteFound(valueEscapeSite(func, module: module, value: i as ValueId, subject: EscapeScanSubject.functionParameter)))
+		bits.push(isFunctionParam and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(i as ValueId))))
 	end 'eachParam'
 	return bits
 end 'escapingParamBits'
 
-// ⭐ **WHICH KIND OF VALUE THE ESCAPE SCAN IS ASKED ABOUT — and the ONE slot on which the two differ.**
+// ⭐ **WHICH VALUES THE ESCAPE SCAN TRACKS — and the ONE slot on which the two rules differ.**
 // A function-typed PARAMETER and a capturing-closure LITERAL leave a frame through exactly the same slots
 // (a store, a return, a phi edge, an indirect call's ARGUMENT), with one exception: a DIRECT call's argument.
 //
@@ -129,21 +129,74 @@ end 'escapingParamBits'
 //     persists, which is what keeps `apply(function(n) gives n + c, x)` — a pass DOWN to a callee that only
 //     CALLS it — green. Re-deciding it here would be one fact decided twice by two rules that would then
 //     have to agree for ever.
-enum EscapeScanSubject
-	functionParameter
-	capturingClosure
+//
+// ⭐⭐ **AND IT IS ALSO HOW MANY VALUES ONE PASS TRACKS, WHICH IS WHAT KEEPS THE CLOSURE RULE LINEAR.**
+// The parameter summary asks about ONE value at a time, and can: a function declares a handful of parameters.
+// The closure rule asks the SAME question of every capturing closure a function mints — and asking it one
+// closure at a time is a body scan PER CLOSURE, i.e. (closures × ops). That is not a benign product: a
+// function's op count GROWS WITH its closure count, so it is a quadratic in the function's own size. MEASURED
+// on a straight-line function holding C capturing closures, all ACCEPTED so the whole body is scanned:
+// `semanticCheck` ran 1.1 / 4.3 / 16.4 / 66.7 / 271.8 ms for C = 40 / 80 / 160 / 320 / 640 — **~4x per
+// doubling**. So `everyCapturingClosure` tracks the whole marked column in ONE pass: the mark is an O(1)
+// array read, so "is this operand tracked" costs the same as comparing against one id, and the scan is
+// O(ops) whatever the closure density. Re-measured on the same ladder after: 0.2 / 0.3 / 0.7 / 1.7 / 2.8 ms
+// — ~2x per doubling, i.e. LINEAR, and still 7.2 ms at a sixth rung of C = 1280.
+union EscapeScanSubject
+	// ONE function-typed parameter, named by its ValueId (a parameter's ValueId is its index). Asked once per
+	// parameter, behind `functionHasFunctionParam`.
+	oneParameter(param ValueId)
+	// EVERY value `func.valueIsCapturingClosure` marks, in a single pass over the body.
+	everyCapturingClosure
+	// ONE marked capturing closure. The sweep above answers "does any of them escape, and where"; the band
+	// match it runs must stay a BOOL to stay allocation-free (see `trackedValueAt`), so "WHICH of them" is a
+	// separate question — asked with this subject, on the refusal path only, so it re-asks the SAME closure
+	// rule rather than a parameter rule that differs at a direct call's argument.
+	oneCapturingClosure(closure ValueId)
 end 'EscapeScanSubject'
 
-// WHERE a tracked value leaves its frame. Not a bool, because the capturing-closure rule must WORD its
-// refusal from the route it found (`closureEscapeReason`), and the two routes carry different evidence: an
-// op has a flat index the reason can be read off, a branch edge is not an op and has none.
+// Is `candidate` one of the values this scan tracks? **O(1) for every subject** — an identity test, or one
+// read of the closure mark column — which is exactly what lets the sweep test every operand it meets instead
+// of re-walking the body once per closure.
+function isTrackedValue(candidate ValueId, subject EscapeScanSubject, func IrFunction) returns bool
+	match subject 'subject'
+		oneParameter(param) then return candidate == param
+		everyCapturingClosure then break 'subject'
+		oneCapturingClosure(closure) then return candidate == closure
+	end 'subject'
+
+	return isMarkedCapturingClosure(candidate, func: func)
+end 'isTrackedValue'
+
+// Is `value` a capturing-closure LITERAL born in `func`? A value minted after parsing (a lowering temporary)
+// has no mark slot and is no closure — `Parser.mintValue` seeds the column per SSA value, so it only ever
+// trails the values it describes.
+function isMarkedCapturingClosure(value ValueId, func IrFunction) returns bool
+	return value < func.valueIsCapturingClosure.count() and (try func.valueIsCapturingClosure.get(value) otherwise panic("isMarkedCapturingClosure: valueIsCapturingClosure.get OOB at {value} inside its own count()"))
+end 'isMarkedCapturingClosure'
+
+// Does this scan track capturing closures rather than one parameter? Asked at exactly ONE slot — the direct
+// call argument in `directCallArgEscapes`, the only place the two rules disagree. A predicate rather than a
+// `==`, because two arms carry a payload and a union has no equality to compare a constructed value against.
+function subjectTracksCapturingClosures(subject EscapeScanSubject) returns bool
+	return match subject 'subject'
+		oneParameter gives false
+		everyCapturingClosure to oneCapturingClosure gives true
+	end 'subject'
+end 'subjectTracksCapturingClosures'
+
+// WHERE a tracked value leaves its frame, and WHICH value did. Not a bool, because the capturing-closure rule
+// must WORD its refusal from the route it found (`closureEscapeReason`) and ANCHOR it at the closure that took
+// that route — and the two routes carry different evidence: an op has a flat index the reason can be read off,
+// a branch edge is not an op and has none. Constructed at most ONCE per scan, which is what makes it
+// affordable: a Maxon union value is a heap object, so a union returned from the per-OP band match would cost
+// one allocation per op scanned (measured: +11 per closure).
 union ValueEscapeSite
-	// A body op or terminator places the value where the frame's environment cannot follow — `opIndex` is
-	// its flat `module.ops` index.
-	persistedBy(opIndex OpIndex)
-	// A branch edge carries the value into a block-arg phi. One slot, joining every incoming edge, and it
+	// A body op or terminator places `value` where the frame's environment cannot follow — `opIndex` is that
+	// op's flat `module.ops` index.
+	persistedBy(value ValueId, opIndex OpIndex)
+	// A branch edge carries `value` into a block-arg phi. One slot, joining every incoming edge, and it
 	// carries the code pointer alone — the environment rides a per-value side column no phi can merge.
-	mergedIntoPhi
+	mergedIntoPhi(value ValueId)
 	none
 end 'ValueEscapeSite'
 
@@ -156,8 +209,8 @@ function escapeSiteFound(site ValueEscapeSite) returns bool
 	end 'site'
 end 'escapeSiteFound'
 
-// ⭐ **THE ONE ESCAPE SCAN, over ops, terminators AND branch edges.** Does `func`'s body use `value` anywhere
-// other than where the frame's environment can follow it? The ONLY unconditionally safe use is
+// ⭐ **THE ONE ESCAPE SCAN, over ops, terminators AND branch edges.** Does `func`'s body use a value `subject`
+// tracks anywhere other than where the frame's environment can follow it? The ONLY unconditionally safe use is
 // `indirectCall`'s CALLEE slot — a call, whose env is threaded synchronously by `emitClosureEnvArg` — plus,
 // for a capturing closure, a direct call's arguments (see `EscapeScanSubject`).
 //
@@ -166,45 +219,90 @@ end 'escapeSiteFound'
 // block ARGUMENT, not an op operand, so an op-only scan misses it. For a capturing closure it is stronger
 // still: a phi cannot carry an environment AT ALL, so reaching one is fatal whether or not the merged value
 // then escapes (`var f = <closure>` reassigned inside an `if` or a `while` compiled clean and SEGFAULTED).
-function valueEscapeSite(func IrFunction, module MaxonModule, value ValueId, subject EscapeScanSubject) returns ValueEscapeSite
+//
+// ⭐ **ONE PASS, WHATEVER THE SUBJECT TRACKS.** It returns the FIRST escape in scan order — blocks, then each
+// block's ops, its terminator and its branch edges — and stops there. For a parameter that is the only escape
+// there is. For the closure sweep it is the EARLIEST OFFENDING USE, whichever closure took it: a deterministic
+// (so worker-invariant) choice, and the one a reader meets first reading the function top to bottom.
+function valueEscapeSite(func IrFunction, module MaxonModule, subject EscapeScanSubject) returns ValueEscapeSite
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("valueEscapeSite: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			if opEscapesValue(try module.ops.get(opIdx) otherwise panic("valueEscapeSite: opIdx {opIdx} not in module.ops"), value: value, subject: subject) 'escapes'
-				return ValueEscapeSite.persistedBy(opIdx)
+			let op = try module.ops.get(opIdx) otherwise panic("valueEscapeSite: opIdx {opIdx} not in module.ops")
+			if opEscapesValue(op, subject: subject, func: func) 'escapes'
+				return ValueEscapeSite.persistedBy(trackedValueAt(op, subject: subject, func: func), opIndex: opIdx)
 			end 'escapes'
 		end 'eachOp'
-		if block.hasTerminatorOp() and terminatorEscapesValue(try module.ops.get(block.terminatorIndex()) otherwise panic("valueEscapeSite: terminatorIndex not in module.ops"), value: value) 'termEscapes'
-			return ValueEscapeSite.persistedBy(block.terminatorIndex())
-		end 'termEscapes'
+
+		if block.hasTerminatorOp() 'hasTerminator'
+			let termIdx = block.terminatorIndex()
+			let term = try module.ops.get(termIdx) otherwise panic("valueEscapeSite: terminatorIndex not in module.ops")
+			if terminatorEscapesValue(term, subject: subject, func: func) 'termEscapes'
+				return ValueEscapeSite.persistedBy(trackedValueAt(term, subject: subject, func: func), opIndex: termIdx)
+			end 'termEscapes'
+		end 'hasTerminator'
+
 		for edge in block.branchEdges 'eachEdge'
-			if valueIdInArray(edge.argIds, value: value) 'edgeEscapes'
-				return ValueEscapeSite.mergedIntoPhi
-			end 'edgeEscapes'
+			for argId in edge.argIds 'eachEdgeArg'
+				if isTrackedValue(argId, subject: subject, func: func) 'edgeEscapes'
+					return ValueEscapeSite.mergedIntoPhi(argId)
+				end 'edgeEscapes'
+			end 'eachEdgeArg'
 		end 'eachEdge'
 	end 'eachBlock'
+
 	return ValueEscapeSite.none
 end 'valueEscapeSite'
 
-// Does BODY op `op` persist `value`? A function value can only leave a frame through a STORE (its value slot),
-// a direct/try/indirect CALL ARGUMENT, or a RETURN (the terminator, handled separately). It is the callee of
-// an indirect call that is SAFE, so `indirectCall` binds only its args (the `_` callee is ignored). The
-// non-persisting bands range to `break` — a newly appended op FAILS TO COMPILE here rather than silently
-// escaping the scan (the band-append invariant). ⭐ That is the whole guarantee OPEN #73 asked for: this
-// match, not a hand-written call at every sink, is what makes the escape rule cover a sink that does not
+// ⭐ **WHICH tracked value the hit at `op` names.** Split from the band matches below, and asked ONCE per
+// scan at the single site it stops at, because those matches run PER OP and must therefore answer in a
+// SCALAR: a Maxon union (and a `type`) is a heap object, so handing "which value" back from them costs one
+// allocation per op scanned — measured at +11 allocations per closure, on a pass that runs on every compile.
+// A single-value subject already knows its answer; the sweep re-asks its own rule of one closure at a time,
+// over the ONE op that stopped it, which is O(closures) on the refusal path and never on the accepting one.
+function trackedValueAt(op MaxonOp, subject EscapeScanSubject, func IrFunction) returns ValueId
+	match subject 'subject'
+		oneParameter(param) then return param
+		everyCapturingClosure then break 'subject'
+		oneCapturingClosure(closure) then return closure
+	end 'subject'
+
+	for v in 0 upto func.valueIsCapturingClosure.count() 'eachValue'
+		let closure = v as ValueId
+		if not isMarkedCapturingClosure(closure, func: func) 'notAClosure'
+			continue
+		end 'notAClosure'
+
+		// Body op or terminator: only one of the two matches can claim any given op, and the sweep does not
+		// record which of them stopped it — so ask both rather than carry a third route through the union.
+		let asOne = EscapeScanSubject.oneCapturingClosure(closure)
+		if opEscapesValue(op, subject: asOne, func: func) or terminatorEscapesValue(op, subject: asOne, func: func) 'thisOne'
+			return closure
+		end 'thisOne'
+	end 'eachValue'
+
+	panic("trackedValueAt: the sweep stopped at a slot no single marked closure escapes — `everyCapturingClosure` and `oneCapturingClosure` disagree about which values a slot persists")
+end 'trackedValueAt'
+
+// Does BODY op `op` persist a value `subject` tracks? A function value can only leave a frame through a STORE
+// (its value slot), a direct/try/indirect CALL ARGUMENT, or a RETURN (the terminator, handled separately). It
+// is the callee of an indirect call that is SAFE, so `indirectCall` binds only its args (the `_` callee is
+// ignored). The non-persisting bands range to `break` — a newly appended op FAILS TO COMPILE here rather than
+// silently escaping the scan (the band-append invariant). ⭐ That is the whole guarantee OPEN #73 asked for:
+// this match, not a hand-written call at every sink, is what makes the escape rule cover a sink that does not
 // exist yet.
-function opEscapesValue(op MaxonOp, value ValueId, subject EscapeScanSubject) returns bool
+function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction) returns bool
 	match op 'op'
-		call(_, callee, args, _, _) then return directCallArgEscapes(callee, args: args, value: value, subject: subject)
+		call(_, callee, args, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func)
 		literal to loadIndirect then break 'op'
-		storeIndirect(_, _, stored, _) then return stored == value
+		storeIndirect(_, _, stored, _) then return isTrackedValue(stored, subject: subject, func: func)
 		stringLiteral then break 'op'
-		tryCall(_, _, callee, args, _, _) then return directCallArgEscapes(callee, args: args, value: value, subject: subject)
+		tryCall(_, _, callee, args, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func)
 		throwError to functionRef then break 'op'
-		indirectCall(_, _, args) then return valueIdInArray(args, value: value)
+		indirectCall(_, _, args) then return trackedValueInArray(args, subject: subject, func: func)
 		// P1.5-B1a: an async spawn's arguments cross into a green thread (an escape route like a call
 		// argument); an `await`/`try await`'s operand is a runtime promise handle, not a persisted value.
-		asyncCall(_, callee, args, _, _) then return directCallArgEscapes(callee, args: args, value: value, subject: subject)
+		asyncCall(_, callee, args, _, _) then return directCallArgEscapes(callee, args: args, subject: subject, func: func)
 		await to tryAwait then break 'op'
 		sizeofType then break 'op'
 		byteStringLiteral then break 'op'
@@ -213,7 +311,7 @@ function opEscapesValue(op MaxonOp, value ValueId, subject EscapeScanSubject) re
 		// ⭐ A WITNESS DISPATCH IS A CALL WITH NO CALLEE NAME, so it escapes for BOTH subjects — see
 		// `directCallArgEscapes` for why the capturing-closure delegation stops here (P1.7a slice 2a).
 		// Its receiver + user args are all in `args`.
-		witnessDispatch(_, args, _, _, _) then return valueIdInArray(args, value: value)
+		witnessDispatch(_, args, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -231,21 +329,23 @@ end 'opEscapesValue'
 // Delegating a slot the delegate never sees is not "one decider", it is NO decider — which is the shape of
 // the hole this rung closes, and the same reason `witnessDispatch` (whose callee is chosen at runtime by the
 // witness table, so no name keys a summary) escapes unconditionally above.
-function directCallArgEscapes(callee ByteArray, args ValueIdArray, value ValueId, subject EscapeScanSubject) returns bool
-	if subject == EscapeScanSubject.capturingClosure and not isCompilerInternalCallee(callee) 'ownedByCallSiteCheck'
+function directCallArgEscapes(callee ByteArray, args ValueIdArray, subject EscapeScanSubject, func IrFunction) returns bool
+	if subjectTracksCapturingClosures(subject) and not isCompilerInternalCallee(callee) 'ownedByCallSiteCheck'
 		return false
 	end 'ownedByCallSiteCheck'
-	return valueIdInArray(args, value: value)
+
+	return trackedValueInArray(args, subject: subject, func: func)
 end 'directCallArgEscapes'
 
-// Does the TERMINATOR `term` persist `value`? Only a `ret` of the bare value does — a `condBranch`
-// condition is a bool, a `branch`/`retVoid` carries no value, and an error terminator carries an error, never
-// a function value. The bands range to `break` for the band-append invariant. It takes no `EscapeScanSubject`
-// because a return is an escape for every subject alike: the frame dies at it.
-function terminatorEscapesValue(term MaxonOp, value ValueId) returns bool
+// Does the TERMINATOR `term` persist a value `subject` tracks? Only a `ret` of the bare value does — a
+// `condBranch` condition is a bool, a `branch`/`retVoid` carries no value, and an error terminator carries an
+// error, never a function value. The bands range to `break` for the band-append invariant. No arm consults
+// the subject beyond "is this value tracked": a return escapes for every subject alike, because the frame
+// dies at it.
+function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func IrFunction) returns bool
 	match term 'term'
 		call to literal then break 'term'
-		ret(returned) then return returned == value
+		ret(returned) then return isTrackedValue(returned, subject: subject, func: func)
 		retVoid to tryAwait then break 'term'
 		sizeofType then break 'term'
 		byteStringLiteral then break 'term'
@@ -257,15 +357,16 @@ function terminatorEscapesValue(term MaxonOp, value ValueId) returns bool
 	return false
 end 'terminatorEscapesValue'
 
-// Membership of a ValueId in an argument array — a bounded scan (argument counts are register-capped).
-function valueIdInArray(args ValueIdArray, value ValueId) returns bool
-	for a in args 'each'
-		if a == value 'found'
+// Does an argument array hold a value `subject` tracks? A bounded scan (argument counts are register-capped),
+// and allocation-free for the same reason the band matches are: it answers in a bool.
+function trackedValueInArray(args ValueIdArray, subject EscapeScanSubject, func IrFunction) returns bool
+	for argId in args 'each'
+		if isTrackedValue(argId, subject: subject, func: func) 'found'
 			return true
 		end 'found'
 	end 'each'
 	return false
-end 'valueIdInArray'
+end 'trackedValueInArray'
 
 // True iff any bit is set — the "does this function persist any parameter?" test that decides whether it earns
 // a map entry.
@@ -949,52 +1050,40 @@ function checkCapturingClosureUses(project Project, module MaxonModule)
 	end 'eachFunc'
 end 'checkCapturingClosureUses'
 
-// One function's capturing closures. `boolArrayAny` is the cheap, NON-ALLOCATING gate — mirroring
-// `buildEscapeSummary`'s `functionHasFunctionParam` and `checkLinearAwait`'s `functionHasAwait` — that keeps
-// the per-value body scan off every closure-free function, which is the entire scale corpus. Reports the
-// FIRST offending closure in value order and stops: one diagnostic per function, chosen deterministically so
-// the choice is worker-invariant. The scan is per-closure over the body, so a function's cost is
-// (closures × ops) — the same bound `escapingParamBits` already pays per function-typed parameter, and
-// closures per function are a handful at most.
+// One function's capturing closures — **ONE body scan for ALL of them.** `boolArrayAny` is the cheap,
+// NON-ALLOCATING gate — mirroring `buildEscapeSummary`'s `functionHasFunctionParam` and `checkLinearAwait`'s
+// `functionHasAwait` — that keeps the body scan off every closure-free function, which is the entire scale
+// corpus. Behind it the scan tracks the whole marked column at once (`EscapeScanSubject`), so the cost is
+// O(ops) whatever the function's closure DENSITY; a scan per closure was (closures × ops), and because a
+// function's op count grows with its closure count that measured ~4x per doubling of C. It reports the first
+// offending USE in scan order and stops — one diagnostic per function, chosen deterministically so the choice
+// is worker-invariant.
 function checkCapturingClosureUsesInFunction(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex)
 	if not boolArrayAny(func.valueIsCapturingClosure) 'noCapturingClosure'
 		return
 	end 'noCapturingClosure'
 
-	for v in 0 upto func.valueIsCapturingClosure.count() 'eachValue'
-		if not (try func.valueIsCapturingClosure.get(v) otherwise panic("checkCapturingClosureUsesInFunction: valueIsCapturingClosure.get OOB at {v} inside its own count()")) 'notAClosure'
-			continue
-		end 'notAClosure'
-		if reportedClosureEscape(project, module: module, func: func, funcIndex: funcIndex, closure: v as ValueId) 'reported'
-			return
-		end 'reported'
-	end 'eachValue'
-end 'checkCapturingClosureUsesInFunction'
-
-// Check ONE capturing closure; report E3099 and return `true` iff it reaches a slot its environment cannot.
-// The route decides the wording: an op names which slot (`closureEscapeReason`), a phi edge is its own route
-// with no op to read.
-function reportedClosureEscape(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, closure ValueId) returns bool
-	match valueEscapeSite(func, module: module, value: closure, subject: EscapeScanSubject.capturingClosure) 'site'
-		persistedBy(opIndex) then return reportClosureEscapeAtOp(project, module: module, func: func, funcIndex: funcIndex, closure: closure, opIndex: opIndex)
-		mergedIntoPhi then return reportClosureEscape(project, func: func, funcIndex: funcIndex, closure: closure, reason: "cannot carry a closure that captures across a branch merge: {CapturingClosureMergeSuffix}")
+	// The route decides the wording: an op names which slot (`closureEscapeReason`), a phi edge is its own
+	// route with no op to read.
+	match valueEscapeSite(func, module: module, subject: EscapeScanSubject.everyCapturingClosure) 'site'
+		persistedBy(closure, opIndex) then reportClosureEscapeAtOp(project, module: module, func: func, funcIndex: funcIndex, closure: closure, opIndex: opIndex)
+		mergedIntoPhi(closure) then reportClosureEscape(project, func: func, funcIndex: funcIndex, closure: closure, reason: "cannot carry a closure that captures across a branch merge: {CapturingClosureMergeSuffix}")
 		none then break 'site'
 	end 'site'
-	return false
-end 'reportedClosureEscape'
+end 'checkCapturingClosureUsesInFunction'
 
 // The OP route: fetch the offending op, word the refusal from its kind, report. Split out of the match arm
 // above so the fetch is a plain `let` — a `try … otherwise panic` nested two levels deep inside a labelled
 // ARGUMENT miscompiles under the bootstrap (`E9001: assign value … not in valueMap`), which is a property of
 // the compiler building this source, not of the rule.
-function reportClosureEscapeAtOp(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, closure ValueId, opIndex OpIndex) returns bool
+function reportClosureEscapeAtOp(project Project, module MaxonModule, func IrFunction, funcIndex FuncIndex, closure ValueId, opIndex OpIndex)
 	let op = try module.ops.get(opIndex) otherwise panic("reportClosureEscapeAtOp: escape site op {opIndex} not in module.ops")
-	return reportClosureEscape(project, func: func, funcIndex: funcIndex, closure: closure, reason: closureEscapeReason(op))
+	reportClosureEscape(project, func: func, funcIndex: funcIndex, closure: closure, reason: closureEscapeReason(op))
 end 'reportClosureEscapeAtOp'
 
 // ⭐ **THE ONE OP-KIND → REASON MAPPING** for a capturing closure found in a slot its environment cannot
-// reach. Every arm that RETURNS is one `opEscapesValue` reports for `EscapeScanSubject.capturingClosure`; the
-// rest fall through to the panic below rather than invent wording, because reaching it would mean the two
+// reach. Every arm that RETURNS is one `opEscapesValue` reports for `EscapeScanSubject.everyCapturingClosure`;
+// the rest fall through to the panic below rather than invent wording, because reaching it would mean the two
 // matches disagree about what a persisting slot IS. The bands range for the band-append invariant, so a newly
 // appended op must state its own answer here too.
 function closureEscapeReason(op MaxonOp) returns String
@@ -1034,12 +1123,10 @@ function runtimeEntryClosureEscapeMessage() returns String
 	return "cannot pass a closure that captures to a compiler runtime entry: it puts the value in heap memory that outlives this frame, and a runtime entry has no signature for the escape summary to be built from. {CapturingClosureEscapeSuffix}"
 end 'runtimeEntryClosureEscapeMessage'
 
-// Report E3099 at `closure`'s defining `functionRef` — the closure literal's own `function` keyword. Always
-// `true`, so the caller can `return` it: one diagnostic per function (`reportedViolation`'s idiom).
-function reportClosureEscape(project Project, func IrFunction, funcIndex FuncIndex, closure ValueId, reason String) returns bool
+// Report E3099 at `closure`'s defining `functionRef` — the closure literal's own `function` keyword.
+function reportClosureEscape(project Project, func IrFunction, funcIndex FuncIndex, closure ValueId, reason String)
 	let range = project.opRanges.get(closureDefiningOp(project, func: func, funcIndex: funcIndex, closure: closure))
 	reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: reason, line: range.line, column: range.column, filePath: func.sourceFilePath)
-	return true
 end 'reportClosureEscape'
 
 // The op that DEFINED `closure` — the `functionRef` `parseClosureExpression` emits, whose span is the
