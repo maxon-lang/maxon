@@ -1419,18 +1419,6 @@ export union AliasCycleResult
 	none
 end 'AliasCycleResult'
 
-// Is `id` already in `ids`? The reachability sweep's `visited` test. A linear scan deliberately: the walk
-// is once per compile over a program's generic instances, and a Set would allocate to answer a question
-// asked a handful of times.
-function genericInstanceIdArrayContains(ids GenericInstanceIdArray, id GenericInstanceId) returns bool
-	for seen in ids 'each'
-		if seen == id 'found'
-			return true
-		end 'found'
-	end 'each'
-	return false
-end 'genericInstanceIdArrayContains'
-
 // ⭐ **ONE `Base with Args` INSTANTIATION SITE (P1.7a slice 2a)** — an interned instance paired with the
 // source anchor of the `typealias X = Base with Args` that names it, for the where-constraint check (E3017)
 // to land its diagnostic on. Collected by `recordGenericAlias` for every alias with a real (non-zero) anchor.
@@ -3437,61 +3425,72 @@ export type ProgramSignatures
 	// no finite compiled name — and both compiled clean and SEGFAULTED at run time before this check.
 	//
 	// Asked once per compile over the FINISHED table, so it needs none of the sweep's ordering: an alias
-	// reaches itself or it does not, whatever order the files were swept in. Walked in declaration-record
-	// order so the alias blamed is a property of the program, not of a map's iteration.
+	// reaches itself or it does not, whatever order the files were swept in. The BLAME is read in
+	// declaration-record order so the alias reported is a property of the program, not of a map's iteration.
+	//
+	// ⚠ **THE CYCLE SET IS COMPUTED ONCE FOR THE WHOLE GRAPH, NOT ONCE PER ALIAS — AND THAT IS A CUBIC
+	// REMOVED, NOT A TIDY-UP.** This first shipped as a per-alias reachability sweep: every alias walked the
+	// instances its arguments reach, with a LINEAR scan of a `visited` array at every pop. On a chain of N
+	// aliases (`N0 = Box with S0`, `N1 = Box with N0`, …) alias i reaches i instances and scans i entries per
+	// pop, so the pass cost N x N x N. MEASURED, A/B in this worktree at dc0e1127c against the same tree with
+	// only this check suppressed: the check alone cost 31 / 268 / 1,751 / 12,298 ms at N = 400 / 800 / 1,600 /
+	// 3,200 — x8.6, x6.5, x7.0 per doubling, i.e. CUBIC, on programs that COMPILE (the rest of the compile
+	// stayed flat at 139…197 ms across the same span). `nodesOnACycle` answers the same question for every
+	// instance at once in O(instances + arguments): the same ladder now compiles in 149 / 197 / 307 ms at
+	// N = 1,600 / 3,200 / 6,400 against a check-suppressed 143 / 194 / 295 ms, so the check costs 6 / 3 / 12 ms
+	// and no longer grows out of the noise floor.
+	//
+	// A program with no generic alias cannot have a cycle at all — only an alias edge can close one, since a
+	// nested `Base with (Base with …)` argument nests syntactically and therefore finitely — so the whole
+	// pass, graph included, is skipped rather than merely cheap.
 	export function firstCyclicAliasDecl() returns AliasCycleResult
+		if self.genericAliasDecls.count() == 0 'noAliasCanCloseACycle'
+			return AliasCycleResult.none
+		end 'noAliasCanCloseACycle'
+
+		let onCycle = nodesOnACycle(self.buildInstanceArgGraph())
 		for i in 0 upto self.genericAliasDecls.count() 'eachDecl'
 			let entry = try self.genericAliasDecls.get(i) otherwise panic("firstCyclicAliasDecl: genericAliasDecls.get OOB at {i}")
 			if let gid = try self.genericAliases.get(entry.aliasName) 'recorded'
-				if self.aliasInstanceReachesItself(gid) 'cyclic'
+				if (try onCycle.get(gid) otherwise panic("firstCyclicAliasDecl: alias '{String.from(entry.aliasName)}' names instance {gid}, outside the interner's own instance space")) 'cyclic'
 					return AliasCycleResult.at(i)
 				end 'cyclic'
 			end 'recorded'
 		end 'eachDecl'
+
 		return AliasCycleResult.none
 	end 'firstCyclicAliasDecl'
 
-	// Does instance `root` reach ITSELF through its type arguments? A forward REACHABILITY sweep, not a
-	// backtracking DFS: reachability is monotone, so a `visited` list needs no unwinding and a shared
-	// sub-instance (a diamond) cannot be mistaken for a cycle — which a path-marking walk without `pop`
-	// would do.
-	function aliasInstanceReachesItself(root GenericInstanceId) returns bool
-		var pending = GenericInstanceIdArray.create()
-		var visited = GenericInstanceIdArray.create()
-		self.pushArgInstances(root, pending: pending)
+	// The "instance ⇒ the instances its type arguments denote" graph, over the dense `GenericInstanceId`
+	// space — a nested `genericInstance` argument directly, and a `named` leaf through the alias table (the
+	// very edge `namedTypeArgIdentity` follows, so the cycle check and the identity read traverse ONE graph
+	// rather than two views of it).
+	//
+	// Built through the shared counting sort (`buildCsr`) like every other adjacency in this compiler, and
+	// for the reason its header gives: a per-node array would be one refcounted heap object per instance.
+	function buildInstanceArgGraph() returns CsrGraph
+		var argOf = CsrColumn.create()
+		var denotes = CsrColumn.create()
 
-		while pending.count() > 0 'walk'
-			let gid = try pending.pop() otherwise panic("aliasInstanceReachesItself: pop from a non-empty pending list")
-			if gid == root 'returnedToRoot'
-				return true
-			end 'returnedToRoot'
-			if genericInstanceIdArrayContains(visited, id: gid) 'alreadySeen'
-				continue
-			end 'alreadySeen'
-			visited.push(gid)
-			self.pushArgInstances(gid, pending: pending)
-		end 'walk'
+		for gid in 0 upto self.genericInstances.count() 'eachInstance'
+			for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
+				let arg = self.substitutedInstanceArg(gid, position: position)
+				let tag = maxonTypeTag(arg)
+				if tag == ValueTypeTag.genericInstance 'nested'
+					argOf.push(gid)
+					denotes.push(typeNameIdOf(arg))
+				end 'nested'
+				if tag == ValueTypeTag.named 'maybeAlias'
+					if let aliased = try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg))) 'namesAnInstance'
+						argOf.push(gid)
+						denotes.push(aliased)
+					end 'namesAnInstance'
+				end 'maybeAlias'
+			end 'eachArg'
+		end 'eachInstance'
 
-		return false
-	end 'aliasInstanceReachesItself'
-
-	// Every instance `gid`'s type arguments denote — a nested `genericInstance` directly, and a `named` leaf
-	// through the alias table (the very edge `namedTypeArgIdentity` follows, so the cycle check and the
-	// identity read traverse ONE graph rather than two views of it).
-	function pushArgInstances(gid GenericInstanceId, pending GenericInstanceIdArray)
-		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
-			let arg = self.substitutedInstanceArg(gid, position: position)
-			let tag = maxonTypeTag(arg)
-			if tag == ValueTypeTag.genericInstance 'nested'
-				pending.push(typeNameIdOf(arg))
-			end 'nested'
-			if tag == ValueTypeTag.named 'maybeAlias'
-				if let aliased = try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg))) 'namesAnInstance'
-					pending.push(aliased)
-				end 'namesAnInstance'
-			end 'maybeAlias'
-		end 'eachArg'
-	end 'pushArgInstances'
+		return buildCsr(argOf, to: denotes, nodeCount: self.genericInstances.count())
+	end 'buildInstanceArgGraph'
 
 	// The declaration record of alias `index`, for the E3091 diagnostic's name and anchor.
 	export function genericAliasDeclAt(index FieldIndex) returns GenericAliasEntry

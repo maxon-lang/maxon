@@ -42,6 +42,13 @@ export type CsrGraph
 		let lo = try self.start.get(n) otherwise panic("CsrGraph.neighbour: node {n} out of range")
 		return try self.list.get(lo + k) otherwise panic("CsrGraph.neighbour: neighbour {k} of node {n} out of range")
 	end 'neighbour'
+
+	// How many nodes the graph spans — the count it was BUILT over, which `start` already carries as one
+	// entry per node plus the end sentinel. Read off the graph rather than passed alongside it, so a
+	// consumer cannot hand a walk a node count the adjacency disagrees with.
+	export function nodeCount() returns CsrIndex
+		return self.start.count() - 1
+	end 'nodeCount'
 end 'CsrGraph'
 
 // Build a CSR graph from a parallel (from, to) edge list over `nodeCount` keys, in
@@ -87,3 +94,178 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 
 	return CsrGraph.create(start, list: list)
 end 'buildCsr'
+
+// ⭐ **WHICH NODES OF `graph` LIE ON A CYCLE** — Tarjan's strongly-connected components, in
+// O(nodes + edges). A node is on a cycle exactly when its component holds more than one node, or when it
+// is its own neighbour; a node alone in its component with no self-edge reaches everything below it and
+// never itself.
+//
+// ⚠ **ONE SWEEP FOR THE WHOLE GRAPH, WHICH IS THE POINT.** The obvious alternative — ask "does node X
+// reach itself?" once per node — answers the same question at O(nodes x (nodes + edges)), because what
+// one node reaches says nothing about what the next one does and the walk starts over.
+// `ProgramSignatures.firstCyclicAliasDecl` shipped exactly that shape and MEASURED CUBIC; its header
+// carries the numbers.
+//
+// The DFS is iterated over an explicit stack rather than recursed: the depth is the graph's own, and a
+// chain of N generic aliases would be N native frames.
+export function nodesOnACycle(graph CsrGraph) returns BoolArray
+	var walk = SccWalk.overNodes(graph.nodeCount())
+	// The DFS stack, as parallel columns: the node, and how many of its neighbours it has walked.
+	var frameNode = CsrColumn.create()
+	var frameEdge = CsrColumn.create()
+
+	for root in 0 upto graph.nodeCount() 'eachRoot'
+		if not walk.isUndiscovered(root) 'reachedFromAnEarlierRoot'
+			continue
+		end 'reachedFromAnEarlierRoot'
+
+		walk.discover(root)
+		frameNode.push(root)
+		frameEdge.push(0)
+
+		while frameNode.count() > 0 'walkFrames'
+			let top = frameNode.count() - 1
+			let node = try frameNode.get(top) otherwise panic("nodesOnACycle: frameNode.get({top}) below its own count()")
+			let edge = try frameEdge.get(top) otherwise panic("nodesOnACycle: frameEdge.get({top}) below its own count()")
+
+			if edge < graph.degree(node) 'moreNeighbours'
+				try frameEdge.set(top, value: edge + 1) otherwise panic("nodesOnACycle: frameEdge.set({top}) below its own count()")
+				let next = graph.neighbour(node, k: edge)
+
+				if walk.isUndiscovered(next) 'descend'
+					walk.discover(next)
+					frameNode.push(next)
+					frameEdge.push(0)
+					continue
+				end 'descend'
+
+				// An edge into a component still OPEN is an edge back into this same walk, so its target's
+				// discovery index bounds how far up `node`'s own component can begin. An edge into a CLOSED
+				// component leaves the current one and says nothing about it.
+				if walk.isOpenComponent(next) 'backIntoThisWalk'
+					walk.lowerTo(node, bound: walk.discoveryOf(next))
+				end 'backIntoThisWalk'
+				continue
+			end 'moreNeighbours'
+
+			_ = try frameNode.pop() otherwise panic("nodesOnACycle: pop from a non-empty frameNode")
+			_ = try frameEdge.pop() otherwise panic("nodesOnACycle: pop from a non-empty frameEdge")
+
+			// `node` is finished: hand its lowlink up to the parent it returns to, then close its component
+			// if nothing beneath it reached higher than itself.
+			if frameNode.count() > 0 'returnsToAParent'
+				let parent = try frameNode.get(frameNode.count() - 1) otherwise panic("nodesOnACycle: frameNode.get below its own count()")
+				walk.lowerTo(parent, bound: walk.lowlinkOf(node))
+			end 'returnsToAParent'
+
+			if walk.rootsAComponent(node) 'componentRoot'
+				walk.closeComponent(node, namesItself: nodeNamesItself(graph, node: node))
+			end 'componentRoot'
+		end 'walkFrames'
+	end 'eachRoot'
+
+	return walk.onCycle
+end 'nodesOnACycle'
+
+// Is `node` its own neighbour? The one way a component of ONE node is still a cycle, and the only reason
+// a component's size is not the whole test.
+function nodeNamesItself(graph CsrGraph, node CsrIndex) returns bool
+	for k in 0 upto graph.degree(node) 'eachNeighbour'
+		if graph.neighbour(node, k: k) == node 'itself'
+			return true
+		end 'itself'
+	end 'eachNeighbour'
+
+	return false
+end 'nodeNamesItself'
+
+// The columns Tarjan's walk carries — one entry per node, plus the stack of components still open. A type
+// rather than six locals threaded through every step, for the reason `SubstrateFixpoint` is one: the walk
+// is ITERATIVE, so discovering a node, lowering a link and closing a component are separate steps over the
+// same columns, and a step that stamped one column and forgot another would corrupt every component root
+// after it.
+type SccWalk
+	// 1-based discovery order, so 0 reads as "not visited yet" and no second column has to say so.
+	var discovered as CsrColumn
+	// The lowest discovery index reachable from the node's subtree — Tarjan's lowlink.
+	var lowlink as CsrColumn
+	// Where the node sits on `componentStack`, which turns a component's SIZE into a subtraction.
+	var openAt as CsrColumn
+	// Is the node still on `componentStack` — is its component still being built?
+	var isOpen as BoolArray
+	// The answer: does the node lie on a cycle?
+	export var onCycle as BoolArray
+	// The nodes of every component still open, in discovery order.
+	var componentStack as CsrColumn
+	var nextDiscovery as CsrIndex
+
+	static function overNodes(nodeCount CsrIndex) returns SccWalk
+		var discovered = CsrColumn.create()
+		discovered.resize(nodeCount)
+		var lowlink = CsrColumn.create()
+		lowlink.resize(nodeCount)
+		var openAt = CsrColumn.create()
+		openAt.resize(nodeCount)
+		var isOpen = BoolArray.create()
+		isOpen.resize(nodeCount)
+		var onCycle = BoolArray.create()
+		onCycle.resize(nodeCount)
+
+		return Self{discovered: discovered, lowlink: lowlink, openAt: openAt, isOpen: isOpen, onCycle: onCycle, componentStack: CsrColumn.create(), nextDiscovery: 1}
+	end 'overNodes'
+
+	function discoveryOf(node CsrIndex) returns CsrIndex
+		return try self.discovered.get(node) otherwise panic("SccWalk.discoveryOf: node {node} outside the walk's node space")
+	end 'discoveryOf'
+
+	function lowlinkOf(node CsrIndex) returns CsrIndex
+		return try self.lowlink.get(node) otherwise panic("SccWalk.lowlinkOf: node {node} outside the walk's node space")
+	end 'lowlinkOf'
+
+	function isUndiscovered(node CsrIndex) returns bool
+		return self.discoveryOf(node) == 0
+	end 'isUndiscovered'
+
+	function isOpenComponent(node CsrIndex) returns bool
+		return try self.isOpen.get(node) otherwise panic("SccWalk.isOpenComponent: node {node} outside the walk's node space")
+	end 'isOpenComponent'
+
+	// Stamp `node` with the next discovery index and open its entry on the component stack. The four
+	// columns move together or not at all.
+	function discover(node CsrIndex)
+		try self.discovered.set(node, value: self.nextDiscovery) otherwise panic("SccWalk.discover: node {node} outside the walk's node space")
+		try self.lowlink.set(node, value: self.nextDiscovery) otherwise panic("SccWalk.discover: node {node} outside the walk's node space")
+		try self.openAt.set(node, value: self.componentStack.count()) otherwise panic("SccWalk.discover: node {node} outside the walk's node space")
+		try self.isOpen.set(node, value: true) otherwise panic("SccWalk.discover: node {node} outside the walk's node space")
+		self.componentStack.push(node)
+		self.nextDiscovery = self.nextDiscovery + 1
+	end 'discover'
+
+	// Pull `node`'s lowlink down to `bound` if that is lower — the one monotone update both the back-edge
+	// arm and the finished-child arm make.
+	function lowerTo(node CsrIndex, bound CsrIndex)
+		if bound < self.lowlinkOf(node) 'lower'
+			try self.lowlink.set(node, value: bound) otherwise panic("SccWalk.lowerTo: node {node} outside the walk's node space")
+		end 'lower'
+	end 'lowerTo'
+
+	// Does `node` root a finished component? Nothing beneath it reached further up than itself.
+	function rootsAComponent(node CsrIndex) returns bool
+		return self.lowlinkOf(node) == self.discoveryOf(node)
+	end 'rootsAComponent'
+
+	// Close `root`'s component: every node pushed at or after its own stack position belongs to it. Two or
+	// more members IS a cycle; a lone member is one only when it names itself.
+	function closeComponent(root CsrIndex, namesItself bool)
+		let base = try self.openAt.get(root) otherwise panic("SccWalk.closeComponent: node {root} outside the walk's node space")
+		let cyclic = self.componentStack.count() - base > 1 or namesItself
+
+		while self.componentStack.count() > base 'popMember'
+			let member = try self.componentStack.pop() otherwise panic("SccWalk.closeComponent: pop from a componentStack already at its base")
+			try self.isOpen.set(member, value: false) otherwise panic("SccWalk.closeComponent: node {member} outside the walk's node space")
+			if cyclic 'onACycle'
+				try self.onCycle.set(member, value: true) otherwise panic("SccWalk.closeComponent: node {member} outside the walk's node space")
+			end 'onACycle'
+		end 'popMember'
+	end 'closeComponent'
+end 'SccWalk'
