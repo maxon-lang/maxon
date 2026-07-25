@@ -2260,7 +2260,68 @@ ALLOCATIONS ARE.** This retroactively explains phantom flat constants this log h
 Measured wins: per-reference cost of the new cascade is **0 allocations** (the payload-free-union choice holds at
 runtime), and a qualified-alias program is now **−125 ns/reference, −3.4% of the phase**.
 
-### ⬜ FILED BY THIS RUNG — four
+### ✅ A TYPE NAME IS DECLARED EXACTLY ONCE — CLOSED 2026-07-25 (x64 1620→**1633/0**, wasm 1429→**1442/0**)
+`type Box` + `typealias Box` **compiled clean and silently discarded the alias** (exit 7); the reverse order gave
+`E3009 Cannot cast from int to struct` — a consequence, not a diagnosis. **Which declaration won was decided by
+SOURCE ORDER**, the same class of order-dependence being removed elsewhere. ⇒ the whole type-name namespace is now
+one-declaration-per-name: **E3006** (kind-neutral) and **E3061** (both typealiases). **No number minted** — E3006's
+doc was already kind-neutral, and shv2's member `duplicateFunction` **was already a lie at 3 of its 4 sites**
+(renamed `duplicateDefinition`). ⚠ **The oracle could not arbitrate: `maxon-sharp` ICEs (`E9001`) on one ordering
+and silently last-wins on the other** — so the rule rests on CORPUS evidence, checked twice.
+
+⭐ **THE CARVE-OUT IS PER ALIAS *FORM*, NOT PER KEYWORD**, and `stdlib/` forces both halves: 7 files declare `Byte`
+(ranged) and 5 declare `ByteArray = Array with Byte` (generic-instance) — a ranged-only carve-out makes the
+load-all-stdlib end state UNREACHABLE. Derived by applying the alias rung's PRINCIPLE (*reject exactly when nothing
+downstream can pick a winner*) rather than copying its answer: ranged aliases are file-scoped ⇒ a per-file winner
+exists ⇒ cross-file legal; every other type-name door is bare and whole-program ⇒ no winner ⇒ rejected.
+⚠ **Honest weak point, recorded in the spec (`type-name-collision.md:61-64`) rather than papered over:** the
+*generic-instance* half is NOT justified by "a winner exists" (that registry is bare too) but by "the corpus needs
+it, and disagreeing instances are last-wins" — E3105's unbuilt sibling.
+
+⭐⭐ **THE REVIEW CAUGHT A REGRESSION AGAINST MAIN THAT THE IMPLEMENTER AND OPTIMIZER BOTH MISSED.**
+`TypeNameRegistry.record` kept the FIRST declaration and never updated it when a legal repeated alias was accepted,
+so `isLegalRepeatedAlias` measured every newcomer against the first declaring FILE. **A file declaring one typealias
+TWICE was then accepted IN SILENCE whenever any other file also declared that name** — each compared against the far
+file, found legal-cross-file, let through:
+```
+a.maxon: typealias L = int(0 to 10)      main:            E3061 b.maxon:2:11  ✅
+b.maxon: typealias L = int(0 to 20)      branch (before): exit 0, NO DIAGNOSTIC  ← REGRESSION
+         typealias L = int(0 to 30)      branch (after):  E3061 b.maxon:2:11  ✅
+```
+⚠ **`stdlib/` is precisely that shape (7 files declare `Byte`), so the hole was open for every name the rule
+protects.** Fixed with one `upsert` — an accepted declaration becomes the incumbent the next is measured against —
+which also closed the same hole for the **generic-instance and function** alias forms, which nothing had ever
+checked. Coordinator-verified: branch now matches main's code AND position exactly.
+
+⭐ **THE REVIEW VALIDATED THE RULE WITH ITS OWN EXTRACTOR, NOT THE ONE IT WAS HANDED.** Over `stdlib/`,
+`maxon-shv2/Compiler/`, **and `maxon-selfhosted/` (191 k lines)**, plus every ```` ```maxon ```` block in BOTH spec
+suites (3,568 + 2,269): **ZERO names claimed by two kinds or forms, zero same-file duplicates, zero non-alias names
+in >1 file.** The ONLY pre-existing program declaring a top-level name twice is `error.duplicate-typealias-same-file`,
+already an error test ⇒ **no previously-legal program in any corpus is newly rejected.** It also found a THIRD
+motivating defect nobody had reported: a user `type Clock` **silently last-wins against the whitelisted
+`stdlib/Clock.maxon`** on main. All 49 cross-file and 49 same-file kind pairs measured.
+
+⭐ **OPTIMIZER: 41% OF THE RUNG'S MEMORY COST WAS SPENT ON NOTHING.** `FileParseArtifact.create` built the new
+`TypeNameDeclArray` EAGERLY, but only the real parse ever pushes to it — the tolerant sweep and
+`walkConstInitializer` structurally never could. Fixed with the shared-empty COW this file already documents for
+`interfaces`/`conformances`; attribution exact to the unit (`phase:signatures` delta now **0 at all six rungs**,
+was precisely *files + top-level constants*). It also built an experiment for a suspected throwing-`get` cost,
+measured it IDENTICAL, and reverted it — "it bought zero and cost a `panic` arm."
+
+### ⬜ FILED BY THIS RUNG
+- **Doubled E3005 when a WHITELISTED stdlib file fails to parse** — `StdlibSource.stdlibFunctionNames` re-queries
+  `queryParseOps` under a comment asserting "a memo HIT", FALSE for a failed parse (never cached), so the file
+  re-parses and `reportParseError` fires twice. Pre-existing, reproduced on main. **Belongs to the whitelist rung.**
+- **`abortedParseArtifact` carries type-name decls but NOT `artifact.diagnostics`** — a file that records an E3011
+  and then dies on a `ParseError` loses it. Pre-existing, identical on main; a distinct diagnostic-completeness
+  change needing its own spec cases.
+- **`maxon-sharp` ICE** — `type Box` then `typealias Box` crashes the bootstrap (`E9001`, `ParseStructLiteral`);
+  reverse order silently last-wins. ⇒ bootstrap-oracle list.
+- ⏭ Measured and REJECTED, number recorded so nobody re-tries it blind: sourcing the five type-minting keywords from
+  `TokenKind.<k>.rawValue` compiles but costs **+26,503 code bytes** — a string-backed enum's `rawValue` is a real
+  accessor, not a folded constant. Named goldens hold the two spellings in step instead.
+
+### ⬜ FILED BY THE UNDECLARED-CAST RUNG — four
 - **`5 as Color` (declared enum) is accepted.** shv2 erases an enum to `integer`, so it is `5 as int` and coherent;
   the bootstrap refuses it, but via its `as` parser accepting a fixed list of type FORMS, not a rule about what an
   int may become. **Whether Maxon permits `int` ↔ `enum` casts is a LANGUAGE question** — documented in the new
