@@ -2343,6 +2343,63 @@ measured it IDENTICAL, and reverted it — "it bought zero and cost a `panic` ar
   `TokenKind.<k>.rawValue` compiles but costs **+26,503 code bytes** — a string-backed enum's `rawValue` is a real
   accessor, not a folded constant. Named goldens hold the two spellings in step instead.
 
+### ✅ A GENERIC INSTANCE'S *COMPILED* NAME IS IN THE TYPE NAMESPACE — CLOSED 2026-07-25 (x64 1634→**1642/0**, wasm 1443→**1451/0**)
+**TWO silent memory-safety defects, both coordinator-verified on base:**
+1. `type Box_String` + `Box with String` ⇒ both emit `__destruct_Box_String`, one body wins ⇒ **build exit 0, ZERO
+   diagnostics, exit 101 (LEAK)**. ⚠ With matching layouts it silently "WORKS" instead — the worse half, because the
+   surviving cascade releases through a real refcount header, so the wrong destructor is *plausible*.
+2. ⭐ **THE MANGLING JOIN IS NOT INJECTIVE** — `_` is a legal name character, so `Pair with (Box_Int, Str)` and
+   `Pair with (Box, Int_Str)` both compile to `Pair_Box_Int_Str` ⇒ **build exit 0, no diagnostic, SIGSEGV**, with
+   **no declaration involved at all**. ⚠ **NOT fixable by changing the separator**: `Pair with (Box with A, B)` and
+   `Pair with (Box, A with B)` collide under ANY separator — only a length-prefixed (Itanium-style) mangling makes
+   the class unrepresentable, and that moves every golden. A future rung; the diagnostic makes it detectable today.
+⇒ **E3006 (CLAIMED, not minted — its doc already owned "one name, two declarations"), reported at the USER's
+declaration span** by `ParseStaging.checkTypeSymbolNamespace`, one pass, two O(1) probes per instance.
+⚠ **Load-bearing carve-out: a `typealias` is NOT a claimant** — an alias mints no symbol (an instance's methods are
+emitted under its BASE's name) — so `typealias Box_Integer = Box with Integer` stays legal. Review probed it
+adversarially, not just with the spec's self-referential case.
+✅ Corpus safety checked BEFORE choosing the rule, then re-checked by the review with its own greps: every
+pre-existing `_`-bearing nominal name in all five corpora is leading-underscore, and **no generic base name contains
+`_` or prefixes any of them** ⇒ nothing existing is newly rejected.
+
+⭐⭐ **THE "ROUND-TRIP" THE OPTIMIZER WAS SENT TO PRICE WAS A QUADRATIC.** `mangleGenericInstance` was rebuilt at 8
+call sites, and **the rebuild RECURSES** (`mangleTypeArg`'s nested arm re-enters it), so an instance nested *d* deep
+re-derived all *d* enclosing names on EVERY ask: **×4.02 / ×4.01 per doubling and 87% of every allocation the
+compile made** (N=1600: 31,134,966 allocations / 55.7 GB / 5,922 ms). Derived ONCE into gid-keyed
+`ProgramSignatures.compiledInstanceNames` ⇒ **407,079 allocations / 93 MB / 915 ms — 76× / 600× / 6.5×**, and it
+pays more on the realistic ladder than the new check ever cost, leaving the rung **allocation-NEGATIVE vs base**
+(−79 … −14,445 across 8 rungs). ⭐ The check itself is LINEAR, settling at **×1.984 over 8 rungs** — and the
+decisive reading is not the ratio but the **SHARE, which DECREASES monotonically across a 128× span** (a superlinear
+term's share GROWS). *"The implementer's conclusion was right; his evidence wasn't sufficient for it."*
+
+⭐⭐ **THE REVIEW FOUND THE RUNG'S OWN DIAGNOSTIC WAS UNREACHABLE ON THE SHAPE THAT MATTERS.**
+`checkTypeSymbolNamespace` RECORDS E3006 at `Compiler.maxon:186`, but the gate that RAISES a recorded diagnostic sits
+inside the pipeline, after `noteDestructorUsage`. On a colliding program whose declared type owns managed state the
+compiler **died first** — coordinator-verified: base = `panic at SignatureIndex.maxon:3276`, stack trace, **no
+diagnostic**; branch = clean **E3006**. **Cause: ONE FACT WRITTEN THREE TIMES WITH THE GUARD ON ONE COPY** — *"an
+`Array`/`Set` instance has no base struct, so never read its fields"* lived in `genericInstanceHasManagedField`
+(whose comment even NAMES the passes that must respect it), while its twin `genericInstanceHasStringField` and
+`addNestedInstanceDestructors` never got the early-out. They agreed until something asked the other two alone.
+⚠ The review also **backed out a broader first attempt** that turned a clean E2056 into a second panic.
+
+### ⬜ FILED BY THIS RUNG — one judgment call worth reading
+- **⛔ SPECULATIVE OVER-INTERNING lets an `Array`/`Set` instance claim a compiled name the author never wrote.**
+  `type Array_Foo` + any matching array literal ⇒ E3006 naming "the generic instantiation `Array with Foo`", which
+  is nowhere in the source. ⚠ **The review DECLINED to narrow the check, and the reasoning is the point:** narrowing
+  would be safe *today* only because of the guard it had just added and because `ArrayRuntime.maxon:2148` records a
+  **slice-local** omission (a generic instance has `__destruct_<mangled>` but no `__clone_<mangled>` *at this
+  slice*). **Making a memory-safety rule depend on a slice-local omission is how this class of defect comes back.
+  Over-reporting a name clash is recoverable by renaming; under-reporting is a wild free.** ⇒ the real fix is to stop
+  the speculation — **demand-driven array-literal instance interning** — which is `SignatureIndex`/`Parser` design
+  work and its own rung.
+- **⛔ A GENERIC TYPE-ARGUMENT MISMATCH IS SILENTLY ACCEPTED AND SIGSEGVs** — `Box with (Pair with (Box with Leaf,
+  Box with (Box with Leaf)))` constructed from a `Pair with (Box with Leaf, Leaf)` value compiles clean and
+  segfaults. Base and branch emit **byte-identical** executables ⇒ pre-existing P1.7 generics type-checking,
+  untouched here. Repro in the rung's scratchpad (`probe/sd.maxon`).
+- **⛔ `maxon-sharp` HAS THE SAME COLLISION DEFECT AND WORSE** — `mm_decref: refcount underflow (already zero)` then
+  `panic: nil pointer`. Undiagnosed there. ⭐ **The two references agreeing is what made this a LANGUAGE rule rather
+  than an shv2 artifact.** ⇒ bootstrap-oracle list.
+
 ### ⛔ FILED BY THE P1.7 CASCADE RUNG (2026-07-25) — a SILENT LEAK, and a ×5.0 in regalloc
 - **⛔ A DECLARED TYPE WHOSE NAME EQUALS A GENERIC INSTANCE'S MANGLING COLLIDES ON THE SYNTHESIZED DESTRUCTOR —
   SILENT LEAK.** `typealias SBox = Box with String` mangles to `Box_String`; a user `type Box_String` then makes
