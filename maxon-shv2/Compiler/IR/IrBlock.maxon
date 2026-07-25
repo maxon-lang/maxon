@@ -256,7 +256,7 @@ export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns 
 	return "block_{blockId}".toByteArray()
 end 'resolveBlockLabel'
 
-// Insert an op reference at `at`, which must name a position INSIDE the block or one
+// Insert ONE op reference at `at`, which must name a position INSIDE the block or one
 // past its end.
 //
 // This exists because `Array.insert` CLAMPS an out-of-range index to the tail, and every
@@ -264,6 +264,13 @@ end 'resolveBlockLabel'
 // — so a position past the end is a bug in the caller, not a request to append. Clamping
 // would put a spill store or a reload at the wrong place and miscompile silently; the
 // `List` this used to be threw instead, and that guard is worth keeping.
+//
+// ⚠ IT SHIFTS A SUFFIX OF `opRefs`, SO IT IS FOR ONE OP AND NOT FOR K OF THEM. A caller
+// placing several ops into one block must use `spliceOpRefs` below — a loop here costs
+// Θ(K × block) and it also forces each iteration to re-derive its position in coordinates
+// the previous iteration has already moved. That is not a style preference: it is the
+// quadratic the register allocator's splitter was measured paying, and the reason its
+// positions can now be read out of an index instead of searched for.
 export function insertOpRef(block IrBlock, at BlockOpPos, opIdx OpIndex)
 	if at > block.opRefs.count() 'oob'
 		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")

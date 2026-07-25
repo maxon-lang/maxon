@@ -467,9 +467,13 @@ type SplitEdits
 	var hasRemoval as bool
 	var removalBlock as CfgIndex
 	var removalPos as BlockOpPos
+	// WHICH op the removal means, so `commitBlock` can prove it is dropping that one and not a
+	// neighbour. The position alone cannot: it is stated in PRE-SPLIT coordinates and carried forward
+	// by `splicesAtOrBefore`, so an off-by-one there would delete a LIVE op out of the block, silently.
+	var removalOpIdx as OpIndex
 
 	static function create() returns SplitEdits
-		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), hasRemoval: false, removalBlock: 0, removalPos: 0}
+		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0}
 	end 'create'
 
 	function clear()
@@ -495,9 +499,9 @@ type SplitEdits
 		self.opIdxs.push(opIdx)
 	end 'recordInsert'
 
-	// The op at PRE-SPLIT forward position `pos` of `blockLocal` is to be removed (a fully
+	// Op `opIdx`, at PRE-SPLIT forward position `pos` of `blockLocal`, is to be removed (a fully
 	// rematerialized constant's def).
-	export function recordRemoval(blockLocal CfgIndex, pos BlockOpPos)
+	export function recordRemoval(blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex)
 		if self.hasRemoval 'alreadyHaveOne'
 			panic("SplitEdits.recordRemoval: a second removal (block {blockLocal}, position {pos}) — a split drops at most ONE op, the def of a constant every use of which it rematerialized, and the removal is a scalar because of it")
 		end 'alreadyHaveOne'
@@ -505,6 +509,7 @@ type SplitEdits
 		self.hasRemoval = true
 		self.removalBlock = blockLocal
 		self.removalPos = pos
+		self.removalOpIdx = opIdx
 	end 'recordRemoval'
 
 	// Materialize every recorded edit: splice the pending ops into their blocks, drop the removed one,
@@ -548,6 +553,14 @@ type SplitEdits
 			// splices that just went in ahead of it — landing exactly where it landed when the removal was
 			// applied by hand, after the inserts.
 			let at = self.removalPos + self.splicesAtOrBefore(self.removalPos, from: from, to: to)
+			let standing = try block.opRefs.get(at) otherwise panic("SplitEdits.commitBlock: opRefs.get OOB at {at} of block {blockLocal}")
+			// The carry-forward and `spliceOpRefs`' backward pass are two statements of ONE shift rule,
+			// and this is the one place a disagreement between them would DELETE something. Removing a
+			// live op is not a crash — the block simply stops computing a value someone reads.
+			if standing != self.removalOpIdx 'wouldDropTheWrongOp'
+				panic("SplitEdits.commitBlock: the removal meant op {self.removalOpIdx} at pre-split position {self.removalPos} of block {blockLocal}, but after {to - from} splice(s) that position carries forward to {at}, which holds op {standing} — the splice shift `spliceOpRefs` performs and the one `splicesAtOrBefore` predicts have diverged")
+			end 'wouldDropTheWrongOp'
+
 			_ = try block.opRefs.remove(at) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
 			index.removeOp()
 		end 'dropTheDeadDef'
@@ -810,16 +823,14 @@ type SplitScratch
 	export var blockDemand as RegCountColumn
 	export var opEffective as RegCountColumn
 	// THE MUTATORS' buffers: one flag per use site of the victim (does that use start a fresh reload —
-	// `markRunStarts`), the block-op list that pre-pass walks, and the operand list the
-	// use-rewriter fills. All three used to be allocated per SPLIT (`OperandList.create()` inside
-	// `spillOneValue` / `rematerializeConstant`), which is the same per-split allocation term the rest
-	// of this type exists to remove.
+	// `markRunStarts`), and the operand list the use-rewriter fills. Both used to be allocated per
+	// SPLIT (`OperandList.create()` inside `spillOneValue` / `rematerializeConstant`), which is the same
+	// per-split allocation term the rest of this type exists to remove.
 	export var runStarts as BoolArray
-	export var splitOps as OpIndexArray
 	export var splitOperands as OperandList
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), runStarts: BoolArray.create(), splitOps: OpIndexArray.create(), splitOperands: OperandList.create()}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), runStarts: BoolArray.create(), splitOperands: OperandList.create()}
 	end 'create'
 
 	// Size the two block-keyed memos the incremental update needs. Deferred until the function turns out
@@ -1208,11 +1219,29 @@ end 'refreshPeak'
 //     use does it, because the original's only remaining reader is then its own store
 //     (`SplitScope.everyUse`). There is no third case: a value with no use at all is not live here.
 //  4. So the ONLY confined values `chooseVictim` may refuse are the ones the peak op itself READS —
-//     and it cannot refuse them all. The tight set OUTNUMBERS the witness, and any witness a clobber
-//     produces has at least the five callee-saved registers in it, so at least six values are confined
-//     here; an op names at most two virtual registers. At least four candidates always remain.
+//     and it cannot refuse them all, PROVIDED THE WITNESS IS NON-EMPTY. The tight set OUTNUMBERS the
+//     witness, and a witness a clobber produces normally has at least the five callee-saved registers
+//     in it, so at least six values are confined there; an op names at most two virtual registers, so
+//     at least four candidates remain.
+//
+//     ⚠ THAT COUNTING ARGUMENT DOES NOT HOLD FOR AN EMPTY WITNESS, and this file used to state it as
+//     though it did. A value confined to ∅ — on x64, any float live across a call, since every XMM is
+//     caller-saved — puts the bound at "more than zero", so a tight set of exactly TWO satisfies it,
+//     and ONE op can read both. That is not hypothetical: it is
+//     `register-spill.two-floats-multiplied-between-calls`, where a stranded reload and the stranded
+//     original met at the `mulsd` that reads them both and this panic fired on a program that fits
+//     the machine many times over.
+//
+//     What closed it is upstream, not here: a reload is no longer BORN with an empty allowed set
+//     (`markRunStarts`), so the values confined to ∅ at any peak are originals only, and the call
+//     that confines them outranks the op that reads them. ⇒ REACHING HERE WITH AN EMPTY WITNESS
+//     POINTS AT THE RUN-BREAK, not at `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak`.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
+		if peak.witness == 0 'confinedToNothing'
+			panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow at a peak whose witness is EMPTY — {peak.pressure} {peak.witnessClass.name} value(s) allowed NO register at all, against a full pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} — and `chooseVictim` refused every one of them. With an empty witness the usual counting argument gives nothing (the tight set need only outnumber ZERO), so a tight set of two values that ONE op reads leaves nothing to choose. Every value confined to ∅ should be an ORIGINAL, relieved at the op that confines it, because a split must never MINT one: look first at the run-break (`markRunStarts` / `opStrandsClass`), which exists to stop a reload being born with nowhere to live. It must never surface as E5001: this program fits the machine.")
+		end 'confinedToNothing'
+
 		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full {peak.witnessClass.name} pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
@@ -2431,10 +2460,10 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 	var edits = scratch.edits
 	var buf = scratch.splitOperands
 
-	// WHERE THE RUNS MUST BREAK, decided BEFORE a single op moves — see `markRunStarts`.
-	// It reads the block's op list, which the insertions below extend, so it runs first; it compares
-	// `module.ops` INDICES and never positions, so nothing it produces can be invalidated by them.
-	markRunStarts(module, index: index, topo: cfg.topo, valueId: valueId, class: liveness.classOf(valueId), pool: pool, file: liveness.registerFile, runStarts: scratch.runStarts, ordered: scratch.splitOps, buf: buf)
+	// WHERE THE RUNS MUST BREAK, decided BEFORE a single op moves — see `markRunStarts`. It reads the
+	// block's op list at the PRE-SPLIT positions the use records carry, so it must run before anything
+	// is recorded; what it produces is a flag per USE ORDINAL, which no insertion can invalidate.
+	markRunStarts(module, index: index, topo: cfg.topo, valueId: valueId, class: liveness.classOf(valueId), pool: pool, file: liveness.registerFile, runStarts: scratch.runStarts, buf: buf)
 
 	// STORE: at the def, which dominates every reload below — and ONLY when memory does not already
 	// hold this value. It does when an earlier split stored it, AND when this id IS a reload (its
@@ -2550,16 +2579,24 @@ end 'spillOneValue'
 // block, or on the other side of the peak, already starts one (`useIsInRun`); this adds the third
 // reason.
 //
-// It walks each use-block's op list ONCE, advancing a single cursor across the uses sited there — the
-// uses of a value in a block are contiguous in its thread and ascending by sequence, so the scans
-// cover disjoint stretches and the whole pre-pass is O(the blocks the victim is used in). That cost
-// is already inside the dirty region the split re-derives afterwards.
+// It scans ONLY the OPEN INTERVAL between each pair of consecutive uses, because that is the only
+// stretch a run boundary can depend on — so the whole pre-pass costs Θ(the span from a value's first
+// use to its last, per block), never Θ(the block).
 //
-// ⚠ IT COMPARES `module.ops` INDICES, NEVER POSITIONS — the same field the rest of the mutator
-// restricts itself to, and the one that is stable however the split is materialized. (Positions happen
-// to be stable too now, since the splices are held back until the split is done, but an op index needs
-// no such argument: the table is append-only, so an existing index never moves at all.)
-function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, ordered OpIndexArray, buf OperandList)
+// ⚠ BOTH ENDPOINTS ARE READ OUT OF THE USE RECORDS (`usePositionIn`), NOT SEARCHED FOR. Deriving a
+// use's position by scanning the block for its op index is the SAME FACT `bodyPositionOfUse` reads
+// straight out of the index, derived a second way — and a second derivation of a position is exactly
+// what this pass was rewritten to remove. Two of them cannot disagree loudly: one would pick a run
+// boundary from one notion of where a use is while the reload was spliced in at another.
+//
+// ⚠ THE STRETCH BEFORE THE FIRST USE IN A BLOCK IS NOT SCANNED, AND MUST NOT BE. That use already
+// starts a run (`useIsInRun` breaks at a block boundary), so a clobber ahead of it decides nothing.
+// Reaching it by search meant walking from position 0 and THROWING THE ANSWER AWAY: Θ(block) per
+// split, Θ(splits × block) over a function — on a straight-line function with M distinct f64 locals
+// all read after one call, ~M × 2M `opStrandsClass` calls whose results were all discarded. It
+// allocates nothing, so `scale-test` cannot see it and neither can the memory column of
+// `--metrics`; it was found by reading, and removing it left both of those columns unmoved.
+function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList)
 	let useSites = index.useCount(valueId)
 	runStarts.refill(useSites, value: false)
 	if useSites == 0 'neverUsed'
@@ -2569,60 +2606,47 @@ function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, v
 	let classPool = poolOfClass(pool, class: class, file: file)
 	var record = index.firstUseOf(valueId)
 	// `numBlocks` is "no block walked yet" — no block index can equal it (the same sentinel
-	// `ReachCache` and `PeakTree` use).
+	// `ReachCache` and `PeakTree` use). It is what makes the first iteration take the `newBlock` arm,
+	// so the block below is re-read before anything looks at it.
 	var walkedBlock = topo.numBlocks
-	var scanFrom = 0 as BlockOpPos
-	var previousOpIdx = 0 as OpIndex
+	var block = blockAt(module, topo: topo, local: 0)
+	var previousPos = 0 as BlockOpPos
 	var havePrevious = false
 
 	for k in 0 upto useSites 'eachUse'
 		let blockLocal = index.useBlockAt(record)
 		if blockLocal != walkedBlock 'newBlock'
 			walkedBlock = blockLocal
-			ordered.clear()
-			collectBlockOps(blockAt(module, topo: topo, local: blockLocal), out: ordered)
-			scanFrom = 0
+			block = blockAt(module, topo: topo, local: blockLocal)
 			havePrevious = false
 		end 'newBlock'
 
-		let opIdx = index.useOpAt(record)
-		// TWO records can name the SAME op — a value read by a block's terminator (an `x64JumpTable`
-		// index) and also passed on one of that block's edges yields an op use and an edge use at the
-		// same op index. Nothing lies between them, and the scan below would run off the end looking
-		// for an op it has already passed.
-		if havePrevious and opIdx == previousOpIdx 'sameOp'
+		let pos = usePositionIn(index, block: block, record: record)
+		// TWO records can name the SAME op, hence the same position — a value read by a block's
+		// terminator (an `x64JumpTable` index) and also passed on one of that block's edges yields an op
+		// use and an edge use at the same place. Nothing lies between them.
+		if havePrevious and pos == previousPos 'sameOp'
 			record = index.nextUseOf(record)
 			continue
 		end 'sameOp'
 
-		var pos = scanFrom
-		var stranded = false
-		while pos < ordered.count() 'toTheUse'
-			let scanned = try ordered.get(pos) otherwise panic("markRunStarts: ordered.get OOB at {pos}")
-			if scanned == opIdx 'reachedTheUse'
-				break
-			end 'reachedTheUse'
+		if havePrevious 'hasAPredecessorInThisBlock'
+			// Only the OPEN interval is scanned: the endpoints are ops this value is an OPERAND of, and
+			// an operand's own op forbids it only through `forbidOperandsFromImplicit`, which cannot
+			// empty a file (it is what keeps an `idiv` divisor out of RAX/RDX, not out of every
+			// register). Every position strictly inside the interval is a BODY op — a record can name
+			// the block's TERMINATOR, but only as the right-hand endpoint, since nothing follows it.
+			let firstBetween = previousPos + 1
+			for scan in firstBetween upto pos 'between'
+				let scanned = try block.opRefs.get(scan) otherwise panic("markRunStarts: opRefs.get OOB at {scan} of block {blockLocal}, scanning between uses {k - 1} and {k} of value {valueId}")
+				if opStrandsClass(module, opIdx: scanned, classPool: classPool, buf: buf) 'noRegisterLeft'
+					try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
+					break
+				end 'noRegisterLeft'
+			end 'between'
+		end 'hasAPredecessorInThisBlock'
 
-			// Only the OPEN interval between two uses is scanned: the endpoints are ops this value is an
-			// OPERAND of, and an operand's own op forbids it only through `forbidOperandsFromImplicit`,
-			// which cannot empty a file (it is what keeps an `idiv` divisor out of RAX/RDX, not out of
-			// every register).
-			if opStrandsClass(module, opIdx: scanned, classPool: classPool, buf: buf) 'noRegisterLeft'
-				stranded = true
-			end 'noRegisterLeft'
-			pos = pos + 1
-		end 'toTheUse'
-
-		if pos >= ordered.count() 'useOpNotInItsBlock'
-			panic("markRunStarts: use {k} of value {valueId} names op {opIdx}, which block {blockLocal} does not hold at or after position {scanFrom} — a use record's block IS its sequence number's block, and its op must be one of that block's")
-		end 'useOpNotInItsBlock'
-
-		if stranded and havePrevious 'separated'
-			try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
-		end 'separated'
-
-		scanFrom = pos + 1
-		previousOpIdx = opIdx
+		previousPos = pos
 		havePrevious = true
 		record = index.nextUseOf(record)
 	end 'eachUse'
@@ -2759,17 +2783,46 @@ function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId Value
 	spliceOp(module, at: 0, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), blockLocal: blockLocal, edits: edits)
 end 'insertStoreAtBlockEntry'
 
-// The `opRefs` position an OP use sits at — read straight out of the use record that names it, because
-// a sequence number IS `block × SeqStride + position` (`UseIndex.usePosAt`) and nothing has moved yet
-// (`SplitEdits`). Searching the block for the anchor op instead was O(block) at EVERY insertion, which
-// is the Θ(insertions × block) a split used to pay.
+// The position a use sits at in `collectBlockOps` order — read straight out of the use record that
+// names it, because a sequence number IS `block × SeqStride + position` (`UseIndex.usePosAt`) and
+// nothing has moved yet (`SplitEdits`). Searching the block for the anchor op instead was O(block) at
+// EVERY insertion, which is the Θ(insertions × block) a split used to pay.
 //
-// It must name a BODY op. The one position a record can carry that `opRefs` does not hold is the
-// block's TERMINATOR — `collectBlockOps` numbers it one past the body, and every EDGE use is anchored
-// there — so reaching here with one is a caller that should have gone to `beforeBranchPosition`. That
-// is the same bug the search used to report when it ran off the end of the body.
-function bodyPositionOfUse(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
+// ⚠ AND IT PROVES THE IDENTITY IT RESTS ON, FOR ONE COMPARE. Two separate rules keep a sequence
+// number equal to `block × SeqStride + position`: `spliceOpRefs` MOVES an op by the number of splices
+// landing at or before it, and `SplitEdits.splicesAtOrBefore` PREDICTS that number for the record's
+// sequence repair. They live in different files and nothing derives one from the other, so they are
+// exactly the pair this project's own bugs are made of — and a drift between them is silent: every
+// anchor here would then name a position one or two ops away from the op the record actually reads, a
+// reload would be spliced in ahead of the wrong instruction, and the answer would simply be wrong. So
+// the op at the position IS compared against the op the record names, on every read, always on. It is
+// O(1) against a walk that is already Θ(uses).
+function usePositionIn(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
 	let pos = index.usePosAt(record)
+	let bodyOps = block.opRefs.count()
+	if pos > bodyOps 'pastTheTerminator'
+		panic("usePositionIn: use record {record} is anchored at position {pos} of block '{String.from(block.label)}', which holds {bodyOps} body op(s) and one terminator — no record can sit past the terminator")
+	end 'pastTheTerminator'
+
+	// The TERMINATOR is numbered one past the body, so `opRefs` cannot answer for it; a record there is
+	// an edge use (or a use the terminator itself reads), and `useOpAt` already returns that op.
+	if pos < bodyOps 'aBodyOp'
+		let at = try block.opRefs.get(pos) otherwise panic("usePositionIn: opRefs.get OOB at {pos}")
+		if at != index.useOpAt(record) 'positionDisagreesWithTheOp'
+			panic("usePositionIn: use record {record} of block '{String.from(block.label)}' claims position {pos}, but that position holds op {at} while the record reads through op {index.useOpAt(record)} — a use's sequence number has drifted from its block's layout, so the two halves of the splice-shift rule (`spliceOpRefs` and `SplitEdits.splicesAtOrBefore`) no longer agree")
+		end 'positionDisagreesWithTheOp'
+	end 'aBodyOp'
+
+	return pos
+end 'usePositionIn'
+
+// The `opRefs` position of an OP use, which must name a BODY op. The one position a record can carry
+// that `opRefs` does not hold is the block's TERMINATOR — `collectBlockOps` numbers it one past the
+// body, and every EDGE use is anchored there — so reaching here with one is a caller that should have
+// gone to `beforeBranchPosition`. That is the same bug the search used to report when it ran off the
+// end of the body.
+function bodyPositionOfUse(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
+	let pos = usePositionIn(index, block: block, record: record)
 	if pos >= block.opRefs.count() 'notABodyOp'
 		panic("bodyPositionOfUse: use record {record} is anchored at position {pos} of block '{String.from(block.label)}', whose body holds {block.opRefs.count()} op(s) — that position is the block's TERMINATOR, and a spill op cannot be spliced after one")
 	end 'notABodyOp'
@@ -2942,7 +2995,7 @@ end 'freshConstOp'
 // (harmless, exactly like the reuse-copy/edge-move ops SsaDestruction appends).
 function dropOriginalDef(module TargetModule, topo FuncTopology, defOpIdx OpIndex, blockLocal CfgIndex, edits SplitEdits)
 	var block = blockAt(module, topo: topo, local: blockLocal)
-	edits.recordRemoval(blockLocal, pos: positionInBlock(block, opIdx: defOpIdx))
+	edits.recordRemoval(blockLocal, pos: positionInBlock(block, opIdx: defOpIdx), opIdx: defOpIdx)
 end 'dropOriginalDef'
 
 // ==========================================================================
