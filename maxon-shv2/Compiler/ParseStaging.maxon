@@ -16,17 +16,28 @@
 // milestone. The array (not a map) keeps the contribution insertion-ordered so
 // the merge is byte-deterministic.
 
-// ⭐ **THE SHARED EMPTY interface/conformance contribution arrays (P1.7a slice 1).** A file with NO
-// `interface`/`implements` declaration — every file in the interface-free corpus, and the whole scale
-// ladder — points its artifact's `interfaces`/`conformances` at these shared, never-mutated singletons
-// rather than allocating two empty arrays it will never push into. `recordInterface`/`recordConformance`
-// copy-on-write on the first push (`count() == 0` uniquely identifies "still the shared empty", since
-// those two functions are the arrays' only writers). This is the same pay-for-use discipline
-// `sharedEmptyInnerAliases`/`emptyTypeParams` follow, and it keeps the artifact allocation-neutral for a
-// program that declares no interface (measured: the eager form cost +2 empty arrays per artifact, a
-// linear delta scaling with the file count).
+// ⭐ **THE SHARED EMPTY contribution arrays.** An artifact that records NONE of a family — a file with
+// no `interface`/`implements` declaration, and (see below) any artifact that never records a type name
+// at all — points its field at one of these shared, never-mutated singletons rather than allocating an
+// empty array it will never push into. The matching `record*` copies on write at the first push
+// (`count() == 0` uniquely identifies "still the shared empty", since each of those functions is its
+// array's only writer). This is the same pay-for-use discipline `sharedEmptyInnerAliases`/`emptyTypeParams`
+// follow, and it keeps the artifact allocation-neutral for a program that declares none (measured for the
+// interface pair: the eager form cost +2 empty arrays per artifact, a linear delta scaling with the file
+// count).
+//
+// ⚠ **`typeNameDecls` IS HERE FOR A STRONGER REASON THAN "OFTEN EMPTY" — TWO OF THE THREE `Parser`
+// CONSTRUCTION SITES CAN NEVER FILL IT.** Only `recordTypeName`, reached from `dispatchTopLevel`, ever
+// pushes one, and `dispatchTopLevel` runs on the REAL parse alone: the tolerant declaration sweep
+// (`foldDeclaredSignaturesInto`, one `Parser` per file) walks tokens on its own and `walkConstInitializer`
+// (one `Parser` per top-level constant) evaluates an expression. Eagerly creating the array in
+// `FileParseArtifact.create` therefore billed one allocation to EVERY sweep and EVERY constant for a
+// structure with no writer — measured at +1 per file and +1 per top-level constant in `phase:signatures`
+// (rung 0: 30 files + 64 constants = +96; rung 5: 185 + 2,048 = +2,235), which was 38% of the whole
+// type-name rung's memory cost, spent on nothing.
 let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
+let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 
 // One `funcReturnTypes` registry contribution: a function's name and its
 // declared return type, recorded by the parser. Ordered in an array so the
@@ -179,7 +190,7 @@ export type FileParseArtifact
 			structTypes: StructLayoutArray.create(),
 			enumTypes: EnumLayoutArray.create(),
 			interfaces: sharedEmptyInterfaces,
-			typeNameDecls: TypeNameDeclArray.create(),
+			typeNameDecls: sharedEmptyTypeNameDecls,
 			conformances: sharedEmptyConformances,
 			typeNames: TypeNameInterner.create(),
 			currentFuncIndex: 0,
@@ -304,7 +315,13 @@ export type FileParseArtifact
 	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
 	// every `record*` above follows. Called from `Parser.dispatchTopLevel`, the ONE place that sees all
 	// five declaring keywords, so this array's order IS the file's source order across kinds.
+	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface` — and here it
+	// buys more, because the two `Parser` sites that are not the real parse never reach this function at
+	// all (see `sharedEmptyTypeNameDecls`).
 	export function recordTypeNameDecl(decl TypeNameDecl)
+		if self.typeNameDecls.count() == 0 'firstTypeNameDecl'
+			self.typeNameDecls = TypeNameDeclArray.create()
+		end 'firstTypeNameDecl'
 		self.typeNameDecls.push(decl)
 	end 'recordTypeNameDecl'
 
