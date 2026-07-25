@@ -208,14 +208,17 @@ export let GtStackGuardMargin = 0x3A0
 export let GtSystemStackSize = 0x10000
 
 // The saved-register frame `__gt_context_switch` builds on a GT stack: the five callee-saved GPRs
-// (rbx, r12, r13, r14, r15 — shv2's callee-saved set, `RegisterAllocator.calleeSavedMask`, spelled once as
-// `calleeSavedOrder` in X64PrologueEpilogue) plus the return-address slot = 6 words = 48 bytes. `__gt_spawn`
-// lays a fresh such frame whose TOP word is `&__gt_trampoline`, so the first switch-in's final `ret` enters
-// the trampoline. It MUST byte-match the context switch's push/pop order — a mismatch is a wild `ret` — so the
-// Target tier's `assertGtFrameConsistent` (X64GtRuntime) CHECKS this constant against `calleeSavedOrder.count()`
-// at chunk-build time; if a callee-saved register is added there without moving this number, an async compile
-// panics rather than miscompiling.
-export let GtInitialFrameBytes = 48  // 5 callee-saved words + the return-address word (checked in X64GtRuntime)
+// (rbx, r12, r13, r14, r15 — `calleeSavedOrder`) as pushed words, the ten callee-saved XMMs (xmm6-15 —
+// `calleeSavedXmmOrder`) as `movsd` words below them, plus the return-address slot = 16 words = 128 bytes.
+// Both lists are spelled once in X64PrologueEpilogue and mirror `RegisterAllocator.calleeSavedMask`.
+// `__gt_spawn` lays a fresh such frame whose TOP word is `&__gt_trampoline`, so the first switch-in's final
+// `ret` enters the trampoline; every word below it is the MEM_COMMIT zeros, which is correct because they
+// become this GT's initial callee-saved registers and the user function establishes each before reading it.
+// It MUST byte-match the context switch's save/restore layout — a mismatch is a wild `ret` — so the Target
+// tier's `assertGtFrameConsistent` (X64GtRuntime) CHECKS this constant against BOTH ordered lists at
+// chunk-build time; if a callee-saved register of EITHER file is added without moving this number, an async
+// compile panics rather than miscompiling.
+export let GtInitialFrameBytes = 128  // 5 GPR words + 10 XMM words + the return-address word (checked in X64GtRuntime)
 
 // The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
 // argument registers unconditionally (a callee reads only the slots it declares; the rest are the

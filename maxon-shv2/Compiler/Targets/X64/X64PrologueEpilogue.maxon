@@ -1,10 +1,32 @@
 // X64PrologueEpilogue — inserts frame setup/teardown ops after register
 // allocation. EVERY function gets a REAL FRAME POINTER: the prologue opens with
-// `push rbp` / `mov rbp, rsp`, then pushes the callee-saved registers the coloring
-// used, then reserves the frame with `sub rsp, N`; the epilogue mirrors all three
-// before each `ret`. This pass owns ALL of it — unlike v1, where ISel pre-emits an
+// `push rbp` / `mov rbp, rsp`, then pushes the callee-saved GPRs the coloring
+// used, reserves the frame with `sub rsp, N`, and finally stores the callee-saved
+// XMMs it used into frame slots; the epilogue mirrors all four before each `ret`.
+// This pass owns ALL of it — unlike v1, where ISel pre-emits an
 // `epilogue` at each return and this pass strips/re-emits it. shv2's return
 // lowering emits only the R8 move + `ret`.
+//
+// ⭐ TWO FILES, TWO MECHANISMS, AND THE SPLIT IS FORCED BY THE ISA. A callee-saved GPR is
+// preserved with `push`/`pop`; a callee-saved XMM cannot be, because **there is no `push xmm`
+// in x86-64**. So xmm6–15 (Wave 2) get their own ordered list (`calleeSavedXmmOrder`) and a
+// dedicated frame SLOT each, saved and restored with the SAME `storeSlotReg`/`loadRegSlot` ops
+// the spiller already uses for float values — which is exactly how arm64 preserves d8–d15
+// (`Arm64PrologueEpilogue`, "THE CALLEE-SAVED REGISTERS ARE SPILLED TO FRAME SLOTS"). Reusing
+// the slot ops rather than minting a 16-byte save op keeps the `TargetOp` contract frozen and
+// makes the two targets ONE mechanism rather than two.
+//
+// ⚠⚠ EIGHT BYTES PER XMM IS SUFFICIENT, AND THAT IS A LIVE PRECONDITION RATHER THAN A SHORTCUT.
+// Win64 nominally obliges a callee to preserve all 128 bits of xmm6–15, and a slot store of an XMM
+// emits `movsd`, which saves only the low 64. That obligation is owed to EXTERNAL callers, and shv2
+// has none: it exports no DLL entry, hands no callback to any Win32 API, and its only external
+// boundary is OUTBOUND `iatCall` into kernel32, where shv2 is the CALLER and the callee preserves
+// shv2's registers. shv2 also has no type wider than 64 bits and never reads bits 64–127 of an XMM,
+// so the low half IS the value. This is the same latitude AAPCS64 gives arm64 for d8–d15, which is
+// why its 8-byte slots are correct there too.
+// ⇒ **IF shv2 EVER GAINS A VECTOR TYPE WIDER THAN 64 BITS, OR EVER EXPOSES A FUNCTION TO EXTERNAL
+// CODE, THIS MUST WIDEN TO 16 BYTES** (a `movups` pair and a 16-byte slot stride) — here AND in the
+// GT context switch, which saves the same set by hand.
 //
 // ⭐ WHY A FRAME POINTER, AND WHY ON EVERY FUNCTION INCLUDING LEAVES
 //
@@ -79,6 +101,16 @@ export let ShadowSpaceBytes = 32 as StackSize
 // across a switch.
 export let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
 
+// The custom-ABI callee-saved XMMs (Wave 2), in SAVE order. Unlike the GPRs these are not a stack —
+// each takes its own frame slot — so the restore order is the same, not the reverse. xmm6–15 mirror
+// `RegisterAllocator.calleeSavedMask`'s XMM half, held to it by `assertCalleeSavedListsMatchMasks`.
+//
+// EXPORTED for the same reason `calleeSavedOrder` is: the GT context switch (X64GtRuntime) must save
+// EXACTLY the set the prologue preserves, because a `call __gt_context_switch` is an ordinary call
+// from the suspending function's view — and it runs another green thread's arbitrary code before
+// returning. Two shared lists, not second copies free to drift into register corruption.
+export let calleeSavedXmmOrder = [X64Register.xmm6, X64Register.xmm7, X64Register.xmm8, X64Register.xmm9, X64Register.xmm10, X64Register.xmm11, X64Register.xmm12, X64Register.xmm13, X64Register.xmm14, X64Register.xmm15]
+
 typealias X64RegisterArray = Array with X64Register
 
 // Insert prologue/epilogue ops for every function in the module.
@@ -100,24 +132,28 @@ end 'insertPrologueEpilogue'
 // `usedCalleeSavedRegs` is read BEFORE anything is inserted, so it reports what the COLORING
 // used and never sees this pass's own `push rbp`.
 function insertFrameForFunction(module TargetModule, func IrFunction)
-	let usedCallee = usedCalleeSavedRegs(module, func: func)
+	let coloured = colouredPhysicalRegs(module, func: func)
+	let usedCallee = usedRegsFrom(calleeSavedOrder, coloured: coloured)
+	let usedXmm = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured)
 	let makesCall = functionMakesCall(module, func: func)
 
 	// The SAME `computeFrameBytes` the GT stack guard reaches through `computeGuardFrameBytes` — one formula, two
 	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
-	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count())
+	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
+	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
+	let xmmBaseSlot = func.stackSize / SpillSlotBytes
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
-			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, frameBytes: frameBytes)
+			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot, frameBytes: frameBytes)
 		end 'entry'
 		isFirstBlock = false
 
 		if blockEndsWithReturn(module, block: block) 'returnBlock'
-			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, frameBytes: frameBytes)
+			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot, frameBytes: frameBytes)
 		end 'returnBlock'
 	end 'eachBlock'
 end 'insertFrameForFunction'
@@ -128,8 +164,10 @@ end 'insertFrameForFunction'
 // `insertFrameForFunction` used inline, lifted here and exported because the guard needs the same answer.
 export function computeGuardFrameBytes(module TargetModule, func IrFunction) returns StackSize
 	let makesCall = functionMakesCall(module, func: func)
-	let pushCount = usedCalleeSavedRegs(module, func: func).count()
-	return computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount)
+	let coloured = colouredPhysicalRegs(module, func: func)
+	let pushCount = usedRegsFrom(calleeSavedOrder, coloured: coloured).count()
+	let xmmSaveCount = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured).count()
+	return computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: xmmSaveCount)
 end 'computeGuardFrameBytes'
 
 // The bytes to reserve with `sub rsp, N`.
@@ -142,18 +180,32 @@ end 'computeGuardFrameBytes'
 //     M5). `mrt_start`'s hand-built frame IS this formula with pushCount 0, stackSize 0.
 //   • A LEAF has no call, so alignment is irrelevant; it reserves just its (16-rounded)
 //     locals — 0 for the leaves that have none. push/pop alone balance rsp.
-function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount) returns StackSize
+//
+// ⚠ `xmmSaveCount` FOLDS INTO THE RESERVATION, NOT INTO `pushCount`. The callee-saved XMMs live in
+// frame SLOTS, not on the push stack (there is no `push xmm`), so they do not move rsp's residue and
+// must not be counted in the parity term — `pushCount` stays the GPR push count. Counting them there
+// would flip the reservation's residue for every function saving an odd number of XMMs and misalign
+// rsp at its calls, which is not a compile error but a fault inside kernel32's SSE.
+//
+// ⚠ A LEAF SAVES CALLEE-SAVED XMMs TOO, and its branch must reserve them: "leaf" means "makes no
+// call", not "is not a callee". Since Wave 2, `preferredVolatilityMask` puts a float into xmm6–15
+// under plain register pressure in a function that calls nothing, and that register still belongs to
+// this function's caller.
+function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount, xmmSaveCount RegCount) returns StackSize
+	let xmmSaveBytes = xmmSaveCount * SpillSlotBytes
 	if not makesCall 'leaf'
-		return alignUp(func.stackSize, alignment: StackFrameAlignment)
+		return alignUp(func.stackSize + xmmSaveBytes, alignment: StackFrameAlignment)
 	end 'leaf'
-	let base = func.stackSize + func.outgoingArgSize + ShadowSpaceBytes
+	let base = func.stackSize + xmmSaveBytes + func.outgoingArgSize + ShadowSpaceBytes
 	let targetMod = frameAlignTarget(pushCount + FramePointerPushCount)
 	return roundUpToMod(base, targetMod: targetMod, modulus: StackFrameAlignment)
 end 'computeFrameBytes'
 
 // The rsp offset of a function's spill-slot AREA — the base the x64 encoder adds to
 // `slot * SpillSlotBytes` for every spill/reload. The frame the prologue reserves is laid
-// out, from rsp upward: [shadow space + outgoing args] [spill slots] [alignment padding].
+// out, from rsp upward: [shadow space + outgoing args] [spill slots] [callee-saved XMM slots]
+// [alignment padding]. The XMM slots ride the SAME grid as the spiller's, which is why they need no
+// base of their own — the layout is decided here once, for both.
 // So spill slots must sit ABOVE the shadow space on a CALLER: at a `call`, the callee may
 // clobber the caller's 32-byte shadow space (`[rsp .. rsp+32)`), which would corrupt a
 // value spilled across a loop whose body makes a call. Placing the slot area at
@@ -189,30 +241,35 @@ function roundUpToMod(base StackSize, targetMod StackSize, modulus StackSize) re
 	return base + delta
 end 'roundUpToMod'
 
-// The callee-saved registers a function's colored body references, in push order. The
-// allocator colors values into rbx/r12–r15 for values live across a call (or under
-// pressure); each such register must be preserved, so it is pushed/popped. Scanned by
-// intersecting every op's physical registers with the callee-saved set.
-function usedCalleeSavedRegs(module TargetModule, func IrFunction) returns X64RegisterArray
+// Every physical register a function's colored body references, as a mask — the ONE scan both
+// callee-saved questions are asked against (which GPRs to push, which XMMs to slot-save), so a
+// function's ops are walked once however many register files the ABI preserves.
+function colouredPhysicalRegs(module TargetModule, func IrFunction) returns RegMask
 	var mask = 0 as RegMask
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("usedCalleeSavedRegs: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("colouredPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			mask = mask or opPhysicalRegs(try module.ops.get(opIdx) otherwise panic("usedCalleeSavedRegs: opIdx {opIdx} not in module.ops"))
+			mask = mask or opPhysicalRegs(try module.ops.get(opIdx) otherwise panic("colouredPhysicalRegs: opIdx {opIdx} not in module.ops"))
 		end 'eachOp'
 		if block.hasTerminatorOp() 'hasTerm'
-			mask = mask or opPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("usedCalleeSavedRegs: terminator not in module.ops"))
+			mask = mask or opPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("colouredPhysicalRegs: terminator not in module.ops"))
 		end 'hasTerm'
 	end 'eachBlock'
+	return mask
+end 'colouredPhysicalRegs'
 
+// The registers of `order` that the coloring used, in `order`'s order. The allocator colors values
+// into the callee-saved registers of EITHER file for values live across a call (or under pressure);
+// each such register must be preserved — a GPR by push/pop, an XMM by a frame slot.
+function usedRegsFrom(order X64RegisterArray, coloured RegMask) returns X64RegisterArray
 	var used = X64RegisterArray.create()
-	for reg in calleeSavedOrder 'eachCallee'
-		if regMaskContains(mask, regNum: reg.rawValue) 'isUsed'
+	for reg in order 'eachCallee'
+		if regMaskContains(coloured, regNum: reg.rawValue) 'isUsed'
 			used.push(reg)
 		end 'isUsed'
 	end 'eachCallee'
 	return used
-end 'usedCalleeSavedRegs'
+end 'usedRegsFrom'
 
 // Every physical GPR a colored TargetOp names, as a mask. Runs on the fully-colored
 // program (post-regalloc, post-SSA-destruction — `xchgRegReg` may be present, so this
@@ -267,12 +324,12 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		leaRegGlobal(d, _) gives physRegBit(d)
 		loadRegBaseDisp(d, b, _, _) gives physRegBit(d) or physRegBit(b)
 		storeBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
-		// The SSE band. Reported exactly like every other op, and DELIBERATELY not special-cased
-		// for Wave 1: every XMM is caller-saved right now, so intersecting this mask with the
-		// callee-saved set yields nothing and no XMM is ever pushed. Answering honestly here
-		// rather than short-circuiting on "floats never need saving" is what makes Wave 2 — where
-		// xmm6-15 BECOME callee-saved — a change to the callee-saved mask alone, instead of a
-		// change to the mask plus a hunt for every place that assumed otherwise.
+		// ⚠ The SSE band MUST be counted, and since Wave 2 this is a REAL-MISCOMPILE arm exactly like
+		// the data-section one above: xmm6-15 are callee-saved, so a float coloured into one and missing
+		// from this mask is never saved by the prologue and the function silently clobbers its CALLER's
+		// register. Wave 1 answered honestly here while the intersection with the callee-saved set was
+		// still empty, which is why Wave 2 needed no hunt for places that had short-circuited on
+		// "floats never need saving" — there were none.
 		addsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
 		subsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
 		mulsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
@@ -282,8 +339,7 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		cvtsi2sdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		cvttsd2siRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		// The MATH INTRINSICS — reported like every other SSE op, for the reason the band comment
-		// above gives: no XMM is callee-saved this wave, so this contributes nothing today, and
-		// answering honestly is what makes Wave 2 a change to the callee-saved mask alone.
+		// above gives.
 		sqrtsdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		roundsdRegReg(d, s, _) gives physRegBit(d) or physRegBit(s)
 		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
@@ -326,10 +382,11 @@ function physRegBit(vreg TargetVReg) returns RegMask
 	end 'v'
 end 'physRegBit'
 
-// Prepend the frame-pointer setup, then the callee-saved pushes, then the frame `sub` to
-// the entry block, so at runtime they run in that order. Built by inserting at index 0 in
-// REVERSE (`sub` first, then each push before it, then the frame pointer before them all),
-// so the final order is: push rbp, mov rbp/rsp, push₀ … pushₙ, sub.
+// Prepend the frame-pointer setup, then the callee-saved GPR pushes, then the frame `sub`, then the
+// callee-saved XMM slot stores, to the entry block, so at runtime they run in that order. Built by
+// inserting at index 0 in REVERSE (the XMM stores first, then the `sub` before them, then each push,
+// then the frame pointer before them all), so the final order is:
+// push rbp, mov rbp/rsp, push₀ … pushₙ, sub, storeSlotReg₀ … storeSlotRegₘ.
 //
 // The frame pointer is established FIRST, before any callee-saved push, and that ordering
 // is what makes the chain well-formed: at `mov rbp, rsp` the only things below the return
@@ -337,7 +394,15 @@ end 'physRegBit'
 // `[rbp+8]` is the return address — the two loads `mrt_panic_walk_frames` does. Pushing a
 // callee-saved register first would bury the return address one slot deeper per push, and
 // the walker has no way to know how many.
-function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X64RegisterArray, frameBytes StackSize)
+function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X64RegisterArray, usedXmm X64RegisterArray, xmmBaseSlot SpillSlot, frameBytes StackSize)
+	// The XMM stores are prepended FIRST, so they end up LAST — after the `sub rsp` that reserves the
+	// slots they write into. They address rsp, so running one before the reservation would store above
+	// the stack pointer, into memory a signal or interrupt frame may overwrite.
+	for xi in 0 upto usedXmm.count() 'eachXmmSaveRev'
+		let slotIndex = usedXmm.count() - 1 - xi
+		let reg = try usedXmm.get(slotIndex) otherwise panic("insertPrologueAtEntry: usedXmm.get OOB")
+		prependOp(module, block: block, op: TargetOp.storeSlotReg(xmmBaseSlot + slotIndex, srcReg: x64PhysReg(reg)))
+	end 'eachXmmSaveRev'
 	if frameBytes > 0 'reserve'
 		prependOp(module, block: block, op: TargetOp.prologue(frameBytes))
 	end 'reserve'
@@ -350,9 +415,13 @@ function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X6
 end 'insertPrologueAtEntry'
 
 // Append the frame teardown before the `ret` terminator, mirroring the prologue exactly in
-// reverse: release the frame (`add rsp`), pop the callee-saved registers in REVERSE push
-// order (LIFO), then restore the caller's frame pointer. Appended to the body, which runs
-// before the `ret` terminator.
+// reverse: reload the callee-saved XMMs (still inside the frame that holds their slots), release
+// the frame (`add rsp`), pop the callee-saved GPRs in REVERSE push order (LIFO), then restore the
+// caller's frame pointer. Appended to the body, which runs before the `ret` terminator.
+//
+// The XMM reloads are NOT reversed, and need not be: each register has its OWN slot rather than a
+// stack position, so save and restore order are independent. Only the pushes are LIFO, a stack being
+// the one thing here that is one.
 //
 // `pop rbp` is reached with rsp back at the value `mov rbp, rsp` captured, because the
 // `add rsp` and the pops undo the `sub` and the pushes one for one. (v1 and the C#
@@ -361,7 +430,11 @@ end 'insertPrologueAtEntry'
 // callee-saved registers, which sit below rbp and would be skipped over. shv2 pushes them
 // after the frame pointer, so it unwinds them explicitly and the balance is what carries
 // rsp home.)
-function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee X64RegisterArray, frameBytes StackSize)
+function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee X64RegisterArray, usedXmm X64RegisterArray, xmmBaseSlot SpillSlot, frameBytes StackSize)
+	for xi in 0 upto usedXmm.count() 'eachXmmRestore'
+		let reg = try usedXmm.get(xi) otherwise panic("appendEpilogueBeforeReturn: usedXmm.get OOB")
+		module.appendOp(block, op: TargetOp.loadRegSlot(x64PhysReg(reg), slot: xmmBaseSlot + xi))
+	end 'eachXmmRestore'
 	if frameBytes > 0 'release'
 		module.appendOp(block, op: TargetOp.epilogue(frameBytes))
 	end 'release'

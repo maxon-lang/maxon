@@ -1,0 +1,311 @@
+// Test: async-scheduler.callee-saved-xmms-survive-a-context-switch
+function threadA() returns int
+	let a0 = 1.5
+	let a1 = 2.5
+	let a2 = 3.5
+	let a3 = 4.5
+	let a4 = 5.5
+	let a5 = 6.5
+	let a6 = 7.5
+	let a7 = 8.5
+	let a8 = 9.5
+	let a9 = 10.5
+	sleep(4)
+	let s1 = trunc(a0) + trunc(a1) + trunc(a2) + trunc(a3) + trunc(a4)
+	let s2 = trunc(a5) + trunc(a6) + trunc(a7) + trunc(a8) + trunc(a9)
+	sleep(4)
+	let s3 = trunc(a0 * 2.0) + trunc(a9 * 2.0)
+	return s1 + s2 + s3
+end 'threadA'
+
+function threadB() returns int
+	let b0 = 100.5
+	let b1 = 200.5
+	let b2 = 300.5
+	let b3 = 400.5
+	let b4 = 500.5
+	let b5 = 600.5
+	let b6 = 700.5
+	let b7 = 800.5
+	let b8 = 900.5
+	let b9 = 1000.5
+	sleep(2)
+	let t1 = trunc(b0) + trunc(b1) + trunc(b2) + trunc(b3) + trunc(b4)
+	let t2 = trunc(b5) + trunc(b6) + trunc(b7) + trunc(b8) + trunc(b9)
+	sleep(2)
+	let t3 = trunc(b0 * 2.0) + trunc(b9 * 2.0)
+	return t1 + t2 + t3
+end 'threadB'
+
+function main() returns ExitCode
+	let m0 = 11.5
+	let m1 = 22.5
+	let pa = async threadA()
+	let pb = async threadB()
+	let ra = await pa
+	let rb = await pb
+	let mine = trunc(m0) + trunc(m1)
+	if ra == 79 and rb == 7702 and mine == 33 'ok'
+		return 0
+	end 'ok'
+	return 9
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_clock_ticks@80 = i64 0
+  __gt_clock_freq@88 = i64 0
+  __gt_proc_count@96 = i64 0
+  __gt_proc_handles_base@104 = i64 0
+  __gt_proc_gts_base@112 = i64 0
+  __gt_free_list_head@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __gt_startup_base@136 = i64 0
+  __gt_procinfo_base@144 = i64 0
+  __gt_exitcode_base@152 = i64 0
+  __gt_cmdline_buf_base@160 = i64 0
+  __gt_cmdline_buf_cap@168 = i64 0
+}
+
+func @threadA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 112
+    x64.storeSlotReg slot0, xmm6
+    x64.storeSlotReg slot1, xmm7
+    x64.storeSlotReg slot2, xmm8
+    x64.storeSlotReg slot3, xmm9
+    x64.storeSlotReg slot4, xmm10
+    x64.storeSlotReg slot5, xmm11
+    x64.storeSlotReg slot6, xmm12
+    x64.storeSlotReg slot7, xmm13
+    x64.storeSlotReg slot8, xmm14
+    x64.storeSlotReg slot9, xmm15
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.movsdRegRip xmm7, [rip + __fconst_1]
+    x64.movsdRegRip xmm8, [rip + __fconst_2]
+    x64.movsdRegRip xmm9, [rip + __fconst_3]
+    x64.movsdRegRip xmm10, [rip + __fconst_4]
+    x64.movsdRegRip xmm11, [rip + __fconst_5]
+    x64.movsdRegRip xmm12, [rip + __fconst_6]
+    x64.movsdRegRip xmm13, [rip + __fconst_7]
+    x64.movsdRegRip xmm14, [rip + __fconst_8]
+    x64.movsdRegRip xmm15, [rip + __fconst_9]
+    x64.movRegImm32 rcx, 4
+    x64.callDirect sleep
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.cvttsd2siRegReg rcx, xmm7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm10
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.cvttsd2siRegReg rax, xmm11
+    x64.cvttsd2siRegReg rcx, xmm12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm13
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm14
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm15
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegImm32 rcx, 4
+    x64.callDirect sleep
+    x64.movsdRegRip xmm0, [rip + __fconst_10]
+    x64.mulsdRegReg xmm6, xmm6, xmm0
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.movsdRegRip xmm0, [rip + __fconst_10]
+    x64.mulsdRegReg xmm15, xmm15, xmm0
+    x64.cvttsd2siRegReg rcx, xmm15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg r8, rcx, rax
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.loadRegSlot xmm8, slot2
+    x64.loadRegSlot xmm9, slot3
+    x64.loadRegSlot xmm10, slot4
+    x64.loadRegSlot xmm11, slot5
+    x64.loadRegSlot xmm12, slot6
+    x64.loadRegSlot xmm13, slot7
+    x64.loadRegSlot xmm14, slot8
+    x64.loadRegSlot xmm15, slot9
+    x64.epilogue 112
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @threadB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 112
+    x64.storeSlotReg slot0, xmm6
+    x64.storeSlotReg slot1, xmm7
+    x64.storeSlotReg slot2, xmm8
+    x64.storeSlotReg slot3, xmm9
+    x64.storeSlotReg slot4, xmm10
+    x64.storeSlotReg slot5, xmm11
+    x64.storeSlotReg slot6, xmm12
+    x64.storeSlotReg slot7, xmm13
+    x64.storeSlotReg slot8, xmm14
+    x64.storeSlotReg slot9, xmm15
+    x64.movsdRegRip xmm6, [rip + __fconst_11]
+    x64.movsdRegRip xmm7, [rip + __fconst_12]
+    x64.movsdRegRip xmm8, [rip + __fconst_13]
+    x64.movsdRegRip xmm9, [rip + __fconst_14]
+    x64.movsdRegRip xmm10, [rip + __fconst_15]
+    x64.movsdRegRip xmm11, [rip + __fconst_16]
+    x64.movsdRegRip xmm12, [rip + __fconst_17]
+    x64.movsdRegRip xmm13, [rip + __fconst_18]
+    x64.movsdRegRip xmm14, [rip + __fconst_19]
+    x64.movsdRegRip xmm15, [rip + __fconst_20]
+    x64.movRegImm32 rcx, 2
+    x64.callDirect sleep
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.cvttsd2siRegReg rcx, xmm7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm10
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.cvttsd2siRegReg rax, xmm11
+    x64.cvttsd2siRegReg rcx, xmm12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm13
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm14
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm15
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegImm32 rcx, 2
+    x64.callDirect sleep
+    x64.movsdRegRip xmm0, [rip + __fconst_10]
+    x64.mulsdRegReg xmm6, xmm6, xmm0
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.movsdRegRip xmm0, [rip + __fconst_10]
+    x64.mulsdRegReg xmm15, xmm15, xmm0
+    x64.cvttsd2siRegReg rcx, xmm15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg r8, rcx, rax
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.loadRegSlot xmm8, slot2
+    x64.loadRegSlot xmm9, slot3
+    x64.loadRegSlot xmm10, slot4
+    x64.loadRegSlot xmm11, slot5
+    x64.loadRegSlot xmm12, slot6
+    x64.loadRegSlot xmm13, slot7
+    x64.loadRegSlot xmm14, slot8
+    x64.loadRegSlot xmm15, slot9
+    x64.epilogue 112
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.storeSlotReg slot1, xmm7
+    x64.movsdRegRip xmm6, [rip + __fconst_21]
+    x64.movsdRegRip xmm7, [rip + __fconst_22]
+    x64.leaRegFunc rcx, [rip + threadA]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rcx, [rip + threadB]
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.cvttsd2siRegReg rcx, xmm7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cmpRegImm32 rbx, 79
+    x64.movRegImm32 rcx, 0
+    x64.jcc equal, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 r8, 7702
+    x64.setccReg equal, rcx
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rax, 33
+    x64.setccReg equal, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rax, rdx
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 9
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sleep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_sleep
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

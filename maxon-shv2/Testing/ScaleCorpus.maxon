@@ -253,13 +253,14 @@ let FloatOpsBase = 64 as KnobSize
 // ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live ACROSS a call — the most
 // expensive thing a float does on this target, and a shape no GPR knob can stand in for.
 //
-// EVERY XMM REGISTER IS CALLER-SAVED in shv2's Wave-1 pool: `callerSavedMask` takes all of
-// `classRegisterMask(RegClass.xmm)`, and taking xmm6-15 as callee-saved is Wave 2 (Win64 preserves
-// all 128 bits of them while `movsd` zeroes 64-127, so it needs 16-byte slots and leaf frame
-// alignment together). So a float live across a call has an allowed set of EXACTLY ∅ and MUST go to
-// memory — where `callChain`'s GPRs in the same position still have five callee-saved registers to
-// hide in. This is the float FORCE-SPILL path, and it is forced spilling rather than E5001: the
-// amended Rule 2 permits a spill whose placement is forced by a call bracket.
+// ⚠ WHAT THIS KNOB MEASURES CHANGED AT WAVE 2. Under Wave 1 every XMM was caller-saved, so a float
+// live across a call had an allowed set of EXACTLY ∅ and MUST go to memory — a store/reload bracket
+// at every call, which is what made `regalloc:splitting` superlinear in the number of cross-call
+// floats. Wave 2 gave the XMM file a callee-saved half (xmm6-15, `calleeSavedMask`), so cross-call
+// floats now live in registers exactly as `callChain`'s GPRs do, and this knob spills only the
+// OVERFLOW past ten — which is why `FloatsLivePerSpillLoop` moved from 4 to 12 in the same commit.
+// It is forced spilling rather than E5001: the amended Rule 2 permits a spill whose placement is
+// forced by a call bracket.
 let FloatSpillLoopsBase = 2 as KnobSize
 
 // The bounded set of float accumulators `scaleFloats` mutates — four, against an XMM file of
@@ -269,11 +270,21 @@ let FloatSpillLoopsBase = 2 as KnobSize
 // separation `WorkingLocalsPerFunction` keeps against `pressuredLoops`.
 let WorkingFloatsPerFunction = 4 as KnobSize
 
-// How many floats each spill loop holds live across its call. Every one of them spills (allowed =
-// ∅), so this is exactly the number of forced store/reload brackets per loop — the float twin of
-// `PressuredValuesPerLoop`, and it needs no headroom calculation because the XMM file's answer for a
-// value live across a call is ∅ at any pool size.
-let FloatsLivePerSpillLoop = 4 as KnobSize
+// How many floats each spill loop holds live across its call — enough to OVERFLOW the callee-saved
+// XMM half, because that half is now where a cross-call float lives.
+//
+// ⚠⚠ IT NEEDS A HEADROOM CALCULATION AGAIN, AND WAVE 2 IS WHY. It was 4, under a comment saying it
+// "needs no headroom calculation because the XMM file's answer for a value live across a call is ∅
+// at any pool size" — true while every XMM was caller-saved, and FALSE the moment xmm6–15 became
+// callee-saved: four floats then fit comfortably and the knob generated a loop that spills NOTHING,
+// measuring the force-spill path by not exercising it. That is the failure this corpus was rebuilt
+// to end (see the `pressuredLoops` note): an instrument that cannot express the feature reports Δ0
+// and the Δ0 reads as evidence.
+//
+// So it is now the float twin of `PressuredValuesPerLoop` in the way that matters: `regMaskPopcount`
+// of the callee-saved XMM half is TEN, and this must EXCEED it for a bracket to be forced. Twelve is
+// ten plus the same slack the GPR knob keeps over its five.
+let FloatsLivePerSpillLoop = 12 as KnobSize
 
 // ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
 //
@@ -1255,8 +1266,9 @@ end 'floatOpsSource'
 let FloatSpillDriver = "scaleFloatSpill"
 
 // The `floatSpill` knob: ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live
-// across a call to `scaleOpaque`. Every one of them is a FORCED spill — see `FloatSpillLoopsBase`
-// for why the allowed set is ∅ rather than merely small.
+// across a call to `scaleOpaque` — TWELVE of them, two more than the callee-saved XMM half is wide,
+// so at least two spill in every loop. See `FloatsLivePerSpillLoop` for why that count is now a
+// headroom calculation rather than a free choice.
 //
 // The call is an INTEGER function, and that is not a compromise: a float ARGUMENT and a float RETURN
 // are both Wave 2, so an int callee is the only call a float can currently be live across — and it
@@ -1274,8 +1286,11 @@ let FloatSpillDriver = "scaleFloatSpill"
 //   • `pressuredLoops` measures a CHOICE. Its eight GPRs have five callee-saved registers to compete
 //     for, so the allocator decides which three go to memory, and the knob is tuned (eight, against a
 //     14-GPR pool) to make exactly five spills fall out of that competition.
-//   • `floatSpill` measures NO CHOICE. Its allowed set is ∅, so every float spills at every call at
-//     any pool size and any knob value — there is nothing to tune and nothing to compete for.
+//   • `floatSpill` measures the SAME choice in the OTHER FILE. Since Wave 2 its floats compete for
+//     ten callee-saved XMMs exactly as the GPRs compete for five, so the knob is tuned (twelve,
+//     against a 16-XMM file) to make the overflow fall out of that competition. Under Wave 1 it
+//     measured no choice at all — the allowed set was ∅ and every float spilled at any knob value —
+//     and that is why the count needed no tuning then and does now.
 //
 // Merging them would take a `varPrefix`, a `counterPrefix`, a `resultPrefix`, a per-loop count, a
 // literal suffix, an accumulator initializer and a return expression — seven parameters to fold two
@@ -1286,7 +1301,7 @@ let FloatSpillDriver = "scaleFloatSpill"
 // share a shape and stay apart for the same kind of reason.)
 function floatSpillSource(loopCount KnobSize) returns String
 	var out = StringBuilder.create()
-	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {FloatsLivePerSpillLoop} floats live across a call in each (allowed = ∅, so every one is a forced spill).\n")
+	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {FloatsLivePerSpillLoop} floats live across a call in each (more than the callee-saved XMM half, so the overflow is a forced spill).\n")
 	out.append("function {FloatSpillDriver}(a int) returns int\n")
 	out.append("\tvar total = 0.0\n")
 

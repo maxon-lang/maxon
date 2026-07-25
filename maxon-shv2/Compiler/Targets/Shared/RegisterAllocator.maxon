@@ -286,6 +286,11 @@ end 'RegAllocStats'
 // proves nothing is live across the `mov r8, retval` return move. r10/r11 stay in the
 // pool — shv2 needs no reserved scratch (SSA destruction breaks copy cycles with `xchg`,
 // and the IAT call is RIP-relative), so the doc's r10/r11-as-scratch is a FUTURE tuning.
+//
+// WAVE 2 gave the XMM file the same two halves: 6 CALLER-saved {xmm0–5} and 10 CALLEE-saved
+// {xmm6–15}, so a float live across a call has the same kind of home an int has had since M5.6
+// instead of no home at all. The XMM half needs no `push` — there is no `push xmm` — so the prologue
+// preserves it in ordinary 8-byte frame SLOTS, exactly as arm64 preserves d8–d15.
 // The pool is a property of the target — arm64 declares its own when its backend lands.
 export function allocatablePool(target Target) returns RegMask
 	match target.cpu 'cpu'
@@ -295,10 +300,17 @@ export function allocatablePool(target Target) returns RegMask
 	end 'cpu'
 end 'allocatablePool'
 
-// The x64 pool: every GPR except rsp/rbp (the frame) — 9 caller-saved + 5 callee-saved — plus every
-// XMM. The XMM half is the whole file (Wave 1 takes all 16 as caller-saved; see `callDirect`).
+// The x64 pool: every register except rsp/rbp (the frame) — 9 caller-saved + 5 callee-saved GPRs,
+// and 6 caller-saved + 10 callee-saved XMMs.
+//
+// It is the UNION OF THE TWO HALVES AND NOTHING ELSE. Wave 1 OR-ed the whole XMM class mask in as a
+// third term, because with every XMM caller-saved the two halves already covered them and the term
+// was a redundant restatement — but it was also the XMM file written down a second time, and it is
+// exactly the term that would have silently kept an XMM allocatable had Wave 2 dropped one out of
+// both halves. `assertCalleeSavedListsMatchMasks` proves the two halves partition the file, which is
+// what makes this union the complete pool rather than merely a large one.
 function x64AllocatablePool() returns RegMask
-	return callerSavedMask() or calleeSavedMask() or classRegisterMask(RegClass.xmm, file: x64RegisterFile())
+	return callerSavedMask() or calleeSavedMask()
 end 'x64AllocatablePool'
 
 // The arm64 pool (AAPCS64-derived, M1 notes): allocatable GPRs x0..x15 ∪ x19..x28, and the WHOLE
@@ -385,6 +397,13 @@ end 'assertCallClobberConsistent'
 
 // The x64 call ops against the x64 caller-saved pool, with rbx (callee-saved) the drift witness.
 function assertX64CallClobbers()
+	// BEFORE the clobber masks are read, for the reason `allocateRegisters`'s call order documents:
+	// the caller-saved mask and the callee-saved lists are two halves of one fact, so a drifted list
+	// makes the clobber check fail too — and it would blame `TargetDialect.callDirect`, sending the
+	// reader to a file with nothing wrong in it. Checking the lists first means each panic accuses
+	// the thing that actually moved.
+	assertCalleeSavedListsMatchMasks()
+
 	let pool = callerSavedMask()
 	assertOneCallClobber(TargetOp.callDirect(""), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
@@ -482,14 +501,28 @@ end 'arm64CallerSavedMask'
 // the clobber mask cannot drift (asserted equal by `assertCallClobberConsistent`). A
 // value live across a call is forbidden all of these.
 //
-// ⭐ ALL SIXTEEN XMMs ARE CALLER-SAVED (Wave 1), so a float live across a call is forbidden its
-// ENTIRE file, has NO register left, and force-spills. That is bought deliberately: it is what makes
-// an EMPTY allowed set reachable, which is the case `valueConfinedTo` exists to guard (∅ is a subset
-// of every set, so an empty allowed set must never read as confined to a GPR witness). Taking
-// xmm6-15 as callee-saved is Wave 2 and is not a tweak — Win64 preserves all 128 bits of them while
-// `movsd` zeroes bits 64-127, so it needs 16-byte spill slots and leaf frame alignment together.
+// ⭐ SIX XMMs ARE CALLER-SAVED (xmm0–5), AND THE OTHER TEN ARE NOT (Wave 2). A float live across a
+// call is therefore confined to xmm6–15 — ten registers, not ∅ — exactly as an int live across a
+// call is confined to the five callee-saved GPRs. Wave 1 took all sixteen here, which forbade such a
+// float its ENTIRE file and force-spilled a store/reload bracket at EVERY call; that made
+// `regalloc:splitting` measurably quadratic in the number of cross-call floats (x4.24 per doubling),
+// which is the whole reason Wave 2 exists.
+//
+// ⚠ AN EMPTY ALLOWED SET IS STILL THE CASE `valueConfinedTo` GUARDS, and it is no longer reachable
+// through a float across a call. See `SplitLiveRanges.noVictimAtPeak` for what can still reach it.
+//
+// Spelled register by register rather than folded out of `calleeSavedXmmOrder`'s complement: this
+// function is on the COLORER's per-value path (`preferredVolatilityMask`), so it must stay a handful
+// of shifts rather than an array walk. `assertCalleeSavedListsMatchMasks` is what keeps it honest —
+// the derivation lives there, run once per module, where it costs nothing.
 export function callerSavedMask() returns RegMask
-	var mask = classRegisterMask(RegClass.xmm, file: x64RegisterFile())
+	var mask = 0 as RegMask
+	mask = mask or regMaskOf(X64Register.xmm0)
+	mask = mask or regMaskOf(X64Register.xmm1)
+	mask = mask or regMaskOf(X64Register.xmm2)
+	mask = mask or regMaskOf(X64Register.xmm3)
+	mask = mask or regMaskOf(X64Register.xmm4)
+	mask = mask or regMaskOf(X64Register.xmm5)
 	mask = mask or regMaskOf(X64Register.rax)
 	mask = mask or regMaskOf(X64Register.rcx)
 	mask = mask or regMaskOf(X64Register.rdx)
@@ -502,9 +535,15 @@ export function callerSavedMask() returns RegMask
 	return mask
 end 'callerSavedMask'
 
-// The 5 CALLEE-saved GPRs a function must preserve across its own body — the effective
-// pool for a value live across a call. The prologue/epilogue pass push/pops exactly the
-// ones a function's coloring used. rsp/rbp are the frame and are never allocatable.
+// The CALLEE-saved registers a function must preserve across its own body — the effective pool for a
+// value live across a call, per file: 5 GPRs (rbx, r12–r15) and, since Wave 2, 10 XMMs (xmm6–15).
+// The prologue/epilogue pass preserves exactly the ones a function's coloring used — the GPRs with
+// `push`/`pop`, the XMMs in frame SLOTS (x86-64 has no `push xmm`). rsp/rbp are the frame and are
+// never allocatable.
+//
+// Spelled register by register for the reason `callerSavedMask` gives; the ORDERED lists
+// (`calleeSavedOrder`, `calleeSavedXmmOrder`) are what the prologue and the GT context switch walk,
+// and `assertCalleeSavedListsMatchMasks` holds those lists and these two masks to one another.
 export function calleeSavedMask() returns RegMask
 	var mask = 0 as RegMask
 	mask = mask or regMaskOf(X64Register.rbx)
@@ -512,8 +551,55 @@ export function calleeSavedMask() returns RegMask
 	mask = mask or regMaskOf(X64Register.r13)
 	mask = mask or regMaskOf(X64Register.r14)
 	mask = mask or regMaskOf(X64Register.r15)
+	mask = mask or regMaskOf(X64Register.xmm6)
+	mask = mask or regMaskOf(X64Register.xmm7)
+	mask = mask or regMaskOf(X64Register.xmm8)
+	mask = mask or regMaskOf(X64Register.xmm9)
+	mask = mask or regMaskOf(X64Register.xmm10)
+	mask = mask or regMaskOf(X64Register.xmm11)
+	mask = mask or regMaskOf(X64Register.xmm12)
+	mask = mask or regMaskOf(X64Register.xmm13)
+	mask = mask or regMaskOf(X64Register.xmm14)
+	mask = mask or regMaskOf(X64Register.xmm15)
 	return mask
 end 'calleeSavedMask'
+
+// ⭐ THE ORDERED LISTS AND THE TWO MASKS ARE THE SAME FACT, so this derives one from the other once
+// per module and panics on any drift. `calleeSavedOrder` / `calleeSavedXmmOrder` are what the
+// prologue pass preserves and what the GT context switch saves across a stack switch; the masks are
+// what the colorer subtracts from a value's pool. A register in a list but not in the mask is never
+// coloured into (a wasted register); a register in the mask but not in a list is coloured into and
+// NEVER SAVED — a function silently clobbering its caller's register, which is a wrong answer with
+// no crash to find it by.
+//
+// It also asserts the two halves PARTITION the file: every x64 register except the frame (rsp/rbp)
+// is either caller- or callee-saved, and none is both. Wave 2 moved ten registers across that line,
+// and the failure mode of doing so by hand is a register that ends up on neither side — allocatable
+// (the pool IS the union) yet clobbered by nothing and saved by nobody.
+function assertCalleeSavedListsMatchMasks()
+	var listed = 0 as RegMask
+	for reg in calleeSavedOrder 'gprs'
+		listed = listed or regMaskOf(reg)
+	end 'gprs'
+	for reg in calleeSavedXmmOrder 'xmms'
+		listed = listed or regMaskOf(reg)
+	end 'xmms'
+
+	if listed != calleeSavedMask() 'listDrift'
+		panic("assertCalleeSavedListsMatchMasks: the ordered callee-saved lists cover {listed} but calleeSavedMask() is {calleeSavedMask()} — X64PrologueEpilogue's `calleeSavedOrder`/`calleeSavedXmmOrder` (what the prologue preserves and the GT context switch saves) and RegisterAllocator's mask (what the colorer treats as call-surviving) drifted apart. A register in the mask but not in a list is coloured into and never saved.")
+	end 'listDrift'
+
+	let file = x64RegisterFile()
+	let realRegisters = classRegisterMask(RegClass.gpr, file: file) or classRegisterMask(RegClass.xmm, file: file)
+	let allocatable = realRegisters and not (regMaskOf(X64Register.rsp) or regMaskOf(X64Register.rbp))
+	if (callerSavedMask() or calleeSavedMask()) != allocatable 'notAPartition'
+		panic("assertCalleeSavedListsMatchMasks: caller-saved u callee-saved is {callerSavedMask() or calleeSavedMask()} but the x64 file minus the frame (rsp/rbp) is {allocatable} — every register the pool offers must be on exactly one side of the call barrier. One on NEITHER side is allocatable, clobbered by no call and saved by no prologue.")
+	end 'notAPartition'
+
+	if (callerSavedMask() and calleeSavedMask()) != 0 'overlap'
+		panic("assertCalleeSavedListsMatchMasks: {callerSavedMask() and calleeSavedMask()} is in BOTH the caller-saved and the callee-saved mask — a register cannot be destroyed by a call and preserved across it at once.")
+	end 'overlap'
+end 'assertCalleeSavedListsMatchMasks'
 
 // Color every function's virtual registers into physical GPRs, in place. Only USER
 // functions are present here — `mrt_start` is prepended AFTER this pass by
@@ -1036,9 +1122,12 @@ function chooseRegister(v ValueId, classPool RegMask, blocked RegMask, dyingRegs
 		// wrong pass entirely. No amount of spilling can free a register from a file the pool does not
 		// offer, so this is a MISSING POOL, diagnosed apart from a genuine over-pool point.
 		if classPool == 0 'noPoolForThisClass'
-			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. If this is an XMM value, `allocatablePool` is still GPR-only: enabling the XMM half requires the 16 XMM bits in BOTH `callerSavedMask` and `TargetDialect.callDirect`'s `implicitDefs` (they are asserted equal), or a float would silently survive a call in a register the callee clobbers.")
+			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. A file becomes allocatable by having its registers in `callerSavedMask` and/or `calleeSavedMask` (whose union IS the pool, and which `assertCalleeSavedListsMatchMasks` proves partition the file); `TargetDialect.callDirect`'s `implicitDefs` must equal the caller-saved half, or a value would silently survive a call in a register the callee clobbers.")
 		end 'noPoolForThisClass'
-		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}, {liveness.classOf(v).name} pool {classPool}) — the cold-spill splitter (M5.3) is supposed to relieve EVERY over-pool point before coloring, including the REDUCED pool at a FIXED-REGISTER point (a value live across a call is confined to the {regMaskPopcount(calleeSavedMask())} callee-saved registers; an idiv reserves RAX/RDX for its own operands). Reaching this means the splitter left a point unrelieved — a SPLITTER BUG (its `analyzePressure` reduced-pool check, `pool ∖ op.implicitDefs`, missed this op), not a colorer limitation.")
+		// The confined-pool figure is per CLASS, not the whole callee-saved set: since Wave 2 that set
+		// spans both files (5 GPRs + 10 XMMs), and quoting 15 at a colorer that ran out of GPRs would
+		// name a number no value could ever have had.
+		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}, {liveness.classOf(v).name} pool {classPool}) — the cold-spill splitter (M5.3) is supposed to relieve EVERY over-pool point before coloring, including the REDUCED pool at a FIXED-REGISTER point (a value live across a call is confined to the {regMaskPopcount(classPool and calleeSavedMask())} callee-saved {liveness.classOf(v).name} register(s); an idiv reserves RAX/RDX for its own operands). Reaching this means the splitter left a point unrelieved — a SPLITTER BUG (its `analyzePressure` reduced-pool check, `pool ∖ op.implicitDefs`, missed this op), not a colorer limitation.")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
@@ -1232,6 +1321,18 @@ function allocateReuseDef(o Operand, seq OpSeq, pos BlockOpPos, deaths BlockDeat
 	let inputId = operandReuseInputValueId(o, buf: buf)
 	let inputReg = alloc.regNumOf(inputId)
 	let inputDies = deaths.dies(pos, v: inputId)
+
+	// ⭐ A REUSE DEF HOLDS ITS INPUT'S VALUE, SO THE TWO SHARE A REGISTER FILE — and this is the ONE
+	// place that can say so. `assertColouredInClass` checks each value against its OWN declared class
+	// and is therefore blind to a PAIR whose declarations disagree; the copy this function may record
+	// is a `movRegReg` of two PHYSICAL registers, so a mismatched pair reaches the encoder as a
+	// cross-file `mov xmm, r64` — which `emitRegRegMove` rejects with no way to name the values, the
+	// op, or the pass that mis-declared them. Asserting the pair here fails where the fact is known.
+	let destClass = liveness.classOf(destId)
+	let inputClass = liveness.classOf(inputId)
+	if destClass != inputClass 'reuseClassMismatch'
+		panic("allocateReuseDef: the two-address op's def v{destId} is {destClass.name}-classed but its REUSE input v{inputId} is {inputClass.name}-classed — a reuse def holds its input's value, so the two must share a register file. The copy this would record is a cross-file `mov`, which the encoder rejects far from the cause. Look at whichever pass declared the two classes (the lowering's value-class column, or `growValueSpace`'s inherited class for a split's fresh ids).")
+	end 'reuseClassMismatch'
 
 	// The reuse copy (if the coalescing hint misses) runs BEFORE the op, so the dest
 	// must be free at that point: it may reuse ONLY the input's dying register (never

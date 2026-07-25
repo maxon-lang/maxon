@@ -366,3 +366,77 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:5:10: Unsupported: `await` applies to a Promise produced by an `async` call — the operand here is not an async spawn's result
 ```
+
+<!-- test: async-scheduler.callee-saved-xmms-survive-a-context-switch -->
+<!-- targets: x64-windows -->
+Two green threads each hold TEN f64 locals across a `sleep`, interleaved so each is suspended while
+the other is actively occupying xmm6–15.
+
+**The context switch is the one call whose callee-saved promise is kept by hand.** Since Wave 2
+xmm6–15 are callee-saved, so the register allocator believes a float in xmm6 survives a
+`call __gt_context_switch` — and that call does not return to its caller: it switches to another
+green thread's stack, which runs arbitrary user code, and comes back only later. The switch has no
+prologue and no coloring, so it must save that half explicitly (`X64GtRuntime`), and this is the
+test that says so: with the switch's `movsd` saves removed, `threadA` returns **5524** — the sum of
+`threadB`'s floats — instead of 79. Nothing in the golden fragments covers the emitted GT runtime,
+so only a RUN can see this.
+
+`threadA` sums 1..10 = 55 plus `trunc(3.0) + trunc(21.0)` = 24, so 79. `threadB` sums
+100+…+1000 = 5500 plus 201 + 2001 = 2202, so 7702. `main`'s own two floats must also survive both
+awaits: 11 + 22 = 33. The exit code is 0 only if all three hold.
+```maxon
+function threadA() returns int
+	let a0 = 1.5
+	let a1 = 2.5
+	let a2 = 3.5
+	let a3 = 4.5
+	let a4 = 5.5
+	let a5 = 6.5
+	let a6 = 7.5
+	let a7 = 8.5
+	let a8 = 9.5
+	let a9 = 10.5
+	sleep(4)
+	let s1 = trunc(a0) + trunc(a1) + trunc(a2) + trunc(a3) + trunc(a4)
+	let s2 = trunc(a5) + trunc(a6) + trunc(a7) + trunc(a8) + trunc(a9)
+	sleep(4)
+	let s3 = trunc(a0 * 2.0) + trunc(a9 * 2.0)
+	return s1 + s2 + s3
+end 'threadA'
+
+function threadB() returns int
+	let b0 = 100.5
+	let b1 = 200.5
+	let b2 = 300.5
+	let b3 = 400.5
+	let b4 = 500.5
+	let b5 = 600.5
+	let b6 = 700.5
+	let b7 = 800.5
+	let b8 = 900.5
+	let b9 = 1000.5
+	sleep(2)
+	let t1 = trunc(b0) + trunc(b1) + trunc(b2) + trunc(b3) + trunc(b4)
+	let t2 = trunc(b5) + trunc(b6) + trunc(b7) + trunc(b8) + trunc(b9)
+	sleep(2)
+	let t3 = trunc(b0 * 2.0) + trunc(b9 * 2.0)
+	return t1 + t2 + t3
+end 'threadB'
+
+function main() returns ExitCode
+	let m0 = 11.5
+	let m1 = 22.5
+	let pa = async threadA()
+	let pb = async threadB()
+	let ra = await pa
+	let rb = await pb
+	let mine = trunc(m0) + trunc(m1)
+	if ra == 79 and rb == 7702 and mine == 33 'ok'
+		return 0
+	end 'ok'
+	return 9
+end 'main'
+```
+```exitcode
+0
+```

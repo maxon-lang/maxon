@@ -937,14 +937,19 @@ end 'main'
 ```
 
 <!-- test: float-locals-read-after-each-of-two-calls -->
-Two f64 locals, each read after each of TWO calls. Every XMM is caller-saved, so both are forbidden
-their entire file across a call and both must live in memory — the forced bracket, at its widest.
+Two f64 locals, each read after each of TWO calls — and since **Wave 2** neither spills at all.
+xmm6–15 are callee-saved, so both locals stay resident in registers across every call and the only
+slot traffic in the fragment is the prologue/epilogue pair that preserves xmm6/xmm7 themselves:
+**two `storeSlotReg` at entry and two `loadRegSlot` before the `ret`, once per function**, not once
+per call.
 
-What this pins is the **bracket count**: exactly TWO `storeSlotReg`, into exactly TWO slots, one per
-local, plus one `loadRegSlot` per read. Before the run-break, the reload serving the reads after the
-first call spanned the second call too, so it was itself stranded and was split again into a second
-slot — four stores and four slots for two values. Read this fragment against the four-call test
-below: the store and slot counts are the same in both, and only the reloads grow.
+⚠ **This test used to pin the opposite**, and reading the old shape is what makes the new one legible.
+Under Wave 1 every XMM was caller-saved, so a float live across a call was forbidden its ENTIRE file,
+had no register left, and was FORCE-SPILLED: the same two stores, plus **one `loadRegSlot` per read**
+— four reloads here, eight in the four-call test below. That per-call bracket is what made
+`regalloc:splitting` superlinear in the number of cross-call floats, and removing it is what Wave 2
+is. Read this fragment against the four-call one: they are now the same shape, and doubling the
+calls no longer adds a single instruction inside the body.
 
 `work` adds 1 and each round adds `trunc(1.5) + trunc(2.5)` = 3, so `acc` runs 0 → 1 → 4 → 5 → 8.
 ```maxon
@@ -969,9 +974,11 @@ end 'main'
 
 <!-- test: float-locals-read-after-each-of-four-calls -->
 The same program with the call sites DOUBLED — the other half of the pair above, and the one that
-makes the property checkable rather than asserted. The splitter still splits each local exactly
-ONCE, so this fragment carries the same two `storeSlotReg` and the same two slots as the two-call
-test; only the `loadRegSlot` count follows the reads. Under the cascade it carried eight of each.
+makes the property checkable rather than asserted. Since Wave 2 the two locals live in xmm6/xmm7
+across every call, so doubling the calls adds NOTHING: this fragment carries the same two
+`storeSlotReg` and two `loadRegSlot` as the two-call test, and they are the callee-save pair rather
+than a spill. Under Wave 1 the reload count followed the reads (eight here, four there); under the
+pre-run-break cascade it carried eight stores and eight slots as well.
 
 `acc` runs 0 → 1 → 4 → 5 → 8 → 9 → 12 → 13 → 16.
 ```maxon
@@ -1010,10 +1017,15 @@ the machine many times over.
 
 The invariant that panic asserts says candidates always remain, on the grounds that "any witness a
 clobber produces has at least the five callee-saved registers in it, so at least six values are
-confined here; an op names at most two virtual registers". That is **false for an empty witness**: a
-float across a call is confined to ∅, so a tight set of exactly two is a violation, and one op can
+confined here; an op names at most two virtual registers". That was **false for an empty witness**: a
+float across a call was confined to ∅, so a tight set of exactly two was a violation, and one op can
 read both. With reloads no longer born stranded, the only confined values left are originals, the
 call outranks the multiply, and the program compiles.
+
+⚠ **Wave 2 removed the ∅ itself**: a float across a call is now confined to the TEN callee-saved
+XMMs, so the counting argument holds for floats exactly as it does for ints, and neither float here
+spills at all. This test keeps its value as the record of why the run-break exists — the ∅ case is
+no longer reachable through a call, and `noVictimAtPeak` explains what could still reach it.
 
 Each round multiplies `1.5 × 2.5` = 3.75 into `s` and `work` adds 1 to `acc`, so two rounds give
 `trunc(7.5) + 2` = 9.
@@ -1036,4 +1048,128 @@ end 'main'
 ```
 ```exitcode
 9
+```
+
+<!-- test: two-floats-across-a-call-with-a-ranged-typealias -->
+Two f64 locals live across a call in a function whose types are a **ranged typealias**. The floats
+stay in callee-saved XMMs (xmm6–15), so nothing spills; the same program with `int` in place of
+`Num` compiled before Wave 2 and this one did not, because the range check is what made the
+splitter run at all here.
+
+Why the ranged typealias is load-bearing rather than decoration: `InsertRangeChecks` emits a
+compare whose boolean result lives only in EFLAGS, so it is a Std value that no Target *operand*
+ever names — and it is the LAST id the pass mints, hence the highest. That is what once made the
+value-class column longer than the allocator's value space, so a split's fresh reload id landed
+inside the already-filled region and kept the column's `gpr` fill (see the next test).
+
+`probe(0)` = `work(0)` + `trunc(3.625 * 1.5 * 64.0)` = 1 + 348 = 349; `probe(1)` = 350. 349 + 350
+is past a byte, so the exit code is their difference plus one.
+```maxon
+typealias Num = int(-1000000000 to 1000000000)
+
+function work(x Num) returns Num
+	return x + 1
+end 'work'
+
+function probe(k Num) returns Num
+	let f0 = 1.5
+	let f2 = 3.625
+	var acc = k
+	acc = work(acc)
+	acc = acc + trunc(f2 * f0 * 64.0)
+	return acc
+end 'probe'
+
+function main() returns ExitCode
+	return (probe(1) - probe(0) + 41) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-reload-inherits-its-victims-register-file -->
+TWELVE f64 locals live across a call — two more than the ten callee-saved XMMs — so at least two of
+them genuinely spill and are reloaded, **and the function also carries a ranged typealias**. That
+pair is the whole test: the range check pushes the value-class column past the allocator's value
+space, and the spill is what mints a fresh id inside the gap.
+
+Before the fix, `LivenessResult.growValueSpace` recorded a split's fresh ids by GROW-FILLING the
+class column with the victim's class — which is a silent no-op when the column is already that
+long. The reload of an f64 therefore kept the column's `gpr` fill, was coloured into a GPR, and
+reached the encoder as either a cross-file `mov xmm1, rax` (`emitRegRegMove`) or a `cvttsd2si`
+whose source is `rcx` (`requireClass`) — the same defect with two crash sites. The class of a
+split's fresh id is now WRITTEN over the minted range, not merely defaulted into it.
+
+`bump(0)` = 1, plus `trunc(1.0) + … + trunc(12.0)` = 78, so 79.
+```maxon
+typealias Num = int(-1000000000 to 1000000000)
+
+function bump(x Num) returns Num
+	return x + 1
+end 'bump'
+
+function pressure(k Num) returns Num
+	let a = 1.0
+	let b = 2.0
+	let c = 3.0
+	let d = 4.0
+	let e = 5.0
+	let f = 6.0
+	let g = 7.0
+	let h = 8.0
+	let i = 9.0
+	let j = 10.0
+	let l = 11.0
+	let m = 12.0
+	var acc = k
+	acc = bump(acc)
+	acc = acc + trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
+	acc = acc + trunc(g) + trunc(h) + trunc(i) + trunc(j) + trunc(l) + trunc(m)
+	return acc
+end 'pressure'
+
+function main() returns ExitCode
+	return pressure(0) as ExitCode
+end 'main'
+```
+```exitcode
+79
+```
+
+<!-- test: ten-floats-across-a-call-fit-the-callee-saved-half -->
+EXACTLY ten f64 locals live across a call — the width of the callee-saved XMM half (xmm6–15). None
+spills: this is the boundary case of Wave 2, and its fragment carries no `storeSlotReg` at all
+where before Wave 2 it carried ten of them plus a reload per read.
+
+`bump(0)` = 1 plus `trunc(1.0) + … + trunc(10.0)` = 55, so 56.
+```maxon
+function bump(x int) returns int
+	return x + 1
+end 'bump'
+
+function pressure(k int) returns int
+	let a = 1.0
+	let b = 2.0
+	let c = 3.0
+	let d = 4.0
+	let e = 5.0
+	let f = 6.0
+	let g = 7.0
+	let h = 8.0
+	let i = 9.0
+	let j = 10.0
+	var acc = k
+	acc = bump(acc)
+	acc = acc + trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e)
+	acc = acc + trunc(f) + trunc(g) + trunc(h) + trunc(i) + trunc(j)
+	return acc
+end 'pressure'
+
+function main() returns ExitCode
+	return pressure(0) as ExitCode
+end 'main'
+```
+```exitcode
+56
 ```

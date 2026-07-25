@@ -16,18 +16,32 @@
 // backend already resolves, so no new relocation machinery is added for it.
 //
 // CALLING CONVENTION — Maxon's internal ABI (StdToX64Conversion): integer arguments in
-// [rcx, rdx, rax, r9, rsi, rdi], primary return in R8; callee-saved GPRs are rbx, r12-r15
-// (RegisterAllocator.calleeSavedMask), plus rsp/rbp (the frame). The context switch saves EXACTLY that
-// callee-saved set — a `call __gt_context_switch` is an ordinary call, so from a suspending function's view
-// it must preserve precisely what any call preserves, no more (rsi/rdi/rax are ARGUMENT registers here, hence
-// caller-saved, hence NOT saved — the one place shv2's ABI diverges from v1's, whose rsi/rdi are callee-saved).
+// [rcx, rdx, rax, r9, rsi, rdi], primary return in R8; callee-saved registers are the GPRs rbx, r12-r15
+// and the XMMs xmm6-15 (RegisterAllocator.calleeSavedMask), plus rsp/rbp (the frame). The context switch
+// saves EXACTLY that callee-saved set — a `call __gt_context_switch` is an ordinary call, so from a
+// suspending function's view it must preserve precisely what any call preserves, no more (rsi/rdi/rax are
+// ARGUMENT registers here, hence caller-saved, hence NOT saved — the one place shv2's ABI diverges from
+// v1's, whose rsi/rdi are callee-saved).
+//
+// ⚠⚠ THE SWITCH IS THE ONE CALL WHOSE CALLEE-SAVED PROMISE IS KEPT BY HAND. Every register-allocated
+// function keeps it by construction (its prologue preserves what its coloring used); this chunk has no
+// prologue and no coloring, and — unlike any ordinary callee — it runs ANOTHER green thread's arbitrary
+// code before control returns. So every register the colorer believes survives a call must be saved here
+// EXPLICITLY, and that set is exactly the two ordered lists below. Wave 2 grew it by ten XMMs.
 
-// The callee-saved GPRs the context switch saves and restores, in push order (pop order is the exact
-// reverse) — the SAME `calleeSavedOrder` the ordinary prologue/epilogue pushes (X64PrologueEpilogue), so the
-// switch preserves EXACTLY what any call preserves, from one shared list rather than a second copy. This
-// ORDER is the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes` = these words
-// + the return-address word, and the trampoline address sits in that top word so the first switch-in's `ret`
-// enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at chunk-build time.
+// The callee-saved registers the context switch saves and restores: the GPRs in push order (pop order is the
+// exact reverse), then the XMMs into a `sub rsp` area written with `movsd` — the SAME `calleeSavedOrder` and
+// `calleeSavedXmmOrder` the ordinary prologue/epilogue preserves (X64PrologueEpilogue), so the switch
+// preserves EXACTLY what any call preserves, from two shared lists rather than second copies. Their sizes are
+// the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes` = the GPR words + the
+// XMM words + the return-address word, and the trampoline address sits in that top word so the first
+// switch-in's `ret` enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at
+// chunk-build time, deriving it from BOTH lists.
+//
+// ⚠ ONE 8-BYTE WORD PER XMM, matching the prologue's 8-byte slots exactly — the low 64 bits ARE the value in
+// shv2 (no type is wider, and nothing reads bits 64-127). The full argument and the condition that would
+// invalidate it live once in `X64PrologueEpilogue`'s header; if that widens to 16 bytes, THIS widens with it,
+// and `assertGtFrameConsistent` is what makes forgetting the second half a compile-time panic.
 
 // The register the context switch reads `from` (arg 0) and `to` (arg 1) from — the ABI's first two integer
 // argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
@@ -81,18 +95,31 @@ let GtTrampGtReg = X64Register.r12
 let GtTrampArgBufReg = X64Register.r10
 let GtTrampFuncPtrReg = X64Register.r11
 
+// The bytes the context switch reserves below its GPR pushes for the callee-saved XMM half — one word per
+// register of `calleeSavedXmmOrder`, the same 8-byte width the prologue's slots use.
+function gtXmmSaveAreaBytes() returns StackSize
+	return calleeSavedXmmOrder.count() * GtArgSlotBytes
+end 'gtXmmSaveAreaBytes'
+
 // ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays `GtInitialFrameBytes`)
-// and this Target-tier byte code SHARE: a fresh GT's initial context-switch frame is `calleeSavedOrder.count()`
-// callee-saved words + one return-address word, each an 8-byte machine word (`GtArgSlotBytes`, the file's i64
-// word size). If a callee-saved register is added to or removed from `calleeSavedOrder` without moving
-// `GtInitialFrameBytes` in lockstep, the first switch-in pops the wrong number of words and `ret`s into a WILD
-// address. This turns that silent cross-tier drift into a compile-time panic on every async compile — a CHECK
-// where the two sides were previously tied only by a comment (feedback: DERIVE > CHECK > COMMENT).
+// and this Target-tier byte code SHARE: a fresh GT's initial context-switch frame is every callee-saved
+// register plus one return-address word. If a register is added to or removed from EITHER callee-saved list
+// without moving `GtInitialFrameBytes` in lockstep, the first switch-in pops the wrong number of bytes and
+// `ret`s into a WILD address. This turns that silent cross-tier drift into a compile-time panic on every
+// async compile — a CHECK where the two sides were previously tied only by a comment (feedback: DERIVE >
+// CHECK > COMMENT).
+//
+// ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS, AND THAT IS THE WHOLE POINT AT WAVE 2. The GPRs are pushed words; the
+// XMMs are `movsd` words in a `sub rsp` area, because x86-64 has no `push xmm`. Leaving this deriving from
+// `calleeSavedOrder` ALONE would have kept it passing while covering only half the frame — and the GT hazard
+// would have gone silent exactly as the callee-saved set grew. An assert that covers only the half that did
+// not change is worse than none: it reads as protection.
 function assertGtFrameConsistent()
-	let framedBytes = (calleeSavedOrder.count() + 1) * GtArgSlotBytes
+	let gprBytes = calleeSavedOrder.count() * GtArgSlotBytes
+	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + GtArgSlotBytes
 
 	if framedBytes != GtInitialFrameBytes 'drift'
-		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved words + 1 return-address word = {framedBytes} bytes, but GtInitialFrameBytes (the frame __gt_spawn lays) is {GtInitialFrameBytes} — a mismatch is a wild ret on the first switch-in")
+		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but GtInitialFrameBytes (the frame __gt_spawn lays) is {GtInitialFrameBytes} — a mismatch is a wild ret on the first switch-in")
 	end 'drift'
 end 'assertGtFrameConsistent'
 
@@ -107,6 +134,23 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	for reg in calleeSavedOrder 'push'
 		encodePushReg(code, reg: reg)
 	end 'push'
+
+	// ⭐⭐ AND THE CALLEE-SAVED XMMs (Wave 2) — `sub rsp` + `movsd`, because there is no `push xmm`.
+	//
+	// THIS IS NOT OPTIONAL AND IT IS NOT SYMMETRY FOR ITS OWN SAKE. Ordinary user code reaches this chunk
+	// through a normal `call` (`__gt_await` → `__gt_context_switch`), so the colorer treats it as a call
+	// clobbering exactly `callerSavedMask()` — which, since Wave 2, EXCLUDES xmm6-15. The colorer therefore
+	// believes a float in xmm6 survives this call. But this chunk does not return to its caller: it switches
+	// to a DIFFERENT green thread's stack, that thread runs arbitrary user code, and control comes back here
+	// only later. Without these saves the other thread's float work lands in xmm6-15 and the suspended
+	// thread resumes reading it — a silent wrong answer with no crash to find it by. Every other register the
+	// colorer believes survives a call is already saved above, for exactly this reason; Wave 2 added ten more
+	// to that set and this is where they are honoured.
+	encodePrologue(code, stackSize: gtXmmSaveAreaBytes())
+	for k in 0 upto calleeSavedXmmOrder.count() 'saveXmm'
+		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: save index derived from count is in range")
+		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: (k * GtArgSlotBytes) as Imm32, srcReg: reg)
+	end 'saveXmm'
 
 	// from->sp = rsp ; from->fp = rbp.
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp)
@@ -126,6 +170,15 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	// seeds a fresh GT's bounds; the save above keeps every GT's fresh). The pair keeps `gs:[0x08]`/`gs:[0x10]`
 	// consistent with RSP across every switch.
 	emitLoadTibFromGt(code, gtReg: GtSwitchToReg, scratch: GtSwitchTibScratchReg)
+
+	// Restore the callee-saved XMMs from the new stack FIRST — they sit BELOW the pushed GPR words, so rsp
+	// addresses them before the `add rsp` that releases their area. Restore order is free (each register has
+	// its own word rather than a stack position); only the GPR pops below are LIFO.
+	for k in 0 upto calleeSavedXmmOrder.count() 'restoreXmm'
+		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: restore index derived from count is in range")
+		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: (k * GtArgSlotBytes) as Imm32)
+	end 'restoreXmm'
+	encodeEpilogue(code, stackSize: gtXmmSaveAreaBytes())
 
 	// Restore callee-saved from the new stack, in reverse push order, then `ret` into to's saved return addr.
 	for i in 0 upto calleeSavedOrder.count() 'pop'

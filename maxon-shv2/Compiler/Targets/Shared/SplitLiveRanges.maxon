@@ -1225,17 +1225,27 @@ end 'refreshPeak'
 //     at least four candidates remain.
 //
 //     ⚠ THAT COUNTING ARGUMENT DOES NOT HOLD FOR AN EMPTY WITNESS, and this file used to state it as
-//     though it did. A value confined to ∅ — on x64, any float live across a call, since every XMM is
-//     caller-saved — puts the bound at "more than zero", so a tight set of exactly TWO satisfies it,
-//     and ONE op can read both. That is not hypothetical: it is
+//     though it did. A value confined to ∅ puts the bound at "more than zero", so a tight set of
+//     exactly TWO satisfies it, and ONE op can read both. That was not hypothetical: it was
 //     `register-spill.two-floats-multiplied-between-calls`, where a stranded reload and the stranded
 //     original met at the `mulsd` that reads them both and this panic fired on a program that fits
-//     the machine many times over.
+//     the machine many times over. At the time a float live across a call WAS confined to ∅, because
+//     Wave 1 took every XMM as caller-saved.
 //
 //     What closed it is upstream, not here: a reload is no longer BORN with an empty allowed set
 //     (`markRunStarts`), so the values confined to ∅ at any peak are originals only, and the call
 //     that confines them outranks the op that reads them. ⇒ REACHING HERE WITH AN EMPTY WITNESS
 //     POINTS AT THE RUN-BREAK, not at `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak`.
+//
+//     ⚠⚠ **WAVE 2 REMOVED THE ONLY WAY A *CALL* CAN PRODUCE ∅, AND THE GUARD STAYS ANYWAY.** xmm6–15
+//     are callee-saved now, so a float live across a call is confined to TEN registers and a GPR to
+//     FIVE — the counting argument holds for both files, and no call op's witness is empty. But ∅ is
+//     a property of the WITNESS, which is `classPool ∖ op.implicitDefs` for ANY fixed-register op,
+//     not only a call: an op whose `implicitDefs` covered a whole class would produce it again, and
+//     that mask is per-op inline data (`TargetOpMeta`) each new op declares for itself. The guard is
+//     therefore not DEAD, it is UNREACHED-BY-TODAY'S-OPS — a statement about the current op set, not
+//     about this code. It costs one compare on the panic path and is the only thing standing between
+//     a future op's clobber mask and a false E5001 against a program that fits the machine.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
 		if peak.witness == 0 'confinedToNothing'

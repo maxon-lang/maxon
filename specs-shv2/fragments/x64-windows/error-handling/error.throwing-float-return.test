@@ -45,18 +45,19 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
     x64.movRegImm rcx, -1
     x64.callDirect safeRoot
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
     x64.jmp trycont
   tryok:
+    x64.movRegReg xmm6, xmm0
     x64.jmp trycont
   trycont:
-    x64.storeSlotReg slot0, xmm0
     x64.movRegImm32 rcx, 5
     x64.callDirect safeRoot
     x64.cmpRegImm32 r10, 0
@@ -68,10 +69,10 @@ func @main {
   tryok:
     x64.jmp trycont
   trycont:
-    x64.loadRegSlot xmm1, slot0
-    x64.cvttsd2siRegReg rax, xmm1
+    x64.cvttsd2siRegReg rax, xmm6
     x64.cvttsd2siRegReg rcx, xmm0
     x64.leaRegRegReg r8, rax, rcx
+    x64.loadRegSlot xmm6, slot0
     x64.epilogue 48
     x64.popReg rbp
     x64.ret

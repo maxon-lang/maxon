@@ -649,17 +649,20 @@ end 'roundsdImm8'
 // register is extended — which is what makes `movsd xmm0, [rax]` its correct 4 bytes.
 //
 // ⚠ THE MEMORY FORM ZEROES BITS 64-127 of the destination, where the register-to-register form
-// MERGES them. Nothing here reads the upper half, so this is not a correctness lever today —
-// it is the fact that makes taking xmm6-15 as callee-saved a Wave 2 problem rather than a free
-// win, because Win64 preserves all 128 bits of them and `movsd` cannot save that.
-function encodeMovsdRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32)
+// MERGES them. Nothing in shv2 reads an XMM's upper half — every XMM value is a scalar f64 — so this
+// is the right instruction both for a value SPILL (whose slot is 8 bytes because an f64 is) AND for
+// preserving a CALLEE-SAVED xmm6-15 across a call, which Wave 2 does through the same 8-byte slot
+// ops. Win64 nominally asks a callee to preserve all 128 bits, but that obligation is owed to
+// EXTERNAL callers and shv2 has none; the full argument, and the condition that would invalidate it,
+// is stated once in `X64PrologueEpilogue`'s header.
+export function encodeMovsdRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32)
 	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: destReg, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
 end 'encodeMovsdRegBaseDisp'
 
 // `movsd [base + disp], srcXmm` (F2 0F 11 /r) — the store mirror of `encodeMovsdRegBaseDisp`.
 // The opcode is the ONLY difference (0x11 puts the XMM in the reg field as the SOURCE, the
 // same reg-field-is-source shape `mov r/m, r` has).
-function encodeMovsdBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register)
+export function encodeMovsdBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register)
 	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRmReg, regField: srcReg, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
 end 'encodeMovsdBaseDispReg'
 
@@ -1223,15 +1226,26 @@ end 'encodeRspAdjust'
 // only REX.B when the register is r8–r15 (r12–r15 are the callee-saved regs the
 // prologue pushes). `emitRex` with `wide: false` emits exactly that: nothing for
 // rax–rdi/rbx, `0x41` for an extended register.
+//
+// ⚠⚠ GPR-ONLY, AND THE CHECK IS NOT DEFENSIVE PADDING — **THERE IS NO `push xmm` IN x86-64.** This
+// encoder takes a register's low 3 bits and emits `push r64` unconditionally, so an XMM handed to it
+// assembles as the GPR sharing its low nibble: xmm3 and rbx both encode as 3, and the result is a
+// push of a register nobody named, with no error at any layer. That is precisely the mistake Wave 2
+// invited — the obvious way to make xmm6–15 callee-saved is to add them to `calleeSavedOrder`, which
+// this loop iterates. `requireClass` turns "there is no push xmm" from something a reader has to
+// remember into something the compiler states. (What Wave 2 does instead: frame slots, see
+// X64PrologueEpilogue.)
 export function encodePushReg(code ByteArray, reg X64Register)
-	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
-	code.push(OpcodePushBase + regLow3(reg))
+	let gpr = requireClass(reg, class: RegClass.gpr)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
+	code.push(OpcodePushBase + regLow3(gpr))
 end 'encodePushReg'
 
-// pop r64 (58+r) — the exact mirror of `encodePushReg`.
+// pop r64 (58+r) — the exact mirror of `encodePushReg`, class gate included.
 export function encodePopReg(code ByteArray, reg X64Register)
-	emitRex(code, wide: false, regField: X64Register.rax, rmField: reg)
-	code.push(OpcodePopBase + regLow3(reg))
+	let gpr = requireClass(reg, class: RegClass.gpr)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: gpr)
+	code.push(OpcodePopBase + regLow3(gpr))
 end 'encodePopReg'
 
 // prologue: reserve the frame with `sub rsp, stackSize`. A zero-size frame emits

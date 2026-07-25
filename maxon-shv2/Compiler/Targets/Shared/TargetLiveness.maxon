@@ -733,6 +733,19 @@ export type LivenessResult
 	// classifying a reload by its own op would answer GPR for a float and colour it into the wrong
 	// file. Defaulting the added entries to `gpr` would make that a SILENT wrong answer; making the
 	// caller name the class makes forgetting it a compile error.
+	//
+	// ⚠⚠ THE CLASS COLUMN IS WRITTEN OVER THE MINTED RANGE, NOT GROW-FILLED INTO IT — and that
+	// distinction is a shipped miscompile, not a nicety. **THE COLUMN CAN ALREADY BE LONGER THAN THE
+	// VALUE SPACE**: the allocator's `valueCount` is `scanFunctionValueCount`, which counts values a
+	// Target OPERAND names, while the lowering's column records a class for every value an op DEFINES
+	// — and a fused compare's boolean lives only in EFLAGS, so it is defined, never an operand, and
+	// (for `InsertRangeChecks`, which mints its cascade last) carries the function's HIGHEST id. Two
+	// honest counts of two different sets, so `column.count() > valueCount` is normal. A `growFilled`
+	// is then a silent NO-OP for exactly the ids this call exists to classify, and the split's fresh
+	// reload keeps the column's `gpr` fill: an f64 reload coloured into a GPR, surfacing far away as a
+	// cross-file `mov xmm1, rax` (`emitRegRegMove`) or a `cvttsd2si` whose source is `rcx`
+	// (`requireClass`) — one defect, two crash sites. Writing the range makes this function do what
+	// the paragraph above says it does.
 	export function growValueSpace(newValueCount ValueId, class RegClass)
 		if newValueCount < self.valueCount 'shrink'
 			panic("LivenessResult.growValueSpace: cannot shrink the value space from {self.valueCount} to {newValueCount}")
@@ -740,6 +753,10 @@ export type LivenessResult
 
 		self.forbidden.growFilled(newValueCount, value: 0)
 		self.valueClass.growFilled(newValueCount, value: class)
+		for v in self.valueCount upto newValueCount 'mintedRange'
+			try self.valueClass.set(v, value: class) otherwise panic("LivenessResult.growValueSpace: v{v} is outside the {self.valueClass.count()}-wide class column after growing it to {newValueCount} — a grow that just ensured the slot cannot leave it missing")
+		end 'mintedRange'
+
 		self.valueCount = newValueCount
 		self.wordsPerRow = bitsetWordsFor(newValueCount)
 	end 'growValueSpace'

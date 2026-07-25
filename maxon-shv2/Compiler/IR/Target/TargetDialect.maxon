@@ -486,7 +486,7 @@ export union TargetOp
 	// displacement. `mrt_start` uses this to `call main`. Full call-barrier
 	// semantics (clobbers caller-saved registers).
 	//
-	// implicitDefs = 0xFFFF0FC7 = every CALLER-SAVED register of BOTH files that the custom
+	// implicitDefs = 0x003F0FC7 = every CALLER-SAVED register of BOTH files that the custom
 	// ABI clobbers across a call.
 	//
 	// The GPR half is 0xFC7: {rax=0, rcx=1, rdx=2, rsi=6, rdi=7, r8=8, r9=9, r10=10, r11=11}
@@ -494,17 +494,23 @@ export union TargetOp
 	// are CALLEE-saved and DELIBERATELY EXCLUDED (rbx being wrongly clobbered was a shipped
 	// v1 regalloc bug — project_regalloc_crosscall_spill_fixes).
 	//
-	// The XMM half is 0xFFFF0000: ALL SIXTEEN of xmm0–15 (bits 16–31), because in Wave 1
-	// every XMM is caller-saved. That is bought deliberately — a float live across a call is
-	// then forbidden its ENTIRE file, has no register left, and FORCE-SPILLS. v1 got this
-	// wrong in both directions and its own float tests are disabled because of it: its
-	// `createX64CallerSavedFps()` takes no `os` parameter while its GPR twin does, so it
-	// applies a SysV table to Win64 and declares xmm6/7 caller-saved when Win64 preserves
-	// them; and its FP callee-saved half is literally empty.
+	// The XMM half is 0x003F0000: SIX registers, xmm0–5 (bits 16–21). xmm6–15 (0xFFC00000) are
+	// CALLEE-saved as of Wave 2, exactly as rbx/r12–r15 are on the GPR side, and are excluded here
+	// for the same reason. Wave 1 clobbered all sixteen: a float live across a call was then
+	// forbidden its ENTIRE file, had no register left, and FORCE-SPILLED a store/reload bracket at
+	// every call — which made `regalloc:splitting` measurably quadratic in the number of cross-call
+	// floats. v1 got this wrong in both directions and its own float tests are disabled because of
+	// it: its `createX64CallerSavedFps()` takes no `os` parameter while its GPR twin does, so it
+	// applies a SysV table to Win64 and declares xmm6/7 caller-saved when Win64 preserves them; and
+	// its FP callee-saved half is literally empty.
 	//
-	// ⚠ TAKING xmm6–15 AS CALLEE-SAVED IS WAVE 2, NOT A TWEAK. Win64 preserves all 128 bits
-	// of them, and `movsd` ZEROES bits 64–127 — so honouring that needs 16-byte spill slots
-	// and drags in leaf frame misalignment at the same time.
+	// ⚠ THE SAME MASK SERVES x64-windows AND x64-linux, and that is a decision rather than an
+	// oversight. shv2 uses its OWN internal ABI on every OS (see X64GtRuntime's header) — neither
+	// Win64 nor System V — and no shv2 function is ever called by anything external on either. The
+	// only outbound boundary is `iatCall` into genuinely Win64-compliant kernel32 functions, which
+	// really do preserve xmm6–15; x64-linux is raw-syscall + static ELF, and a `syscall` touches no
+	// XMM state at all. An OS-parameterized mask would buy nothing and would be a second copy of the
+	// call barrier. (v1 HAS such a parameter, named `_` and unused.)
 	//
 	// The liveness pass folds this mask into `forbiddenPhys` for every value live ACROSS a
 	// call, so such a value is forced into a callee-saved register OF ITS OWN FILE — and
@@ -512,7 +518,7 @@ export union TargetOp
 	// is subtracted from. That assert is why this literal and `callerSavedMask()` MUST move
 	// in one commit: it is the one-fact-one-place guard doing its job.
 	// A union-backing literal cannot reference a named `let`, so the mask is inline.
-	callDirect(targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	callDirect(targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
 	// this to `call ExitProcess`; `lowerOsAllocPages` uses it to `call VirtualAlloc`.
@@ -536,7 +542,7 @@ export union TargetOp
 	// `assertCallClobberConsistent` asserts BOTH call ops against `callerSavedMask()`, so the
 	// three cannot drift. A union-backing literal cannot reference a named `let`, which is why the
 	// mask is spelled inline here and guarded there rather than shared.
-	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 	// Sign-extend RAX into RDX:RAX (`cqo`, REX.W 99) so the following `idiv` divides the
 	// full 128-bit RDX:RAX by its operand. Both registers are IMPLICIT (no explicit
 	// operand): implicitUses = 0x1 (the RAX bit — `X64Register.rax.rawValue` == 0, so
@@ -957,7 +963,7 @@ export union TargetOp
 	// invariant), so every `… to arm64FpLoadRdata` range arm fails to compile until consciously extended.
 	//
 	// ⚠⚠ IT CANNOT REUSE `iatCall`, AND THE REASON IS THE CLOBBER. `iatCall`'s single `TargetOpMeta`
-	// carries the x64 caller-saved mask (0xFFFF0FC7), whose bits name x64 `RegNum`s — a DIFFERENT numbering
+	// carries the x64 caller-saved mask (0x003F0FC7), whose bits name x64 `RegNum`s — a DIFFERENT numbering
 	// from arm64's. Routing an arm64 mmap/write through `iatCall` would forbid a value live across it the
 	// x64 set (leaving x3/x4/x5/x12–x15, all arm64 caller-saved, free to colour and be clobbered): a silent
 	// miscompile, and `__slab_alloc` genuinely holds values live across its page call (the exact shape the
@@ -1015,13 +1021,13 @@ export union TargetOp
 	//
 	// ⚠⚠ **THE SAME CLOBBER MASK AS `callDirect`/`iatCall`, AND IT MUST STAY THAT WAY.** A call destroys
 	// the caller-saved set whether the target is a name or a register, so `implicitDefs` is the custom
-	// ABI's caller-saved mask `0xFFFF0FC7` — held equal to `callerSavedMask()` by
+	// ABI's caller-saved mask `0x003F0FC7` — held equal to `callerSavedMask()` by
 	// `assertCallClobberConsistent` alongside `callDirect`/`iatCall` (the one-fact-one-place guard). The
 	// callee register is a USE, so the liveness census forbids it the caller-saved set only if it is ALSO
 	// live ACROSS the call; live only UP TO the call (the common case), it may sit in an arg register the
 	// arg moves have not yet written. A union-backing literal cannot reference a named `let`, so the mask
 	// is inline and guarded there.
-	callReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	callReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 	// A raw Linux x86-64 `syscall` (`mov eax, number; 0F 05`) — the x64 sibling of `arm64Syscall`, and
 	// the reason x64-linux needs no import table, no IAT and no loader-bound imports: Windows reaches
 	// every OS primitive through the IAT (`iatCall`), Linux permits raw syscalls.
@@ -1036,8 +1042,8 @@ export union TargetOp
 	// op carries only the syscall NUMBER (the encoder materialises it into eax, where the ABI wants it).
 	//
 	// ⚠⚠ THE SAME CLOBBER MASK AS `iatCall`/`callDirect`, AND IT MUST STAY THAT WAY. `isCall: true` plus
-	// implicitDefs = 0xFFFF0FC7 (the custom ABI's caller-saved set — rax/rcx/rdx/rsi/rdi/r8..r11 + every
-	// XMM) confines any value live ACROSS the syscall to the callee-saved half, which is what keeps
+	// implicitDefs = 0x003F0FC7 (the custom ABI's caller-saved set — rax/rcx/rdx/rsi/rdi/r8..r11 +
+	// xmm0–5) confines any value live ACROSS the syscall to the callee-saved half, which is what keeps
 	// `__slab_alloc`'s bookkeeping (live across its mmap syscall) correct — the exact miscompile the
 	// `iatCall` comment records for `VirtualAlloc`. The `syscall` instruction clobbers rcx (rip) and r11
 	// (rflags) and the kernel returns in rax — all three are inside this mask, so the encoder is free to
@@ -1050,7 +1056,7 @@ export union TargetOp
 	// `TargetOp` stops at or before `callReg`, so an op inserted anywhere else would be silently
 	// swallowed — appending past the last arm makes each stale match fail to compile until it is
 	// consciously extended.
-	x64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	x64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 	// --- P1.1b slice 2: the DENSE-match jump table (x64 + arm64) ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `x64Syscall`, per the band-append invariant: every
@@ -1096,9 +1102,9 @@ export union TargetOp
 	//
 	// ⚠⚠ THE SAME CLOBBER MASK AS `callDirect`/`callReg`/`iatCall`, AND IT MUST STAY THAT WAY. A call destroys
 	// the caller-saved set whether the target is a name, a register or a memory operand, so `implicitDefs` is
-	// the custom ABI's caller-saved mask `0xFFFF0FC7` — held equal to `callerSavedMask()` by
+	// the custom ABI's caller-saved mask `0x003F0FC7` — held equal to `callerSavedMask()` by
 	// `assertX64CallClobbers` alongside `callDirect`/`callReg`/`iatCall`/`x64Syscall`.
-	callMem(baseReg TargetVReg, disp Imm32) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	callMem(baseReg TargetVReg, disp Imm32) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the
