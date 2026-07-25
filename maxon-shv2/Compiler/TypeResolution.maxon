@@ -4,6 +4,24 @@
 // unresolved type, and keeps the `funcReturnTypes` registry in sync with the
 // resolved module so SemanticCheck reads resolved types.
 //
+// ⭐ **THE CASCADE BELOW IS `denotedNamedType`, AND IT HAS THREE READERS, NOT ONE.** "What does this
+// name denote?" is asked by this pass (whose `unknown` verdict IS its E3011) AND by the two places a
+// program writes an `as`-cast target — `Parser.applyCast` for a body cast and `Parser.applyConstCast`
+// for a top-level `let`'s. Those two used to ask nothing at all: `parseTypeReference` hands back a
+// bare `MaxonType.named` for every type it cannot answer syntactically, `maxonTypeTag` reads all of
+// them as one tag, and so `5 as CompletelyMadeUpNameXyz` compiled and returned 5. The cure is the ONE
+// list, asked from all three — never a second cascade in the parser, which is this project's
+// signature bug (one fact written down twice) aimed at the question where the two copies would look
+// most alike.
+//
+// It reads the WHOLE-PROGRAM signature index rather than the `Project` registries, and that is what
+// makes it askable from the parser at all (the parser holds no `Project` — the pure-parser
+// invariant). The two hold the same declarations, folded from the same artifacts through the same
+// doors: `upsertDeclaredEnum` is the single write of BOTH enum registries and `createEnumRegistry`
+// seeds both, and the parser has ALREADY been deciding struct-ness from the index for every `named`
+// parameter and return type (`Parser.resolveNamedStruct`), so reading it here makes resolution agree
+// with the parser rather than merely with itself.
+//
 // A named type resolves through FOUR sources, in order:
 //
 //   1. The BUILTIN alias `ExitCode`, recognized by NAME — WITHOUT loading the stdlib
@@ -27,10 +45,11 @@
 //      later milestone.
 //
 // A named type in none of the four is a USER error (a typo, or a type this slice does not
-// have), not a compiler-invariant violation, and it reports E3011 — unpositioned, because the
-// parser records no source span for a type REFERENCE (only ops and parameter NAMES carry
-// one). See `resolveNamedType` for why an unpositioned diagnostic is the right trade and
-// what positioning it would cost.
+// have), not a compiler-invariant violation, and it is E3011. WHERE it is anchored is the
+// asking reader's to decide, which is why `denotedNamedType` raises `UnknownTypeName` rather
+// than reporting: a DECLARATION site reports unpositioned (nothing records a source span for a
+// type reference in a signature or a field — see `resolveNamedType`), while a CAST site is
+// anchored on the `as` the user wrote, because the parser holds that token when it asks.
 //
 // The integer literal `42` is already typed `integer` (→ i64) by the parser, so it
 // needs no resolution.
@@ -40,19 +59,32 @@
 // into a builtin-alias table (Character, etc.) when the stdlib cone lands.
 let ExitCodeBuiltinName = b"ExitCode"
 
+// `denotedNamedType`'s "this name is in none of the sources" answer. Payload-free — the caller
+// already holds the name it asked about — so it is a scalar and the throw allocates nothing on a
+// path taken once per named type reference in the program.
+export enum UnknownTypeName implements Error
+	notDeclared
+end 'UnknownTypeName'
+
 // Resolve every unresolved/named type in `module`'s function signatures to a
 // concrete `MaxonType`, and re-sync each function's resolved return type into
 // the project's `funcReturnTypes` registry (SemanticCheck's source of truth).
 export function resolveTypes(project Project, module MaxonModule)
+	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
+	// reference, and the memoized query is a map probe that has no business being on that path. (It
+	// used to be fetched inside `resolveNamedType`, on the rare qualified-alias arm only — this is
+	// strictly fewer fetches, not more.)
+	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
 	for i in 0 upto module.functions.count() 'eachFunc'
 		var func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
-		func.maxonReturnType = resolveReturnType(project, ret: func.maxonReturnType)
+		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType)
 
 		var resolvedParams = MaxonTypeArray.create()
 		for pt in func.maxonParamTypes 'eachParam'
-			resolvedParams.push(resolveType(project, t: pt))
+			resolvedParams.push(resolveType(project, signatures: signatures, t: pt))
 		end 'eachParam'
 		func.maxonParamTypes = resolvedParams
 
@@ -60,7 +92,7 @@ export function resolveTypes(project Project, module MaxonModule)
 		syncResolvedSignature(project, func: func)
 	end 'eachFunc'
 
-	checkStructFieldTypes(project)
+	checkStructFieldTypes(project, signatures: signatures)
 
 	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
 	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
@@ -102,10 +134,10 @@ end 'resolveTypes'
 // place this pass's diagnostics are not in declaration order. It is deterministic (the same program
 // hashes the same names into the same slots), which is what the byte-identical-output gate needs;
 // and a program with two undeclared field types has two independent bugs, not an ordering.
-function checkStructFieldTypes(project Project)
+function checkStructFieldTypes(project Project, signatures ProgramSignatures)
 	for (_, layout) in project.structTypes 'eachStruct'
 		for fieldType in layout.fieldTypes 'eachField'
-			_ = resolveType(project, t: fieldType)
+			_ = resolveType(project, signatures: signatures, t: fieldType)
 		end 'eachField'
 	end 'eachStruct'
 end 'checkStructFieldTypes'
@@ -131,20 +163,20 @@ function syncResolvedSignature(project Project, func IrFunction)
 	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: func.maxonParamTypes, paramAggregateNames: sig.paramAggregateNames))
 end 'syncResolvedSignature'
 
-function resolveReturnType(project Project, ret MaxonReturnType) returns MaxonReturnType
+function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType) returns MaxonReturnType
 	return match ret 'r'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(resolveType(project, t: inner))
+		value(inner) gives MaxonReturnType.value(resolveType(project, signatures: signatures, t: inner))
 	end 'r'
 end 'resolveReturnType'
 
-function resolveType(project Project, t MaxonType) returns MaxonType
+function resolveType(project Project, signatures ProgramSignatures, t MaxonType) returns MaxonType
 	match t 'r'
 		boolean then return t
 		integer then return t
 		float then return t
 		exitCode then return t
-		named(id) then return resolveNamedType(project, id: id)
+		named(id) then return resolveNamedType(project, signatures: signatures, id: id)
 		unresolved then panic("resolveTypes: `unresolved` reached type resolution — the parser emits no unresolved placeholders at M1")
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
 		// directly for `Self` (and for the enclosing type's own name) inside a `type` body, because
@@ -190,15 +222,25 @@ export function isCompilerOwnedTypeName(name ByteArray) returns bool
 	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(OrderingTypeName)
 end 'isCompilerOwnedTypeName'
 
-function resolveNamedType(project Project, id TypeNameId) returns MaxonType
-	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
+// The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it
+// denotes nothing. THE one list of the sources a named type can come from; see this file's header
+// for its three readers and for why it reads the signature index rather than `Project`.
+//
+// It THROWS rather than answering with a union case, and the reason is measured rather than
+// stylistic: a Maxon union with an associated value is heap-boxed, this is asked once per named type
+// reference in the whole program, and `RangedAliasRegistry.underlyingInAnyFile` already records what
+// one such box per reference cost (+36 × 2^n allocations across the scale ladder — a term that grows
+// with the PROGRAM, where every other cost of alias resolution grows only with the DECLARATIONS).
+// `UnknownTypeName` is payload-free, so it is a scalar; the caller already holds the name.
+export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId) returns MaxonType throws UnknownTypeName
 	if name.equals(ExitCodeBuiltinName) 'isExitCode'
 		return MaxonType.exitCode
 	end 'isExitCode'
 
 	// ⭐ A COMPILER-SYNTHESIZED RANGED INT ALIAS — `HashValue`, the result type of `Hashable.hash()`. It is in
-	// no alias registry (shv2 reads no stdlib, so its `typealias HashValue = int(0 to u32.max)` is not in
-	// `project.typeAliases`), and without this arm it is E3011 on every user `hash() returns HashValue`. It
+	// no alias registry (shv2 reads no stdlib module that declares it, so its
+	// `typealias HashValue = int(0 to u32.max)` is in no registry), and without this arm it is E3011 on
+	// every user `hash() returns HashValue`. It
 	// resolves to width-free `integer` exactly as a ranged int alias does (`alias.underlying` drops the
 	// range) — the u32 mask lives in the synthesized `int.hash` body, not the type. Handled inline like
 	// `ExitCode` rather than seeded into `typeAliases`, which `resetMergeTargets` recreates empty per
@@ -223,10 +265,11 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	// `typealias` and a `type` of one name would be a duplicate declaration, and (⚠) that is NOT
 	// yet diagnosed. It is a real gap, it belongs with the duplicate-`type` gap `commitStructTypes`
 	// records, and neither is this rung's.
-	// `contains`, not a fetch: the layout itself is not wanted here. Resolution answers WHICH TYPE
+	// `containsStruct`, not `structOf`: the layout itself is not wanted here, and `structOf` boxes a
+	// throwaway `DeclaredStruct.undeclared` for the COMMON no answer. Resolution answers WHICH TYPE
 	// this name is, and the answer is the id the reference already carries. The fields are the
 	// parser's question, asked of the signature index at the use site.
-	if project.structTypes.contains(name) 'isStruct'
+	if signatures.containsStruct(name) 'isStruct'
 		return MaxonType.structRef(id)
 	end 'isStruct'
 
@@ -241,7 +284,7 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	//
 	// The compiler-known `Ordering` resolves HERE rather than through an inline arm of its own, because
 	// `createEnumRegistry` seeds it INTO this registry — one registration, every reader, no arm to add.
-	if project.enumTypes.contains(name) 'isEnum'
+	if signatures.containsEnum(name) 'isEnum'
 		return MaxonType.integer
 	end 'isEnum'
 
@@ -257,7 +300,7 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	// declaring file. This is the HOTTEST reader of the registry — once per named type reference in
 	// the program — which is why the door it asks through hands back the primitive rather than a
 	// `DeclaredAlias` that would be heap-boxed per call.
-	if let underlying = try project.typeAliases.underlyingInAnyFile(name) 'isPlainAlias'
+	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'isPlainAlias'
 		return underlying
 	end 'isPlainAlias'
 
@@ -266,9 +309,8 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	// underlying primitive here, EXACTLY as a plain ranged alias does — so `maxonTypeToStdType` never sees a
 	// `named` residue in a signature or field type. The per-instance one's nominal name survives only in the
 	// VALUE column, where the front-end identity checks read it; a signature carries no identity. Reached only
-	// for a name that is NEITHER a plain alias nor an aggregate — a rare, dotted name — so the memoized
-	// `queryProgramSignatures` fetch and the qualified-name split never touch the plain-alias hot path.
-	let signatures = try queryProgramSignatures(project) otherwise panic("resolveNamedType: queryProgramSignatures failed inside resolveTypes — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	// for a name that is NEITHER a plain alias nor an aggregate — a rare, dotted name — so the qualified-name
+	// split never touches the plain-alias hot path.
 	match signatures.qualifiedAliasOf(name) 'qualified'
 		declared(alias) then return alias.underlying
 		undeclared then break 'qualified'
@@ -276,24 +318,40 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 
 	// A name in NONE of the sources is a USER error — a typo (`Scor` for `Score`), a bare
 	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
-	// user-defined type this slice does not have. It panicked until now, which was a
-	// tolerable bargain only while `ExitCode` was the sole legal named type and no
-	// source file could plausibly write another. Ranged typealiases ended that: naming a
-	// type is now the most ordinary thing a Maxon file does, and a one-character slip in
-	// one must not take the compiler down.
-	//
-	// UNPOSITIONED, exactly like E3001/E3002 — nothing records a source span for a type
-	// REFERENCE yet (only ops and parameter NAMES carry one), so there is no line to
-	// point at. Positioning it means threading that span from `parseTypeReference`
-	// through `FuncSignature` into the registry this pass reads, which is its own piece
-	// of work; a bare diagnostic beats a panic until it lands.
-	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: "Unknown type '{String.from(name)}'"))
+	// user-defined type this slice does not have. Each reader decides what to DO about it:
+	// this pass reports E3011 unpositioned and recovers, the two cast sites raise the same
+	// code anchored on the `as` they were written at.
+	throw UnknownTypeName.notDeclared
+end 'denotedNamedType'
 
-	// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
-	// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
-	// this pass returns. Nothing downstream ever reads it — it exists only to keep
-	// the module structurally well-formed for the instant in between, so that the
-	// rest of this pass can go on to report the OTHER unknown types in the file
-	// rather than stopping at the first.
-	return MaxonType.integer
+// The one wording of "this name denotes no type", shared by the anchorless declaration sites below
+// and by the `as`-cast sites in the parser (`Queries.reportParseError`'s `unknownCastTargetType`
+// arm), so one fact has one text however it is reached.
+export function unknownTypeMessage(typeName String) returns String
+	return "Unknown type '{typeName}'"
+end 'unknownTypeMessage'
+
+// `denotedNamedType` for the DECLARATION sites this pass walks — a parameter, a return type, a
+// struct field. Each reports and recovers rather than failing the pass, so a file with three
+// undeclared types reports three diagnostics.
+//
+// UNPOSITIONED, exactly like E3001/E3002 — nothing records a source span for a type REFERENCE in a
+// DECLARATION (only ops and parameter NAMES carry one), so there is no line to point at. Positioning
+// it means threading that span from `parseTypeReference` through `FuncSignature` into the registry
+// this pass reads, which is its own piece of work. ⚠ It is NOT a property of the diagnostic: a cast
+// target reaches the same verdict POSITIONED, because the parser holds the `as` token when it asks.
+function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId) returns MaxonType
+	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
+
+	return try denotedNamedType(signatures, name: name, id: id) otherwise 'undeclared'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name))))
+
+		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
+		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
+		// this pass returns. Nothing downstream ever reads it — it exists only to keep
+		// the module structurally well-formed for the instant in between, so that the
+		// rest of this pass can go on to report the OTHER unknown types in the file
+		// rather than stopping at the first.
+		return MaxonType.integer
+	end 'undeclared'
 end 'resolveNamedType'

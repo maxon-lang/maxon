@@ -285,6 +285,15 @@ export union ParseError implements Error
 	// aggregate's POINTER flowed on typed as the numeric target and either miscompiled (a range check
 	// on a struct pointer) or was caught only downstream at the next type-checked position.
 	invalidCast(sourceType String, targetType String, line LineNumber, column ColumnNumber)
+	// An `as` cast whose TARGET NAME denotes no type at all — a typo (`Scor` for `Score`), a bare sized
+	// name (`u8` is not a type in Maxon; a ranged alias over it is), or a type this slice does not have.
+	// Renders as **E3011**, the SAME code `TypeResolution` gives the identical fact met at a parameter, a
+	// return type or a field, and from the SAME authority (`denotedNamedType`) — so a name cannot be a
+	// type in one position and not in another. Raised by BOTH cast sites (`castTargetTag` for a body
+	// cast, `requireConstCastTargetKind` for a top-level `let`'s), positioned at the `as`, which is the
+	// half the declaration sites cannot do: they record no span for a type REFERENCE. Before this the
+	// cast silently evaporated and the program ran (`5 as CompletelyMadeUpNameXyz` returned 5).
+	unknownCastTargetType(typeName String, line LineNumber, column ColumnNumber)
 	// P1.5-A1: a THROWING function referenced as a VALUE (`let f = risky`). A function type has no throws
 	// clause, so the binding would drop it and there is no indirect try-call to carry it back. Renders as
 	// E3101, positioned at the function name. `errorType` is the thrown enum's name (the callee's `throws
@@ -14196,7 +14205,7 @@ export type Parser
 		// `promoteToFloat` or a range check on a POINTER, or leave a mismatched drop (a String drop run on a
 		// struct box — a double free). See `castHasNoLegalConversion` and `ParseError.invalidCast`.
 		let sourceTag = self.tagOf(value)
-		let targetTag = maxonTypeTag(targetType)
+		let targetTag = try self.castTargetTag(targetType, asTok: asTok)
 		if castHasNoLegalConversion(sourceTag, target: targetTag) 'incompatibleKinds'
 			throw ParseError.invalidCast(typeTagName(sourceTag), targetType: typeTagName(targetTag), line: asTok.line, column: asTok.column)
 		end 'incompatibleKinds'
@@ -14228,6 +14237,40 @@ export type Parser
 		self.recordCastSite(value, targetType: targetType, asTok: asTok)
 		return value
 	end 'applyCast'
+
+	// ⭐ **THE CAST TARGET'S KIND AS THE AUTHORITY DENOTES IT — not as `maxonTypeTag` reads the
+	// SPELLING.** `parseTypeReference` answers a handful of type spellings syntactically (`Self`, the
+	// enclosing type's own name, `String`, a type parameter, a generic-instance alias, a function
+	// alias) and hands back a bare `MaxonType.named` for everything else — a declared `type` named
+	// from OUTSIDE its own body, a declared enum/union, a ranged typealias, a qualified inner alias,
+	// and a name nothing declares at all. `maxonTypeTag` reads all five as one tag, so the legality
+	// gate was asking about a NAME, and its answer for a name that denotes nothing was the same as
+	// for a ranged int alias: convert nothing, flow the value on. `5 as CompletelyMadeUpNameXyz`
+	// compiled and returned 5; so did `5 as Point`, which `applyCast`'s own header claims to reject.
+	//
+	// `denotedNamedType` is THE list of the sources a named type can come from — the same list whose
+	// `unknown` verdict is `TypeResolution`'s E3011 — so a cast site and the resolution pass cannot
+	// come to disagree about what a name means. There is deliberately no second cascade here.
+	//
+	// ⚠ **THE RESOLVED TYPE IS FOR THIS GATE ONLY and is NOT substituted for `targetType`.** The
+	// conversion below still reads the `named` type, because that is what carries the alias NAME a
+	// narrowing check records (`recordCastSite`) and the nominal identity a per-instance cast stamps
+	// (`castConvertsPerInstance`). Erasing it here would silently drop both — the erasure is the
+	// SIGNATURE's, not the cast's.
+	function castTargetTag(targetType MaxonType, asTok Token) returns ValueTypeTag throws ParseError
+		let spelledTag = maxonTypeTag(targetType)
+		if spelledTag != ValueTypeTag.named 'alreadyConcrete'
+			return spelledTag
+		end 'alreadyConcrete'
+
+		let nameId = typeNameIdOf(targetType)
+		let name = self.internedName(nameId)
+		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise 'undeclared'
+			throw ParseError.unknownCastTargetType(String.from(name), line: asTok.line, column: asTok.column)
+		end 'undeclared'
+
+		return maxonTypeTag(denoted)
+	end 'castTargetTag'
 
 	// Does this int→int `as` convert per-instance identity (P1.6-C) — either STAMPING a per-instance target
 	// onto the result (`x as StrWrapper.Idx`) or STRIPPING a per-instance source into a plain target
@@ -19422,12 +19465,43 @@ export type Parser
 		if self.at(TokenKind.identifier) or self.at(TokenKind.int) or self.at(TokenKind.bool) or self.at(TokenKind.float) 'targetType'
 			let targetTok = self.current()
 			self.advance()
+			try self.requireConstCastTargetKind(value, targetTok: targetTok, asTok: asTok)
 			try self.checkConstCastRange(value, targetTok: targetTok, asTok: asTok)
 			return value
 		end 'targetType'
 		let tok = self.current()
 		throw ConstEvalError.defective(ParseError.nonConstantInitializer("cast target", leftover: String.from(tok.value), line: tok.line, column: tok.column))
 	end 'applyConstCast'
+
+	// ⭐ **`castTargetTag`'S CONST TWIN — THE SECOND PLACE A CAST TARGET IS WRITTEN.** A top-level
+	// `let X = 5 as T` never reaches the expression path: it is folded here, by a walk driven from
+	// `ProgramSignatures.evaluateInitializers` before any file is parsed. Checking only `applyCast`
+	// would have left `let SENTINEL = 5 as Bogus` evaporating exactly as it always had — half a fact,
+	// which is worse than none, because the half that works makes the other half look tested.
+	//
+	// It asks the identical authority and raises the identical two diagnostics, anchored on the same
+	// `as` token, so the two spellings of one mistake are reported identically.
+	//
+	// A PRIMITIVE-KEYWORD target (`int`/`bool`/`float`) denotes itself and is never `named`, so only
+	// the identifier form has anything to look up. ⚠ The id handed to the authority is the filler
+	// `UnnamedTypeId`: this walk STORES no type — it reads only the target's KIND — and the id rides
+	// exactly one arm (a declared `type`'s `structRef`), whose TAG is all this gate reads. It is also
+	// the only id available: the const evaluator "emits no ops and touches no artifact", so it has no
+	// interner of its own, and minting into the signature index's would mutate a memo mid-build.
+	function requireConstCastTargetKind(value ConstValue, targetTok Token, asTok Token) throws ConstEvalError
+		if targetTok.kind != TokenKind.identifier 'primitiveKeyword'
+			return
+		end 'primitiveKeyword'
+
+		let denoted = try denotedNamedType(self.signatures, name: targetTok.value, id: UnnamedTypeId) otherwise 'undeclared'
+			throw ConstEvalError.defective(ParseError.unknownCastTargetType(String.from(targetTok.value), line: asTok.line, column: asTok.column))
+		end 'undeclared'
+
+		let targetTag = maxonTypeTag(denoted)
+		if castHasNoLegalConversion(value.tag, target: targetTag) 'incompatibleKinds'
+			throw ConstEvalError.defective(ParseError.invalidCast(typeTagName(value.tag), targetType: typeTagName(targetTag), line: asTok.line, column: asTok.column))
+		end 'incompatibleKinds'
+	end 'requireConstCastTargetKind'
 
 	// Compile-time range check for a constant `as` cast — the top-level `let` half of the narrowing
 	// E3005, mirroring `InsertRangeChecks.needsRuntimeGuard`'s literal path. It fires only for a

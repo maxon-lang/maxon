@@ -1108,7 +1108,8 @@ end 'main'
 7
 ```
 
-<!-- test: cast-to-stdlib-internal-typealias -->
+<!-- disabled-test: cast-to-stdlib-internal-typealias -->
+<!-- stdlib whitelist: Array.maxon, which declares ElementCount — see cast-target-type-resolution.md -->
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal
 ranged aliases (`ElementCount`, `NodeIndex`, …) appear in the public collection

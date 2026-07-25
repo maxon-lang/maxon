@@ -441,6 +441,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// legal conversion), one code. Byte-for-byte the bootstrap's `ValidateCast` text, so the two
 		// compilers reject an incompatible-kind cast identically (`Cannot cast from String to int`).
 		invalidCast(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "Cannot cast from {sourceType} to {targetType}", line: line, column: column, filePath: path)
+		// E3011 and `unknownTypeMessage` — the SAME code and the SAME wording `TypeResolution` gives an
+		// undeclared type met at a parameter, a return type or a field, because it is one fact met at a
+		// fourth position. Only the ANCHOR differs, and in this direction: a cast has one.
+		unknownCastTargetType(typeName, line, column) then reportPositioned(project, code: ErrorCode.unknownType, message: unknownTypeMessage(typeName), line: line, column: column, filePath: path)
 		throwingFunctionAsValue(name, errorType, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionAsValue, message: "Cannot use throwing function '{name}' as a value: it throws '{errorType}', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.", line: line, column: column, filePath: path)
 		capturingClosureEscapes(message, line, column) then reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: message, line: line, column: column, filePath: path)
 		giveTypeMismatch(got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "match arms give incompatible types: '{got}' vs '{expected}'", line: line, column: column, filePath: path)
