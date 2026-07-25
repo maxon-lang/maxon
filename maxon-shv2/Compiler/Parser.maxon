@@ -1016,9 +1016,14 @@ let MethodNameSeparator = "."
 // What makes the duplication safe is not this comment: it is that the two copies have a TEST between them.
 // Every direct builtin-conformance dispatch resolves through `isCompilerInternalCallee` →
 // `isBuiltinConformanceImplName` → `isQualifiedUnderTypeName`, so a byte here that disagrees with the join
-// above makes every `int.compare`/`float.compare`/`bool.compare`/`int.hash`/`*.equals` call fail to be
-// recognized as compiler-owned and the eighteen `primitive-comparable`/`primitive-hashable`/
-// `method-call-on-call-result` cases go RED with E3004. The copies cannot drift silently.
+// above makes EVERY direct builtin-conformance call fail to be recognized as compiler-owned, and every
+// `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` case goes RED with E3004. The
+// copies cannot drift silently.
+//
+// ⚠ It deliberately quotes neither the impl roster nor a case COUNT. Both were written out here, and both
+// were stale within one rung of being written — the count said "eight" when there were nineteen. What the
+// check is worth does not depend on the number, and a number nothing verifies is just a second place to be
+// wrong.
 let MethodNameSeparatorBytes = b"."
 
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
