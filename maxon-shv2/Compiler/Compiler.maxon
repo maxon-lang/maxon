@@ -165,7 +165,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// project twice, and a layout that accumulated would double every slot on the second pass.
 	// Same discipline as `resetMergeTargets` — the arena is the source of truth, the derived table
 	// is rebuilt from it.
-	let signatures = try queryProgramSignatures(project)
+	// ⚠ `var`, because the index MEMOIZES: `mangleGenericInstance` derives each instance's compiled name
+	// on first ask and keeps it (`CompiledInstanceNameMap`), and every pass below asks. One binding, so
+	// the derivation is shared by all of them rather than repeated per pass.
+	var signatures = try queryProgramSignatures(project)
 
 	// ⭐ **WHERE-CONSTRAINT VALIDATION (P1.7a slice 2a — E3017) — HERE, after the instances are interned.**
 	// Every `Box with Foo where T is Digest` instantiation is checked: `Foo` must declare `implements Digest`,

@@ -852,7 +852,7 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 	// body the Maxon scan cannot see, so the bits are declared here. A String inside a nested struct/instance
 	// field is dropped by that nested destructor, so only a DIRECT substituted String turns on `usesStrDecref`.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray())) 'referenced'
+		if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id))) 'referenced'
 			usage.usesHeap = true
 			if signatures.genericInstanceHasStringField(id) 'hasString'
 				usage.usesStrDecref = true
@@ -911,7 +911,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	end 'eachUnion'
 
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		work.register(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray()), node: CascadeNode.genericInstance(id))
+		work.register(destructorSymbol(signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
 	end 'eachInstance'
 
 	work.seed(usage.neededDestructors)
@@ -1128,7 +1128,7 @@ function synthesizeGenericInstanceDestructor(module StdModule, id GenericInstanc
 		end 'scalarField'
 		drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), callee: signatures.genericInstanceFieldDropCallee(id, index: i)))
 	end 'eachField'
-	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(signatures.mangleGenericInstance(id).toByteArray()), drops: drops)
+	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(signatures.mangleGenericInstance(id)), drops: drops)
 end 'synthesizeGenericInstanceDestructor'
 
 // ⭐ **THE PER-INSTANCE DESTRUCTOR INSTALLER (P1.6-B2)** — the generic-instance twin of
@@ -1140,7 +1140,7 @@ export function installGenericInstanceDestructors(module StdModule, signatures P
 		if not signatures.genericInstanceHasManagedField(id) 'noManaged'
 			continue
 		end 'noManaged'
-		if not needed.contains(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray())) 'notReferenced'
+		if not needed.contains(destructorSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
 			continue
 		end 'notReferenced'
 		synthesizeGenericInstanceDestructor(module, id: id, signatures: signatures)

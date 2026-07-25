@@ -1243,6 +1243,30 @@ export typealias GenericAliasMap = Map with (ByteArray, GenericInstanceId)
 export typealias GenericInstanceIdArray = Array with GenericInstanceId
 export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstanceIdArray)
 
+// ⭐⭐ **gid ⇒ ITS COMPILED NAME, DERIVED ONCE.** A generic instance's mangling is a pure function of its
+// base name and its args, both FIXED at intern time and neither ever revised — so it is derivable once
+// and asked many times. It was derived many times: EIGHT call sites ask — `mangleTypeArg`'s own nested
+// arm, the drop-callee router, the descriptor label, four `MmRuntime` cascade passes and the E3006
+// compiled-name check — and each ask REBUILT the whole string.
+//
+// ⚠ **THAT REBUILD IS RECURSIVE, WHICH MADE IT QUADRATIC.** `mangleTypeArg`'s nested arm re-enters
+// `mangleGenericInstance`, so deriving `Wrap with (Wrap with (… Small))` at depth d re-derived all d
+// enclosing names — Θ(d) per ask, Θ(Σd) = Θ(N²) over the program, at every one of those sites.
+// MEASURED on a hand-written chain of N inline-nested instantiations (a ~5 KB source file): allocations
+// inside `mangleGenericInstance` were 9,897 / 39,797 / 159,597 at N = 50 / 100 / 200 — **x4.02 and x4.01
+// per doubling, a textbook quadratic** — and 87% of every allocation the compile made. Compile time was
+// 51 / 109 / 344 / 1,360 / 5,922 ms at N = 100…1,600 (x4.0-4.4 per doubling), and 97% of it was
+// UNATTRIBUTED in the per-phase table, because the passes that ask sit between phase brackets.
+//
+// With the memo each name is built ONCE, from its argument's ALREADY-BUILT name: O(1) map probe per ask,
+// O(arity) appends per distinct instance. Total allocations become O(instances); total BYTES stay Θ(N²)
+// for a nested chain and that half is irreducible — name `i` genuinely IS `i` levels long.
+//
+// Keyed by gid rather than positional, so it does not care that instances are interned in two waves
+// (the signatures sweep, then `Array`/`Set` literals during parse) — a gid is append-only and its
+// mangling is settled the moment it exists.
+export typealias CompiledInstanceNameMap = Map with (GenericInstanceId, ByteArray)
+
 // The element type NAMES whose `Array with <name>` literal instance the sweep has ALREADY over-interned
 // (P1.7 slice 3). `internArrayLiteralAggregateInstances` runs once per file that materializes a
 // `[<identifier>…]` literal and over-interns `Array with <every declared struct/union>`; because the
@@ -1589,6 +1613,9 @@ export type ProgramSignatures
 	// remaps each entry's args into `typeNames` before interning. Read by the parser to resolve a
 	// generic-alias call base and to check a generic instance's arity / managed args.
 	var genericInstances as GenericInstanceRegistry
+	// Each interned instance's COMPILED name, derived on first ask and kept — see `CompiledInstanceNameMap`
+	// for the quadratic this removes. Empty for a program that instantiates no generic.
+	var compiledInstanceNames as CompiledInstanceNameMap
 	// The element type names whose `Array with <name>` managed-literal instance has already been over-interned
 	// by an earlier file's sweep (P1.7 slice 3) — the dedup that keeps `internArrayLiteralAggregateInstances`
 	// O(types) rather than O(files × types). See `ArrayLiteralElementNameSet`.
@@ -1668,7 +1695,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -3217,7 +3244,7 @@ export type ProgramSignatures
 			return String.from(self.nameOfId(typeNameIdOf(t)))
 		end 'namedOrStruct'
 		if tag == ValueTypeTag.genericInstance 'nested'
-			return self.mangleGenericInstance(typeNameIdOf(t))
+			return String.from(self.mangleGenericInstance(typeNameIdOf(t)))
 		end 'nested'
 		// An OPAQUE type-parameter argument (`Array with T` inside a generic body, P1.7 slice 3b-i) — its
 		// instance `Array with typeParameter(pos)` is interned like any other, so its structural mangling names
@@ -3264,12 +3291,30 @@ export type ProgramSignatures
 	// The structural mangling of a generic instance itself — `Box_Integer` for `Box with Integer` — the
 	// base name joined to each argument's mangling. Shared by `mangleTypeArg` (a nested-instance argument)
 	// and lowering's descriptor-label builder.
-	export function mangleGenericInstance(id GenericInstanceId) returns String
+	//
+	// ⚠ **DERIVED ONCE PER INSTANCE, AND THAT IS NOT A CONSTANT-FACTOR TIDY-UP** — the derivation is
+	// RECURSIVE through `mangleTypeArg`'s nested arm, so re-deriving on every ask was quadratic in
+	// nesting depth. `CompiledInstanceNameMap` carries the measurement.
+	//
+	// Returns the `ByteArray` six of the eight callers want (a symbol name is bytes, and each of those six
+	// used to convert on the spot); the two that want a `String` say so. It hands back the memo's own
+	// handle, so an ask costs a retain rather than a rebuild — safe because every consumer either READS it
+	// (a map key, a `Set.contains` probe) or builds a NEW string around it (`destructorSymbol`,
+	// `String.from`), and none writes through it.
+	export function mangleGenericInstance(id GenericInstanceId) returns ByteArray
+		if let derived = try self.compiledInstanceNames.get(id) 'alreadyDerived'
+			return derived
+		end 'alreadyDerived'
+
 		var out = String.from(self.genericInstanceBaseName(id))
 		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
-			out.append("_{self.mangleTypeArg(arg)}")
+			out.append("_")
+			out.append(self.mangleTypeArg(arg))
 		end 'eachArg'
-		return out
+
+		let name = out.toByteArray()
+		self.compiledInstanceNames.upsert(id, value: name)
+		return name
 	end 'mangleGenericInstance'
 
 	// --- Generic-instance managed drop (P1.6-B2) ---
@@ -3564,7 +3609,7 @@ export type ProgramSignatures
 			return SetDecrefName
 		end 'set'
 		if self.genericInstanceHasManagedField(id) 'managed'
-			return destructorSymbol(self.mangleGenericInstance(id).toByteArray())
+			return destructorSymbol(self.mangleGenericInstance(id))
 		end 'managed'
 		return MmDecrefName
 	end 'genericInstanceBoxDropCallee'
