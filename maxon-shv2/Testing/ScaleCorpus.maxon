@@ -1,11 +1,12 @@
 // ScaleCorpus — the generated ladder the scale suite measures.
 //
-// ONE PROGRAM PER RUNG, and each rung DOUBLES all fifteen structural knobs at once. Six rungs is a
-// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be fifteen ladders
-// and ninety compiles to learn the same thing, because the question is never "which knob is
+// ONE PROGRAM PER RUNG, and each rung DOUBLES all twenty-five structural knobs at once. Six rungs is a
+// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be twenty-five ladders
+// and a hundred and fifty compiles to learn the same thing, because the question is never "which knob is
 // the compiler slow in" (the per-phase table answers that already) but "does the whole thing stay
-// linear as a program grows", and a program grows in every direction at once. (Two SHIFT shapes ride
-// along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`.)
+// linear as a program grows", and a program grows in every direction at once. (Some shapes ride
+// along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`
+// and `scalarCoverageSource`.)
 //
 // ⚠ THE CORPUS NOW DECLARES ITSELF. Every run prints `printCorpusManifest` — the constructs it
 // generates, the dimensions it scales, and, load-bearing, the ones it structurally CANNOT see (it
@@ -78,24 +79,40 @@
 //
 // THE SUBSET: shv2 implements `int` AND `float` arithmetic (including integer `/` and `mod`),
 // functions (<=6 params), `if`, `while`, `break`, `return`, body-local `let`/`var`, TOP-LEVEL
-// `let`/`var`, `type` declarations with field reads, bitwise + shifts (`and`/`shl`/`shr`), and ranged
-// typealiases. No `print`, no arrays, no strings, no `for`, no `match`, no `as` casts. Everything
-// below stays inside it — and `printCorpusManifest` states exactly this boundary on every run, so a
-// construct outside it (and the codegen change to it that would be invisible) is NAMED rather than
-// silently absent.
+// `let`/`var`, `type` declarations with field reads AND writes, structs across a call, `enum` + `match`,
+// `String`, `Array`, unconstrained generics, interfaces with concrete dispatch, `print`, `or`/`xor`/`not`,
+// `as` casts, bitwise + shifts (`and`/`shl`/`shr`), and ranged typealiases. No `for`, no closures, no
+// async, no witness-table dispatch. Everything below stays inside it — and `printCorpusManifest` states
+// exactly this boundary on every run, so a construct outside it (and the codegen change to it that would
+// be invisible) is NAMED rather than silently absent.
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
-// This is the file's most durable defect, and it has now recurred FOUR times:
+// This is the file's most durable defect, and it has now recurred FIVE times:
 //   • `float` was in the subset for a full rung before one line of this file generated any. See
 //     `FloatOpsBase` for what that cost (a panicking emitter, shipped).
 //   • integer `/` and `mod` were in it since P1.0d.3 — the entire `idiv` fixed-register path — and
 //     every `/` the corpus emitted was a FLOAT `/`. See `IntDivideBase`.
 //   • top-level `let` and `var` were in it for TWO rungs, 36 spec tests' worth. See `GlobalConstsBase`.
 //   • `type` declarations were in it from P1.0r, the rung that gave shv2 a HEAP. See `StructTypesBase`.
+//   • ⭐ AND THEN TEN RUNGS AT ONCE. `match`, `enum`, `String`, `Array`, generics and interfaces —
+//     everything from P1.1b to P1.7a — were in the subset and the corpus generated NOT ONE of them.
+//     Measured on the ladder this file shipped with: `match` 0, `enum` 0, `String` 0, `Array with` 0,
+//     `type ... uses` 0, `interface` 0, `implements` 0, `print(` 0, ` or ` 0, ` xor ` 0, struct field
+//     WRITE 0 — at rung 0 AND at rung 5, in 109,697 lines. So the one artifact that answers *"what has
+//     this compiler's cost actually done, change by change"* was measuring the compiler roughly as it
+//     stood at P1.1a, and rung after rung of PLAN.md recorded `scale allocsΔ0 … the corpus is
+//     generics-free / Set-free / conformance-free` — which is not evidence of anything. Every optimizer
+//     instead built a throwaway ladder of its own and discarded it. See `EnumTypesBase` onwards.
 //
 // The manifest named the first two as blind spots the whole time and they were read as footnotes. It
-// did not name the last two AT ALL — see `printCorpusManifest`, which is now the load-bearing half of
-// this file rather than its documentation.
+// did not name the third and fourth AT ALL. And for the fifth it did worse than either: it named the
+// families under NOT GENERATED while also making two CLAIMS THAT HAD STOPPED BEING TRUE — that struct
+// field writes were "P1.1a wave 2 and NOT IMPLEMENTED" and a struct crossing a call "P1.4, deferred on
+// the borrow-vs-consume ruling". Both had shipped; `specs-shv2/challenge-struct-field-assign.md` and
+// `struct-managed-field.md` had live tests for them. A manifest that names a gap with the WRONG reason
+// is worse than one that omits it, because the reason is what a reader uses to decide whether to close
+// it. See `printCorpusManifest`, which is the load-bearing half of this file rather than its
+// documentation.
 
 // Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
 // exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
@@ -143,7 +160,7 @@ end 'parseRungCount'
 export typealias KnobSize = int(1 to 1048576)
 
 // ===========================================================================================
-// The fifteen knobs, and their rung-0 sizes
+// The twenty-five knobs, and their rung-0 sizes
 // ===========================================================================================
 //
 // Each is `base << rung`. The bases are tuned so that rung 0 clears fixed process + stdlib
@@ -476,6 +493,155 @@ let PressuredValuesPerLoop = 8 as KnobSize
 let GeneratedLoopTrips = 4
 
 // ===========================================================================================
+// The ten knobs for what the language gained between P1.1b and P1.7a
+// ===========================================================================================
+//
+// ⚠ THIS IS THE FIFTH — AND LARGEST — RECURRENCE OF THIS FILE'S FOUNDING DEFECT, AND IT WAS TEN RUNGS
+// DEEP. See the header for the measurement: `match`, `enum`, `String`, `Array`, generics, interfaces,
+// `print`, `or`/`xor`, and struct field WRITES were all in the subset and the corpus generated ZERO of
+// each, at every rung. The knobs below close it.
+//
+// EVERY ONE OF THEM IS CROSS-TARGET-SAFE, AND THAT IS A HARD CONSTRAINT, NOT A PREFERENCE. `compileRung`
+// spawns `build` with NO `--target`, so the ladder always compiles for the HOST — and `witnessCall` on
+// arm64/wasm is a `panic(...)`, not a clean diagnostic, so a rung that generated one would fail to
+// compile and take the WHOLE RUN down through `brokenRun`. So: unconstrained generics only (no `where`
+// clause anywhere ⇒ no witness table ⇒ no `funcAbs64InRdata` relocation), interfaces reached by CONCRETE
+// dispatch only (no `where T is I`), and no `Set`. Those three, plus opaque-`T` managed arrays, are the
+// x64-only families this ladder must not emit; `printCorpusManifest` names them under NOT GENERATED with
+// exactly that reason.
+
+// ONE file, N `enum` declarations, each matched exhaustively once — the PER-TYPE cost: the enum
+// registry, its case table, and the tag's scalar backing.
+//
+// ⚠ NOT `matchSites` WITH A DIFFERENT NUMBER, and the separation is the same one `structTypes` keeps
+// against `structAllocs`. This knob grows how many enums the compiler must DECLARE and lay out; that one
+// grows how many `match` SITES dispatch over a fixed set of them. A change to enum declaration or tag
+// layout moves this column and not that one; a change to the dispatch STRATEGY moves that one and not
+// this one. Two knobs that a future change must be free to move independently are not one knob.
+let EnumTypesBase = 4 as KnobSize
+
+// How many cases each generated enum declares.
+//
+// ⚠ FOUR, AND THE NUMBER IS LOAD-BEARING — it is `Parser.MinIntervalsForDispatch`. At or above four
+// disjoint intervals a `match` lowers to a balanced binary search or, if the covered span is dense
+// enough, a JUMP TABLE; below four it lowers to a linear compare chain. Three cases here would make the
+// dense statement-form site and the range-folded expression-form site pick the SAME strategy, and the
+// jump table — an `.rdata` table plus an indirect jump — would be generated nowhere in the corpus.
+let EnumCasesPerType = 4 as KnobSize
+
+// ONE file, M `match` SITES over a FIXED pair of enums — the PER-SITE cost: the normalized dispatch
+// interval list, the strategy chosen from it, and the blocks and phis it mints.
+//
+// ⚠ IT ROTATES OVER ALL THREE DISPATCH STRATEGIES, because a corpus that generated only one would
+// measure a third of the lowering — the mistake `IntDivideBase` records for `idiv` (the corpus was full
+// of `/` and every one was a FLOAT `/`). See `matchSitesSource` for which shape provokes which.
+let MatchSitesBase = 16 as KnobSize
+
+// The three site SHAPES `matchSitesSource` rotates over: statement-form dense (jump table),
+// expression-form range-folded (linear chain), expression-form sparse (binary search).
+let MatchDispatchShapeCount = 3 as KnobSize
+
+// The raw-value stride between the SPARSE enum's cases — what forces a binary search rather than a
+// table. `Parser.MaxTableSlotsPerInterval` is 32, so four cases spanning `3 * stride + 1` slots must
+// exceed 128 covered slots to be refused a table: a stride of 100 spans 301 slots at 1.3% density,
+// nowhere near the 40% floor. A stride of 1 would be the dense case and this shape would collapse into
+// the one above it.
+let MatchSparseCaseStride = 100
+
+// ONE file, M `String` operation groups — the per-SITE cost of the heap String: a literal's `.rdata`
+// blob and record, an INTERPOLATION of the opaque accumulator (an int→String conversion, which
+// allocates), an `.append` (which detaches onto a private buffer), `==` through `__str_eq`, and the
+// `__str_decref` each owned String's death forces.
+//
+// `byteLength()` is the way OUT of the String domain, exactly as `trunc` is for floats: it is what makes
+// the group's result flow back into `acc` and therefore load-bearing, so no future DCE pass may take the
+// String dimension away again.
+let StringOpsBase = 8 as KnobSize
+
+// ONE file, N types each owning a `String` field, each built once and dropped at scope exit — the
+// PER-TYPE cost of the SYNTHESIZED destructor cascade (`__destruct_<T>`, which frees the field).
+//
+// ⚠ NOT `stringOps` WITH A STRUCT AROUND IT. That knob grows how many times String CODE runs; this one
+// grows how many distinct `__destruct_<T>` bodies the compiler must SYNTHESIZE and root. A change to
+// `installStructDestructors` moves this column and not that one.
+let ManagedStructTypesBase = 4 as KnobSize
+
+// ONE file, M TRIVIAL-element `Array` operation groups — `create`/`reserve`/`push`/`get`/`count`, plus
+// the O(1) COW trio `slice`/`clone`/`append`, over a ranged-int element alias.
+//
+// The COW trio is not decoration: `.slice` and `.clone` refcount the BUFFER rather than the record, and
+// `.append` is what forces a detach. A corpus with only `push`/`get` measures the growth path and none
+// of the sharing path.
+let ArrayOpsBase = 8 as KnobSize
+
+// ONE file, M CONCRETE-MANAGED-element `Array` operation groups — `Array with String` and
+// `Array with <struct owning a String>`: the element-destructor threading, and the RETAIN a `get` of a
+// managed element owes.
+//
+// ⚠ NOT `arrayOps` WITH A DIFFERENT ELEMENT TYPE, for the reason the two struct knobs are not one: the
+// managed path stores an element DROP function in the array record and calls it per slot, and a change
+// to that threading moves this column while leaving the trivial one flat. (OPAQUE-`T` managed elements —
+// the descriptor-gated `funcAbs64InRdata` path — are x64-only and deliberately absent; see this
+// section's header.)
+let ManagedArrayOpsBase = 4 as KnobSize
+
+// ONE file, N generic BASE declarations, alternating `uses T` and `uses A, B`, each instantiated once —
+// the PER-BASE cost: the type-parameter registry and the ONE shared method body per base that
+// dictionary-passing compiles (there is no monomorphization, so a base costs one body however many
+// instances it has).
+//
+// ⚠ NOT `genericInstances` WITH A DIFFERENT NUMBER. That knob holds the base FIXED and grows the
+// INSTANTIATIONS, which is where the layout descriptors are. This one grows the bases, which is where
+// the shared bodies are. A change to generic-body compilation moves this column; a change to
+// `ensureLayoutDescriptor` moves that one.
+let GenericBasesBase = 4 as KnobSize
+
+// ONE file, M `typealias … = Base with Arg` INSTANTIATIONS over a FIXED base — the PER-INSTANCE cost:
+// the layout descriptor, the per-instance typealias, and (for a managed argument) that instance's own
+// `__destruct_<instance>`.
+//
+// ⚠ EVERY INSTANCE NEEDS ITS OWN TYPE ARGUMENT, AND THAT IS WHY THE ARGUMENTS ARE GENERATED TOO. Two
+// aliases of `Box with Integer` are two names for ONE instance, so a knob that spelled M aliases over
+// one argument would grow M names and one descriptor — a dimension that reads as covered and is flat by
+// construction, which is precisely this file's founding defect in miniature. So instance `i` gets its
+// own argument: a ranged int alias whose RANGE is unique to `i` (a generic's ranged element type is part
+// of its type, `e4146cf8e`), or a struct unique to `i` that owns a `String`.
+let GenericInstancesBase = 8 as KnobSize
+
+// The two type-argument shapes `genericInstancesSource` rotates over: a TRIVIAL ranged int (borrowed
+// into the box) and a MANAGED struct owning a String (moved in, and dropped through the instance's own
+// cascade). Both must scale, because they are different ownership paths through the same base.
+let GenericInstanceArgShapeCount = 2 as KnobSize
+
+// N interfaces and their conforming types — the PER-CONFORMANCE cost: `ConformanceCheck`'s declared-
+// conformance index, the method-requirement match, and one compiled method body per requirement.
+//
+// ⚠ THIS KNOB GROWS FILES, DELIBERATELY, AND IT IS THE ONLY ONE BESIDES `manyFiles` THAT DOES.
+// `Parser.requireInterfaceForParse` scans the CURRENT FILE's interfaces once per `where`-constraint
+// site, so interfaces-per-file is a measured cost multiplier — and the standing instruction from the
+// triage that filed it is not to land many protocol interfaces in one artifact. Holding
+// `InterfacesPerFile` CONSTANT and letting the file count double is what keeps that scan bounded while
+// the conformance count still climbs. (This corpus emits no `where` clause, so the scan has zero sites
+// today; the shape is kept honest for the rung that adds one.)
+let InterfaceTypesBase = 4 as KnobSize
+
+// How many interfaces (and their conforming types) go in ONE generated file — see `InterfaceTypesBase`.
+let InterfacesPerFile = 4 as KnobSize
+
+// ONE file, M direct `instance.method()` DISPATCH SITES over a FIXED set of conforming types — the
+// per-SITE cost of CONCRETE interface dispatch, which is a direct call to a known body and NOT a
+// witness-table lookup (that is `where T is I`, x64-only, and absent — see this section's header).
+//
+// ⚠ NOT `interfaceTypes` WITH A DIFFERENT NUMBER: a change to conformance CHECKING moves that column,
+// a change to how an interface method CALL lowers moves this one.
+let IfaceDispatchBase = 8 as KnobSize
+
+// The bounded set of conforming types `ifaceDispatchSource` rotates its call sites over. CONSTANT for
+// the reason `AllocStructTypeCount` is: were the dispatch knob to grow its own conformances it would BE
+// `interfaceTypes`, and the separation defended above would exist only in the comments.
+let IfaceDispatchTypeCount = 4 as KnobSize
+
+// ===========================================================================================
 // Rung layout on disk
 // ===========================================================================================
 
@@ -497,6 +663,17 @@ export type ScaleRung
 end 'ScaleRung'
 
 export typealias ScaleRungArray = Array with ScaleRung
+
+// CEILING DIVISION — how many buckets of `perBucket` items it takes to hold `total`, with the last
+// bucket taking the remainder.
+//
+// Written once because the off-by-one is easy to get wrong and because the two knobs that spread
+// themselves over MANY FILES (`writeManyFunctions`, `writeInterfaceTypes`) must agree on what
+// "distribute N over files" means. Each pairs it with a `>= total` break inside its own loop, so a
+// bucket that would run past the end emits nothing rather than a name nothing declares.
+function bucketCount(total KnobSize, perBucket KnobSize) returns KnobSize
+	return (total + perBucket - 1) / perBucket
+end 'bucketCount'
 
 // A knob's size at `rung`: `base << rung`. THE one place the doubling lives, so no knob can drift
 // out of step with the others and quietly change what "one rung" means.
@@ -552,6 +729,10 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeCallChain(dir, length: knobAt(CallChainBase, rung: rung), written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(PressuredDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(NestedDriver))
+	// The two COVERAGE files sit together under `h_`, because that is what they both are: fixed-size
+	// shapes whose PRESENCE matters and whose COUNT does not. They dilute `assertCorpusCompiled`'s
+	// code-growth ratio (a fixed block does not double), so they stay small relative to the knobs.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_cover", source: scalarCoverageSource(), written: written, drivers: drivers, driver: RungDriver.threads(CoverageDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written, drivers: drivers, driver: RungDriver.threads(ShiftsDriver))
 	// The float knobs thread the seed exactly as the int ones do — each takes the opaque `acc` and
 	// hands back a `trunc`ed int, so a float function is as load-bearing as any other and no DCE pass
@@ -566,6 +747,21 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "n_stypes", source: structTypesSource(knobAt(StructTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructTypesDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "o_sallocs", source: structAllocsSource(knobAt(StructAllocsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructAllocsDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(DivideDriver))
+	// The ten knobs for what the language gained between P1.1b and P1.7a. Every one is
+	// cross-target-safe: no `where` clause, no witness dispatch, no `Set` — see their section header.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "q_enums", source: enumTypesSource(knobAt(EnumTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(EnumTypesDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "r_match", source: matchSitesSource(knobAt(MatchSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(MatchSitesDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "s_strings", source: stringOpsSource(knobAt(StringOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StringOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "t_mstruct", source: managedStructTypesSource(knobAt(ManagedStructTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ManagedStructsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "u_arrays", source: arrayOpsSource(knobAt(ArrayOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ArrayOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "v_marray", source: managedArrayOpsSource(knobAt(ManagedArrayOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(ManagedArrayOpsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "w_gbase", source: genericBasesSource(knobAt(GenericBasesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GenericBasesDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "x_ginst", source: genericInstancesSource(knobAt(GenericInstancesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GenericInstancesDriver))
+	// The interface knob writes and registers itself across MANY files, like `writeManyFunctions`: its
+	// per-file drivers' names are known only inside the loop that mints them, and holding
+	// `InterfacesPerFile` constant is what keeps the per-file interface scan bounded (see its knob).
+	sourceBytes = sourceBytes + try writeInterfaceTypes(dir, count: knobAt(InterfaceTypesBase, rung: rung), written: written, drivers: drivers)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "y_ifdisp", source: ifaceDispatchSource(knobAt(IfaceDispatchBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(IfaceDispatchDriver))
 	// `z_`, not `k_`, so `main` sorts last however many knobs are added above it. The prefixes are
 	// cosmetic (shv2 merges in listing order and the merge is order-independent), but a `main` wedged
 	// mid-alphabet would have to be renamed by every future knob, and `pruneRungDir` deletes the old
@@ -700,9 +896,7 @@ end 'seedSource'
 // `driver` parameter: it writes N files holding N*k functions, so there is no single entry point to
 // declare, and the names are known only inside the loop that mints them.
 function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
-	// Ceiling division: the last file takes the remainder, and no function is dropped because the
-	// counts did not divide evenly.
-	let perFile = (funcCount + fileCount - 1) / fileCount
+	let perFile = bucketCount(funcCount, perBucket: fileCount)
 
 	var total = 0 as SourceByteCount
 	for fileIndex in 0 upto fileCount 'eachFile'
@@ -1225,6 +1419,11 @@ end 'globalVarsSource'
 //
 // SHARED BY BOTH STRUCT KNOBS, so the two measure the SAME declaration against different dimensions:
 // how many of them exist, and how many times one is built.
+//
+// It also emits the per-type READER — a free function taking the struct BY PARAMETER and reading its
+// fields, which is a struct crossing a CALL BOUNDARY. That shape shipped (`specs-shv2/structs.md`'s
+// `struct-literal-as-arg`, `struct-managed-field.md`'s `param-consumed-into-field`) while this file's
+// manifest went on calling it "P1.4, deferred on the borrow-vs-consume ruling" — see `printCorpusManifest`.
 function structTypeDecl(name String) returns String
 	var out = StringBuilder.create()
 	out.append("\ntype {name}\n")
@@ -1235,18 +1434,28 @@ function structTypeDecl(name String) returns String
 	out.append("\t\treturn Self\{x: x, y: y\}\n")
 	out.append("\tend 'create'\n")
 	out.append("end '{name}'\n")
+	out.append("\n")
+	out.append("function {structReaderName(name)}(p {name}) returns int\n")
+	out.append("\treturn p.x + p.y\n")
+	out.append("end '{structReaderName(name)}'\n")
 	return out.build()
 end 'structTypeDecl'
 
-// ⭐ EVERY `create` IN THIS FILE SITS IN ITS OWN BLOCK, AND THE REASON IS MEASURED, NOT STYLISTIC.
-// Both struct knobs emit through here, so the rule is stated once.
+// The per-type reader's name — spelled in the DECLARATION (`structTypeDecl`) and at the CALL
+// (`structCreateInBlock`), so it is derived in one place rather than written down twice.
+function structReaderName(typeName String) returns String
+	return "scaleRead{typeName}"
+end 'structReaderName'
+
+// ⭐ EVERY OWNED VALUE IN THIS CORPUS IS BORN INSIDE ITS OWN BLOCK, AND THE REASON IS MEASURED, NOT
+// STYLISTIC. Every knob that creates heap — both struct knobs, the String knob, both Array knobs, both
+// generic knobs, the interface knobs — emits through here, so the rule is stated exactly once.
 //
-// A STRUCT BINDING IS OWNED, AND AN OWNED BINDING DOES NOT DIE WHEN YOU STOP READING IT. At
-// function-body scope it stays on the parser's `ownedBindings` list until the `return`, where
-// `emitScopeDrops` (Parser.maxon:2524) decrefs every one of them. So N creates at function scope put
-// N struct pointers LIVE SIMULTANEOUSLY at the return, against a 14-GPR pool — and the splitter must
-// then spill nearly all of them. It does not refuse (they are spillable, so this is never E5001); it
-// goes QUADRATIC.
+// AN OWNED BINDING DOES NOT DIE WHEN YOU STOP READING IT. At function-body scope it stays on the
+// parser's `ownedBindings` list until the `return`, where `emitScopeDrops` (Parser.maxon:2524) decrefs
+// every one of them. So N creates at function scope put N heap pointers LIVE SIMULTANEOUSLY at the
+// return, against a 14-GPR pool — and the splitter must then spill nearly all of them. It does not
+// refuse (they are spillable, so this is never E5001); it goes QUADRATIC.
 //
 // MEASURED, on a private ladder of 32/64/128/256/512 creates in one function:
 //   • at function scope: `regalloc:splitting` reads x3.49, x3.70, x3.84, x3.91 per doubling —
@@ -1264,15 +1473,82 @@ end 'structTypeDecl'
 // on a construct with a known gap in it.
 //
 // The `if` is SCOPE SCAFFOLDING, not a CFG dimension — `deepBlocks` owns that one, and this adds ~1
-// branch per create against its ~3 blocks per if/else. `pressuredLoops` uses `while` the same way, for
+// branch per site against its ~3 blocks per if/else. `pressuredLoops` uses `while` the same way, for
 // the same reason: a knob may spend control flow to set up the thing it actually measures.
-function structCreateInBlock(index KnobSize, typeName String, binding String) returns String
+//
+// The condition is `acc > 0` in every caller, which is why it is not a parameter: `acc` is the opaque
+// accumulator every generated driver declares, so the guard is unfoldable and the block is unremovable.
+// `body` is indented TWO tabs by its caller — one for the function, one for this block.
+function ownedSiteBlock(label String, body String) returns String
 	var out = StringBuilder.create()
-	out.append("\tif acc > 0 'g{index}'\n")
-	out.append("\t\tlet {binding} = {typeName}.create(acc, y: acc + {index mod 5 + 1})\n")
-	out.append("\t\tacc = acc + {binding}.x + {binding}.y\n")
-	out.append("\tend 'g{index}'\n")
+	out.append("\tif acc > 0 '{label}'\n")
+	out.append(body)
+	out.append("\tend '{label}'\n")
 	return out.build()
+end 'ownedSiteBlock'
+
+// ONE TYPE OWNING A MANAGED FIELD, beside a trivial one — the declaration whose SYNTHESIZED
+// `__destruct_<T>` must free the first and skip the second. A type with only the String field would not
+// distinguish "walks the managed offsets" from "frees everything", which is why the trivial field is
+// part of the shape rather than filler.
+//
+// SHARED BY THE THREE KNOBS THAT NEED A MANAGED AGGREGATE, and they need the same one: the
+// managed-struct knob (which grows how many such types EXIST), the managed-array knob (whose ELEMENT is
+// one), and the generic-instances knob (whose managed type ARGUMENT is one). Three near-copies is three
+// places for the shape to drift, and the drift would be silent — each knob would still compile and each
+// would be measuring a slightly different declaration.
+//
+// `valueTypeName` is a NAME rather than a fixed `int` because each caller's file declares its own
+// element alias, and a ranged alias and a bare `int` do not lay out the same slot everywhere.
+function managedFieldTypeDecl(name String, valueTypeName String) returns String
+	var out = StringBuilder.create()
+	out.append("\ntype {name}\n")
+	out.append("\texport var label as String\n")
+	out.append("\texport var value as {valueTypeName}\n")
+	out.append("\n")
+	out.append("\tstatic function create(label String, value {valueTypeName}) returns Self\n")
+	out.append("\t\treturn Self\{label: label, value: value\}\n")
+	out.append("\tend 'create'\n")
+	out.append("end '{name}'\n")
+	return out.build()
+end 'managedFieldTypeDecl'
+
+// ONE UNCONSTRAINED SINGLE-PARAMETER GENERIC BASE — an opaque `T` field, a `create` that takes one, and
+// a `get` that hands it back.
+//
+// SHARED BY BOTH GENERIC KNOBS, which is the whole reason they can be two knobs at all: one grows how
+// many such BASES exist (each costing one shared method body, since shv2 passes dictionaries rather than
+// monomorphizing) and the other holds ONE of them fixed and grows the INSTANTIATIONS. Emitting the
+// declaration twice would let the two knobs measure different bases while claiming to isolate the two
+// costs of the same one.
+function genericBoxDecl(name String) returns String
+	var out = StringBuilder.create()
+	out.append("\ntype {name} uses T\n")
+	out.append("\texport var value as T\n")
+	out.append("\n")
+	out.append("\texport static function create(v T) returns Self\n")
+	out.append("\t\treturn Self\{value: v\}\n")
+	out.append("\tend 'create'\n")
+	out.append("\n")
+	out.append("\texport function get() returns T\n")
+	out.append("\t\treturn self.value\n")
+	out.append("\tend 'get'\n")
+	out.append("end '{name}'\n")
+	return out.build()
+end 'genericBoxDecl'
+
+// One struct create SITE: build it, read both fields, WRITE a field, and pass the whole struct across a
+// call. Shared by both struct knobs, so all four are per-SITE costs that ride whichever knob doubles.
+//
+// The binding is `var` rather than `let` because of the field write — `challenge-struct-field-assign.md`'s
+// `struct-field-reassignment` is the shape, and assigning through a `let` is E2013.
+function structCreateInBlock(index KnobSize, typeName String, binding String) returns String
+	var body = StringBuilder.create()
+	body.append("\t\tvar {binding} = {typeName}.create(acc, y: acc + {index mod 5 + 1})\n")
+	body.append("\t\tacc = acc + {binding}.x + {binding}.y\n")
+	body.append("\t\t{binding}.y = acc + {index mod 3 + 1}\n")
+	body.append("\t\tacc = acc + {structReaderName(typeName)}({binding})\n")
+	return ownedSiteBlock("g{index}", body: body.build())
 end 'structCreateInBlock'
 
 let StructTypesDriver = "scaleStructTypes"
@@ -1431,6 +1707,786 @@ function shiftCoverageSource() returns String
 	return out.build()
 end 'shiftCoverageSource'
 
+// The remaining SCALAR coverage shapes, and the one aggregate shape whose COUNT is not interesting.
+// Fixed-size, like `shiftCoverageSource` and for the same reason: a codegen change to any of these must
+// stop being invisible, and the trend delta reports ANY movement, constant or not.
+//
+// Six axes are covered that the corpus had at ZERO before:
+//   • LOGICAL `or` / `xor` / `not` over bools — `or` is short-circuit control flow (two blocks and a
+//     merge phi, like the `and` guards the corpus already had), `xor` is NOT (it must evaluate both), and
+//     `not` picks its opcode from its operand's type. Three different lowerings behind one keyword each.
+//   • BITWISE `or` / `xor` / `not` over ints — the same three keywords, a different band entirely.
+//   • An `as` cast over an OPAQUE value, which emits a runtime RANGE GUARD. A cast of a literal is
+//     checked at compile time and emits nothing, so only an opaque operand measures the guard.
+//   • `print` — the whole formatted-output path, which nothing in the corpus reached.
+//   • A loop that actually `break`s. `break` was in the subset from M4b and the manifest said, in plain
+//     text, "in the subset, but no generated loop exits early": a loop EXIT phi carrying live values is a
+//     different merge from a loop header phi, and no knob was minting one.
+//   • A struct-typed FIELD written through the loaded box (`o.inner.x = ...`). This is a SHAPE, not a
+//     dimension — `structAllocs` already doubles the create-site count, and nesting depth is capped at 2
+//     on purpose, so what matters here is that the shape exists at all.
+function scalarCoverageSource() returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: scalar + aggregate COVERAGE (fixed, not scaled) — logical and bitwise or/xor/not, an `as` guard, print, a break, a nested field write.\n")
+	out.append("typealias {CoverageNarrowAlias} = int(0 to {CoverageNarrowUpperBound})\n")
+	out.append("\n")
+
+	// LOGICAL or / xor / not: `or` short-circuits (blocks + a merge phi), `xor` cannot, `not` inverts.
+	out.append("function {CoverageBoolName}(a int) returns int\n")
+	out.append("\tlet hi = a > {CoverageBoolHighBound}\n")
+	out.append("\tlet lo = a < {CoverageBoolLowBound}\n")
+	out.append("\tif hi or lo 'either'\n")
+	out.append("\t\treturn a + 1\n")
+	out.append("\tend 'either'\n")
+	out.append("\tif hi xor lo 'oneOnly'\n")
+	out.append("\t\treturn a + 2\n")
+	out.append("\tend 'oneOnly'\n")
+	out.append("\tif not hi 'small'\n")
+	out.append("\t\treturn a + 3\n")
+	out.append("\tend 'small'\n")
+	out.append("\treturn a + 4\n")
+	out.append("end '{CoverageBoolName}'\n")
+	out.append("\n")
+
+	// BITWISE or / xor / not: the same three keywords over ints, which is a different band.
+	out.append("function {CoverageBitsName}(a int) returns int\n")
+	out.append("\tlet m = a or {CoverageBitSetMask}\n")
+	out.append("\tlet x = m xor {CoverageBitFlipMask}\n")
+	out.append("\treturn x and not {CoverageBitClearMask}\n")
+	out.append("end '{CoverageBitsName}'\n")
+	out.append("\n")
+
+	// An `as` cast over an OPAQUE value — a runtime range guard. The mask keeps the value inside the
+	// alias's range, but the compiler cannot prove that, so the guard is emitted either way; these
+	// programs are compiled and never run, so the guard's branch is what is being measured.
+	out.append("function {CoverageCastName}(a int) returns int\n")
+	out.append("\tlet n = (a and {CoverageNarrowUpperBound}) as {CoverageNarrowAlias}\n")
+	out.append("\treturn n as int\n")
+	out.append("end '{CoverageCastName}'\n")
+	out.append("\n")
+
+	// A loop that EXITS EARLY: the break's edge carries the loop-carried values into the exit phi.
+	out.append("function {CoverageBreakName}(a int) returns int\n")
+	out.append("\tvar total = a\n")
+	out.append("\tvar i = 0\n")
+	out.append("\twhile i < {CoverageBreakTrips} 'loop'\n")
+	out.append("\t\ttotal = total + i\n")
+	out.append("\t\tif total > {CoverageBreakLimit} 'enough'\n")
+	out.append("\t\t\tbreak\n")
+	out.append("\t\tend 'enough'\n")
+	out.append("\t\ti = i + 1\n")
+	out.append("\tend 'loop'\n")
+	out.append("\treturn total\n")
+	out.append("end '{CoverageBreakName}'\n")
+	out.append("\n")
+
+	// A struct-typed FIELD, written through the loaded box. Nesting stops at depth 2 deliberately: the
+	// cloner/destructor cascades are a needs-FIXPOINT whose pass count is the deepest chain, and a
+	// machine-generated deep chain is exactly what makes that superlinear.
+	//
+	// The inner type is the SHARED plain-struct declaration, so this shape cannot drift from the one both
+	// struct knobs measure — only the OUTER type, whose field is struct-typed, is bespoke here.
+	out.append(structTypeDecl(CoverageInnerName))
+	out.append("\ntype {CoverageOuterName}\n")
+	out.append("\texport var inner as {CoverageInnerName}\n")
+	out.append("\n")
+	out.append("\tstatic function create(inner {CoverageInnerName}) returns Self\n")
+	out.append("\t\treturn Self\{inner: inner\}\n")
+	out.append("\tend 'create'\n")
+	out.append("end '{CoverageOuterName}'\n")
+	out.append("\n")
+	out.append("function {CoverageNestedName}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	var nested = StringBuilder.create()
+	nested.append("\t\tvar o = {CoverageOuterName}.create({CoverageInnerName}.create(acc, y: acc + 1))\n")
+	nested.append("\t\to.inner.x = acc + 1\n")
+	nested.append("\t\tacc = acc + o.inner.x\n")
+	// `structTypeDecl` emits a per-type READER beside its type, and `deadFunctions` is a REAL pass in
+	// this pipeline — an uncalled one is legitimately deleted, and this file's own rule (see `mainSource`)
+	// is that a generated declaration nothing reaches is a dimension that evaporates silently. So the
+	// inner type's reader is called here, which also puts a struct across a CALL inside the coverage file.
+	nested.append("\t\tvar q = {CoverageInnerName}.create(acc, y: acc + 2)\n")
+	nested.append("\t\tacc = acc + {structReaderName(CoverageInnerName)}(q)\n")
+	out.append(ownedSiteBlock("nested", body: nested.build()))
+	out.append("\treturn acc\n")
+	out.append("end '{CoverageNestedName}'\n")
+	out.append("\n")
+
+	// The driver threads the opaque seed through every coverage function, and PRINTS — the one `print` in
+	// the whole corpus, which is the whole of what makes the formatted-output path visible here.
+	out.append("function {CoverageDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	out.append("\tacc = acc + {CoverageBoolName}(acc)\n")
+	out.append("\tacc = acc + {CoverageBitsName}(acc)\n")
+	out.append("\tacc = acc + {CoverageCastName}(acc)\n")
+	out.append("\tacc = acc + {CoverageBreakName}(acc)\n")
+	out.append("\tacc = acc + {CoverageNestedName}(acc)\n")
+	out.append("\tprint(\"scale coverage \{acc\}\\n\")\n")
+	out.append("\treturn acc\n")
+	out.append("end '{CoverageDriver}'\n")
+	return out.build()
+end 'scalarCoverageSource'
+
+// ===========================================================================================
+// The ten knobs for P1.1b..P1.7a, as source
+// ===========================================================================================
+
+// The names each of the ten knobs below declares and then reads back — spelled in a DECLARATION and in a
+// USE many lines apart, so each is named once here for the reason `smallFunctionName` exists: a prefix
+// written down twice is a prefix that can drift, and the failure is not a bad measurement but a generated
+// program that does not compile at all.
+let EnumTypePrefix = "ScaleEnum"
+let EnumCasePrefix = "ec"
+let EnumPickPrefix = "scaleEnumPick"
+let EnumTypesDriver = "scaleEnumTypes"
+
+let MatchDenseEnumName = "ScaleMatchDense"
+let MatchDenseCasePrefix = "md"
+let MatchDensePickName = "scaleMatchDensePick"
+let MatchSparseEnumName = "ScaleMatchSparse"
+let MatchSparseCasePrefix = "mp"
+let MatchSparsePickName = "scaleMatchSparsePick"
+let MatchSitesDriver = "scaleMatchSites"
+
+let StringOpsDriver = "scaleStringOps"
+
+let ManagedStructPrefix = "ScaleNamed"
+let ManagedStructValueAlias = "ScaleNamedValue"
+let ManagedStructsDriver = "scaleManagedStructs"
+
+let ArrayElementAlias = "ScaleElement"
+let IntArrayAlias = "ScaleIntArray"
+let ArrayOpsDriver = "scaleArrayOps"
+
+let StringArrayAlias = "ScaleStringArray"
+let ManagedRowValueAlias = "ScaleRowValue"
+let ManagedRowName = "ScaleRow"
+let ManagedRowArrayAlias = "ScaleRowArray"
+let ManagedArrayOpsDriver = "scaleManagedArrayOps"
+
+let GenericElementAlias = "ScaleGenElement"
+let GenericBasePrefix = "ScaleGBase"
+let GenericBaseInstPrefix = "ScaleGBaseInst"
+let GenericBasesDriver = "scaleGenericBases"
+
+let GenericInstanceBaseName = "ScaleXBox"
+let GenericInstanceElemPrefix = "ScaleXElem"
+let GenericInstanceHoldPrefix = "ScaleXHold"
+let GenericInstanceHoldValueAlias = "ScaleXHoldValue"
+let GenericInstancePrefix = "ScaleXInst"
+let GenericInstancesDriver = "scaleGenericInstances"
+
+let InterfacePrefix = "ScaleProto"
+let ConformerPrefix = "ScaleUnit"
+let InterfaceMeasurePrefix = "ScaleMeasure"
+let InterfaceFileDriverPrefix = "scaleIfaceFile"
+
+let DispatchInterfacePrefix = "ScaleDispProto"
+let DispatchConformerPrefix = "ScaleDisp"
+let DispatchMeasureAlias = "ScaleDispMeasure"
+let IfaceDispatchDriver = "scaleIfaceDispatch"
+
+let CoverageNarrowAlias = "ScaleCoverNarrow"
+let CoverageBoolName = "scaleCoverBool"
+let CoverageBitsName = "scaleCoverBits"
+let CoverageCastName = "scaleCoverCast"
+let CoverageBreakName = "scaleCoverBreak"
+let CoverageInnerName = "ScaleCoverInner"
+let CoverageOuterName = "ScaleCoverOuter"
+let CoverageNestedName = "scaleCoverNested"
+let CoverageDriver = "scaleCoverage"
+
+// The coverage block's bounds and masks. Named because a bare literal in emitted source is a magic
+// value in two programs at once — this one and the one it generates.
+let CoverageNarrowUpperBound = 4095
+let CoverageBoolHighBound = 10
+let CoverageBoolLowBound = 1000000
+let CoverageBitSetMask = 5
+let CoverageBitFlipMask = 9
+let CoverageBitClearMask = 15
+let CoverageBreakTrips = 100
+let CoverageBreakLimit = 1000
+
+// The two interface method names every conforming type in the corpus implements. Plain names, not
+// per-interface ones: a method is TYPE-scoped, so `ScaleUnit0.probe` and `ScaleUnit1.probe` are distinct
+// functions and the whole-program duplicate check (E3006) never sees a clash — exactly as every generated
+// type's `create` already proves.
+let InterfaceProbeMethod = "probe"
+let InterfaceScaleMethod = "scaleBy"
+
+// The `enumTypes` knob: N `enum` declarations, each with an opaque PICKER and one exhaustive `match`.
+//
+// THE SCRUTINEE COMES FROM A CALL, which is this file's founding rule reaching a new construct. A
+// `match` on `Color.green` is a match on a value the front end knows, and while nothing folds a `match`
+// today, a corpus whose every scrutinee is a literal is one SCCP away from measuring nothing. The picker
+// branches on the opaque `acc` and returns a different case per arm, so the tag is a call result — the
+// second of the exactly two things `foldConstOperands` cannot see through.
+//
+// The arms are `EnumCasesPerType` explicit BARE case names (a qualified `Color.red` in an arm is E3075,
+// and a plain `default` on an enum is E2046). Contiguous ordinals at four intervals is the DENSE case, so
+// each of these matches lowers to a jump table.
+//
+// ⚠ MANY SMALL MATCHES, NEVER ONE BIG ONE. The duplicate-pattern check (E2027) is pairwise O(arms²) —
+// deliberately, since it must compare every pattern against every other — so hundreds of arms in one
+// match would make compile time quadratic in that one construct and the knob would be measuring the
+// check rather than the language. Four arms is sixteen comparisons.
+function enumTypesSource(typeCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the enum-types knob — {typeCount} enum declarations of {EnumCasesPerType} cases, each picked opaquely and matched exhaustively.\n")
+
+	for t in 0 upto typeCount 'eachType'
+		let enumName = "{EnumTypePrefix}{t}"
+		out.append("\nenum {enumName}\n")
+		for c in 0 upto EnumCasesPerType 'eachCase'
+			out.append("\t{EnumCasePrefix}{c}\n")
+		end 'eachCase'
+		out.append("end '{enumName}'\n")
+		out.append(enumPickerSource("{EnumPickPrefix}{t}", enumName: enumName, casePrefix: EnumCasePrefix, salt: t))
+	end 'eachType'
+
+	out.append("\nfunction {EnumTypesDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for t in 0 upto typeCount 'eachUse'
+		out.append("\tlet v{t} = {EnumPickPrefix}{t}(acc)\n")
+		out.append("\tmatch v{t} 'em{t}'\n")
+		for c in 0 upto EnumCasesPerType 'eachArm'
+			out.append("\t\t{EnumCasePrefix}{c} then acc = acc + {c + 1}\n")
+		end 'eachArm'
+		out.append("\tend 'em{t}'\n")
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end '{EnumTypesDriver}'\n")
+	return out.build()
+end 'enumTypesSource'
+
+// The OPAQUE TAG SOURCE every `match` in this corpus dispatches on: a function that branches on the
+// opaque accumulator and returns a different enum case per arm, so its result is a call result and
+// therefore invisible to the folder.
+//
+// Shared by both enum knobs, so the two measure the same opacity trick against different dimensions —
+// how many enums exist, and how many sites dispatch over a fixed pair of them. `salt` varies the branch
+// constant so the pickers are not textually identical, which would benchmark the parser's cache.
+function enumPickerSource(pickerName String, enumName String, casePrefix String, salt KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("\nfunction {pickerName}(a int) returns {enumName}\n")
+	out.append("\tif a > {salt mod 7 + 1} 'hi'\n")
+	out.append("\t\treturn {enumName}.{casePrefix}{EnumCasesPerType - 1}\n")
+	out.append("\tend 'hi'\n")
+	out.append("\treturn {enumName}.{casePrefix}0\n")
+	out.append("end '{pickerName}'\n")
+	return out.build()
+end 'enumPickerSource'
+
+// The `matchSites` knob: M `match` sites over a FIXED pair of enums, ROTATING OVER ALL THREE DISPATCH
+// STRATEGIES — because `Parser.emitDispatchRange` picks one of three from the normalized interval list,
+// and a corpus that generated only one of them would measure a third of the lowering. (That is exactly
+// what `IntDivideBase` records: the corpus was full of `/` and every one of them was a FLOAT `/`.)
+//
+//   • SHAPE 0 — STATEMENT form (`then`), `EnumCasesPerType` explicit arms over CONTIGUOUS ordinals. Four
+//     intervals covering four slots is 100% dense, so this is the JUMP TABLE: an `.rdata` slot table and
+//     an indirect jump. It is also the only shape whose arms ASSIGN rather than give, so it is the one
+//     that mints the continuation phis a statement match needs.
+//   • SHAPE 1 — EXPRESSION form (`gives`) with a RANGE arm folding all but the last case. Two intervals
+//     is below `MinIntervalsForDispatch`, so this is the LINEAR COMPARE CHAIN. Range arms are in ORDINAL
+//     (declaration) order, which is what `lo to hi` means here.
+//   • SHAPE 2 — EXPRESSION form over the SPARSE enum, whose cases are `MatchSparseCaseStride` apart. Four
+//     intervals again, but the covered span is far too wide for a table to be worth its slots, so this is
+//     the BALANCED BINARY SEARCH.
+//
+// All three take their scrutinee from a picker call, for the reason `enumPickerSource` states.
+function matchSitesSource(siteCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the match-sites knob — {siteCount} match sites rotating over all {MatchDispatchShapeCount} dispatch strategies (jump table, linear chain, binary search).\n")
+
+	out.append("\nenum {MatchDenseEnumName}\n")
+	for c in 0 upto EnumCasesPerType 'eachDense'
+		out.append("\t{MatchDenseCasePrefix}{c}\n")
+	end 'eachDense'
+	out.append("end '{MatchDenseEnumName}'\n")
+	out.append(enumPickerSource(MatchDensePickName, enumName: MatchDenseEnumName, casePrefix: MatchDenseCasePrefix, salt: 2))
+
+	out.append("\nenum {MatchSparseEnumName}\n")
+	for c in 0 upto EnumCasesPerType 'eachSparse'
+		out.append("\t{MatchSparseCasePrefix}{c} = {c * MatchSparseCaseStride}\n")
+	end 'eachSparse'
+	out.append("end '{MatchSparseEnumName}'\n")
+	out.append(enumPickerSource(MatchSparsePickName, enumName: MatchSparseEnumName, casePrefix: MatchSparseCasePrefix, salt: 5))
+
+	out.append("\nfunction {MatchSitesDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto siteCount 'eachSite'
+		match i mod MatchDispatchShapeCount 'shape'
+			0 then out.append(matchDenseStatementSite(i))
+			1 then out.append(matchRangeExpressionSite(i))
+			2 then out.append(matchSparseExpressionSite(i))
+			// `MatchDispatchShapeCount` and this arm set are the same fact stated twice — the count, and the
+			// shapes that realize it. This is the CHECK between the copies: raise the constant without
+			// adding a shape and the ladder stops loudly here rather than silently generating fewer
+			// strategies than the manifest claims.
+			default panic("matchSitesSource: MatchDispatchShapeCount is {MatchDispatchShapeCount} but shape {i mod MatchDispatchShapeCount} has no emitter — add one beside matchDenseStatementSite / matchRangeExpressionSite / matchSparseExpressionSite, or lower the constant")
+		end 'shape'
+	end 'eachSite'
+	out.append("\treturn acc\n")
+	out.append("end '{MatchSitesDriver}'\n")
+	return out.build()
+end 'matchSitesSource'
+
+// SHAPE 0 — a STATEMENT match whose arms assign: dense contiguous ordinals, so a jump table.
+function matchDenseStatementSite(index KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("\tlet mv{index} = {MatchDensePickName}(acc)\n")
+	out.append("\tmatch mv{index} 'ms{index}'\n")
+	for c in 0 upto EnumCasesPerType 'eachArm'
+		out.append("\t\t{MatchDenseCasePrefix}{c} then acc = acc + {(index + c) mod 7 + 1}\n")
+	end 'eachArm'
+	out.append("\tend 'ms{index}'\n")
+	return out.build()
+end 'matchDenseStatementSite'
+
+// SHAPE 1 — an EXPRESSION match with a RANGE arm: two intervals, so a linear compare chain.
+function matchRangeExpressionSite(index KnobSize) returns String
+	var arms = StringBuilder.create()
+	arms.append("\t\t{MatchDenseCasePrefix}0 to {MatchDenseCasePrefix}{EnumCasesPerType - 2} gives {index mod 9 + 1}\n")
+	arms.append("\t\t{MatchDenseCasePrefix}{EnumCasesPerType - 1} gives {index mod 6 + 2}\n")
+	return matchExpressionSite(index, pickName: MatchDensePickName, arms: arms.build())
+end 'matchRangeExpressionSite'
+
+// SHAPE 2 — an EXPRESSION match over the SPARSE enum: four far-apart intervals, so a binary search.
+function matchSparseExpressionSite(index KnobSize) returns String
+	var arms = StringBuilder.create()
+	for c in 0 upto EnumCasesPerType 'eachArm'
+		arms.append("\t\t{MatchSparseCasePrefix}{c} gives {(index + c) mod 8 + 1}\n")
+	end 'eachArm'
+	return matchExpressionSite(index, pickName: MatchSparsePickName, arms: arms.build())
+end 'matchSparseExpressionSite'
+
+// The EXPRESSION-form wrapper both expression shapes sit inside: the opaque scrutinee, the `let … = match`
+// binding, and the fold of the match's value back into `acc`. Written once because the two shapes differ
+// only in their ARM SET — which enum they dispatch on and how its cases are grouped — and that difference
+// is the point of having both; the scaffolding around it is not, and two copies of it would be two places
+// for the result to stop flowing into `acc` and the whole site to become deletable dead code.
+function matchExpressionSite(index KnobSize, pickName String, arms String) returns String
+	var out = StringBuilder.create()
+	out.append("\tlet mv{index} = {pickName}(acc)\n")
+	out.append("\tlet mr{index} = match mv{index} 'ms{index}'\n")
+	out.append(arms)
+	out.append("\tend 'ms{index}'\n")
+	out.append("\tacc = acc + mr{index}\n")
+	return out.build()
+end 'matchExpressionSite'
+
+// The `stringOps` knob: M String operation groups, each in its own block for `ownedSiteBlock`'s reason.
+//
+// ⚠ THIS FILE'S FOUNDING TRAP BITES STRINGS HARDEST, AND NOT THE WAY IT LOOKS. A pile of string LITERALS
+// does not fold — there is no string folding — but it also measures almost nothing that a real program
+// does, because every literal is a fixed `.rdata` blob with no runtime work behind it. The opacity here
+// therefore has to be structural rather than defensive: the INTERPOLATION formats the opaque accumulator
+// (an int→String conversion that allocates), and `byteLength()` is the way back OUT of the String domain,
+// exactly as `trunc` is for floats. Without that return path the whole group would be dead code that a
+// future DCE pass could legitimately delete, taking the String dimension with it.
+//
+// The literals are deliberately LONG. A short string lives inline in its 48-byte record with no heap
+// allocation at all, so a corpus of short literals would measure the String type and none of the heap
+// underneath it.
+//
+// ⚠ THE INTERPOLATION IS NOT INSIDE A LOOP. A 14-GPR pool refuses a 16-live-value interpolation in a loop
+// body with E5001 (PLAN.md #76) — a FATAL compile error that would take the whole ladder down, not a
+// warning. Each group here is straight-line inside a single `if`, so peak pressure is a handful.
+function stringOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the string-ops knob — {groupCount} groups of literal + interpolation + append + byteLength + ==.\n")
+	out.append("\nfunction {StringOpsDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+
+	for i in 0 upto groupCount 'eachGroup'
+		let literal = "scale string payload segment number {i} long enough to reach the heap"
+		var body = StringBuilder.create()
+		body.append("\t\tvar sv{i} = \"{literal}\"\n")
+		body.append("\t\tlet st{i} = \" tail \{acc\}\"\n")
+		body.append("\t\tsv{i}.append(st{i})\n")
+		body.append("\t\tacc = acc + sv{i}.byteLength()\n")
+		body.append("\t\tif sv{i} == \"{literal}\" 'se{i}'\n")
+		body.append("\t\t\tacc = acc + 1\n")
+		body.append("\t\tend 'se{i}'\n")
+		out.append(ownedSiteBlock("sg{i}", body: body.build()))
+	end 'eachGroup'
+
+	out.append("\treturn acc\n")
+	out.append("end '{StringOpsDriver}'\n")
+	return out.build()
+end 'stringOpsSource'
+
+// The `managedStructTypes` knob: N types each owning a `String` field, each built once and dropped.
+//
+// The per-TYPE cost is the point — one SYNTHESIZED `__destruct_<T>` body per type, rooted and installed —
+// so what doubles is how many distinct cascades exist, not how hard any one of them is used. Each is
+// built once anyway, for `structTypesSource`'s reason: a type nothing builds is a type a future pass may
+// legitimately never lay out, and the dimension would evaporate silently.
+function managedStructTypesSource(typeCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the managed-struct-types knob — {typeCount} types owning a String field, each built once and dropped through its cascade.\n")
+	out.append("typealias {ManagedStructValueAlias} = int(i64.min to i64.max)\n")
+
+	for t in 0 upto typeCount 'eachType'
+		out.append(managedFieldTypeDecl("{ManagedStructPrefix}{t}", valueTypeName: ManagedStructValueAlias))
+	end 'eachType'
+
+	out.append("\nfunction {ManagedStructsDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for t in 0 upto typeCount 'eachUse'
+		let literal = "managed struct label number {t} long enough to reach the heap"
+		var body = StringBuilder.create()
+		body.append("\t\tlet nv{t} = {ManagedStructPrefix}{t}.create(\"{literal}\", value: acc)\n")
+		body.append("\t\tacc = acc + nv{t}.value\n")
+		body.append("\t\tif nv{t}.label == \"{literal}\" 'ml{t}'\n")
+		body.append("\t\t\tacc = acc + 1\n")
+		body.append("\t\tend 'ml{t}'\n")
+		out.append(ownedSiteBlock("mn{t}", body: body.build()))
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end '{ManagedStructsDriver}'\n")
+	return out.build()
+end 'managedStructTypesSource'
+
+// The `arrayOps` knob: M TRIVIAL-element Array groups. Two blocks per group, and they are two blocks
+// rather than one because they measure two different halves of the type:
+//
+//   • The GROWTH half — `create`/`reserve`/`push`/`get`/`count`. `reserve` is a distinct path from the
+//     implicit growth a bare `push` triggers, so both are here.
+//   • The SHARING half — `slice`/`clone`/`append`. `slice` and `clone` are O(1): they refcount the
+//     element BUFFER rather than the record, which is the one place shv2 diverges from both reference
+//     compilers, and `append` is what forces the detach. A corpus with only `push`/`get` measures the
+//     growth path and none of this.
+//
+// Everything flows through `acc`: the pushed values are the opaque accumulator, and `count()`/`get()`
+// flow back into it, so no group is dead code.
+function arrayOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the array-ops knob — {groupCount} trivial-element Array groups (create/reserve/push/get/count, then slice/clone/append).\n")
+	out.append("typealias {ArrayElementAlias} = int(i64.min to i64.max)\n")
+	out.append("typealias {IntArrayAlias} = Array with {ArrayElementAlias}\n")
+	out.append("\nfunction {ArrayOpsDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+
+	for i in 0 upto groupCount 'eachGroup'
+		var grow = StringBuilder.create()
+		grow.append("\t\tvar ab{i} = {IntArrayAlias}.create()\n")
+		grow.append("\t\tab{i}.reserve({i mod 4 + 2})\n")
+		grow.append("\t\tab{i}.push(acc)\n")
+		grow.append("\t\tab{i}.push(acc + {i mod 5 + 1})\n")
+		grow.append("\t\tacc = acc + (try ab{i}.get(0) otherwise 0) + ab{i}.count()\n")
+		out.append(ownedSiteBlock("ag{i}", body: grow.build()))
+
+		var share = StringBuilder.create()
+		share.append("\t\tvar ac{i} = {IntArrayAlias}.create()\n")
+		share.append("\t\tac{i}.push(acc)\n")
+		share.append("\t\tac{i}.push(acc + {i mod 3 + 1})\n")
+		share.append("\t\tlet aq{i} = try ac{i}.slice(0, endIndex: 1) otherwise {IntArrayAlias}.create()\n")
+		share.append("\t\tvar ak{i} = ac{i}.clone()\n")
+		share.append("\t\tak{i}.append(ac{i})\n")
+		share.append("\t\tacc = acc + aq{i}.count() + ak{i}.count()\n")
+		out.append(ownedSiteBlock("as{i}", body: share.build()))
+	end 'eachGroup'
+
+	out.append("\treturn acc\n")
+	out.append("end '{ArrayOpsDriver}'\n")
+	return out.build()
+end 'arrayOpsSource'
+
+// The `managedArrayOps` knob: M CONCRETE-MANAGED-element Array groups, over both managed element shapes.
+//
+// TWO ELEMENT SHAPES, because the element's drop is reached differently for each: an `Array with String`
+// calls `__str_decref` per slot, while an `Array with <struct owning a String>` calls that struct's
+// `__destruct_<T>`, which then frees the String. One indirection apart, and a change to the element-drop
+// threading can move one without the other.
+//
+// The `get` is not decoration either: reading a MANAGED element out of an array owes a RETAIN, and
+// `byteLength()` on the result is what keeps that read load-bearing rather than a discarded value a
+// future pass may delete.
+//
+// ⚠ OPAQUE-`T` MANAGED ELEMENTS ARE DELIBERATELY ABSENT — `Array with <type parameter>` instantiated
+// managed rides the descriptor's `funcAbs64InRdata` copyFunc/dropFunc relocation, which is x64-only. The
+// ladder compiles for the HOST, so generating one would fail the compile on a non-x64 host and take the
+// whole run down through `brokenRun`. See the knob section's header.
+function managedArrayOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the managed-array-ops knob — {groupCount} groups over `Array with String` and `Array with <struct owning a String>`.\n")
+	out.append("typealias {ManagedRowValueAlias} = int(i64.min to i64.max)\n")
+	out.append("typealias {StringArrayAlias} = Array with String\n")
+	out.append(managedFieldTypeDecl(ManagedRowName, valueTypeName: ManagedRowValueAlias))
+	out.append("\ntypealias {ManagedRowArrayAlias} = Array with {ManagedRowName}\n")
+	out.append("\nfunction {ManagedArrayOpsDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+
+	for i in 0 upto groupCount 'eachGroup'
+		var strings = StringBuilder.create()
+		strings.append("\t\tvar ms{i} = {StringArrayAlias}.create()\n")
+		strings.append("\t\tms{i}.push(\"managed array element number {i} long enough to reach the heap\")\n")
+		strings.append("\t\tms{i}.push(\"managed array element \{acc\}\")\n")
+		strings.append("\t\tlet mg{i} = try ms{i}.get(0) otherwise \"\"\n")
+		strings.append("\t\tacc = acc + ms{i}.count() + mg{i}.byteLength()\n")
+		out.append(ownedSiteBlock("mq{i}", body: strings.build()))
+
+		var rows = StringBuilder.create()
+		rows.append("\t\tvar mr{i} = {ManagedRowArrayAlias}.create()\n")
+		rows.append("\t\tmr{i}.push({ManagedRowName}.create(\"row element label number {i} for the heap\", value: acc))\n")
+		rows.append("\t\tacc = acc + mr{i}.count()\n")
+		out.append(ownedSiteBlock("mw{i}", body: rows.build()))
+	end 'eachGroup'
+
+	out.append("\treturn acc\n")
+	out.append("end '{ManagedArrayOpsDriver}'\n")
+	return out.build()
+end 'managedArrayOpsSource'
+
+// The `genericBases` knob: N generic BASE declarations, alternating `uses T` and `uses A, B`, each
+// instantiated once with a trivial argument.
+//
+// The per-BASE cost is the point. shv2 is DICTIONARY-PASSING, not monomorphizing, so a base compiles ONE
+// shared method body however many instantiations it has — which is exactly why the base count and the
+// instance count are two knobs and not one. What doubles here is the number of shared bodies, the
+// type-parameter registries behind them, and the opaque-`T` field accesses inside them.
+//
+// BOTH ARITIES DOUBLE, at half the knob each: a one-parameter base and a two-parameter base differ in how
+// the type arguments are bound and slotted, and generating only the first would leave the multi-parameter
+// path measured by nothing. `uses A, B` also needs its instantiation's arguments PARENTHESIZED, which a
+// single argument must not be — a small syntactic fork that only exists if both shapes are emitted.
+//
+// ⚠ NO `where` CLAUSE, ANYWHERE. A constrained type parameter dispatches through a witness table, whose
+// blob rides the x64-only `funcAbs64InRdata` relocation — see the knob section's header for why that
+// would break the run rather than merely skew it.
+function genericBasesSource(baseCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the generic-bases knob — {baseCount} unconstrained generic bases alternating `uses T` and `uses A, B`, each instantiated once.\n")
+	out.append("typealias {GenericElementAlias} = int(i64.min to i64.max)\n")
+
+	for t in 0 upto baseCount 'eachBase'
+		let baseName = "{GenericBasePrefix}{t}"
+		let instName = "{GenericBaseInstPrefix}{t}"
+		if t mod 2 == 0 'oneParam'
+			out.append(genericBoxDecl(baseName))
+			out.append("\ntypealias {instName} = {baseName} with {GenericElementAlias}\n")
+		end 'oneParam' else 'twoParam'
+			out.append("\ntype {baseName} uses A, B\n")
+			out.append("\texport var first as A\n")
+			out.append("\texport var second as B\n")
+			out.append("\n")
+			out.append("\texport static function create(a A, b B) returns Self\n")
+			out.append("\t\treturn Self\{first: a, second: b\}\n")
+			out.append("\tend 'create'\n")
+			out.append("\n")
+			out.append("\texport function firstVal() returns A\n")
+			out.append("\t\treturn self.first\n")
+			out.append("\tend 'firstVal'\n")
+			out.append("end '{baseName}'\n")
+			out.append("\ntypealias {instName} = {baseName} with ({GenericElementAlias}, {GenericElementAlias})\n")
+		end 'twoParam'
+	end 'eachBase'
+
+	out.append("\nfunction {GenericBasesDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for t in 0 upto baseCount 'eachUse'
+		var body = StringBuilder.create()
+		if t mod 2 == 0 'oneParamUse'
+			body.append("\t\tlet gv{t} = {GenericBaseInstPrefix}{t}.create(acc)\n")
+			body.append("\t\tacc = acc + gv{t}.get()\n")
+		end 'oneParamUse' else 'twoParamUse'
+			body.append("\t\tlet gv{t} = {GenericBaseInstPrefix}{t}.create(acc, b: acc + {t mod 5 + 1})\n")
+			body.append("\t\tacc = acc + gv{t}.firstVal()\n")
+		end 'twoParamUse'
+		out.append(ownedSiteBlock("gb{t}", body: body.build()))
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end '{GenericBasesDriver}'\n")
+	return out.build()
+end 'genericBasesSource'
+
+// The lowest upper bound a generated trivial type argument's range takes, and the mask that keeps a value
+// inside it. The floor is above the mask so every instance's range — `0 to floor + i` — admits every
+// masked value at every rung; the range still DIFFERS per instance, which is the only property the knob
+// needs from it.
+let GenericInstanceElemFloor = 1000
+let GenericInstanceArgMask = 255
+
+// The `genericInstances` knob: M INSTANTIATIONS of ONE fixed base — the per-INSTANCE cost (the layout
+// descriptor, the per-instance typealias, and a managed instance's own `__destruct_<instance>`).
+//
+// ⚠ EVERY INSTANCE GETS ITS OWN TYPE ARGUMENT, AND THAT IS THE WHOLE DESIGN OF THIS KNOB. Two aliases of
+// `Box with Integer` are two NAMES for one instance, so M aliases over one argument would grow M names
+// and exactly one descriptor — a dimension that reads as covered and is flat by construction, which is
+// this file's founding defect in miniature. So the arguments are generated alongside the aliases:
+//
+//   • A TRIVIAL argument: a ranged int alias whose RANGE is unique to `i`. A generic's ranged element
+//     type is part of its type (`e4146cf8e`), so distinct ranges are distinct instances with distinct
+//     element widths — which is also why the pushed value is masked rather than passed raw.
+//   • A MANAGED argument: a struct unique to `i` that owns a `String`. There is only ONE `String` type,
+//     so `Box with String` can never be more than one instance; a per-`i` holder is how the MANAGED
+//     ownership path (the argument is MOVED into the box and dropped through the instance's cascade)
+//     scales at all.
+function genericInstancesSource(instanceCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the generic-instances knob — {instanceCount} instantiations of one fixed base, each with its OWN type argument (trivial ranged int / managed holder).\n")
+	out.append("typealias {GenericInstanceHoldValueAlias} = int(i64.min to i64.max)\n")
+	out.append(genericBoxDecl(GenericInstanceBaseName))
+
+	for i in 0 upto instanceCount 'eachInstance'
+		if i mod GenericInstanceArgShapeCount == 0 'trivialArg'
+			out.append("\ntypealias {GenericInstanceElemPrefix}{i} = int(0 to {GenericInstanceElemFloor + i})\n")
+			out.append("typealias {GenericInstancePrefix}{i} = {GenericInstanceBaseName} with {GenericInstanceElemPrefix}{i}\n")
+		end 'trivialArg' else 'managedArg'
+			out.append(managedFieldTypeDecl("{GenericInstanceHoldPrefix}{i}", valueTypeName: GenericInstanceHoldValueAlias))
+			out.append("typealias {GenericInstancePrefix}{i} = {GenericInstanceBaseName} with {GenericInstanceHoldPrefix}{i}\n")
+		end 'managedArg'
+	end 'eachInstance'
+
+	out.append("\nfunction {GenericInstancesDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto instanceCount 'eachUse'
+		var body = StringBuilder.create()
+		if i mod GenericInstanceArgShapeCount == 0 'trivialUse'
+			// Masked, not raw: the argument's alias is narrow, so an unmasked `acc` would be a value the
+			// range admits only by luck. The mask is opaque either way (the folder cannot see through
+			// `acc`), and the compiler cannot prove the bound, so the range guard is emitted regardless.
+			body.append("\t\tlet xv{i} = {GenericInstancePrefix}{i}.create(acc and {GenericInstanceArgMask})\n")
+			body.append("\t\tacc = acc + xv{i}.get()\n")
+		end 'trivialUse' else 'managedUse'
+			body.append("\t\tlet xv{i} = {GenericInstancePrefix}{i}.create({GenericInstanceHoldPrefix}{i}.create(\"generic managed instance {i} payload for the heap\", value: acc))\n")
+			body.append("\t\tacc = acc + 1\n")
+		end 'managedUse'
+		out.append(ownedSiteBlock("xi{i}", body: body.build()))
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end '{GenericInstancesDriver}'\n")
+	return out.build()
+end 'genericInstancesSource'
+
+// The `interfaceTypes` knob: N interfaces and their conforming types, spread `InterfacesPerFile` to a
+// file — the per-CONFORMANCE cost.
+//
+// ⭐ IT WRITES AND REGISTERS IN ONE FUNCTION, for `writeManyFunctions`' and `writeCallChain`'s reason:
+// this knob's per-file driver names are known only inside the loop that mints them, so each is read OFF
+// THE GENERATOR rather than recomputed from the knob's size.
+//
+// ⚠ IT GROWS FILES ON PURPOSE. `Parser.requireInterfaceForParse` scans the CURRENT FILE's interfaces once
+// per `where`-constraint site, so interfaces-per-file is a measured cost multiplier and the standing
+// instruction is not to land many protocol interfaces in one artifact. Holding `InterfacesPerFile`
+// constant and letting the file count double keeps that scan bounded while the conformance count climbs.
+// (This corpus emits no `where` clause, so there are zero sites today. The shape is kept honest for the
+// rung that adds one — and that cost is in TIME, which this instrument cannot see, so the corpus paying
+// it would show nothing while slowing every run.)
+function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
+	let fileCount = bucketCount(count, perBucket: InterfacesPerFile)
+
+	var total = 0 as SourceByteCount
+	for fileIndex in 0 upto fileCount 'eachFile'
+		let driverName = "{InterfaceFileDriverPrefix}{fileIndex}"
+		let measureAlias = "{InterfaceMeasurePrefix}{fileIndex}"
+
+		var out = StringBuilder.create()
+		out.append("// Generated by ScaleCorpus: the interface-types knob, file {fileIndex} — up to {InterfacesPerFile} interfaces and their conforming types.\n")
+		// The measure alias is per FILE, not shared: a typealias is a declaration like any other, and the
+		// same name declared by every one of the rung's interface files would be a redeclaration rather
+		// than a convenience.
+		out.append("typealias {measureAlias} = int(i64.min to i64.max)\n")
+
+		var body = StringBuilder.create()
+		body.append("\nfunction {driverName}(a int) returns int\n")
+		body.append("\tvar acc = a\n")
+
+		for slot in 0 upto InterfacesPerFile 'eachInterface'
+			let index = fileIndex * InterfacesPerFile + slot
+			if index >= count 'past'
+				break
+			end 'past'
+
+			out.append(interfaceConformancePair("{InterfacePrefix}{index}", typeName: "{ConformerPrefix}{index}", measureAlias: measureAlias, salt: index))
+			body.append(interfaceDispatchSite(index, typeName: "{ConformerPrefix}{index}", binding: "uv{index}", label: "ic{index}"))
+		end 'eachInterface'
+
+		body.append("\treturn acc\n")
+		body.append("end '{driverName}'\n")
+		out.append(body.build())
+
+		drivers.push(driverName)
+		total = total + try writeRungFile(dir, name: "y_iface_{fileIndex}", source: out.build(), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
+	end 'eachFile'
+	return total
+end 'writeInterfaceTypes'
+
+// One interface and the type that conforms to it. Shared by both interface knobs, so the two measure the
+// SAME declaration against different dimensions: how many conformances exist, and how many sites dispatch
+// over a fixed set of them.
+//
+// The method bodies read the field by BARE NAME (`base`, not `self.base`), which is how a method body
+// inside a type resolves a field — the shape `specs-shv2/interfaces.md` documents, and a different name
+// resolution path from every other function in this corpus.
+//
+// ⚠ NO `where T is I` — concrete dispatch only. A constrained type parameter's method call is a witness
+// dispatch, whose table rides the x64-only `funcAbs64InRdata` relocation; see the knob section's header.
+function interfaceConformancePair(interfaceName String, typeName String, measureAlias String, salt KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("\ninterface {interfaceName}\n")
+	out.append("\tfunction {InterfaceProbeMethod}() returns {measureAlias}\n")
+	out.append("\tfunction {InterfaceScaleMethod}(n {measureAlias}) returns {measureAlias}\n")
+	out.append("end '{interfaceName}'\n")
+	out.append("\ntype {typeName} implements {interfaceName}\n")
+	out.append("\tlet base as {measureAlias}\n")
+	out.append("\n")
+	out.append("\tfunction {InterfaceProbeMethod}() returns {measureAlias}\n")
+	out.append("\t\treturn base + {salt mod 7 + 1}\n")
+	out.append("\tend '{InterfaceProbeMethod}'\n")
+	out.append("\n")
+	out.append("\tfunction {InterfaceScaleMethod}(n {measureAlias}) returns {measureAlias}\n")
+	out.append("\t\treturn base * 2 + n\n")
+	out.append("\tend '{InterfaceScaleMethod}'\n")
+	out.append("\n")
+	out.append("\tstatic function create(base {measureAlias}) returns Self\n")
+	out.append("\t\treturn Self\{base: base\}\n")
+	out.append("\tend 'create'\n")
+	out.append("end '{typeName}'\n")
+	return out.build()
+end 'interfaceConformancePair'
+
+// One CONCRETE interface-dispatch site: build a conforming instance and call both of its interface
+// methods, one with no arguments and one with an argument. Shared by both interface knobs for the reason
+// `structCreateInBlock` is shared by both struct knobs.
+function interfaceDispatchSite(index KnobSize, typeName String, binding String, label String) returns String
+	var body = StringBuilder.create()
+	body.append("\t\tlet {binding} = {typeName}.create(acc)\n")
+	body.append("\t\tacc = acc + {binding}.{InterfaceProbeMethod}() + {binding}.{InterfaceScaleMethod}({index mod 5 + 1})\n")
+	return ownedSiteBlock(label, body: body.build())
+end 'interfaceDispatchSite'
+
+// The `ifaceDispatch` knob: M CONCRETE dispatch SITES over a FIXED set of conformances.
+//
+// The per-SITE cost is the point — the receiver's construction and the method call's lowering — so what
+// doubles is the number of call sites while the number of conformances stays put. That is the whole of
+// the difference from `interfaceTypes`, and the reason the two are not one knob with a bigger number:
+// this is the column that moves when interface-method CALL lowering changes, and that one is the column
+// that moves when `ConformanceCheck` does.
+//
+// It declares its OWN fixed conformances rather than reaching for the other knob's, exactly as
+// `structAllocsSource` declares its own types: a knob that read another knob's declarations would move
+// whenever that knob was retuned.
+function ifaceDispatchSource(siteCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the interface-dispatch knob — {siteCount} concrete dispatch sites over {IfaceDispatchTypeCount} conformances.\n")
+	out.append("typealias {DispatchMeasureAlias} = int(i64.min to i64.max)\n")
+
+	for t in 0 upto IfaceDispatchTypeCount 'eachType'
+		out.append(interfaceConformancePair("{DispatchInterfacePrefix}{t}", typeName: "{DispatchConformerPrefix}{t}", measureAlias: DispatchMeasureAlias, salt: t))
+	end 'eachType'
+
+	out.append("\nfunction {IfaceDispatchDriver}(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto siteCount 'eachSite'
+		out.append(interfaceDispatchSite(i, typeName: "{DispatchConformerPrefix}{i mod IfaceDispatchTypeCount}", binding: "dv{i}", label: "id{i}"))
+	end 'eachSite'
+	out.append("\treturn acc\n")
+	out.append("end '{IfaceDispatchDriver}'\n")
+	return out.build()
+end 'ifaceDispatchSource'
+
 // `main`, which threads the seed through every generated function.
 //
 // It calls all of them ON PURPOSE. An uncalled function is a function a future dead-code pass could
@@ -1550,6 +2606,19 @@ end 'codeGrowthAt'
 // GENERATED for a rung after P1.0r implemented them, and integer `/` and `mod` sat there for three
 // after P1.0d.3 built the entire idiv path.
 //
+// ⚠⚠ AND IT CAN LIE A THIRD WAY, WHICH IS THE WORST OF THE THREE: BY NAMING A GAP WITH A REASON THAT
+// HAS STOPPED BEING TRUE. The struct entry said field WRITES were "P1.1a wave 2 and NOT IMPLEMENTED"
+// and a struct crossing a CALL was "P1.4, deferred on the borrow-vs-consume ruling". Both had shipped
+// — `specs-shv2/challenge-struct-field-assign.md`'s `struct-field-reassignment` and
+// `struct-managed-field.md`'s `param-consumed-into-field` were live, non-disabled tests — and the file
+// went ten rungs without either. An omission stops a reader from KNOWING; a stale reason stops them
+// from LOOKING, because the reason is what they use to decide whether the gap is theirs to close.
+//
+// ⇒ SO WHEN A FAMILY MOVES TO CONSTRUCTS GENERATED, ITS OLD REASON GOES WITH IT. And a reason that
+// remains must be one this file can still defend today: the three x64-only families below are named
+// with the mechanism (`funcAbs64InRdata`) and the consequence (a BROKEN RUN, not a skewed number),
+// because that is checkable, and "not implemented" was not.
+//
 // ⇒ THE RULE THIS LIST IS NOW HELD TO: every construct in the subset appears under EXACTLY ONE
 // heading, and a construct that is PARTLY generated (structs — reads yes, writes no) says which part
 // under GENERATED rather than being filed whole under either. A heading is a claim; an omission is a
@@ -1574,21 +2643,50 @@ export function printCorpusManifest()
 	print("      use and emits almost no code: that is correct, and it is the front end being measured\n")
 	print("    TOP-LEVEL var — .data slots, GlobalDataTable.layOut, globalAddr/loadIndirect/storeIndirect\n")
 	print("    STRUCTS (the heap): `type` declarations, an explicit `static create`, Self\{\} construction,\n")
-	print("      field READS, and the __mm_alloc site each create emits. TWO BLIND SPOTS LIVE INSIDE\n")
-	print("      THIS ONE and no knob here can close them: field WRITES (`p.x = 30`) are P1.1a wave 2\n")
-	print("      and NOT IMPLEMENTED, and a struct crossing a CALL boundary (as a parameter or a\n")
-	print("      return) is P1.4, deferred on the borrow-vs-consume ruling. A codegen change to either\n")
-	print("      is invisible here even though structs are otherwise generated\n")
-	print("    if, if/else, while, and NESTED while (to a doubling depth)\n")
+	print("      field READS *and* field WRITES (`p.y = ...`, and `o.inner.x = ...` through a loaded box),\n")
+	print("      a struct crossing a CALL BOUNDARY as a parameter, and the __mm_alloc site each create\n")
+	print("      emits. ⚠ THIS ENTRY USED TO CLAIM THE OPPOSITE — that writes were 'P1.1a wave 2 and NOT\n")
+	print("      IMPLEMENTED' and a struct across a call 'P1.4, deferred on the borrow-vs-consume ruling'.\n")
+	print("      Both had shipped, with live spec tests, for ten rungs\n")
+	print("    if, if/else, while, and NESTED while (to a doubling depth); `break` out of a loop\n")
 	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
-	print("    short-circuit `and` (the two-condition guards), bitwise `and` (shift-count masks)\n")
+	print("    short-circuit `and` and `or` (control flow, not operators), `xor` and `not` over bools,\n")
+	print("      bitwise `and` / `or` / `xor` / `not` over ints\n")
 	print("    shl / shr with: a CONSTANT count (folded) AND a DYNAMIC count (runtime-guarded), over a\n")
 	print("      SIGNED operand (arithmetic/sign fill) AND a ranged int(0 to u64.max) operand (zero fill)\n")
-	print("    ranged typealiases\n")
+	print("    ranged typealiases, and an `as` cast of an OPAQUE value (which emits a runtime RANGE GUARD;\n")
+	print("      a cast of a literal is checked at compile time and emits nothing)\n")
+	print("    `print` — the formatted-output path\n")
 	print("    FLOAT (the SSE band): + - * / , compares in BOTH forms (feeding a jcc, and materialized\n")
 	print("      as a bool), float PHIs (branch-merged and loop-carried), int->float promotion and\n")
 	print("      trunc (the conversion band's two directions), and floats live ACROSS A CALL — whose\n")
 	print("      allowed set is EXACTLY empty, so every one is a forced spill\n")
+	print("    ENUM declarations (bare and int-backed) and EXHAUSTIVE `match` in BOTH forms — statement\n")
+	print("      (`then`, arms that assign, so the continuation phis are minted) and expression (`gives`) —\n")
+	print("      over an OPAQUE scrutinee, and rotating over ALL THREE dispatch strategies: the linear\n")
+	print("      compare chain (<4 intervals), the balanced binary search (>=4, span too wide for a table)\n")
+	print("      and the JUMP TABLE (>=4 and dense: an .rdata slot table plus an indirect jump)\n")
+	print("    STRING (the heap): literals long enough to leave the 48-byte record, INTERPOLATION of the\n")
+	print("      opaque accumulator (an int->String conversion that allocates), `.append` (which detaches\n")
+	print("      onto a private buffer), `==` through __str_eq, `.byteLength()` as the way back out to int,\n")
+	print("      and a struct owning a String field dropped through its synthesized __destruct_<T> cascade\n")
+	print("    ARRAY, trivial-element: create / reserve / push / get / count, plus the O(1) COW trio\n")
+	print("      slice / clone / append — which refcount the element BUFFER rather than the record\n")
+	print("    ARRAY, CONCRETE-managed-element: `Array with String` and `Array with <struct owning a\n")
+	print("      String>` — the element-drop function threaded through the array record, and the RETAIN a\n")
+	print("      `get` of a managed element owes.\n")
+	print("      ⚠ BOTH ARRAY KNOBS ARE PER-SITE: the number of `Array with <T>` INSTANCES is FIXED at\n")
+	print("      four (one trivial, one String, one struct-element, one nested), and only the OP-SITE count\n")
+	print("      doubles. A per-INSTANCE Array dimension — many distinct element types, so many distinct\n")
+	print("      layout descriptors — is NOT generated; the generic-instances knob is the only place that\n")
+	print("      cost is measured, and it measures it for a user base, not for `Array`\n")
+	print("    GENERICS, UNCONSTRAINED: `type ... uses T` and `uses A, B` bases (dictionary-passing, so ONE\n")
+	print("      shared body per base), `typealias X = Base with Arg` instantiations each with their OWN\n")
+	print("      type argument, and both ownership paths for that argument — a TRIVIAL ranged int (borrowed\n")
+	print("      into the box) and a MANAGED struct owning a String (moved in, dropped through the\n")
+	print("      instance's own cascade)\n")
+	print("    INTERFACES: `interface` declarations, `type X implements I` conformance, and CONCRETE\n")
+	print("      dispatch (`x.method()`, with and without arguments) — a direct call to a known body\n")
 	print("\n")
 	print("  COST DIMENSIONS ON THE DOUBLING LADDER (each DOUBLES per rung; the rung-over-rung RATIO is\n")
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
@@ -1596,16 +2694,31 @@ export function printCorpusManifest()
 	print("    pressured-loop COUNT, loop-nest DEPTH, locals-in-scope per function (the V dimension),\n")
 	print("    float-op groups, float-spill loop COUNT, top-level `let` COUNT, top-level `var` COUNT,\n")
 	print("    `type` declaration COUNT (a per-TYPE cost), struct `create` SITE count (a per-SITE cost,\n")
-	print("    over a FIXED set of types, so the two move independently), and int-divide groups\n")
+	print("    over a FIXED set of types, so the two move independently), int-divide groups,\n")
+	print("    `enum` declaration COUNT (per-TYPE) and `match` SITE count (per-SITE, over a fixed pair of\n")
+	print("    enums, so a change to tag layout and a change to dispatch strategy move different columns),\n")
+	print("    String op-group count, managed-struct TYPE count (per synthesized __destruct_<T> body),\n")
+	print("    trivial-element Array group count and MANAGED-element Array group count (the element-drop\n")
+	print("    threading is what separates them), generic BASE count (per shared body) and generic\n")
+	print("    INSTANTIATION count (per layout descriptor, over a FIXED base), interface CONFORMANCE count\n")
+	print("    — which also doubles the FILE count, deliberately, to keep interfaces-per-file constant —\n")
+	print("    and interface DISPATCH SITE count over a FIXED set of conformances\n")
 	print("\n")
 	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
-	print("    `break` (in the subset, but no generated loop exits early); `or` / `xor` / `not`;\n")
-	print("    print, arrays, strings, `for`, `match`; closures, async, generics; `as` casts.\n")
-	print("    Float ARGUMENTS and float RETURNS are absent because they do not exist yet (Wave 2 —\n")
-	print("    the xmm0 ABI slot); every float here enters by promotion and leaves through trunc,\n")
-	print("    which is the whole of what Wave 1 can express. Struct field WRITES and structs across a\n")
-	print("    CALL are absent for the same reason — see the struct entry above, which names them\n")
-	print("    where a reader looking up structs will actually find them.\n")
+	print("    `for`-in, closures, async. Float ARGUMENTS and float RETURNS are absent because they do not\n")
+	print("    exist yet (Wave 2 — the xmm0 ABI slot); every float here enters by promotion and leaves\n")
+	print("    through trunc, which is the whole of what Wave 1 can express.\n")
+	print("    ⚠ AND THREE FAMILIES ARE ABSENT FOR A REASON THAT IS NEITHER 'unimplemented' NOR 'forgotten',\n")
+	print("    so it is stated in full: WITNESS-TABLE DISPATCH (a `where T is I` constraint), `Set`, and\n")
+	print("    OPAQUE-`T` MANAGED ARRAY ELEMENTS all ride the `funcAbs64InRdata` relocation, which is\n")
+	print("    x64-only — and this ladder always compiles for the HOST, because `compileRung` spawns\n")
+	print("    `build` with no --target. On arm64/wasm a witness call is a panic(), not a diagnostic, so a\n")
+	print("    corpus that generated one would FAIL TO COMPILE and take the whole run down as a BROKEN RUN\n")
+	print("    rather than merely skewing a number. Generating them needs host-awareness in the runner\n")
+	print("    first, which is a decision, not an oversight.\n")
+	print("    The per-type deep CLONER cascade (__clone_<T>, and `noteClonerUsage`'s needs-fixpoint) is\n")
+	print("    absent too: nothing here deep-clones a MANAGED-element array, so `neededCloners` stays\n")
+	print("    empty and that fixpoint early-outs at every rung.\n")
 	print("\n")
 	print("  !! MEASURES MEMORY ONLY — a TIME-only superlinearity is invisible here BY DESIGN. Time is not\n")
 	print("     reproducible, so it cannot be trended; a cost that re-walks tokens or chases pointers but\n")
