@@ -2119,6 +2119,64 @@ overturned a measured decision.
 - ⏭ Also: `spec-test --target=arm64-macos` panics at `SpecTestRunner.maxon:928` before running anything, so even a
   COMPILE-ONLY test (one that needs no executor) cannot run on a non-arm64 host. The arm64 attribution golden was
   verified BY HAND and is byte-for-byte what it pins. A runner change would let compile-only tests run anywhere.
+
+### ✅ FIRST STAND-IN RETIRED — `stdlib/Sleep.maxon` IS the real `sleep` (2026-07-25, x64 1586→**1587/0**, wasm 1394→**1396/0**)
+**Bare-name builtins are the OTHER temporary scaffolding** (stand-ins for stdlib functions that did not exist yet),
+so retiring one and deleting the whitelist point the same way. `SleepBuiltinName` + its recognizer arm DELETED;
+`"Sleep.maxon"` listed; `stdlib/` untouched — **the module works unmodified, which is the test.**
+- **It fixed a case where shv2 REJECTED A PROGRAM THE ORACLE ACCEPTS.** `let nap = sleep; nap(5)` was `E2004`
+  (a call-site-only builtin name has no address; a declaration does) — now runs, exit 7, matching the bootstrap.
+  The float-arg diagnostic also stopped being bespoke `E3005 'sleep' requires a integer` and became the oracle's
+  exact **E3009** conversion message. **Retiring a stand-in is not relocation — the function starts participating
+  in the language.**
+- **NOT byte-neutral, and that is expected here:** 15 goldens across 7 specs moved. Whole aggregated diff =
+  −15 `callDirect __gt_sleep`, +15 `callDirect sleep`, +15 `func @sleep` frames + standard prologue/epilogue.
+  "A call frame appeared" accounts for ALL of it.
+- **DELIBERATE behaviour change, both halves pinned:** an UNREACHED `sleep(1)` now compiles for wasm — the entry
+  moved out of reachability-BLIND user code into reachability-AWARE stdlib.
+- ⭐ **PRICED FOR THE NEXT SIXTEEN** (`print`, `trunc`, `runProcess`, 7×`subp*`, 4 math): the forwarding frame is
+  **86 bytes ONCE per retired builtin, not per call site** (identical on a 233-byte and a 1.4 MB program). Only
+  ~34 is the frame the goldens show; **~52 is a GT stack guard emitted at the BYTE level, invisible to Target-IR
+  goldens** — nobody reading the diff would have found it. ⚠ The reviewer measured the one real non-GT forwarder
+  (`WallClock.nowUnixSeconds`) at **+53, not ~34** — treat "~34 for a non-GT forwarder" as a PREDICTION, not a
+  constant. Retiring all sixteen ⇒ a one-off ~0.5–1.4 KB.
+- ⚠ **shv2 HAS NO INLINER AND NONE IS SCHEDULED** (`PLAN.md:493`, `ARCHITECTURE.md:572`), so every retired builtin
+  costs that frame permanently. Measured worth of one: a 200M-iteration `trunc` loop is **282 ms direct vs 536 ms
+  through a forwarder** — noise for `sleep`/`runProcess` (a park/syscall dwarfs it), but **the entire cost** for
+  `trunc` and the math intrinsics. Cheaper option named, not built: a body that is ONE forwarding call can be a
+  **tail-call**, turning the whole frame into a `jmp`.
+- ⭐ **THE FLOOR, which `scale-test` STRUCTURALLY CANNOT FLAG:** loading is linear in module count (×1.967/doubling,
+  per-entry term exactly 16 allocations), and the right unit is the FUNCTION, not the byte. Real `stdlib/` is 49
+  files / 695 function declarations ⇒ **the fully-loaded stdlib will cost ~350–500 K allocations and ~25 MB on
+  EVERY compile as a FLAT FLOOR** — ~60–80% of a whole rung-0 compile. Every term is measured linear, so this is
+  neither debt nor defect; it is the design consequence of parsing all of stdlib every time, removable only by a
+  **lazy/cached stdlib artifact — its own rung, and the one that pays for the end state.** It is a floor, not a
+  slope, so no curve will ever bend to reveal it.
+- ⚠ Retiring `print` will flip essentially every program onto the stdlib path, at which point
+  `StdlibSource.maxon:149`'s `userCodeCallsStdlib` short-circuit — written to keep stdlib cost a per-compile
+  constant — becomes dead in practice. Linear either way; note it before it is mistaken for a regression.
+- ⭐ **THE REVIEW FOUND THE SAFETY NET ITSELF WAS WRONG:** the collision rule (*"do not list a module whose function
+  name a bare builtin claims"*) was stated in TWO files beside a prose roster naming **4 of the 15** claiming names
+  — omitting `spawnReadLine` and all seven `subp*`. A maintainer checking a module against the roster instead of
+  against `parseCallNamed`'s `if` chain would be told a CLAIMED name was free, and get back exactly the silent
+  shadow the rule exists to prevent. Both rosters deleted; the chain is named as the one authority. *(One fact
+  written down twice — in the documentation of the rule against writing one fact down twice.)*
+
+### ⛔ NEXT RUNG, AND IT GATES FURTHER RETIREMENTS — duplicate `typealias` is a SILENT WRONG ANSWER
+**shv2 has no duplicate-`typealias` diagnostic and resolution is LAST-REGISTERED-WINS. stdlib registers AFTER user
+source, so a listed module's typealias SILENTLY OVERRIDES the user's.** Coordinator-verified against the oracle:
+```maxon
+typealias Milliseconds = int(0 to 100)      // the user's narrow range
+let m = 500 as Milliseconds                  // shv2: COMPILES, m == 500 (exit 9)
+                                             // bootstrap: E3005 Value 500 is outside the range of 'Milliseconds'
+```
+A range check that must reject silently passes. **Pre-existing and GENERAL** — it reproduces with two typealiases
+in ONE user file and zero stdlib involvement, and Clock already shipped five such names (`DurationMs`, `InstantMs`,
+`InstantNanos`, `DurationNanos`, `UnixSeconds`); this rung added one (`Milliseconds`). ⇒ merged, not blocked.
+**But it gates the programme: every one of the sixteen remaining retirements claims MORE type names**, and the
+loader's collision rule covers function-vs-function (loud) and type-vs-builtin (maintainer's job) — **not this
+case, which is the one that silently returns a wrong answer.** Fix = a whole-program duplicate-typealias check
+(new error code + specs + goldens). **Do this BEFORE retiring `print`.**
 - Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
 lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
 intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
