@@ -125,13 +125,33 @@ A **constant** in that position is relieved the same way but for free: it is re-
 before *every* use, with no slot, no store and no load. Rematerialization is preferred over spilling
 here for the same reason it is preferred everywhere.
 
-A store→slot→reload chain that does not preserve value identity — a mis-targeted store,
-a wrong-slot reload, a reload of a slot nothing wrote — hands a use the wrong value, so
-the program computes the wrong answer and the exit-code assertion below fails. The
-committed `.test` goldens carry the other half: they pin *how many* stores and reloads
-each function emits and *where*, so a spill that leaks into a loop body, or a reload
-that reappears at every use, fails as a golden mismatch even though the answer is still
-right.
+### A reload must not be born with nowhere to live
+
+A reload serves a **run** of uses, so it is live from its own site to the last use of that run. If an
+op inside that span denies the reload's whole register **file** — an f64 live across a call is
+forbidden all sixteen XMMs, because every one of them is caller-saved — then the fresh reload comes
+out of the split with an **empty** allowed set. It cannot be coloured anywhere, so the allocator is
+obliged to find it at the next peak and split it *again*: the split that was meant to relieve the
+value has minted its own next victim.
+
+That cascade is **quadratic**, and it is invisible in the emitted code, which grows only linearly. Two
+f64 locals read after each of N calls cost 2 splits per *call site* rather than 2 in total, each one
+re-splitting the previous reload and writing it to a **fresh** stack slot. Measured on the two tests
+below, against a compiler without the run-break: the two-call program emitted **4 stores into 4
+slots** and the four-call program **8 into 8**, both for the same two values — the bracket count
+tracking the call count instead of the value count. At N=128/256/512 the splitter's memory grew ×3.84
+then ×3.98 per doubling, against ×2.0 for the same program with the two locals declared `int`.
+
+So a run **breaks** at an op that would strand the value's file, and one split of the original then
+mints every reload the value needs — none of them able to become a victim in its turn. The test is
+"leaves this file **no** register", not "clobbers something this value could have used": an `int`
+across a call keeps the five callee-saved registers, is coloured, and is never re-picked, so breaking
+there would emit a reload per call and buy nothing.
+
+The tests below pin the **shape**, not a timing. Doubling the number of call sites leaves the number
+of stores and slots **unchanged** — two of each, one per local — while the reloads grow with the reads
+that need them, which is the ABI's price and not the allocator's.
+
 ### What the RUN proves, and what the GOLDEN proves
 
 Every test below is checked twice, and the two halves prove different things — neither substitutes
@@ -914,4 +934,106 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: float-locals-read-after-each-of-two-calls -->
+Two f64 locals, each read after each of TWO calls. Every XMM is caller-saved, so both are forbidden
+their entire file across a call and both must live in memory — the forced bracket, at its widest.
+
+What this pins is the **bracket count**: exactly TWO `storeSlotReg`, into exactly TWO slots, one per
+local, plus one `loadRegSlot` per read. Before the run-break, the reload serving the reads after the
+first call spanned the second call too, so it was itself stranded and was split again into a second
+slot — four stores and four slots for two values. Read this fragment against the four-call test
+below: the store and slot counts are the same in both, and only the reloads grow.
+
+`work` adds 1 and each round adds `trunc(1.5) + trunc(2.5)` = 3, so `acc` runs 0 → 1 → 4 → 5 → 8.
+```maxon
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	var acc = 0
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	return acc
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: float-locals-read-after-each-of-four-calls -->
+The same program with the call sites DOUBLED — the other half of the pair above, and the one that
+makes the property checkable rather than asserted. The splitter still splits each local exactly
+ONCE, so this fragment carries the same two `storeSlotReg` and the same two slots as the two-call
+test; only the `loadRegSlot` count follows the reads. Under the cascade it carried eight of each.
+
+`acc` runs 0 → 1 → 4 → 5 → 8 → 9 → 12 → 13 → 16.
+```maxon
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	var acc = 0
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	return acc
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: two-floats-multiplied-between-calls -->
+The multiply reads BOTH floats, and that is what made this a compiler CRASH rather than slow code.
+
+A reload that spanned a later call was stranded, so it stayed confined exactly as the value it
+relieved was. A stranded reload and a stranded original then met at the `mulsd` that reads them
+both, giving a confined peak whose tight set was the peak op's OWN TWO OPERANDS — and
+`chooseVictim` excludes the values the peak op reads, because they are needed in registers there.
+Nothing was left to choose and `noVictimAtPeak` fired its splitter-bug panic on a program that fits
+the machine many times over.
+
+The invariant that panic asserts says candidates always remain, on the grounds that "any witness a
+clobber produces has at least the five callee-saved registers in it, so at least six values are
+confined here; an op names at most two virtual registers". That is **false for an empty witness**: a
+float across a call is confined to ∅, so a tight set of exactly two is a violation, and one op can
+read both. With reloads no longer born stranded, the only confined values left are originals, the
+call outranks the multiply, and the program compiles.
+
+Each round multiplies `1.5 × 2.5` = 3.75 into `s` and `work` adds 1 to `acc`, so two rounds give
+`trunc(7.5) + 2` = 9.
+```maxon
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	var s = 0.0
+	var acc = 0
+	acc = work(acc)
+	s = s + a * b
+	acc = work(acc)
+	s = s + a * b
+	return trunc(s) + acc
+end 'main'
+```
+```exitcode
+9
 ```
