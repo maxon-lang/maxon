@@ -13,7 +13,7 @@ shv2 does not load all of `stdlib/` the way v1 and the C# bootstrap do. It loads
 WHITELIST — a listed subset of `stdlib/*.maxon` prepended to every compile — so stdlib support can
 grow one module at a time, each module gated on the language features it needs. The list is stated
 in exactly one place, `Compiler/StdlibWhitelist.maxon`'s `whitelistedStdlibRelativePaths()`; at this
-rung it holds `stdlib/Clock.maxon` and `stdlib/Sleep.maxon`, in that order.
+rung its only entry is `stdlib/Clock.maxon`.
 
 A whitelisted module is registered into the query database exactly like a user source, so it flows
 through the same tokenize → signature-index → parse → merge spine. Its declarations therefore
@@ -69,21 +69,43 @@ A whitelisted module must declare no name a user program declares and no builtin
 - TYPE-name-vs-builtin collisions are the maintainer's responsibility. shv2 has no
   builtin-type-redeclaration diagnostic at all — a user `type String` compiles today as a distinct
   nominal — so enforcing one is a general language matter, not a whitelist one. Clock declares
-  `Clock`/`WallClock` and time typealiases and Sleep declares `Milliseconds`, none of them builtin,
-  so neither can hit this. Do not whitelist a module that redeclares a builtin.
+  `Clock`/`WallClock` and time typealiases, none of them builtin, so it cannot hit this. Do not
+  whitelist a module that redeclares a builtin.
 
-- FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, and `stdlib/Sleep.maxon` is standing in one.
-  The parser recognizes a handful of BARE names (`print`, `sleep`, `trunc`, `runProcess`, the math
-  intrinsics) before any registry is consulted, so a CALL to one never reaches a declaration of that
-  name — `sleep(5)` emits the builtin's `__gt_sleep` directly, while `let f = sleep` (not a call
-  site) takes the address of the whitelisted `stdlib.sleep`, whose body reaches the same entry
-  through `__Builtins.sleep`. Both suspend the green thread for the same duration, so a program is
-  correct either way; what is unsound is that one name has two routes. It predates the whitelist —
-  a user file declaring its own `function sleep` already compiled with the declaration silently
-  unlinked — and repairing it means deleting the bare-name builtin, which moves every committed
-  golden that calls `sleep` and hands `E3104` a span inside `stdlib/Sleep.maxon` instead of the
-  user's own call. Until then, do not whitelist a module whose function name a bare builtin already
-  claims unless — as here — the two lower to the same runtime entry.
+- FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT — and this is why `stdlib/Sleep.maxon` is
+  **not** the second entry, though the compiler can now compile it unmodified. The parser
+  recognizes a handful of BARE names (`print`, `sleep`, `trunc`, `runProcess`, the math intrinsics)
+  before any registry is consulted, so a CALL to one never reaches a declaration of that name.
+  Whitelisting Sleep would load a module no ordinary call site can reach — `sleep(5)` still emits
+  the builtin's `__gt_sleep` — while charging the whitelist's per-compile cost (measured: +677
+  allocations and ~30 KB on **every** compile, flat across a 32x scale ladder) for zero delivered
+  capability. And the name would have two routes: `let f = sleep` is not a call site, so it takes
+  the address of the whitelisted `stdlib.sleep`, whose body reaches the same entry the long way
+  round.
+
+  The shadowing is not the whitelist's doing and predates it: a user file declaring its own
+  `function sleep` already compiles with the declaration silently unlinked, no diagnostic. The
+  repair is to delete the bare-name builtin and let the whitelisted declaration be authoritative —
+  its own rung, because it moves every committed golden that calls `sleep` (~13 across 6 specs),
+  changes `async-sleep.float-arg-rejected`'s pinned stderr, and must first answer the gap below.
+  **The rule: do not whitelist a module whose function name a bare builtin already claims. Retire
+  the builtin first.**
+
+### The open mechanism gap: a diagnostic that originates INSIDE whitelisted stdlib source
+
+A whitelisted module is a real compilation unit, so a rejection raised in ITS body is positioned at
+ITS path — an absolute `…/stdlib/Foo.maxon:L:C` naming a file the user never opened, for a mistake
+they made at a call site somewhere else. Nothing renders it in terms of the caller, and no spec can
+pin it (the runner rewrites only the fragment's own path).
+
+This is GENERAL to the whitelist, not a quirk of any one module. It fires wherever a whitelisted
+body bottoms out in something target-gated or otherwise refusable — which is exactly what a stdlib
+leaf is for; every module in the queue behind Clock ends in a `__Builtins.*` intrinsic. Clock is
+only spared today because its callers are `Clock.nowMs()`-shaped, so `E3104`'s span already lands
+inside `stdlib/Clock.maxon` on a non-x64 target and no test compiles a Clock program for one.
+Whitelisting Sleep would have made it user-visible on the first `sleep(1)` compiled for wasm. A
+diagnostic raised in whitelisted source needs a caller-side anchor before the whitelist grows a
+module users reach through a target-gated leaf.
 
 ## Tests
 
@@ -152,36 +174,12 @@ end 'main'
 4
 ```
 
-<!-- test: stdlib-whitelist.sleep-module-runs -->
-<!-- targets: x64-windows -->
-`stdlib/Sleep.maxon` — whitelist entry #2 — compiles UNMODIFIED as part of this build, and the code
-it contributes RUNS. `sleep` names the whitelisted declaration (a bare `sleep(…)` call site would be
-claimed by the bare-name builtin first — see the collision rule above — so the function VALUE is what
-reaches it), and calling through it suspends the green thread observably: the elapsed time measured
-across it with `Clock` is at least most of the requested duration. Both whitelisted modules are live
-in one program, which is also the proof that two of them coexist.
-```maxon
-function main() returns ExitCode
-	let start = Clock.nowMs()
-	let napper = sleep
-	napper(60)
-	let elapsed = Clock.elapsedMs(start)
-	if elapsed >= 40 'slept'
-		return 7 as ExitCode
-	end 'slept'
-	return 1 as ExitCode
-end 'main'
-```
-```exitcode
-7
-```
-
 <!-- test: stdlib-whitelist.no-clock-is-byte-neutral -->
-A program that never mentions Clock or Sleep must compile to exactly what it did before either was
-whitelisted: the whitelist adds both to this compile too, and every one of their functions is pruned
-back out with no runtime floor installed. This case carries NO target restriction, so its
-byte-neutrality is checked on wasm as well — the whitelist must not drag the x64-only clock and timer
-substrate into a non-x64 target for a program that reads no clock and never sleeps.
+A program that never mentions Clock must compile to exactly what it did before Clock was whitelisted:
+the whitelist adds Clock to this compile too, and every one of its functions is pruned back out with
+no runtime floor installed. This case carries NO target restriction, so its byte-neutrality is
+checked on wasm as well — the whitelist must not drag the x64-only clock substrate into a
+non-x64 target for a program that reads no clock.
 ```maxon
 function main() returns ExitCode
 	let answer = 42

@@ -41,11 +41,10 @@
 //      unreachable from `main` — and `scanRuntimeUsage` skips it. ⭐ USER functions are NEVER
 //      skipped (their present-code floor semantics are unchanged), so the existing corpus is
 //      untouched; only the INJECTED whitelist code is reachability-gated. This is sound for
-//      Clock and Sleep because each of their functions is reached ONLY by direct `call`/`funcAddr`
-//      — never by a witness dispatch or an `.rdata` reloc — so call-graph reachability from `main`
-//      is EXACT for them (a Maxon-tier reachability that missed a witness edge would be unsound in
-//      general, which is why this skip is scoped to the whitelist rather than applied to all
-//      functions).
+//      Clock because a Clock function is reached ONLY by direct `call`/`funcAddr` — never by a
+//      witness dispatch or an `.rdata` reloc — so call-graph reachability from `main` is EXACT
+//      for it (a Maxon-tier reachability that missed a witness edge would be unsound in general,
+//      which is why this skip is scoped to the whitelist rather than applied to all functions).
 //
 // ⭐ THE COLLISION RULE. A whitelisted module must declare no name a user program declares and
 // no builtin type/name.
@@ -56,24 +55,42 @@
 //   • TYPE-name-vs-builtin collisions are the maintainer's responsibility. shv2 has no
 //     builtin-type-redeclaration diagnostic at all — a user `type String` compiles today as a
 //     distinct nominal — so enforcing one is a general language matter, not a whitelist one.
-//     Clock declares `Clock`/`WallClock` and time typealiases and Sleep declares `Milliseconds`,
-//     none of them builtin, so neither can hit this. Do not whitelist a module that redeclares a
-//     builtin.
-//   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, and `stdlib/Sleep.maxon` is standing
-//     in one. `Parser.parseCallNamed` recognizes a handful of bare names (`print`, `sleep`,
-//     `trunc`, `runProcess`, the math intrinsics) BEFORE `emitCall` consults any registry, so a
-//     CALL to such a name never reaches the whitelisted declaration of it: `sleep(5)` emits the
-//     builtin's `__gt_sleep` directly, while `let f = sleep` — not a call site — takes the address
-//     of the whitelisted `stdlib.sleep`, whose body calls `__Builtins.sleep` and reaches the same
-//     entry the long way round. Both spellings suspend the green thread for the same duration, so
-//     the program is CORRECT either way; what is unsound is only that one name has two routes.
-//     ⚠ MEASURED, and it predates this whitelist: a user file declaring its own `function sleep`
-//     already compiled with the declaration silently unlinked. The honest repair is to delete the
-//     bare-name builtin once the module that supersedes it is whitelisted — which is a separate
-//     rung, because it moves every committed golden that calls `sleep` and it hands the E3104
-//     target rejection a span inside `stdlib/Sleep.maxon` instead of the user's own call. Until
-//     then: do not whitelist a module whose function name a bare builtin already claims, unless —
-//     as here — the two lower to the same runtime entry.
+//     Clock declares `Clock`/`WallClock` and time typealiases, none of them builtin, so it
+//     cannot hit this. Do not whitelist a module that redeclares a builtin.
+//   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT — and this is why `stdlib/Sleep.maxon`
+//     is NOT on the list above, though the compiler can now compile it. `Parser.parseCallNamed`
+//     recognizes a handful of BARE names (`print`, `sleep`, `trunc`, `runProcess`, the math
+//     intrinsics) BEFORE `emitCall` consults any registry, so a CALL to such a name never reaches
+//     a declaration of it. Whitelisting Sleep would therefore load a module no ordinary call site
+//     can reach — `sleep(5)` still emits the builtin's `__gt_sleep` — while charging the
+//     whitelist's per-compile cost (MEASURED at +677 allocations and ~30 KB on EVERY compile,
+//     flat across a 32x scale ladder) for zero delivered capability. Worse, the name would have
+//     TWO routes: `let f = sleep` is not a call site, so it takes the address of the whitelisted
+//     `stdlib.sleep`, whose body reaches the same entry the long way round.
+//     ⚠ The shadowing is NOT the whitelist's doing and predates it: a user file declaring its own
+//     `function sleep` already compiles with the declaration silently unlinked, no diagnostic
+//     (measured on plain user code). The repair is to delete the bare-name builtin and let the
+//     whitelisted declaration be authoritative — its own rung, because it moves every committed
+//     golden that calls `sleep` (~13 across 6 specs), changes `async-sleep.float-arg-rejected`'s
+//     pinned stderr, and must first answer the diagnostic-attribution gap below.
+//     ⇒ THE RULE: do not whitelist a module whose function name a bare builtin already claims.
+//     Retire the builtin first.
+//
+// ⭐ THE OPEN MECHANISM GAP: A DIAGNOSTIC THAT ORIGINATES INSIDE WHITELISTED STDLIB SOURCE.
+// A whitelisted module is a real compilation unit, so a rejection raised in ITS body is positioned
+// at ITS path — an absolute `…/stdlib/Foo.maxon:L:C` naming a file the user never opened, for a
+// mistake they made at a call site somewhere else. Nothing renders it in terms of the caller, and
+// no spec can pin it (the runner rewrites only the fragment's own path).
+//
+// ⚠ THIS IS GENERAL TO THE WHITELIST, NOT A QUIRK OF ANY ONE MODULE. It fires wherever a
+// whitelisted body bottoms out in something target-gated or otherwise refusable, which is exactly
+// what a stdlib leaf is FOR — every module in the queue behind Clock ends in a `__Builtins.*`
+// intrinsic. Clock is only spared today because its callers are `Clock.nowMs()`-shaped, so
+// `SemanticCheck`'s E3104 span already lands inside `stdlib/Clock.maxon` on a non-x64 target and
+// no test compiles a Clock program for one. Sleep would have made it user-visible on the first
+// `sleep(1)` compiled for wasm. Whoever retires the bare-name builtins owns this: a diagnostic
+// raised in whitelisted source needs a caller-side anchor (or an explicit "…, required by <call
+// site>" note) before the whitelist grows a module users reach through a target-gated leaf.
 
 // The directory name walked for, and a generous bound on how far up the tree to look. A
 // checkout is shallow (`<root>/maxon-shv2/.maxon/maxon-shv2.exe` is three levels under the
@@ -102,7 +119,6 @@ export typealias WhitelistPathArray = Array with FilePath
 function whitelistedStdlibRelativePaths() returns StringArray
 	var paths = StringArray.create()
 	paths.push("stdlib/Clock.maxon")
-	paths.push("stdlib/Sleep.maxon")
 	return paths
 end 'whitelistedStdlibRelativePaths'
 
