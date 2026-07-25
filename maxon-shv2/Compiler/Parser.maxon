@@ -1360,8 +1360,8 @@ let TruncBuiltinName = b"trunc"
 // Every ARITY-1 NUMERIC builtin — `trunc` and the four math intrinsics — takes exactly one argument.
 // ONE constant, because `numericBuiltinOperand` is the one function that states it (as both the check
 // and the message's `expected`), and a bare `1` there would be a magic value in the more literal
-// sense: the number that says what these builtins ARE. (`print`/`sleep`/`runProcess` keep their own,
-// because each has its own emit and its own operand rule.)
+// sense: the number that says what these builtins ARE. (`print`/`__Builtins.sleep`/`runProcess` keep
+// their own, because each has its own emit and its own operand rule.)
 let NumericBuiltinArity = 1 as ParamCount
 
 // **THE `String` BUILTIN TYPE'S NAME** (P1.2 wave A). Recognized SYNTACTICALLY in `parseTypeReference`
@@ -1381,23 +1381,19 @@ let PrintBuiltinName = b"print"
 // states it as both the check and the diagnostic's `expected`.
 let PrintArity = 1 as ParamCount
 
-// **THE `sleep` BUILTIN** (P1.5 mid-body-yield). Like `print`/`trunc`, recognized by name after its arguments
-// are parsed: it takes ordinary call syntax but emits no `MaxonOp.call` to a user function — it routes to the
-// `__gt_sleep(ms)` scheduler runtime entry (which parks the current green thread on a timer and yields).
-let SleepBuiltinName = b"sleep"
-
-// `sleep` takes exactly one INTEGER argument — the duration in milliseconds (per `specs/sleep.md`) — and
-// returns void.
-let SleepArity = 1 as ParamCount
-
-// **THE `runProcess` BUILTIN** (P1.5 subprocess seed). Like `sleep`, recognized by name after its arguments are
+// **THE `runProcess` BUILTIN** (P1.5 subprocess seed). Like `print`, recognized by name after its arguments are
 // parsed: ordinary call syntax, but it emits no `MaxonOp.call` to a user function — it routes to the
 // `__gt_process_run(strPtr)` scheduler runtime entry (which spawns a Windows child, parks the current green
 // thread with a YIELDING wait, and returns the child's scalar exit code once it finishes).
+//
+// ⚠ It is a STAND-IN for a stdlib module shv2 cannot compile yet, and it therefore claims the bare name
+// `runProcess` the way `sleep` used to claim its own: a declaration of that name anywhere is silently
+// unreachable, because this test runs before any registry is consulted. Retire it the same way — delete the
+// name here and list the stdlib module that declares it — when that module compiles.
 let RunProcessBuiltinName = b"runProcess"
 
 // `runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the child's exit
-// code), so unlike `sleep` its result IS usable in value position.
+// code), so unlike `__Builtins.sleep` its result IS usable in value position.
 let RunProcessArity = 1 as ParamCount
 
 // **THE `spawnReadLine` BUILTIN** (P1.5 dogfood slice 1a-ii — the IOCP overlapped-read PROBE). A TEMPORARY probe
@@ -1480,6 +1476,16 @@ end 'isBuiltinsIntrinsicCallee'
 
 // Every clock intrinsic reads a clock and takes nothing.
 let ClockIntrinsicArity = 0 as ParamCount
+
+// `__Builtins.sleep` takes exactly one INTEGER argument — the duration in milliseconds (per
+// `specs/sleep.md`) — and returns void.
+//
+// ⚠ **THIS IS THE INTRINSIC'S ARITY, NOT `sleep`'s.** A source `sleep(ms)` is an ordinary call to
+// `stdlib/Sleep.maxon`'s declaration, and the arity it meets is that declaration's, checked by
+// SemanticCheck against its signature exactly like every other call's. An intrinsic has no signature for
+// that check to read — no file declares it — which is the whole reason this constant exists, and why it
+// belongs here beside the intrinsic table rather than up with the bare-name builtins.
+let SleepIntrinsicArity = 1 as ParamCount
 
 // The scale between the two MONOTONIC readings — `currentTimeMs()` IS `currentTimeNanos() / 1e6`. Named
 // here because this is the only place it is applied; the wall clock's own two scale constants live with
@@ -7226,9 +7232,9 @@ export type Parser
 			// intrinsic allocates nothing, so a value-returning one written here simply has its result
 			// discarded, exactly as every other bare-call statement's is.
 			//
-			// This is the position `stdlib/Sleep.maxon` needs — a module shv2 does not load yet, because the
-			// bare-name `sleep` builtin below claims its only declaration: its whole body is
-			// `__Builtins.sleep(milliseconds)` on a line of its own. Until this arm existed, the three
+			// This is the position `stdlib/Sleep.maxon` needs — the module every source-level `sleep(ms)`
+			// now resolves to: its whole body is `__Builtins.sleep(milliseconds)` on a line of its own,
+			// so without this arm the module does not compile. Until it existed, the three
 			// recognized intrinsics all RETURNED a value, so every one of them arrived in expression
 			// position and the recognizer was never asked from here — a void intrinsic died as
 			// `E2015: Unsupported: identifier statement`, pointing at the `__Builtins` token.
@@ -19558,10 +19564,6 @@ export type Parser
 			return try self.emitPrint(args, calleeTok: anchor, resultUsed: resultUsed)
 		end 'printBuiltin'
 
-		if callee.equals(SleepBuiltinName) 'sleepBuiltin'
-			return try self.emitSleep(args, name: callee, calleeTok: anchor, resultUsed: resultUsed)
-		end 'sleepBuiltin'
-
 		if callee.equals(RunProcessBuiltinName) 'runProcessBuiltin'
 			return try self.emitRunProcess(args, calleeTok: anchor)
 		end 'runProcessBuiltin'
@@ -19645,14 +19647,13 @@ export type Parser
 				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: WallClockNowUnixSecondsName, calleeTok: anchor)
 			end 'currentUnixTimeSeconds'
 
-			// ⭐ THE QUALIFIED SPELLING OF `sleep`, ROUTED THROUGH THE BARE ONE'S EMIT — not a second
-			// mapping from "sleep" to `__gt_sleep`. `stdlib/Sleep.maxon` — which shv2 does not load, because
-			// the bare-name builtin above already claims the one name it declares — is written
-			// against `__Builtins.sleep(ms)`, and the bare-name builtin above is the same suspension with
-			// the same argument rule; one decider means the two spellings cannot come to disagree about
-			// the duration's type, the void result, or which scheduler entry parks the green thread.
+			// ⭐ **THE ONLY SPELLING OF `sleep` THE PARSER RECOGNIZES — STDLIB'S OWN FLOOR.** A source
+			// `sleep(ms)` is an ordinary call to `stdlib/Sleep.maxon`'s declaration, which the loader
+			// brings into every compile and whose one-line body is exactly this intrinsic; there is no
+			// bare-name `sleep` builtin and there must never be a second one, or a call and a declaration
+			// of the same name would reach the scheduler by two routes that could come to disagree.
 			if callee.equals(BuiltinsSleepName) 'sleep'
-				return try self.emitSleep(args, name: callee, calleeTok: anchor, resultUsed: resultUsed)
+				return try self.emitSleep(args, calleeTok: anchor, resultUsed: resultUsed)
 			end 'sleep'
 		end 'builtinsIntrinsic'
 
@@ -19797,31 +19798,33 @@ export type Parser
 		return self.emitRuntimeCall(PrintStringName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitPrint'
 
-	// `sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the scheduler
-	// (P1.5 mid-body-yield). A compiler BUILTIN like `print`: ordinary call syntax, but it emits no
-	// `MaxonOp.call` to a user function — it routes to the `__gt_sleep` scheduler runtime entry (which parks the
-	// running GT on a timer and yields). It requires exactly one INTEGER argument (the duration; a float/String/
-	// bool is refused) and returns VOID, so a call in value position is rejected exactly as a void user-call is.
+	// `__Builtins.sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the
+	// scheduler (P1.5 mid-body-yield). It emits no `MaxonOp.call` to a user function — it routes to the
+	// `__gt_sleep` scheduler runtime entry (which parks the running GT on a timer and yields). It requires
+	// exactly one INTEGER argument (the duration; a float/String/bool is refused) and returns VOID, so a call
+	// in value position is rejected exactly as a void user-call is.
 	//
-	// TWO spellings reach it — the bare `sleep(ms)` and the qualified `__Builtins.sleep(ms)` that
-	// `stdlib/Sleep.maxon` is written against — and `name` is the callee's own bytes so each diagnostic
-	// quotes what the user actually wrote, the same way `emitClockIntrinsicCall` and `emitMathIntrinsic`
-	// serve several names from one emit.
-	function emitSleep(args ValueIdArray, name ByteArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
-		if args.count() != SleepArity 'arity'
-			throw ParseError.builtinArity(String.from(name), expected: SleepArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+	// ⚠ **THE INTRINSIC IS STDLIB'S FLOOR, NOT THE SURFACE.** What a user writes is `sleep(ms)`, an ordinary
+	// call to `stdlib/Sleep.maxon`'s declaration, and the rules it meets are that declaration's — its
+	// parameter type, its absent return — checked by SemanticCheck against its signature like every other
+	// call's. The checks below are what an intrinsic needs BECAUSE no file declares it: there is no signature
+	// for the ordinary checks to read. So they are not a second copy of the same rule; they are the rule for
+	// the one call site `stdlib/Sleep.maxon`'s body makes.
+	function emitSleep(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		if args.count() != SleepIntrinsicArity 'arity'
+			throw ParseError.builtinArity(String.from(BuiltinsSleepName), expected: SleepIntrinsicArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
-		let arg = try args.get(0) otherwise panic("emitSleep: args.count() == SleepArity just checked but get(0) failed")
+		let arg = try args.get(0) otherwise panic("emitSleep: args.count() == SleepIntrinsicArity just checked but get(0) failed")
 		let argTag = self.tagOf(arg)
 		if not typeClassAdmits(TypeClass.numeric, tag: argTag) or tagIsFloat(argTag) 'notAnInt'
-			throw ParseError.builtinOperandType(String.from(name), required: "integer", got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinOperandType(String.from(BuiltinsSleepName), required: "integer", got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInt'
 
-		// `sleep` returns nothing, so using its result is using a value that is not there — the same error a
-		// void user-call gets in value position.
+		// The intrinsic returns nothing, so using its result is using a value that is not there — the same
+		// error a void user-call gets in value position.
 		if resultUsed 'noValueToUse'
-			throw ParseError.voidCallResultUsed(String.from(name), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.voidCallResultUsed(String.from(BuiltinsSleepName), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
 		var callArgs = ValueIdArray.create()
@@ -19830,12 +19833,12 @@ export type Parser
 	end 'emitSleep'
 
 	// `runProcess(cmd)` — **SPAWN A WINDOWS CHILD AND AWAIT ITS EXIT CODE**, yielding the current green thread
-	// while it runs (P1.5 subprocess seed). A compiler BUILTIN like `sleep`: ordinary call syntax, but it emits no
+	// while it runs (P1.5 subprocess seed). A compiler BUILTIN like `print`: ordinary call syntax, but it emits no
 	// `MaxonOp.call` to a user function — it routes to the `__gt_process_run(strPtr)` scheduler runtime entry
 	// (which spawns the child with CreateProcessA, parks the GT on the process, and — once the netpoll observes
 	// the child exit — resumes and returns its scalar exit code). It requires exactly one STRING argument (the
 	// command line; a non-String is refused with E3005, mirroring `emitSleep`'s integer check) and returns an
-	// INTEGER, so — unlike `sleep`'s void — its result IS usable in value position and needs no `resultUsed` gate.
+	// INTEGER, so — unlike `emitSleep`'s void — its result IS usable in value position and needs no `resultUsed` gate.
 	//
 	// The String is BORROWED, exactly as `print` borrows its argument: `__gt_process_run` reads the command
 	// line's `buffer`/`length` out of the 48-byte record (like `__print_string` does) and never takes ownership,

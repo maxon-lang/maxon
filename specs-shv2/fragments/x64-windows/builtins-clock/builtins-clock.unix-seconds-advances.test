@@ -46,7 +46,7 @@ func @main {
     x64.callDirect __clock_now_unix_s
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 1100
-    x64.callDirect __gt_sleep
+    x64.callDirect sleep
     x64.callDirect __clock_now_unix_s
     x64.leaRegRegImm32 rax, rbx, 1
     x64.cmpRegReg r8, rax
@@ -62,6 +62,17 @@ func @main {
     x64.movRegImm32 r8, 1
     x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sleep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_sleep
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

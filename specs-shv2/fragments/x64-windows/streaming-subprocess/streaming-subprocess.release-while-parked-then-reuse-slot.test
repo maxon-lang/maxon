@@ -86,7 +86,7 @@ func @main {
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 176], rbx
     x64.movRegImm32 rcx, 300
-    x64.callDirect __gt_sleep
+    x64.callDirect sleep
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_subp_release
     x64.leaRegRdata rcx, [rip + __str_rec_3]
@@ -113,6 +113,17 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sleep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_sleep
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

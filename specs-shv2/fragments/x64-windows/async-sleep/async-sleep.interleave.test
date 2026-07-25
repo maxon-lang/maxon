@@ -55,7 +55,7 @@ func @slow {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 100
-    x64.callDirect __gt_sleep
+    x64.callDirect sleep
     x64.leaRegGlobal rax, __data_order
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.imulRegRegImm32 rax, rax, 10
@@ -74,7 +74,7 @@ func @fast {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.movRegImm32 rcx, 10
-    x64.callDirect __gt_sleep
+    x64.callDirect sleep
     x64.leaRegGlobal rax, __data_order
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.imulRegRegImm32 rax, rax, 10
@@ -109,6 +109,17 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sleep {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_sleep
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

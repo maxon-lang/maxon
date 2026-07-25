@@ -30,6 +30,32 @@ of spawn order.
 The argument is an integer count of milliseconds; a `float`/`String`/`bool` is refused. `sleep` returns
 nothing, so its result may not be used in value position.
 
+### `sleep` is an ORDINARY FUNCTION — `stdlib/Sleep.maxon`'s, not a name the compiler claims
+
+`sleep` is declared in `stdlib/Sleep.maxon`, which the stdlib loader brings into every compile, and its
+one-line body is written against the `__Builtins.sleep` intrinsic (`builtins-sleep.md`):
+
+```text
+typealias Milliseconds = int(0 to u64.max)
+
+export function sleep(milliseconds Milliseconds)
+	__Builtins.sleep(milliseconds)
+end 'sleep'
+```
+
+It used to be a BARE-NAME COMPILER BUILTIN instead — a name `Parser.parseCallNamed` recognized before any
+registry was consulted, standing in for a stdlib the compiler could not yet load. A call-site-only name is
+not a declaration, and the difference showed in two places: the name had no VALUE (`let nap = sleep` was
+*"Undefined variable 'sleep'"* where the reference compiler takes the function's address), and a user file
+declaring its own `function sleep` compiled with that declaration SILENTLY UNLINKED — `sleep(1)` still
+reached the builtin, no diagnostic, a wrong answer. Both are gone: the name is now resolved like every
+other, so it has an address, and a second declaration of it is the ordinary whole-program duplicate
+(`E3006`, naming `stdlib/Sleep.maxon`).
+
+Everything the builtin enforced by hand is now enforced by the declaration: the argument is checked against
+`milliseconds Milliseconds` by the ordinary argument rule, and the absent result by the ordinary void-call
+rule. Only the qualified `__Builtins.sleep(ms)` — stdlib's own floor — is still recognized by name.
+
 ## Tests
 
 <!-- test: async-sleep.basic -->
@@ -139,9 +165,34 @@ end 'main'
 50
 ```
 
+<!-- test: async-sleep.taken-as-a-value -->
+<!-- targets: x64-windows -->
+`sleep` is a DECLARATION, so it has an address: bound to a `let` and called indirectly, it parks the green
+thread exactly as the direct call does. A call-site-only builtin name has no value at all — this program was
+*"error E2004: Undefined variable 'sleep'"* while one claimed the name, though the reference compiler has
+always accepted it.
+```maxon
+function main() returns ExitCode
+	let nap = sleep
+	let start = Clock.nowMs()
+	nap(60)
+	let elapsed = Clock.elapsedMs(start)
+	if elapsed >= 40 'slept'
+		return 7 as ExitCode
+	end 'slept'
+	return 1 as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: async-sleep.float-arg-rejected -->
 <!-- targets: x64-windows -->
-`sleep` requires an integer millisecond count; a float is refused at compile time.
+`sleep` requires an integer millisecond count; a float is refused at compile time — by the ORDINARY
+argument rule against `milliseconds Milliseconds`, which is why the rejection names the parameter and offers
+the conversion, and is the same sentence every other narrowing site speaks. The bare-name builtin refused it
+with a rule of its own (`E3005: 'sleep' requires a integer, but its argument is float`), which said neither.
 ```maxon
 function main() returns ExitCode
 	sleep(1.5)
@@ -149,7 +200,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:2: 'sleep' requires a integer, but its argument is float
+error E3009: <fragment>:3:2: argument 'milliseconds': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: async-sleep.rejected-on-wasm -->
@@ -162,6 +213,10 @@ the backend, which is what it was before this gate:
 ```text
 panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only
 ```
+
+The refusal is raised INSIDE `stdlib/Sleep.maxon`'s body and attributed to the crossing call, so it is
+positioned at the line the user wrote and names the stdlib function they called
+(`stdlib-whitelist.md`) — never at a path inside `stdlib/`.
 ```maxon
 function main() returns ExitCode
 	sleep(1)
@@ -169,5 +224,59 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```
+
+<!-- test: async-sleep.rejected-on-arm64 -->
+<!-- targets: arm64-macos -->
+The attribution is a property of the crossing, not of one backend: the same program compiled for arm64 is
+refused at the same user span, naming the same stdlib function and the same missing runtime entry.
+```maxon
+function main() returns ExitCode
+	sleep(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no arm64-macos implementation
+```
+
+<!-- test: async-sleep.taken-as-a-value-rejected-on-wasm -->
+<!-- targets: wasm32-wasi -->
+Taking `sleep`'s ADDRESS reaches its body exactly as a call does, so the crossing is refused at the span
+where the address is taken — `2:10`, the `sleep` token, not the `f(5)` that consumes the value and not a
+line inside `stdlib/`. The value route needs its own pin because it is not a call op at all: the target
+gate reaches it through the `functionRef`, which is one of the four edges reachability counts.
+```maxon
+function main() returns ExitCode
+	let f = sleep
+	f(5)
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```
+
+<!-- test: async-sleep.unreached-compiles-on-wasm -->
+<!-- targets: wasm32-wasi -->
+An UNREACHED `sleep` now compiles for wasm, and that is a deliberate behaviour change this rung made:
+while `sleep` was a bare-name builtin the call was a `__gt_sleep` in USER code, and the target gate is
+reachability-BLIND for user code, so `napper` was refused though `main` never calls it
+(`builtins-sleep.rejected-on-wasm-when-unreached`, which pins the property at the spelling that still has
+it). The declaration moved that runtime entry INTO stdlib source, where the gate is reachability-AWARE —
+the same exemption that keeps an unused stdlib module byte-neutral
+(`stdlib-whitelist.unreached-clock-still-compiles-on-wasm`). A `sleep` on a path from `main` is still
+refused, as the case above shows.
+```maxon
+function napper()
+	sleep(1)
+end 'napper'
+
+function main() returns ExitCode
+	return 4
+end 'main'
+```
+```exitcode
+4
 ```

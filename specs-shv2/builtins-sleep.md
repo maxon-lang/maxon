@@ -11,9 +11,9 @@ category: system
 
 `__Builtins` is the compiler's builtin TYPE, whose static methods are INTRINSICS rather than
 functions any file declares (see `builtins-clock.md` for the three clock members). `sleep` is the
-fourth member, and the one `stdlib/Sleep.maxon` is written against — a module the compiler can now
-compile unmodified but which the whitelist is deliberately NOT grown to, because the bare-name
-`sleep` builtin already claims the name (`stdlib-whitelist.md` states the rule and the measurement):
+fourth member, and the one `stdlib/Sleep.maxon` is written against — the module the stdlib loader
+now brings into every compile, unmodified, so that a source-level `sleep(ms)` is a call to ITS
+declaration rather than to a name the compiler claims (`async-sleep.md`):
 
 ```text
 export function sleep(milliseconds Milliseconds)
@@ -21,10 +21,11 @@ export function sleep(milliseconds Milliseconds)
 end 'sleep'
 ```
 
-`__Builtins.sleep(ms)` suspends the current green thread for `ms` milliseconds, exactly as the bare
-`sleep(ms)` builtin does — the two spellings share one emit, so they cannot come to disagree about
-the argument's type, the absent result, or which scheduler entry parks the thread. It takes exactly
-one INTEGER argument and returns VOID.
+`__Builtins.sleep(ms)` suspends the current green thread for `ms` milliseconds. It is STDLIB's OWN
+FLOOR — the one spelling that is still recognized by name, because the module's body has to bottom
+out somewhere — and it takes exactly one INTEGER argument and returns VOID. The bare `sleep(ms)`
+builtin that used to share this emit is gone; the stdlib declaration replaced it, and the argument
+and result rules a source call meets are now that declaration's.
 
 ### A VOID intrinsic needs a STATEMENT position, and that is what the other three never asked for
 
@@ -57,11 +58,18 @@ used to be:
 panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung
 ```
 
-The refusal is a SEMANTIC CHECK, so it does not care whether the call is reachable: a `sleep` written in
-a function `main` never calls is refused for wasm just as a type error in an unreached function is
-reported. That is a narrowing against the previous rung, where the same program compiled because
-dead-function elimination — which runs two tiers later — removed the call before any backend saw it. It is
-pinned below so that the reverse change is a deliberate one.
+The refusal is a SEMANTIC CHECK, so it does not care whether the call is reachable: an
+`__Builtins.sleep` written in a function `main` never calls is refused for wasm just as a type error in an
+unreached function is reported. That is a narrowing against the rung before it, where the same program
+compiled because dead-function elimination — which runs two tiers later — removed the call before any
+backend saw it. It is pinned below so that the reverse change is a deliberate one.
+
+⚠ It is pinned HERE, at the INTRINSIC, because that is the spelling it is still true of. The bare
+`sleep(1)` it used to be written with is now a call to `stdlib/Sleep.maxon`'s declaration, which moves the
+`__gt_sleep` out of user code and into stdlib source — where the gate is reachability-AWARE, so an
+unreached one COMPILES (`async-sleep.unreached-compiles-on-wasm` pins the other side). Reachability-blind
+for user code and reachability-aware for stdlib source is one rule with two halves, and the two cases now
+pin one half each.
 
 ## Tests
 
@@ -167,15 +175,15 @@ error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: it
 
 <!-- test: builtins-sleep.rejected-on-wasm-when-unreached -->
 <!-- targets: wasm32-wasi -->
-The gate is REACHABILITY-BLIND for user code: `napper` is never called, yet its `sleep` is still refused.
+The gate is REACHABILITY-BLIND for user code: `napper` is never called, yet its intrinsic is still refused.
 `SemanticCheck` visits every function and dead-function elimination runs two tiers later, so this is the
-same rule that reports a type error in an unreached function. Pinned because the whitelist's own exemption
-(`checkCalls` skips an unreached whitelisted stdlib body) points the other way, and the rung that retires
-the bare-name `sleep` builtin moves this call INTO such a body — which would silently flip this program
-back to compiling.
+same rule that reports a type error in an unreached function. Pinned because the stdlib loader's own
+exemption (`checkCalls` skips an unreached stdlib body) points the other way, and it is the INTRINSIC that
+keeps this property: the bare `sleep(1)` this case was written with reaches the same entry through
+`stdlib/Sleep.maxon` now, so it takes the exemption instead.
 ```maxon
 function napper()
-	sleep(1)
+	__Builtins.sleep(1)
 end 'napper'
 
 function main() returns ExitCode

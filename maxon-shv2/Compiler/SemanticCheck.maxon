@@ -893,7 +893,7 @@ end 'validateCall'
 //     `currentTimeMs`, and every `Clock.*` written against them);
 //   • `__clock_*` — `osReadWallClock`'s GetSystemTimeAsFileTime (`__Builtins.currentUnixTimeSeconds`);
 //   • `__gt_sleep` — the green-thread timer park, whose deadline is computed from that same `osReadClock`
-//     reading (`sleep(ms)` and `__Builtins.sleep(ms)`, which `stdlib/Sleep.maxon` is written against).
+//     reading (`__Builtins.sleep(ms)`, and so every `sleep(ms)` through `stdlib/Sleep.maxon`'s body).
 //
 // It spans two runtime BANDS — the monotonic clock and the sleep park are `__gt_`-named because the
 // SCHEDULER owns that counter and that timer heap (see `ClockRuntime.maxon`'s header) — which is why it is
@@ -920,8 +920,8 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
-// The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote `sleep(1)` or
-// `__Builtins.currentTimeMs()`, never `__gt_sleep`, so there is no name of theirs to quote back at them —
+// The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote
+// `__Builtins.currentTimeMs()`, never `__gt_now_ns`, so there is no name of theirs to quote back at them —
 // the entry is named later in the same sentence, which is where it belongs. A stdlib function is the
 // opposite case and IS quoted: its name is exactly what the user wrote.
 let TargetUnsupportedUnnamedSubject = "it"
@@ -932,11 +932,12 @@ let TargetUnsupportedUnnamedSubject = "it"
 // `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. TWO kinds of callee reach them, and this is
 // the one gate both go through:
 //
-//   • a COMPILER-OWNED runtime entry the parser emitted (`sleep(1)` → `__gt_sleep`). Each builtin lowers to
-//     ONE entry, so the callee name is the whole test.
+//   • a COMPILER-OWNED runtime entry the parser emitted (`__Builtins.sleep(1)` → `__gt_sleep`). Each
+//     builtin lowers to ONE entry, so the callee name is the whole test.
 //   • a STDLIB function whose body reaches one, directly or through other stdlib functions
-//     (`Clock.elapsedMs` → `Clock.nowMs` → `__gt_now_ns`). `stdlibSubstrateEntries` computed which, and
-//     which entry each reaches; this is where that fact becomes a refusal.
+//     (`Clock.elapsedMs` → `Clock.nowMs` → `__gt_now_ns`, and `sleep` → `__gt_sleep`).
+//     `stdlibSubstrateEntries` computed which, and which entry each reaches; this is where that fact
+//     becomes a refusal.
 //
 // ⚠ **THE SECOND KIND IS BLAMED AT THE CROSSING, WHICH IS THE POINT.** Stdlib source is compiled as part of
 // the program, so refusing it inside its own body positions the error at an absolute
@@ -952,16 +953,21 @@ let TargetUnsupportedUnnamedSubject = "it"
 // BACKSTOPS for a compiler bug that gets one past this gate; they are no longer the user-facing rejection.
 //
 // ⚠ **IT IS REACHABILITY-BLIND FOR USER CODE, AND REACHABILITY-AWARE FOR STDLIB SOURCE** — an asymmetry
-// worth stating because retiring a bare-name builtin turns one into the other. A `sleep(1)` inside a
-// function `main` never calls is still refused for wasm (measured), for the same reason a type error in an
-// unreached function is: this pass visits every function, and dead-function elimination runs two tiers later.
-// STDLIB source is the ONE exemption, because a stdlib module the program does not use must leave the
-// compile byte-identical: an unreachable stdlib function is in `stdlibFacts.unreachable`, so it has no
-// `substrateEntries` entry and no crossing to it can be refused. Clock shows both halves TODAY: a
-// `Clock.nowMs()` in code `main` never calls compiles clean for wasm while a reached one is refused. So the
-// day a bare-name builtin is retired in favour of the stdlib declaration that shadows it, an unreached call
-// to that name starts COMPILING for wasm again — the runtime entry moves out of user code and into stdlib.
-// A real behaviour change to decide on deliberately, not to discover.
+// worth stating because retiring a bare-name builtin turns one into the other. An `__Builtins.sleep(1)`
+// inside a function `main` never calls is still refused for wasm (measured), for the same reason a type
+// error in an unreached function is: this pass visits every function, and dead-function elimination runs two
+// tiers later. STDLIB source is the ONE exemption, because a stdlib module the program does not use must
+// leave the compile byte-identical: an unreachable stdlib function is in `stdlibFacts.unreachable`, so it
+// has no `substrateEntries` entry and no crossing to it can be refused. Clock shows both halves: a
+// `Clock.nowMs()` in code `main` never calls compiles clean for wasm while a reached one is refused.
+//
+// ⭐ **THE BARE-NAME `sleep` BUILTIN WAS RETIRED THAT WAY, AND MOVED A PROGRAM ACROSS THE ASYMMETRY** — the
+// decision this note was written to force, taken rather than discovered. `sleep(1)` used to BE a
+// `__gt_sleep` in user code, so an unreached one was refused; it is now a call into `stdlib/Sleep.maxon`,
+// so an unreached one COMPILES (`async-sleep.unreached-compiles-on-wasm`, against
+// `builtins-sleep.rejected-on-wasm-when-unreached`, which keeps the property at the intrinsic spelling that
+// still has it). That is the correct direction: the entry genuinely is stdlib's, and a program with no path
+// to it does not contain it. Every builtin retired this way moves the same way.
 function requireTargetSupportsCallee(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, blameTargetErrorsHere bool)
 	// ⚠ `blameTargetErrorsHere` already carries BOTH preconditions — the target can refuse something, and
 	// this function is where such a refusal belongs — because both are constant per function and this runs

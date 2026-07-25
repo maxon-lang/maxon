@@ -1,22 +1,13 @@
-// Test: spawn-read-line.drop-in-flight
-function reader() returns int
-	return spawnReadLine("cmd /c echo hello")
-end 'reader'
-
-function dropInFlight() returns int
-	let r = async reader()
-	sleep(1)
-	return 0
-end 'dropInFlight'
-
+// Test: async-sleep.taken-as-a-value
 function main() returns ExitCode
-	var i = 0
-	while i < 5 'loop'
-		let d = dropInFlight()
-		i = i + 1
-	end 'loop'
-	let n = spawnReadLine("cmd /c echo hello")
-	return n as ExitCode
+	let nap = sleep
+	let start = Clock.nowMs()
+	nap(60)
+	let elapsed = Clock.elapsedMs(start)
+	if elapsed >= 40 'slept'
+		return 7 as ExitCode
+	end 'slept'
+	return 1 as ExitCode
 end 'main'
 ---
 ExitCode: 7
@@ -44,47 +35,6 @@ data {
   __gt_exitcode_base@152 = i64 0
   __gt_cmdline_buf_base@160 = i64 0
   __gt_cmdline_buf_cap@168 = i64 0
-  __io_iocp@176 = i64 0
-  __io_done_event@184 = i64 0
-  __io_lock@192 = i64 0
-  __io_init_done@200 = i64 0
-  __io_pending@208 = i64 0
-  __io_pipe_seq@216 = i64 0
-}
-
-func @reader {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __gt_io_read
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
-func @dropInFlight {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.leaRegFunc rcx, [rip + reader]
-    x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 1
-    x64.callDirect sleep
-    x64.movRegImm32 r12, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {
@@ -92,20 +42,70 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegFunc rbx, [rip + __fnref_sleep]
+    x64.callDirect Clock.nowMs
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 60
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect Clock.elapsedMs
+    x64.cmpRegImm32 r8, 40
+    x64.jcc greaterEqual, slept
+    x64.jmp ifcont
+  slept:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Clock.nowMs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_now_ns
+    x64.movRegImm32 rcx, 1000000
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg r8, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Clock.elapsedMs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
     x64.prologue 40
-    x64.movRegImm32 rbx, 0
-    x64.jmp whilehdr
-  whilehdr:
-    x64.cmpRegImm32 rbx, 5
-    x64.jcc less, loop
-    x64.jmp whileexit
-  loop:
-    x64.callDirect dropInFlight
-    x64.leaRegRegImm32 rbx, rbx, 1
-    x64.jmp whilehdr
-  whileexit:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __gt_io_read
+    x64.movRegReg rbx, rcx
+    x64.callDirect Clock.nowMs
+    x64.cmpRegReg r8, rbx
+    x64.jcc less, clockSkew
+    x64.jmp ifcont
+  clockSkew:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.subRegReg r8, r8, rbx
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
