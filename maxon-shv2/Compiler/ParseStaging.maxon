@@ -377,13 +377,15 @@ end 'commitDiagnostics'
 // `TypeResolution.resolveNamedType` turns a `MaxonType.named` for a declared `type` into a
 // `structRef` against.
 //
-// A plain upsert, matching `commitTypeAliases`. ⚠ Two files declaring the same `type` name is
-// therefore LAST-WINS and silent. That is a real gap and it is not this rung's: unlike a
-// typealias — where a same-named file-local alias is LEGAL (specs/duplicate-typealias.md) and so a
-// collision must not be reported — two structs of one name are a genuine duplicate and want the
-// positioned E3006 `commitFuncSignatures` raises for functions. It needs per-file type scoping to
-// tell the legal case from the illegal one, which arrives with cross-file name resolution, and no
-// spec case covers it today.
+// A plain upsert. ⚠ Two files declaring the same `type` name is therefore LAST-WINS and silent.
+// That is a real gap and it is not this rung's: two structs of one name are a genuine duplicate and
+// want a positioned diagnostic, and no spec case covers it today.
+//
+// ⚠ **DO NOT COPY `commitTypeAliases` HERE WITHOUT READING WHY IT SPLITS.** An alias's rule is
+// same-file duplicate ⇒ E3061, cross-file ⇒ legal and resolved per file, because a non-exported
+// typealias is FILE-LOCAL (`specs/duplicate-typealias.md`, and `stdlib/` depends on it). Whether a
+// `type` is file-local in the same way is a question no spec answers yet, so the split cannot simply
+// be transplanted — it needs per-file type scoping, which arrives with cross-file name resolution.
 function commitStructTypes(project Project, artifact FileParseArtifact)
 	for layout in artifact.structTypes 'each'
 		project.structTypes.upsert(layout.name, value: layout)
@@ -429,15 +431,29 @@ function commitRangeChecks(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitRangeChecks'
 
-// Commit the artifact's ranged-typealias declarations into the project registry. A
-// plain upsert, and DELIBERATELY not a duplicate check: a non-exported typealias is
-// FILE-LOCAL, so two files may each declare `MyInt` and neither is an error
-// (specs/duplicate-typealias.md). Honouring that needs per-file alias scoping, which
-// arrives with cross-file name resolution; until then the registry is whole-program
-// and same-named aliases must agree.
+// Commit the artifact's ranged-typealias declarations into the project registry, and raise E3061 on
+// a SAME-FILE redeclaration.
+//
+// ⭐ **SAME-FILE ONLY, and the distinction is the whole point.** A non-exported typealias is
+// FILE-LOCAL, so two FILES may each declare `MyInt` and neither is an error
+// (`specs/duplicate-typealias.md`, and `stdlib/` relies on it — six files privately declare
+// `Byte = int(0 to u8.max)`). Two declarations in ONE file are a genuine duplicate that no
+// qualification could ever disambiguate, which is why the reference compilers reject exactly that
+// (`specs/export-keyword.md`, `error.duplicate-typealias-same-file`). `RangedAliasRegistry.record`
+// answers which case this is, so the two cannot be confused here.
+//
+// ⚠ **WHOLE-PROGRAM, NOT PARSE-TIME.** It runs at the merge, where `commitFuncSignatures` raises
+// E3006, and not in the parser — a file-local check cannot see a forward reference or a second file,
+// and this project has already paid for that lesson once (the value-merge rung, #81). The parser
+// records positions and nothing else.
 function commitTypeAliases(project Project, artifact FileParseArtifact)
 	for alias in artifact.typeAliases 'each'
-		project.typeAliases.upsert(alias.name, value: alias)
+		match project.typeAliases.record(alias) 'displaced'
+			// Blamed on the REDECLARATION the user wrote — its own name token, in its own file —
+			// never on the first declaration, which is the one line that was fine.
+			declared(prior) then reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(prior.name)}'", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
+			undeclared then break 'displaced'
+		end 'displaced'
 	end 'each'
 end 'commitTypeAliases'
 

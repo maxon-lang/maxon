@@ -186,9 +186,19 @@ export type RangedTypeAlias
 	export var underlying as MaxonType
 	export var low as ParsedInt
 	export var high as ParsedInt
+	// WHERE it was declared. The file makes resolution file-scoped (`rangedAliasKeys` — a use resolves
+	// to its OWN file's alias before anyone else's), and the name's position anchors the E3061 a
+	// same-file redeclaration raises, exactly as `FuncSignatureEntry` carries both for E3006.
+	//
+	// ⚠ The position must be the alias NAME's, not the `typealias` keyword's: E3061 blames the
+	// redeclaration the user wrote, and the reference compiler anchors on the name (`…:3:11` for
+	// `typealias Score`, column 11 being the `S`).
+	export var declFilePath as FilePath
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
 
-	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt) returns RangedTypeAlias
-		return Self{name: name, underlying: underlying, low: low, high: high}
+	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns RangedTypeAlias
+		return Self{name: name, underlying: underlying, low: low, high: high, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'RangedTypeAlias'
 
@@ -198,6 +208,115 @@ export typealias RangedTypeAliasArray = Array with RangedTypeAlias
 // file's artifact (alongside `funcReturnTypes` / `funcSignatures`); read by
 // TypeResolution to collapse `MaxonType.named` to a primitive.
 export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
+
+// The names more than one FILE declares. A lookup consults this before building any key, which is
+// the whole reason it exists — see `RangedAliasRegistry`.
+typealias MultiplyDeclaredAliasNames = Set with ByteArray
+
+// ⭐ **THE RANGED-ALIAS REGISTRY — file-scoped resolution, and why a bare map was a wrong ANSWER.**
+//
+// A non-exported `typealias` is FILE-LOCAL (`specs/duplicate-typealias.md`), so two files may each
+// declare `Limit` over a different range and neither disturbs the other. Filed under the bare name
+// alone — which is what this was — the LAST file merged simply won, and its range silently replaced
+// everyone else's: `600 as Limit` compiled clean in a file whose own `Limit` is `int(0 to 500)`
+// because another file declared a wider one. Not a missing feature; a wrong answer, and an
+// order-dependent one, since the stdlib loader deliberately does not sort.
+//
+// ⚠ **IT IS ALREADY LOAD-BEARING FOR `stdlib/`.** Six files declare `Byte = int(0 to u8.max)`
+// privately and agree, but `stdlib/helpers/string/` holds a pair that does NOT:
+// `utf16.maxon` declares `Utf16UnitCount = int(1 to 2)` and `views.maxon` the same name as
+// `int(0 to u64.max)`. Under one bare map, whichever merged last decided both files' range checks.
+//
+// **SCOPED FIRST, BARE SECOND** — the identical rule top-level `let`/`var` bindings resolve by
+// (`ProgramSignatures.declFor`), sharing that rule's one key builder (`fileScopedDeclKey`).
+//
+// ⚠ **BUT NOT ITS VISIBILITY CONDITION, and this is a deliberate divergence.**
+// `topLevelStorageKey` files a FILE-PRIVATE binding under the scoped key and an exported one under
+// the bare name, so a file-private binding is invisible elsewhere. An alias may NOT be made
+// invisible that way today: `specs-shv2/ranged-typealias.md`'s `cast-to-stdlib-internal-typealias`
+// requires a stdlib alias to be nameable "from any file, regardless of its source-level visibility
+// modifier". So every alias is filed under BOTH keys and visibility is not consulted — a file's own
+// declaration WINS, and one declared only elsewhere is still reachable. That keeps this change a
+// strict narrowing: no name that resolved before stops resolving.
+//
+// **OUT OF SCOPE, deliberately** (coordinator ruling): when a name is declared in several OTHER
+// files and none is the reader's, the bare probe still answers last-wins. That is the E3063
+// ambiguity case, and reporting it needs cross-file name resolution — the same rung that gives
+// `export` its meaning as a key.
+export type RangedAliasRegistry
+	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
+	// whole-program behaviour, which is what makes the bare probe safe to keep.
+	var byName as RangedTypeAliasMap
+	// Every alias AGAIN under `fileScopedDeclKey`, so a file can find its own.
+	var byFileScopedKey as RangedTypeAliasMap
+	var multiplyDeclared as MultiplyDeclaredAliasNames
+
+	export static function create() returns RangedAliasRegistry
+		return Self{byName: RangedTypeAliasMap.create(), byFileScopedKey: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasNames.create()}
+	end 'create'
+
+	// File one declaration, and answer what it DISPLACED IN ITS OWN FILE — `declared(prior)` exactly
+	// when this is a same-file redeclaration, which is what `commitTypeAliases` raises E3061 on.
+	// Reporting it from the writer keeps the duplicate test and the insert on one key build and makes
+	// it impossible for them to disagree about which declarations collide.
+	export function record(alias RangedTypeAlias) returns DeclaredAlias
+		let scopedKey = fileScopedDeclKey(alias.name, declFilePath: alias.declFilePath)
+		var displaced = DeclaredAlias.undeclared
+		if let prior = try self.byFileScopedKey.get(scopedKey) 'sameFileRedeclaration'
+			displaced = DeclaredAlias.declared(prior)
+		end 'sameFileRedeclaration'
+		self.byFileScopedKey.upsert(scopedKey, value: alias)
+
+		// A name becomes "multiply declared" only when a DIFFERENT file already declared it — a
+		// same-file duplicate is E3061 and must not switch the hot path on for a name that, once the
+		// error is reported, has exactly one meaning.
+		if let existing = try self.byName.get(alias.name) 'nameSeen'
+			if not existing.declFilePath.equals(alias.declFilePath) 'anotherFile'
+				self.multiplyDeclared.insert(alias.name)
+			end 'anotherFile'
+		end 'nameSeen'
+		self.byName.upsert(alias.name, value: alias)
+
+		return displaced
+	end 'record'
+
+	// The alias `name` denotes when read FROM `readerFilePath`.
+	//
+	// ⚠ **THE `multiplyDeclared` TEST IS A COST GATE, NOT A CORRECTNESS ONE**, and it is why this is
+	// not simply two probes. `fileScopedDeclKey` builds a String per call, and this is asked once per
+	// named type reference — the parser's hot path — whereas a name only ONE file declares has the
+	// same answer from either probe. So the key is built only for a name that genuinely has more than
+	// one meaning, which in a real program is nearly none of them. Removing the test would change no
+	// answer and would put a String allocation on every type reference in the program.
+	export function lookup(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
+		if self.multiplyDeclared.contains(name) 'contested'
+			if let own = try self.byFileScopedKey.get(fileScopedDeclKey(name, declFilePath: readerFilePath)) 'readersOwnFile'
+				return DeclaredAlias.declared(own)
+			end 'readersOwnFile'
+		end 'contested'
+
+		return self.lookupInAnyFile(name)
+	end 'lookup'
+
+	// ⚠ **THE BARE PROBE, for the readers that HAVE no file to ask from** — union payload
+	// classification reached from the emitted runtime (`MmRuntime`/`ArrayRuntime` walk
+	// `project.enumTypes`, which records no declaring file) and generic type-argument canonicalization
+	// (`conformerTypeArgName`, which holds an instance id).
+	//
+	// It is spelled separately, and named for what it does, so that "this site cannot scope its
+	// lookup" is greppable rather than hidden behind a path that LOOKS scoped. Both ask only for
+	// `underlying` — the `int`/`float` keyword — and never for the RANGE, so the answer differs
+	// between two same-named aliases only if one is `int` and the other `float`; no such pair exists
+	// in `stdlib/` or the corpus today. Giving these sites a declaring file means putting one on
+	// `EnumLayout` and threading it through the runtime emitters, which is a change to the union and
+	// generics tiers, not to alias resolution.
+	export function lookupInAnyFile(name ByteArray) returns DeclaredAlias
+		if let any = try self.byName.get(name) 'declaredSomewhere'
+			return DeclaredAlias.declared(any)
+		end 'declaredSomewhere'
+		return DeclaredAlias.undeclared
+	end 'lookupInAnyFile'
+end 'RangedAliasRegistry'
 
 // --- Range-check sites (P1.9) — the parser's carrier for `InsertRangeChecks` ---
 //
@@ -1019,7 +1138,7 @@ export type Project
 	export var pendingFnMergeChecks as PendingFnMergeCheckArray
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
-	export var typeAliases as RangedTypeAliasMap
+	export var typeAliases as RangedAliasRegistry
 	// Range-check sites, keyed by function name (see FunctionRangeChecks) — P1.9. The parser
 	// records every `as` cast into a ranged alias and every ranged `return`; `InsertRangeChecks`
 	// (Std tier) reads this to emit the guards / E3005. Kept SEPARATE from `funcReturnTypes`
@@ -1102,7 +1221,7 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
-			typeAliases: RangedTypeAliasMap.create(),
+			typeAliases: RangedAliasRegistry.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),

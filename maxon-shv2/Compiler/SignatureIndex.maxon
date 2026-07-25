@@ -259,7 +259,13 @@ end 'topLevelStorageKey'
 // The key a FILE-PRIVATE declaration is filed under. Also the first probe `declFor` makes, which
 // is why it is a function and not an inlined interpolation at the two sites: a reader and a writer
 // that spelled this key differently would file a declaration nothing could ever find.
-function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteArray
+//
+// EXPORTED because ranged typealiases are filed by the same rule and must be filed by the same
+// SPELLING (`RangedAliasRegistry`, Project.maxon). A second key builder for the second declaration
+// kind is this project's signature bug — one fact written down twice — and its failure mode here is
+// the silent one: a writer and a reader that disagree file an alias nothing can ever find, so every
+// lookup quietly falls through to the bare name and file scoping evaporates with no test failing.
+export function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteArray
 	return "{declFilePath.toString()}{FileScopedKeySeparator}{String.from(name)}".toByteArray()
 end 'fileScopedDeclKey'
 
@@ -707,7 +713,12 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 
 	// A ranged-int alias is a scalar of its underlying width; a float-underlying alias would be a float
 	// payload (none are declarable yet).
-	match signatures.aliasOf(name) 'alias'
+	//
+	// ⚠ Bare-name, and NOT the caller's file: the alias that governs a payload field is the one visible
+	// where the UNION was declared, which `EnumLayout` does not record. Passing the classifying file
+	// would not be a partial answer, it would be the wrong one — this is asked from the emitted
+	// runtime's walk of `project.enumTypes` as well as from the parser.
+	match signatures.aliasOfAnyFile(name) 'alias'
 		declared(alias) then return aliasPayloadClass(alias)
 		undeclared then break 'alias'
 	end 'alias'
@@ -1497,7 +1508,7 @@ export type ProgramSignatures
 	// type-name IDS — a ranged alias's underlying type is always the `int` KEYWORD, never a name —
 	// so unlike `returnTypes` it needs no interner and no remap: it travels by name and arrives by
 	// name.
-	var typeAliases as RangedTypeAliasMap
+	var typeAliases as RangedAliasRegistry
 	// FUNCTION typealias name -> its declaration (P1.5-A1). Like `typeAliases` it carries NO type-name
 	// ids — a function alias's return type is stored interner-free as a (tag, name-ByteArray) pair (see
 	// FunctionTypeAlias) — so it travels by name and arrives by name, needing no interner and no remap.
@@ -1620,7 +1631,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -2037,7 +2048,11 @@ export type ProgramSignatures
 	// `int(0 to u64.max)` makes the type UNSIGNED, which changes what every `shr` on it MEANS. Every
 	// file must re-parse on that edit, and this is what makes it happen.
 	function recordAlias(alias RangedTypeAlias)
-		self.typeAliases.upsert(alias.name, value: alias)
+		// The displaced same-file declaration is DISCARDED here on purpose: E3061 is raised once, at
+		// the merge (`commitTypeAliases`), which is the whole-program drain that owns
+		// `project.diagnostics`. Reporting it from the pre-parse sweep as well would double every
+		// duplicate — the sweep and the merge both see every declaration.
+		_ = self.typeAliases.record(alias)
 
 		// The bounds are SIGNED (`ParsedInt`) and the hash domain is UNSIGNED, so each crosses by an
 		// explicit cast. Bound to locals rather than written inline: as arguments to a nested `mix`
@@ -2647,12 +2662,19 @@ export type ProgramSignatures
 		end 'k'
 	end 'mixValueTag'
 
-	// The ranged typealias `name` denotes, declared in ANY file. THE door the shift rule asks
-	// through — see `Parser.valueIsUnsigned`.
-	export function aliasOf(name ByteArray) returns DeclaredAlias
-		let alias = try self.typeAliases.get(name) otherwise return DeclaredAlias.undeclared
-		return DeclaredAlias.declared(alias)
+	// The ranged typealias `name` denotes when read FROM `readerFilePath` — the reader's OWN file's
+	// declaration first, anyone else's second (`RangedAliasRegistry`). THE door the shift rule asks
+	// through — see `Parser.valueIsUnsigned` — and the reason a file's `int(0 to 500)` governs the
+	// casts written in it even where another file declares that name more widely.
+	export function aliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
+		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
+
+	// The bare-name door, for the readers that have no file to ask from — see
+	// `RangedAliasRegistry.lookupInAnyFile`, which is where the (narrow) residual is written down.
+	export function aliasOfAnyFile(name ByteArray) returns DeclaredAlias
+		return self.typeAliases.lookupInAnyFile(name)
+	end 'aliasOfAnyFile'
 
 	// --- Inner + per-instance ranged aliases (P1.6-C) ---
 
@@ -3173,10 +3195,15 @@ export type ProgramSignatures
 	// A ranged numeric alias resolves to its underlying primitive `MaxonType` (`int(0 to u32.max)` -> `integer`),
 	// exactly as `resolveNamedType` does (`alias.underlying`, range dropped); every other type passes through.
 	// The one step that lets `conformerTypeArgName` name a primitive-bound argument by its primitive.
+	//
+	// ⚠ Bare-name for `classifyUnionPayload`'s reason: the file that governs a generic INSTANCE's type
+	// argument is the one that wrote the instantiation, and a `GenericInstanceId` does not carry it.
+	// Only `underlying` is read, never the range.
 	function canonicalizeRangedAlias(t MaxonType) returns MaxonType
 		if maxonTypeTag(t) == ValueTypeTag.named 'named'
-			if let alias = try self.typeAliases.get(self.nameOfId(typeNameIdOf(t))) 'rangedAlias'
-				return alias.underlying
+			match self.aliasOfAnyFile(self.nameOfId(typeNameIdOf(t))) 'rangedAlias'
+				declared(alias) then return alias.underlying
+				undeclared then break 'rangedAlias'
 			end 'rangedAlias'
 		end 'named'
 		return t

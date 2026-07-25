@@ -488,10 +488,7 @@ error E3062: specs/fragments/export-keyword/error.non-exported-typealias-cross-f
 error E2003: specs/fragments/export-keyword/error.non-exported-typealias-cross-file.test:7:16: Expected type name after 'as'
 ```
 
-<!-- disabled-test: error.duplicate-typealias-same-file -->
-<!-- E3061 duplicate typealias — `commitTypeAliases` upserts deliberately (a
-     non-exported alias is FILE-local, so two files may each declare `MyInt`); the check
-     needs per-file alias scoping, which arrives with cross-file name resolution -->
+<!-- test: error.duplicate-typealias-same-file -->
 ```maxon
 typealias Score = int(0 to 100)
 typealias Score = int(0 to 200)

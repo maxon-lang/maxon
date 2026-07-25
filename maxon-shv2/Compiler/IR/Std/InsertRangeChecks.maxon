@@ -134,10 +134,14 @@ type RangeCheckEmitter
 
 	// ---- cast sites ----
 
+	// ⭐ `filePath` is the file the CAST was written in, and it is what picks the alias: a file's own
+	// `Limit` governs its own casts even where another file declares that name over a wider range
+	// (`RangedAliasRegistry`). `undeclared` — a builtin like `ExitCode`, or an alias no loaded file
+	// declares — is the "not a checkable range" case and guards nothing.
 	function processCastSite(site RangeCheckCastSite, filePath FilePath)
-		match self.boundsOf(site.aliasName) 'bounds'
-			none then return
-			some(alias) then self.guardCast(site, alias: alias, filePath: filePath)
+		match self.project.typeAliases.lookup(site.aliasName, readerFilePath: filePath) 'bounds'
+			undeclared then return
+			declared(alias) then self.guardCast(site, alias: alias, filePath: filePath)
 		end 'bounds'
 	end 'processCastSite'
 
@@ -150,10 +154,12 @@ type RangeCheckEmitter
 
 	// ---- return sites ----
 
+	// `filePath` picks the alias, exactly as it does for a cast — a ranged `return` is checked against
+	// the range declared where the FUNCTION was written.
 	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath)
-		match self.boundsOf(returnAliasName) 'bounds'
-			none then return
-			some(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath)
+		match self.project.typeAliases.lookup(returnAliasName, readerFilePath: filePath) 'bounds'
+			undeclared then return
+			declared(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath)
 		end 'bounds'
 	end 'processReturnSites'
 
@@ -305,18 +311,6 @@ type RangeCheckEmitter
 		end 'eachCheck'
 	end 'emitCascade'
 
-	// ---- lookups ----
-
-	// The bounds of a ranged alias by name, or `none` when the name is not in the ranged-alias registry
-	// (a builtin like `ExitCode`, or a stdlib alias not reachable from this program) — which is exactly
-	// the "not a checkable range" case, treated as no check.
-	function boundsOf(aliasName ByteArray) returns RangeAliasLookup
-		if not self.project.typeAliases.contains(aliasName) 'unknown'
-			return RangeAliasLookup.none
-		end 'unknown'
-		return RangeAliasLookup.some(try self.project.typeAliases.get(aliasName) otherwise panic("boundsOf: contains said yes but get failed for '{String.from(aliasName)}'"))
-	end 'boundsOf'
-
 	// Where a CAST guard goes: at the END of the block the cast was EVALUATED in (before that block's
 	// terminator), so the guard runs on the path the cast is on and NOWHERE else — a cast in an unselected
 	// ternary arm / if-branch does not fire it. An int->int cast emits no Std op to anchor to, so the block
@@ -395,12 +389,6 @@ type RangeCheckEmitter
 		self.intConsts.upsert(resultId, value: value)
 	end 'recordConst'
 end 'RangeCheckEmitter'
-
-// The result of a ranged-alias lookup — a bounds struct or "not a checkable range".
-union RangeAliasLookup
-	none
-	some(alias RangedTypeAlias)
-end 'RangeAliasLookup'
 
 // The i64 the sign check compares against: a value `< 0` (signed) has bit 63 set, which for the
 // unsigned-max upper shape proves it is a huge unsigned the range ADMITS. Named so the sign

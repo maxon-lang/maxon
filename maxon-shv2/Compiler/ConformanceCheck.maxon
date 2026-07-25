@@ -307,9 +307,14 @@ end 'signatureMatches'
 // `project.typeAliases`/`.underlying` `resolveNamedType` reads, so it cannot diverge from resolution for the
 // plain-alias case — the concrete parameter/return types this slice supports. A non-alias name (a struct, a
 // primitive keyword, `Self`-substituted, `void`) is not in the registry and passes through unchanged.
+// ⚠ Bare-name for `resolveNamedType`'s reason, and it must MATCH `resolveNamedType`: this comparison
+// exists to agree with resolution, and only `underlying` is read — the range is deliberately dropped
+// two lines down. Scoping it here while resolution stayed bare is precisely the divergence the header
+// above says must not happen.
 function canonicalTypeName(project Project, name ByteArray) returns ByteArray
-	if let alias = try project.typeAliases.get(name) 'rangedAlias'
-		return maxonTypeName(alias.underlying, typeNames: project.typeNames).toByteArray()
+	match project.typeAliases.lookupInAnyFile(name) 'rangedAlias'
+		declared(alias) then return maxonTypeName(alias.underlying, typeNames: project.typeNames).toByteArray()
+		undeclared then break 'rangedAlias'
 	end 'rangedAlias'
 	return name
 end 'canonicalTypeName'

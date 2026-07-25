@@ -1,0 +1,126 @@
+---
+feature: typealias-file-scope
+status: stable
+keywords: [typealias, file-scope, ranged, stdlib, shadowing, cross-file]
+category: diagnostics
+---
+
+# A typealias resolves in ITS OWN FILE first
+
+## Documentation
+
+A non-exported `typealias` is **file-local** (`specs/duplicate-typealias.md`), so two files may each
+declare `Limit` with a different range and neither disturbs the other. Resolution is therefore
+**scoped first, bare second** — the identical rule top-level `let`/`var` bindings already resolve by
+(`ProgramSignatures.declFor`) — and it is what makes a file's own declaration authoritative for the
+casts written in that file.
+
+Before this rule existed, the alias registry was one whole-program map keyed by the bare name, so the
+**last file merged won** and its range silently replaced everyone else's. That is a wrong ANSWER, not
+a missing feature: a cast the declaring file's own range forbids compiled clean, and a cast that range
+permits was rejected against a stranger's.
+
+Two directions have to hold, and each catches the opposite failure:
+
+- a **narrow** file's out-of-range cast is still **rejected** when another file's alias is wider
+  (otherwise the wide one erases a guard the author wrote);
+- a **wide** file's in-range cast is still **accepted** when another file's alias is narrower
+  (otherwise the narrow one invents a guard the author never wrote).
+
+`stdlib/` is the same rule with no special case: a listed stdlib module's typealias is another file's
+declaration, so a user's own alias of that name wins for the user's own casts — and the user's does
+not disturb the stdlib module either. `stdlib/Sleep.maxon` declares `Milliseconds`, which is what
+makes it the case a user actually meets.
+
+**Out of scope**, and deliberately: `export` visibility as a *key* (an exported alias is still filed
+under its bare name) and **E3063** ambiguity between two exported aliases of one name in different
+files. Both need cross-file name resolution; this rung is the file-scoped half only.
+
+## Tests
+
+<!-- test: user-alias-wins-over-stdlib -->
+A user file declares `Milliseconds`, the name `stdlib/Sleep.maxon` also declares. The user's own
+range governs the cast written in the user's file, so `500` is out of range and rejected. Before
+file-scoped resolution the stdlib module merged last and its `int(0 to u64.max)` silently won: this
+program compiled and returned 9.
+```maxon
+typealias Milliseconds = int(0 to 100)
+
+function main() returns ExitCode
+	let m = 500 as Milliseconds
+	if m > 100 'chk'
+		return 9
+	end 'chk'
+	return 3
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:14: Value 500 is outside the range of 'Milliseconds' (int(0 to 100))
+```
+
+
+<!-- test: narrow-file-cast-still-rejected -->
+`a.maxon`'s `Limit` is `int(0 to 500)` and `b.maxon`'s is `int(0 to 2000)`. The cast in `a.maxon` is
+checked against `a.maxon`'s range and rejected. This is the direction where the WIDER alias would
+erase a guard the author wrote — the failure that returned 9 from this program.
+
+The diagnostic is anchored in **`a.maxon`**, the file that wrote the cast — never in `b.maxon`, whose
+only involvement is declaring the name.
+```maxon
+// --- file: a.maxon
+typealias Limit = int(0 to 500)
+
+export function checkA() returns ExitCode
+	let v = 600 as Limit
+	return v
+end 'checkA'
+
+// --- file: b.maxon
+typealias Limit = int(0 to 2000)
+
+export function checkB() returns ExitCode
+	return 0
+end 'checkB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return checkA()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:14: Value 600 is outside the range of 'Limit' (int(0 to 500))
+```
+
+
+<!-- test: wide-file-cast-still-accepted -->
+The opposite direction, and the shape of the collision `stdlib/helpers/string/` already contains:
+`utf16.maxon` declares `Utf16UnitCount = int(1 to 2)` while `views.maxon` declares the same name as
+`int(0 to u64.max)`. Each file's cast is checked against its OWN range, so the wide file's `40`
+compiles even though a narrower alias of that name exists elsewhere. Under one whole-program registry
+this program did not merely answer wrongly — whichever file merged last decided whether it compiled
+at all, from the order the directory walk happened to return.
+```maxon
+// --- file: narrow.maxon
+typealias Unit = int(1 to 2)
+
+export function unitVal() returns ExitCode
+	let u = 2 as Unit
+	return u
+end 'unitVal'
+
+// --- file: wide.maxon
+typealias Unit = int(0 to u64.max)
+
+export function wideVal() returns ExitCode
+	let w = 40 as Unit
+	return w
+end 'wideVal'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return unitVal() + wideVal()
+end 'main'
+```
+```exitcode
+42
+```

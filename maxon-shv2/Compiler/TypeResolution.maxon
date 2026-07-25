@@ -248,8 +248,15 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	// A PLAIN ranged alias ("Score") — checked FIRST after the aggregates, and BEFORE the qualified-alias
 	// path below, so the common case never pays the qualified split. A plain alias resolves to its underlying
 	// primitive: two aliases over the same range are the same type, an alias creates no nominal distinction.
-	if let alias = try project.typeAliases.get(name) 'isPlainAlias'
-		return alias.underlying
+	//
+	// ⚠ Bare-name (`lookupInAnyFile`), and that is exactly right HERE rather than a gap: this arm reads
+	// only `underlying`, and it DROPS the range — which is the erasure the whole type system rests on.
+	// The RANGE is resolved per declaring file, where it is actually enforced (`InsertRangeChecks`).
+	// A file to scope by is also genuinely absent on one of the two paths in: `checkStructFieldTypes`
+	// resolves a `StructLayout`'s field types, and a layout records no declaring file.
+	match project.typeAliases.lookupInAnyFile(name) 'isPlainAlias'
+		declared(alias) then return alias.underlying
+		undeclared then break 'isPlainAlias'
 	end 'isPlainAlias'
 
 	// ⭐ A QUALIFIED ALIAS (P1.6-C) — a base-template inner alias ("Wrapper.Idx", the shared-body form a

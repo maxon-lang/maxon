@@ -5034,12 +5034,17 @@ export type Parser
 	// out of the slice and rejected with a positioned error.
 	//
 	// `visibility` is consumed by `parseFunction` and by `readTopLevelBinding`. A typealias carries
-	// one too, and it is deliberately DROPPED: alias visibility decides whether a name is reachable
-	// from another FILE, and the alias registry is whole-program until cross-file name resolution
-	// lands (see `commitTypeAliases`). Recording it now would be a field nothing reads. A `type`'s
-	// visibility is dropped for the identical reason — `project.structTypes` is whole-program —
-	// which is why `parseTypeDeclaration` does not take one. Its METHODS each carry their own, read
-	// at the member (see `parseTypeMember`), because that is where the source writes it.
+	// one too, and it is still deliberately DROPPED — but no longer because nothing scopes aliases.
+	// `RangedAliasRegistry` resolves them per declaring FILE; what it does not do is let visibility
+	// decide REACHABILITY, because `specs-shv2/ranged-typealias.md`'s `cast-to-stdlib-internal-typealias`
+	// requires a stdlib alias to be nameable from any file "regardless of its source-level visibility
+	// modifier". So an alias is filed under both keys, visibility is read by nobody, and recording it
+	// would still be a field nothing reads. It becomes load-bearing with E3063 / cross-file name
+	// resolution, which is where `export` gets its meaning as a key.
+	//
+	// A `type`'s visibility is dropped for the reason a typealias's USED to be — `project.structTypes`
+	// is whole-program — which is why `parseTypeDeclaration` does not take one. Its METHODS each carry
+	// their own, read at the member (see `parseTypeMember`), because that is where the source writes it.
 	function dispatchTopLevel() throws ParseError
 		var visibility = Visibility.file
 		if self.at(TokenKind.export) 'exported'
@@ -5274,7 +5279,7 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		let underlying = MaxonType.float if isFloat else MaxonType.integer
-		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high))
+		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
 	end 'readTypeAliasDeclaration'
 
 	// Is the cursor at a nested typealias declaration inside a type body (P1.6-C) — `typealias …` or the
@@ -6609,7 +6614,7 @@ export type Parser
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return EmptySourceText
 		end 'notNamed'
-		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(t))) 'a'
+		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(t)), readerFilePath: self.filePath) 'a'
 			declared(alias) gives alias.name
 			undeclared gives EmptySourceText
 		end 'a'
@@ -8069,7 +8074,7 @@ export type Parser
 			return ValueTypeTag.integer
 		end 'compilerDeclaredIntAlias'
 
-		return match self.signatures.aliasOf(name) 'a'
+		return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
 			declared(alias) gives maxonTypeTag(alias.underlying)
 			undeclared gives ValueTypeTag.named
 		end 'a'
@@ -12195,7 +12200,7 @@ export type Parser
 
 		if scrutTag == ValueTypeTag.named 'aliasScrutinee'
 			let name = self.internedName(self.valueNameId(scrut))
-			return match self.signatures.aliasOf(name) 'a'
+			return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
 				declared(alias) gives not tagIsFloat(maxonTypeTag(alias.underlying))
 				undeclared gives false
 			end 'a'
@@ -13360,7 +13365,7 @@ export type Parser
 		// merged registry, which is the authority). It is not this rule's to report — the sweep is
 		// deliberately tolerant — and the program is rejected before anything emitted here can run,
 		// so "signed" is the harmless reading and never a silent wrong answer.
-		return match self.signatures.aliasOf(name) 'a'
+		return match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'a'
 			declared(alias) gives rangeIsUnsigned(alias.low)
 			undeclared gives false
 		end 'a'
@@ -18509,7 +18514,7 @@ export type Parser
 		end 'kind'
 
 		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("fieldStorageType: a field's named type has an id that is not in this file's interner — the layout's types are adopted through `fieldTypeOf`, which re-interns into exactly this table")
-		match self.signatures.aliasOf(name) 'alias'
+		match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'alias'
 			declared(alias) then return alias.underlying
 			undeclared then break 'alias'
 		end 'alias'
@@ -19429,7 +19434,7 @@ export type Parser
 			return
 		end 'notCheckable'
 
-		match self.signatures.aliasOf(targetTok.value) 'a'
+		match self.signatures.aliasOf(targetTok.value, readerFilePath: self.filePath) 'a'
 			undeclared then break 'a'
 			declared(alias) then try self.reportConstCastIfOutOfRange(value, alias: alias, asTok: asTok)
 		end 'a'
