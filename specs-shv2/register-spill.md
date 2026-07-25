@@ -1139,8 +1139,16 @@ end 'main'
 
 <!-- test: ten-floats-across-a-call-fit-the-callee-saved-half -->
 EXACTLY ten f64 locals live across a call — the width of the callee-saved XMM half (xmm6–15). None
-spills: this is the boundary case of Wave 2, and its fragment carries no `storeSlotReg` at all
-where before Wave 2 it carried ten of them plus a reload per read.
+spills: this is the boundary case of Wave 2.
+
+⚠ Its fragment still carries TEN `storeSlotReg` — the entry instruction count is literally unchanged
+by Wave 2 — but they are a different kind of store, and that distinction is the whole point of the
+case. Before Wave 2 the ten were VALUE SPILLS, one per local, each paired with a reload at every
+read because a float live across a call was forbidden its entire file. After Wave 2 the ten are the
+CALLEE-SAVE PAIR the prologue writes once and the epilogue restores once, and the values themselves
+stay resident in xmm6–15 for the whole body. Counting stores cannot tell the two apart; only their
+position can, which is why this case is read alongside the two-call and four-call siblings above —
+there the store count stays flat as the calls double, which a per-call spill bracket could not do.
 
 `bump(0)` = 1 plus `trunc(1.0) + … + trunc(10.0)` = 55, so 56.
 ```maxon
