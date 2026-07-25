@@ -1131,6 +1131,73 @@ end 'main'
 0
 ```
 
+<!-- test: error.bare-generic-constructor-unbound-t -->
+⭐ **A generic type's constructor called on the BASE rather than on an instance alias is REFUSED, and
+that closes a LEAK.** `Box.create(…)` binds no type argument, so `T` is never bound: there is no
+concrete instance, therefore no layout descriptor, therefore no synthesized `__destruct_<instance>` —
+and the value it builds is never dropped. Before this rung the program compiled and **exited 101**
+(both this form and the `let a = Box.create(…)` / `takes(a)` form). The reference compiler agrees the
+construct is ill-formed, and says why more directly: it resolves `a.value` as bare `int`
+(`E4006: Primitive type 'int' has no method named 's'`) — `T` unbound.
+
+The diagnostic it lands on is the ordinary argument-identity mismatch, `got 'Box'` being the base
+rather than an instance. That is defensible and is recorded here as the code this construct gets; it
+is deliberately NOT a code of its own.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+function takes(b N0) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(Box.create(S0.make("x")))
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:9: argument type mismatch for 'b': expected 'Box_S0', got 'Box'
+```
+
+<!-- test: error.bare-generic-constructor-unbound-t-bound-first -->
+The same unbound-`T` construct reached through a binding rather than inline — it leaked identically
+(exit 101) and is refused identically, so the rejection does not depend on the argument being a
+temporary.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+function takes(b N0) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	let a = Box.create(S0.make("x"))
+	return takes(a)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:9: argument type mismatch for 'b': expected 'Box_S0', got 'Box'
+```
+
 <!-- test: error.self-cycle-alias -->
 ```maxon
 type S0
