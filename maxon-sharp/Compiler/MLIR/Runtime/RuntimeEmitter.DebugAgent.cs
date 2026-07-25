@@ -629,7 +629,9 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal(DbgStepModeGlobal, 8, 0);   // 0 = DbgStepModeNone: no user/over-bp single-step armed
 
     // All four start zero, which is "no thread is held" — so an un-debugged program's __gt_dequeue
-    // takes one load and one not-taken branch, and never reaches any of this.
+    // never reaches any of this. What its dispatcher DOES cost is stated once, where the dispatcher is
+    // (RuntimeEmitter.Scheduler.cs, EmitGtDequeue), and measured rather than inferred: a second
+    // statement of it here is how a hot path's cost comes to be described two ways and wrongly in both.
     _b.DefineGlobal(DbgGtHoldGlobal, DbgMaxHeldGreenThreads * DbgGtWordSize, 0);
     _b.DefineGlobal(DbgGtHoldAllGlobal, DbgGtWordSize, 0);
     _b.DefineGlobal(DbgGtHeldHeadGlobal, DbgGtWordSize, 0);

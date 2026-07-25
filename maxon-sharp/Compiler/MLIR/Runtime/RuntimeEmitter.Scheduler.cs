@@ -359,9 +359,27 @@ public partial class RuntimeEmitter {
   // dispatcher and the unchanged body, `__gt_dequeue_ready` — so the filter wraps the answer instead of
   // being threaded through the four places the body returns one.
   //
-  // The dark cost is ONE load and ONE not-taken branch: with no debugger attached `__dbg_base` is zero
-  // and the body runs exactly as it did before. See RuntimeEmitter.DebugAgent.cs's green-thread control
-  // section for what the filter does with the thread it takes.
+  // ⚠ THE DARK COST IS A WHOLE CALL FRAME, NOT A BRANCH. "One load and a not-taken branch" is what this
+  // shape reads like and is not what it emits: with no debugger attached the path through here is the
+  // dispatcher's own prologue (push rbp / mov / sub rsp,0x40 / push rbx,rsi,rdi), the `__dbg_base` load,
+  // a test, a TAKEN jump, `call __gt_dequeue_ready`, and the matching epilogue — 17 instructions and 8
+  // stack accesses, disassembled out of the emitted `.text`, around a body that is byte-for-byte what it
+  // was. Stated here because this is the one place that can state it, and because the emitted cost of a
+  // hot path is exactly the kind of claim that must not be inferred from what the source looks like.
+  //
+  // WHAT IT COSTS, MEASURED (2026-07-25, x64-windows, idle 16-core host, MAXON_MAX_PROCS=1): +0.055 ns
+  // per dequeue, 95% CI [-0.37, +0.48] ns — smaller than the +0.084 ns/dequeue that a NULL CONTROL (the
+  // same binary in both arms) reports as this harness's own bias. 300 randomized-order pairs of a
+  // 1.2M-dequeue scheduling benchmark at 8.4M dequeues/s, outlier-trimmed. So it is not free, and it is
+  // below the floor of the sharpest in-situ instrument available.
+  //
+  // It is deliberately NOT a frameless tail jump (`jmp __gt_dequeue_ready`, 4 instructions instead of
+  // 17, and what would make the sentence above unnecessary): the gain is unmeasurable, and shrinking
+  // this function shifts every runtime code offset after it — including the spawn-trampoline frames that
+  // DebugSamples/threads.expected.txt (0xf818) and gtcontrol.expected.txt (0xf831) pin.
+  //
+  // See RuntimeEmitter.DebugAgent.cs's green-thread control section for what the filter does with the
+  // thread it takes.
   // =========================================================================
 
   public void EmitGtDequeue() {
