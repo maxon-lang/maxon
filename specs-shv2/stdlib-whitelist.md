@@ -9,11 +9,16 @@ category: system
 
 ## Documentation
 
-shv2 does not load all of `stdlib/` the way v1 and the C# bootstrap do. It loads an EXPLICIT
-WHITELIST — a listed subset of `stdlib/*.maxon` prepended to every compile — so stdlib support can
-grow one module at a time, each module gated on the language features it needs. The list is stated
-in exactly one place, `Compiler/StdlibWhitelist.maxon`'s `whitelistedStdlibRelativePaths()`; at this
-rung its only entry is `stdlib/Clock.maxon`.
+shv2's stdlib loader enumerates every `.maxon` file under the checkout's `stdlib/`, top level and
+subdirectories alike, exactly as v1 and the C# bootstrap do — and then a TEMPORARY WHITELIST filters
+which of them are actually loaded, so stdlib support can grow one module at a time, each module gated
+on the language features it needs. The filter is stated in exactly one place,
+`Compiler/StdlibWhitelist.maxon`; at this rung its only entry is `stdlib/Clock.maxon`.
+
+The whitelist is scaffolding, not a feature: it is a filter INSIDE the real loader rather than a list
+the loader walks, so removing it is a deletion rather than a rewrite. Everything downstream of the
+loader deals in two durable facts instead — "is this function stdlib source or user source?" and "is
+it reachable from `main`?" — so no pass has to be rewritten on the day the filter goes.
 
 A whitelisted module is registered into the query database exactly like a user source, so it flows
 through the same tokenize → signature-index → parse → merge spine. Its declarations therefore
@@ -40,10 +45,10 @@ output. Two mechanisms compose to guarantee that:
    wall clock?) runs at the Maxon tier, BEFORE that elimination. Clock.nowMs's body calls
    `__gt_now_ns` and WallClock.nowUnixSeconds's calls `__clock_now_unix_s`, so a naive load would
    install the scheduler and a `.data` slot for a program that reads no clock — slots the later
-   elimination cannot prune. The whitelist therefore SKIPS its own unreachable functions in that
-   scan (`stdlibWhitelistSkipSet`): a whitelisted function no user code reaches feeds the floor
-   decision nothing. User functions are never skipped, so nothing about a program that does not use
-   the whitelist changes.
+   elimination cannot prune. That scan therefore SKIPS the stdlib functions no path from `main`
+   reaches (`StdlibFacts.unreachable`): code the program does not contain feeds the floor decision
+   nothing. User functions are never skipped — an unreached user body still speaks for the program —
+   so nothing about a program that touches no stdlib changes.
 
 The whole existing `specs-shv2` corpus — every program that never touches Clock — is the standing
 proof of this: not one committed fragment moves when Clock is added to the whitelist.
@@ -93,27 +98,34 @@ A whitelisted module must declare no name a user program declares and no builtin
   **The rule: do not whitelist a module whose function name a bare builtin already claims. Retire
   the builtin first.**
 
-### The open mechanism gap: a diagnostic that originates INSIDE whitelisted stdlib source
+### A diagnostic raised inside stdlib source is attributed to the crossing call
 
-A whitelisted module is a real compilation unit, so a rejection raised in ITS body is positioned at
-ITS path — an absolute `…/stdlib/Foo.maxon:L:C` naming a file the user never opened, for a mistake
-they made at a call site somewhere else. Nothing renders it in terms of the caller, and no spec can
-pin it (the runner rewrites only the fragment's own path).
+Stdlib source is compiled as part of the program, so a rejection raised in one of its bodies would be
+positioned at ITS path — an absolute `…/stdlib/Foo.maxon:L:C` naming a file the user never opened, at
+a line they cannot change, for a choice they made at a call site somewhere else.
 
-This is GENERAL to the whitelist, not a quirk of any one module. It fires wherever a whitelisted
-body bottoms out in something target-gated or otherwise refusable — which is exactly what a stdlib
-leaf is for; every module in the queue behind Clock ends in a `__Builtins.*` intrinsic. Clock is
-only spared today because its callers are `Clock.nowMs()`-shaped, so `E3104`'s span already lands
-inside `stdlib/Clock.maxon` on a non-x64 target and no test compiles a Clock program for one.
+That is not a quirk of one module: it fires wherever a stdlib body bottoms out in something
+target-gated, which is exactly what a stdlib leaf is FOR — every module in the queue behind Clock ends
+in a `__Builtins.*` intrinsic — and it gets more common, not less, as stdlib grows.
 
-Which route makes the gap user-visible was measured rather than assumed. With the Sleep entry
-temporarily added, a plain `sleep(1)` compiled for wasm is still anchored at the **user's** span —
-the bare builtin claims the call site, so the whitelisted body is never entered. What reaches the
-gap is the second route above: `let f = sleep` takes the whitelisted declaration's address, and
-`f(5)` for wasm reports `E3104` at `stdlib/Sleep.maxon:6:2`, a file the user never opened. Retiring
-the bare-name builtin sends the plain call down that route too, turning the gap from exotic into the
-common case. A diagnostic raised in whitelisted source needs a caller-side anchor before the
-whitelist grows a module users reach through a target-gated leaf.
+The refusal that reaches this today is the TARGET gate, `E3104`. It is reported at the FIRST call
+crossing from user code INTO stdlib, and it names the stdlib function the user actually wrote:
+
+```text
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+```
+
+The requirement is TRANSITIVE through the stdlib call graph: `Clock.elapsedMs` names no runtime entry
+itself — it calls `Clock.nowMs`, which does — so a program calling `elapsedMs` is refused at ITS call,
+naming `Clock.elapsedMs` and still naming the entry that has no lowering. A user's own helper is user
+code, so `main → myHelper → Clock.nowMs` is blamed inside `myHelper`. And a stdlib function no path
+from `main` reaches is refused nowhere at all, which is what keeps an unused module byte-neutral.
+
+The gate is therefore reachability-BLIND for user code and reachability-AWARE for stdlib source: a
+`sleep(1)` in a function `main` never calls is still refused for wasm
+(`builtins-sleep.rejected-on-wasm-when-unreached`), while a `Clock.nowMs()` in one is not. The day a
+bare-name builtin is retired in favour of the stdlib declaration that shadows it, that program moves
+from the first case to the second — a behaviour change to decide on deliberately, not to discover.
 
 ## Tests
 
@@ -196,4 +208,98 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: stdlib-whitelist.target-refusal-blames-the-crossing-call -->
+<!-- targets: wasm32-wasi -->
+A whitelisted body that bottoms out in an x64-only runtime entry is refused at the USER's call, and
+names the whitelisted function they wrote — never at `stdlib/Clock.maxon`, a file they never opened
+and cannot change.
+```maxon
+function main() returns ExitCode
+	let t = Clock.nowMs()
+	if t > 0 'chk'
+		return 4
+	end 'chk'
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-whitelist.target-refusal-blames-the-crossing-call-arm64 -->
+<!-- targets: arm64-macos -->
+The attribution is a property of the whitelist mechanism, not of one backend: the same program
+compiled for arm64 is refused at the same user span, naming the same whitelisted function and the
+same missing runtime entry.
+```maxon
+function main() returns ExitCode
+	let t = Clock.nowMs()
+	if t > 0 'chk'
+		return 4
+	end 'chk'
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no arm64-macos implementation
+```
+
+<!-- test: stdlib-whitelist.target-refusal-is-transitive -->
+<!-- targets: wasm32-wasi -->
+`Clock.elapsedMs` reaches no runtime entry itself — it calls `Clock.nowMs`, which does. The
+requirement propagates through the whitelisted call graph, so the caller is blamed at the function
+THEY named, while the entry named is still the one that has no lowering.
+```maxon
+function main() returns ExitCode
+	let e = Clock.elapsedMs(0)
+	if e >= 0 'chk'
+		return 4
+	end 'chk'
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.elapsedMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-whitelist.target-refusal-blames-the-users-own-helper -->
+<!-- targets: wasm32-wasi -->
+A user's own function is not whitelisted, so the crossing is the call INSIDE it — code the user can
+actually change — rather than `main`'s call to the helper or anything in `stdlib/`.
+```maxon
+function reader() returns int
+	return Clock.nowMs()
+end 'reader'
+
+function main() returns ExitCode
+	let t = reader()
+	if t > 0 'chk'
+		return 4
+	end 'chk'
+	return 5
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:9: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+```
+
+<!-- test: stdlib-whitelist.unreached-clock-still-compiles-on-wasm -->
+<!-- targets: wasm32-wasi -->
+The crossing gate is reachability-AWARE, exactly as the runtime-floor skip is: `reader` is never
+called, so no path from `main` crosses into the whitelist and the program compiles for wasm
+unchanged. This is the byte-neutrality guarantee stated as a run — attributing the refusal to the
+caller must not turn an untaken crossing into a refusal.
+```maxon
+function reader() returns int
+	return Clock.nowMs()
+end 'reader'
+
+function main() returns ExitCode
+	return 4
+end 'main'
+```
+```exitcode
+4
 ```

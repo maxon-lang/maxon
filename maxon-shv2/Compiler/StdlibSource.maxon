@@ -1,0 +1,519 @@
+// StdlibSource — what a compile knows about the STDLIB SOURCE it loaded, as opposed to the user's own
+// code. Two facts, derived once per compile from one walk of the merged Maxon module:
+//
+//   1. WHICH STDLIB FUNCTIONS THIS PROGRAM CANNOT REACH — code dead-function elimination will drop
+//      before the back end, so no pre-elimination pass may let it decide anything about the program.
+//   2. WHICH STDLIB FUNCTIONS NEED THE x64-WINDOWS SUBSTRATE, and which runtime entry each one reaches —
+//      the fact a user's own call site is refused with, so a target rejection names the stdlib function
+//      THEY wrote instead of a line inside `stdlib/`.
+//
+// ⭐ **NOTHING HERE DEPENDS ON *WHICH* STDLIB FILES ARE LOADED — only on which functions came from
+// stdlib.** shv2 loads a growing subset of `stdlib/` today and all of it eventually; both facts above get
+// MORE important in that end state, not less, because a program built on `Map`, `String` and `FilePath`
+// crosses into stdlib on nearly every line, and a diagnostic positioned inside one of them is a
+// diagnostic about a file the user never opened.
+//
+// So the question asked throughout is **"is this function STDLIB source or USER source?"**, answered from
+// the function's own source path (`isStdlibFunction`) — never from a registry of loaded modules. Grow the
+// set of loaded files to every file under `stdlib/` and every function in this file still answers
+// correctly, over a larger set, with no edit.
+
+// ⭐ **WHICH FILES ARE STDLIB IS ESTABLISHED BY CONSTRUCTION, NOT BY RE-TESTING PATHS.** The stdlib loader
+// enumerates `project.stdlibDir` and records every file it parsed from there in `project.stdlibSourcePaths`
+// — so "this file lies under the checkout's `stdlib/`" is already known of exactly those files, and of no
+// others. That record is what the facts below are derived from.
+//
+// ⚠ **THE ALTERNATIVE WAS MEASURED AND IS EXPENSIVE.** Re-deriving it by asking `FilePath.isInside` of
+// each of the program's source paths costs about FOUR String allocations per question — on Windows
+// `canonicalForCompare` clones and lower-cases both sides, and the needle is an interpolation — so it puts
+// a term into every compile that grows with the number of files the user wrote. Measured on the scale
+// ladder: +60 allocations at rung 0 rising to +1,920 at rung 5, doubling with the corpus, for a fact the
+// loader already had. Asking it per FUNCTION instead of per file was worse again (+3,633 rising to
+// +48,273). `isStdlibFunction` answers the per-function form from a set built once.
+//
+// ⭐ **IS THIS FUNCTION STDLIB SOURCE?** A `ByteArray` hash against that set. This is the question every
+// pass asks, and it stays true as stdlib grows from one module to all of it — nothing here depends on
+// WHICH files those are, only on their having come from `stdlib/`.
+export function isStdlibFunction(project Project, func IrFunction) returns bool
+	return project.stdlibFacts.stdlibFunctions.contains(func.name)
+end 'isStdlibFunction'
+
+// The stdlib source files a compile loaded. A DISTINCTLY-named alias rather than QueryDatabase's
+// `FilePathArray`, whose name collides with a member typealias inside stdlib's `type Directory` and so
+// does not resolve from every compiler file (`DiagnosticArray`, the same `Array with T` shape under a
+// unique name, resolves cross-file fine — the name is the difference).
+export typealias StdlibSourcePathArray = Array with FilePath
+
+// The directory name walked for, and a generous bound on how far up the tree to look. A checkout is
+// shallow (`<root>/maxon-shv2/.maxon/maxon-shv2.exe` is three levels under the `stdlib/` that sits at
+// `<root>`), so 64 is far more than enough while still terminating on a pathological path rather than
+// looping forever.
+let StdlibDirName = "stdlib"
+let MaxStdlibSearchDepth = 64
+
+// Locate the checkout's `stdlib/` by walking UP from the COMPILER's own executable directory.
+//
+// ⚠ NOT from `Directory.currentPath()` (v1's `findStdlibPath`): the spec runner and `run_program`
+// compile a program in a throwaway temp dir, so the working directory has no `stdlib/` above it.
+// The compiler binary always lives inside the checkout, so its own path is the reliable anchor —
+// the same reason the bootstrap's `FindStdlibPath` (0-Compiler.cs) walks up from
+// `AppContext.BaseDirectory`. A failure to locate it is a hard, LOUD error rather than a silent
+// skip: every compile loads stdlib source, so a missing stdlib is a real environment problem the
+// user must see, not a `Clock.nowMs()` that mysteriously reports E3004.
+export function locateStdlibDir() returns FilePath throws CompileError
+	let exePath = try Process.executablePath() otherwise throw CompileError.stdlibNotFound
+	var dir = try exePath.parent() otherwise throw CompileError.stdlibNotFound
+
+	var depth = 0
+	while depth < MaxStdlibSearchDepth 'search'
+		// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays
+		// untyped and matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity —
+		// whereas a String VALUE selects `join(String)` cleanly.
+		let candidate = dir.join("{StdlibDirName}")
+		if Directory.exists(candidate) 'found'
+			return candidate
+		end 'found'
+		// `parent()` throws at the filesystem root — the correct place for the search to give up.
+		dir = try dir.parent() otherwise throw CompileError.stdlibNotFound
+		depth = depth + 1
+	end 'search'
+
+	throw CompileError.stdlibNotFound
+end 'locateStdlibDir'
+
+// A set of function names, for O(1) membership. Used for both "unreachable from `main`" and "declared in
+// stdlib source", exactly like `DestructorSet`.
+export typealias FunctionNameSet = Set with ByteArray
+
+// A stdlib function name -> the x64-windows-only runtime entry its body reaches, directly or through
+// other stdlib functions. Membership IS "this function needs the Win32 substrate", so the map is its own
+// mark column and there is no second set to keep in step with it.
+export typealias StdlibSubstrateEntryMap = Map with (ByteArray, ByteArray)
+
+// Name → merged-module function index, for the reachability walk — the Maxon-tier twin of
+// `DeadFunctionElimination.FuncIndexByName`.
+typealias StdlibFuncIndexByName = Map with (ByteArray, FuncIndex)
+
+// Stdlib function name -> its DENSE node index in the substrate fixpoint's call graph. A distinct alias
+// from `StdlibFuncIndexByName`, whose values are merged-MODULE function indices: these index the far
+// smaller stdlib-only key space `buildCsr` is handed.
+typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
+
+// ⭐ THE TWO FACTS ABOUT STDLIB SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
+// object rather than two `Project` fields because they are one derivation over one call graph:
+// `substrateEntries` is meaningful only for the functions `unreachable` does NOT hold (code the program
+// cannot reach is invisible to it, substrate and all), and two fields assigned from two calls could come
+// to disagree about which functions those are.
+export type StdlibFacts
+	// Every function the merged module got from stdlib source — the per-function form of `isStdlibPath`,
+	// materialized once so the question can be asked of every function of the program without paying a
+	// path comparison each time (see `isStdlibFunction`).
+	export let stdlibFunctions as FunctionNameSet
+	// Stdlib functions NOT reachable from `main`. Dead-function elimination drops them before the back
+	// end, so a pass that runs earlier and examines function BODIES to decide something about the PROGRAM
+	// — the runtime floor it carries (`scanRuntimeUsage`), the targets it can be built for
+	// (`checkCalls`) — must not let them decide it, or the program pays for code it does not contain.
+	// User functions are never in it: a diagnostic in unreached USER code is still the user's bug, while
+	// a runtime requirement of unreached STDLIB code is nobody's.
+	export let unreachable as FunctionNameSet
+	// The REACHABLE stdlib functions that need the x64-windows substrate, and which runtime entry each
+	// one reaches. Read at a call site that crosses from user code into stdlib, to refuse the program on
+	// a target that cannot lower it — at the user's own span.
+	export let substrateEntries as StdlibSubstrateEntryMap
+
+	export static function create(stdlibFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap) returns StdlibFacts
+		return Self{stdlibFunctions: stdlibFunctions, unreachable: unreachable, substrateEntries: substrateEntries}
+	end 'create'
+
+	// A compile that has not derived them yet, and the answer for a compile that loaded no stdlib source
+	// at all: no function is stdlib, nothing is unreachable-stdlib and nothing needs the substrate.
+	export static function empty() returns StdlibFacts
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create())
+	end 'empty'
+end 'StdlibFacts'
+
+// ⭐ DERIVE BOTH FACTS. Runs once per compile, right after the module is merged and before any pass that
+// reads either of them.
+export function deriveStdlibFacts(project Project, module MaxonModule) returns StdlibFacts throws CompileError
+	let stdlibNames = try stdlibFunctionNames(project)
+	if stdlibNames.count() == 0 'noStdlibSource'
+		return StdlibFacts.empty()
+	end 'noStdlibSource'
+
+	var stdlibSet = FunctionNameSet.create()
+	for name in stdlibNames 'seed'
+		stdlibSet.insert(name)
+	end 'seed'
+
+	// ⭐ COMMON-CASE SHORT-CIRCUIT. If no op in USER code names a stdlib callee, no stdlib function is
+	// reachable at all, so ALL of them are unreachable and NONE can be blamed for a substrate — reached by
+	// ONE allocation-free O(ops) scan, WITHOUT the O(functions) name->index map and reached-array the
+	// from-`main` walk allocates, and without the substrate fixpoint. That map is the whole per-compile
+	// memory cost of loading stdlib source into a program that never touches it, so skipping it keeps the
+	// cost a per-compile CONSTANT instead of growing with the user program. It stays EXACT: a stdlib
+	// function referenced by nothing is reachable from nothing.
+	if not userCodeCallsStdlib(module, stdlib: stdlibSet) 'noneReferenced'
+		var allUnreachable = FunctionNameSet.create()
+		for name in stdlibNames 'markAll'
+			allUnreachable.insert(name)
+		end 'markAll'
+		return StdlibFacts.create(stdlibSet, unreachable: allUnreachable, substrateEntries: StdlibSubstrateEntryMap.create())
+	end 'noneReferenced'
+
+	// User code DOES call stdlib — resolve exactly which stdlib functions the program REACHES from `main`
+	// and mark only the untouched ones. This precise walk (and its maps) runs ONLY for a program that
+	// actually uses stdlib.
+	let reachable = reachableMaxonFunctionNames(module)
+	var unreachable = FunctionNameSet.create()
+	for name in stdlibNames 'classify'
+		if not reachable.contains(name) 'unreached'
+			unreachable.insert(name)
+		end 'unreached'
+	end 'classify'
+
+	return StdlibFacts.create(stdlibSet, unreachable: unreachable, substrateEntries: stdlibSubstrateEntries(module, stdlibNames: stdlibNames, unreachable: unreachable))
+end 'deriveStdlibFacts'
+
+// Every function the merged module got from stdlib source, in load order. Read back from each stdlib
+// file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already parsed it — so the cost is
+// O(stdlib functions) and touches nothing the user wrote. A `ByteArrayArray` rather than a set because
+// the names are unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a
+// dense ORDER for its node space as well as membership.
+function stdlibFunctionNames(project Project) returns ByteArrayArray throws CompileError
+	var names = ByteArrayArray.create()
+	for path in project.stdlibSourcePaths 'eachFile'
+		let artifact = try queryParseOps(project, path: path)
+		for func in artifact.module.functions 'eachFunc'
+			names.push(func.name)
+		end 'eachFunc'
+	end 'eachFile'
+	return names
+end 'stdlibFunctionNames'
+
+// The reachable-from-`main` closure over the merged Maxon module, as a set of function NAMES.
+// The Maxon-tier twin of `DeadFunctionElimination.markCalleeOf`: the FOUR ops that name a callee
+// are edges — `call`, `tryCall`, `functionRef` (a TAKEN ADDRESS is a static edge even though the
+// call consuming it is indirect) and `asyncCall`. Every other variant names no static callee.
+//
+// A callee that is not a module function — an as-yet-uninstalled `__gt_*`/`__clock_*` runtime
+// helper, which is added only during/after lowering — is simply not queued, exactly as
+// `DeadFunctionElimination.markLiveFunction` handles the same case.
+//
+// ⚠ Reachability by direct `call`/`funcAddr` edges is EXACT for stdlib source at this rung because no
+// stdlib function is reached by a witness dispatch or an `.rdata` reloc. A Maxon-tier reachability that
+// missed such an edge would be unsound in general, which is why what it decides is scoped to stdlib
+// source rather than applied to every function.
+function reachableMaxonFunctionNames(module MaxonModule) returns FunctionNameSet
+	var byName = StdlibFuncIndexByName.create()
+	for i in 0 upto module.funcCount() 'index'
+		byName.upsert(module.getFunc(i).name, value: i)
+	end 'index'
+
+	var reached = BoolArray.create()
+	reached.resize(module.funcCount())
+	var worklist = FuncIndexArray.create()
+	var names = FunctionNameSet.create()
+
+	markReachable(UserEntryName.toByteArray(), byName: byName, reached: reached, worklist: worklist, names: names)
+
+	while worklist.count() > 0 'walk'
+		let idx = try worklist.pop() otherwise panic("reachableMaxonFunctionNames: pop from a non-empty worklist")
+		markMaxonCallees(module, func: module.getFunc(idx), byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'walk'
+
+	return names
+end 'reachableMaxonFunctionNames'
+
+// Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
+// or a root whose runtime this program never installs) is not found and not queued — nothing to
+// walk. Mirrors `DeadFunctionElimination.markLiveFunction`.
+function markReachable(name ByteArray, byName StdlibFuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	let idx = try byName.get(name) otherwise 'notAModuleFunction'
+		return
+	end 'notAModuleFunction'
+
+	let already = try reached.get(idx) otherwise panic("reachableMaxonFunctionNames: reached.get OOB at function index {idx}")
+	if already 'alreadyReached'
+		return
+	end 'alreadyReached'
+
+	try reached.set(idx, value: true) otherwise panic("reachableMaxonFunctionNames: reached.set OOB at function index {idx}")
+	names.insert(name)
+	worklist.push(idx)
+end 'markReachable'
+
+// Walk `block.opRefs` DIRECTLY — not `IrModule.liveOpIndices`, which allocates a fresh op-index array
+// per function. This runs at the Maxon tier BEFORE any block-rebuilding pass, so `opRefs` holds no
+// orphan ops (the concern that forces `liveOpIndices` at the Std tier), which is exactly why
+// `scanRuntimeUsage` walks the same way here. A terminator names no callee, so visiting only the body
+// ops in `opRefs` is complete for reachability.
+function markMaxonCallees(module MaxonModule, func IrFunction, byName StdlibFuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
+			markMaxonCalleeEdge(op, byName: byName, reached: reached, worklist: worklist, names: names)
+		end 'eachOp'
+	end 'eachBlock'
+end 'markMaxonCallees'
+
+// The static reachability edge one `MaxonOp` names, if any. The arms RANGE over the whole union in
+// declaration order, ending at the current last variant (`witnessDispatch`), so a variant appended
+// past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
+// working in the reviewer's favour (MaxonDialect's header), exactly as `markCalleeOf` relies on it.
+// A new variant that carries a callee name must be added as its own arm.
+function markMaxonCalleeEdge(op MaxonOp, byName StdlibFuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	match op 'op'
+		call(_, callee, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		// `literal` … `stringLiteral`: literals, arithmetic, comparisons, branches, returns, and the
+		// three `var`-access ops — none names a Maxon function.
+		literal to stringLiteral then break 'op'
+		tryCall(_, _, callee, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		// `throwError` … `panicAbort`: the error terminators name no callee.
+		throwError to panicAbort then break 'op'
+		functionRef(_, funcName) then markReachable(funcName, byName: byName, reached: reached, worklist: worklist, names: names)
+		// `indirectCall` calls through a code POINTER a `functionRef` above already credited.
+		indirectCall then break 'op'
+		asyncCall(_, callee, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
+		// `await` … `witnessDispatch`: an await consumes a promise VALUE, and a witness dispatch reads
+		// an `.rdata` table — neither names a static Maxon callee here.
+		await to witnessDispatch then break 'op'
+	end 'op'
+end 'markMaxonCalleeEdge'
+
+// True iff any live op in USER code names a STDLIB callee — the allocation-free pre-scan that lets a
+// program which never touches stdlib skip the reachability walk and the substrate fixpoint entirely. It
+// reads the same four callee-naming variants `markMaxonCalleeEdge` does, and is a SEPARATE band match on
+// purpose: it runs on every compile, so it must allocate nothing (no boxed callee union, no map/queue) —
+// it only asks "is one present?". Both matches are guarded by the same band-append invariant.
+function userCodeCallsStdlib(module MaxonModule, stdlib FunctionNameSet) returns bool
+	for func in module.functions 'eachFunc'
+		// ⭐ SKIP STDLIB's OWN BODIES. Stdlib is internally connected (`Clock.elapsedMs` calls
+		// `Clock.nowMs`), so scanning its bodies would find an intra-stdlib edge on EVERY compile and
+		// defeat this short-circuit. The exact question is "does USER code cross INTO stdlib?", and the
+		// first edge into stdlib on any path from `main` is made by a USER caller — `main` itself is never
+		// stdlib — so scanning only user bodies is the exact condition. (A stdlib-only reference is
+		// unreachable-from-`main` anyway, so a false negative here is impossible; a false positive would
+		// merely trigger the exact full walk.)
+		//
+		// It reads the set being BUILT rather than `isStdlibFunction`, which reads the PUBLISHED one:
+		// this runs inside the derivation, before `project.stdlibFacts` holds anything.
+		if stdlib.contains(func.name) 'skipStdlibBody'
+			continue
+		end 'skipStdlibBody'
+
+		// Direct `block.opRefs` walk — allocation-free, and safe for the same reason `markMaxonCallees`
+		// and `scanRuntimeUsage` use it at this tier (pre-pipeline: no orphan ops; callees are body ops).
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("userCodeCallsStdlib: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("userCodeCallsStdlib: opRef {opIdx} not in module.ops")
+				if opNamesStdlibCallee(op, stdlib: stdlib) 'found'
+					return true
+				end 'found'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return false
+end 'userCodeCallsStdlib'
+
+// Whether one `MaxonOp` names a callee in `stdlib`. Same band structure — and same band-append protection
+// — as `markMaxonCalleeEdge` (a variant appended past `witnessDispatch` fails to compile here rather than
+// being silently swallowed).
+function opNamesStdlibCallee(op MaxonOp, stdlib FunctionNameSet) returns bool
+	return match op 'op'
+		call(_, callee, _, _, _) gives stdlib.contains(callee)
+		literal to stringLiteral gives false
+		tryCall(_, _, callee, _, _, _) gives stdlib.contains(callee)
+		throwError to panicAbort gives false
+		functionRef(_, funcName) gives stdlib.contains(funcName)
+		indirectCall gives false
+		asyncCall(_, callee, _, _, _) gives stdlib.contains(callee)
+		await to witnessDispatch gives false
+	end 'op'
+end 'opNamesStdlibCallee'
+
+// ⭐ **WHICH STDLIB FUNCTIONS NEED THE x64-WINDOWS SUBSTRATE, AND WHICH RUNTIME ENTRY EACH REACHES.**
+// The fact a user's crossing call is blamed with, so the refusal names the stdlib function they wrote
+// instead of a line inside `stdlib/`.
+//
+// ⭐ TRANSITIVE, because a stdlib module is written in LAYERS. `Clock.elapsedMs` names no runtime entry at
+// all — it calls `Clock.nowMs`, which names `__gt_now_ns` — and a program calling `elapsedMs` must be
+// refused at ITS call. So the requirement propagates BACKWARD along the stdlib call graph to a fixpoint:
+// the seeds are the functions that name an entry directly, and a caller inherits its callee's.
+//
+// ⚠ **IT CARRIES THE ENTRY NAME, NOT A BIT**, which is why it is not the parser's `reverseReachabilityMark`:
+// `Clock` alone reaches TWO entries (`__gt_now_ns` for the monotonic clock, `__clock_now_unix_s` for the
+// calendar), so a bit would leave the diagnostic naming whichever one it guessed — a wrong answer, not a
+// cosmetic one. What PROPAGATES is still a scalar: a node inherits its callee's SEED INDEX, and the names
+// are read off `seedEntries` once at the end.
+//
+// COST: O(stdlib functions + their ops + their intra-stdlib edges), bounded by the stdlib source LOADED
+// and not by the user program, and computed only for a compile that actually calls into stdlib. Each node
+// enters the worklist at most once and each reverse edge is walked once, so it stays linear in the loaded
+// stdlib as that grows from today's one module to all of it.
+//
+// The UNREACHABLE stdlib functions are left out entirely: they are invisible to this compile, so their
+// substrate is too. That is what keeps a `Clock.nowMs()` in code `main` never calls compiling for wasm.
+function stdlibSubstrateEntries(module MaxonModule, stdlibNames ByteArrayArray, unreachable FunctionNameSet) returns StdlibSubstrateEntryMap
+	let nodeCount = stdlibNames.count()
+	var nodeOf = StdlibNodeByName.create()
+	for i in 0 upto nodeCount 'index'
+		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i)
+	end 'index'
+
+	var state = SubstrateFixpoint.overNodes(nodeCount)
+	for func in module.functions 'eachFunc'
+		if unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+		if let node = try nodeOf.get(func.name) 'stdlibFunction'
+			for blockRef in func.blockRefs 'eachBlock'
+				let block = try module.blocks.get(blockRef) otherwise panic("stdlibSubstrateEntries: blockRef from func.blockRefs not in module.blocks")
+				for opIdx in block.opRefs 'eachOp'
+					let op = try module.ops.get(opIdx) otherwise panic("stdlibSubstrateEntries: opRef {opIdx} not in module.ops")
+					noteSubstrateEdge(op, callerNode: node, nodeOf: nodeOf, state: state)
+				end 'eachOp'
+			end 'eachBlock'
+		end 'stdlibFunction'
+	end 'eachFunc'
+
+	state.propagateToCallers()
+
+	var entries = StdlibSubstrateEntryMap.create()
+	for i in 0 upto nodeCount 'publish'
+		if state.requiresSubstrate(i) 'needsIt'
+			entries.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB in publish"), value: state.entryOf(i))
+		end 'needsIt'
+	end 'publish'
+	return entries
+end 'stdlibSubstrateEntries'
+
+// The mutable state of the substrate fixpoint over the stdlib call graph's DENSE node space. It is one
+// object rather than six threaded columns because the body scan and the propagation write all of it, and a
+// helper that took them apart could be handed five of the six.
+//
+// ⭐ THE COLUMNS PROPAGATE SCALARS. A marked node stores an INDEX into `seedEntries`, never the entry name
+// itself: reading a name out of the answer while inserting into it is a read-borrow held across a mutation,
+// which the ownership checker refuses (E3070) — correctly, since the insert may reallocate what the read
+// borrowed. The names are read once, after the fixpoint has settled.
+type SubstrateFixpoint
+	// Per node: does it (transitively) need the Win32 substrate? Also the "already queued" test — a node is
+	// marked exactly when it enters the worklist, so it enters at most once.
+	var marked as BoolArray
+	// Per MARKED node: the index into `seedEntries` of the seed it inherits its entry from.
+	var seedOf as CsrColumn
+	// The runtime entry each seed names, in the order the seeds were found.
+	var seedEntries as ByteArrayArray
+	// Nodes whose callers still have to inherit from them. Drained by index, never popped, so a node's
+	// position is stable while the array grows.
+	var worklist as CsrColumn
+	// The intra-stdlib call graph, REVERSED as it is collected (callee -> caller), so the propagation
+	// walks from a function that names an entry to the functions that reach it.
+	var edgeCallee as CsrColumn
+	var edgeCaller as CsrColumn
+
+	static function overNodes(nodeCount CsrIndex) returns SubstrateFixpoint
+		var marked = BoolArray.create()
+		marked.resize(nodeCount)
+		var seedOf = CsrColumn.create()
+		seedOf.resize(nodeCount)
+		return Self{marked: marked, seedOf: seedOf, seedEntries: ByteArrayArray.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create()}
+	end 'overNodes'
+
+	// `node` names `entry` directly — a SEED. The FIRST entry a body names is the one it is reported for: a
+	// body naming two is refused for either, and both are equally true of it.
+	function seed(node CsrIndex, entry ByteArray)
+		let already = try self.marked.get(node) otherwise panic("SubstrateFixpoint.seed: marked.get({node}) outside the node space")
+		if already 'alreadySeeded'
+			return
+		end 'alreadySeeded'
+		self.mark(node, seedIndex: self.seedEntries.count())
+		self.seedEntries.push(entry)
+	end 'seed'
+
+	// A call edge inside stdlib, recorded reversed for the propagation below.
+	function callEdge(calleeNode CsrIndex, callerNode CsrIndex)
+		self.edgeCallee.push(calleeNode)
+		self.edgeCaller.push(callerNode)
+	end 'callEdge'
+
+	// Mark `node` as needing the substrate `seedIndex` names, and queue its callers for the same.
+	function mark(node CsrIndex, seedIndex CsrIndex)
+		try self.marked.set(node, value: true) otherwise panic("SubstrateFixpoint.mark: marked.set({node}) outside the node space")
+		try self.seedOf.set(node, value: seedIndex) otherwise panic("SubstrateFixpoint.mark: seedOf.set({node}) outside the node space")
+		self.worklist.push(node)
+	end 'mark'
+
+	// ⭐ THE FIXPOINT: every stdlib function that REACHES a seed over stdlib's own call edges inherits its
+	// entry. A reverse BFS over the CSR adjacency — each node enters the worklist once (the marking IS the
+	// visited test) and each edge is walked once, for O(nodes + edges).
+	function propagateToCallers()
+		let callersOf = buildCsr(self.edgeCallee, to: self.edgeCaller, nodeCount: self.marked.count())
+		var head = 0 as CsrIndex
+		while head < self.worklist.count() 'drain'
+			let node = try self.worklist.get(head) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
+			head = head + 1
+			let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get({node}) outside the node space")
+			for k in 0 upto callersOf.degree(node) 'eachCaller'
+				let caller = callersOf.neighbour(node, k: k)
+				if not (try self.marked.get(caller) otherwise panic("SubstrateFixpoint.propagateToCallers: marked.get({caller}) outside the node space")) 'newlyRequired'
+					self.mark(caller, seedIndex: seedIndex)
+				end 'newlyRequired'
+			end 'eachCaller'
+		end 'drain'
+	end 'propagateToCallers'
+
+	function requiresSubstrate(node CsrIndex) returns bool
+		return try self.marked.get(node) otherwise panic("SubstrateFixpoint.requiresSubstrate: marked.get({node}) outside the node space")
+	end 'requiresSubstrate'
+
+	// The runtime entry `node` reaches. Defined only for a node `requiresSubstrate` accepts — an unmarked
+	// node's `seedOf` slot was never written, and the panics say so rather than returning slot 0's name.
+	function entryOf(node CsrIndex) returns ByteArray
+		if not self.requiresSubstrate(node) 'unmarked'
+			panic("SubstrateFixpoint.entryOf: node {node} needs no substrate")
+		end 'unmarked'
+		let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.entryOf: seedOf.get({node}) outside the node space")
+		return try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.entryOf: node {node} names seed {seedIndex}, which does not exist")
+	end 'entryOf'
+end 'SubstrateFixpoint'
+
+// One stdlib body op's contribution to the substrate fixpoint: it either NAMES a substrate runtime entry
+// (a seed) or calls another stdlib function (a reverse edge). A callee can never be both — the parser
+// reserves the `__` prefix for compiler-owned names, so no stdlib declaration can carry one.
+//
+// The band structure — and the band-append protection — is `markMaxonCalleeEdge`'s, the third member of
+// that family in this file. Each asks a different question of the SAME four callee-naming variants, and
+// each pays a different cost (this one runs only for a compile that calls into stdlib), which is why they
+// are separate matches; a variant appended past `witnessDispatch` fails to compile in all three rather
+// than being silently swallowed by any of them.
+function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
+	match op 'op'
+		call(_, callee, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		literal to stringLiteral then break 'op'
+		tryCall(_, _, callee, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		throwError to panicAbort then break 'op'
+		functionRef(_, funcName) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		indirectCall then break 'op'
+		asyncCall(_, callee, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		await to witnessDispatch then break 'op'
+	end 'op'
+end 'noteSubstrateEdge'
+
+// Classify ONE callee named by a stdlib body: a runtime entry that needs the Win32 substrate SEEDS the
+// fixpoint, another stdlib function becomes a reverse edge, and anything else — a user callback, or a
+// target-neutral runtime helper — carries no substrate requirement.
+//
+// ⭐ `calleeNeedsWin32Substrate` is asked, never restated: it is the ONE place that knows which runtime
+// entries only x64-windows can provide, and a second list here would be that fact written down twice.
+function noteSubstrateCallee(callee ByteArray, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
+	if calleeNeedsWin32Substrate(callee) 'substrateEntry'
+		state.seed(callerNode, entry: callee)
+		return
+	end 'substrateEntry'
+
+	if let calleeNode = try nodeOf.get(callee) 'stdlibSibling'
+		state.callEdge(calleeNode, callerNode: callerNode)
+	end 'stdlibSibling'
+end 'noteSubstrateCallee'

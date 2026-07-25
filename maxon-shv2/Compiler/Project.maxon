@@ -991,18 +991,22 @@ end 'slotCallArgs'
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
-	// The whitelisted stdlib module files loaded into THIS compile (see StdlibWhitelist).
-	// Recorded at load time so the runtime-floor scan can identify the injected functions and skip
-	// the ones the program does not reach (`stdlibWhitelistSkipSet`); empty until
-	// `loadStdlibWhitelist` registers them.
-	export var stdlibWhitelistPaths as WhitelistPathArray
-	// The whitelisted functions THIS program does not reach (`stdlibWhitelistSkipSet`), computed
-	// once per compile after the module is merged. Every PRE-elimination pass that examines function
-	// BODIES for a target/runtime decision — `scanRuntimeUsage`'s floor scan, `checkCalls`'s E3104
-	// target-support gate — consults this to leave the injected-but-unused Clock exactly as invisible
-	// as dead-function elimination will later make it. Empty for user-only code and never holds a
-	// user function, so no non-whitelist program's checks change.
-	export var whitelistSkipSet as FunctionNameSet
+	// The checkout's `stdlib/` directory, located once at load time (`locateStdlibDir`). The stdlib
+	// loader enumerates it; nothing else needs to know where it is.
+	export var stdlibDir as FilePath
+	// Every file the stdlib loader parsed out of that directory — which is exactly "the STDLIB source
+	// this compile contains", established by construction rather than by re-testing paths later (see
+	// StdlibSource). Empty until the loader runs; it grows with the stdlib shv2 can load, and in the end
+	// state it is every file under `stdlib/`.
+	export var stdlibSourcePaths as StdlibSourcePathArray
+	// What THIS compile knows about the stdlib source it loaded (`deriveStdlibFacts`), computed once
+	// after the module is merged: which stdlib functions the program cannot reach, and which of the
+	// ones it CAN reach need the x64-windows substrate. Every PRE-elimination pass that examines
+	// function BODIES for a target/runtime decision — `scanRuntimeUsage`'s floor scan, `checkCalls`'s
+	// E3104 target-support gate — consults it, so unreachable stdlib code decides nothing about a
+	// program that does not contain it. Both halves are empty for stdlib-free code and neither ever
+	// holds a USER function, so no user-only program's checks change.
+	export var stdlibFacts as StdlibFacts
 	// Declared function return types (the M1 parse-staging registry).
 	export var funcReturnTypes as FuncReturnTypeMap
 	// Declared function parameter signatures (names + types), keyed by name.
@@ -1088,11 +1092,12 @@ export type Project
 	// day N compiles run at once.
 	export var traceUnit as TraceUnit
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath) returns Project
 		return Self{
 			db: db,
-			stdlibWhitelistPaths: WhitelistPathArray.create(),
-			whitelistSkipSet: FunctionNameSet.create(),
+			stdlibDir: stdlibDir,
+			stdlibSourcePaths: StdlibSourcePathArray.create(),
+			stdlibFacts: StdlibFacts.empty(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
@@ -1120,8 +1125,11 @@ end 'Project'
 // Construct a fresh Project rooted at `rootPath` for `target`. The single
 // constructor a driver needs; mirrors v1's `createProject` (which additionally
 // seeds three empty memo sentinels — QueryDatabase.create owns those in shv2).
-export function createProject(rootPath FilePath, target Target) returns Project
-	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target)
+// `stdlibDir` is passed IN rather than located here so the project is born with a
+// valid one: `isStdlibFunction` reads it, and a field that is briefly wrong is a
+// field a later pass can read while it is wrong.
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath) returns Project
+	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target, stdlibDir: stdlibDir)
 end 'createProject'
 
 // Append a diagnostic to the project's sink. The single funnel every reporting

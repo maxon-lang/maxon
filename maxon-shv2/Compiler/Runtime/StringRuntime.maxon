@@ -387,16 +387,18 @@ export type RuntimeUsage
 	end 'create'
 end 'RuntimeUsage'
 
-// `skip` names the functions this scan must ignore — the stdlib-whitelist functions the program
-// does not reach (see StdlibWhitelist.stdlibWhitelistSkipSet). It is EMPTY for user-only code and
-// never contains a user function, so the answer for every non-whitelist program is unchanged; it
-// exists solely so an unused injected module (Clock) installs no runtime floor.
-export function scanRuntimeUsage(module MaxonModule, skip FunctionNameSet) returns RuntimeUsage
+// `unreachableStdlib` names the functions this scan must ignore — the STDLIB functions no path from
+// `main` reaches (`StdlibFacts.unreachable`, see StdlibSource). Dead-function elimination drops them
+// before the back end, so the floor they would ask for is a floor for code the program does not
+// contain: a `Clock` nothing calls must not install the green-thread scheduler and the wall-clock
+// `.data` slot. It never contains a USER function — an unreached user body still speaks for the
+// program — so the answer for every stdlib-free program is unchanged.
+export function scanRuntimeUsage(module MaxonModule, unreachableStdlib FunctionNameSet) returns RuntimeUsage
 	var usage = RuntimeUsage.create()
 	for func in module.functions 'eachFunc'
-		if skip.contains(func.name) 'skipWhitelisted'
+		if unreachableStdlib.contains(func.name) 'notInTheProgram'
 			continue
-		end 'skipWhitelisted'
+		end 'notInTheProgram'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("scanRuntimeUsage: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'

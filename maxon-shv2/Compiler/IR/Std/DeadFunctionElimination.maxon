@@ -6,9 +6,9 @@
 // wasm all inherit it rather than each having to remember to re-add it — the same argument that put
 // `assertNoSugarOps` there.
 //
-// ⭐ **WHY IT IS A PREREQUISITE, not a nicety.** The user-directed stdlib whitelist loads a listed
-// subset of `stdlib/*.maxon` so stdlib support can grow module by module. Without this pass,
-// whitelisting one module drags EVERY function in it into EVERY program — which adds them to all 221+
+// ⭐ **WHY IT IS A PREREQUISITE, not a nicety.** shv2 compiles `stdlib/*.maxon` source into every
+// program. Without this pass, loading one stdlib module drags EVERY function in it into EVERY
+// program — which adds them to all 221+
 // committed goldens, costs every compile, and BREAKS the wasm and arm64 suites outright, because the
 // GT/clock/IOCP substrate those modules reach is x64-windows-only (a `sleep(1)` program dies on wasm at
 // `StdToWasm: emitFuncAddr: no wasm function index for '__gt_trampoline'`). Reachability fixes all
@@ -255,11 +255,12 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 	// and a dropped function's index is now beyond `module.functions`, so no survivor's lookup can ever
 	// match one: leaving them costs a few extra iterations on the cold E5001 path and nothing else,
 	// where rebuilding the program-sized columns costs the same linear bytes the `dropped == 0` case
-	// avoids. The stdlib whitelist makes this the common case: an unused whitelisted module (e.g. Clock
-	// in a program that reads no clock) merges after the user source and drops as a block, so a program
-	// that installs no emitted runtime (the runtime functions append AFTER it) drops ONLY trailing
-	// functions — without this skip every such compile would pay the full rebuild the whitelist newly
-	// forced on it. A program that DOES install runtime drops the whitelisted module from the MIDDLE
+	// avoids. Compiling stdlib source into every program makes this the common case: a stdlib module the
+	// program does not use (e.g. Clock in a program that reads no clock) merges after the user source and
+	// drops as a block, so a program that installs no emitted runtime (the runtime functions append AFTER
+	// it) drops ONLY trailing functions — without this skip every such compile would pay the full rebuild
+	// that loading stdlib newly forced on it. A program that DOES install runtime drops the module from
+	// the MIDDLE
 	// (the runtime sits after it), a survivor's index moves, and the remap correctly runs.
 	if not keptNumberingShifted 'trailingDropsOnly'
 		return

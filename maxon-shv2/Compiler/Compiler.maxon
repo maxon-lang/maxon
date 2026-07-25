@@ -109,12 +109,14 @@ end 'writeTargetIr'
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
 export function loadProject(inputPath FilePath, target Target) returns Project throws CompileError
-	var project = createProject(inputPath, target: target)
+	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it: it is
+	// what later passes tell stdlib source from user source with (`isStdlibFunction`).
+	var project = createProject(inputPath, target: target, stdlibDir: try locateStdlibDir())
 	try loadSourceFiles(project, path: project.rootPath)
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
-	// file (not from a whitelisted module), and an empty user project still fails with
-	// `noSourceFiles` above rather than compiling only the whitelist (see StdlibWhitelist).
-	try loadStdlibWhitelist(project)
+	// file (not from a stdlib module), and an empty user project still fails with `noSourceFiles`
+	// above rather than compiling only stdlib.
+	try loadStdlibSources(project)
 	return project
 end 'loadProject'
 
@@ -181,20 +183,22 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// layout — the `.data` slots must exist before the backend resolves a `globalAddr` against
 	// them. The parser has already emitted the `__mm_alloc` call by this point, so the fact is
 	// available one tier up from where it is consumed.
-	// ⭐ WHITELIST NEUTRALITY. The stdlib whitelist injected Clock into EVERY compile; a Clock this
-	// program never reaches must be invisible to EVERY pre-elimination pass that examines a body —
-	// else its `__gt_now_ns`/`__clock_now_unix_s` calls would install the scheduler + wall-clock
-	// `.data` for a program that reads no clock (`scanRuntimeUsage`), and refuse to compile at all on
-	// wasm/arm64 (`checkCalls`'s E3104 target gate). Computed ONCE here — whitelisted AND unreachable
-	// from `main` — and stored on the project so both consumers read the identical set. User functions
-	// are never in it, so nothing about a non-whitelist program changes. See StdlibWhitelist for why
-	// this is sound (Clock is reached only by direct call, never by a witness or `.rdata` edge).
-	project.whitelistSkipSet = try stdlibWhitelistSkipSet(project, module: module)
+	// ⭐ STDLIB SOURCE THIS PROGRAM CANNOT REACH MUST DECIDE NOTHING ABOUT IT. Stdlib is loaded into
+	// EVERY compile, so a `Clock` no path from `main` reaches must be invisible to every
+	// pre-elimination pass that examines a body — else its `__gt_now_ns`/`__clock_now_unix_s` calls
+	// would install the scheduler + wall-clock `.data` for a program that reads no clock
+	// (`scanRuntimeUsage`), and refuse to compile at all on wasm/arm64 (`checkCalls`'s E3104 target
+	// gate). Computed ONCE here — stdlib AND unreachable from `main`, plus which of the REACHABLE
+	// ones need the x64-windows substrate — and stored on the project so every consumer reads the
+	// identical derivation. USER functions are never in it, so nothing about a stdlib-free program
+	// changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
+	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
+	project.stdlibFacts = try deriveStdlibFacts(project, module: module)
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
 	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
-	var usage = scanRuntimeUsage(module, skip: project.whitelistSkipSet)
+	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable)
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
@@ -390,8 +394,8 @@ function loadSourceDirectory(project Project, dir FilePath) throws CompileError
 	end 'each'
 end 'loadSourceDirectory'
 
-// Read one source file and register its content with the query system. Exported so the stdlib
-// whitelist loads its modules through the identical read+register path a user file takes.
+// Read one source file and register its content with the query system. Exported so stdlib modules
+// are loaded through the identical read+register path a user file takes.
 export function loadOneSourceFile(project Project, path FilePath) throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	fileChanged(project, path: path, content: content)

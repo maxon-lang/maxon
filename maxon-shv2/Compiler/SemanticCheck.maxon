@@ -696,15 +696,29 @@ end 'pushSuccessorPair'
 // ops (never terminators), so only `block.opRefs` is scanned.
 function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary)
 	for func in module.functions 'eachFunc'
-		// A whitelisted stdlib function the program does not reach is dead trusted code that
-		// dead-function elimination will drop before the back end. Its only target-relevant call check
-		// is E3104 — Clock's body reaches `__gt_now_ns`/`__clock_now_unix_s`, x64-only — and firing that
-		// on a wasm/arm64 program that never uses the clock would refuse a compile the whitelist must
-		// leave untouched (see Compiler.maxon / StdlibWhitelist). A REACHABLE Clock on wasm is NOT in
-		// this set, so a program that genuinely reads the clock still gets its E3104.
-		if project.whitelistSkipSet.contains(func.name) 'skipWhitelisted'
+		// A STDLIB function no path from `main` reaches is code dead-function elimination will drop
+		// before the back end, so a check here would report a defect in code the program does not
+		// contain. The one that would fire is E3104 — Clock's body reaches
+		// `__gt_now_ns`/`__clock_now_unix_s`, x64-only — and firing it on a wasm/arm64 program that
+		// never reads a clock would refuse a compile that contains no clock (see Compiler.maxon /
+		// StdlibSource). A REACHABLE Clock on wasm is NOT in this set, so a program that genuinely
+		// reads the clock still gets its E3104 — at the CROSSING call, not here.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
 			continue
-		end 'skipWhitelisted'
+		end 'notInTheProgram'
+		// ⭐ **WHO IS BLAMED FOR A TARGET-UNSUPPORTED CALLEE, DECIDED ONCE PER FUNCTION.** Two conditions,
+		// both constant for a whole function, so both are settled here rather than at every call op:
+		//
+		//   • the TARGET must be one that can refuse anything at all. On x64-windows nothing is, and the
+		//     second question below costs a hash of the function's name — once per function of the whole
+		//     program — so the `and` short-circuits it away on the default target.
+		//   • the function must be USER source. A stdlib body is checked like any other EXCEPT for the
+		//     E3104 target gate: its substrate requirement is reported at the USER call that crossed INTO
+		//     stdlib (`requireTargetSupportsCallee`), and repeating it here would position a second
+		//     diagnostic at `stdlib/Clock.maxon:L:C` — a file the user never opened and cannot change.
+		//     Keyed on stdlib-vs-user source, the fact that stays true as stdlib grows from one module to
+		//     all of it.
+		let blameTargetErrorsHere = not targetHasWin32Substrate(project.target) and not isStdlibFunction(project, func: func)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
@@ -713,7 +727,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
 					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
 					// covered it).
-					call(_, callee, args, argLabels, argRanges) then validatePlainCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, throwsMap: throwsMap, escapeSummary: escapeSummary)
+					call(_, callee, args, argLabels, argRanges) then validatePlainCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, throwsMap: throwsMap, escapeSummary: escapeSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 					// Extended past `branch` to take in the varAccess band and the `stringLiteral` op: a
 					// global's address/load/store and a string literal are not calls and have nothing for
 					// this check to say. Their CALLEE-shaped question — "does this name resolve?" — was
@@ -722,18 +736,23 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					literal to stringLiteral then break 'op'
 					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
 					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
-					tryCall(_, _, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
+					tryCall(_, _, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 					// The error terminators and the panic op read no callee signature.
 					throwError to panicAbort then break 'op'
 					// P1.5-A1: a `functionRef`'s "does this function name resolve?" was answered by the parser
-					// (`emitFunctionRef` checks `returnTypeOf`, else E2004); an `indirectCall`'s callee is a
-					// VALUE, not a name to resolve, and A1 does not type-check its positional arguments. Neither
-					// has anything for this call-validation check to say.
-					functionRef to indirectCall then break 'op'
+					// (`emitFunctionRef` checks `returnTypeOf`, else E2004), and A1 does not type-check the
+					// positional arguments of the indirect call that later consumes it — so signature
+					// validation has nothing to say about either. The TARGET gate does, about the
+					// `functionRef` alone: taking a STDLIB function's ADDRESS reaches its body exactly
+					// as a call does (it is one of the four edges `markMaxonCalleeEdge` counts), so the
+					// crossing is refused at the span where the address is taken. An `indirectCall`'s callee
+					// is a VALUE, whose `functionRef` was already gated here.
+					functionRef(_, funcName) then requireTargetSupportsCallee(project, func: func, opIndex: opIdx, callee: funcName, blameTargetErrorsHere: blameTargetErrorsHere)
+					indirectCall then break 'op'
 					// P1.5-B1a: an async spawn validates its arguments like a plain call AND requires the
 					// callee's PARAMETERS to be GPR scalars (the trampoline passes them through the integer
 					// arg registers); `await`'s operand is a runtime promise handle, not a callee to resolve.
-					asyncCall(_, callee, args, argLabels, argRanges) then validateAsyncCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
+					asyncCall(_, callee, args, argLabels, argRanges) then validateAsyncCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 					// An `await`/`try await`'s operand is a runtime promise handle, not a callee to resolve; the
 					// awaited function was validated at its `async` spawn site. The `try await` throws-compatibility
 					// (E3057 plain-await, E3059 propagate mismatch) is checked by the parser at the await/try token.
@@ -755,8 +774,8 @@ end 'checkCalls'
 // PARAMETERS to be GPR scalars. The argument-VALUE and RESULT scalar checks are the parser's (it holds the
 // pre-resolution types and must type the promise safely); this is the one check the parser cannot make — a
 // callee declared in another file, whose param types only the whole-program `funcSignatures` registry has.
-function validateAsyncCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, escapeSummary ParamEscapeSummary)
-	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
+function validateAsyncCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, escapeSummary ParamEscapeSummary, blameTargetErrorsHere bool)
+	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireAsyncScalarParams(project, func: func, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
@@ -784,8 +803,8 @@ end 'requireAsyncScalarParams'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
-function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary)
-	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
+function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, blameTargetErrorsHere bool)
+	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
 	// error flag would be silently dropped: a throwing array accessor (`__arr_get`/…) would return a dummy 0 on an
 	// out-of-bounds read, and a bare `runProcess` (P1.5 #93) would return its sentinel exit code while dropping the
@@ -821,9 +840,14 @@ end 'validatePlainCall'
 // cleanly slotted call, the per-argument TYPES). The call site's own span
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, escapeSummary ParamEscapeSummary)
+function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, escapeSummary ParamEscapeSummary, blameTargetErrorsHere bool)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
+
+	// ⭐ THE TARGET GATE IS ASKED OF EVERY CALLEE, compiler-owned or not: a `__gt_now_ns` the parser
+	// emitted and a `Clock.nowMs` stdlib declared are the same refusal, and asking it here — once,
+	// before the two kinds part company below — is what keeps them one rule.
+	requireTargetSupportsCallee(project, func: func, opIndex: opIndex, callee: callee, blameTargetErrorsHere: blameTargetErrorsHere)
 
 	// ⭐ A COMPILER-INTERNAL CALL HAS NOTHING FOR THIS CHECK TO SAY. A `__`-prefixed callee
 	// (`__mm_alloc`, `__print_string`, `__str_eq`) is emitted by the PARSER (`Parser.emitRuntimeCall`)
@@ -839,9 +863,9 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 	// makes the premise true is the closed door, not the reservation; do not remove one without the other.
 	//
 	// The ONE thing this pass can say about a compiler-owned callee is which TARGET it can be lowered for,
-	// because it is the first pass that holds both the call's source span and `project.target`.
+	// because it is the first pass that holds both the call's source span and `project.target` — and that
+	// is asked of every callee above, before this return.
 	if isCompilerInternalCallee(callee) 'compilerOwnCall'
-		requireTargetSupportsRuntimeCallee(project, callee: callee, callRange: callRange, filePath: filePath)
 		return
 	end 'compilerOwnCall'
 
@@ -860,8 +884,10 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 end 'validateCall'
 
 // ⭐ **THE RUNTIME ENTRIES A SOURCE-WRITTEN BUILTIN LOWERS TO THAT ONLY x64-WINDOWS CAN PROVIDE.** The
-// exact set `requireTargetSupportsRuntimeCallee` refuses elsewhere (E3104), and the deliberate counterpart
-// of `targetHasWin32Substrate` below: one says what a CALLEE needs, the other what a TARGET has.
+// exact set `requireTargetSupportsCallee` refuses below (E3104), and the deliberate counterpart of
+// `targetHasWin32Substrate` below it: one says what a CALLEE needs, the other what a TARGET has. It is
+// also what `stdlibSubstrateEntries` ASKS to seed its fixpoint — that fixpoint propagates this answer
+// through the stdlib call graph rather than keeping a second list of entries to drift from it.
 //
 //   • `__gt_now_ns` — `osReadClock`'s QueryPerformanceCounter/Frequency (`__Builtins.currentTimeNanos`,
 //     `currentTimeMs`, and every `Clock.*` written against them);
@@ -890,41 +916,78 @@ end 'validateCall'
 // panic they die of is `osReadClock`/`osFreePages`, the green-thread SCHEDULER's substrate that a subprocess
 // drags in, not a subprocess-specific op. Bringing them in is the same piece of work as the async op kinds
 // and is not bolted on here; nothing this rung makes reachable calls them on another target.
-function calleeNeedsWin32Substrate(callee ByteArray) returns bool
+export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
+
+// The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote `sleep(1)` or
+// `__Builtins.currentTimeMs()`, never `__gt_sleep`, so there is no name of theirs to quote back at them —
+// the entry is named later in the same sentence, which is where it belongs. A stdlib function is the
+// opposite case and IS quoted: its name is exactly what the user wrote.
+let TargetUnsupportedUnnamedSubject = "it"
 
 // ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN.**
 //
 // The x64-windows-only ops behind these entries — `osReadClock`, `osReadWallClock`, `osSleepMs` — are ones
-// `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. Each builtin lowers to ONE runtime entry,
-// so the CALLEE NAME is the whole test, and this is where a program compiled for another target is refused.
+// `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. TWO kinds of callee reach them, and this is
+// the one gate both go through:
+//
+//   • a COMPILER-OWNED runtime entry the parser emitted (`sleep(1)` → `__gt_sleep`). Each builtin lowers to
+//     ONE entry, so the callee name is the whole test.
+//   • a STDLIB function whose body reaches one, directly or through other stdlib functions
+//     (`Clock.elapsedMs` → `Clock.nowMs` → `__gt_now_ns`). `stdlibSubstrateEntries` computed which, and
+//     which entry each reaches; this is where that fact becomes a refusal.
+//
+// ⚠ **THE SECOND KIND IS BLAMED AT THE CROSSING, WHICH IS THE POINT.** Stdlib source is compiled as part of
+// the program, so refusing it inside its own body positions the error at an absolute
+// `…/stdlib/Clock.maxon:19:10` — a file the user never opened, at a line they cannot change, for a choice
+// they made at a call site somewhere else. `checkCalls` therefore silences the gate inside STDLIB source
+// (`blameTargetErrorsHere`) and it fires instead at the first call from USER code into stdlib. A user's own
+// helper is user code, so `main → myHelper → Clock.nowMs` is blamed inside `myHelper`, at code they can act
+// on. This gets MORE important as stdlib grows: a program built on `Map` and `String` crosses into stdlib on
+// nearly every line, and every leaf down there ends in an intrinsic.
 //
 // ⚠ It replaces a PANIC, not a diagnostic: before it, such a program crashed the compiler three tiers down
 // (`StdToWasm.maxon: 'osReadClock' is x64-windows only`) with no file and no line. Those panics stay as
 // BACKSTOPS for a compiler bug that gets one past this gate; they are no longer the user-facing rejection.
 //
-// ⚠ **IT IS REACHABILITY-BLIND FOR USER CODE, AND REACHABILITY-AWARE FOR WHITELISTED STDLIB** — an asymmetry
-// worth stating because the next widening of the whitelist turns one into the other. A `sleep(1)` inside a
+// ⚠ **IT IS REACHABILITY-BLIND FOR USER CODE, AND REACHABILITY-AWARE FOR STDLIB SOURCE** — an asymmetry
+// worth stating because retiring a bare-name builtin turns one into the other. A `sleep(1)` inside a
 // function `main` never calls is still refused for wasm (measured), for the same reason a type error in an
 // unreached function is: this pass visits every function, and dead-function elimination runs two tiers later.
-// A whitelisted stdlib body is the ONE exemption (`checkCalls`'s `whitelistSkipSet`), because an unused
-// whitelisted module must leave a compile byte-identical. Clock shows both halves TODAY: an unreached
-// `Clock.nowMs()` compiles clean for wasm (its `__gt_now_ns` sits in a skipped body) while a reached one is
-// refused. So the day a module is whitelisted and the bare builtin it shadows is retired, an unreached call
-// to that name starts COMPILING for wasm again — the runtime entry moves out of user code and into a skipped
-// body. A real behaviour change to decide on deliberately, not to discover.
-function requireTargetSupportsRuntimeCallee(project Project, callee ByteArray, callRange SourceRange, filePath FilePath)
-	if not calleeNeedsWin32Substrate(callee) 'targetNeutralRuntime'
+// STDLIB source is the ONE exemption, because a stdlib module the program does not use must leave the
+// compile byte-identical: an unreachable stdlib function is in `stdlibFacts.unreachable`, so it has no
+// `substrateEntries` entry and no crossing to it can be refused. Clock shows both halves TODAY: a
+// `Clock.nowMs()` in code `main` never calls compiles clean for wasm while a reached one is refused. So the
+// day a bare-name builtin is retired in favour of the stdlib declaration that shadows it, an unreached call
+// to that name starts COMPILING for wasm again — the runtime entry moves out of user code and into stdlib.
+// A real behaviour change to decide on deliberately, not to discover.
+function requireTargetSupportsCallee(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, blameTargetErrorsHere bool)
+	// ⚠ `blameTargetErrorsHere` already carries BOTH preconditions — the target can refuse something, and
+	// this function is where such a refusal belongs — because both are constant per function and this runs
+	// at every call op of the program. Do not re-ask the target here: that would be one fact tested in two
+	// places, and the cheap one is the one the caller already settled.
+	if not blameTargetErrorsHere 'nothingRefusableHere'
 		return
-	end 'targetNeutralRuntime'
+	end 'nothingRefusableHere'
 
-	if targetHasWin32Substrate(project.target) 'supported'
+	if calleeNeedsWin32Substrate(callee) 'compilerOwnedEntry'
+		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: TargetUnsupportedUnnamedSubject, entry: callee)
 		return
-	end 'supported'
+	end 'compilerOwnedEntry'
 
-	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "this construct is x64-windows only at this rung: it lowers to the runtime entry '{String.from(callee)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: filePath)
-end 'requireTargetSupportsRuntimeCallee'
+	if let entry = try project.stdlibFacts.substrateEntries.get(callee) 'stdlibCrossing'
+		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: "'{String.from(callee)}'", entry: entry)
+	end 'stdlibCrossing'
+end 'requireTargetSupportsCallee'
+
+// The one wire format of E3104, so the two subjects cannot drift into two spellings of one rejection. The
+// span is materialized HERE rather than at the gate because `SourceRangeTable.get` builds a heap
+// `SourceRange` and this is the cold path — the gate itself runs over every call op of every function.
+function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex OpIndex, subject String, entry ByteArray)
+	let callRange = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "this construct is x64-windows only at this rung: {subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+end 'reportTargetUnsupportedCallee'
 
 // Does `target` have the Win32 import table the green-thread/clock substrate is built on? x64-windows alone:
 // x64-linux takes the syscall route (which every one of these ops rejects), and arm64/wasm have no lowering
