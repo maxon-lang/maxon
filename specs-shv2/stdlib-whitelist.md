@@ -86,8 +86,10 @@ A whitelisted module must declare no name a user program declares and no builtin
   The shadowing is not the whitelist's doing and predates it: a user file declaring its own
   `function sleep` already compiles with the declaration silently unlinked, no diagnostic. The
   repair is to delete the bare-name builtin and let the whitelisted declaration be authoritative —
-  its own rung, because it moves every committed golden that calls `sleep` (~13 across 6 specs),
-  changes `async-sleep.float-arg-rejected`'s pinned stderr, and must first answer the gap below.
+  its own rung, because it moves every committed golden that calls `sleep` (counted: 15 goldens
+  across 7 specs — `async-sleep`, `async-promise-drop`, `async-stack-growth`, `async-subprocess`,
+  `builtins-clock`, `spawn-read-line`, `streaming-subprocess`), changes
+  `async-sleep.float-arg-rejected`'s pinned stderr, and must first answer the gap below.
   **The rule: do not whitelist a module whose function name a bare builtin already claims. Retire
   the builtin first.**
 
@@ -103,9 +105,15 @@ body bottoms out in something target-gated or otherwise refusable — which is e
 leaf is for; every module in the queue behind Clock ends in a `__Builtins.*` intrinsic. Clock is
 only spared today because its callers are `Clock.nowMs()`-shaped, so `E3104`'s span already lands
 inside `stdlib/Clock.maxon` on a non-x64 target and no test compiles a Clock program for one.
-Whitelisting Sleep would have made it user-visible on the first `sleep(1)` compiled for wasm. A
-diagnostic raised in whitelisted source needs a caller-side anchor before the whitelist grows a
-module users reach through a target-gated leaf.
+
+Which route makes the gap user-visible was measured rather than assumed. With the Sleep entry
+temporarily added, a plain `sleep(1)` compiled for wasm is still anchored at the **user's** span —
+the bare builtin claims the call site, so the whitelisted body is never entered. What reaches the
+gap is the second route above: `let f = sleep` takes the whitelisted declaration's address, and
+`f(5)` for wasm reports `E3104` at `stdlib/Sleep.maxon:6:2`, a file the user never opened. Retiring
+the bare-name builtin sends the plain call down that route too, turning the gap from exotic into the
+common case. A diagnostic raised in whitelisted source needs a caller-side anchor before the
+whitelist grows a module users reach through a target-gated leaf.
 
 ## Tests
 

@@ -1449,8 +1449,9 @@ let SqrtBuiltinName = b"sqrt"
 //
 // `__Builtins` is the compiler's builtin TYPE, and every leaf of the stdlib bottoms out in a static call on
 // it (`stdlib/Clock.maxon`'s `nowMs`/`nowNanos`/`nowUnixSeconds` are three one-line wrappers around the
-// three names below). It reaches `parseCallNamed` as an ORDINARY QUALIFIED CALLEE — the mangled bytes
-// `__Builtins.currentTimeMs` — which is exactly why the bare-name builtin table above can never match one,
+// first three names below; `stdlib/Sleep.maxon`'s `sleep` is a fourth, around the fourth). It reaches
+// `parseCallNamed` as an ORDINARY QUALIFIED CALLEE — the mangled bytes `__Builtins.currentTimeMs` —
+// which is exactly why the bare-name builtin table above can never match one,
 // and why this table is a separate arm rather than three more rows in it.
 //
 // Every row is a NAME plus its lowering, so "which intrinsics exist" and "what each one becomes" are one
@@ -7225,7 +7226,8 @@ export type Parser
 			// intrinsic allocates nothing, so a value-returning one written here simply has its result
 			// discarded, exactly as every other bare-call statement's is.
 			//
-			// This is the position `stdlib/Sleep.maxon` needs (whitelist entry #2): its whole body is
+			// This is the position `stdlib/Sleep.maxon` needs — the module the whitelist is NOT yet grown to
+			// (see `StdlibWhitelist.maxon`'s bare-builtin collision rule): its whole body is
 			// `__Builtins.sleep(milliseconds)` on a line of its own. Until this arm existed, the three
 			// recognized intrinsics all RETURNED a value, so every one of them arrived in expression
 			// position and the recognizer was never asked from here — a void intrinsic died as
@@ -19644,7 +19646,8 @@ export type Parser
 			end 'currentUnixTimeSeconds'
 
 			// ⭐ THE QUALIFIED SPELLING OF `sleep`, ROUTED THROUGH THE BARE ONE'S EMIT — not a second
-			// mapping from "sleep" to `__gt_sleep`. `stdlib/Sleep.maxon` (whitelist entry #2) is written
+			// mapping from "sleep" to `__gt_sleep`. `stdlib/Sleep.maxon` — not yet whitelisted, and the reason
+			// is in `StdlibWhitelist.maxon` — is written
 			// against `__Builtins.sleep(ms)`, and the bare-name builtin above is the same suspension with
 			// the same argument rule; one decider means the two spellings cannot come to disagree about
 			// the duration's type, the void result, or which scheduler entry parks the green thread.
@@ -20784,6 +20787,14 @@ export type Parser
 	// to disagree about which qualifier belongs to the compiler, and the failure would be silent in the worst
 	// direction: a statement accepted here and then rejected as an unknown intrinsic three functions later.
 	//
+	// ⚠ **THE NAME IS BUILT BY THE SAME EXPRESSION `parseQualifiedCall` USES, `qualifiedCallBaseName` INCLUDED**,
+	// and that call is not decoration. Deriving the callee here as a bare `qualifiedMethodName(baseToken, …)`
+	// agrees with the real parse only for as long as `qualifiedCallBaseName` is the identity on every name that
+	// can reach this shape — true today (it rewrites a GENERIC ALIAS to its base struct, and no user name may
+	// wear the `__` prefix), and exactly the kind of premise that quietly stops holding. Two derivations of one
+	// name is the duplication this predicate was written to avoid, so it makes the one call rather than
+	// re-deriving a name that merely happens to match.
+	//
 	// The mangling allocates, and it is on a COLD path by construction: the shape is asked only after every
 	// cheaper statement form has declined, and `methodCallsAt` has already claimed every qualified shape whose
 	// base is a value in scope — so what reaches here is a static-call-shaped statement, which is either an
@@ -20793,7 +20804,7 @@ export type Parser
 			return false
 		end 'notAQualifiedCall'
 
-		return isBuiltinsIntrinsicCallee(qualifiedMethodName(self.tokenAt(index).value, methodName: self.tokenAt(index + 2).value))
+		return isBuiltinsIntrinsicCallee(qualifiedMethodName(self.qualifiedCallBaseName(self.tokenAt(index).value), methodName: self.tokenAt(index + 2).value))
 	end 'builtinsIntrinsicCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:

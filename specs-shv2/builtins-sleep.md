@@ -11,7 +11,9 @@ category: system
 
 `__Builtins` is the compiler's builtin TYPE, whose static methods are INTRINSICS rather than
 functions any file declares (see `builtins-clock.md` for the three clock members). `sleep` is the
-fourth member, and the one `stdlib/Sleep.maxon` — the whitelist's second entry — is written against:
+fourth member, and the one `stdlib/Sleep.maxon` is written against — a module the compiler can now
+compile unmodified but which the whitelist is deliberately NOT grown to, because the bare-name
+`sleep` builtin already claims the name (`stdlib-whitelist.md` states the rule and the measurement):
 
 ```text
 export function sleep(milliseconds Milliseconds)
@@ -54,6 +56,12 @@ used to be:
 ```text
 panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung
 ```
+
+The refusal is a SEMANTIC CHECK, so it does not care whether the call is reachable: a `sleep` written in
+a function `main` never calls is refused for wasm just as a type error in an unreached function is
+reported. That is a narrowing against the previous rung, where the same program compiled because
+dead-function elimination — which runs two tiers later — removed the call before any backend saw it. It is
+pinned below so that the reverse change is a deliberate one.
 
 ## Tests
 
@@ -151,6 +159,27 @@ a panic from inside the wasm backend.
 function main() returns ExitCode
 	__Builtins.sleep(1)
 	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-sleep.rejected-on-wasm-when-unreached -->
+<!-- targets: wasm32-wasi -->
+The gate is REACHABILITY-BLIND for user code: `napper` is never called, yet its `sleep` is still refused.
+`SemanticCheck` visits every function and dead-function elimination runs two tiers later, so this is the
+same rule that reports a type error in an unreached function. Pinned because the whitelist's own exemption
+(`checkCalls` skips an unreached whitelisted stdlib body) points the other way, and the rung that retires
+the bare-name `sleep` builtin moves this call INTO such a body — which would silently flip this program
+back to compiling.
+```maxon
+function napper()
+	sleep(1)
+end 'napper'
+
+function main() returns ExitCode
+	return 4
 end 'main'
 ```
 ```maxoncstderr

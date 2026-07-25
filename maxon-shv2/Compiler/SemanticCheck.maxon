@@ -885,8 +885,11 @@ end 'validateCall'
 // ⚠ **STILL OUTSIDE IT: `async`/`await`.** Their `__gt_*` calls do not exist until lowering — the same
 // blind spot `scanRuntimeUsage` documents — so no callee-name test can reach them and gating them honestly
 // means gating the async OP KINDS, which is its own piece of work. `runProcess(cmd)` and the
-// streaming-subprocess builtins are outside it too, for a different reason: their x64-windows-only substrate
-// is the SUBPROCESS one, and nothing this rung makes reachable calls them on another target.
+// streaming-subprocess builtins are outside it too: their runtime entries (`__gt_process_*`) are not named
+// here, so on another target they still die as a BACKEND PANIC rather than a diagnostic — MEASURED, and the
+// panic they die of is `osReadClock`/`osFreePages`, the green-thread SCHEDULER's substrate that a subprocess
+// drags in, not a subprocess-specific op. Bringing them in is the same piece of work as the async op kinds
+// and is not bolted on here; nothing this rung makes reachable calls them on another target.
 function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
@@ -900,6 +903,17 @@ end 'calleeNeedsWin32Substrate'
 // ⚠ It replaces a PANIC, not a diagnostic: before it, such a program crashed the compiler three tiers down
 // (`StdToWasm.maxon: 'osReadClock' is x64-windows only`) with no file and no line. Those panics stay as
 // BACKSTOPS for a compiler bug that gets one past this gate; they are no longer the user-facing rejection.
+//
+// ⚠ **IT IS REACHABILITY-BLIND FOR USER CODE, AND REACHABILITY-AWARE FOR WHITELISTED STDLIB** — an asymmetry
+// worth stating because the next widening of the whitelist turns one into the other. A `sleep(1)` inside a
+// function `main` never calls is still refused for wasm (measured), for the same reason a type error in an
+// unreached function is: this pass visits every function, and dead-function elimination runs two tiers later.
+// A whitelisted stdlib body is the ONE exemption (`checkCalls`'s `whitelistSkipSet`), because an unused
+// whitelisted module must leave a compile byte-identical. Clock shows both halves TODAY: an unreached
+// `Clock.nowMs()` compiles clean for wasm (its `__gt_now_ns` sits in a skipped body) while a reached one is
+// refused. So the day a module is whitelisted and the bare builtin it shadows is retired, an unreached call
+// to that name starts COMPILING for wasm again — the runtime entry moves out of user code and into a skipped
+// body. A real behaviour change to decide on deliberately, not to discover.
 function requireTargetSupportsRuntimeCallee(project Project, callee ByteArray, callRange SourceRange, filePath FilePath)
 	if not calleeNeedsWin32Substrate(callee) 'targetNeutralRuntime'
 		return

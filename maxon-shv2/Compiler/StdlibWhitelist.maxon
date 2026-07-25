@@ -71,8 +71,10 @@
 //     `function sleep` already compiles with the declaration silently unlinked, no diagnostic
 //     (measured on plain user code). The repair is to delete the bare-name builtin and let the
 //     whitelisted declaration be authoritative — its own rung, because it moves every committed
-//     golden that calls `sleep` (~13 across 6 specs), changes `async-sleep.float-arg-rejected`'s
-//     pinned stderr, and must first answer the diagnostic-attribution gap below.
+//     golden that calls `sleep` (COUNTED: 15 goldens across 7 specs — async-sleep, async-promise-drop,
+//     async-stack-growth, async-subprocess, builtins-clock, spawn-read-line, streaming-subprocess),
+//     changes `async-sleep.float-arg-rejected`'s pinned stderr, and must first answer the
+//     diagnostic-attribution gap below.
 //     ⇒ THE RULE: do not whitelist a module whose function name a bare builtin already claims.
 //     Retire the builtin first.
 //
@@ -87,10 +89,19 @@
 // what a stdlib leaf is FOR — every module in the queue behind Clock ends in a `__Builtins.*`
 // intrinsic. Clock is only spared today because its callers are `Clock.nowMs()`-shaped, so
 // `SemanticCheck`'s E3104 span already lands inside `stdlib/Clock.maxon` on a non-x64 target and
-// no test compiles a Clock program for one. Sleep would have made it user-visible on the first
-// `sleep(1)` compiled for wasm. Whoever retires the bare-name builtins owns this: a diagnostic
-// raised in whitelisted source needs a caller-side anchor (or an explicit "…, required by <call
-// site>" note) before the whitelist grows a module users reach through a target-gated leaf.
+// no test compiles a Clock program for one.
+//
+// ⚠ WHICH ROUTE MAKES IT USER-VISIBLE WAS MEASURED, because guessing it wrong sends the next rung
+// after the wrong repro. With the entry temporarily added, a plain `sleep(1)` compiled for wasm is
+// STILL anchored at the USER's span — the bare builtin claims the call site, so the whitelisted body
+// is never entered. What reaches the gap is the SECOND route named above: `let f = sleep` takes the
+// whitelisted declaration's address, and `f(5)` for wasm reports E3104 at `stdlib/Sleep.maxon:6:2`,
+// a file the user never opened. Once the bare-name builtin is RETIRED, the plain call takes that
+// route too and the gap becomes the common case rather than the exotic one.
+//
+// Whoever retires the bare-name builtins owns this: a diagnostic raised in whitelisted source needs a
+// caller-side anchor (or an explicit "…, required by <call site>" note) before the whitelist grows a
+// module users reach through a target-gated leaf.
 
 // The directory name walked for, and a generous bound on how far up the tree to look. A
 // checkout is shallow (`<root>/maxon-shv2/.maxon/maxon-shv2.exe` is three levels under the
