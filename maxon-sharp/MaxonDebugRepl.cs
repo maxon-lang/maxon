@@ -36,14 +36,16 @@ internal static class MaxonDebugRepl {
 
   // ---- Interactive REPL ----
 
-  public static int RunInteractive(string exePath, IReadOnlyList<string> targetArgs, TimeSpan? stopTimeout) {
+  public static int RunInteractive(string exePath, IReadOnlyList<string> targetArgs, TimeSpan? stopTimeout,
+      IReadOnlyDictionary<string, string>? targetEnv) {
     TryEnableUtf8();
     var sidecar = LoadSidecar(exePath);
     if (sidecar == null) return 1;
 
     MaxonDebugger dbg;
     try {
-      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, stopTimeout: stopTimeout);
+      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, stopTimeout: stopTimeout,
+        targetEnv: targetEnv);
     } catch (DebuggerException ex) {
       Console.Error.WriteLine($"maxon debug: {ex.Message}");
       return 1;
@@ -140,6 +142,12 @@ internal static class MaxonDebugRepl {
           break;
         case DebugCommand.Backtrace:
           DoBacktrace();
+          break;
+        case DebugCommand.Threads:
+          RenderThreadsText(dbg.ListGreenThreads(), Console.Out);
+          break;
+        case DebugCommand.GtBacktrace:
+          DoGtBacktrace(rest);
           break;
         case DebugCommand.Print:
           DoPrint(rest);
@@ -280,6 +288,27 @@ internal static class MaxonDebugRepl {
       RenderBacktraceText(dbg.Backtrace(), Console.Out);
     }
 
+    /// A per-green-thread backtrace always RE-LISTS first: the id the user typed is only meaningful
+    /// against a current listing, and the record index the engine posts is only meaningful against the
+    /// array the agent last published. Listing here keeps those two in step without the user having to
+    /// remember to type `threads` first.
+    private void DoGtBacktrace(string rest) {
+      if (!uint.TryParse(rest.Trim(), out var id) || id == 0) {
+        Console.Out.WriteLine($"Usage: {GtBacktraceUsageText}");
+        return;
+      }
+
+      var list = dbg.ListGreenThreads();
+      if (GtListUnavailableReason(list.Status) is { } reason) {
+        Console.Out.WriteLine($"gt-backtrace: {reason}.");
+        return;
+      }
+
+      var bt = dbg.GtBacktrace((int)id);
+      RenderFramesText($"green thread #{id}", GtBacktraceUnavailableReason(bt.Status), bt.Frames,
+        Console.Out);
+    }
+
     private void DoPrint(string rest) {
       if (_stop is not { } report) {
         Console.Out.WriteLine(NotStoppedText);
@@ -395,6 +424,8 @@ internal static class MaxonDebugRepl {
       Console.Out.WriteLine("  finish                      run until the current function returns");
       Console.Out.WriteLine("  until <line>          (u)   run until a line in the current function (or it returns)");
       Console.Out.WriteLine("  backtrace             (bt)  show the stopped call stack");
+      Console.Out.WriteLine("  threads               (gts) list the live green threads, with the stop marked");
+      Console.Out.WriteLine("  gt-backtrace <id>     (gtbt) backtrace one green thread (parked ones only)");
       Console.Out.WriteLine("  locals                      list the stopped function's locals with values");
       Console.Out.WriteLine("  print <expr>          (p)   render a value; dotted paths navigate (person.home.name)");
       Console.Out.WriteLine("  quit                  (q)   end the session");
@@ -424,7 +455,7 @@ internal static class MaxonDebugRepl {
   }
 
   public static int RunBatch(string exePath, IReadOnlyList<string> targetArgs, string commandsSpec,
-      TimeSpan? stopTimeout) {
+      TimeSpan? stopTimeout, IReadOnlyDictionary<string, string>? targetEnv) {
     TryEnableUtf8();
     var sidecar = LoadSidecar(exePath);
     if (sidecar == null) { EmitError("no debug info found for the target"); return 1; }
@@ -438,7 +469,7 @@ internal static class MaxonDebugRepl {
     try {
       // Target stdout -> the driver's STDERR so this mode's JSON stream on stdout stays clean.
       dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, targetStdout: Console.Error,
-        stopTimeout: stopTimeout);
+        stopTimeout: stopTimeout, targetEnv: targetEnv);
     } catch (DebuggerException ex) {
       EmitError(ex.Message);
       return 1;
@@ -497,6 +528,12 @@ internal static class MaxonDebugRepl {
         break;
       case DebugCommand.Backtrace:
         EmitBacktrace(dbg.Backtrace());
+        break;
+      case DebugCommand.Threads:
+        EmitThreads(dbg.ListGreenThreads());
+        break;
+      case DebugCommand.GtBacktrace:
+        BatchGtBacktrace(dbg, rest);
         break;
       case DebugCommand.Locals:
         BatchLocals(dbg, session.CurrentStop);
@@ -663,6 +700,24 @@ internal static class MaxonDebugRepl {
     session.CurrentStop = null;
     session.Finished = true;
     session.Incomplete = true;
+  }
+
+  /// The batch twin of <see cref="Session.DoGtBacktrace"/>, and it re-lists for the same reason: an id
+  /// only means something against a current listing, so a `--commands` script that asks for one without
+  /// a preceding `threads` still gets a correct answer rather than an empty one.
+  private static void BatchGtBacktrace(MaxonDebugger dbg, string rest) {
+    if (!uint.TryParse(rest.Trim(), out var id) || id == 0) {
+      EmitError($"gt-backtrace needs a green-thread id ({GtBacktraceUsageText})");
+      return;
+    }
+
+    var list = dbg.ListGreenThreads();
+    if (GtListUnavailableReason(list.Status) is { } reason) {
+      EmitError(reason);
+      return;
+    }
+
+    EmitGtBacktrace((int)id, dbg.GtBacktrace((int)id));
   }
 
   private static void BatchLocals(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
@@ -852,22 +907,38 @@ internal static class MaxonDebugRepl {
     _ => throw new InvalidOperationException($"Unhandled backtrace status {status}"),
   };
 
-  private static void RenderBacktraceText(MaxonDebugger.BacktraceResult bt, TextWriter w) {
-    if (BacktraceUnavailableReason(bt.Status) is { } reason) {
-      w.WriteLine($"  backtrace: {reason}.");
+  private static void RenderBacktraceText(MaxonDebugger.BacktraceResult bt, TextWriter w) =>
+    RenderFramesText("backtrace", BacktraceUnavailableReason(bt.Status), bt.Frames, w);
+
+  /// <summary>
+  /// The frame-list TEXT face, shared by the stopped-thread backtrace and the per-green-thread one so a
+  /// frame is worded identically whichever walk produced it. <paramref name="unavailableReason"/> is
+  /// null when the walk succeeded — an EMPTY frame list is a real answer (a thread stopped at entry, or
+  /// one that has never run) and says so rather than borrowing the unavailable wording.
+  /// </summary>
+  private static void RenderFramesText(string label, string? unavailableReason,
+      IReadOnlyList<MaxonDebugger.Frame> frames, TextWriter w) {
+    if (unavailableReason is { } reason) {
+      w.WriteLine($"  {label}: {reason}.");
       return;
     }
-    if (bt.Frames.Count == 0) {
-      w.WriteLine("  backtrace: (no stack — stopped at entry)");
+    if (frames.Count == 0) {
+      w.WriteLine($"  {label}: (no stack)");
       return;
     }
-    w.WriteLine("  backtrace:");
-    foreach (var f in bt.Frames) {
-      var loc = f.Location;
-      var where = loc.HasLine ? $"{loc.File}:{loc.Line}" : "<no line>";
-      var fn = loc.HasFunction ? loc.Function : "<unknown>";
-      w.WriteLine($"    #{f.Index}  {fn}  at {where}  [0x{f.CodeOffset:x}]");
-    }
+    w.WriteLine($"  {label}:");
+    foreach (var f in frames) w.WriteLine($"    #{f.Index}  {FrameText(f)}");
+  }
+
+  /// One frame as a line of prose — the ONE spelling of "function at file:line [offset]", so the stop
+  /// window, a backtrace and a green-thread top frame cannot describe the same frame three ways.
+  private static string FrameText(MaxonDebugger.Frame f) => LocationText(f.Location) + $"  [{HexOffset(f.CodeOffset)}]";
+
+  /// A resolved location as prose, honest about each half it could not resolve.
+  private static string LocationText(MaxonDebugger.SymLocation loc) {
+    var where = loc.HasLine ? $"{loc.File}:{loc.Line}" : "<no line>";
+    var fn = loc.HasFunction ? loc.Function : "<unknown>";
+    return $"{fn}  at {where}";
   }
 
   // ---- Shared renderers: JSON ----
@@ -902,29 +973,171 @@ internal static class MaxonDebugRepl {
     WriteBacktraceArray(w, "frames", bt);
   });
 
-  private static void WriteBacktraceArray(Utf8JsonWriter w, string name, MaxonDebugger.BacktraceResult bt) {
-    // An unavailable backtrace is null + a reason, NEVER an empty array — a consumer must not read
-    // "unsupported" or "unacked" as "a real, empty stack."
-    if (BacktraceUnavailableReason(bt.Status) is { } reason) {
+  private static void WriteBacktraceArray(Utf8JsonWriter w, string name, MaxonDebugger.BacktraceResult bt) =>
+    WriteFramesOrReason(w, name, BacktraceUnavailableReason(bt.Status), bt.Frames);
+
+  /// <summary>
+  /// The frame-list JSON face, shared by every producer of frames. An unavailable list is null + a
+  /// reason, NEVER an empty array — a consumer must not read "unsupported", "unacked" or "running on a
+  /// processor" as "a real, empty stack."
+  /// </summary>
+  private static void WriteFramesOrReason(Utf8JsonWriter w, string name, string? unavailableReason,
+      IReadOnlyList<MaxonDebugger.Frame> frames) {
+    if (unavailableReason is { } reason) {
       w.WriteNull(name);
       w.WriteString($"{name}Unavailable", reason);
       return;
     }
     w.WriteStartArray(name);
-    foreach (var f in bt.Frames) {
+    foreach (var f in frames) {
       w.WriteStartObject();
       w.WriteNumber("frame", f.Index);
-      var loc = f.Location;
-      if (loc.HasFunction) w.WriteString("function", loc.Function);
-      if (loc.HasLine) {
-        w.WriteString("file", loc.File);
-        w.WriteNumber("line", loc.Line);
-      }
+      WriteLocationFields(w, f.Location);
       w.WriteString("offset", HexOffset(f.CodeOffset));
       w.WriteEndObject();
     }
     w.WriteEndArray();
   }
+
+  /// A resolved location's JSON fields, each omitted when it could not be resolved — the ONE spelling,
+  /// so a frame and a green thread's top frame carry the same keys.
+  private static void WriteLocationFields(Utf8JsonWriter w, MaxonDebugger.SymLocation loc) {
+    if (loc.HasFunction) w.WriteString("function", loc.Function);
+    if (loc.HasLine) {
+      w.WriteString("file", loc.File);
+      w.WriteNumber("line", loc.Line);
+    }
+  }
+
+  // ---- Shared renderers: green threads (P4d-2a) ----
+
+  /// The reason a green-thread listing produced nothing, or null when it succeeded — stated ONCE so the
+  /// text and JSON faces cannot tell the user to rebuild when the target merely exited.
+  private static string? GtListUnavailableReason(MaxonDebugger.GtListStatus status) => status switch {
+    MaxonDebugger.GtListStatus.Ok => null,
+    MaxonDebugger.GtListStatus.UnsupportedByAgent =>
+      "green threads are not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.GtListStatus.NotAcknowledged =>
+      "threads command not acknowledged (the target may have exited)",
+    _ => throw new InvalidOperationException($"Unhandled green-thread list status {status}"),
+  };
+
+  /// The reason a per-green-thread backtrace produced no frames, or null when it succeeded.
+  private static string? GtBacktraceUnavailableReason(MaxonDebugger.GtBacktraceStatus status) => status switch {
+    MaxonDebugger.GtBacktraceStatus.Ok => null,
+    MaxonDebugger.GtBacktraceStatus.UnsupportedByAgent =>
+      "green threads are not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.GtBacktraceStatus.UnknownId =>
+      "no green thread with that id in the current listing (run 'threads' first)",
+    MaxonDebugger.GtBacktraceStatus.RunningOnCpu =>
+      "that green thread is running on a processor, so it has no stable stack to walk",
+    MaxonDebugger.GtBacktraceStatus.Unavailable =>
+      "the agent produced no trace for that green thread (it completed while the target was parked, "
+      + "or the target exited)",
+    _ => throw new InvalidOperationException($"Unhandled green-thread backtrace status {status}"),
+  };
+
+  /// The runtime's own state word for a green thread. Reported ALONGSIDE the on-cpu fact rather than
+  /// folded into it: `running` here means the scheduler last set it running, which a PARKED thread still
+  /// reads, so collapsing the two would turn an honest pair of facts into a wrong one.
+  private static string GreenThreadStatusText(long status) => status switch {
+    Compiler.Ir.Runtime.GtLayout.GtStatusReady => "ready",
+    Compiler.Ir.Runtime.GtLayout.GtStatusRunning => "running",
+    Compiler.Ir.Runtime.GtLayout.GtStatusCompleted => "completed",
+    Compiler.Ir.Runtime.GtLayout.GtStatusWaiting => "waiting",
+    _ => $"status#{status}",
+  };
+
+  /// Where a green thread is with respect to a PROCESSOR — the fact that decides whether its stack can
+  /// be walked. Three words, because "the stop" and "running somewhere else" are as different as
+  /// running and parked.
+  private static string GreenThreadCpuText(MaxonDebugger.GreenThread t) =>
+    t.IsStopped ? "stopped" : t.OnCpu ? "on-cpu" : "parked";
+
+  /// A green thread's display name: its entry function, or which processor's scheduler thread it is.
+  private static string GreenThreadName(MaxonDebugger.GreenThread t) =>
+    t.IsSchedulerThread ? $"<scheduler P{t.ProcId}>"
+    : t.EntryFunction.Length > 0 ? t.EntryFunction
+    : "<unknown>";
+
+  /// <summary>
+  /// Why a green thread has no top frame, or null when it has one. THREE causes, none of them a failure,
+  /// and the stopped one has to be tested FIRST: the stopped thread is also on-cpu, so an on-cpu-first
+  /// test told the user their own stopped thread was "running on a processor" — which is exactly the
+  /// wrong answer, since the one thing that thread is not doing is running. It happens at the entry stop,
+  /// where the agent has parked before publishing any stop event and so has no PC to report.
+  /// </summary>
+  private static string? TopFrameUnavailableReason(MaxonDebugger.GreenThread t) =>
+    t.TopKind != MaxonDebugger.GtTopFrame.None ? null
+    : t.IsStopped ? "stopped before any frame was published (the entry stop)"
+    : t.OnCpu ? "running on a processor — no stable stack to walk"
+    : "not started — no frames yet";
+
+  private static void RenderThreadsText(MaxonDebugger.GreenThreadList list, TextWriter w) {
+    if (GtListUnavailableReason(list.Status) is { } reason) {
+      w.WriteLine($"threads: {reason}.");
+      return;
+    }
+
+    w.WriteLine($"green threads ({list.Threads.Count}):");
+    int nameWidth = 0;
+    foreach (var t in list.Threads) nameWidth = Math.Max(nameWidth, GreenThreadName(t).Length);
+
+    foreach (var t in list.Threads) {
+      var marker = t.IsStopped ? CurrentLineMarker : " ";
+      var where = TopFrameUnavailableReason(t) is { } why ? why : LocationText(t.TopLocation);
+      w.WriteLine($"  {marker} #{t.Id}  {GreenThreadName(t).PadRight(nameWidth)}  "
+        + $"{GreenThreadStatusText(t.Status),-9} {GreenThreadCpuText(t),-7}  {where}");
+    }
+
+    // A truncated list is a WRONG ANSWER unless it says so — the agent's array is bounded, and a reader
+    // must not take a short list for the whole set.
+    if (list.Truncated)
+      w.WriteLine($"  … more than {Compiler.Ir.Runtime.RuntimeEmitter.DbgMaxGreenThreads} green threads "
+        + "are live; this list is truncated.");
+  }
+
+  private static void EmitThreads(MaxonDebugger.GreenThreadList list) => WriteEvent(w => {
+    w.WriteString("event", "threads");
+    if (GtListUnavailableReason(list.Status) is { } reason) {
+      w.WriteNull("threads");
+      w.WriteString("threadsUnavailable", reason);
+      return;
+    }
+
+    if (list.Truncated) w.WriteBoolean("truncated", true);
+    w.WriteStartArray("threads");
+    foreach (var t in list.Threads) {
+      w.WriteStartObject();
+      w.WriteNumber("id", t.Id);
+      w.WriteString("kind", t.IsSchedulerThread ? "scheduler" : "green");
+      if (t.IsSchedulerThread) w.WriteNumber("proc", t.ProcId);
+      else if (t.EntryFunction.Length > 0) w.WriteString("entry", t.EntryFunction);
+      w.WriteString("status", GreenThreadStatusText(t.Status));
+      w.WriteString("cpu", GreenThreadCpuText(t));
+      if (TopFrameUnavailableReason(t) is { } why) {
+        w.WriteNull("topFrame");
+        w.WriteString("topFrameUnavailable", why);
+      } else {
+        w.WriteStartObject("topFrame");
+        WriteLocationFields(w, t.TopLocation);
+        w.WriteString("offset", HexOffset(t.TopLocation.CodeOffset));
+        w.WriteEndObject();
+      }
+      w.WriteEndObject();
+    }
+    w.WriteEndArray();
+  });
+
+  private static void EmitGtBacktrace(int id, MaxonDebugger.GtBacktraceResult bt) => WriteEvent(w => {
+    w.WriteString("event", "gt-backtrace");
+    w.WriteNumber("id", id);
+    WriteFramesOrReason(w, "frames", GtBacktraceUnavailableReason(bt.Status), bt.Frames);
+  });
+
+  /// The usage line for `gt-backtrace`, shared by both faces so they cannot describe the argument
+  /// differently.
+  private const string GtBacktraceUsageText = "gt-backtrace <id>   (an id from 'threads')";
 
   private static void EmitExit(MaxonDebugger dbg) => WriteEvent(w => {
     w.WriteString("event", "exit");
@@ -1179,7 +1392,8 @@ internal static class MaxonDebugRepl {
   /// (continue) but stay distinct here so the interactive prompt can word them differently. `Step`/`Next`/
   /// `Finish`/`Until` are the P4b source-line stepping commands.
   private enum DebugCommand {
-    Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Print, Locals, Help, Quit, Unknown,
+    Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace, Print,
+    Locals, Help, Quit, Unknown,
   }
 
   /// One command's vocabulary AND its completion policy: the canonical word, its aliases, and the pool its
@@ -1201,6 +1415,8 @@ internal static class MaxonDebugRepl {
     new(DebugCommand.Finish,    "finish",    [],                CompletionArgTarget.None),
     new(DebugCommand.Until,     "until",     ["u"],             CompletionArgTarget.None),
     new(DebugCommand.Backtrace, "backtrace", ["bt", "where"],   CompletionArgTarget.None),
+    new(DebugCommand.Threads,   "threads",   ["gts"],           CompletionArgTarget.None),
+    new(DebugCommand.GtBacktrace, "gt-backtrace", ["gtbt"],     CompletionArgTarget.None),
     new(DebugCommand.Print,     "print",     ["p"],             CompletionArgTarget.Locals),
     new(DebugCommand.Locals,    "locals",    [],                CompletionArgTarget.Locals),
     new(DebugCommand.Help,      "help",      ["?", "commands"], CompletionArgTarget.None),

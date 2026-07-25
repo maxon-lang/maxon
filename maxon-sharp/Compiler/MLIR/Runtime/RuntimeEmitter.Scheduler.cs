@@ -237,12 +237,12 @@ public partial class RuntimeEmitter {
     _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch1, 0);
 
-    // Check P[i]->status == 0
+    // Check P[i]->status == PStatusUnused
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffStatus);
     _b.JumpIfNonZero(VReg.Scratch2, "__gt_enqueue_spawn_next");
 
-    // Set status = 1
-    _b.MovRegImm(VReg.Scratch2, 1);
+    // Claim it: status = PStatusActive
+    _b.MovRegImm(VReg.Scratch2, PStatusActive);
     _b.StoreIndirect(VReg.Scratch1, POffStatus, VReg.Scratch2);
     _b.StoreLocal(4, VReg.Scratch1);
 

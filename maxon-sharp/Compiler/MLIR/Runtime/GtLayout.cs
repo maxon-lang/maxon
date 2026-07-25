@@ -119,6 +119,14 @@ public static class GtLayout {
                                                  // (PUSH RBP + CALL overhead) between successive
                                                  // prologue stack checks.
 
+  // ---- ProcContext status values (POffStatus) ----
+  // A P struct is allocated for every possible processor at __gt_init, so "does this P exist" and "is
+  // this P live" are different questions and only this field answers the second. Every reader must
+  // filter on it: the debug agent's green-thread enumeration walks the __sched_procs array to reach
+  // each P's INLINE main-thread GT, and an unused P's inline GT is zeroed, not a thread.
+  public const int PStatusUnused = 0;
+  public const int PStatusActive = 1;
+
   // ---- ProcContext (P) struct offsets ----
   public const int POffLocalQueueHead = 0x00;
   public const int POffLocalQueueTail = 0x08;

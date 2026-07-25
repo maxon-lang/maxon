@@ -23,10 +23,12 @@ internal static class DebugAgentProbe {
 
   // ---- P3a: attach probe (`maxon debug --attach-probe`) ----
 
-  public static int Run(string exePath, TimeSpan? stopTimeout) {
+  public static int Run(string exePath, TimeSpan? stopTimeout,
+      IReadOnlyDictionary<string, string>? targetEnv) {
     MaxonDebugger dbg;
     try {
-      dbg = MaxonDebugger.Attach(exePath, NoArgs, sidecar: null, stopTimeout: stopTimeout);
+      dbg = MaxonDebugger.Attach(exePath, NoArgs, sidecar: null, stopTimeout: stopTimeout,
+        targetEnv: targetEnv);
     } catch (DebuggerException ex) {
       Console.Error.WriteLine($"maxon debug --attach-probe: {ex.Message}");
       return 1;
@@ -85,10 +87,12 @@ internal static class DebugAgentProbe {
   /// exits with the right code. With <paramref name="clearAtStop"/>, the breakpoint is CLEARED while
   /// the target is stopped at it (exercising the trap handler's cleared-while-parked path).
   /// </summary>
-  public static int RunBpTest(string exePath, long codeOffset, bool clearAtStop, TimeSpan? stopTimeout) {
+  public static int RunBpTest(string exePath, long codeOffset, bool clearAtStop, TimeSpan? stopTimeout,
+      IReadOnlyDictionary<string, string>? targetEnv) {
     MaxonDebugger dbg;
     try {
-      dbg = MaxonDebugger.Attach(exePath, NoArgs, sidecar: null, stopTimeout: stopTimeout);
+      dbg = MaxonDebugger.Attach(exePath, NoArgs, sidecar: null, stopTimeout: stopTimeout,
+        targetEnv: targetEnv);
     } catch (DebuggerException ex) {
       Console.Error.WriteLine($"maxon debug --bp-test: {ex.Message}");
       return 1;

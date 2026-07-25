@@ -133,9 +133,18 @@ internal sealed class MaxonDebugger : IDisposable {
   /// Throws <see cref="DebuggerException"/> with a clear reason on a build-id mismatch or a spawn
   /// failure — the caller reports it and exits nonzero, the way the schema-mismatch refusal does.
   /// <paramref name="stopTimeout"/> overrides <see cref="DefaultStopTimeout"/> for this session.
+  ///
+  /// <paramref name="targetEnv"/> sets environment variables IN THE DEBUGGEE (gdb's `set environment`),
+  /// applied on top of the inherited environment. It is what lets a session pin a runtime knob the
+  /// debuggee reads before `main` — <c>MAXON_MAX_PROCS</c> most of all, since the scheduler decides how
+  /// many worker processors to spawn at startup and a green-thread transcript is otherwise
+  /// machine-dependent. It cannot override <see cref="RuntimeEmitter.DbgActivationEnvVar"/>: that names
+  /// the control segment this driver created, and letting a caller repoint it would detach the agent
+  /// from the very session attaching to it.
   /// </summary>
   public static MaxonDebugger Attach(string exePath, IReadOnlyList<string> targetArgs, MxdbgReader? sidecar,
-      TextWriter? targetStdout = null, TimeSpan? stopTimeout = null) {
+      TextWriter? targetStdout = null, TimeSpan? stopTimeout = null,
+      IReadOnlyDictionary<string, string>? targetEnv = null) {
     var stdoutSink = targetStdout ?? Console.Out;
 
     if (!File.Exists(exePath))
@@ -167,6 +176,11 @@ internal sealed class MaxonDebugger : IDisposable {
         CreateNoWindow = true,
       };
       foreach (var a in targetArgs) psi.ArgumentList.Add(a);
+      // Caller-supplied variables go on FIRST, so the activation var below always wins: the segment name
+      // is this session's own handle on the agent, not a setting.
+      if (targetEnv != null)
+        foreach (var (name, value) in targetEnv) psi.EnvironmentVariables[name] = value;
+
       // The agent reads this SAME var name from its `__dbg_env_name` symdata (one definition, so the
       // producer and consumer cannot drift and leave the agent silently dark).
       psi.EnvironmentVariables[RuntimeEmitter.DbgActivationEnvVar] = mapping.SegmentName;
@@ -824,6 +838,10 @@ internal sealed class MaxonDebugger : IDisposable {
     // property of who happened to call them — a step runner cannot start with a stop outstanding TODAY.
     if (StopOutstanding) return false;
 
+    // Every resume passes through here, so this is where the green-thread epoch advances: once the
+    // target runs, any thread struct may have been recycled, and an id must not outlive that.
+    if (cmd is RuntimeEmitter.DbgCmdContinue or RuntimeEmitter.DbgCmdStep) _resumeEpoch++;
+
     Thread.MemoryBarrier();
     _cmdSeq += 1;
     _accessor.Write(RuntimeEmitter.DbgOffCmdSeq, _cmdSeq);
@@ -1020,6 +1038,21 @@ internal sealed class MaxonDebugger : IDisposable {
     if (!PostCommand(RuntimeEmitter.DbgCmdBacktrace, 0))
       return new BacktraceResult(BacktraceStatus.NotAcknowledged, []);
 
+    // Frame 0 is the exact stopped PC, so only frames above it carry the call-site bias.
+    return new BacktraceResult(BacktraceStatus.Ok, ReadFrameArray(frameZeroIsReturnAddress: false));
+  }
+
+  /// <summary>
+  /// Read and symbolize the frame array the agent just filled. The ONE reader of that array, shared by
+  /// the stopped-thread backtrace and the per-green-thread one, so they cannot drift on the array's
+  /// bound or on which frames need the −1 call-site bias.
+  ///
+  /// <paramref name="frameZeroIsReturnAddress"/> is the single real difference between the two, and it
+  /// is not cosmetic: a stopped thread's frame 0 is the exact PC the agent trapped at, while a PARKED
+  /// green thread has no such PC — its frame 0 is the return address into whoever called the runtime
+  /// function it parked in, and symbolizing it unbiased would name the line AFTER the call.
+  /// </summary>
+  private IReadOnlyList<Frame> ReadFrameArray(bool frameZeroIsReturnAddress) {
     // The park loop's ack store-release published the array; acquire it before reading.
     Thread.MemoryBarrier();
     long count = _accessor.ReadInt64(RuntimeEmitter.DbgOffBtCount);
@@ -1029,10 +1062,237 @@ internal sealed class MaxonDebugger : IDisposable {
     var frames = new List<Frame>((int)count);
     for (int i = 0; i < count; i++) {
       long off = _accessor.ReadInt64(RuntimeEmitter.DbgOffBtFrames + (long)i * 8);
-      bool isReturnAddress = i > 0;
+      bool isReturnAddress = i > 0 || frameZeroIsReturnAddress;
       frames.Add(new Frame(i, off, isReturnAddress, Symbolize(off, returnAddressBias: isReturnAddress)));
     }
-    return new BacktraceResult(BacktraceStatus.Ok, frames);
+    return frames;
+  }
+
+  // ---- Green threads (P4d-2a) ----
+
+  /// True when this binary's agent enumerates green threads (control version ≥ DbgGtMinVersion). A v7
+  /// agent acks the unknown list command and leaves the record array zeroed, and "count = 0" reads as a
+  /// perfectly ordinary "this program has no green threads" — so the gate is what keeps a missing
+  /// capability from rendering as a confident, wrong, empty thread list.
+  public bool GreenThreadsSupported => AgentVersion >= RuntimeEmitter.DbgGtMinVersion;
+
+  /// Why a green-thread listing produced nothing, kept DISTINCT (as <see cref="BacktraceStatus"/> is)
+  /// so a surface never tells the user to rebuild when the target simply exited.
+  public enum GtListStatus { Ok, UnsupportedByAgent, NotAcknowledged }
+
+  /// Which frame, if any, the agent could describe for a green thread — see the agent's DbgGtTopFrame*.
+  public enum GtTopFrame { None, Exact, ReturnAddress }
+
+  /// <summary>
+  /// One live green thread. <see cref="Id"/> is the DRIVER's stable small integer (the runtime has no
+  /// thread id at all — see <see cref="GtIdentity"/>); <see cref="Handle"/> is the raw struct address
+  /// that identity is built on and is never shown to a user.
+  ///
+  /// <see cref="Status"/> and <see cref="OnCpu"/> are BOTH reported because they answer different
+  /// questions and the runtime's own word is the misleading one: `status` is set to Running before a
+  /// context switch INTO a thread and is never cleared when it parks, so a parked thread commonly reads
+  /// `running`. <see cref="OnCpu"/> is "some processor is executing it right now", which is what decides
+  /// whether its saved stack can be walked at all.
+  /// </summary>
+  public readonly record struct GreenThread(
+    int Id, ulong Handle, long Status, bool OnCpu, bool IsStopped, long ProcId,
+    string EntryFunction, GtTopFrame TopKind, SymLocation TopLocation, long RecordIndex) {
+
+    /// True for a processor's INLINE main-thread green thread — the scheduler context an OS worker runs
+    /// on, which is never spawned from a function. Derived from the processor field the agent recorded,
+    /// so "is this a scheduler thread" is not a second fact that could disagree with its owner.
+    public bool IsSchedulerThread => ProcId != RuntimeEmitter.DbgGtNotAProc;
+  }
+
+  /// <summary>
+  /// One enumeration. <see cref="Truncated"/> is reported rather than swallowed: a thread list that
+  /// silently stops short is a wrong answer, and the agent's array is bounded.
+  /// </summary>
+  public readonly record struct GreenThreadList(
+    GtListStatus Status, IReadOnlyList<GreenThread> Threads, bool Truncated);
+
+  /// <summary>
+  /// What makes two sightings of a green thread THE SAME thread. It cannot be the raw handle: a
+  /// completed thread's struct goes back on its processor's free list and the next spawn POPS IT, so an
+  /// address is reused almost immediately. Measured, twice, against this debugger's own sample:
+  ///
+  ///   * two threads complete, two are spawned — the LIFO free list hands them back CROSSED, so each
+  ///     address arrives carrying the other thread's entry function;
+  ///   * ONE thread completes and one is spawned for the same function — the address AND the entry
+  ///     function both match, and an identity built from those two alone hands the new thread the dead
+  ///     one's id. A live thread wearing a dead one's name is the wrong answer this record exists to
+  ///     prevent, so the handle and the entry function are not enough on their own.
+  ///
+  /// <see cref="Epoch"/> is what closes it: the driver counts every RESUME it issues, and a SPAWNED
+  /// thread's identity carries the count at the time it was seen. An id therefore never survives the
+  /// target running — which is the only interval in which a struct can be recycled under a single
+  /// processor, and the overwhelmingly likely one under several.
+  ///
+  /// A processor's INLINE main-thread thread takes epoch 0 instead, and that is not an exemption: its
+  /// struct lives inside a P that exists for the whole process, so its address cannot be recycled and
+  /// its identity is exactly its processor index. Epoching it would renumber `main` on every `continue`
+  /// for no gain at all.
+  ///
+  /// ⚠ What remains, stated rather than papered over: with several processors a thread can complete and
+  /// another be spawned into its struct for the same entry function WHILE the target is parked, inside
+  /// one epoch. Closing that needs a monotonic spawn ordinal in the thread struct — GtOffTraceId is
+  /// exactly one, but it is `--async-trace`-only, so making it load-bearing is a runtime change rather
+  /// than a driver one.
+  /// </summary>
+  private readonly record struct GtIdentity(ulong Handle, long EntryPc, long ProcId, long Epoch);
+
+  /// <summary>
+  /// How many times this session has RESUMED the target. It is the epoch a spawned thread's identity is
+  /// scoped to (see <see cref="GtIdentity"/>), and it is counted at the one choke point every resume
+  /// passes through rather than at each of the callers that resume — a `continue`, a `step`, and every
+  /// one of the up-to-<see cref="MaxStepInstructions"/> single-steps a source-line step makes.
+  /// </summary>
+  private long _resumeEpoch;
+
+  /// Ids handed out so far, by identity. Rebuilt on every listing so a thread that has gone away takes
+  /// its id with it.
+  private Dictionary<GtIdentity, int> _gtIds = [];
+
+  /// Never reused, so a retired id cannot come back attached to a different thread.
+  private int _nextGtId;
+
+  /// The most recent listing, which is what a per-thread command names. Held because the agent's record
+  /// INDEX is only meaningful against the array it published, and the driver must not send an index the
+  /// user's id no longer maps to.
+  private IReadOnlyList<GreenThread> _lastGtList = [];
+
+  /// <summary>
+  /// Enumerate the debuggee's live green threads. Requires a parked target (every mailbox command does)
+  /// and a sidecar, since each thread's entry function and top frame are symbolized here.
+  /// </summary>
+  public GreenThreadList ListGreenThreads() {
+    if (!GreenThreadsSupported) return new GreenThreadList(GtListStatus.UnsupportedByAgent, [], false);
+    if (!PostCommand(RuntimeEmitter.DbgCmdGtList, 0))
+      return new GreenThreadList(GtListStatus.NotAcknowledged, [], false);
+
+    // The park loop's ack store-release published the array; acquire it before reading.
+    Thread.MemoryBarrier();
+    long count = _accessor.ReadInt64(RuntimeEmitter.DbgOffGtCount);
+    if (count < 0) count = 0;
+    if (count > RuntimeEmitter.DbgMaxGreenThreads) count = RuntimeEmitter.DbgMaxGreenThreads;
+    bool truncated = _accessor.ReadInt64(RuntimeEmitter.DbgOffGtTruncated) != 0;
+    ulong stopped = (ulong)_accessor.ReadInt64(RuntimeEmitter.DbgOffGtStopped);
+
+    // Ids are minted into a FRESH map, so an identity absent from this listing is forgotten and its next
+    // appearance takes a new id. That retirement is half of what keeps a recycled struct from inheriting
+    // an id (see GtIdentity for the other half, and for what remains).
+    var ids = new Dictionary<GtIdentity, int>();
+    var threads = new List<GreenThread>((int)count);
+    for (long i = 0; i < count; i++) {
+      long rec = RuntimeEmitter.DbgOffGtRecords + i * RuntimeEmitter.DbgGtRecSize;
+      ulong handle = (ulong)_accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffHandle);
+      long entryPc = _accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffEntryPc);
+      long procId = _accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffProc);
+
+      // A processor's inline thread is pinned to its P for the whole process, so it is identified by its
+      // processor index alone and keeps one id for the session. Only a SPAWNED thread — the kind whose
+      // struct is recycled — is scoped to the current resume epoch.
+      bool isSchedulerThread = procId != RuntimeEmitter.DbgGtNotAProc;
+      var identity = new GtIdentity(handle, entryPc, procId, isSchedulerThread ? 0 : _resumeEpoch);
+      if (!_gtIds.TryGetValue(identity, out int id)) id = ++_nextGtId;
+      ids[identity] = id;
+
+      long topKindWord = _accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffTopKind);
+      long topPc = _accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffTopPc);
+      var topKind = TopFrameKindOf(topKindWord);
+      threads.Add(new GreenThread(
+        id, handle,
+        _accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffStatus),
+        _accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffOnCpu) != 0,
+        handle != 0 && handle == stopped,
+        procId,
+        EntryFunctionName(entryPc, procId),
+        topKind,
+        topKind == GtTopFrame.None
+          ? default
+          : Symbolize(topPc, returnAddressBias: topKind == GtTopFrame.ReturnAddress),
+        i));
+    }
+
+    _gtIds = ids;
+    _lastGtList = threads;
+    return new GreenThreadList(GtListStatus.Ok, threads, truncated);
+  }
+
+  /// The agent's top-frame word as the driver's kind. An unrecognized word THROWS rather than degrading
+  /// to None: the two ends share one set of constants, so a value outside it means the segment layout
+  /// itself is being misread, and rendering that as "no frame available" would hide it.
+  private static GtTopFrame TopFrameKindOf(long word) => word switch {
+    RuntimeEmitter.DbgGtTopFrameNone => GtTopFrame.None,
+    RuntimeEmitter.DbgGtTopFrameExact => GtTopFrame.Exact,
+    RuntimeEmitter.DbgGtTopFrameReturn => GtTopFrame.ReturnAddress,
+    _ => throw new DebuggerException($"the debug agent reported an unknown top-frame kind {word}"),
+  };
+
+  /// The name of a green thread's entry function, or empty when it HAS none — which is a property of the
+  /// thread, not of the debug info: a processor's inline main-thread thread is not spawned from a
+  /// function at all, and the processor field (never a zero entry offset) is what says so. A missing
+  /// sidecar is deliberately NOT folded in here; <see cref="Symbolize"/> refuses that honestly, the way
+  /// every other resolution on this engine does, rather than returning a nameless thread that reads like
+  /// a nameless thread.
+  private string EntryFunctionName(long entryPc, long procId) =>
+    procId == RuntimeEmitter.DbgGtNotAProc ? Symbolize(entryPc).Function : "";
+
+  /// Why a per-green-thread backtrace produced no frames. The three refusals are DISTINCT because each
+  /// needs a different sentence, and two of them are answered by the driver before anything is posted:
+  /// it knows the ids it minted, and it knows from the listing which threads are on-cpu.
+  public enum GtBacktraceStatus {
+    /// The agent walked the thread's parked frame chain (which may still be empty — a spawned thread
+    /// that has never run has no frame pointer yet).
+    Ok,
+    /// The agent predates green-thread enumeration; its zeroed array must not be read as a real trace.
+    UnsupportedByAgent,
+    /// No green thread carries that id in the most recent listing.
+    UnknownId,
+    /// The thread is executing on a processor, so its saved rsp/rbp are stale. Walking them would
+    /// produce a plausible-looking WRONG backtrace, which is worse than saying so.
+    RunningOnCpu,
+    /// The agent produced no trace: the thread completed while the target was parked (its struct may
+    /// already have been recycled), or the target stopped answering.
+    Unavailable,
+  }
+
+  public readonly record struct GtBacktraceResult(GtBacktraceStatus Status, IReadOnlyList<Frame> Frames);
+
+  /// <summary>
+  /// Backtrace ONE green thread by its driver-assigned id, against the most recent
+  /// <see cref="ListGreenThreads"/>.
+  ///
+  /// The STOPPED thread is answered from the ordinary stopped-frame walk rather than the parked one, and
+  /// that is not a shortcut: it is the single thread that is on-cpu AND standing still, so the agent has
+  /// its exact trapped PC — a strictly better frame 0 than a return address off the chain. Every other
+  /// on-cpu thread is refused.
+  /// </summary>
+  public GtBacktraceResult GtBacktrace(int id) {
+    if (!GreenThreadsSupported) return new GtBacktraceResult(GtBacktraceStatus.UnsupportedByAgent, []);
+
+    GreenThread? match = null;
+    foreach (var t in _lastGtList) {
+      if (t.Id != id) continue;
+      match = t;
+      break;
+    }
+    if (match is not { } thread) return new GtBacktraceResult(GtBacktraceStatus.UnknownId, []);
+
+    if (thread.IsStopped) {
+      var stoppedTrace = Backtrace();
+      return new GtBacktraceResult(
+        stoppedTrace.Status == BacktraceStatus.Ok ? GtBacktraceStatus.Ok : GtBacktraceStatus.Unavailable,
+        stoppedTrace.Frames);
+    }
+
+    if (thread.OnCpu) return new GtBacktraceResult(GtBacktraceStatus.RunningOnCpu, []);
+
+    if (!PostCommand(RuntimeEmitter.DbgCmdGtBacktrace, thread.RecordIndex))
+      return new GtBacktraceResult(GtBacktraceStatus.Unavailable, []);
+
+    // A parked thread has no trapped PC, so even frame 0 is a return address off its saved chain.
+    return new GtBacktraceResult(GtBacktraceStatus.Ok, ReadFrameArray(frameZeroIsReturnAddress: true));
   }
 
   // ---- Source-line stepping (P4b) ----

@@ -1,0 +1,71 @@
+P4d-2a green-thread VISIBILITY gate — reproducible transcript over DebugSamples/threads.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/threads.maxon
+  maxon debug --target-env=MAXON_MAX_PROCS=1 --batch --commands='break threads.maxon:39; break threads.maxon:50; run; threads; gt-backtrace 3; gt-backtrace 1; gt-backtrace 9; continue; threads' maxon-sharp/DebugSamples/threads.exe
+
+RED (the same command against a pre-P4d-2a binary, before this rung): `threads` and `gt-backtrace` were
+unknown words, and --target-env did not exist, so the run produced no thread information at all:
+  maxon debug: Unknown 'maxon debug' option: --target-env=MAXON_MAX_PROCS=1
+and without that flag, with the commands alone:
+  {"event":"error","message":"unknown command 'threads'"}
+  {"event":"error","message":"unknown command 'gt-backtrace'"}
+
+WHAT EACH COMMAND PROVES (asserted by the JSON below):
+  * threads (first)  -> the enumeration is a UNION and BOTH halves are present. #1 is `kind:"scheduler"`,
+                        main's own green thread, which lives INLINE in the processor struct and is never
+                        linked into `__gt_all_head` — a list built from the spawned-thread list alone
+                        would omit it. It is also `cpu:"stopped"`, i.e. the thread the debugger is
+                        stopped on, so the omitted half IS the stopped one. #2/#3 are the two spawned
+                        tasks, `cpu:"parked"`, each with a top frame in the sleep they are waiting in.
+  * status vs cpu    -> reported SEPARATELY and they disagree on purpose: #1 reads `status:"running"`
+                        (the runtime sets that before switching INTO a thread and never clears it) while
+                        #2/#3 read `waiting`. `cpu` is the debugger's own question — which thread a
+                        processor is actually executing — and it is what gates a stack walk.
+  * gt-backtrace 3   -> a PARKED thread's stack is walked from its own saved frame pointer, bounded by
+                        its own stack extent: sleep <- slowTask:22 <- the spawn trampoline. Frame 0 is a
+                        RETURN ADDRESS (a parked thread has no trapped PC), so it carries the call-site
+                        bias like any other non-zero frame.
+  * gt-backtrace 1   -> the STOPPED thread is answered from the exact trapped PC instead, so its frame 0
+                        is main:39 rather than a return address — the one on-cpu thread whose stack is
+                        standing still.
+  * gt-backtrace 9   -> an id nobody holds is REFUSED by name; it is never answered with an empty stack,
+                        which a consumer would read as "this thread has no frames".
+  * threads (second) -> THE ID TEST. Between the two stops the first pair of threads COMPLETED and their
+                        structs went back on the processor's free list, where the next two spawns pop
+                        them straight off — measured: the same addresses come back, and for a repeated
+                        entry function they come back with the same entry function too. The second pair
+                        is nevertheless #4/#5, never #2/#3: an id is scoped to the driver's resume count,
+                        so it cannot outlive the target running. #1 keeps its id across both stops
+                        because a processor's inline thread cannot be recycled at all.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The thread set, each thread's kind/entry/status/cpu, which thread is stopped, the frame FUNCTIONS and
+    LINES, the id RELATIONSHIPS (#1 stable across both stops, #4/#5 distinct from #2/#3), and the exit
+    code 6 (1+2 from the first pair, 1+2 from the second) are the P4d-2a subject and are STABLE.
+  * The `.text` offsets (0x115/0x1a5 the two breakpoints, 0x238 inside sleep, 0x274 slowTask's sleep call,
+    0x4c the entry-stub return) are build-specific and move only if codegen moves.
+  * NOT asserted, and deliberately: the raw GreenThread addresses (they differ every run, which is why an
+    id exists at all) and wall-clock timing.
+
+⚠ WHAT THIS GOLDEN DOES NOT COVER — `--target-env=MAXON_MAX_PROCS=1` pins the debuggee to a SINGLE
+processor, and that is what makes the transcript byte-stable: with the default setting the scheduler
+spawns worker processors on demand, so the number of `kind:"scheduler"` rows is machine- and
+timing-dependent and no exact-diff golden is possible. The consequence is that MULTI-PROCESSOR
+enumeration is NOT exercised here, and neither is the one refusal that needs it — a thread found RUNNING
+on another processor, which `gt-backtrace` declines to walk because its saved rsp/rbp are stale. Both
+belong to P4d-2b, which introduces per-thread park/resume and can hold a thread in that state
+deterministically. The single-processor run still exercises both halves of the union, both sides of the
+park gate (the stopped thread on-cpu, two spawned threads parked), and the id-recycling test above.
+
+--- EXPECTED --batch STDOUT (newline-delimited JSON, one event per line) ---
+{"event":"breakpoint","action":"set","file":"threads.maxon","line":39,"offset":"0x115","function":"main"}
+{"event":"breakpoint","action":"set","file":"threads.maxon","line":50,"offset":"0x1a5","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x115","function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":39,"col":2,"source":[{"line":36,"text":"\t// shows up as \u0060ready\u0060 with no frames. Two yields let both tasks reach their own sleep and park.","current":false},{"line":37,"text":"\tsleep(30)","current":false},{"line":38,"text":"\tsleep(30)","current":false},{"line":39,"text":"\tlet r1 = await p1   // breakpoint here: main on-cpu and stopped, slowTask \u002B fastTask both parked","current":true},{"line":40,"text":"\tlet r2 = await p2","current":false},{"line":41,"text":"","current":false},{"line":42,"text":"\t// SECOND WAVE, and it is the id test. Both threads above have completed by now, so their structs are","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":39,"offset":"0x115"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":39,"offset":"0x115"}},{"id":2,"kind":"green","entry":"fastTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x238"}},{"id":3,"kind":"green","entry":"slowTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x238"}}]}
+{"event":"gt-backtrace","id":3,"frames":[{"frame":0,"function":"stdlib.sleep","offset":"0x238"},{"frame":1,"function":"slowTask","file":"maxon-sharp/DebugSamples/threads.maxon","line":22,"offset":"0x274"},{"frame":2,"offset":"0xf7ed"}]}
+{"event":"gt-backtrace","id":1,"frames":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":39,"offset":"0x115"},{"frame":1,"offset":"0x4c"}]}
+{"event":"gt-backtrace","id":9,"frames":null,"framesUnavailable":"no green thread with that id in the current listing (run \u0027threads\u0027 first)"}
+{"event":"stop","reason":"breakpoint","offset":"0x1a5","function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":50,"col":2,"source":[{"line":47,"text":"\tlet p4 = async fastTask()","current":false},{"line":48,"text":"\tsleep(30)","current":false},{"line":49,"text":"\tsleep(30)","current":false},{"line":50,"text":"\tlet r3 = await p3   // breakpoint here: a second pair, parked exactly as the first pair was","current":true},{"line":51,"text":"\tlet r4 = await p4","current":false},{"line":52,"text":"\treturn r1 \u002B r2 \u002B r3 \u002B r4","current":false},{"line":53,"text":"end \u0027main\u0027","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":50,"offset":"0x1a5"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/threads.maxon","line":50,"offset":"0x1a5"}},{"id":4,"kind":"green","entry":"fastTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x238"}},{"id":5,"kind":"green","entry":"slowTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x238"}}]}
+{"event":"exit","code":6}

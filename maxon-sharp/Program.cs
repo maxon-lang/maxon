@@ -77,6 +77,9 @@ class Program {
       + $"(default {MaxonDebugger.DefaultStopTimeoutText}s;");
     Console.WriteLine("                           prefix any live-session form). A timeout is reported as a timeout,");
     Console.WriteLine("                           never as an exit, and the target is released rather than orphaned");
+    Console.WriteLine($"  {TargetEnvFlag}N=V     Set a variable in the DEBUGGEE's environment (repeatable;");
+    Console.WriteLine("                           prefix any target-spawning form). MAXON_MAX_PROCS=1 pins the");
+    Console.WriteLine("                           scheduler to one processor, which makes a green-thread run reproducible");
     Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
@@ -114,18 +117,40 @@ class Program {
   /// non-interactively, emitting one JSON event per stop.
   /// </summary>
   static int RunDebug(string[] args) {
-    // `--stop-timeout` is consumed as a LEADING option — before the subcommand and before the target —
-    // so it can never be mistaken for one of the arguments forwarded verbatim to the debuggee.
+    // Both session options are consumed as LEADING ones — before the subcommand and before the target —
+    // so neither can be mistaken for one of the arguments forwarded verbatim to the debuggee.
     TimeSpan? stopTimeout = null;
-    while (args.Length > 0 && args[0].StartsWith(MaxonDebugger.StopTimeoutFlag, StringComparison.Ordinal)) {
-      var value = args[0][MaxonDebugger.StopTimeoutFlag.Length..];
-      if (!TryParseStopTimeout(value, out var parsed)) {
-        Console.Error.WriteLine($"maxon debug: {MaxonDebugger.StopTimeoutFlag}<seconds> needs a positive "
-          + $"number of seconds (got '{value}').");
-        return 1;
+    Dictionary<string, string>? targetEnv = null;
+
+    while (args.Length > 0) {
+      if (args[0].StartsWith(MaxonDebugger.StopTimeoutFlag, StringComparison.Ordinal)) {
+        var value = args[0][MaxonDebugger.StopTimeoutFlag.Length..];
+        if (!TryParseStopTimeout(value, out var parsed)) {
+          Console.Error.WriteLine($"maxon debug: {MaxonDebugger.StopTimeoutFlag}<seconds> needs a positive "
+            + $"number of seconds (got '{value}').");
+          return 1;
+        }
+        stopTimeout = parsed;
+        args = args[1..];
+        continue;
       }
-      stopTimeout = parsed;
-      args = args[1..];
+
+      if (args[0].StartsWith(TargetEnvFlag, StringComparison.Ordinal)) {
+        var value = args[0][TargetEnvFlag.Length..];
+        if (!TryParseTargetEnv(value, out var name, out var setting)) {
+          Console.Error.WriteLine($"maxon debug: {TargetEnvFlag}<NAME>=<VALUE> needs a non-empty variable "
+            + $"name followed by '=' (got '{value}').");
+          return 1;
+        }
+        // Repeatable; a repeated NAME takes the LAST value, matching how a shell assignment behaves and
+        // how the environment block itself can only hold one value per name.
+        targetEnv ??= [];
+        targetEnv[name] = setting;
+        args = args[1..];
+        continue;
+      }
+
+      break;
     }
 
     if (args.Length == 0) {
@@ -136,18 +161,19 @@ class Program {
       Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
       Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
       Console.Error.WriteLine("       maxon debug --bp-test <exe> <codeOffset>");
-      Console.Error.WriteLine($"Any live-session form may be prefixed with {MaxonDebugger.StopTimeoutFlag}<seconds>.");
+      Console.Error.WriteLine($"A live-session form may be prefixed with {MaxonDebugger.StopTimeoutFlag}<seconds>,");
+      Console.Error.WriteLine($"and a target-spawning one with {TargetEnvFlag}<NAME>=<VALUE> (repeatable).");
       return 1;
     }
 
     switch (args[0]) {
       case "--batch":
-        return RunDebugBatch(args[1..], stopTimeout);
+        return RunDebugBatch(args[1..], stopTimeout, targetEnv);
 
       case "--complete": {
         // Non-interactive completion: `maxon debug --complete '<partial line>' <exe>`. Prints the
         // candidates the interactive Tab key would offer, so the pure completion engine is batch-testable.
-        if (RejectStopTimeout(stopTimeout, "--complete")) return 1;
+        if (RejectStopTimeout(stopTimeout, "--complete") || RejectTargetEnv(targetEnv, "--complete")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --complete needs a partial input line and a target executable "
             + "('maxon debug --complete \"<partial>\" <exe>').");
@@ -157,7 +183,7 @@ class Program {
       }
 
       case "--dump-info": {
-        if (RejectStopTimeout(stopTimeout, "--dump-info")) return 1;
+        if (RejectStopTimeout(stopTimeout, "--dump-info") || RejectTargetEnv(targetEnv, "--dump-info")) return 1;
         if (args.Length < 2) {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
           return 1;
@@ -167,7 +193,7 @@ class Program {
       }
 
       case "--symbolize": {
-        if (RejectStopTimeout(stopTimeout, "--symbolize")) return 1;
+        if (RejectStopTimeout(stopTimeout, "--symbolize") || RejectTargetEnv(targetEnv, "--symbolize")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --symbolize needs a .mxdbg path and at least one code offset.");
           return 1;
@@ -184,7 +210,7 @@ class Program {
           Console.Error.WriteLine("maxon debug --attach-probe needs a path to a Maxon executable.");
           return 1;
         }
-        return DebugAgentProbe.Run(args[1], stopTimeout);
+        return DebugAgentProbe.Run(args[1], stopTimeout, targetEnv);
       }
 
       case "--bp-test": {
@@ -202,7 +228,7 @@ class Program {
           return 1;
         }
         bool clearAtStop = args.Length > 3 && args[3] == "clear";
-        return DebugAgentProbe.RunBpTest(args[1], bpOffset, clearAtStop, stopTimeout);
+        return DebugAgentProbe.RunBpTest(args[1], bpOffset, clearAtStop, stopTimeout, targetEnv);
       }
 
       default:
@@ -211,7 +237,7 @@ class Program {
           return 1;
         }
         // A bare target path (plus any args to forward): launch the interactive REPL.
-        return MaxonDebugRepl.RunInteractive(args[0], args[1..], stopTimeout);
+        return MaxonDebugRepl.RunInteractive(args[0], args[1..], stopTimeout, targetEnv);
     }
   }
 
@@ -254,12 +280,47 @@ class Program {
     return true;
   }
 
+  /// The flag that sets a variable in the DEBUGGEE's environment (gdb's `set environment`). Its headline
+  /// use is pinning a runtime knob the target reads before `main`: `MAXON_MAX_PROCS` fixes how many
+  /// worker processors the scheduler spawns, which is what makes a green-thread transcript reproducible
+  /// instead of machine-dependent.
+  const string TargetEnvFlag = "--target-env=";
+
+  /// <summary>
+  /// Parse a <see cref="TargetEnvFlag"/> value as `NAME=VALUE`. The NAME must be non-empty and must not
+  /// itself contain '=' (the first '=' separates), and an EMPTY VALUE is accepted — setting a variable to
+  /// the empty string is a real, distinct request from not setting it. Malformed input is REFUSED by the
+  /// caller rather than ignored: a silently dropped variable would leave the target running under an
+  /// environment the user believes they configured.
+  /// </summary>
+  static bool TryParseTargetEnv(string text, out string name, out string value) {
+    name = "";
+    value = "";
+    int eq = text.IndexOf('=');
+    if (eq <= 0) return false;
+
+    name = text[..eq];
+    value = text[(eq + 1)..];
+    return true;
+  }
+
+  /// Refuse <see cref="TargetEnvFlag"/> on a `maxon debug` surface that spawns no target, exactly as
+  /// <see cref="RejectStopTimeout"/> does — accepting it there and doing nothing is the same silent lie.
+  static bool RejectTargetEnv(IReadOnlyDictionary<string, string>? targetEnv, string surface) {
+    if (targetEnv == null) return false;
+
+    Console.Error.WriteLine($"maxon debug {surface}: {TargetEnvFlag}<NAME>=<VALUE> sets a variable in a "
+      + "SPAWNED debuggee (the REPL, --batch); reading a sidecar starts no process to set it in.");
+    return true;
+  }
+
   /// <summary>
   /// `maxon debug --batch --commands=&lt;spec&gt; &lt;exe&gt; [args...]` — the non-interactive face of
   /// the REPL engine. <c>--commands</c> is a `;`-separated inline list or `@file`; the first non-option
   /// arg is the target, the rest are forwarded to it. Emits one JSON event per stop to stdout.
   /// </summary>
-  static int RunDebugBatch(string[] args, TimeSpan? stopTimeout) {
+  static int RunDebugBatch(string[] args, TimeSpan? stopTimeout,
+      IReadOnlyDictionary<string, string>? targetEnv) {
     string? commands = null;
     string? exe = null;
     var targetArgs = new List<string>();
@@ -290,7 +351,7 @@ class Program {
       Console.Error.WriteLine("maxon debug --batch needs a target executable.");
       return 1;
     }
-    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout);
+    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout, targetEnv);
   }
 
   /// Load a `.mxdbg` sidecar for the given path (a `.mxdbg` file, or a binary whose sidecar is

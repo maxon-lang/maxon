@@ -3600,7 +3600,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // [x29+16] = P[0]
 
     // P[0]->status = 1 (active)
-    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitMovRegImm(ARM64Register.X1, PStatusActive);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, POffStatus, 8);
 
     // Set TLS: pthread_setspecific(__sched_tls_key, P[0])
@@ -3965,7 +3965,7 @@ public partial class ARM64CodeEmitter {
     EmitGlobalLeaReg(ARM64Register.X9, "__sched_active_workers");
     EmitAtomicDecReg(ARM64Register.X9); // active_workers--
     EmitLoadP(ARM64Register.X9);
-    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitMovRegImm(ARM64Register.X0, PStatusUnused);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffStatus, 8);   // status = 0
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffIdleFlag, 8);  // idleFlag = 0
     EmitMovRegImm(ARM64Register.X0, 0); // return NULL

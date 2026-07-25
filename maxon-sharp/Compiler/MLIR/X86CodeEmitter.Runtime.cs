@@ -4377,7 +4377,7 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x08, X86Register.Rax, 8); // [rbp-8] = P[0]
 
     // P[0]->status = 1 (active)
-    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitMovRegImm(X86Register.Rcx, PStatusActive);
     EmitMovIndirectMemReg(X86Register.Rax, POffStatus, X86Register.Rcx);
 
     // Set TLS slot to P[0]
@@ -5501,7 +5501,7 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.Rax, POffCurrentGt, X86Register.Rcx);
 
     // P->status = 1 (active)
-    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitMovRegImm(X86Register.Rcx, PStatusActive);
     EmitMovIndirectMemReg(X86Register.Rax, POffStatus, X86Register.Rcx);
 
     // Atomically increment active workers
@@ -5678,7 +5678,7 @@ public partial class X86CodeEmitter {
 
     // P->status = 0 (stopped)
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rcx, PStatusUnused);
     EmitMovIndirectMemReg(X86Register.Rax, POffStatus, X86Register.Rcx);
 
     // Return 0 (CreateThread callback return value)
