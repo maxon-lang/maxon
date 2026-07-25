@@ -2446,3 +2446,146 @@ end 'main'
 ```exitcode
 21
 ```
+
+### The escape rule is DERIVED, not a list of places to remember
+
+The refusals above each name the construct the user wrote — the field, the union case, the `gives`
+arm — and they can, because the parser still holds those words. But a hand-written check at each
+syntactic sink can only cover the sinks somebody remembered, and the rule it enforces is not about
+syntax at all: it is that a capturing closure's ENVIRONMENT must be able to follow the value. So the
+rule is also stated once, structurally, over the finished IR: a capturing closure may appear only
+where the environment travels with it — as the callee of an in-frame indirect call, or as an argument
+to a direct call whose callee is known not to persist it. Every other slot is refused.
+
+Stating it that way covers routes the enumeration missed, and these are not hypothetical. A `var`
+holding a capturing closure and REASSIGNED inside an `if` or a `while` merges through a block-arg phi
+exactly as a ternary does — one slot, carrying the code pointer and nothing else — and neither shape
+is a ternary, a match `gives` or an `otherwise`. Both compiled clean and segfaulted.
+
+<!-- test: first-class-function.capturing-closure-across-if-merge-errors -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+A capturing closure reassigned inside an `if` merges through the continuation's phi. Refused at the
+closure literal — the phi edge that loses the environment has no source position of its own, and the
+literal is the token that has to change either way.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function main() returns ExitCode
+	let bump = 20
+	var f = function(n Integer) gives n + bump
+	if bump > 5 'branch'
+		f = function(n Integer) gives n * bump
+	end 'branch'
+	return f(2)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-if-merge-errors.test:8:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-across-loop-merge-errors -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The same merge through a LOOP-HEADER phi. `capturing-closure-rebound-in-loop` (accepted, above) binds
+a fresh `let` inside the body and carries nothing across the back edge; this carries a `var` across it,
+which is a merge and loses the environment.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function main() returns ExitCode
+	let bump = 20
+	var f = function(n Integer) gives n + bump
+	var i = 0
+	while i < 2 'loop'
+		f = function(n Integer) gives n * bump
+		i = i + 1
+	end 'loop'
+	return f(2)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-loop-merge-errors.test:8:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-through-witness-dispatch-errors -->
+<!-- targets: x64-windows, x64-linux -->
+A capturing closure handed to an interface method dispatched through a WITNESS. The interprocedural
+check that decides "does the callee persist this parameter?" is keyed on a callee NAME, and a witness
+dispatch has none — the concrete method is chosen at run time from the witness table, so no summary can
+be consulted and the environment cannot be threaded to it either. Before the rule was derived this
+reached lowering and panicked; the identical shape through a plain call was already E3099.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+interface Stasher
+	function stash(fn UnaryOp) returns Integer
+end 'Stasher'
+
+type Slot implements Stasher
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+
+	export function stash(fn UnaryOp) returns Integer
+		self.op = fn
+		return 7
+	end 'stash'
+end 'Slot'
+
+type W uses T where T is Stasher
+	export var inner as T
+
+	export static function create(inner T) returns Self
+		return Self{inner: inner}
+	end 'create'
+
+	export function put(k Integer) returns Integer
+		return self.inner.stash(function(n Integer) gives n + k)
+	end 'put'
+end 'W'
+
+typealias SlotW = W with Slot
+
+function plain(n Integer) returns Integer
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	let s = Slot.create(plain)
+	let w = SlotW.create(s)
+	return w.put(5)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-through-witness-dispatch-errors.test:30:27: cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-into-container-errors -->
+<!-- targets: x64-windows, x64-linux -->
+A capturing closure pushed into a heap container. The array literal route is refused by an unrelated
+element-type rule, but `.push()` is a call to a compiler runtime entry — and a runtime entry is in no
+signature registry, so the escape summary the call-site check consults cannot be built for it. Rather
+than delegate the decision to a check that structurally cannot run, the derived rule refuses it: the
+Array outlives the frame and takes the code pointer alone.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+typealias OpArray = Array with UnaryOp
+
+function main() returns ExitCode
+	let bump = 20
+	var a = OpArray.create()
+	a.push(function(n Integer) gives n + bump)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-into-container-errors.test:10:9: cannot pass a closure that captures to a compiler runtime entry: it puts the value in heap memory that outlives this frame, and a runtime entry has no signature for the escape summary to be built from. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```

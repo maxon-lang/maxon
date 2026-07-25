@@ -829,10 +829,28 @@ implicit-self is noted with the P1.4b closed-box / the future-rungs list):
   drained in `compileToCodeResult` before `resolveTypes`) so a same-file FORWARD-REF and a cross-file mismatch are
   both caught — a coordinator-probed silent miscompile the first parse-time-file-local pass had missed; an
   unverifiable branch (a function value from a param/field/call-result) is cleanly REJECTED, never silent-accepted.
-- **#73 — capturing-closure escape checking is PER-SITE (enumerated sinks), not a derived invariant** —
-  nothing forces a NEW value-sink to call `rejectEscapingClosure`. Complete for today's grammar (only the
-  interprocedural summary got the DERIVE cure). Replace with ONE invariant: a capturing-closure value may
-  appear only as an indirect-call callee OR a frame-local binding. Not a blocker.
+- **✅ #73 — the capturing-closure escape rule is now DERIVED — CLOSED 2026-07-24** (1552→1561/0 x64,
+  1367→1374/0 wasm). It was NOT "complete for today's grammar": the enumeration listed three MERGES (a
+  ternary arm, a match `gives`, an `otherwise` fallback) and an `if`-continuation phi and a loop-header phi
+  are merges too — `var f = <capturing closure>` reassigned inside an `if` or a `while` compiled clean and
+  **SEGFAULTED**. `SemanticCheck.checkCapturingClosureUses` now states the rule ONCE over the finished IR
+  (a capturing closure may appear only where its environment travels with it), through the SAME exhaustive
+  band-append `match` the interprocedural parameter summary already walked — generalised from
+  `paramEscapesInBody`/`opEscapesParam` to `valueEscapeSite`/`opEscapesValue` over an `EscapeScanSubject`,
+  so ops, terminators AND branch edges are covered for both questions and a newly appended `MaxonOp` fails
+  to COMPILE rather than becoming an unguarded sink.
+  ⚠ **The parser's per-route refusals STAY, and that is not the enumeration surviving** — it is the only
+  place that still holds the words (`storeIndirect` carries no field/struct/case name and a branch edge
+  carries no source span at all, so "cannot store a closure that captures in field 'op' of 'Handler'", at
+  the field token, is unreconstructible later). SABOTAGE-PROVED non-load-bearing: with
+  `rejectEscapingClosure` disabled, every one of the 14 pinned escape programs is still REFUSED (6 by this
+  rule as E3099 in generic words, the rest by pre-existing type rules) and every accept stays green — so
+  soundness is this rule's and only the wording is the parser's.
+  It also closed two holes the delegation had left open, both by the same principle (*delegate a slot only
+  where the delegate actually RUNS*): a capturing closure at a **witness dispatch** (no callee name keys an
+  escape summary — it reached lowering and PANICKED) and one handed to a **compiler-internal `__` callee**
+  (`a.push(closure)` — `validateCall` returns before the escape check, so a heap Array took the bare code
+  pointer). Memory: exactly 0 allocs / 0 bytes delta across the whole scale ladder.
 - **✅ #78 — indirect calls carry the callee's float result/param types — CLOSED 2026-07-22** (main
   `a1515dfb7`, 1100→1106/0, cross-target). Was WORSE than framed: not a wasm-only trap but a COMPILER CRASH on
   x64 too (a float-returning/float-param function value called indirectly panicked "crosses register files").

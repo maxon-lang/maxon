@@ -378,3 +378,178 @@ end 'main'
 ```exitcode
 2
 ```
+
+### A closure literal is an expression, not a declaration
+
+`function` opens a DECLARATION only in the three-token shape `function <name> (`. A closure literal
+spells the same keyword and declares nothing: it has no name, no `end`, and opens no block of its
+own. That distinction is load-bearing outside the parser proper, in the whole-file **declaration
+sweep** that runs before any file is parsed: the sweep counts a declaration's block open so it can
+tell a type's FIELD (`export var x as Integer` at the type's top level) from a method's local
+binding one level down, and every `type` / `enum` / `interface` / top-level `let`-`var` it records
+is gated on that counter reading zero.
+
+A closure literal counted as a declaration leaves the counter permanently one too deep, and every
+depth-0 gate after it silently stops firing — so the declarations BELOW the closure are never
+recorded at all. What the compiler then does is never "compile it anyway": the drift guards that
+exist for exactly this mismatch (`requireConstructible`, `ProgramSignatures.recordedDeclFor`) fire
+as an internal PANIC on a program that is completely correct. Inside a type body the overshoot is
+worse than absent — it runs past the type's own `end` and reads the NEXT declaration's members into
+THIS type's layout, so a field of one type is reported missing from another, and the swallowed
+type's factory is registered under the swallowing type's name, which types its callers' results
+from the wrong signature.
+
+None of the cases below is a diagnostics test. Each is a correct program that must simply compile
+and run.
+
+<!-- test: closure-capture.type-declared-after-a-closure-in-a-free-function -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+A closure literal in a FREE function's body, with a `type` declared after it. The sweep must leave
+its block depth at zero across the closure, or `type Box` is never recorded and `Self{…}` panics.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function bumped(n Integer) returns Integer
+	let step = function(k Integer) gives k + 1
+	return step(n)
+end 'bumped'
+
+type Box
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(40)
+	return b.v + bumped(1)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closure-capture.type-declared-after-a-closure-bearing-type -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The same overshoot one level in: the closure sits in a METHOD body, so the sweep runs past `type
+Counter`'s `end` and consumes `type Box` as though it were more of `Counter`.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function bumped(n Integer) returns Integer
+		let step = function(k Integer) gives k + 1
+		return step(n)
+	end 'bumped'
+end 'Counter'
+
+type Box
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(40)
+	return b.v + Counter.bumped(1)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closure-capture.field-declared-after-a-closure-bearing-method -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+A field declared BELOW a method that contains a closure literal. The overshoot puts the field one
+level too deep for the sweep's depth-0 field gate, so it is dropped from the layout and every use of
+it is refused as "no field named …" — a wrong answer about a field that is right there.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var first as Integer
+
+	static function make(seed Integer) returns Self
+		let step = function(k Integer) gives k + 1
+		return Self{first: step(seed), second: 2}
+	end 'make'
+
+	export var second as Integer
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.make(39)
+	return p.first * p.second
+end 'main'
+```
+```exitcode
+80
+```
+
+<!-- test: closure-capture.top-level-binding-after-a-closure -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+A top-level `let` and `var` declared after a closure literal. Both are recorded only at depth zero,
+so both go missing — and `dispatchTopLevel` then meets a binding the sweep never saw.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function bumped(n Integer) returns Integer
+	let step = function(k Integer) gives k + 1
+	return step(n)
+end 'bumped'
+
+let Base = 20
+var offset = 21
+
+function main() returns ExitCode
+	offset = offset + 1
+	return Base + offset + bumped(-1)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closure-capture.enum-declared-after-a-closure -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+An `enum` declared after a closure literal — the third depth-0 gate, and the one whose failure is a
+parse-level diagnostic (an unrecorded `Color.green` is read as a ranged-alias bound) rather than a
+panic.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function bumped(n Integer) returns Integer
+	let step = function(k Integer) gives k + 1
+	return step(n)
+end 'bumped'
+
+enum Color
+	red
+	green
+end 'Color'
+
+function shade(c Color) returns Integer
+	return match c 'shade'
+		red gives 1
+		green gives 41
+	end 'shade'
+end 'shade'
+
+function main() returns ExitCode
+	return shade(Color.green) + bumped(0)
+end 'main'
+```
+```exitcode
+42
+```

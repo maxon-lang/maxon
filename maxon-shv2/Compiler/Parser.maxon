@@ -75,7 +75,11 @@ typealias EnvSlotIndex = int(0 to u64.max)
 // compilers' by-REFERENCE model; shv2 captures by VALUE into a heap env, but that env is dropped at the
 // enclosing frame's scope exit, so the "cannot outlive that frame" conclusion holds identically and the
 // byte-identical golden stands. See the `capturingClosureEscapes` ParseError header.
-let CapturingClosureEscapeSuffix = "captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing"
+//
+// EXPORTED because the DERIVED invariant (`SemanticCheck.checkCapturingClosureUses`) states the same reason
+// for the routes the parser cannot word — so the reason lives once for both, and the parser's route-specific
+// refusals and the structural backstop cannot come to explain one rule two ways.
+export let CapturingClosureEscapeSuffix = "captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing"
 
 // The shared tail of every E3099 raised when a capturing closure reaches a MERGE (a match-expression
 // `gives` arm, an `otherwise <value>` fallback — and, once the front-end parses it, a ternary arm). A
@@ -84,7 +88,12 @@ let CapturingClosureEscapeSuffix = "captures are taken by reference to the enclo
 // environment REGARDLESS of whether the result escapes the frame. The reachable twin of the (front-end-
 // unreachable) ternary-arm refusal the corpus already pins; the route-specific prefix ("as a `gives` arm
 // …", "as the value of an `otherwise` …") is built at each site so the one reason lives once.
-let CapturingClosureMergeSuffix = "a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing"
+//
+// EXPORTED for `CapturingClosureEscapeSuffix`'s reason — and here the second reader is not a nicety: the
+// parser enumerates only THREE merges (a ternary arm, a match `gives`, an `otherwise` fallback), while an
+// `if`-continuation phi and a loop-header phi are merges too and were reaching the back end unrefused. The
+// derived invariant catches those, and says the same thing about them.
+export let CapturingClosureMergeSuffix = "a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing"
 
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
 // `intLiteralValue` / `floatLiteralBits` catch and re-raise, positioned, as
@@ -3087,7 +3096,11 @@ export type Parser
 				continue
 			end 'isTopLevelBinding'
 
-			if self.at(TokenKind.function) 'isFunction'
+			// A function DECLARATION — `function <name> (`, never a bare `function` keyword. A closure
+			// literal spells the keyword and opens no block (see `functionDeclarationAt`); counted as a
+			// declaration it would leave `depth` one too deep for the rest of the file, and every depth-0
+			// gate below would stop firing.
+			if self.functionDeclarationAt(self.pos) 'isFunction'
 				// A function opens a block, closed by its own `end`. Counted BEFORE the signature is
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
@@ -3188,6 +3201,29 @@ export type Parser
 		return self.at(TokenKind.let) or self.at(TokenKind.var)
 	end 'atTopLevelBindingKeyword'
 
+	// ⭐ **DOES THE TOKEN AT `index` OPEN A FUNCTION DECLARATION — `function <name> (` — rather than
+	// merely spell the `function` keyword?** The three-token shape IS the declaration: `parseFunction`
+	// consumes `function`, a NAME and a parameter list in that order, and no clause may sit between them
+	// (there is no generic-function `uses`). Two other things spell `function` and declare nothing:
+	//
+	//   • a CLOSURE LITERAL — `function(n Integer) gives n + c` — an expression, with no name, no `end`,
+	//     and no block of its own;
+	//   • an enum/union CASE NAME — `function` is a legal one (`keyword-as-case-name.md`).
+	//
+	// ONE predicate, read by the whole-file declaration sweep, by `recordScannedType`'s body walk and by
+	// `atEnumMethodStart`, for `atTopLevelBindingKeyword`'s reason: the sweep's `function` arm counts a
+	// BLOCK OPEN that only a real declaration's `end` ever closes, so a keyword taught to one reader and
+	// not another leaves the sweep's block depth permanently one too deep. Every later depth-0 gate then
+	// fails to fire — a `type`/`enum`/`interface`/top-level `let` after a closure literal is simply never
+	// recorded — and the drift guards that exist for exactly this (`requireConstructible`,
+	// `ProgramSignatures.recordedDeclFor`) fire as a compiler PANIC on a correct program. Inside a type
+	// body the same overshoot swallows the NEXT type's members into this one's layout, which is a wrong
+	// ANSWER: the swallowed type's factory is registered under this type's name, so a call to it is typed
+	// from the wrong signature.
+	function functionDeclarationAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.function and self.kindAt(index + 1) == TokenKind.identifier and self.kindAt(index + 2) == TokenKind.leftParen
+	end 'functionDeclarationAt'
+
 	// Is the cursor on a `Set from` construction — a bare `Set` identifier immediately followed by `from`
 	// (P1.7b slice B)?
 	//
@@ -3250,15 +3286,16 @@ export type Parser
 		return Visibility.file
 	end 'scannedVisibility'
 
-	// Cursor is just past `function`. Append the declared return type of the function whose
-	// name follows, if the declaration is well-formed enough to read one off.
+	// Cursor is just past `function`, ON the declared name. Append the declared return type of the
+	// function that name introduces, if the declaration is well-formed enough to read one off.
+	//
+	// Both callers reach here only through `functionDeclarationAt`, so the `function` NAME `(` shape is
+	// already established — this reader never re-asks it. (It stays TOLERANT past that point: a
+	// malformed parameter list or return type is the real parse's to report, with a position.)
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
 	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
-		if not self.at(TokenKind.identifier) 'noName'
-			return
-		end 'noName'
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -4544,7 +4581,10 @@ export type Parser
 				continue
 			end 'isField'
 
-			if self.at(TokenKind.function) 'isMethod'
+			// A method DECLARATION, asked through the same `functionDeclarationAt` the outer sweep asks:
+			// a closure literal in a method body spells `function` too, and counting it here overshoots
+			// the type's `end` — the sweep then reads the NEXT declaration's members into THIS layout.
+			if self.functionDeclarationAt(self.pos) 'isMethod'
 				// The method opens a block closed by its own `end`. Counted BEFORE the signature is
 				// read, because reading it moves the cursor past the `function` keyword — the caller's
 				// loop does exactly this, for exactly this reason.
@@ -5946,18 +5986,17 @@ export type Parser
 	// Does the cursor open a METHOD inside an enum/union body — `[export|static] function <name>(`?
 	//
 	// ⚠ **`function` IS ALSO A LEGAL CASE NAME** (`keyword-as-case-name.md` declares one), so a bare
-	// `function` keyword does NOT open a method: a method is `function` followed by a NAME and a `(`.
+	// `function` keyword does NOT open a method: a method is `function` followed by a NAME and a `(`
+	// — the shared `functionDeclarationAt`, which the declaration sweep reads for the same reason.
 	// Mirrors the bootstrap's `IsEnumMethodStart` (2-Parser.cs:3155). Methods on an enum are a later
-	// rung, so this predicate exists only to REJECT one cleanly rather than misparse it.
+	// rung, so this predicate exists only to REJECT one cleanly rather than misparse it. All this adds
+	// is the leading modifier an enum body may carry before the keyword.
 	function atEnumMethodStart() returns bool
 		var p = self.pos
 		if self.kindAt(p) == TokenKind.export or self.kindAt(p) == TokenKind.static 'modifier'
 			p = p + 1
 		end 'modifier'
-		if self.kindAt(p) != TokenKind.function 'notFunction'
-			return false
-		end 'notFunction'
-		return self.kindAt(p + 1) == TokenKind.identifier and self.kindAt(p + 2) == TokenKind.leftParen
+		return self.functionDeclarationAt(p)
 	end 'atEnumMethodStart'
 
 	// Read ONE enum/union case into `layout`, threading the tag counter + backing through `state`.
