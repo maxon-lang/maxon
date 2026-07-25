@@ -1411,6 +1411,26 @@ end 'GenericAliasEntry'
 
 export typealias GenericAliasEntryArray = Array with GenericAliasEntry
 
+// Which generic-alias DECLARATION closes a type cycle (P1.7, E3091), or that none does. A union rather
+// than an index-plus-sentinel because declaration 0 is a real alias. Asked once per compile, so the one
+// heap box it costs is not on any hot path.
+export union AliasCycleResult
+	at(index FieldIndex)
+	none
+end 'AliasCycleResult'
+
+// Is `id` already in `ids`? The reachability sweep's `visited` test. A linear scan deliberately: the walk
+// is once per compile over a program's generic instances, and a Set would allocate to answer a question
+// asked a handful of times.
+function genericInstanceIdArrayContains(ids GenericInstanceIdArray, id GenericInstanceId) returns bool
+	for seen in ids 'each'
+		if seen == id 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'genericInstanceIdArrayContains'
+
 // ⭐ **ONE `Base with Args` INSTANTIATION SITE (P1.7a slice 2a)** — an interned instance paired with the
 // source anchor of the `typealias X = Base with Args` that names it, for the where-constraint check (E3017)
 // to land its diagnostic on. Collected by `recordGenericAlias` for every alias with a real (non-zero) anchor.
@@ -1608,6 +1628,11 @@ export type ProgramSignatures
 	// memo when a declaration a reader COPIED FROM changes, and this declaration is byte-identical in every
 	// program — mixing a constant would move every program's hash and invalidate nothing.
 	var enumTypes as EnumLayoutMap
+	// ⭐ The generic-alias DECLARATIONS, in record order (P1.7) — the deterministic list `firstCyclicAliasDecl`
+	// walks. `genericAliases` is keyed by NAME and is a Map, so it can answer "which instance?" but never
+	// "which alias was declared first?"; the E3091 blame must be a property of the program, not of a map's
+	// iteration, so the order is kept explicitly here.
+	var genericAliasDecls as GenericAliasEntryArray
 	// ⭐ Generic-instance interner (P1.6-A) — `Box with Integer` ⇒ a `GenericInstanceId`, id ⇒
 	// `(baseId, argTypes)`. LIKE `structTypes` IT CARRIES IDS (an arg is a `MaxonType`), so `foldFile`
 	// remaps each entry's args into `typeNames` before interning. Read by the parser to resolve a
@@ -1695,7 +1720,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -2010,6 +2035,7 @@ export type ProgramSignatures
 		let args = self.resolveGenericArgs(entry, remap: remap)
 		let giid = self.genericInstances.intern(baseId, args: args)
 		self.genericAliases.upsert(entry.aliasName, value: giid)
+		self.genericAliasDecls.push(entry)
 
 		// Record the instantiation SITE (P1.7a slice 2a) for the E3017 where-constraint check — only when the
 		// alias carries a real source anchor (a top-level `typealias X = Base with Args`; a synthesized alias
@@ -3346,29 +3372,131 @@ export type ProgramSignatures
 	// `EmptySourceText` for a scalar, a `String`, a ranged alias or an opaque `typeParameter` argument: those
 	// carry no nominal identity and meet their argument by TAG (`checkDeclaredType`), so a `Box with Integer`
 	// keeps accepting a plain `int` literal.
+	// ⚠ **EVERY TAG STATES ITS OWN ANSWER.** This used to end in a bare `return EmptySourceText`, and that
+	// was a silent default landing on the ONE rule that reads empty as a positive claim:
+	// `namedAggregatesConflict` treats exactly-one-empty as "an aggregate meeting a SCALAR", so an
+	// unhandled kind did not abstain — it asserted `scalar` and REJECTED a legal program. A tag appended to
+	// `ValueTypeTag` must now fail to compile here rather than inherit a wrong answer.
 	export function instanceArgAggregateName(gid GenericInstanceId, position TypeParamId) returns ByteArray
 		let arg = self.substitutedInstanceArg(gid, position: position)
-		let tag = maxonTypeTag(arg)
+		match maxonTypeTag(arg) 'k'
+			// No nominal identity: a scalar, a `String`, an opaque `T` and a function value all coerce by
+			// TAG (`checkDeclaredType`), so `Box with Integer` keeps accepting a plain `42`.
+			boolean then return EmptySourceText
+			integer then return EmptySourceText
+			float then return EmptySourceText
+			named then return self.namedTypeArgIdentity(arg)
+			exitCode then return EmptySourceText
+			unresolved then return EmptySourceText
+			void then panic("instanceArgAggregateName: instance {gid}'s type argument at {position} is `void` — a type argument is a TYPE, and the parser accepts no void one")
+			// A struct argument is named by itself and a nested instance by its compiled name — the same two
+			// spellings `mangleTypeArg` produces, which is why it is asked rather than re-derived.
+			structRef then return self.instanceArgTypeName(gid, position: position)
+			string then return EmptySourceText
+			function then return EmptySourceText
+			typeParameter then return EmptySourceText
+			genericInstance then return self.instanceArgTypeName(gid, position: position)
+		end 'k'
+	end 'instanceArgAggregateName'
 
-		// A struct argument is named by itself and a nested instance by its compiled name — the same two
-		// spellings `mangleTypeArg` produces for them, which is why it is asked rather than re-derived.
-		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance 'nominal'
-			return self.instanceArgTypeName(gid, position: position)
-		end 'nominal'
-
-		if tag != ValueTypeTag.named 'notNamed'
-			return EmptySourceText
-		end 'notNamed'
+	// ⭐⭐ **READ-TIME RESOLUTION OF A TYPE ARGUMENT SPELLED AS A GENERIC-INSTANCE ALIAS (P1.7).**
+	//
+	// `typealias N1 = Box with N0` records its argument as a plain `named(N0)` LEAF: only a syntactic
+	// `Base with (…)` header becomes `genericInstance` at intern time, and the sweep records a file's
+	// aliases at its END, so an alias named before it is interned cannot be seen there at all. Resolving it
+	// HERE is what makes the two spellings agree — this runs from `semanticCheck`, long after the whole
+	// sweep is folded, so the alias table is COMPLETE and the answer cannot depend on declaration or file
+	// order. (`Box with N0` and `Box with (Box with S0)` still intern as two instances with two compiled
+	// names; that duplicate is pre-existing and is its own rung. What matters for the comparison is the
+	// TYPE ARGUMENT's identity, and both spellings yield `N0`'s instance — the same `Box_S0`.)
+	//
+	// ⚠ It cannot hang on a cyclic alias: `mangleGenericInstance` recurses only through `genericInstance`
+	// args (`mangleTypeArg` returns a `named` arg's bare NAME without resolving it), and those nest
+	// syntactically, so the recursion is bounded by source nesting depth. A cycle is refused earlier
+	// anyway, by `firstCyclicAliasDecl` (E3091), which runs before the pipeline.
+	function namedTypeArgIdentity(arg MaxonType) returns ByteArray
+		let name = self.nameOfId(typeNameIdOf(arg))
+		if let aliased = try self.genericAliases.get(name) 'namesAnInstance'
+			return self.mangleGenericInstance(aliased)
+		end 'namesAnInstance'
 
 		// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
-		// share it — so only a registered aggregate carries identity here, exactly as both twins decide it.
-		let name = self.nameOfId(typeNameIdOf(arg))
+		// share it — so only a registered aggregate carries identity, exactly as both twins decide it.
 		if self.containsStruct(name) or self.containsEnum(name) 'registeredAggregate'
 			return name
 		end 'registeredAggregate'
 
+		// A RANGED numeric alias (`Integer`), which is a nominal wrapper over a scalar and decays. This is
+		// the enumerated last kind a `named` can be, not a fallthrough: the three are alias / aggregate /
+		// ranged, and the tag match above has already excluded everything that is not `named`.
 		return EmptySourceText
-	end 'instanceArgAggregateName'
+	end 'namedTypeArgIdentity'
+
+	// ⭐ **THE FIRST GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT (P1.7, E3091).** `typealias A = Box
+	// with A` and the mutual `A = Box with B` / `B = Box with A` describe INFINITE types — no finite layout,
+	// no finite compiled name — and both compiled clean and SEGFAULTED at run time before this check.
+	//
+	// Asked once per compile over the FINISHED table, so it needs none of the sweep's ordering: an alias
+	// reaches itself or it does not, whatever order the files were swept in. Walked in declaration-record
+	// order so the alias blamed is a property of the program, not of a map's iteration.
+	export function firstCyclicAliasDecl() returns AliasCycleResult
+		for i in 0 upto self.genericAliasDecls.count() 'eachDecl'
+			let entry = try self.genericAliasDecls.get(i) otherwise panic("firstCyclicAliasDecl: genericAliasDecls.get OOB at {i}")
+			if let gid = try self.genericAliases.get(entry.aliasName) 'recorded'
+				if self.aliasInstanceReachesItself(gid) 'cyclic'
+					return AliasCycleResult.at(i)
+				end 'cyclic'
+			end 'recorded'
+		end 'eachDecl'
+		return AliasCycleResult.none
+	end 'firstCyclicAliasDecl'
+
+	// Does instance `root` reach ITSELF through its type arguments? A forward REACHABILITY sweep, not a
+	// backtracking DFS: reachability is monotone, so a `visited` list needs no unwinding and a shared
+	// sub-instance (a diamond) cannot be mistaken for a cycle — which a path-marking walk without `pop`
+	// would do.
+	function aliasInstanceReachesItself(root GenericInstanceId) returns bool
+		var pending = GenericInstanceIdArray.create()
+		var visited = GenericInstanceIdArray.create()
+		self.pushArgInstances(root, pending: pending)
+
+		while pending.count() > 0 'walk'
+			let gid = try pending.pop() otherwise panic("aliasInstanceReachesItself: pop from a non-empty pending list")
+			if gid == root 'returnedToRoot'
+				return true
+			end 'returnedToRoot'
+			if genericInstanceIdArrayContains(visited, id: gid) 'alreadySeen'
+				continue
+			end 'alreadySeen'
+			visited.push(gid)
+			self.pushArgInstances(gid, pending: pending)
+		end 'walk'
+
+		return false
+	end 'aliasInstanceReachesItself'
+
+	// Every instance `gid`'s type arguments denote — a nested `genericInstance` directly, and a `named` leaf
+	// through the alias table (the very edge `namedTypeArgIdentity` follows, so the cycle check and the
+	// identity read traverse ONE graph rather than two views of it).
+	function pushArgInstances(gid GenericInstanceId, pending GenericInstanceIdArray)
+		for position in 0 upto self.genericInstanceArgCount(gid) 'eachArg'
+			let arg = self.substitutedInstanceArg(gid, position: position)
+			let tag = maxonTypeTag(arg)
+			if tag == ValueTypeTag.genericInstance 'nested'
+				pending.push(typeNameIdOf(arg))
+			end 'nested'
+			if tag == ValueTypeTag.named 'maybeAlias'
+				if let aliased = try self.genericAliases.get(self.nameOfId(typeNameIdOf(arg))) 'namesAnInstance'
+					pending.push(aliased)
+				end 'namesAnInstance'
+			end 'maybeAlias'
+		end 'eachArg'
+	end 'pushArgInstances'
+
+	// The declaration record of alias `index`, for the E3091 diagnostic's name and anchor.
+	export function genericAliasDeclAt(index FieldIndex) returns GenericAliasEntry
+		return try self.genericAliasDecls.get(index) otherwise panic("genericAliasDeclAt: genericAliasDecls.get OOB at {index}")
+	end 'genericAliasDeclAt'
 
 	// --- Generic-instance managed drop (P1.6-B2) ---
 	//

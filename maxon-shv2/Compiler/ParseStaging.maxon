@@ -526,6 +526,39 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 	end 'eachInstantiation'
 end 'checkTypeSymbolNamespace'
 
+// ⭐ **A GENERIC ALIAS WHOSE TYPE ARGUMENTS LEAD BACK TO IT IS REFUSED (P1.7, E3091).** `typealias A = Box
+// with A`, and the mutual `A = Box with B` / `B = Box with A`, describe INFINITE types: no finite layout and
+// no finite compiled name. Both compiled with exit 0 and NO diagnostic, then SEGFAULTED — the same shape as
+// this rung's original defect, one level up.
+//
+// Blamed at the DECLARATION rather than at a use, because the declaration is the ill-formed thing and a
+// cycle is ill-formed whether or not anyone instantiates it. Run BEFORE the pipeline (so before
+// `semanticCheck`), which is also what guarantees no later reader has to survive a cycle.
+export function checkGenericAliasCycles(project Project, signatures ProgramSignatures)
+	// A prior diagnostic leaves the registries INCOMPLETE, so a cycle "found" here could be an artifact of a
+	// half-folded program — the same refusal `checkTypeSymbolNamespace` and `checkWhereConstraints` make.
+	if projectHasErrors(project) 'malformedProject'
+		return
+	end 'malformedProject'
+
+	match signatures.firstCyclicAliasDecl() 'cycle'
+		none then return
+		at(index) then reportGenericAliasCycle(project, entry: signatures.genericAliasDeclAt(index))
+	end 'cycle'
+end 'checkGenericAliasCycles'
+
+// Report E3091 at the offending `typealias`. A SYNTHESIZED alias carries no anchor (line 0), so it falls back
+// to the whole-program form `reportInstantiationPairCollision` uses for the same reason — pointing at line 0
+// of a file the user never wrote would be worse than not pointing at all.
+function reportGenericAliasCycle(project Project, entry GenericAliasEntry)
+	let message = "typealias '{String.from(entry.aliasName)}' forms a type cycle: its type arguments refer back to '{String.from(entry.aliasName)}'"
+	if entry.nameLine == 0 'synthesized'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticTypeResolutionCycle, message: message))
+		return
+	end 'synthesized'
+	reportPositioned(project, code: ErrorCode.semanticTypeResolutionCycle, message: message, line: entry.nameLine, column: entry.nameColumn, filePath: entry.filePath)
+end 'reportGenericAliasCycle'
+
 // Who already claims `compiled`. The declared side is asked FIRST, so a name claimed by both a
 // declaration and an earlier instantiation reports against the declaration — the claimant that is
 // always positioned, and the one the author can rename.

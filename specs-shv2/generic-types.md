@@ -946,3 +946,210 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: alias-named-type-argument-agrees -->
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: alias-named-type-argument-forward-declared-agrees -->
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N1 = Box with N0
+typealias N0 = Box with S0
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: alias-named-type-argument-cross-file-types-first -->
+```maxon
+// --- file: a_types.maxon
+export type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+export type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+export typealias N0 = Box with S0
+// --- file: b_use.maxon
+typealias N1 = Box with N0
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: alias-named-type-argument-cross-file-use-first -->
+```maxon
+// --- file: a_use.maxon
+typealias N1 = Box with N0
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
+	return 0
+end 'main'
+// --- file: b_types.maxon
+export type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+export type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+export typealias N0 = Box with S0
+```
+```exitcode
+0
+```
+
+<!-- test: both-spellings-agree-at-the-comparison -->
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+typealias ViaAlias = Box with N0
+typealias ViaInline = Box with (Box with S0)
+function main() returns ExitCode
+	let v0 = N0.create(S0.make("x"))
+	let a = ViaAlias.create(v0)
+	let b = ViaInline.create(v0)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.self-cycle-alias -->
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias A = Box with A
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
+```
+
+<!-- test: error.mutual-cycle-alias -->
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias A = Box with B
+typealias B = Box with A
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
+```
+
+<!-- test: error.self-cycle-alias-used -->
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias A = Box with A
+function main() returns ExitCode
+	let x = A.create(S0.make("q"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
+```

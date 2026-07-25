@@ -175,6 +175,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// else E3017 anchored on the `typealias`. It reads the interned generic instances (`queryProgramSignatures`)
 	// and the declared conformances (`checkConformance` already validated them), so it runs after both. Any
 	// E3017 it records is caught by the pipeline's error gate, exactly as an E3016 is.
+	// ⭐ **A CYCLIC GENERIC ALIAS IS REFUSED FIRST (P1.7, E3091)** — before the two checks below and before
+	// the pipeline. An alias whose type arguments lead back to it denotes an INFINITE type, so every later
+	// reader (the where-constraint check, the compiled-name space, the argument identity read) would be
+	// asking questions of a type that does not exist. Refusing here is what lets all of them assume it does.
+	checkGenericAliasCycles(project, signatures: signatures)
+
 	checkWhereConstraints(project, signatures: signatures)
 
 	// ⭐ **THE COMPILED TYPE-NAME NAMESPACE (E3006) — HERE, for `checkWhereConstraints`'s two reasons.**

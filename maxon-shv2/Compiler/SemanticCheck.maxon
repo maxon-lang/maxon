@@ -212,16 +212,6 @@ union ValueEscapeSite
 	none
 end 'ValueEscapeSite'
 
-// The concrete generic instance a call into a SHARED generic body is made at (P1.7) — the fact that turns a
-// `typeParameter` parameter back into a type. `none` for every ordinary call, which is why it is a union and
-// not a sentinel gid: `GenericInstanceId` 0 is a real instance. `checkTypeParameterArgs` gates on the
-// callee's signature before minting one, so a call with no opaque parameter — the whole generics-free corpus
-// — pays no heap box for the `none`.
-union CallGenericInstance
-	instance(gid GenericInstanceId)
-	none
-end 'CallGenericInstance'
-
 // Did the scan find a real escape? The two escaping arms collapse to one range (the union's own band order),
 // so a route appended later must state its own answer rather than inherit `none`'s.
 function escapeSiteFound(site ValueEscapeSite) returns bool
@@ -1078,10 +1068,17 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 		return
 	end 'noOpaqueParams'
 
-	match callGenericInstance(func, result: result, sig: sig, argIds: argIds) 'instance'
-		none then return
-		instance(gid) then checkTypeParameterArgsAt(project, func: func, gid: gid, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
-	end 'instance'
+	// ⭐ The instance is read off a VALUE this pass already holds, so the answer costs no heap object. It
+	// used to be a `CallGenericInstance` union — and a Maxon union value IS a heap box, minted once per call
+	// into a shared generic body just to be matched and dropped (measured: 1 allocation / 16 bytes per such
+	// call, on a path that becomes every array operation at P1.7 Array). A `ValueId` is a scalar.
+	let subject = callInstanceSubject(sig, result: result, argIds: argIds)
+	let tag = try func.valueTags.get(subject) otherwise return
+	if tag != ValueTypeTag.genericInstance 'notAnInstance'
+		return
+	end 'notAnInstance'
+
+	checkTypeParameterArgsAt(project, func: func, gid: try func.valueNameIds.get(subject) otherwise panic("checkTypeParameterArgs: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep"), sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 end 'checkTypeParameterArgs'
 
 // The body of the type-parameter argument check once the call's concrete instance is known. Only the
@@ -1118,27 +1115,18 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 	end 'eachArg'
 end 'checkTypeParameterArgsAt'
 
-// ⭐ **THE CONCRETE GENERIC INSTANCE A CALL INTO A SHARED GENERIC BODY IS MADE AT**, or `none` for an
-// ordinary call. Two shapes carry it, and they are asked in the order that makes a METHOD's answer its
-// receiver's: an instance method's receiver IS the instance, whereas its result may be an unrelated type
-// (`get() returns T`), while a static factory has no receiver and its RESULT is the instance it built.
-function callGenericInstance(func IrFunction, result ValueId, sig FuncSignature, argIds ValueIdArray) returns CallGenericInstance
+// ⭐ **WHICH VALUE CARRIES THE INSTANCE a call into a shared generic body is made at.** Two shapes carry
+// it, and they are asked in the order that makes a METHOD's answer its receiver's: an instance method's
+// receiver IS the instance, whereas its result may be an unrelated type (`get() returns T`), while a static
+// factory has no receiver and its RESULT is the instance it built (`retypeGenericAliasConstructorResult`).
+// Returns a `ValueId` rather than an instance-or-none union so the answer allocates nothing; the caller
+// reads the tag to find out whether it is an instance at all.
+function callInstanceSubject(sig FuncSignature, result ValueId, argIds ValueIdArray) returns ValueId
 	if sig.takesReceiver() and argIds.count() > 0 'method'
-		let receiverId = try argIds.get(0) otherwise panic("callGenericInstance: argIds.count() > 0 but get(0) failed")
-		return valueGenericInstance(func, value: receiverId)
+		return try argIds.get(0) otherwise panic("callInstanceSubject: argIds.count() > 0 but get(0) failed")
 	end 'method'
-	return valueGenericInstance(func, value: result)
-end 'callGenericInstance'
-
-// The instance a VALUE is, read off the function's published per-value type columns — `none` for anything
-// that is not a generic instance (a plain struct, a scalar, a void call's unused result slot).
-function valueGenericInstance(func IrFunction, value ValueId) returns CallGenericInstance
-	let tag = try func.valueTags.get(value) otherwise return CallGenericInstance.none
-	if tag != ValueTypeTag.genericInstance 'notAnInstance'
-		return CallGenericInstance.none
-	end 'notAnInstance'
-	return CallGenericInstance.instance(try func.valueNameIds.get(value) otherwise panic("valueGenericInstance: genericInstance value v{value} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep"))
-end 'valueGenericInstance'
+	return result
+end 'callInstanceSubject'
 
 // ⭐ **THE PER-INSTANCE ARGUMENT CHECK (P1.6-C, E3005).** A method whose parameter is a bare inner alias
 // (`setTag(t Idx)`) wants that parameter QUALIFIED to the concrete receiver's instance (`WrapperB.setTag`
