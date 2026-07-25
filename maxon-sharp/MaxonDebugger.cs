@@ -114,8 +114,16 @@ internal sealed class MaxonDebugger : IDisposable {
   /// resolved location.
   public readonly record struct Frame(int Index, long CodeOffset, bool IsReturnAddress, SymLocation Location);
 
+  /// <summary>
+  /// True when this session asked for <c>--stop-others</c>. Kept so a surface can REFUSE it AFTER the
+  /// handshake: the mode word is written before the target is spawned, so the agent's version is not yet
+  /// knowable there, and an agent too old to read that word would freeze nothing at all while the user
+  /// believed the rest of the program was stopped.
+  /// </summary>
+  public bool StopOthersRequested { get; }
+
   private MaxonDebugger(SharedMapping mapping, MemoryMappedViewAccessor accessor, Process process,
-      Task stdout, Task stderr, MxdbgReader? sidecar, TimeSpan stopTimeout) {
+      Task stdout, Task stderr, MxdbgReader? sidecar, TimeSpan stopTimeout, bool stopOthers) {
     _mapping = mapping;
     _accessor = accessor;
     _process = process;
@@ -123,6 +131,7 @@ internal sealed class MaxonDebugger : IDisposable {
     _stderr = stderr;
     Sidecar = sidecar;
     StopTimeout = stopTimeout;
+    StopOthersRequested = stopOthers;
   }
 
   /// <summary>
@@ -144,7 +153,7 @@ internal sealed class MaxonDebugger : IDisposable {
   /// </summary>
   public static MaxonDebugger Attach(string exePath, IReadOnlyList<string> targetArgs, MxdbgReader? sidecar,
       TextWriter? targetStdout = null, TimeSpan? stopTimeout = null,
-      IReadOnlyDictionary<string, string>? targetEnv = null) {
+      IReadOnlyDictionary<string, string>? targetEnv = null, bool stopOthers = false) {
     var stdoutSink = targetStdout ?? Console.Out;
 
     if (!File.Exists(exePath))
@@ -164,9 +173,12 @@ internal sealed class MaxonDebugger : IDisposable {
     Process? spawned = null;
     try {
       accessor = mapping.Map.CreateViewAccessor(0, size);
-      // A fresh segment is zeroed; StopAtEntry is the one field seeded before spawn, so the driver can
-      // set breakpoints before user code runs, gdb-style.
+      // A fresh segment is zeroed; these are the fields seeded before spawn. StopAtEntry lets the driver
+      // set breakpoints before user code runs, gdb-style. StopOthers must be in force at that very first
+      // stop too — it describes every stop of the session, so there is no moment at which the driver
+      // could post it instead.
       accessor.Write(RuntimeEmitter.DbgOffStopAtEntry, 1L);
+      accessor.Write(RuntimeEmitter.DbgOffStopOthers, stopOthers ? 1L : 0L);
 
       var psi = new ProcessStartInfo {
         FileName = Path.GetFullPath(exePath),
@@ -208,7 +220,7 @@ internal sealed class MaxonDebugger : IDisposable {
       // Ownership passes to the instance here: from this point EndSession/Dispose is what ends the target.
       spawned = null;
       return new MaxonDebugger(mapping, accessor, process, stdout, stderr, sidecar,
-        stopTimeout ?? DefaultStopTimeout);
+        stopTimeout ?? DefaultStopTimeout, stopOthers);
     } catch {
       KillUnowned(spawned);
       accessor?.Dispose();
@@ -839,8 +851,13 @@ internal sealed class MaxonDebugger : IDisposable {
     if (StopOutstanding) return false;
 
     // Every resume passes through here, so this is where the green-thread epoch advances: once the
-    // target runs, any thread struct may have been recycled, and an id must not outlive that.
-    if (cmd is RuntimeEmitter.DbgCmdContinue or RuntimeEmitter.DbgCmdStep) _resumeEpoch++;
+    // target runs, any thread struct may have been recycled, and an id must not outlive that. The
+    // SELECTION goes with it, for the stronger reason: it names a frame, and a resumed thread's frames
+    // are gone even when its struct is not.
+    if (cmd is RuntimeEmitter.DbgCmdContinue or RuntimeEmitter.DbgCmdStep) {
+      _resumeEpoch++;
+      ClearGreenThreadSelection();
+    }
 
     Thread.MemoryBarrier();
     _cmdSeq += 1;
@@ -1083,6 +1100,11 @@ internal sealed class MaxonDebugger : IDisposable {
   /// Which frame, if any, the agent could describe for a green thread — see the agent's DbgGtTopFrame*.
   public enum GtTopFrame { None, Exact, ReturnAddress }
 
+  /// Whether the DEBUGGER owns a green thread — see the agent's DbgGtHold*. <see cref="Pending"/> is the
+  /// cooperative limit made visible: the hold is in force but the thread is executing, so it keeps
+  /// running until it next interacts with the scheduler, and one that never does stays here.
+  public enum GtHold { None, Held, Pending }
+
   /// <summary>
   /// One live green thread. <see cref="Id"/> is the DRIVER's stable small integer (the runtime has no
   /// thread id at all — see <see cref="GtIdentity"/>); <see cref="Handle"/> is the raw struct address
@@ -1096,12 +1118,30 @@ internal sealed class MaxonDebugger : IDisposable {
   /// </summary>
   public readonly record struct GreenThread(
     int Id, ulong Handle, long Status, bool OnCpu, bool IsStopped, long ProcId,
-    string EntryFunction, GtTopFrame TopKind, SymLocation TopLocation, long RecordIndex) {
+    string EntryFunction, GtTopFrame TopKind, SymLocation TopLocation, ulong TopFramePointer,
+    GtHold Hold, long RecordIndex) {
 
     /// True for a processor's INLINE main-thread green thread — the scheduler context an OS worker runs
     /// on, which is never spawned from a function. Derived from the processor field the agent recorded,
     /// so "is this a scheduler thread" is not a second fact that could disagree with its owner.
     public bool IsSchedulerThread => IsSchedulerProc(ProcId);
+
+    /// <summary>
+    /// The frame `print` and `locals` read when this thread is SELECTED, or null when it has none.
+    ///
+    /// Its PC is the LOOKUP offset, biased for a return address, because that is the only thing it is
+    /// used for: which function's local table to resolve a name against. The DISPLAYED location comes
+    /// from the per-thread backtrace, which applies the same bias for itself — so nothing renders this
+    /// number and nothing has to remember it is off by one.
+    ///
+    /// Sp is deliberately 0: it is only meaningful to the step runners, and stepping a thread that is
+    /// not the stopped one is refused outright rather than approximated.
+    /// </summary>
+    public StopInfo? InspectionFrame => TopKind == GtTopFrame.None || TopFramePointer == 0
+      ? null
+      : new StopInfo(RuntimeEmitter.DbgStopReasonBreakpoint,
+        TopKind == GtTopFrame.ReturnAddress ? TopLocation.CodeOffset - 1 : TopLocation.CodeOffset,
+        0, (long)TopFramePointer);
   }
 
   /// <summary>
@@ -1166,6 +1206,43 @@ internal sealed class MaxonDebugger : IDisposable {
   /// Never reused, so a retired id cannot come back attached to a different thread.
   private int _nextGtId;
 
+  /// <summary>
+  /// Every id this session has ever minted. It exists only to make a REFUSAL ACTIONABLE, and that is
+  /// worth a set: ids are re-minted on every resume (see <see cref="GtIdentity"/>), so the id a user
+  /// read one stop ago is genuinely gone — and "no green thread has id 3" is a true sentence that sends
+  /// them looking for a thread that is right there under a new number. Knowing the id was OURS turns it
+  /// into "that id is from an earlier stop; run `threads`", which is the same refusal with the next step
+  /// attached.
+  /// </summary>
+  private readonly HashSet<int> _everMintedGtIds = [];
+
+  /// The green thread `gt <id>` selected, and the id it was selected by. The ID is what persists: the
+  /// RECORD is re-read from each listing (see <see cref="ListGreenThreads"/>), because a thread's frame
+  /// pointer is a fact about one stop.
+  private int? _selectedGtId;
+  private GreenThread? _selectedGt;
+
+  /// The green thread `print`, `locals` and `backtrace` currently describe, or null for the stopped one.
+  public GreenThread? SelectedGreenThread => _selectedGt;
+
+  /// <summary>
+  /// The frame value inspection reads: the SELECTED green thread's, or the stopped one's when nothing is
+  /// selected. Every surface asks this rather than choosing for itself, so `print` cannot read one
+  /// thread while `backtrace` shows another.
+  /// </summary>
+  public StopInfo InspectionFrame(StopInfo stopped) =>
+    _selectedGt is { } t && t.InspectionFrame is { } frame ? frame : stopped;
+
+  /// <summary>
+  /// Forget any `gt <id>` selection. Called wherever the target RESUMES, because a selection names a
+  /// frame of a thread that is now free to move — and because ids are re-minted across a resume anyway,
+  /// so the selection could not be renewed even if the frame were still there.
+  /// </summary>
+  private void ClearGreenThreadSelection() {
+    _selectedGtId = null;
+    _selectedGt = null;
+  }
+
   /// The most recent listing, which is what a per-thread command names. Held because the agent's record
   /// INDEX is only meaningful against the array it published, and the driver must not send an index the
   /// user's id no longer maps to.
@@ -1220,11 +1297,29 @@ internal sealed class MaxonDebugger : IDisposable {
         topKind == GtTopFrame.None
           ? default
           : Symbolize(topPc, returnAddressBias: topKind == GtTopFrame.ReturnAddress),
+        (ulong)_accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffTopFp),
+        HoldKindOf(_accessor.ReadInt64(rec + RuntimeEmitter.DbgGtRecOffHold)),
         i));
     }
 
     _gtIds = ids;
+    foreach (var t in threads) _everMintedGtIds.Add(t.Id);
     _lastGtList = threads;
+
+    // A selection is a POSITION IN A LISTING, so it is re-read from the one just published rather than
+    // remembered: between two stops the same thread's frames move, and a stale copy would let `print`
+    // read the frame the thread had at the previous stop and call it current.
+    if (_selectedGtId is { } selectedId) {
+      GreenThread? refreshed = null;
+      foreach (var t in threads) {
+        if (t.Id != selectedId || t.IsStopped || t.OnCpu) continue;
+        refreshed = t;
+        break;
+      }
+      _selectedGt = refreshed;
+      if (refreshed is null) _selectedGtId = null;
+    }
+
     return new GreenThreadList(GtListStatus.Ok, threads, truncated);
   }
 
@@ -1238,6 +1333,17 @@ internal sealed class MaxonDebugger : IDisposable {
     _ => throw new DebuggerException($"the debug agent reported an unknown top-frame kind {word}"),
   };
 
+  /// The agent's hold word as the driver's kind. It THROWS on an unrecognized value for the same reason
+  /// its sibling above does: both decode a word the agent wrote from a closed set the two ends share, so
+  /// a value outside it means the record layout itself is being misread — and rendering that as "not
+  /// held" would hide it behind a perfectly ordinary-looking listing.
+  private static GtHold HoldKindOf(long word) => word switch {
+    RuntimeEmitter.DbgGtHoldNone => GtHold.None,
+    RuntimeEmitter.DbgGtHoldHeld => GtHold.Held,
+    RuntimeEmitter.DbgGtHoldPending => GtHold.Pending,
+    _ => throw new DebuggerException($"the debug agent reported an unknown hold kind {word}"),
+  };
+
   /// The name of a green thread's entry function, or empty when it HAS none — which is a property of the
   /// thread, not of the debug info: a processor's inline main-thread thread is not spawned from a
   /// function at all, and the processor field (never a zero entry offset) is what says so. A missing
@@ -1247,23 +1353,46 @@ internal sealed class MaxonDebugger : IDisposable {
   private string EntryFunctionName(long entryPc, long procId) =>
     IsSchedulerProc(procId) ? "" : Symbolize(entryPc).Function;
 
-  /// Why a per-green-thread backtrace produced no frames. The three refusals are DISTINCT because each
-  /// needs a different sentence, and two of them are answered by the driver before anything is posted:
-  /// it knows the ids it minted, and it knows from the listing which threads are on-cpu.
-  public enum GtBacktraceStatus {
-    /// The agent walked the thread's parked frame chain (which may still be empty — a spawned thread
-    /// that has never run has no frame pointer yet).
+  /// <summary>
+  /// How a command that names ONE green thread turned out. It is ONE vocabulary for all of them —
+  /// `gt-backtrace`, `gt`, `gt-park`, `gt-resume` — because they share the whole hard part: every one
+  /// of them starts by resolving an id against a fresh listing, and every one of them can be refused by
+  /// the same facts about the thread it lands on. Three parallel enums here meant three copies of one
+  /// mapping, and the way THAT fails is a command quietly wording a stale id as an unknown one.
+  ///
+  /// Not every member can arise from every command (nothing selects a scheduler thread; nothing parks a
+  /// thread with no frame), and that is fine: the refusal a command produces is the one it produces,
+  /// and each is worded once, centrally.
+  /// </summary>
+  public enum GtThreadStatus {
+    /// The command was carried out. For a backtrace the frame list may still be EMPTY — a spawned
+    /// thread that has never run has no frame pointer yet — which is a real answer, not a failure.
     Ok,
-    /// The agent predates green-thread enumeration; its zeroed array must not be read as a real trace.
+    /// The agent predates the green-thread surface; its record array must not be read at all.
     UnsupportedByAgent,
-    /// No green thread carries that id in the most recent listing.
+    /// The listing this command starts with could not be taken, so nothing could be resolved.
+    NotListed,
+    /// No green thread carries that id, and none ever did in this session.
     UnknownId,
-    /// The thread is executing on a processor, so its saved rsp/rbp are stale. Walking them would
-    /// produce a plausible-looking WRONG backtrace, which is worse than saying so.
+    /// That id named a thread at an EARLIER stop. Distinct from <see cref="UnknownId"/> because the two
+    /// need different next steps: this one is cured by running `threads` again.
+    StaleId,
+    /// The thread is executing on a processor. Its saved rsp/rbp are stale, so walking them would
+    /// produce a plausible-looking WRONG backtrace; and a COOPERATIVE park cannot reach it until it
+    /// next interacts with the scheduler, which for a compute loop is never.
     RunningOnCpu,
-    /// The agent produced no trace: the thread completed while the target was parked (its struct may
-    /// already have been recycled), or the target stopped answering.
-    Unavailable,
+    /// The thread has no readable frame: it has not started, or the agent could not vouch for its
+    /// frame chain. Nothing to select, and nothing for `print` to read.
+    NoFrame,
+    /// A processor's inline scheduler thread — the processor itself. Never enqueued, so never parkable.
+    SchedulerThread,
+    /// The thread the debugger is stopped on. Already stopped; parking it would only stop it resuming.
+    StoppedThread,
+    /// The AGENT did not carry it out. Coarse on purpose, because the driver genuinely cannot tell its
+    /// causes apart from the outcome word alone (see the P4d-1 residual on <c>DbgOffCmdResult</c>): a
+    /// full park table, a resume with no park to undo, a thread that completed while the target was
+    /// parked, or a target that stopped answering. Each is named in the sentence, not guessed between.
+    Refused,
   }
 
   /// <summary>
@@ -1275,7 +1404,7 @@ internal sealed class MaxonDebugger : IDisposable {
   /// when the id resolved to no thread, which is always accompanied by a refusal <see cref="Status"/>.
   /// </summary>
   public readonly record struct GtBacktraceResult(
-    GtBacktraceStatus Status, IReadOnlyList<Frame> Frames, GreenThread? Thread);
+    GtThreadStatus Status, IReadOnlyList<Frame> Frames, GreenThread? Thread);
 
   /// <summary>
   /// Backtrace ONE green thread by its driver-assigned id, against the most recent
@@ -1287,46 +1416,127 @@ internal sealed class MaxonDebugger : IDisposable {
   /// on-cpu thread is refused.
   /// </summary>
   public GtBacktraceResult GtBacktrace(int id) {
-    if (!GreenThreadsSupported)
-      return new GtBacktraceResult(GtBacktraceStatus.UnsupportedByAgent, [], null);
-
-    // RE-LIST FIRST, here rather than at each caller. What this posts is a record INDEX, and an index is
-    // only meaningful against the array the agent last published — which the agent republishes on every
-    // per-thread command. While both REPL faces happened to list beforehand, that made the invariant a
-    // property of who calls this rather than of the engine: the next surface to reach for it (the MCP
-    // batch shape this ladder is heading to) would get a plausible backtrace OF THE WRONG THREAD, with
-    // nothing to catch it. Listing is cheap and the target is parked either way.
-    var list = ListGreenThreads();
-    if (list.Status != GtListStatus.Ok)
-      return new GtBacktraceResult(
-        list.Status == GtListStatus.UnsupportedByAgent
-          ? GtBacktraceStatus.UnsupportedByAgent
-          : GtBacktraceStatus.Unavailable,
-        [], null);
-
-    GreenThread? match = null;
-    foreach (var t in _lastGtList) {
-      if (t.Id != id) continue;
-      match = t;
-      break;
-    }
-    if (match is not { } thread) return new GtBacktraceResult(GtBacktraceStatus.UnknownId, [], null);
+    if (ResolveGreenThread(id, out var thread) is { } refusal)
+      return new GtBacktraceResult(refusal, [], null);
 
     if (thread.IsStopped) {
       var stoppedTrace = Backtrace();
       return new GtBacktraceResult(
-        stoppedTrace.Status == BacktraceStatus.Ok ? GtBacktraceStatus.Ok : GtBacktraceStatus.Unavailable,
+        stoppedTrace.Status == BacktraceStatus.Ok ? GtThreadStatus.Ok : GtThreadStatus.Refused,
         stoppedTrace.Frames, thread);
     }
 
-    if (thread.OnCpu) return new GtBacktraceResult(GtBacktraceStatus.RunningOnCpu, [], thread);
+    if (thread.OnCpu) return new GtBacktraceResult(GtThreadStatus.RunningOnCpu, [], thread);
 
     if (!PostCommand(RuntimeEmitter.DbgCmdGtBacktrace, thread.RecordIndex))
-      return new GtBacktraceResult(GtBacktraceStatus.Unavailable, [], thread);
+      return new GtBacktraceResult(GtThreadStatus.Refused, [], thread);
 
     // A parked thread has no trapped PC, so even frame 0 is a return address off its saved chain.
     return new GtBacktraceResult(
-      GtBacktraceStatus.Ok, ReadFrameArray(frameZeroIsReturnAddress: true), thread);
+      GtThreadStatus.Ok, ReadFrameArray(frameZeroIsReturnAddress: true), thread);
+  }
+
+  /// <summary>
+  /// Resolve a driver id to a green thread in a FRESH listing, or return why it could not be.
+  ///
+  /// RE-LISTING IS THE POINT, and it lives here rather than at each caller. What a per-thread command
+  /// posts is a record INDEX, and an index is only meaningful against the array the agent last
+  /// published — which the agent republishes on every per-thread command. While the REPL faces happen to
+  /// list beforehand, that made the invariant a property of who calls this rather than of the engine:
+  /// the next surface to reach for it would get a plausible answer ABOUT THE WRONG THREAD, with nothing
+  /// to catch it. Listing is cheap and the target is parked either way.
+  /// </summary>
+  private GtThreadStatus? ResolveGreenThread(int id, out GreenThread thread) {
+    thread = default;
+    if (!GreenThreadsSupported) return GtThreadStatus.UnsupportedByAgent;
+
+    var list = ListGreenThreads();
+    if (list.Status != GtListStatus.Ok)
+      return list.Status == GtListStatus.UnsupportedByAgent
+        ? GtThreadStatus.UnsupportedByAgent
+        : GtThreadStatus.NotListed;
+
+    foreach (var t in _lastGtList) {
+      if (t.Id != id) continue;
+      thread = t;
+      return null;
+    }
+    return _everMintedGtIds.Contains(id) ? GtThreadStatus.StaleId : GtThreadStatus.UnknownId;
+  }
+
+  // ---- Green-thread selection and control (P4d-2b) ----
+
+  public readonly record struct GtSelectResult(GtThreadStatus Status, GreenThread? Thread);
+
+  /// <summary>
+  /// Make <paramref name="id"/> the thread `backtrace`, `print` and `locals` describe.
+  ///
+  /// Selecting the STOPPED thread clears the selection rather than recording one, and that is not a
+  /// shortcut: "no selection" already MEANS the stopped thread, so recording it would create a second
+  /// spelling of one state — and the two would then have to be kept agreeing about a frame that has
+  /// only one source, the stop event itself.
+  /// </summary>
+  public GtSelectResult SelectGreenThread(int id) {
+    if (ResolveGreenThread(id, out var thread) is { } refusal)
+      return new GtSelectResult(refusal, null);
+
+    if (thread.IsStopped) {
+      ClearGreenThreadSelection();
+      return new GtSelectResult(GtThreadStatus.Ok, thread);
+    }
+    if (thread.OnCpu) return new GtSelectResult(GtThreadStatus.RunningOnCpu, thread);
+    if (thread.InspectionFrame is null) return new GtSelectResult(GtThreadStatus.NoFrame, thread);
+
+    _selectedGtId = id;
+    _selectedGt = thread;
+    return new GtSelectResult(GtThreadStatus.Ok, thread);
+  }
+
+  public readonly record struct GtHoldResult(GtThreadStatus Status, GreenThread? Thread);
+
+  /// <summary>
+  /// Park one green thread: the scheduler will decline to run it until <see cref="ResumeGreenThread"/>.
+  ///
+  /// THREE refusals, and each is a real property of the named thread rather than a limitation of the
+  /// mechanism: a processor's scheduler thread is the processor and is never scheduled at all; the
+  /// STOPPED thread is already stopped, and holding it would only stop it from being resumed; and a
+  /// thread ON A PROCESSOR cannot be reached by a cooperative park, which is stated rather than queued.
+  ///
+  /// It posts even when the record already reads Held, because under `--stop-others` EVERY thread reads
+  /// Held for the duration of one stop — and a park that quietly declined to record itself there would
+  /// evaporate on the next `continue`, which is the whole thing the user asked for.
+  /// </summary>
+  public GtHoldResult ParkGreenThread(int id) {
+    if (ResolveGreenThread(id, out var thread) is { } refusal)
+      return new GtHoldResult(refusal, null);
+
+    if (thread.IsSchedulerThread) return new GtHoldResult(GtThreadStatus.SchedulerThread, thread);
+    if (thread.IsStopped) return new GtHoldResult(GtThreadStatus.StoppedThread, thread);
+    if (thread.OnCpu) return new GtHoldResult(GtThreadStatus.RunningOnCpu, thread);
+
+    return new GtHoldResult(
+      PostCommand(RuntimeEmitter.DbgCmdGtHold, thread.RecordIndex)
+        ? GtThreadStatus.Ok
+        : GtThreadStatus.Refused,
+      thread);
+  }
+
+  /// <summary>
+  /// Release one green thread's park. The agent REFUSES when no park names that thread, which is what
+  /// distinguishes a `--stop-others` freeze (lifted by `continue`, not by this) from a `gt-park`.
+  ///
+  /// A released thread's selection is dropped: from here it is free to be scheduled, so the frame
+  /// `print` would read is no longer one this session can promise is standing still.
+  /// </summary>
+  public GtHoldResult ResumeGreenThread(int id) {
+    if (ResolveGreenThread(id, out var thread) is { } refusal)
+      return new GtHoldResult(refusal, null);
+
+    if (!PostCommand(RuntimeEmitter.DbgCmdGtRelease, thread.RecordIndex))
+      return new GtHoldResult(GtThreadStatus.Refused, thread);
+
+    if (_selectedGtId == id) ClearGreenThreadSelection();
+    return new GtHoldResult(GtThreadStatus.Ok, thread);
   }
 
   // ---- Source-line stepping (P4b) ----

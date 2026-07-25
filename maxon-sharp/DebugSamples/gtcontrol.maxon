@@ -1,0 +1,76 @@
+// P4d-2b green-thread CONTROL gate sample — per-GT park/resume, and `gt <id>` context switch.
+//
+// SINGLE-PROCESSOR by design (the golden pins `--target-env=MAXON_MAX_PROCS=1`): everything this
+// sample asserts is about the debugger OWNING a thread, not about concurrency, and one processor is
+// what makes the transcript byte-stable. The multi-processor half of this rung — a thread found
+// RUNNING on another processor, and `--stop-others` — is DebugSamples/gtmulti.maxon.
+//
+// ⭐ THE SHAPE IS WHAT MAKES A PARK PROVABLE WITHOUT WAITING OR POLLING. main awaits the LONG task and
+// parks the SHORT one, so the park's effect is a state at the next breakpoint rather than a duration:
+//
+//   * At the first breakpoint every task is parked in its own wait, so any of them can be parked.
+//   * `await p2` then drives the scheduler for ~600 ms. `heldTask`'s own wait ends a third of the way
+//     through THAT wait, so without a park it would resume, finish and be gone by the second
+//     breakpoint — which is exactly what the second EXPECTED block below shows.
+//   * With the park in place it is handed to the scheduler at that moment and DECLINED instead, so it
+//     is still alive at the second breakpoint with ~400 ms of margin. Its survival IS the proof that
+//     the hold took effect; no timing is asserted, only the state it produces.
+//   * `await p1` is behind that first await, so the program only completes once `gt-resume` has
+//     released heldTask. The EXIT CODE is therefore the proof that a park/resume round trip neither
+//     leaks nor wedges a thread: 44 means every task's result came back.
+//
+// ⭐ `heldTask` parks on an AWAIT rather than a `sleep`, and that is what makes `print`/`locals` on a
+// selected thread mean anything. A thread parked in `sleep` has `stdlib.sleep` as its top frame, whose
+// parameter the register allocator never spills — so its locals are honestly empty and prove nothing.
+// A thread parked in `await` has its OWN function as the top frame, because `__gt_await` is where the
+// context switch is taken from. `mark` is read AFTER the await, so it is live across the park and must
+// have a frame slot (the same rule cond.maxon states for `found`), which is what `print mark` reads.
+//
+// ⚠ The waits are `await`s, deliberately, and NOT a long `sleep` in main. `sleep` on the main thread
+// returns EARLY when another green thread completes — measured on the unchanged compiler:
+// `sleep(30); sleep(300)` alongside a task that completes at 100 ms returns the whole program in
+// 130 ms, because `__gt_yield_completed` sets `P->mainThread.status = running` before switching to it,
+// which on P0 IS `main`, and `maxon_sleep`'s main-thread loop reads that status as "my timer fired".
+// A sample built on a main-thread sleep duration would be asserting that defect.
+
+typealias ExitCode = int(0 to 255)
+typealias Integer = int(i64.min to i64.max)
+
+function innerTask() returns Integer
+	sleep(200)
+	return 1
+end 'innerTask'
+
+function heldTask() returns Integer
+	// `mark` is COMPUTED rather than written down, and that is what gives it a frame slot: a constant
+	// is rematerialized wherever it is needed and never occupies one, so `let mark = 41` would leave
+	// this function with no readable local at all and `print mark` with nothing true to say.
+	var mark = 0
+	var i = 0
+	while i < 41 'accumulate'
+		mark = mark + 1
+		i = i + 1
+	end 'accumulate'
+
+	let inner = async innerTask()
+	let got = await inner   // parks HERE, so this function is its own top frame while parked
+	return got + mark
+end 'heldTask'
+
+function freeTask() returns Integer
+	sleep(600)
+	return 2
+end 'freeTask'
+
+function main() returns ExitCode
+	let p1 = async heldTask()
+	let p2 = async freeTask()
+	// TWO yields, not one: measured (P4d-2a), each yield from the main thread hands the processor to
+	// exactly ONE ready task, so with a single yield the second task never starts.
+	sleep(30)
+	sleep(30)
+	let r2 = await p2   // breakpoint here: every task is parked in its own wait, none of them expired
+	let r1 = await p1   // breakpoint here: heldTask is HELD, and would have finished long ago if it
+	                    // were not. Only returns once `gt-resume` has released it.
+	return r1 + r2
+end 'main'

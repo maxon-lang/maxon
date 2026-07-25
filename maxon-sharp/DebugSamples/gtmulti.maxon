@@ -1,0 +1,70 @@
+// P4d-2b green-thread CONTROL gate sample — the MULTI-PROCESSOR half.
+//
+// P4d-2a's golden pins MAXON_MAX_PROCS=1, so two things went untested and they are this sample's
+// whole job:
+//
+//   1. A thread list with MORE THAN ONE PROCESSOR in it. `--target-env=MAXON_MAX_PROCS=2` pins the
+//      count, so the scheduler-thread rows are a fixed set rather than a machine-dependent one.
+//   2. A green thread deliberately held RUNNING on another processor. `spinTask` is a pure compute
+//      loop — once a processor picks it up it never touches the scheduler again — so it is the one
+//      thread a COOPERATIVE park can never stop, and every refusal that turns on that fact has to be
+//      exercised rather than reasoned about.
+//
+// ⭐ GETTING A THREAD ONTO THE OTHER PROCESSOR IS NOT AUTOMATIC, and the shape below is what the
+// scheduler actually requires (read out of RuntimeEmitter.Scheduler.cs, then measured):
+//
+//   * A spawn goes to THIS processor's `runnext` first, then to its LOCAL queue. A worker can only
+//     take work from the global queue or by STEALING, and `__gt_steal_work` refuses a victim whose
+//     local queue holds fewer than TWO entries. So THREE spawns are the minimum that leaves a
+//     stealable queue: the third displaces the second, leaving [spin, tiny] in the local queue with
+//     `runnext` holding the last one.
+//   * The stolen entry is the local queue's HEAD, so `spinTask` is spawned FIRST — that is what makes
+//     which thread lands on the worker deterministic rather than lucky.
+//   * `spinTask`'s one `sleep` is at the END, not the start. `async` on a body that never yields is
+//     refused outright (E3073), but a yield at the START would park the task the instant the worker
+//     picked it up — and with main busy below, nothing would ever check its timer. At the end it
+//     satisfies the compiler and still leaves the thread spinning for the whole session.
+//   * main then BUSY-LOOPS instead of sleeping. It must not touch the scheduler while the worker
+//     wakes and steals (~100 µs), and it must not run the queued tasks itself — a `sleep` here would
+//     do exactly that. The loop is ~50 ms, three orders of magnitude of margin, and it costs the
+//     sample nothing because `spinTask` runs concurrently on the other processor throughout.
+
+typealias ExitCode = int(0 to 255)
+typealias Integer = int(i64.min to i64.max)
+
+function spinTask() returns Integer
+	var acc = 0
+	var i = 0
+	while i < 2000000000 'spin'
+		acc = acc + 1
+		i = i + 1
+	end 'spin'
+
+	// The ONE yield in this function, and it is here because the compiler REQUIRES one (E3073,
+	// "'async' is for I/O-concurrent work only"). At the END it is never reached during the debug
+	// session, which is the point: this thread is on-cpu from the moment it starts until it finishes.
+	sleep(1)
+	return acc / 1000000000
+end 'spinTask'
+
+function tinyTask() returns Integer
+	sleep(1)
+	return 0
+end 'tinyTask'
+
+function main() returns ExitCode
+	let ps = async spinTask()   // spawned FIRST, so it is the local queue's head — the entry a worker steals
+	let t1 = async tinyTask()   // displaces spinTask into the local queue
+	let t2 = async tinyTask()   // displaces tinyTask too, so the local queue reaches the stealable length
+
+	// Busy-wait WITHOUT touching the scheduler, so the worker gets the steal and main runs nothing.
+	var spin = 0
+	while spin < 100000000 'wait'
+		spin = spin + 1
+	end 'wait'
+
+	let rs = await ps           // breakpoint here: spinTask is on-cpu on the worker processor
+	let r1 = await t1
+	let r2 = await t2
+	return rs + r1 + r2
+end 'main'

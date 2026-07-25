@@ -353,15 +353,39 @@ public partial class RuntimeEmitter {
   //
   // GMP dequeue: runnext -> local (with 1/61 fairness) -> global -> steal.
   //
-  // Stack slots:
-  //   0 = P*
-  //   1 = result GT* (used during global dequeue)
+  // ⭐ THIS IS THE ONE PLACE THE SCHEDULER DECIDES WHAT RUNS NEXT, which is why the debug agent's
+  // per-thread hold (P4d-2b) is applied to its RESULT rather than anywhere else: a thread the debugger
+  // owns is one this function declines to hand back. `__gt_dequeue` is therefore split in two — a
+  // dispatcher and the unchanged body, `__gt_dequeue_ready` — so the filter wraps the answer instead of
+  // being threaded through the four places the body returns one.
   //
-  // Frame size: 0x40
+  // The dark cost is ONE load and ONE not-taken branch: with no debugger attached `__dbg_base` is zero
+  // and the body runs exactly as it did before. See RuntimeEmitter.DebugAgent.cs's green-thread control
+  // section for what the filter does with the thread it takes.
   // =========================================================================
 
   public void EmitGtDequeue() {
-    _b.FunctionStart("__gt_dequeue", 0, 0x40);
+    if (!Compiler.NoDebugAgent) {
+      _b.FunctionStart("__gt_dequeue", 0, 0x40);
+
+      var plainLabel = UniqueLabel("gt_dequeue_undebugged");
+
+      _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+      _b.JumpIfZero(VReg.Scratch1, plainLabel);
+      // Attached: the agent decides. `__dbg_base` is the right gate because it is cleared in exactly one
+      // place — __dbg_shutdown, at process exit — so no thread can be left held by a detach that happens
+      // while the program is still running.
+      _b.Call("__dbg_gt_dequeue_filtered");
+      _b.FunctionEnd();
+
+      _b.DefineLabel(plainLabel);
+      _b.Call("__gt_dequeue_ready");
+      _b.FunctionEnd();
+    }
+
+    // With the agent omitted (--no-debug-agent) there is nothing to filter, so the body IS the whole
+    // function and keeps the name every caller uses.
+    _b.FunctionStart(Compiler.NoDebugAgent ? "__gt_dequeue" : "__gt_dequeue_ready", 0, 0x40);
 
     // Load P*
     _b.LoadCurrentP(VReg.Scratch1);

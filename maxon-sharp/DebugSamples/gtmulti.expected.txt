@@ -1,0 +1,64 @@
+P4d-2b green-thread CONTROL gate — the MULTI-PROCESSOR half, over DebugSamples/gtmulti.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/gtmulti.maxon
+  maxon debug --target-env=MAXON_MAX_PROCS=2 --batch --commands='break gtmulti.maxon:66; run; threads; gt 5; gt-park 5; gt-backtrace 5; gt-park 2; continue' maxon-sharp/DebugSamples/gtmulti.exe
+  maxon debug --stop-others --target-env=MAXON_MAX_PROCS=2 --batch --commands='break gtmulti.maxon:66; run; threads; continue' maxon-sharp/DebugSamples/gtmulti.exe
+
+RED (before this rung): `gt`, `gt-park` and `--stop-others` did not exist, and the multi-processor
+listing itself was untested — P4d-2a's golden pins MAXON_MAX_PROCS=1, which is exactly what made a
+second processor's rows, and a thread running on one, its two named coverage gaps. This file closes
+both.
+
+WHAT EACH COMMAND PROVES (asserted by the JSON below):
+  * threads          -> ⭐ A MULTI-PROCESSOR LIST. Five rows and every one of them is a different case:
+                        #1 the stopped `main` on P0; #2 P1's own scheduler thread, off-cpu because it is
+                        executing a green thread rather than itself; #3/#4 spawned tasks that have never
+                        run; and #5 `spinTask`, `cpu:"on-cpu"` — A GREEN THREAD EXECUTING ON THE OTHER
+                        PROCESSOR while the debugger is stopped. That thread is the whole sample.
+  * #2's top frame   -> named honestly. A processor's scheduler thread runs on the OS thread's stack, so
+                        the frame above its saved one is the thread-entry thunk, outside `.text`, and the
+                        walk correctly stops. It used to read "not started — no frames yet", which was
+                        measurably wrong: that worker was running a green thread at that instant.
+  * gt 5             -> REFUSED. A thread on a processor has no stable frame — its saved rsp/rbp are
+                        whatever its last context switch wrote, and it has run since.
+  * gt-park 5        -> ⭐ REFUSED, and this is the rung's central honesty. `spinTask` is a pure compute
+                        loop; a cooperative park can only take effect where a thread next interacts with
+                        the scheduler, and this one never will. The refusal SAYS THAT, in place of a
+                        request that would sit unfulfilled behind a hopeful timeout reporting success.
+  * gt-backtrace 5   -> the same refusal, in the same words, from the command P4d-2a already had: one
+                        fact, one sentence, four callers.
+  * gt-park 2        -> a processor's scheduler thread is refused here too, on a REAL worker rather than
+                        on P0 — the case the single-processor golden cannot produce.
+  * --stop-others    -> ⭐ THE FREEZE, AND ITS LIMIT, IN ONE LISTING. #3/#4 are off-cpu, so the hold has
+                        already taken effect on them: `hold":"held"`, and the scheduler will not start
+                        them while the stop lasts. #5 is on-cpu, so it reads `hold":"pending"` — a
+                        DISTINCT word, because it is still running. Nothing here waits, polls, or
+                        promises: the listing states which threads the freeze reached.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The five-row set, each row's kind/proc/entry/status/cpu/hold, every refusal reason, and the exit code
+    2 are the subject and are STABLE. Measured 20/20 byte-identical for each block.
+  * The `.text` offsets are build-specific and move only if codegen moves.
+  * NOT asserted: the raw GreenThread addresses, and wall-clock timing.
+
+⚠ WHY THE SAMPLE IS SHAPED THIS WAY — three spawns, and main busy-waiting rather than sleeping — is
+written out in gtmulti.maxon's header. In short: a worker can only take work by STEALING, stealing
+refuses a victim whose local queue holds fewer than two entries, and a `sleep` in main would run the
+queued tasks itself instead of leaving them to be stolen.
+
+--- EXPECTED --batch STDOUT (newline-delimited JSON, one event per line) ---
+{"event":"breakpoint","action":"set","file":"gtmulti.maxon","line":66,"offset":"0x163","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x163","function":"main","file":"maxon-sharp/DebugSamples/gtmulti.maxon","line":66,"col":2,"source":[{"line":63,"text":"\t\tspin = spin \u002B 1","current":false},{"line":64,"text":"\tend \u0027wait\u0027","current":false},{"line":65,"text":"","current":false},{"line":66,"text":"\tlet rs = await ps           // breakpoint here: spinTask is on-cpu on the worker processor","current":true},{"line":67,"text":"\tlet r1 = await t1","current":false},{"line":68,"text":"\tlet r2 = await t2","current":false},{"line":69,"text":"\treturn rs \u002B r1 \u002B r2","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/gtmulti.maxon","line":66,"offset":"0x163"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtmulti.maxon","line":66,"offset":"0x163"}},{"id":2,"kind":"scheduler","proc":1,"status":"running","cpu":"parked","topFrame":null,"topFrameUnavailable":"the processor\u0027s scheduler loop \u2014 its caller is the OS thread entry, outside the program\u0027s code"},{"id":3,"kind":"green","entry":"tinyTask","status":"ready","cpu":"parked","topFrame":null,"topFrameUnavailable":"not started \u2014 no frames yet"},{"id":4,"kind":"green","entry":"tinyTask","status":"ready","cpu":"parked","topFrame":null,"topFrameUnavailable":"not started \u2014 no frames yet"},{"id":5,"kind":"green","entry":"spinTask","status":"running","cpu":"on-cpu","topFrame":null,"topFrameUnavailable":"running on a processor \u2014 no stable stack to walk"}]}
+{"event":"gt-select","id":5,"action":"refused","reason":"that green thread is running on a processor, so it has no stable stack to walk and a cooperative park cannot reach it until it next interacts with the scheduler"}
+{"event":"gt-park","id":5,"action":"refused","reason":"that green thread is running on a processor, so it has no stable stack to walk and a cooperative park cannot reach it until it next interacts with the scheduler"}
+{"event":"gt-backtrace","id":5,"frames":null,"framesUnavailable":"that green thread is running on a processor, so it has no stable stack to walk and a cooperative park cannot reach it until it next interacts with the scheduler"}
+{"event":"gt-park","id":2,"action":"refused","reason":"that is a processor\u0027s scheduler thread, which is the processor itself \u2014 it is never scheduled, so it cannot be parked"}
+{"event":"exit","code":2}
+
+--- EXPECTED --batch STDOUT: the same stop under --stop-others ---
+{"event":"breakpoint","action":"set","file":"gtmulti.maxon","line":66,"offset":"0x163","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x163","function":"main","file":"maxon-sharp/DebugSamples/gtmulti.maxon","line":66,"col":2,"source":[{"line":63,"text":"\t\tspin = spin \u002B 1","current":false},{"line":64,"text":"\tend \u0027wait\u0027","current":false},{"line":65,"text":"","current":false},{"line":66,"text":"\tlet rs = await ps           // breakpoint here: spinTask is on-cpu on the worker processor","current":true},{"line":67,"text":"\tlet r1 = await t1","current":false},{"line":68,"text":"\tlet r2 = await t2","current":false},{"line":69,"text":"\treturn rs \u002B r1 \u002B r2","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/gtmulti.maxon","line":66,"offset":"0x163"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtmulti.maxon","line":66,"offset":"0x163"}},{"id":2,"kind":"scheduler","proc":1,"status":"running","cpu":"parked","topFrame":null,"topFrameUnavailable":"the processor\u0027s scheduler loop \u2014 its caller is the OS thread entry, outside the program\u0027s code"},{"id":3,"kind":"green","entry":"tinyTask","status":"ready","cpu":"parked","hold":"held","topFrame":null,"topFrameUnavailable":"not started \u2014 no frames yet"},{"id":4,"kind":"green","entry":"tinyTask","status":"ready","cpu":"parked","hold":"held","topFrame":null,"topFrameUnavailable":"not started \u2014 no frames yet"},{"id":5,"kind":"green","entry":"spinTask","status":"running","cpu":"on-cpu","hold":"pending","topFrame":null,"topFrameUnavailable":"running on a processor \u2014 no stable stack to walk"}]}
+{"event":"exit","code":2}

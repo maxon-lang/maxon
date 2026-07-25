@@ -89,7 +89,15 @@ public partial class RuntimeEmitter {
   /// v3/v4 reason rather than the v6 one: a v7 agent acks the unknown list command without writing a
   /// record, and its zeroed count reads as a perfectly plausible "this program has no green threads" —
   /// a wrong answer dressed as an answer. So the driver refuses `threads` below this version instead.
-  public const long DbgControlVersion = 8;
+  ///
+  /// v9 (P4d-2b) adds GREEN-THREAD CONTROL: the <see cref="DbgCmdGtHold"/> / <see cref="DbgCmdGtRelease"/>
+  /// commands, the <see cref="DbgOffStopOthers"/> mode word, and two more words per green-thread record
+  /// (<see cref="DbgGtRecOffTopFp"/>, which is what lets `print`/`locals` read a SELECTED thread's frame,
+  /// and <see cref="DbgGtRecOffHold"/>, which reports whether the debugger owns that thread). The record
+  /// grew, so this version is what tells the driver how wide a record is — reading a v9 array with a v8
+  /// stride does not fail, it silently reports OTHER THREADS' fields, which is the worst shape of wrong
+  /// answer this segment can produce. Both new commands and the mode word are refused below it.
+  public const long DbgControlVersion = 9;
 
   /// The control-segment version at which the agent first understood <see cref="DbgCmdBacktrace"/>.
   /// The driver refuses to trust the frame array from an older agent (which would ack-and-ignore).
@@ -217,6 +225,23 @@ public partial class RuntimeEmitter {
   public const int DbgOffGtStopped = 0x4D0;    // i64 — GreenThread* the stop is parked on (0 = none)
   public const int DbgOffGtRecords = 0x4D8;    // DbgMaxGreenThreads records of DbgGtRecSize bytes
 
+  /// Stop-others mode (driver writes once, before spawn) — v9. Non-zero asks the agent to hold EVERY
+  /// green thread for the duration of each stop, so the rest of the program is frozen while the user
+  /// looks at it; zero is the P3b behaviour, where only the trapping processor is parked.
+  ///
+  /// It is DERIVED from the end of the record array rather than hand-placed, because that array's size
+  /// is itself a product of two constants — the one field placement a reader cannot check by eye, and
+  /// the one that would silently overlap if <see cref="DbgGtRecSize"/> grew again. The emit-time check
+  /// in <see cref="EmitDebugAgentFunctions"/> bounds the whole segment.
+  ///
+  /// A pre-spawn MODE word rather than a command, exactly like <see cref="DbgOffStopAtEntry"/>: it must
+  /// already be in force at the entry stop, which happens before the driver can post anything.
+  public const int DbgOffStopOthers = DbgOffGtRecords + DbgMaxGreenThreads * DbgGtRecSize;
+
+  /// One past the last byte the agent writes in the control segment — the ONE expression the emit-time
+  /// page check reads, so adding a field means extending this and nothing else.
+  public const int DbgControlSegmentHighWater = DbgOffStopOthers + DbgGtWordSize;
+
   /// The most green threads one enumeration reports. It bounds BOTH the record array (which must fit the
   /// control page) and the LIST WALK itself, and the second is what makes it load-bearing rather than a
   /// capacity number: the walk of `__gt_all_head` runs in the trap handler and is deliberately UNLOCKED
@@ -239,6 +264,11 @@ public partial class RuntimeEmitter {
   //
   // EntryPc is meaningful exactly when Proc == DbgGtNotAProc: a P's inline main-thread GT is not spawned
   // from a function and has no entry, and that is DERIVED from Proc rather than written down twice.
+  //
+  // TopFp is the FRAME POINTER the TopPc belongs to, and it is what makes `gt <id>` more than a label:
+  // a value is read as [fp + slot], so a thread the driver has SELECTED needs its frame pointer, not
+  // only its code offset. It is published beside TopPc rather than fetched by a second command because
+  // the two are one fact about one frame, and a second fetch could see a different one.
   public const int DbgGtRecOffHandle = 0 * DbgGtWordSize;   // raw GreenThread* — the driver's identity key
   public const int DbgGtRecOffStatus = 1 * DbgGtWordSize;   // GtLayout.GtStatus* as the runtime holds it
   public const int DbgGtRecOffOnCpu = 2 * DbgGtWordSize;    // 1 = currentGt of an ACTIVE processor
@@ -246,10 +276,12 @@ public partial class RuntimeEmitter {
   public const int DbgGtRecOffProc = 4 * DbgGtWordSize;     // owning P index, or DbgGtNotAProc
   public const int DbgGtRecOffTopKind = 5 * DbgGtWordSize;  // DbgGtTopFrame*
   public const int DbgGtRecOffTopPc = 6 * DbgGtWordSize;    // top frame's code offset (per TopKind)
+  public const int DbgGtRecOffTopFp = 7 * DbgGtWordSize;    // top frame's frame pointer (0 = none)
+  public const int DbgGtRecOffHold = 8 * DbgGtWordSize;     // DbgGtHold*
 
-  /// One green-thread record: the seven words above, DERIVED rather than restated so the stride the
+  /// One green-thread record: the nine words above, DERIVED rather than restated so the stride the
   /// agent strides by cannot drift from the fields it holds.
-  public const int DbgGtRecSize = 7 * DbgGtWordSize;
+  public const int DbgGtRecSize = 9 * DbgGtWordSize;
 
   /// Sentinel <see cref="DbgGtRecOffProc"/> for a SPAWNED green thread, which belongs to no processor —
   /// it migrates between them. A real P index is always &gt;= 0, so this cannot collide.
@@ -267,16 +299,42 @@ public partial class RuntimeEmitter {
   public const long DbgGtTopFrameExact = 1;
   public const long DbgGtTopFrameReturn = 2;
 
+  // What a record's Hold word says about the DEBUGGER's ownership of that thread. Two states, and the
+  // difference between them is exactly the cooperative limit this rung is honest about:
+  //   None    — the debugger has not asked for this thread.
+  //   Held    — a hold is in force AND the thread is not executing on any processor, so the scheduler
+  //             cannot start it: it will not run again until the hold is dropped. That is true whether
+  //             or not it has physically reached __dbg_gt_dequeue_filtered yet, because that filter is
+  //             passed BEFORE a thread runs, never after.
+  //   Pending — a hold is in force but the thread IS executing on a processor. A cooperative park
+  //             cannot reach into a running thread, so it keeps running until it next interacts with
+  //             the scheduler — and a thread that never does (a compute loop) stays here forever. It
+  //             is a DISTINCT word from Held precisely so nothing can report the one as the other.
+  public const long DbgGtHoldNone = 0;
+  public const long DbgGtHoldHeld = 1;
+  public const long DbgGtHoldPending = 2;
+
   /// The control-segment version at which the agent first ANSWERS a command. Below it the word is the
   /// zeroed segment's 0, which is indistinguishable from a refusal, so the driver falls back to the old
   /// weaker contract there (an ack means the command was processed) rather than calling every command on
   /// an older binary refused.
   public const long DbgCmdResultMinVersion = 7;
 
-  /// The control-segment version at which the agent first ENUMERATES green threads. The driver refuses
-  /// `threads` below it rather than reading the zeroed record array, which would render as an empty —
-  /// and entirely believable — thread list for a program that plainly has green threads.
-  public const long DbgGtMinVersion = 8;
+  /// <summary>
+  /// The control-segment version at which the agent's green-thread surface — enumeration AND control —
+  /// is trustworthy. The driver refuses `threads`, `gt-backtrace`, `gt`, `gt-park`, `gt-resume` and
+  /// `--stop-others` below it rather than reading the record array, which at v8 would render as an
+  /// empty — and entirely believable — thread list for a program that plainly has green threads.
+  ///
+  /// ⚠ It is ONE number for BOTH halves, and this rung is where it MOVED (8 → 9) rather than gaining a
+  /// second gate beside it. The contract asked for a separate control gate, but the RECORD GREW at v9
+  /// (<see cref="DbgGtRecOffTopFp"/> / <see cref="DbgGtRecOffHold"/>), and a stride change is not a
+  /// capability that can be missing: a v9 driver reading a v8 array does not see an absent field, it
+  /// reads the NEXT thread's handle as this thread's frame pointer. So visibility cannot outlive the
+  /// stride either, and two gates here would be the same number written twice — the one bug this
+  /// codebase keeps closing.
+  /// </summary>
+  public const long DbgGtMinVersion = 9;
 
   /// The width of every word in a condition record. The record is six i64s so the agent can read each
   /// with the neutral 8-byte <see cref="IEmitterBackend.LoadIndirect"/> and the driver can write each
@@ -360,6 +418,8 @@ public partial class RuntimeEmitter {
   public const long DbgCmdSetBpCond = 7;
   public const long DbgCmdGtList = 8;
   public const long DbgCmdGtBacktrace = 9;
+  public const long DbgCmdGtHold = 10;
+  public const long DbgCmdGtRelease = 11;
 
   // Stop reasons written to DbgOffStopReason by the agent. "breakpoint" (P3b) and "step" (P4b, published
   // after a DbgCmdStep single-step completes) — kept DISTINCT so the driver's step loop can tell a step
@@ -379,6 +439,18 @@ public partial class RuntimeEmitter {
   /// need the saved original bytes, and code bytes should not sit in a same-user-readable segment).
   /// A small fixed table: the driver sets a handful of breakpoints, never hundreds.
   public const int DbgMaxBreakpoints = 16;
+
+  /// <summary>
+  /// How many green threads the debugger can hold INDIVIDUALLY at once (`gt-park`). Agent .data, like
+  /// the breakpoint table and for the same reasons, and a full table is REFUSED through
+  /// <see cref="DbgOffCmdResult"/> rather than silently dropped — a park the user was told took effect
+  /// and did not is a thread that keeps running under a debugger that says it is stopped.
+  ///
+  /// It bounds only the by-name holds. `--stop-others` holds every thread through
+  /// <see cref="DbgGtHoldAllGlobal"/> and needs no slot at all, which is why 16 is generous rather than
+  /// a limit anybody meets: a human parks a handful of threads by name.
+  /// </summary>
+  public const int DbgMaxHeldGreenThreads = 16;
 
   /// The x86 INT3 breakpoint opcode the agent patches into `.text`. The ARM64 counterpart (`BRK #0`)
   /// lives in the ARM64 backend's `__dbg_arm_bp`, since the patch width and encoding differ by ISA.
@@ -515,6 +587,28 @@ public partial class RuntimeEmitter {
   public const long DbgStepModeOverBp = 1;  // continue past a breakpoint: resume silently once the step completes
   public const long DbgStepModeUser = 2;    // a user source-step: publish a step stop and re-park once it completes
 
+  // ---- Green-thread HOLD state (P4d-2b), agent .data ----
+  //
+  // ⚠ TWO SIDES, AND THEY MUST NOT BE CONFUSED. The words below are written by the TRAP HANDLER (the
+  // park loop, servicing a driver command) and read by the SCHEDULER (__gt_dequeue, on an ordinary
+  // worker thread). That split is what keeps the agent async-signal-safe while still being able to take
+  // the scheduler's own lock: the handler only ever stores a word, and every queue manipulation —
+  // which needs SchedLock — happens on the scheduler side, where taking it is ordinary.
+  //
+  //   __dbg_gt_hold      — the handles `gt-park` named (0 = free slot). Handler writes, scheduler reads.
+  //   __dbg_gt_hold_all  — non-zero while a `--stop-others` stop is in force. Handler writes.
+  //   __dbg_gt_held_head — the chain of threads the scheduler has actually caught and set aside, linked
+  //                        through GtOffNext (safe: a caught thread is in no queue, which is exactly the
+  //                        condition under which the free list reuses that same field). Scheduler only.
+  //   __dbg_gt_readmit   — the doorbell that says "a hold was dropped; re-offer what you are holding".
+  //                        Handler sets it, the scheduler clears it under the lock. It exists so the
+  //                        common case (a hold in force, nothing to release) costs ONE load in the
+  //                        dequeue path instead of a lock and a walk.
+  public const string DbgGtHoldGlobal = "__dbg_gt_hold_table";
+  public const string DbgGtHoldAllGlobal = "__dbg_gt_hold_all";
+  public const string DbgGtHeldHeadGlobal = "__dbg_gt_held_head";
+  public const string DbgGtReadmitGlobal = "__dbg_gt_readmit";
+
   /// <summary>Emit the agent's globals: the mapped-base pointer (0 = dark), the env-var name, the
   /// breakpoint table (address / original byte / condition), and the single-step-over state.</summary>
   public void EmitDebugAgentGlobals() {
@@ -533,6 +627,13 @@ public partial class RuntimeEmitter {
     _b.DefineGlobal(DbgStepTempAddrGlobal, 8, 0);
     _b.DefineGlobal(DbgStepTempOrigGlobal, 8, 0);
     _b.DefineGlobal(DbgStepModeGlobal, 8, 0);   // 0 = DbgStepModeNone: no user/over-bp single-step armed
+
+    // All four start zero, which is "no thread is held" — so an un-debugged program's __gt_dequeue
+    // takes one load and one not-taken branch, and never reaches any of this.
+    _b.DefineGlobal(DbgGtHoldGlobal, DbgMaxHeldGreenThreads * DbgGtWordSize, 0);
+    _b.DefineGlobal(DbgGtHoldAllGlobal, DbgGtWordSize, 0);
+    _b.DefineGlobal(DbgGtHeldHeadGlobal, DbgGtWordSize, 0);
+    _b.DefineGlobal(DbgGtReadmitGlobal, DbgGtWordSize, 0);
   }
 
   /// <summary>
@@ -679,27 +780,34 @@ public partial class RuntimeEmitter {
   // registers.
 
   /// <summary>
-  /// __dbg_bp_slot(matchVal) -> slot index whose __dbg_bp_addr equals matchVal, or -1. Called with an
-  /// absolute address to find an existing breakpoint, or with 0 to find a free slot (a real
-  /// breakpoint address is never 0). Pure scan, no calls.
+  /// Emit <paramref name="funcLabel"/>(matchVal) -> the index into the i64 table
+  /// <paramref name="tableGlobal"/> (of <paramref name="entryCount"/> entries) whose entry equals
+  /// matchVal, or -1. Pure scan, no calls.
+  ///
+  /// TWO agent tables are keyed this way and both use the SAME "0 means free" convention, so the scan is
+  /// written once and instantiated twice rather than copied:
+  ///   * <c>__dbg_bp_slot</c> over <see cref="DbgBpAddrGlobal"/> — an absolute `.text` address finds an
+  ///     existing breakpoint, and 0 finds a free slot (a real breakpoint address is never 0);
+  ///   * <c>__dbg_gt_hold_slot</c> over <see cref="DbgGtHoldGlobal"/> — a GreenThread* finds an existing
+  ///     hold, and 0 finds a free slot (a real green thread is never at address 0).
   /// </summary>
-  private void EmitDbgBpSlot() {
-    _b.FunctionStart("__dbg_bp_slot", 1, 0x40);
+  private void EmitDbgTableSlotScan(string funcLabel, string tableGlobal, int entryCount) {
+    _b.FunctionStart(funcLabel, 1, 0x40);
 
-    var loopLabel = UniqueLabel("dbg_bp_slot_loop");
-    var foundLabel = UniqueLabel("dbg_bp_slot_found");
-    var missLabel = UniqueLabel("dbg_bp_slot_miss");
+    var loopLabel = UniqueLabel(funcLabel + "_loop");
+    var foundLabel = UniqueLabel(funcLabel + "_found");
+    var missLabel = UniqueLabel(funcLabel + "_miss");
 
-    _b.LeaGlobal(VReg.Scratch1, DbgBpAddrGlobal);         // base
+    _b.LeaGlobal(VReg.Scratch1, tableGlobal);             // base
     _b.ZeroReg(VReg.Scratch2);                            // i = 0
 
     _b.DefineLabel(loopLabel);
-    _b.CmpRegImm(VReg.Scratch2, DbgMaxBreakpoints);
+    _b.CmpRegImm(VReg.Scratch2, entryCount);
     _b.JumpIf(Condition.AboveEqual, missLabel);
     _b.MovRegReg(VReg.Scratch3, VReg.Scratch2);
     _b.ShlRegImm(VReg.Scratch3, 3);
-    _b.AddRegReg(VReg.Scratch3, VReg.Scratch1);           // &bp_addr[i]
-    _b.LoadIndirect(VReg.Ret, VReg.Scratch3, 0);          // bp_addr[i]
+    _b.AddRegReg(VReg.Scratch3, VReg.Scratch1);           // &table[i]
+    _b.LoadIndirect(VReg.Ret, VReg.Scratch3, 0);          // table[i]
     _b.CmpRegReg(VReg.Ret, VReg.Arg0);
     _b.JumpIf(Condition.Equal, foundLabel);
     _b.AddRegImm(VReg.Scratch2, 1);
@@ -1414,26 +1522,85 @@ public partial class RuntimeEmitter {
 
     var noneLabel = UniqueLabel("dbg_frame_ra_none");
 
-    const int slotFp = 0;
-    const int slotStackLow = 1;
-    const int slotStackHigh = 2;
+    EmitDbgJumpIfNotAFrame(FrameArgSlotFp, FrameArgSlotStackLow, FrameArgSlotStackHigh, noneLabel);
 
+    _b.LoadLocal(VReg.Scratch1, FrameArgSlotFp);
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 8);         // ra = [fp + 8]
+    _b.Call("__dbg_text_offset");
+    _b.FunctionEnd();
+
+    _b.DefineLabel(noneLabel);
+    _b.ZeroReg(VReg.Ret);
+    _b.FunctionEnd();
+  }
+
+  // The (fp, stackLow, stackHigh) triple every frame primitive takes, in the order it is passed —
+  // named once so the two functions and the shared test below cannot disagree about which slot is which.
+  private const int FrameArgSlotFp = 0;
+  private const int FrameArgSlotStackLow = 1;
+  private const int FrameArgSlotStackHigh = 2;
+
+  /// <summary>
+  /// Jump to <paramref name="badLabel"/> unless the frame pointer in frame slot <paramref name="slotFp"/>
+  /// is one we may DEREFERENCE: non-null and wholly inside [stackLow, stackHigh). Emitted inline (like
+  /// <see cref="EmitDbgStackWindow"/>) rather than called, so asking it twice costs no extra trap-handler
+  /// frame — depth on that path is what P4d-GT-STACK's reserve is spent on.
+  ///
+  /// It is the ONE statement of what makes a frame link readable, and both readers of a frame need it:
+  /// <see cref="EmitDbgFrameRa"/> reads the return address at [fp + 8], and <see cref="EmitDbgFrameNext"/>
+  /// reads the saved frame pointer at [fp] and must vouch for the ANSWER as well as the input — a
+  /// frame pointer handed to the driver becomes the base of a `print`, which reads memory at [fp + slot].
+  ///
+  /// Clobbers Scratch1/Scratch2.
+  /// </summary>
+  private void EmitDbgJumpIfNotAFrame(int slotFp, int slotStackLow, int slotStackHigh, string badLabel) {
     _b.LoadLocal(VReg.Scratch1, slotFp);
-    _b.JumpIfZero(VReg.Scratch1, noneLabel);
+    _b.JumpIfZero(VReg.Scratch1, badLabel);
     _b.LoadLocal(VReg.Scratch2, slotStackLow);
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.JumpIf(Condition.Below, noneLabel);                // below the stack's low bound
-    // The frame link is TWO words — [fp] and [fp + 8] are both read below — so the high bound has to
-    // leave room for both, not merely for fp itself. `fp < high` alone would read a qword AT high, which
-    // is one past the end of a green thread's stack, where the spawn trampoline's frame pointer sits.
+    _b.JumpIf(Condition.Below, badLabel);                 // below the stack's low bound
+    // The frame link is TWO words — [fp] and [fp + 8] — so the high bound has to leave room for both,
+    // not merely for fp itself. `fp < high` alone would read a qword AT high, which is one past the end
+    // of a green thread's stack, where the spawn trampoline's frame pointer sits.
     _b.LoadLocal(VReg.Scratch2, slotStackHigh);
     _b.AddRegImm(VReg.Scratch1, GtLayout.FrameLinkBytes);
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.JumpIf(Condition.Above, noneLabel);                // fp + 16 > high: the link runs off the end
-    _b.LoadLocal(VReg.Scratch1, slotFp);                  // restore fp (the bound test consumed it)
+    _b.JumpIf(Condition.Above, badLabel);                 // fp + 16 > high: the link runs off the end
+  }
 
-    _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 8);         // ra = [fp + 8]
-    _b.Call("__dbg_text_offset");
+  /// <summary>
+  /// __dbg_frame_next(fp, stackLow, stackHigh) -> the CALLER's frame pointer saved at [fp], or 0 when
+  /// the chain ends there.
+  ///
+  /// The other half of <see cref="EmitDbgFrameRa"/>: that one answers "which code does this frame return
+  /// to", this one answers "whose frame is that code running in" — and the pair is what a debugger needs,
+  /// because a return address names a function and only a frame pointer can read its locals.
+  ///
+  /// Both the walk's ADVANCE and the per-thread top-frame record come through here, so "when does a
+  /// chain end" is stated once. The answer must ASCEND (a stack grows down, so a caller's frame is at a
+  /// higher address; a non-ascending link is a corrupt or terminating chain) and must itself be a frame
+  /// we could dereference — which is the load-bearing half here rather than a formality, since this
+  /// result is published to the driver and read as the base of a `print`.
+  /// </summary>
+  private void EmitDbgFrameNext() {
+    _b.FunctionStart("__dbg_frame_next", 3, 0x40);
+
+    var noneLabel = UniqueLabel("dbg_frame_next_none");
+
+    // Frame slot 3 holds the candidate, so the shared test can be asked about it the same way.
+    const int slotNext = 3;
+
+    EmitDbgJumpIfNotAFrame(FrameArgSlotFp, FrameArgSlotStackLow, FrameArgSlotStackHigh, noneLabel);
+
+    _b.LoadLocal(VReg.Scratch1, FrameArgSlotFp);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, 0);     // next = [fp]
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.JumpIf(Condition.BelowEqual, noneLabel);           // not ascending: the chain ends here
+    _b.StoreLocal(slotNext, VReg.Scratch2);
+
+    EmitDbgJumpIfNotAFrame(slotNext, FrameArgSlotStackLow, FrameArgSlotStackHigh, noneLabel);
+
+    _b.LoadLocal(VReg.Ret, slotNext);
     _b.FunctionEnd();
 
     _b.DefineLabel(noneLabel);
@@ -1496,12 +1663,14 @@ public partial class RuntimeEmitter {
     _b.AddRegImm(VReg.Scratch0, 1);
     _b.StoreLocal(slotCount, VReg.Scratch0);
 
-    // Advance: next = [fp], and a non-ascending link ends the walk.
-    _b.LoadLocal(VReg.Scratch1, slotFp);
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, 0);
-    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.JumpIf(Condition.BelowEqual, doneLabel);
-    _b.StoreLocal(slotFp, VReg.Scratch2);
+    // Advance through the ONE statement of where a chain ends, shared with the per-thread top-frame
+    // record, so a corrupt link cannot end the walk here and be trusted there.
+    _b.LoadLocal(VReg.Arg0, slotFp);
+    _b.LoadLocal(VReg.Arg1, slotStackLow);
+    _b.LoadLocal(VReg.Arg2, slotStackHigh);
+    _b.Call("__dbg_frame_next");
+    _b.JumpIfZero(VReg.Ret, doneLabel);
+    _b.StoreLocal(slotFp, VReg.Ret);
     _b.Jump(walkLabel);
 
     _b.DefineLabel(doneLabel);
@@ -1776,9 +1945,13 @@ public partial class RuntimeEmitter {
     var parkedTopLabel = UniqueLabel("dbg_gt_rec_parked_top");
     var noTopLabel = UniqueLabel("dbg_gt_rec_no_top");
     var storeTopLabel = UniqueLabel("dbg_gt_rec_store_top");
+    var holdPendingLabel = UniqueLabel("dbg_gt_rec_hold_pending");
+    var holdNoneLabel = UniqueLabel("dbg_gt_rec_hold_none");
+    var holdStoreLabel = UniqueLabel("dbg_gt_rec_hold_store");
     var doneLabel = UniqueLabel("dbg_gt_rec_done");
 
-    // Frame slots: 0=gt 1=procId (params) 2=base 3=rec 4=onCpu 5=topKind 6=topPc.
+    // Frame slots: 0=gt 1=procId (params) 2=base 3=rec 4=onCpu 5=topKind 6=topPc 7=topFp,
+    // 8/9 = the stack window the parked top-frame arm walks in.
     const int slotGt = 0;
     const int slotProc = 1;
     const int slotBase = 2;
@@ -1786,6 +1959,9 @@ public partial class RuntimeEmitter {
     const int slotOnCpu = 4;
     const int slotTopKind = 5;
     const int slotTopPc = 6;
+    const int slotTopFp = 7;
+    const int slotStackLow = 8;
+    const int slotStackHigh = 9;
 
     _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
     _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: nothing to write into
@@ -1838,6 +2014,11 @@ public partial class RuntimeEmitter {
     EmitDbgJumpIfNoStopPublished(VReg.Scratch1, VReg.Scratch2, noTopLabel);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopPc);
     _b.StoreLocal(slotTopPc, VReg.Scratch2);
+    // The stopped thread's frame pointer is the one the stop event itself published — the SAME word
+    // `print` and `locals` already read the stopped frame's locals through, so selecting the stopped
+    // thread with `gt <id>` can only ever agree with not having selected anything.
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopFp);
+    _b.StoreLocal(slotTopFp, VReg.Scratch2);
     _b.MovRegImm(VReg.Scratch2, DbgGtTopFrameExact);
     _b.StoreLocal(slotTopKind, VReg.Scratch2);
     _b.Jump(storeTopLabel);
@@ -1852,11 +2033,26 @@ public partial class RuntimeEmitter {
     _b.StoreLocal(slotTopPc, VReg.Scratch2);
     _b.MovRegImm(VReg.Scratch2, DbgGtTopFrameReturn);
     _b.StoreLocal(slotTopKind, VReg.Scratch2);
+
+    // The frame pointer that return address belongs to is the NEXT link up from the saved one, and it
+    // is validated by the same rule the walk itself just used — it has to be, because the driver reads
+    // a `print` operand at [fp + slot] and nothing downstream of here re-checks it. A window this walk
+    // could not vouch for yields 0, which the driver reports as "no frame to read" rather than guessing.
+    _b.LoadLocal(VReg.Scratch0, slotGt);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtLayout.GtOffRsp);
+    EmitDbgStackWindow(VReg.Scratch0, VReg.Scratch2, slotStackLow, slotStackHigh);
+    _b.LoadLocal(VReg.Scratch0, slotGt);
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, GtLayout.GtOffRbp);
+    _b.LoadLocal(VReg.Arg1, slotStackLow);
+    _b.LoadLocal(VReg.Arg2, slotStackHigh);
+    _b.Call("__dbg_frame_next");
+    _b.StoreLocal(slotTopFp, VReg.Ret);
     _b.Jump(storeTopLabel);
 
     _b.DefineLabel(noTopLabel);
     _b.ZeroReg(VReg.Scratch2);
     _b.StoreLocal(slotTopPc, VReg.Scratch2);
+    _b.StoreLocal(slotTopFp, VReg.Scratch2);
     _b.MovRegImm(VReg.Scratch2, DbgGtTopFrameNone);
     _b.StoreLocal(slotTopKind, VReg.Scratch2);
 
@@ -1866,6 +2062,32 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch3, DbgGtRecOffTopKind, VReg.Scratch2);
     _b.LoadLocal(VReg.Scratch2, slotTopPc);
     _b.StoreIndirect(VReg.Scratch3, DbgGtRecOffTopPc, VReg.Scratch2);
+    _b.LoadLocal(VReg.Scratch2, slotTopFp);
+    _b.StoreIndirect(VReg.Scratch3, DbgGtRecOffTopFp, VReg.Scratch2);
+
+    // Whether the DEBUGGER owns this thread, decided by the SAME predicate the scheduler's dequeue
+    // filter asks — so what the listing says and what the scheduler does cannot disagree. "Held" and
+    // "pending" differ only by whether a processor is executing it right now, which is exactly the
+    // cooperative limit: a hold reaches a thread at its next scheduler interaction, and a thread that is
+    // running has not had one yet.
+    _b.LoadLocal(VReg.Arg0, slotGt);
+    _b.Call("__dbg_gt_should_hold");
+    _b.LoadLocal(VReg.Scratch3, slotRec);
+    _b.JumpIfZero(VReg.Ret, holdNoneLabel);
+    _b.LoadLocal(VReg.Scratch2, slotOnCpu);
+    _b.JumpIfNonZero(VReg.Scratch2, holdPendingLabel);
+    _b.MovRegImm(VReg.Scratch2, DbgGtHoldHeld);
+    _b.Jump(holdStoreLabel);
+
+    _b.DefineLabel(holdPendingLabel);
+    _b.MovRegImm(VReg.Scratch2, DbgGtHoldPending);
+    _b.Jump(holdStoreLabel);
+
+    _b.DefineLabel(holdNoneLabel);
+    _b.MovRegImm(VReg.Scratch2, DbgGtHoldNone);
+
+    _b.DefineLabel(holdStoreLabel);
+    _b.StoreIndirect(VReg.Scratch3, DbgGtRecOffHold, VReg.Scratch2);
 
     // Published LAST, so a count the driver reads always covers a fully-written record.
     _b.LoadLocal(VReg.Scratch1, slotBase);
@@ -2050,14 +2272,7 @@ public partial class RuntimeEmitter {
     _b.ZeroReg(VReg.Scratch0);
     _b.StoreIndirect(VReg.Scratch1, DbgOffBtCount, VReg.Scratch0);
 
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffCmdArg);   // record index
-    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch1, DbgOffGtCount);
-    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
-    _b.JumpIf(Condition.AboveEqual, refusedLabel);       // unsigned: a negative index is huge here
-
-    EmitDbgGtRecAddr(VReg.Scratch3, VReg.Scratch2, VReg.Scratch1, VReg.Scratch0);
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch3, DbgGtRecOffHandle);
-    _b.StoreLocal(slotGt, VReg.Scratch2);
+    EmitDbgGtRecordHandleFromCmdArg(slotBase, slotGt, refusedLabel);
 
     // Still live? The rescan republishes the array, which is why the handle is read out FIRST.
     _b.LoadLocal(VReg.Arg0, slotGt);
@@ -2081,11 +2296,359 @@ public partial class RuntimeEmitter {
     _b.FunctionEnd();
   }
 
+  // =========================================================================
+  // Green-thread control (P4d-2b) — a COOPERATIVE per-thread hold
+  // =========================================================================
+  //
+  // ⭐ THERE IS NO PRIMITIVE THAT PARKS AN ARBITRARY GREEN THREAD, and OS thread suspension is refused
+  // outright: `SuspendThread` can stop an M inside the allocator or holding the scheduler lock, which
+  // trades a debugger feature for a deadlocked debuggee. So a hold is a REFUSAL TO SCHEDULE, taken at
+  // the one place the scheduler decides what runs next.
+  //
+  // ⭐ THAT PLACE IS `__gt_dequeue`'s RESULT, and it is the whole design:
+  //   * It is the ONE choke point. Every context switch INTO a green thread is preceded by a dequeue —
+  //     `__sched_worker_loop`, `__gt_await`, `__gt_yield`, `maxon_sleep`'s main-thread loop, `__gt_cleanup`
+  //     — with exactly one exception, the switch to a P's own inline scheduler thread, which is not a
+  //     thread anyone can hold (see __dbg_gt_should_hold).
+  //   * A thread caught there has NOT RUN YET, which is what makes a hold safe rather than racy: its
+  //     saved rsp/rbp are the ones its last context switch wrote, so the debugger can walk it and read
+  //     its locals; and it cannot complete out from under a hold, because completing requires running.
+  //   * A thread that is ALREADY running has not reached that point and will not until it next
+  //     interacts with the scheduler. That is the cooperative limit, and it is REPORTED
+  //     (DbgGtHoldPending) rather than hidden behind a timeout that claims success.
+  //
+  // ⚠ TWO SIDES, ONE MECHANISM, AND THE SPLIT IS LOAD-BEARING. Everything above `__dbg_gt_hold_add` runs
+  // in the TRAP HANDLER, servicing a driver command, and touches nothing but agent words — no lock, no
+  // queue — because on POSIX that handler is a SIGTRAP handler. Everything from `__dbg_gt_hold_push`
+  // down runs on an ORDINARY SCHEDULER THREAD inside `__gt_dequeue`, where taking the scheduler's own
+  // lock is not merely allowed but required: the held chain is reachable from every processor.
+
+  /// <summary>
+  /// __dbg_gt_should_hold(gt) -> 1 when the debugger has asked for this thread to stop running.
+  ///
+  /// The ONE predicate, asked by BOTH the scheduler's dequeue filter (which acts on it) and the record
+  /// the driver reads (which reports it). Two statements of it would let the listing say "held" about a
+  /// thread the scheduler was about to run, which is the one wrong answer this whole rung must not give.
+  ///
+  /// A processor's INLINE scheduler thread is excluded first, and not defensively: it is never enqueued,
+  /// so it can never reach the dequeue filter, so a hold on it is a promise nothing could keep. The test
+  /// is `stackBase == 0` — the runtime's own spelling of "has no stack of its own" (__gt_stack_high,
+  /// __io_complete_gt, __gt_signal_waiter), rather than a second opinion about what a scheduler thread is.
+  /// </summary>
+  private void EmitDbgGtShouldHold() {
+    _b.FunctionStart("__dbg_gt_should_hold", 1, 0x40);
+
+    var noLabel = UniqueLabel("dbg_should_hold_no");
+    var yesLabel = UniqueLabel("dbg_should_hold_yes");
+
+    const int slotGt = 0;
+
+    _b.LoadLocal(VReg.Scratch1, slotGt);
+    _b.JumpIfZero(VReg.Scratch1, noLabel);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, GtLayout.GtOffStackBase);
+    _b.JumpIfZero(VReg.Scratch2, noLabel);                 // a processor's own scheduler thread
+
+    _b.LoadGlobal(VReg.Scratch2, DbgGtHoldAllGlobal);
+    _b.JumpIfNonZero(VReg.Scratch2, yesLabel);             // --stop-others: every thread is held
+
+    _b.LoadLocal(VReg.Arg0, slotGt);
+    _b.Call("__dbg_gt_hold_slot");
+    _b.CmpRegImm(VReg.Ret, 0);
+    _b.JumpIf(Condition.Less, noLabel);
+
+    _b.DefineLabel(yesLabel);
+    _b.MovRegImm(VReg.Ret, 1);
+    _b.FunctionEnd();
+
+    _b.DefineLabel(noLabel);
+    _b.ZeroReg(VReg.Ret);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Emit the load of the green-thread record named by <see cref="DbgOffCmdArg"/> into
+  /// <paramref name="slotHandle"/>, jumping to <paramref name="refusedLabel"/> when the index does not
+  /// name a record in the array the agent last published. Expects the segment base in
+  /// <paramref name="slotBase"/>.
+  ///
+  /// The argument is an INDEX INTO THE AGENT'S OWN ARRAY, never a pointer, for the reason
+  /// <see cref="EmitDbgGtBacktrace"/> states: a raw GreenThread* from the driver would be an
+  /// arbitrary-read (and here an arbitrary-WRITE, since a hold makes the agent store the value) primitive.
+  /// All three per-thread commands resolve their argument the same way, stated once.
+  ///
+  /// Clobbers Scratch0..Scratch3.
+  /// </summary>
+  private void EmitDbgGtRecordHandleFromCmdArg(int slotBase, int slotHandle, string refusedLabel) {
+    _b.LoadLocal(VReg.Scratch1, slotBase);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffCmdArg);   // record index
+    _b.LoadIndirect(VReg.Scratch3, VReg.Scratch1, DbgOffGtCount);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.JumpIf(Condition.AboveEqual, refusedLabel);        // unsigned: a negative index is huge here
+
+    EmitDbgGtRecAddr(VReg.Scratch3, VReg.Scratch2, VReg.Scratch1, VReg.Scratch0);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch3, DbgGtRecOffHandle);
+    _b.JumpIfZero(VReg.Scratch2, refusedLabel);           // a record with no thread in it
+    _b.StoreLocal(slotHandle, VReg.Scratch2);
+  }
+
+  /// <summary>
+  /// __dbg_gt_hold_add() — record a hold for the green thread at record index
+  /// <see cref="DbgOffCmdArg"/>, or REFUSE (<see cref="DbgCmdResultRefused"/>) when the table is full.
+  ///
+  /// It deliberately checks NEITHER that the thread is off-cpu NOR that it is not a scheduler thread:
+  /// the driver refuses both before posting (it holds the very listing that answers them), and
+  /// __dbg_gt_should_hold already declines to act on a scheduler thread. Re-testing here would be a
+  /// second statement of a rule that already has one, and the two could then disagree about what the
+  /// user was told.
+  ///
+  /// A FULL TABLE is the one thing only the agent knows, so it is the one thing it answers.
+  /// </summary>
+  private void EmitDbgGtHoldAdd() {
+    _b.FunctionStart("__dbg_gt_hold_add", 0, 0x60);
+
+    var refusedLabel = UniqueLabel("dbg_gt_hold_refused");
+    var doneLabel = UniqueLabel("dbg_gt_hold_done");
+
+    const int slotBase = 0;
+    const int slotHandle = 1;
+    const int slotSlot = 2;
+
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.JumpIfZero(VReg.Scratch1, doneLabel);
+    _b.StoreLocal(slotBase, VReg.Scratch1);
+
+    EmitDbgGtRecordHandleFromCmdArg(slotBase, slotHandle, refusedLabel);
+
+    // Already held: the request is satisfied, so it succeeds rather than consuming a second slot.
+    _b.LoadLocal(VReg.Arg0, slotHandle);
+    _b.Call("__dbg_gt_hold_slot");
+    _b.CmpRegImm(VReg.Ret, 0);
+    _b.JumpIf(Condition.GreaterEqual, doneLabel);
+
+    _b.ZeroReg(VReg.Arg0);                                // 0 = a free slot
+    _b.Call("__dbg_gt_hold_slot");
+    _b.CmpRegImm(VReg.Ret, 0);
+    _b.JumpIf(Condition.Less, refusedLabel);              // table full
+    _b.StoreLocal(slotSlot, VReg.Ret);
+
+    _b.LoadLocal(VReg.Scratch2, slotSlot);
+    _b.ShlRegImm(VReg.Scratch2, 3);
+    _b.LeaGlobal(VReg.Scratch1, DbgGtHoldGlobal);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.LoadLocal(VReg.Scratch3, slotHandle);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch3);
+    _b.Jump(doneLabel);
+
+    _b.DefineLabel(refusedLabel);
+    EmitDbgStoreCmdResult(DbgCmdResultRefused);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// __dbg_gt_release() — drop the hold on the green thread at record index
+  /// <see cref="DbgOffCmdArg"/> and ring the readmit doorbell, or REFUSE when no hold names it.
+  ///
+  /// Clearing the table entry is not enough on its own: a thread the scheduler already CAUGHT is off
+  /// every run queue and sitting on the held chain, where nothing will look at it again until a
+  /// `__gt_dequeue` is told to. The doorbell is that telling, and it is set here rather than derived on
+  /// the scheduler side so the common case — a hold in force with nothing to release — stays one load.
+  /// </summary>
+  private void EmitDbgGtRelease() {
+    _b.FunctionStart("__dbg_gt_release", 0, 0x60);
+
+    var refusedLabel = UniqueLabel("dbg_gt_release_refused");
+    var doneLabel = UniqueLabel("dbg_gt_release_done");
+
+    const int slotBase = 0;
+    const int slotHandle = 1;
+
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.JumpIfZero(VReg.Scratch1, doneLabel);
+    _b.StoreLocal(slotBase, VReg.Scratch1);
+
+    EmitDbgGtRecordHandleFromCmdArg(slotBase, slotHandle, refusedLabel);
+
+    _b.LoadLocal(VReg.Arg0, slotHandle);
+    _b.Call("__dbg_gt_hold_slot");
+    _b.CmpRegImm(VReg.Ret, 0);
+    _b.JumpIf(Condition.Less, refusedLabel);              // no hold names this thread
+
+    _b.MovRegReg(VReg.Scratch2, VReg.Ret);
+    _b.ShlRegImm(VReg.Scratch2, 3);
+    _b.LeaGlobal(VReg.Scratch1, DbgGtHoldGlobal);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.ZeroReg(VReg.Scratch3);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch3);
+
+    EmitDbgGtRingReadmit();
+    _b.Jump(doneLabel);
+
+    _b.DefineLabel(refusedLabel);
+    EmitDbgStoreCmdResult(DbgCmdResultRefused);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// Ring the readmit doorbell: "a hold was dropped — re-offer whatever you are holding". Emitted at
+  /// both the places a hold can go away (one thread by name, and every thread when a `--stop-others`
+  /// stop ends), so neither can drop a hold and leave the thread stranded on the held chain.
+  /// Clobbers Scratch0.
+  private void EmitDbgGtRingReadmit() {
+    _b.MovRegImm(VReg.Scratch0, 1);
+    _b.StoreGlobal(DbgGtReadmitGlobal, VReg.Scratch0);
+  }
+
+  /// <summary>
+  /// Emit the push of the green thread in frame slot <paramref name="slotGt"/> onto the held chain,
+  /// under the SCHEDULER'S OWN LOCK. Inline rather than a call because both users are already inside
+  /// `__gt_dequeue` and the sequence is five instructions.
+  ///
+  /// The chain is linked through <c>GtOffNext</c>, which is safe for exactly the reason the per-P free
+  /// list may use the same field: a thread on this chain is in no run queue. It is the SCHEDULER's lock
+  /// rather than a lock of the agent's own because the chain is reachable from every processor and this
+  /// code already runs where that lock is the ordinary one to take — the trap handler never comes here.
+  ///
+  /// Clobbers Scratch0..Scratch3 and everything <c>LockAcquire</c>/<c>LockRelease</c> clobber, so
+  /// <paramref name="slotGt"/> is a frame slot and is re-loaded after the lock is taken.
+  /// </summary>
+  private void EmitDbgGtHoldPush(int slotGt) {
+    _b.LockAcquire(_b.SchedLockLabel);
+    _b.LoadLocal(VReg.Scratch1, slotGt);
+    _b.LoadGlobal(VReg.Scratch2, DbgGtHeldHeadGlobal);
+    _b.StoreIndirect(VReg.Scratch1, GtLayout.GtOffNext, VReg.Scratch2);
+    _b.StoreGlobal(DbgGtHeldHeadGlobal, VReg.Scratch1);
+    _b.LockRelease(_b.SchedLockLabel);
+  }
+
+  /// <summary>
+  /// __dbg_gt_readmit_held() — hand every thread the debugger no longer wants held back to the
+  /// scheduler.
+  ///
+  /// It runs on a SCHEDULER thread, from the top of `__gt_dequeue`, and that is the whole reason the
+  /// trap handler never has to touch a queue: a release is a word the handler stores, and the work of
+  /// re-enqueuing happens later, on a thread where `__gt_enqueue` — with its lock, its wake and its
+  /// worker spawn — is an ordinary call.
+  ///
+  /// The chain is DETACHED under the lock in one swap and then walked PRIVATELY, so `__gt_enqueue` is
+  /// never called with the lock held (it takes the same one) and two processors arriving together
+  /// cannot both walk it: the second finds an empty chain and a cleared doorbell.
+  ///
+  /// Threads that are STILL held are pushed back rather than dropped, which is what makes releasing one
+  /// thread out of several correct — and what stops this from becoming a churn loop that re-enqueues a
+  /// held thread only to catch it again on the next line.
+  /// </summary>
+  private void EmitDbgGtReadmitHeld() {
+    _b.FunctionStart("__dbg_gt_readmit_held", 0, 0x60);
+
+    var loopLabel = UniqueLabel("dbg_readmit_loop");
+    var stillHeldLabel = UniqueLabel("dbg_readmit_still_held");
+    var nextLabel = UniqueLabel("dbg_readmit_next");
+    var doneLabel = UniqueLabel("dbg_readmit_done");
+
+    const int slotChain = 0;
+    const int slotNode = 1;
+
+    // Detach the whole chain and clear the doorbell in one critical section: from here the chain is
+    // this processor's private list, so nothing below needs the lock except a push-back.
+    _b.LockAcquire(_b.SchedLockLabel);
+    _b.LoadGlobal(VReg.Scratch1, DbgGtHeldHeadGlobal);
+    _b.StoreLocal(slotChain, VReg.Scratch1);
+    _b.ZeroReg(VReg.Scratch2);
+    _b.StoreGlobal(DbgGtHeldHeadGlobal, VReg.Scratch2);
+    _b.StoreGlobal(DbgGtReadmitGlobal, VReg.Scratch2);
+    _b.LockRelease(_b.SchedLockLabel);
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch1, slotChain);
+    _b.JumpIfZero(VReg.Scratch1, doneLabel);
+    _b.StoreLocal(slotNode, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, GtLayout.GtOffNext);
+    _b.StoreLocal(slotChain, VReg.Scratch2);
+    _b.ZeroReg(VReg.Scratch2);
+    _b.StoreIndirect(VReg.Scratch1, GtLayout.GtOffNext, VReg.Scratch2);
+
+    _b.LoadLocal(VReg.Arg0, slotNode);
+    _b.Call("__dbg_gt_should_hold");
+    _b.JumpIfNonZero(VReg.Ret, stillHeldLabel);
+
+    _b.LoadLocal(VReg.Arg0, slotNode);
+    _b.Call("__gt_enqueue");
+    _b.Jump(nextLabel);
+
+    _b.DefineLabel(stillHeldLabel);
+    EmitDbgGtHoldPush(slotNode);
+
+    _b.DefineLabel(nextLabel);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// __dbg_gt_dequeue_filtered() -> the next green thread this processor may RUN, or 0.
+  ///
+  /// `__gt_dequeue`'s answer, minus every thread the debugger is holding. Threads it declines are set
+  /// aside on the held chain rather than put back, because putting one back would hand it straight to
+  /// the next dequeue and spin the processor; and set-aside is safe precisely because the caught thread
+  /// has not run, so nothing else refers to it.
+  ///
+  /// The readmit check is FIRST, so a thread released while the target was parked is back in the run
+  /// queue before this processor decides there is nothing to do — which is what keeps a `gt-resume`
+  /// followed by `continue` from wedging a program that is waiting on the released thread.
+  /// </summary>
+  private void EmitDbgGtDequeueFiltered() {
+    _b.FunctionStart("__dbg_gt_dequeue_filtered", 0, 0x60);
+
+    var loopLabel = UniqueLabel("dbg_deq_filter_loop");
+    var noReadmitLabel = UniqueLabel("dbg_deq_filter_no_readmit");
+    var doneLabel = UniqueLabel("dbg_deq_filter_done");
+
+    const int slotGt = 0;
+
+    _b.LoadGlobal(VReg.Scratch1, DbgGtReadmitGlobal);
+    _b.JumpIfZero(VReg.Scratch1, noReadmitLabel);
+    _b.Call("__dbg_gt_readmit_held");
+
+    _b.DefineLabel(noReadmitLabel);
+
+    _b.DefineLabel(loopLabel);
+    _b.Call("__gt_dequeue_ready");
+    // Stored BEFORE the zero test, so the single return path below reads a slot that has always been
+    // written — including the "nothing runnable" answer, which is a real result and not a fall-through.
+    _b.StoreLocal(slotGt, VReg.Ret);
+    _b.JumpIfZero(VReg.Ret, doneLabel);
+
+    _b.LoadLocal(VReg.Arg0, slotGt);
+    _b.Call("__dbg_gt_should_hold");
+    _b.JumpIfZero(VReg.Ret, doneLabel);                   // free to run: this is the answer
+
+    EmitDbgGtHoldPush(slotGt);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.LoadLocal(VReg.Ret, slotGt);
+    _b.FunctionEnd();
+  }
+
   /// <summary>
   /// __dbg_park_loop() — the stop-the-world pause. Spin on the command doorbell (CmdSeq), dispatching
-  /// set-breakpoint / set-condition / clear-breakpoint / backtrace / read-memory (and acking each), until
-  /// the driver sends continue; yield the slice between polls so the pause does not peg a core. Reused by the entry
-  /// stop and the breakpoint-hit stop. Returns when continue arrives (or the agent detaches).
+  /// set-breakpoint / set-condition / clear-breakpoint / backtrace / read-memory / green-thread control
+  /// (and acking each), until the driver sends continue; yield the slice between polls so the pause does
+  /// not peg a core. Reused by the entry stop and the breakpoint-hit stop. Returns when continue arrives
+  /// (or the agent detaches).
+  ///
+  /// It is also where <c>--stop-others</c> lives, and its scope is EXACTLY one stop: the hold on every
+  /// green thread goes on here, on the way in, and comes off on the way out through `continue`. Two
+  /// consequences are deliberate:
+  ///   * a STEP does not lift it, because a step is still a stop — letting the rest of the program run
+  ///     for the duration of one instruction is not a coherent thing to offer, and one source-line step
+  ///     is up to MaxStepInstructions round trips, each of which would otherwise re-enqueue and re-catch
+  ///     every thread in the program;
+  ///   * the DETACH exit lifts it, because a debuggee whose driver has gone must not stay frozen.
   /// </summary>
   private void EmitDbgParkLoop() {
     _b.FunctionStart("__dbg_park_loop", 0, 0x40);
@@ -2099,11 +2662,27 @@ public partial class RuntimeEmitter {
     var readLabel = UniqueLabel("dbg_park_read");
     var gtListLabel = UniqueLabel("dbg_park_gt_list");
     var gtBtLabel = UniqueLabel("dbg_park_gt_backtrace");
+    var gtHoldLabel = UniqueLabel("dbg_park_gt_hold");
+    var gtReleaseLabel = UniqueLabel("dbg_park_gt_release");
     var ackLabel = UniqueLabel("dbg_park_ack");
     var contLabel = UniqueLabel("dbg_park_continue");
     var stepLabel = UniqueLabel("dbg_park_step");
     var exitLabel = UniqueLabel("dbg_park_exit");
+    var releaseAllLabel = UniqueLabel("dbg_park_release_all");
+    var noStopOthersLabel = UniqueLabel("dbg_park_no_stop_others");
     var doneLabel = UniqueLabel("dbg_park_done");
+
+    // Freeze the rest of the program for the duration of this stop, if the session asked for it. Set
+    // BEFORE the first command is served, so the very first `threads` already reports the world as the
+    // user asked for it rather than as it was a moment ago.
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.JumpIfZero(VReg.Scratch1, noStopOthersLabel);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopOthers);
+    _b.JumpIfZero(VReg.Scratch2, noStopOthersLabel);
+    _b.MovRegImm(VReg.Scratch2, 1);
+    _b.StoreGlobal(DbgGtHoldAllGlobal, VReg.Scratch2);
+
+    _b.DefineLabel(noStopOthersLabel);
 
     _b.DefineLabel(loopLabel);
     _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
@@ -2142,6 +2721,10 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Equal, gtListLabel);
     _b.CmpRegImm(VReg.Ret, DbgCmdGtBacktrace);
     _b.JumpIf(Condition.Equal, gtBtLabel);
+    _b.CmpRegImm(VReg.Ret, DbgCmdGtHold);
+    _b.JumpIf(Condition.Equal, gtHoldLabel);
+    _b.CmpRegImm(VReg.Ret, DbgCmdGtRelease);
+    _b.JumpIf(Condition.Equal, gtReleaseLabel);
     _b.Jump(ackLabel);                                   // unknown command: ack and keep waiting
 
     _b.DefineLabel(setLabel);
@@ -2176,6 +2759,14 @@ public partial class RuntimeEmitter {
     _b.Call("__dbg_gt_backtrace");
     _b.Jump(ackLabel);
 
+    _b.DefineLabel(gtHoldLabel);                         // stop scheduling one thread, then ack (below)
+    _b.Call("__dbg_gt_hold_add");
+    _b.Jump(ackLabel);
+
+    _b.DefineLabel(gtReleaseLabel);                      // let one thread run again, then ack (below)
+    _b.Call("__dbg_gt_release");
+    _b.Jump(ackLabel);
+
     _b.DefineLabel(ackLabel);                            // reload base (a call clobbered it), ack, loop
     _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
     _b.LoadLocal(VReg.Scratch2, 0);
@@ -2194,16 +2785,37 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(contLabel);
     _b.MovRegImm(VReg.Ret, DbgStepModeOverBp);
     _b.StoreGlobal(DbgStepModeGlobal, VReg.Ret);
-    _b.Jump(exitLabel);
+    // The `--stop-others` freeze ends with the stop that raised it. Both halves are needed and neither
+    // is the other's duplicate: clearing the flag stops NEW threads being caught, and the doorbell is
+    // what hands back the ones already caught — which nothing else would ever look at again.
+    _b.Jump(releaseAllLabel);
 
     _b.DefineLabel(stepLabel);
     _b.MovRegImm(VReg.Ret, DbgStepModeUser);
     _b.StoreGlobal(DbgStepModeGlobal, VReg.Ret);
 
-    _b.DefineLabel(exitLabel);                           // ack (no call clobbered base/seq), return
+    // Ack and return. Base and seq are RELOADED rather than carried in registers, exactly as the ack
+    // above does: the release path below writes agent globals on the way here, and which registers a
+    // StoreGlobal needs is the backend's business, not something to assume from here.
+    _b.DefineLabel(exitLabel);
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.LoadLocal(VReg.Scratch2, 0);
     _b.StoreRelease(VReg.Scratch1, DbgOffAckSeq, VReg.Scratch2);
+    _b.FunctionEnd();
+
+    // Reached by `continue` and by the DETACH exit, and it must serve both: a driver that has gone
+    // away can no longer release anything, so a debuggee left frozen would stay frozen forever.
+    // Scratch1/Scratch2 (base and seq) are dead on the detach path and reloaded by the ack on the other.
+    _b.DefineLabel(releaseAllLabel);
+    _b.ZeroReg(VReg.Scratch3);
+    _b.StoreGlobal(DbgGtHoldAllGlobal, VReg.Scratch3);
+    EmitDbgGtRingReadmit();
+    _b.Jump(exitLabel);
 
     _b.DefineLabel(doneLabel);
+    _b.ZeroReg(VReg.Scratch3);
+    _b.StoreGlobal(DbgGtHoldAllGlobal, VReg.Scratch3);
+    EmitDbgGtRingReadmit();
     _b.FunctionEnd();
   }
 
@@ -2351,15 +2963,15 @@ public partial class RuntimeEmitter {
     // array off the end of the mapped page — and the agent writes that array from inside a trap handler,
     // so the symptom would be the debuggee faulting rather than a wrong number. The comments above state
     // the arithmetic; this CHECKS it, at build time, because a stated invariant is a test nobody wrote.
-    long segmentHighWater = DbgOffGtRecords + (long)DbgMaxGreenThreads * DbgGtRecSize;
-    if (segmentHighWater > DbgControlSegmentSize)
+    if (DbgControlSegmentHighWater > DbgControlSegmentSize)
       throw new InvalidOperationException(
-        $"the debug control segment overflows its {DbgControlSegmentSize}-byte page: the green-thread "
-        + $"record array ends at {segmentHighWater}. Shrink DbgMaxGreenThreads ({DbgMaxGreenThreads}) or "
+        $"the debug control segment overflows its {DbgControlSegmentSize}-byte page: its last field ends "
+        + $"at {DbgControlSegmentHighWater}. Shrink DbgMaxGreenThreads ({DbgMaxGreenThreads}) or "
         + $"DbgGtRecSize ({DbgGtRecSize}), or grow the segment.");
 
     EmitDebugAgentGlobals();
-    EmitDbgBpSlot();
+    EmitDbgTableSlotScan("__dbg_bp_slot", DbgBpAddrGlobal, DbgMaxBreakpoints);
+    EmitDbgTableSlotScan("__dbg_gt_hold_slot", DbgGtHoldGlobal, DbgMaxHeldGreenThreads);
     EmitDbgSetBp();
     EmitDbgClearBp();
     EmitDbgBpOrigOfAddr();
@@ -2369,15 +2981,21 @@ public partial class RuntimeEmitter {
     EmitDbgPublishStop();
     EmitDbgTextOffset();
     EmitDbgFrameRa();
+    EmitDbgFrameNext();
     EmitDbgWalkFrames();
     EmitDbgBacktrace();
     EmitDbgReadMem();
     EmitDbgProcAt();
     EmitDbgGtOnCpu();
     EmitDbgGtFrames();
+    EmitDbgGtShouldHold();
     EmitDbgGtRecord();
     EmitDbgGtScan();
     EmitDbgGtBacktrace();
+    EmitDbgGtHoldAdd();
+    EmitDbgGtRelease();
+    EmitDbgGtReadmitHeld();
+    EmitDbgGtDequeueFiltered();
     EmitDbgParkLoop();
     EmitDbgOnBreakpoint();
     EmitDbgOnStep();

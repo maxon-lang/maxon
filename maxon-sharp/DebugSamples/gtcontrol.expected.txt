@@ -1,0 +1,97 @@
+P4d-2b green-thread CONTROL gate — reproducible transcript over DebugSamples/gtcontrol.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/gtcontrol.maxon
+  maxon debug --target-env=MAXON_MAX_PROCS=1 --batch --commands='break gtcontrol.maxon:72; break gtcontrol.maxon:73; run; threads; gt-park 1; gt-park 4; threads; continue; threads; gt 4; gt 5; backtrace; locals; print mark; next; gt-resume 5; threads; continue' maxon-sharp/DebugSamples/gtcontrol.exe
+  maxon debug --target-env=MAXON_MAX_PROCS=1 --batch --commands='break gtcontrol.maxon:72; break gtcontrol.maxon:73; run; threads; continue; threads; continue' maxon-sharp/DebugSamples/gtcontrol.exe
+
+RED (the same commands against a pre-P4d-2b binary, before this rung): every control word was unknown,
+so nothing could be parked, selected or read:
+  {"event":"error","message":"unknown command 'gt-park'"}
+  {"event":"error","message":"unknown command 'gt'"}
+  {"event":"error","message":"unknown command 'gt-resume'"}
+and the second block's transcript was ALREADY what it is below — which is the point of running it: it is
+the CONTROL, and it is unchanged by this rung.
+
+THE TWO BLOCKS ARE AN A/B, AND THAT IS WHAT PROVES THE PARK. They differ by one command, `gt-park 4`:
+  * WITHOUT it, heldTask's await completes ~400 ms before the second breakpoint, so by then the thread
+    has finished and the listing holds nothing but `main` (block 2).
+  * WITH it, the scheduler is handed heldTask at that same moment and DECLINES it, so the thread is
+    still alive and still parked at its await when the second breakpoint is reached (block 1).
+No timing is asserted anywhere; the park's effect is a STATE, and the control run is what shows the
+state is not simply what would have happened anyway.
+
+WHAT EACH COMMAND PROVES (asserted by the JSON below):
+  * gt-park 1        -> REFUSED by name. #1 is the processor's own inline scheduler thread, which is
+                        never enqueued and so could never be caught by a hold; promising to park it
+                        would be a promise nothing enforces.
+  * gt-park 4        -> accepted, and the very next listing carries `hold":"held"` on that row — the
+                        listing and the scheduler read the SAME predicate, so what the user is told and
+                        what the scheduler does cannot disagree.
+  * threads (after)  -> heldTask is STILL THERE, as `ready` + `parked` + `held`. Compare block 2, where
+                        the same line of the same program lists only `main`.
+  * gt 4             -> REFUSED, and ACTIONABLY: the id was minted before the resume, and ids are
+                        re-minted on every resume, so the refusal names that rather than saying no such
+                        thread exists. (P4d-2a listed this as a residual: correct but unfriendly.)
+  * gt 5 / backtrace -> the context switch. The backtrace is heldTask's own, walked from ITS saved frame
+                        pointer while the target is stopped in `main` — two frames, because a spawned
+                        thread's chain ends at the spawn trampoline.
+  * locals / print   -> ⭐ the frame is READ, not merely named: `i` and `mark` come out of heldTask's
+                        parked frame at 41. `main` has no local called `mark` at all, so this value
+                        cannot have come from the stopped thread.
+  * next             -> REFUSED while another thread is selected. `gt` moves what the debugger LOOKS AT;
+                        it cannot move what the target RUNS, and silently stepping the stopped thread
+                        would report a stop about a thread the user was not looking at.
+  * gt-resume 5      -> the hold column disappears from the next listing, and the program then RUNS TO
+                        COMPLETION: exit 44 is heldTask's 42 (1 from innerTask + 41) plus freeTask's 2.
+                        A park/resume round trip that leaked or wedged a thread could not produce it.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The thread set, each thread's kind/entry/status/cpu/hold, which thread is stopped, every refusal
+    reason, the frame FUNCTIONS and LINES, the local VALUES (41), the id RELATIONSHIPS (#4 before the
+    resume and #5 after, #1 stable across both stops) and the exit code 44 are the P4d-2b subject and
+    are STABLE. Measured 20/20 byte-identical for each block.
+  * The `.text` offsets are build-specific and move only if codegen moves. 0xf831 — the spawn TRAMPOLINE
+    frame — is RUNTIME code, so it moves whenever the emitted runtime changes size, not only when user
+    codegen does.
+  * NOT asserted, deliberately: the raw GreenThread addresses (they differ every run, which is why an id
+    exists at all) and wall-clock timing.
+
+⚠ RUN THE SAMPLE ONLY WITH MAXON_MAX_PROCS <= 2. `heldTask` spawns and awaits a green thread of its own,
+and a NESTED async segfaults 100% of the time at 3 or more processors on the unchanged compiler — 20/20,
+reproduced with `--no-debug-agent`, i.e. with none of this rung's code in the binary, and 0/20 at one or
+two processors. That is a pre-existing scheduler defect (a sharper form of the intermittent
+multi-processor spawn/await crash already filed in PLAN.md) and it is reported rather than fixed here.
+The nesting is not decoration: a thread parked in `sleep` has `stdlib.sleep` as its top frame, whose
+parameter is never spilled, so its locals are honestly empty and `print` would have nothing to read. A
+thread parked in `await` has its OWN function as the top frame, which is what makes the selection
+demonstrable at all.
+
+--- EXPECTED --batch STDOUT (newline-delimited JSON, one event per line) ---
+{"event":"breakpoint","action":"set","file":"gtcontrol.maxon","line":72,"offset":"0x115","function":"main"}
+{"event":"breakpoint","action":"set","file":"gtcontrol.maxon","line":73,"offset":"0x11e","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x115","function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"col":2,"source":[{"line":69,"text":"\t// exactly ONE ready task, so with a single yield the second task never starts.","current":false},{"line":70,"text":"\tsleep(30)","current":false},{"line":71,"text":"\tsleep(30)","current":false},{"line":72,"text":"\tlet r2 = await p2   // breakpoint here: every task is parked in its own wait, none of them expired","current":true},{"line":73,"text":"\tlet r1 = await p1   // breakpoint here: heldTask is HELD, and would have finished long ago if it","current":false},{"line":74,"text":"\t                    // were not. Only returns once \u0060gt-resume\u0060 has released it.","current":false},{"line":75,"text":"\treturn r1 \u002B r2","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"offset":"0x115"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"offset":"0x115"}},{"id":2,"kind":"green","entry":"innerTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x197"}},{"id":3,"kind":"green","entry":"freeTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x197"}},{"id":4,"kind":"green","entry":"heldTask","status":"waiting","cpu":"parked","topFrame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}]}
+{"event":"gt-park","id":1,"action":"refused","reason":"that is a processor\u0027s scheduler thread, which is the processor itself \u2014 it is never scheduled, so it cannot be parked"}
+{"event":"gt-park","id":4,"action":"parked"}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"offset":"0x115"}},{"id":2,"kind":"green","entry":"innerTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x197"}},{"id":3,"kind":"green","entry":"freeTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x197"}},{"id":4,"kind":"green","entry":"heldTask","status":"waiting","cpu":"parked","hold":"held","topFrame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}]}
+{"event":"stop","reason":"breakpoint","offset":"0x11e","function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"col":2,"source":[{"line":70,"text":"\tsleep(30)","current":false},{"line":71,"text":"\tsleep(30)","current":false},{"line":72,"text":"\tlet r2 = await p2   // breakpoint here: every task is parked in its own wait, none of them expired","current":false},{"line":73,"text":"\tlet r1 = await p1   // breakpoint here: heldTask is HELD, and would have finished long ago if it","current":true},{"line":74,"text":"\t                    // were not. Only returns once \u0060gt-resume\u0060 has released it.","current":false},{"line":75,"text":"\treturn r1 \u002B r2","current":false},{"line":76,"text":"end \u0027main\u0027","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"offset":"0x11e"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"offset":"0x11e"}},{"id":5,"kind":"green","entry":"heldTask","status":"ready","cpu":"parked","hold":"held","topFrame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}]}
+{"event":"gt-select","id":4,"action":"refused","reason":"that id named a green thread at an earlier stop \u2014 ids are re-minted every time the target resumes, so run \u0027threads\u0027 for the current list"}
+{"event":"gt-select","id":5,"action":"selected","frame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}
+{"event":"gt-backtrace","id":5,"frames":[{"frame":0,"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"},{"frame":1,"offset":"0xf831"}]}
+{"event":"locals","values":[{"name":"i","type":"i64","kind":"Primitive","display":"41"},{"name":"mark","type":"i64","kind":"Primitive","display":"41"}]}
+{"event":"value","name":"mark","type":"i64","kind":"Primitive","display":"41"}
+{"event":"error","message":"stepping runs the thread the target is STOPPED on, and green thread #5 is selected \u2014 select the stopped thread (marked in \u0027threads\u0027) or \u0027continue\u0027 first"}
+{"event":"gt-resume","id":5,"action":"resumed"}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"offset":"0x11e"}},{"id":5,"kind":"green","entry":"heldTask","status":"ready","cpu":"parked","topFrame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}]}
+{"event":"exit","code":44}
+
+--- EXPECTED --batch STDOUT: the CONTROL run, identical but for the missing `gt-park` ---
+{"event":"breakpoint","action":"set","file":"gtcontrol.maxon","line":72,"offset":"0x115","function":"main"}
+{"event":"breakpoint","action":"set","file":"gtcontrol.maxon","line":73,"offset":"0x11e","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x115","function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"col":2,"source":[{"line":69,"text":"\t// exactly ONE ready task, so with a single yield the second task never starts.","current":false},{"line":70,"text":"\tsleep(30)","current":false},{"line":71,"text":"\tsleep(30)","current":false},{"line":72,"text":"\tlet r2 = await p2   // breakpoint here: every task is parked in its own wait, none of them expired","current":true},{"line":73,"text":"\tlet r1 = await p1   // breakpoint here: heldTask is HELD, and would have finished long ago if it","current":false},{"line":74,"text":"\t                    // were not. Only returns once \u0060gt-resume\u0060 has released it.","current":false},{"line":75,"text":"\treturn r1 \u002B r2","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"offset":"0x115"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":72,"offset":"0x115"}},{"id":2,"kind":"green","entry":"innerTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x197"}},{"id":3,"kind":"green","entry":"freeTask","status":"waiting","cpu":"parked","topFrame":{"function":"stdlib.sleep","offset":"0x197"}},{"id":4,"kind":"green","entry":"heldTask","status":"waiting","cpu":"parked","topFrame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}]}
+{"event":"stop","reason":"breakpoint","offset":"0x11e","function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"col":2,"source":[{"line":70,"text":"\tsleep(30)","current":false},{"line":71,"text":"\tsleep(30)","current":false},{"line":72,"text":"\tlet r2 = await p2   // breakpoint here: every task is parked in its own wait, none of them expired","current":false},{"line":73,"text":"\tlet r1 = await p1   // breakpoint here: heldTask is HELD, and would have finished long ago if it","current":true},{"line":74,"text":"\t                    // were not. Only returns once \u0060gt-resume\u0060 has released it.","current":false},{"line":75,"text":"\treturn r1 \u002B r2","current":false},{"line":76,"text":"end \u0027main\u0027","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"offset":"0x11e"},{"frame":1,"offset":"0x4c"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"offset":"0x11e"}}]}
+{"event":"exit","code":44}

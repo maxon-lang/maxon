@@ -37,7 +37,7 @@ internal static class MaxonDebugRepl {
   // ---- Interactive REPL ----
 
   public static int RunInteractive(string exePath, IReadOnlyList<string> targetArgs, TimeSpan? stopTimeout,
-      IReadOnlyDictionary<string, string>? targetEnv) {
+      IReadOnlyDictionary<string, string>? targetEnv, bool stopOthers) {
     TryEnableUtf8();
     var sidecar = LoadSidecar(exePath);
     if (sidecar == null) return 1;
@@ -45,7 +45,7 @@ internal static class MaxonDebugRepl {
     MaxonDebugger dbg;
     try {
       dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, stopTimeout: stopTimeout,
-        targetEnv: targetEnv);
+        targetEnv: targetEnv, stopOthers: stopOthers);
     } catch (DebuggerException ex) {
       Console.Error.WriteLine($"maxon debug: {ex.Message}");
       return 1;
@@ -54,6 +54,11 @@ internal static class MaxonDebugRepl {
     using (dbg) {
       if (!dbg.WaitForAgentAlive()) {
         Console.Error.WriteLine("maxon debug: the debug agent never attached (is MAXON_DEBUG honored by this build?).");
+        return 1;
+      }
+      if (StopOthersUnsupportedText(dbg) is { } unsupported) {
+        Console.Error.WriteLine($"maxon debug: {unsupported}.");
+        dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
         return 1;
       }
 
@@ -148,6 +153,15 @@ internal static class MaxonDebugRepl {
           break;
         case DebugCommand.GtBacktrace:
           DoGtBacktrace(rest);
+          break;
+        case DebugCommand.GtSelect:
+          DoGtSelect(rest);
+          break;
+        case DebugCommand.GtPark:
+          DoGtHold(rest, park: true);
+          break;
+        case DebugCommand.GtResume:
+          DoGtHold(rest, park: false);
           break;
         case DebugCommand.Print:
           DoPrint(rest);
@@ -284,6 +298,13 @@ internal static class MaxonDebugRepl {
         Console.Out.WriteLine(NotStoppedText);
         return;
       }
+      // A `gt <id>` selection redirects the WHOLE inspection surface, not only `print` — a backtrace of
+      // the stopped thread beside locals from another one would be the most confusing pair of true
+      // statements this REPL could make.
+      if (dbg.SelectedGreenThread is { } selected) {
+        RenderGtBacktraceText(selected.Id, dbg.GtBacktrace(selected.Id), Console.Out);
+        return;
+      }
       // The target is still parked at the same stop, so a fresh request is authoritative.
       RenderBacktraceText(dbg.Backtrace(), Console.Out);
     }
@@ -298,9 +319,45 @@ internal static class MaxonDebugRepl {
         return;
       }
 
-      var bt = dbg.GtBacktrace(id);
-      RenderFramesText($"green thread #{id}", GtBacktraceUnavailableReason(bt.Status), bt.Frames,
-        Console.Out, GtEmptyFramesText(bt));
+      RenderGtBacktraceText(id, dbg.GtBacktrace(id), Console.Out);
+    }
+
+    /// `gt <id>` — switch the inspection surface to another green thread; bare `gt` reports which one it
+    /// is on. Deliberately does NOT print that thread's whole stack: `backtrace` does, and now describes
+    /// the selected thread, so printing it here would be the same answer twice under two commands.
+    private void DoGtSelect(string rest) {
+      if (rest.Trim().Length == 0) {
+        Console.Out.WriteLine(dbg.SelectedGreenThread is { } current
+          ? $"On green thread #{current.Id} {GreenThreadName(current)}. {GtSelectUsageText}"
+          : $"On the stopped green thread. {GtSelectUsageText}");
+        return;
+      }
+      if (!TryParseGtId(rest, out int id)) {
+        Console.Out.WriteLine($"Usage: {GtSelectUsageText}");
+        return;
+      }
+
+      var result = dbg.SelectGreenThread(id);
+      if (GtThreadCommandReason(result.Status) is { } reason) {
+        Console.Out.WriteLine($"gt {id}: {reason}.");
+        return;
+      }
+      Console.Out.WriteLine(GtSelectedText(id, result.Thread));
+    }
+
+    private void DoGtHold(string rest, bool park) {
+      var verb = GtHoldCommandName(park);
+      if (!TryParseGtId(rest, out int id)) {
+        Console.Out.WriteLine($"Usage: {verb} <id>   (an id from 'threads')");
+        return;
+      }
+
+      var result = park ? dbg.ParkGreenThread(id) : dbg.ResumeGreenThread(id);
+      if (GtThreadCommandReason(result.Status) is { } reason) {
+        Console.Out.WriteLine($"{verb} {id}: {reason}.");
+        return;
+      }
+      Console.Out.WriteLine(GtHoldDoneText(id, park, result.Thread));
     }
 
     private void DoPrint(string rest) {
@@ -317,7 +374,7 @@ internal static class MaxonDebugRepl {
         return;
       }
       try {
-        RenderValueText(renderer.Evaluate(report.Stop, rest), Console.Out);
+        RenderValueText(renderer.Evaluate(dbg.InspectionFrame(report.Stop), rest), Console.Out);
       } catch (DebuggerException ex) {
         Console.Out.WriteLine($"print: {ex.Message}.");
       }
@@ -333,7 +390,7 @@ internal static class MaxonDebugRepl {
         return;
       }
       try {
-        var values = renderer.Locals(report.Stop);
+        var values = renderer.Locals(dbg.InspectionFrame(report.Stop));
         if (values.Count == 0) {
           Console.Out.WriteLine("  (no named locals with a stack home here)");
           return;
@@ -351,12 +408,20 @@ internal static class MaxonDebugRepl {
         Console.Out.WriteLine(NotStoppedText);
         return;
       }
+      if (StepRefusedWhileSelectedText(dbg) is { } refusal) {
+        Console.Out.WriteLine($"{refusal}.");
+        return;
+      }
       ApplyStepOutcome(op(report.Stop));
     }
 
     private void DoUntil(string rest) {
       if (_stop is not { } report) {
         Console.Out.WriteLine(NotStoppedText);
+        return;
+      }
+      if (StepRefusedWhileSelectedText(dbg) is { } refusal) {
+        Console.Out.WriteLine($"{refusal}.");
         return;
       }
       if (!uint.TryParse(rest.Trim(), out var line) || line == 0) {
@@ -420,6 +485,9 @@ internal static class MaxonDebugRepl {
       Console.Out.WriteLine("  backtrace             (bt)  show the stopped call stack");
       Console.Out.WriteLine("  threads               (gts) list the live green threads, with the stop marked");
       Console.Out.WriteLine("  gt-backtrace <id>     (gtbt) backtrace one green thread (parked ones only)");
+      Console.Out.WriteLine("  gt <id>                     switch backtrace/print/locals to another green thread");
+      Console.Out.WriteLine("  gt-park <id>                stop scheduling one green thread (it stays inspectable)");
+      Console.Out.WriteLine("  gt-resume <id>              let a parked green thread run again");
       Console.Out.WriteLine("  locals                      list the stopped function's locals with values");
       Console.Out.WriteLine("  print <expr>          (p)   render a value; dotted paths navigate (person.home.name)");
       Console.Out.WriteLine("  quit                  (q)   end the session");
@@ -449,7 +517,7 @@ internal static class MaxonDebugRepl {
   }
 
   public static int RunBatch(string exePath, IReadOnlyList<string> targetArgs, string commandsSpec,
-      TimeSpan? stopTimeout, IReadOnlyDictionary<string, string>? targetEnv) {
+      TimeSpan? stopTimeout, IReadOnlyDictionary<string, string>? targetEnv, bool stopOthers) {
     TryEnableUtf8();
     var sidecar = LoadSidecar(exePath);
     if (sidecar == null) { EmitError("no debug info found for the target"); return 1; }
@@ -463,7 +531,7 @@ internal static class MaxonDebugRepl {
     try {
       // Target stdout -> the driver's STDERR so this mode's JSON stream on stdout stays clean.
       dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, targetStdout: Console.Error,
-        stopTimeout: stopTimeout, targetEnv: targetEnv);
+        stopTimeout: stopTimeout, targetEnv: targetEnv, stopOthers: stopOthers);
     } catch (DebuggerException ex) {
       EmitError(ex.Message);
       return 1;
@@ -472,6 +540,11 @@ internal static class MaxonDebugRepl {
     using (dbg) {
       if (!dbg.WaitForAgentAlive()) {
         EmitError("the debug agent never attached (is MAXON_DEBUG honored by this build?)");
+        return 1;
+      }
+      if (StopOthersUnsupportedText(dbg) is { } unsupported) {
+        EmitError(unsupported);
+        dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
         return 1;
       }
 
@@ -527,13 +600,25 @@ internal static class MaxonDebugRepl {
         BatchUntil(dbg, exePath, rest, session);
         break;
       case DebugCommand.Backtrace:
-        EmitBacktrace(dbg.Backtrace());
+        // Redirected by a `gt <id>` selection for the reason the interactive face states: a backtrace of
+        // one thread beside locals from another is the worst pair of true statements available.
+        if (dbg.SelectedGreenThread is { } selected) EmitGtBacktrace(selected.Id, dbg.GtBacktrace(selected.Id));
+        else EmitBacktrace(dbg.Backtrace());
         break;
       case DebugCommand.Threads:
         EmitThreads(dbg.ListGreenThreads());
         break;
       case DebugCommand.GtBacktrace:
         BatchGtBacktrace(dbg, rest);
+        break;
+      case DebugCommand.GtSelect:
+        BatchGtSelect(dbg, rest);
+        break;
+      case DebugCommand.GtPark:
+        BatchGtHold(dbg, rest, park: true);
+        break;
+      case DebugCommand.GtResume:
+        BatchGtHold(dbg, rest, park: false);
         break;
       case DebugCommand.Locals:
         BatchLocals(dbg, session.CurrentStop);
@@ -656,11 +741,13 @@ internal static class MaxonDebugRepl {
   private static void BatchStepCommand(MaxonDebugger dbg, string exePath,
       Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op, BatchSession session) {
     if (session.CurrentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
+    if (StepRefusedWhileSelectedText(dbg) is { } refusal) { EmitError(refusal); return; }
     ApplyBatchStepOutcome(dbg, exePath, op(stop), session);
   }
 
   private static void BatchUntil(MaxonDebugger dbg, string exePath, string rest, BatchSession session) {
     if (session.CurrentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
+    if (StepRefusedWhileSelectedText(dbg) is { } refusal) { EmitError(refusal); return; }
     if (!uint.TryParse(rest.Trim(), out var line) || line == 0) { EmitError("until needs a line number"); return; }
     ApplyBatchStepOutcome(dbg, exePath, dbg.Until(stop, line), session);
   }
@@ -714,11 +801,55 @@ internal static class MaxonDebugRepl {
     EmitGtBacktrace(id, dbg.GtBacktrace(id));
   }
 
+  private static void BatchGtSelect(MaxonDebugger dbg, string rest) {
+    if (!TryParseGtId(rest, out int id)) {
+      EmitError($"gt needs a green-thread id ({GtSelectUsageText})");
+      return;
+    }
+
+    var result = dbg.SelectGreenThread(id);
+    WriteEvent(w => {
+      w.WriteString("event", "gt-select");
+      w.WriteNumber("id", id);
+      if (GtThreadCommandReason(result.Status) is { } reason) {
+        w.WriteString("action", "refused");
+        w.WriteString("reason", reason);
+        return;
+      }
+      w.WriteString("action", result.Thread is { IsStopped: true } ? "stopped-thread" : "selected");
+      if (result.Thread is { } t && t.TopKind != MaxonDebugger.GtTopFrame.None) {
+        w.WriteStartObject("frame");
+        WriteLocationFields(w, t.TopLocation);
+        w.WriteEndObject();
+      }
+    });
+  }
+
+  private static void BatchGtHold(MaxonDebugger dbg, string rest, bool park) {
+    var verb = GtHoldCommandName(park);
+    if (!TryParseGtId(rest, out int id)) {
+      EmitError($"{verb} needs a green-thread id (an id from 'threads')");
+      return;
+    }
+
+    var result = park ? dbg.ParkGreenThread(id) : dbg.ResumeGreenThread(id);
+    WriteEvent(w => {
+      w.WriteString("event", verb);
+      w.WriteNumber("id", id);
+      if (GtThreadCommandReason(result.Status) is { } reason) {
+        w.WriteString("action", "refused");
+        w.WriteString("reason", reason);
+        return;
+      }
+      w.WriteString("action", park ? "parked" : "resumed");
+    });
+  }
+
   private static void BatchLocals(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
     if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
     if (MakeValueRenderer(dbg, out var reason) is not { } renderer) { EmitError(reason); return; }
     try {
-      var values = renderer.Locals(stop);
+      var values = renderer.Locals(dbg.InspectionFrame(stop));
       WriteEvent(w => {
         w.WriteString("event", "locals");
         w.WriteStartArray("values");
@@ -735,7 +866,7 @@ internal static class MaxonDebugRepl {
     if (rest.Length == 0) { EmitError("print needs an expression (e.g. print person.home.name)"); return; }
     if (MakeValueRenderer(dbg, out var reason) is not { } renderer) { EmitError(reason); return; }
     try {
-      var value = renderer.Evaluate(stop, rest);
+      var value = renderer.Evaluate(dbg.InspectionFrame(stop), rest);
       WriteEvent(w => {
         w.WriteString("event", "value");
         WriteValueBody(w, value);
@@ -1013,34 +1144,93 @@ internal static class MaxonDebugRepl {
 
   // ---- Shared renderers: green threads (P4d-2a) ----
 
-  /// What BOTH green-thread commands say about a pre-v8 agent. One sentence, because the two commands
+  /// What EVERY green-thread command says about an agent too old to serve it. One sentence, because they
   /// share one capability gate (<c>MaxonDebugger.GreenThreadsSupported</c>) and answering the same
-  /// question two ways is how the two would come to describe one binary differently.
+  /// question several ways is how they would come to describe one binary differently.
   private const string GreenThreadsUnsupportedText =
     "green threads are not supported by this binary's debug agent (rebuild to enable)";
 
+  /// <summary>
+  /// Why a session must not start, or null when it may. `--stop-others` is written into the control
+  /// segment BEFORE the target is spawned, so it is the one option whose support cannot be checked where
+  /// it is applied — and an agent that does not read that word freezes nothing at all while every
+  /// listing looks perfectly normal. It is therefore a REFUSAL to start rather than a warning: the whole
+  /// point of the flag is that the user is about to trust what they see.
+  /// </summary>
+  private static string? StopOthersUnsupportedText(MaxonDebugger dbg) =>
+    dbg.StopOthersRequested && !dbg.GreenThreadsSupported
+      ? $"{StopOthersFlag} needs a rebuilt debug agent — this binary's cannot hold green threads, so the "
+        + "rest of the program would keep running while the session reported it stopped"
+      : null;
+
+  /// The two spellings of what a stop does to the OTHER green threads. They are one setting with two
+  /// names rather than two flags, so asking for both is a contradiction the parser refuses.
+  public const string ThisGtFlag = "--this-gt";
+  public const string StopOthersFlag = "--stop-others";
+
   /// The reason a green-thread listing produced nothing, or null when it succeeded — stated ONCE so the
   /// text and JSON faces cannot tell the user to rebuild when the target merely exited.
+  /// What every green-thread command says when the LISTING it depends on could not be taken. Shared,
+  /// because a per-thread command's first act is to list — so its failure is the listing's failure and
+  /// must not acquire a second wording on the way out.
+  private const string GtListUnavailableText = "threads command not acknowledged (the target may have exited)";
+
   private static string? GtListUnavailableReason(MaxonDebugger.GtListStatus status) => status switch {
     MaxonDebugger.GtListStatus.Ok => null,
     MaxonDebugger.GtListStatus.UnsupportedByAgent => GreenThreadsUnsupportedText,
-    MaxonDebugger.GtListStatus.NotAcknowledged =>
-      "threads command not acknowledged (the target may have exited)",
+    MaxonDebugger.GtListStatus.NotAcknowledged => GtListUnavailableText,
     _ => throw new InvalidOperationException($"Unhandled green-thread list status {status}"),
   };
 
-  /// The reason a per-green-thread backtrace produced no frames, or null when it succeeded.
-  private static string? GtBacktraceUnavailableReason(MaxonDebugger.GtBacktraceStatus status) => status switch {
-    MaxonDebugger.GtBacktraceStatus.Ok => null,
-    MaxonDebugger.GtBacktraceStatus.UnsupportedByAgent => GreenThreadsUnsupportedText,
-    MaxonDebugger.GtBacktraceStatus.UnknownId =>
-      "no green thread with that id in the current listing (run 'threads' first)",
-    MaxonDebugger.GtBacktraceStatus.RunningOnCpu =>
-      "that green thread is running on a processor, so it has no stable stack to walk",
-    MaxonDebugger.GtBacktraceStatus.Unavailable =>
-      "the agent produced no trace for that green thread (it completed while the target was parked, "
-      + "or the target exited)",
-    _ => throw new InvalidOperationException($"Unhandled green-thread backtrace status {status}"),
+  /// An id no green thread has ever carried in this session, and one that named a thread at an EARLIER
+  /// stop. They are stated apart because the next step differs, and the second is the common one: ids are
+  /// re-minted on every resume, so `threads; next; threads` renumbers the same live threads and the id a
+  /// user just read is genuinely gone. "No green thread has id 3" would send them looking for a thread
+  /// that is sitting right there under a new number.
+  private const string GtUnknownIdText = "no green thread has that id in this session";
+  private const string GtStaleIdText =
+    "that id named a green thread at an earlier stop — ids are re-minted every time the target resumes, "
+    + "so run 'threads' for the current list";
+
+  /// What every green-thread command says about a thread executing on a processor. ONE sentence, because
+  /// it is ONE fact — the park gate — and the four commands that hit it (`gt`, `gt-park`, `gt-backtrace`
+  /// and the listing's own top-frame column) must not describe it as four different limitations.
+  private const string GtRunningOnCpuText =
+    "that green thread is running on a processor, so it has no stable stack to walk and a cooperative "
+    + "park cannot reach it until it next interacts with the scheduler";
+
+  /// <summary>
+  /// Why a command that named ONE green thread did not do it, or null when it did — the single wording
+  /// of every per-thread refusal, for `gt-backtrace`, `gt`, `gt-park` and `gt-resume` alike.
+  ///
+  /// One function because it answers one closed vocabulary (<c>MaxonDebugger.GtThreadStatus</c>), and
+  /// because the alternative was measured: three near-identical switches sharing four of their arms,
+  /// which is how a stale id comes to be worded as an unknown one in three places and correctly in a
+  /// fourth. A member a given command cannot produce simply never reaches its caller.
+  /// </summary>
+  private static string? GtThreadCommandReason(MaxonDebugger.GtThreadStatus status) => status switch {
+    MaxonDebugger.GtThreadStatus.Ok => null,
+    MaxonDebugger.GtThreadStatus.UnsupportedByAgent => GreenThreadsUnsupportedText,
+    MaxonDebugger.GtThreadStatus.NotListed => GtListUnavailableText,
+    MaxonDebugger.GtThreadStatus.UnknownId => GtUnknownIdText,
+    MaxonDebugger.GtThreadStatus.StaleId => GtStaleIdText,
+    MaxonDebugger.GtThreadStatus.RunningOnCpu => GtRunningOnCpuText,
+    MaxonDebugger.GtThreadStatus.NoFrame =>
+      "that green thread has no readable frame yet (it has not started, or the agent could not vouch "
+      + "for its frame chain), so there is nothing to inspect",
+    MaxonDebugger.GtThreadStatus.SchedulerThread =>
+      "that is a processor's scheduler thread, which is the processor itself — it is never scheduled, "
+      + "so it cannot be parked",
+    MaxonDebugger.GtThreadStatus.StoppedThread =>
+      "that is the green thread the debugger is stopped on; it is already stopped, and parking it would "
+      + "only stop it being resumed",
+    MaxonDebugger.GtThreadStatus.Refused =>
+      "the agent did not carry that out — a park needs a free slot in its "
+      + $"{Compiler.Ir.Runtime.RuntimeEmitter.DbgMaxHeldGreenThreads}-thread table, a resume needs a park "
+      + "to undo (a '--stop-others' freeze is lifted by 'continue', not by 'gt-resume'), a backtrace "
+      + "needs a thread that did not complete while the target was parked, and all of them need a "
+      + "target that is still there",
+    _ => throw new InvalidOperationException($"Unhandled green-thread command status {status}"),
   };
 
   /// <summary>
@@ -1069,6 +1259,21 @@ internal static class MaxonDebugRepl {
   private static string GreenThreadCpuText(MaxonDebugger.GreenThread t) =>
     t.IsStopped ? "stopped" : t.OnCpu ? "on-cpu" : "parked";
 
+  /// <summary>
+  /// Whether the DEBUGGER owns this thread, or null when it does not — a column that appears only when
+  /// it has something to say, so an un-parked listing reads exactly as it did before this rung.
+  ///
+  /// "pending" is the honest word for a hold that is in force against a thread the scheduler is not in a
+  /// position to stop yet. It is NOT a synonym for held, and the difference is the whole cooperative
+  /// story: a `held` thread will not run again until it is resumed, a `pending` one is running right now.
+  /// </summary>
+  private static string? GreenThreadHoldText(MaxonDebugger.GtHold hold) => hold switch {
+    MaxonDebugger.GtHold.None => null,
+    MaxonDebugger.GtHold.Held => "held",
+    MaxonDebugger.GtHold.Pending => "pending",
+    _ => throw new InvalidOperationException($"Unhandled green-thread hold {hold}"),
+  };
+
   /// A green thread's display name: its entry function, or which processor's scheduler thread it is.
   private static string GreenThreadName(MaxonDebugger.GreenThread t) =>
     t.IsSchedulerThread ? $"<scheduler P{t.ProcId}>"
@@ -1088,9 +1293,16 @@ internal static class MaxonDebugRepl {
   /// which at the entry stop it printed about `main`, one line under a listing correctly saying that
   /// thread was stopped before any frame was published.
   /// </summary>
+  ///
+  /// The SCHEDULER-THREAD arm is a fourth cause and not a variation of the third: a processor's inline
+  /// thread runs on the OS thread's own stack, so the frame above its saved one is the thread-entry
+  /// thunk, which is outside `.text` and correctly ends the walk. Reporting that as "not started" was
+  /// measured wrong the moment a second processor appeared — the worker in question was executing a
+  /// green thread at that very instant.
   private static string GreenThreadNoFramesReason(MaxonDebugger.GreenThread t) =>
     t.IsStopped ? "stopped at entry, before any frame was published"
     : t.OnCpu ? "running on a processor — no stable stack to walk"
+    : t.IsSchedulerThread ? "the processor's scheduler loop — its caller is the OS thread entry, outside the program's code"
     : "not started — no frames yet";
 
   /// Why a green thread's LISTED top frame is absent, or null when it has one. The agent reports no top
@@ -1118,8 +1330,9 @@ internal static class MaxonDebugRepl {
     foreach (var t in list.Threads) {
       var marker = t.IsStopped ? CurrentLineMarker : " ";
       var where = TopFrameUnavailableReason(t) is { } why ? why : LocationText(t.TopLocation);
+      var hold = GreenThreadHoldText(t.Hold) is { } h ? $"[{h}] " : "";
       w.WriteLine($"  {marker} #{t.Id}  {GreenThreadName(t).PadRight(nameWidth)}  "
-        + $"{GreenThreadStatusText(t.Status),-9} {GreenThreadCpuText(t),-7}  {where}");
+        + $"{GreenThreadStatusText(t.Status),-9} {GreenThreadCpuText(t),-7}  {hold}{where}");
     }
 
     // A truncated list is a WRONG ANSWER unless it says so — the agent's array is bounded, and a reader
@@ -1147,6 +1360,9 @@ internal static class MaxonDebugRepl {
       else if (t.EntryFunction.Length > 0) w.WriteString("entry", t.EntryFunction);
       w.WriteString("status", GreenThreadStatusText(t.Status));
       w.WriteString("cpu", GreenThreadCpuText(t));
+      // Omitted when the debugger holds nothing, so a session that never parks a thread emits exactly
+      // the shape it did before this rung — and a consumer reading `hold` knows it means something.
+      if (GreenThreadHoldText(t.Hold) is { } hold) w.WriteString("hold", hold);
       if (TopFrameUnavailableReason(t) is { } why) {
         w.WriteNull("topFrame");
         w.WriteString("topFrameUnavailable", why);
@@ -1163,12 +1379,55 @@ internal static class MaxonDebugRepl {
   private static void EmitGtBacktrace(int id, MaxonDebugger.GtBacktraceResult bt) => WriteEvent(w => {
     w.WriteString("event", "gt-backtrace");
     w.WriteNumber("id", id);
-    WriteFramesOrReason(w, "frames", GtBacktraceUnavailableReason(bt.Status), bt.Frames);
+    WriteFramesOrReason(w, "frames", GtThreadCommandReason(bt.Status), bt.Frames);
   });
 
   /// The usage line for `gt-backtrace`, shared by both faces so they cannot describe the argument
   /// differently.
   private const string GtBacktraceUsageText = "gt-backtrace <id>   (an id from 'threads')";
+
+  private const string GtSelectUsageText =
+    "gt <id> switches to another green thread (an id from 'threads'); bare 'gt' reports the current one";
+
+  /// The frame-list face of a per-thread backtrace, shared by `gt-backtrace <id>` and by `backtrace`
+  /// while a thread is selected — which ARE the same answer and must not be worded twice.
+  private static void RenderGtBacktraceText(int id, MaxonDebugger.GtBacktraceResult bt, TextWriter w) =>
+    RenderFramesText($"green thread #{id}", GtThreadCommandReason(bt.Status), bt.Frames, w,
+      GtEmptyFramesText(bt));
+
+  /// The canonical spelling of each hold command, so its usage line, its refusal prefix and its JSON
+  /// event name are one string rather than three that happen to match.
+  private static string GtHoldCommandName(bool park) => park ? "gt-park" : "gt-resume";
+
+  /// What `gt <id>` reports on success. The STOPPED thread is named as such rather than as a selection,
+  /// because that is what the engine did with it: selecting it clears the selection.
+  private static string GtSelectedText(int id, MaxonDebugger.GreenThread? thread) =>
+    thread is { IsStopped: true }
+      ? $"Now on green thread #{id} (the stopped thread) — 'backtrace', 'print' and 'locals' describe it."
+      : $"Now on green thread #{id}"
+        + (thread is { } t ? $" {GreenThreadName(t)}" : "")
+        + " — 'backtrace', 'print' and 'locals' describe it until the target resumes.";
+
+  private static string GtHoldDoneText(int id, bool park, MaxonDebugger.GreenThread? thread) {
+    var name = thread is { } t ? $" {GreenThreadName(t)}" : "";
+    return park
+      ? $"Green thread #{id}{name} parked — the scheduler will not run it until 'gt-resume {id}'."
+      : $"Green thread #{id}{name} resumed — the scheduler may run it again.";
+  }
+
+  /// <summary>
+  /// Why a step command refuses while another green thread is selected, or null when nothing is.
+  ///
+  /// `gt <id>` moves what the debugger LOOKS AT; it cannot move what the target RUNS, because a stop
+  /// belongs to one thread and stepping resumes that thread's processor. Refusing is the honest answer:
+  /// silently stepping the stopped thread while the user is reading another one's locals would produce a
+  /// stop report about a thread they were not looking at.
+  /// </summary>
+  private static string? StepRefusedWhileSelectedText(MaxonDebugger dbg) =>
+    dbg.SelectedGreenThread is { } t
+      ? $"stepping runs the thread the target is STOPPED on, and green thread #{t.Id} is selected — "
+        + "select the stopped thread (marked in 'threads') or 'continue' first"
+      : null;
 
   /// <summary>
   /// Parse a green-thread id argument. It parses as the driver's OWN id type, and that is the fix rather
@@ -1445,8 +1704,8 @@ internal static class MaxonDebugRepl {
   /// (continue) but stay distinct here so the interactive prompt can word them differently. `Step`/`Next`/
   /// `Finish`/`Until` are the P4b source-line stepping commands.
   private enum DebugCommand {
-    Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace, Print,
-    Locals, Help, Quit, Unknown,
+    Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace, GtSelect,
+    GtPark, GtResume, Print, Locals, Help, Quit, Unknown,
   }
 
   /// One command's vocabulary AND its completion policy: the canonical word, its aliases, and the pool its
@@ -1470,6 +1729,9 @@ internal static class MaxonDebugRepl {
     new(DebugCommand.Backtrace, "backtrace", ["bt", "where"],   CompletionArgTarget.None),
     new(DebugCommand.Threads,   "threads",   ["gts"],           CompletionArgTarget.None),
     new(DebugCommand.GtBacktrace, "gt-backtrace", ["gtbt"],     CompletionArgTarget.None),
+    new(DebugCommand.GtSelect,  "gt",        ["thread"],        CompletionArgTarget.None),
+    new(DebugCommand.GtPark,    "gt-park",   ["gtpark"],        CompletionArgTarget.None),
+    new(DebugCommand.GtResume,  "gt-resume", ["gtresume"],      CompletionArgTarget.None),
     new(DebugCommand.Print,     "print",     ["p"],             CompletionArgTarget.Locals),
     new(DebugCommand.Locals,    "locals",    [],                CompletionArgTarget.Locals),
     new(DebugCommand.Help,      "help",      ["?", "commands"], CompletionArgTarget.None),

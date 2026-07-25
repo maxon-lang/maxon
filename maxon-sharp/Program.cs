@@ -80,6 +80,12 @@ class Program {
     Console.WriteLine($"  {TargetEnvFlag}N=V         Set a variable in the DEBUGGEE's environment (repeatable;");
     Console.WriteLine("                           prefix any target-spawning form). MAXON_MAX_PROCS=1 pins the");
     Console.WriteLine("                           scheduler to one processor, which makes a green-thread run reproducible");
+    Console.WriteLine($"  {MaxonDebugRepl.ThisGtFlag} | {MaxonDebugRepl.StopOthersFlag}");
+    Console.WriteLine("                           What a stop does to the OTHER green threads: park only the");
+    Console.WriteLine($"                           trapping one ({MaxonDebugRepl.ThisGtFlag}, the default), or hold every");
+    Console.WriteLine("                           thread for the duration of the stop. A hold is COOPERATIVE, so a");
+    Console.WriteLine("                           thread already running keeps running until it next reaches the");
+    Console.WriteLine("                           scheduler — 'threads' reports that as 'pending' rather than 'held'");
     Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
@@ -121,8 +127,23 @@ class Program {
     // so neither can be mistaken for one of the arguments forwarded verbatim to the debuggee.
     TimeSpan? stopTimeout = null;
     Dictionary<string, string>? targetEnv = null;
+    // Tri-state on purpose: null = not mentioned, so asking for BOTH spellings of one setting is a
+    // contradiction the parser can see rather than a last-one-wins accident.
+    bool? stopOthers = null;
 
     while (args.Length > 0) {
+      if (args[0] is MaxonDebugRepl.ThisGtFlag or MaxonDebugRepl.StopOthersFlag) {
+        bool requested = args[0] == MaxonDebugRepl.StopOthersFlag;
+        if (stopOthers is { } already && already != requested) {
+          Console.Error.WriteLine($"maxon debug: {MaxonDebugRepl.ThisGtFlag} and "
+            + $"{MaxonDebugRepl.StopOthersFlag} are the two settings of one option; pick one.");
+          return 1;
+        }
+        stopOthers = requested;
+        args = args[1..];
+        continue;
+      }
+
       if (args[0].StartsWith(MaxonDebugger.StopTimeoutFlag, StringComparison.Ordinal)) {
         var value = args[0][MaxonDebugger.StopTimeoutFlag.Length..];
         if (!TryParseStopTimeout(value, out var parsed)) {
@@ -162,18 +183,19 @@ class Program {
       Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
       Console.Error.WriteLine("       maxon debug --bp-test <exe> <codeOffset>");
       Console.Error.WriteLine($"A live-session form may be prefixed with {MaxonDebugger.StopTimeoutFlag}<seconds>,");
-      Console.Error.WriteLine($"and a target-spawning one with {TargetEnvFlag}<NAME>=<VALUE> (repeatable).");
+      Console.Error.WriteLine($"and a target-spawning one with {TargetEnvFlag}<NAME>=<VALUE> (repeatable)");
+      Console.Error.WriteLine($"and {MaxonDebugRepl.ThisGtFlag} / {MaxonDebugRepl.StopOthersFlag}.");
       return 1;
     }
 
     switch (args[0]) {
       case "--batch":
-        return RunDebugBatch(args[1..], stopTimeout, targetEnv);
+        return RunDebugBatch(args[1..], stopTimeout, targetEnv, stopOthers ?? false);
 
       case "--complete": {
         // Non-interactive completion: `maxon debug --complete '<partial line>' <exe>`. Prints the
         // candidates the interactive Tab key would offer, so the pure completion engine is batch-testable.
-        if (RejectSessionOptions(stopTimeout, targetEnv, "--complete")) return 1;
+        if (RejectSessionOptions(stopTimeout, targetEnv, stopOthers, "--complete")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --complete needs a partial input line and a target executable "
             + "('maxon debug --complete \"<partial>\" <exe>').");
@@ -183,7 +205,7 @@ class Program {
       }
 
       case "--dump-info": {
-        if (RejectSessionOptions(stopTimeout, targetEnv, "--dump-info")) return 1;
+        if (RejectSessionOptions(stopTimeout, targetEnv, stopOthers, "--dump-info")) return 1;
         if (args.Length < 2) {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
           return 1;
@@ -193,7 +215,7 @@ class Program {
       }
 
       case "--symbolize": {
-        if (RejectSessionOptions(stopTimeout, targetEnv, "--symbolize")) return 1;
+        if (RejectSessionOptions(stopTimeout, targetEnv, stopOthers, "--symbolize")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --symbolize needs a .mxdbg path and at least one code offset.");
           return 1;
@@ -210,6 +232,7 @@ class Program {
           Console.Error.WriteLine("maxon debug --attach-probe needs a path to a Maxon executable.");
           return 1;
         }
+        if (RejectStopOthers(stopOthers, "--attach-probe")) return 1;
         return DebugAgentProbe.Run(args[1], stopTimeout, targetEnv);
       }
 
@@ -228,6 +251,7 @@ class Program {
           return 1;
         }
         bool clearAtStop = args.Length > 3 && args[3] == "clear";
+        if (RejectStopOthers(stopOthers, "--bp-test")) return 1;
         return DebugAgentProbe.RunBpTest(args[1], bpOffset, clearAtStop, stopTimeout, targetEnv);
       }
 
@@ -237,7 +261,7 @@ class Program {
           return 1;
         }
         // A bare target path (plus any args to forward): launch the interactive REPL.
-        return MaxonDebugRepl.RunInteractive(args[0], args[1..], stopTimeout, targetEnv);
+        return MaxonDebugRepl.RunInteractive(args[0], args[1..], stopTimeout, targetEnv, stopOthers ?? false);
     }
   }
 
@@ -310,8 +334,22 @@ class Program {
   /// is how the two would eventually disagree about which surfaces those are.
   /// </summary>
   static bool RejectSessionOptions(TimeSpan? stopTimeout, IReadOnlyDictionary<string, string>? targetEnv,
-      string surface) =>
-    RejectStopTimeout(stopTimeout, surface) || RejectTargetEnv(targetEnv, surface);
+      bool? stopOthers, string surface) =>
+    RejectStopTimeout(stopTimeout, surface) || RejectTargetEnv(targetEnv, surface)
+      || RejectStopOthers(stopOthers, surface);
+
+  /// Refuse the scheduler-locking pair on a `maxon debug` surface that has no green threads to hold —
+  /// the sidecar readers, and the two substrate harnesses, which drive a target through the mailbox but
+  /// have no thread commands and no listing to act on. Accepting it there and doing nothing is the same
+  /// silent lie the two refusals above exist to prevent.
+  static bool RejectStopOthers(bool? stopOthers, string surface) {
+    if (stopOthers == null) return false;
+
+    Console.Error.WriteLine($"maxon debug {surface}: {MaxonDebugRepl.ThisGtFlag} / "
+      + $"{MaxonDebugRepl.StopOthersFlag} decide what a STOP does to the other green threads, which only "
+      + "the REPL and --batch stop at.");
+    return true;
+  }
 
   /// Refuse <see cref="TargetEnvFlag"/> on a `maxon debug` surface that spawns no target, exactly as
   /// <see cref="RejectStopTimeout"/> does — accepting it there and doing nothing is the same silent lie.
@@ -329,7 +367,7 @@ class Program {
   /// arg is the target, the rest are forwarded to it. Emits one JSON event per stop to stdout.
   /// </summary>
   static int RunDebugBatch(string[] args, TimeSpan? stopTimeout,
-      IReadOnlyDictionary<string, string>? targetEnv) {
+      IReadOnlyDictionary<string, string>? targetEnv, bool stopOthers) {
     string? commands = null;
     string? exe = null;
     var targetArgs = new List<string>();
@@ -360,7 +398,7 @@ class Program {
       Console.Error.WriteLine("maxon debug --batch needs a target executable.");
       return 1;
     }
-    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout, targetEnv);
+    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout, targetEnv, stopOthers);
   }
 
   /// Load a `.mxdbg` sidecar for the given path (a `.mxdbg` file, or a binary whose sidecar is
