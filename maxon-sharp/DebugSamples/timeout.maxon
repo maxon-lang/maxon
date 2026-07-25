@@ -1,0 +1,14 @@
+// P4d-1 stop-deadline gate sample. Deliberately SLOW: `main` sleeps far longer than any deadline the
+// golden drives, so every wait below runs out of time with the target STILL ALIVE — the one state the
+// driver used to report as a clean exit. Nothing here is timing-sensitive in the other direction: the
+// sleep only has to outlast the small `--stop-timeout` the golden passes, and it outlasts it by 10x.
+
+typealias ExitCode = int(0 to 255)
+
+function main() returns ExitCode
+	var total = 0
+	sleep(20000)         // outlives the golden's deadline: a `next` over this line cannot finish in time
+	total = total + 3    // breakpoint target: unreachable inside the deadline
+
+	return total
+end 'main'

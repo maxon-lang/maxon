@@ -1,0 +1,81 @@
+P4d-1 stop-deadline gate — reproducible transcript over DebugSamples/timeout.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/timeout.maxon
+  maxon debug --stop-timeout=2 --batch --commands='break timeout.maxon:11; run; print total' maxon-sharp/DebugSamples/timeout.exe; echo "driver-exit=$?"
+  maxon debug --stop-timeout=2 --batch --commands='break timeout.maxon:11' maxon-sharp/DebugSamples/timeout.exe; echo "driver-exit=$?"
+  maxon debug --stop-timeout=2 --batch --commands='break timeout.maxon:10; run; next' maxon-sharp/DebugSamples/timeout.exe; echo "driver-exit=$?"
+
+RED (the same commands before this rung — reproduced on an ORDINARY breakpoint, no condition involved):
+`WaitForStop` returned a bare bool that conflated "the target exited" with "I gave up waiting", and the
+one deadline it waited on was `AttachTimeout` — 20s, the bound on how fast the AGENT answers a handshake,
+applied to a question about how long the USER'S PROGRAM runs. So a breakpoint the target had simply not
+reached yet produced, at 20s:
+  {"event":"exit","running":true}
+and THREE wrong things at once, all of which this golden's blocks now assert against:
+  1. the wait was published as an EXIT — a missed breakpoint was indistinguishable from a clean run to
+     completion, and the driver still returned 0, so CI could not tell them apart;
+  2. the debuggee was ORPHANED — left alive, parked in `__dbg_park_loop`, surviving the driver;
+  3. the driver then HUNG FOREVER in `JoinIo()`, because the stdio-forwarding tasks only finish when the
+     target's pipes close and that orphan never closed them. It released only when the orphan was killed
+     by hand.
+`--stop-timeout` did not exist, and there was no `timeout` event to emit.
+
+WHAT EACH BLOCK PROVES (asserted by the JSON below):
+  * BLOCK 1 — the headline case. A deadline elapses while the target is ALIVE, and it is reported as a
+    `timeout` naming BOTH facts an `exit` event structurally cannot carry: WHAT was awaited and for HOW
+    LONG. The trailing `print total` emits nothing, which is the point — the session has no parked frame,
+    so it does not invent one. The exit event then says `terminated` rather than a code, because the
+    driver killed the target and the status a killed process carries is the OS's, not the program's
+    answer. The driver exits 1.
+  * BLOCK 2 — the DRAIN wait, which is a different wait with a different subject. No `run` is issued, so
+    the command list ends with the target still parked at entry; the drain releases it and waits for the
+    program to finish. `waitingFor` says so ("the program to run to completion"), distinguishing it from
+    BLOCK 1's wait for a breakpoint. This is the wait that used to report `{"event":"exit","running":true}`
+    — an exit event that admitted, in its own field, that nothing had exited.
+  * BLOCK 3 — the STEP wait. `next` over a line whose callee outlives the deadline used to be reported as
+    `StepOutcomeKind.Exited`, i.e. "the program finished", while it was still sleeping. It is now its own
+    outcome and reports `waitingFor: "a stop after a step"`. The stop event before it is a real one, so
+    this also proves a timeout does not disturb the stop that preceded it.
+  * ALL THREE — no orphan. Each block's target is released before the driver returns; after this
+    transcript `tasklist /FI "IMAGENAME eq timeout.exe"` lists nothing. That cannot be asserted in stdout,
+    so it is asserted by the `"terminated":true` field, which is emitted only on the path that killed it.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The event shapes, the `waitingFor` vocabulary, the `seconds` value, and the ABSENCE of any `exit`
+    event carrying a code are the P4d-1 subject and are STABLE.
+  * `seconds` is 2 because the commands pass `--stop-timeout=2`. The DEFAULT is 600s, which is what makes
+    the separation real rather than cosmetic: the same probe under the default deadline now REACHES a
+    breakpoint 25s into a run that the old 20s bound reported as an exit. The flag exists so this gate
+    costs ~2s per block instead of waiting the default out. BLOCK 3 costs ~2s for a second reason worth
+    stating: a timed-out step no longer tries to clear its temp breakpoints through a target that is not
+    parked, which used to block for the full 20s agent-ack timeout on top of the deadline.
+  * The `.text` offsets (0xab / 0x9f, the two statement rows; 0x4c the entry-stub return) are
+    build-specific and move only if codegen for `main` moves.
+  * The exit event deliberately carries NO code on a terminated target. That is not an omission: the OS
+    status of a killed process is platform-specific (−1 on Windows, 137 on POSIX), so publishing it as
+    `code` would be both a wrong answer and a golden that could not be shared across hosts.
+  * The `driver-exit=1` line in every block is the driver's own exit code, echoed into stdout so the
+    gate CHECKS it rather than taking this file's word for it: a timed-out session must not look like a
+    pass to CI, and that rule is worth exactly as much as the test that enforces it.
+  * Non-ASCII characters in a source line are emitted as JSON \u escapes by the writer, so the EXPECTED
+    blocks below are pure ASCII and byte-comparable regardless of the console's encoding.
+
+--- EXPECTED --batch STDOUT, BLOCK 1: a breakpoint the target cannot reach in time ---
+{"event":"breakpoint","action":"set","file":"timeout.maxon","line":11,"offset":"0xab","function":"main"}
+{"event":"timeout","waitingFor":"a stop after continue","seconds":2}
+{"event":"exit","terminated":true}
+driver-exit=1
+
+--- EXPECTED --batch STDOUT, BLOCK 2: the drain's wait for the program to finish ---
+{"event":"breakpoint","action":"set","file":"timeout.maxon","line":11,"offset":"0xab","function":"main"}
+{"event":"timeout","waitingFor":"the program to run to completion","seconds":2}
+{"event":"exit","terminated":true}
+driver-exit=1
+
+--- EXPECTED --batch STDOUT, BLOCK 3: a step whose callee outlives the deadline ---
+{"event":"breakpoint","action":"set","file":"timeout.maxon","line":10,"offset":"0x9f","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x9f","function":"main","file":"maxon-sharp/DebugSamples/timeout.maxon","line":10,"col":2,"source":[{"line":7,"text":"","current":false},{"line":8,"text":"function main() returns ExitCode","current":false},{"line":9,"text":"\tvar total = 0","current":false},{"line":10,"text":"\tsleep(20000)         // outlives the golden\u0027s deadline: a \u0060next\u0060 over this line cannot finish in time","current":true},{"line":11,"text":"\ttotal = total \u002B 3    // breakpoint target: unreachable inside the deadline","current":false},{"line":12,"text":"","current":false},{"line":13,"text":"\treturn total","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/timeout.maxon","line":10,"offset":"0x9f"},{"frame":1,"offset":"0x4c"}]}
+{"event":"timeout","waitingFor":"a stop after a step","seconds":2}
+{"event":"exit","terminated":true}
+driver-exit=1

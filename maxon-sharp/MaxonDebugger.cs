@@ -31,9 +31,58 @@ internal sealed class MaxonDebugger : IDisposable {
   /// Stem of the control-segment name; its pid+random suffix keeps concurrent sessions from colliding.
   private const string ControlSegmentPrefix = "maxon_dbg_";
 
-  /// How long the driver waits for the agent to reach a handshake / ack / stop before giving up.
-  /// Generous: a debuggee only has to map a page and patch a byte, but a loaded CI box is slow.
+  /// <summary>
+  /// How long the driver waits for the AGENT to answer — the handshake, or the ack of a posted command.
+  /// Generous: a debuggee only has to map a page and patch a byte, but a loaded CI box is slow, so 20s
+  /// here means "the agent is broken", which is a driver-side fault.
+  ///
+  /// It is deliberately NOT the bound on a wait for the target to next STOP. That is a property of the
+  /// USER'S PROGRAM — a breakpoint may legitimately be minutes into a run — and is bounded by
+  /// <see cref="StopTimeout"/> instead. Sharing one number conflated a slow program with a broken agent.
+  /// </summary>
   private static readonly TimeSpan AttachTimeout = TimeSpan.FromSeconds(20);
+
+  /// <summary>
+  /// The default bound on a wait for the target to reach its next stop. A debugger waits for its target,
+  /// so this is far larger than <see cref="AttachTimeout"/>; it exists only so a `--batch` session cannot
+  /// hang CI forever, and <see cref="StopTimeoutFlag"/> overrides it.
+  /// </summary>
+  private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromMinutes(10);
+
+  /// The CLI flag that overrides <see cref="StopTimeout"/>, spelled HERE next to the deadline it sets, so
+  /// the parser that reads it and every message that recommends it cannot drift apart.
+  public const string StopTimeoutFlag = "--stop-timeout=";
+
+  /// The recourse offered to a human whose deadline was too short — worded ONCE beside the flag it names,
+  /// so no surface can recommend it differently.
+  public const string RaiseStopTimeoutText =
+    "Raise the deadline with " + StopTimeoutFlag + "<seconds> and run again.";
+
+  /// <see cref="DefaultStopTimeout"/> as the usage banner prints it, so the help text cannot claim a
+  /// default the driver does not use.
+  public static string DefaultStopTimeoutText => SecondsText(DefaultStopTimeout);
+
+  /// This session's bound on a wait for the next stop (see <see cref="DefaultStopTimeout"/>).
+  public TimeSpan StopTimeout { get; }
+
+  /// This session's stop deadline in SECONDS — the ONE value every surface reports, whether as JSON data
+  /// or as prose.
+  public double StopTimeoutSeconds => StopTimeout.TotalSeconds;
+
+  /// <see cref="StopTimeoutSeconds"/> as text. Deliberately the SHORTEST ROUND-TRIP form, which is exactly
+  /// what <c>Utf8JsonWriter.WriteNumber</c> emits for the same double — so the prose face and the JSON
+  /// face cannot print different numbers for one deadline. A fixed "0.###" here would have: TimeSpan keeps
+  /// 100ns ticks, not whole milliseconds, so `--stop-timeout=0.0004` reads 0.0004 in JSON and would have
+  /// rendered as "0s" in prose — the driver claiming a deadline it was not given.
+  public string StopTimeoutText => SecondsText(StopTimeout);
+
+  private static string SecondsText(TimeSpan span) =>
+    span.TotalSeconds.ToString(CultureInfo.InvariantCulture);
+
+  /// <see cref="StopTimeout"/> as a <c>WaitForExit</c> argument, saturating rather than overflowing the
+  /// cast: a deadline beyond ~24 days is still a deadline, and wrapping it would produce a NEGATIVE wait.
+  private int StopTimeoutMilliseconds =>
+    StopTimeout.TotalMilliseconds >= int.MaxValue ? int.MaxValue : (int)StopTimeout.TotalMilliseconds;
 
   private readonly SharedMapping _mapping;
   private readonly MemoryMappedViewAccessor _accessor;
@@ -66,13 +115,14 @@ internal sealed class MaxonDebugger : IDisposable {
   public readonly record struct Frame(int Index, long CodeOffset, bool IsReturnAddress, SymLocation Location);
 
   private MaxonDebugger(SharedMapping mapping, MemoryMappedViewAccessor accessor, Process process,
-      Task stdout, Task stderr, MxdbgReader? sidecar) {
+      Task stdout, Task stderr, MxdbgReader? sidecar, TimeSpan stopTimeout) {
     _mapping = mapping;
     _accessor = accessor;
     _process = process;
     _stdout = stdout;
     _stderr = stderr;
     Sidecar = sidecar;
+    StopTimeout = stopTimeout;
   }
 
   /// <summary>
@@ -82,9 +132,10 @@ internal sealed class MaxonDebugger : IDisposable {
   /// mode passes the driver's stderr so its own JSON stream on stdout stays a clean, parseable channel.
   /// Throws <see cref="DebuggerException"/> with a clear reason on a build-id mismatch or a spawn
   /// failure — the caller reports it and exits nonzero, the way the schema-mismatch refusal does.
+  /// <paramref name="stopTimeout"/> overrides <see cref="DefaultStopTimeout"/> for this session.
   /// </summary>
   public static MaxonDebugger Attach(string exePath, IReadOnlyList<string> targetArgs, MxdbgReader? sidecar,
-      TextWriter? targetStdout = null) {
+      TextWriter? targetStdout = null, TimeSpan? stopTimeout = null) {
     var stdoutSink = targetStdout ?? Console.Out;
 
     if (!File.Exists(exePath))
@@ -133,7 +184,8 @@ internal sealed class MaxonDebugger : IDisposable {
         while (sr.ReadLine() is { } line) Console.Error.WriteLine(line);
       });
 
-      return new MaxonDebugger(mapping, accessor, process, stdout, stderr, sidecar);
+      return new MaxonDebugger(mapping, accessor, process, stdout, stderr, sidecar,
+        stopTimeout ?? DefaultStopTimeout);
     } catch {
       accessor?.Dispose();
       mapping.Dispose();
@@ -154,20 +206,66 @@ internal sealed class MaxonDebugger : IDisposable {
         + $"binary 0x{actual:x16}. Rebuild to regenerate the sidecar.");
   }
 
+  // ---- Polling ----
+
+  /// <summary>
+  /// The pause every wait loop takes between two reads of the control segment. A wait here is BIMODAL and
+  /// a single strategy cannot serve both ends of it:
+  ///
+  ///   * a command ack, or the stop that ends one single-step, comes back in MICROSECONDS — and
+  ///     <see cref="WalkToNextLine"/> makes up to <see cref="MaxStepInstructions"/> such round trips for
+  ///     ONE `step`, so their latency is the whole cost of stepping;
+  ///   * a breakpoint stop can be MINUTES away, because it waits on the user's program.
+  ///
+  /// Yielding throughout serves the first and burns a whole core on the second (measured on a 1M-hit
+  /// conditional breakpoint: 8,873 ms wall against 8,859 ms of CPU — 99.8% of a core, 6,156 ms of it
+  /// KERNEL time, spent almost entirely in the per-poll yield and the per-poll `HasExited` syscall).
+  /// Sleeping throughout serves the second and destroys stepping. So: yield for a hot burst that covers
+  /// any agent round trip, then escalate to short sleeps, capped — the long tail then costs nothing.
+  /// </summary>
+  private struct PollBackoff {
+
+    /// Polls served by a bare yield before the first sleep. Sized to cover an agent round trip with two
+    /// orders of magnitude to spare (a measured step round trip is tens of microseconds; a poll is a few),
+    /// so stepping never reaches the sleeping phase, while a wait that IS long pays this burst once.
+    private const int YieldPolls = 512;
+
+    /// Sleeping polls at one duration before it grows by a millisecond.
+    private const int PollsPerSleepStep = 64;
+
+    /// The longest the loop sleeps between two polls. It bounds how late a stop can be NOTICED, so it
+    /// stays small enough to be invisible next to the human and CI timescales that reach it.
+    private const int MaxSleepMs = 4;
+
+    private int _polls;
+
+    public void Pause() {
+      _polls++;
+      if (_polls <= YieldPolls) {
+        Thread.Yield();
+        return;
+      }
+      Thread.Sleep(Math.Min(1 + (_polls - YieldPolls) / PollsPerSleepStep, MaxSleepMs));
+    }
+  }
+
   // ---- Handshake ----
 
   /// Spin until the agent announces its handshake (magic present AND the alive flag set) or the target
   /// exits / we time out. Reliable because the target is parked at entry until released.
   public bool WaitForAgentAlive() {
     var deadline = DateTime.UtcNow + AttachTimeout;
-    while (DateTime.UtcNow < deadline) {
+    var backoff = new PollBackoff();
+    while (true) {
       if ((_accessor.ReadInt64(RuntimeEmitter.DbgOffFlags) & RuntimeEmitter.DbgFlagAgentAlive) != 0
           && _accessor.ReadInt64(RuntimeEmitter.DbgOffMagic) == RuntimeEmitter.DbgControlMagic)
         return true;
       if (_process.HasExited) return false;
-      Thread.Yield();
+      // The deadline is tested AFTER the state reads, so a handshake that lands in the final poll window
+      // is honored rather than lost to the clock.
+      if (DateTime.UtcNow >= deadline) return false;
+      backoff.Pause();
     }
-    return false;
   }
 
   /// The control-segment schema version the agent announced.
@@ -182,14 +280,22 @@ internal sealed class MaxonDebugger : IDisposable {
   /// arm/clear through PostCommand directly, so a temp never enters this set.
   private readonly HashSet<long> _userBreakpointOffsets = [];
 
+  /// The registry mirrors what is ARMED IN THE TARGET, so both sides update only once the post has
+  /// LANDED. Recording a breakpoint that never armed would make the step runners believe a user bp sits
+  /// there and skip planting their own temp, so a `next`/`finish` would run straight past the place it
+  /// meant to stop; forgetting one that is still armed is the mirror error, and lets a temp bp be planted
+  /// on the user's live 0xCC and then delete it. Both became reachable once a post can be refused outright
+  /// (see <see cref="StopOutstanding"/>) rather than only failing after a 20s stall.
   public bool SetBreakpointAtOffset(long codeOffset) {
+    if (!PostCommand(RuntimeEmitter.DbgCmdSetBp, codeOffset)) return false;
     _userBreakpointOffsets.Add(codeOffset);
-    return PostCommand(RuntimeEmitter.DbgCmdSetBp, codeOffset);
+    return true;
   }
 
   public bool ClearBreakpointAtOffset(long codeOffset) {
+    if (!PostCommand(RuntimeEmitter.DbgCmdClearBp, codeOffset)) return false;
     _userBreakpointOffsets.Remove(codeOffset);
-    return PostCommand(RuntimeEmitter.DbgCmdClearBp, codeOffset);
+    return true;
   }
 
   /// <summary>
@@ -203,7 +309,14 @@ internal sealed class MaxonDebugger : IDisposable {
   /// </summary>
   private bool IsAtUserBreakpoint(StopInfo stop) => _userBreakpointOffsets.Contains(stop.PcOffset);
 
-  public bool Continue() => PostCommand(RuntimeEmitter.DbgCmdContinue, 0);
+  /// <summary>
+  /// Resume the target. When a previous wait TIMED OUT the stop it asked for is still outstanding and the
+  /// target was never parked, so there is nothing to resume and nothing to post — the correct continuation
+  /// is simply to go on waiting for that stop, which is what returning true lets the caller do. Posting
+  /// instead would be acked the instant the target parked and would RESUME it, swallowing the outstanding
+  /// stop and reporting a location the target had already left.
+  /// </summary>
+  public bool Continue() => StopOutstanding || PostCommand(RuntimeEmitter.DbgCmdContinue, 0);
 
   /// The outcome of resolving+arming a breakpoint, so the resolve→arm DECISION lives once here and each
   /// surface only renders it (a divergent copy of "no code vs set" would be a wrong answer, not a compile
@@ -595,6 +708,12 @@ internal sealed class MaxonDebugger : IDisposable {
   /// races to exit after, which is treated as done (the program legitimately ran to completion).
   /// </summary>
   private bool PostCommand(long cmd, long arg) {
+    // The mailbox is only serviced by a PARKED target. With a stop outstanding the target is still
+    // running, so a post would sit unacked for the whole AttachTimeout and then — if the target parked
+    // meanwhile — be acked and resume it, consuming the stop that was outstanding. Refused fast instead,
+    // so a surface reports "not acknowledged" immediately rather than stalling for 20s on each command.
+    if (StopOutstanding) return false;
+
     _accessor.Write(RuntimeEmitter.DbgOffCmd, cmd);
     _accessor.Write(RuntimeEmitter.DbgOffCmdArg, arg);
     return RingDoorbellAndAwaitAck(cmd);
@@ -647,13 +766,14 @@ internal sealed class MaxonDebugger : IDisposable {
     _accessor.Write(RuntimeEmitter.DbgOffCmdSeq, _cmdSeq);
 
     var deadline = DateTime.UtcNow + AttachTimeout;
-    while (DateTime.UtcNow < deadline) {
+    var backoff = new PollBackoff();
+    while (true) {
       Thread.MemoryBarrier();
       if (_accessor.ReadInt64(RuntimeEmitter.DbgOffAckSeq) >= _cmdSeq) return true;
       if (_process.HasExited) return cmd == RuntimeEmitter.DbgCmdContinue;
-      Thread.Yield();
+      if (DateTime.UtcNow >= deadline) return false;
+      backoff.Pause();
     }
-    return false;
   }
 
   // ---- Memory reads (value inspection) ----
@@ -709,31 +829,75 @@ internal sealed class MaxonDebugger : IDisposable {
   // ---- Stop events ----
 
   /// <summary>
-  /// Wait for the agent to publish a NEW stop event (StopSeq advances past the watermark), returning
-  /// its reason/PC/SP/FP. Returns false when the target exits or ran to completion first. Polling
-  /// against a watermark lets one session span multiple stops without the next wait returning on a
-  /// stale seq.
+  /// How a wait for the next stop ended. The three stay DISTINCT — as <see cref="BacktraceStatus"/> and
+  /// <see cref="ReadMemoryStatus"/> do — because they demand OPPOSITE reactions, and telling them apart is
+  /// the whole point of the type: an <see cref="Exited"/> target is GONE and the session is over, whereas a
+  /// <see cref="TimedOut"/> one is still ALIVE and must be reported honestly and released.
+  ///
+  /// The bool this replaced conflated exactly those two, so a breakpoint the target had simply not reached
+  /// yet was published as a clean run to completion — a wrong answer — while the still-live debuggee was
+  /// orphaned and the driver blocked forever joining stdio pipes that could never close.
   /// </summary>
-  public bool WaitForStop(out StopInfo stop) {
-    stop = default;
-    var deadline = DateTime.UtcNow + AttachTimeout;
-    while (DateTime.UtcNow < deadline) {
+  public enum StopWaitStatus {
+    /// The agent published a new stop event; <c>Stop</c> holds its reason/PC/SP/FP.
+    Stopped,
+    /// The target exited before publishing one — it ran to completion.
+    Exited,
+    /// <see cref="StopTimeout"/> elapsed with the target still running. NOT an exit.
+    TimedOut,
+  }
+
+  public readonly record struct StopWaitResult(StopWaitStatus Status, StopInfo Stop);
+
+  /// <summary>
+  /// True when a stop-wait gave up while the target was still RUNNING, so the stop the driver asked for
+  /// has never been consumed and the target is not parked at the agent's mailbox.
+  ///
+  /// It is the one fact that makes the timeout path SAFE rather than merely honest. Two observed wrong
+  /// answers came from not tracking it: a retried `continue` was acked the moment the target parked and
+  /// resumed it, so the driver then reported the already-published stop as current — a location the
+  /// target had left; and a timed-out step's temp-breakpoint cleanup blocked for the whole
+  /// <see cref="AttachTimeout"/> against an agent that could not answer.
+  /// </summary>
+  public bool StopOutstanding { get; private set; }
+
+  /// <summary>
+  /// Wait for the agent to publish a NEW stop event (StopSeq advances past the watermark). Polling against
+  /// a watermark lets one session span multiple stops without the next wait returning on a stale seq.
+  /// Bounded by <see cref="StopTimeout"/>, NOT by <see cref="AttachTimeout"/>: how long until the target
+  /// next stops is a property of the user's program, not of the agent's responsiveness.
+  /// </summary>
+  public StopWaitResult WaitForStop() {
+    var deadline = DateTime.UtcNow + StopTimeout;
+    var backoff = new PollBackoff();
+    while (true) {
       Thread.MemoryBarrier();
       long seq = _accessor.ReadInt64(RuntimeEmitter.DbgOffStopSeq);
       if (seq > _stopWatermark) {
         _stopWatermark = seq;
         Thread.MemoryBarrier();
-        stop = new StopInfo(
+        StopOutstanding = false;
+        return new StopWaitResult(StopWaitStatus.Stopped, new StopInfo(
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopReason),
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopPc),
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopSp),
-          _accessor.ReadInt64(RuntimeEmitter.DbgOffStopFp));
-        return true;
+          _accessor.ReadInt64(RuntimeEmitter.DbgOffStopFp)));
       }
-      if (_process.HasExited) return false;
-      Thread.Yield();
+
+      if (_process.HasExited) {
+        StopOutstanding = false;
+        return new StopWaitResult(StopWaitStatus.Exited, default);
+      }
+
+      // Both live states are read BEFORE the clock, so a stop (or an exit) that lands in the final poll
+      // window is reported as what it is rather than as a timeout.
+      if (DateTime.UtcNow >= deadline) {
+        StopOutstanding = true;
+        return new StopWaitResult(StopWaitStatus.TimedOut, default);
+      }
+
+      backoff.Pause();
     }
-    return false;
   }
 
   // ---- Symbolization ----
@@ -820,13 +984,26 @@ internal sealed class MaxonDebugger : IDisposable {
   /// Why a step produced no stop, or Stopped with the new location. The kinds stay DISTINCT (as
   /// <see cref="BacktraceStatus"/> and <see cref="ReadMemoryStatus"/> do) so each surface words its own
   /// advice: an unsupported agent (rebuild), an unacked command (target may have exited), the target
-  /// running to completion, a runaway that hit the instruction cap, a <c>finish</c> with no caller frame,
-  /// and an <c>until</c> whose line has no code each need different messages, not one "failed".
+  /// running to completion, a step whose stop never arrived inside <see cref="StopTimeout"/> (the target
+  /// is STILL RUNNING — not the same thing as exiting), a runaway that hit the instruction cap, a
+  /// <c>finish</c> with no caller frame, and an <c>until</c> whose line has no code each need different
+  /// messages, not one "failed".
   public enum StepOutcomeKind {
-    Stopped, Exited, UnsupportedByAgent, NotAcknowledged, LimitReached, NoCallerFrame, NoCode,
+    Stopped, Exited, TimedOut, UnsupportedByAgent, NotAcknowledged, LimitReached, NoCallerFrame, NoCode,
   }
 
   public readonly record struct StepOutcome(StepOutcomeKind Kind, StopInfo Stop);
+
+  /// The step outcome a stop-wait produces — ONE mapping, so the three runners that wait for a stop
+  /// mid-step cannot disagree about what an exit or a timeout means. Before the tri-state they each read
+  /// "no stop" as <see cref="StepOutcomeKind.Exited"/>, which is how a step over a slow call reported the
+  /// target as finished while it was still running.
+  private static StepOutcome StepOutcomeOf(StopWaitResult wait) => wait.Status switch {
+    StopWaitStatus.Stopped => new StepOutcome(StepOutcomeKind.Stopped, wait.Stop),
+    StopWaitStatus.Exited => new StepOutcome(StepOutcomeKind.Exited, default),
+    StopWaitStatus.TimedOut => new StepOutcome(StepOutcomeKind.TimedOut, default),
+    _ => throw new InvalidOperationException($"Unhandled stop-wait status {wait.Status}"),
+  };
 
   /// A generous cap on machine instructions single-stepped for ONE source step, so a statement compiling
   /// to a pathological amount of code — or a step-INTO that descends into a runtime function with no line
@@ -848,9 +1025,7 @@ internal sealed class MaxonDebugger : IDisposable {
     if (!SteppingSupported) return new StepOutcome(StepOutcomeKind.UnsupportedByAgent, default);
     if (!PostCommand(RuntimeEmitter.DbgCmdStep, 0))
       return new StepOutcome(_process.HasExited ? StepOutcomeKind.Exited : StepOutcomeKind.NotAcknowledged, default);
-    return WaitForStop(out var stop)
-      ? new StepOutcome(StepOutcomeKind.Stopped, stop)
-      : new StepOutcome(StepOutcomeKind.Exited, default);
+    return StepOutcomeOf(WaitForStop());
   }
 
   /// <summary>
@@ -998,9 +1173,17 @@ internal sealed class MaxonDebugger : IDisposable {
     return true;
   }
 
+  /// <summary>
   /// Clear every temp bp WE armed (never a coinciding user bp, which was not added to the list) — the one
   /// cleanup both step runners share.
+  ///
+  /// A step that TIMED OUT is the one exit that cannot clear them: the target is still running, so each
+  /// clear would be posted to an unserviced mailbox. Those patches instead die with the target, which
+  /// every timeout path now guarantees — batch ends the session, and the interactive step-timeout arm
+  /// ends it too, precisely because temp traps in a running target cannot be reconciled from here.
+  /// </summary>
   private void ClearTempBreakpoints(List<long> armed) {
+    if (StopOutstanding) return;
     foreach (var off in armed) PostCommand(RuntimeEmitter.DbgCmdClearBp, off);
   }
 
@@ -1016,7 +1199,10 @@ internal sealed class MaxonDebugger : IDisposable {
     try {
       for (int i = 0; i < MaxReturnContinues; i++) {
         if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
-        if (!WaitForStop(out var stop)) return new StepOutcome(StepOutcomeKind.Exited, default);
+
+        var wait = WaitForStop();
+        if (wait.Status != StopWaitStatus.Stopped) return StepOutcomeOf(wait);
+        var stop = wait.Stop;
 
         // BREAKPOINTS WIN: a user breakpoint hit while running out reports there, ahead of the frame
         // guard below — which would otherwise read it as recursion re-entering the armed return address
@@ -1053,9 +1239,7 @@ internal sealed class MaxonDebugger : IDisposable {
       if (returnOff is { } r && r != lineOff && !ArmTempIfNeeded(r, armed))
         return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
       if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
-      return WaitForStop(out var stop)
-        ? new StepOutcome(StepOutcomeKind.Stopped, stop)
-        : new StepOutcome(StepOutcomeKind.Exited, default);
+      return StepOutcomeOf(WaitForStop());
     } finally {
       ClearTempBreakpoints(armed);
     }
@@ -1066,35 +1250,113 @@ internal sealed class MaxonDebugger : IDisposable {
   public bool HasExited => _process.HasExited;
   public int ExitCode => _process.ExitCode;
 
-  public bool WaitForExit(int milliseconds) => _process.WaitForExit(milliseconds);
+  /// True when the DRIVER killed the target rather than the target reaching its own exit.
+  private bool _terminated;
 
-  public void WaitForExit() => _process.WaitForExit();
+  /// <summary>
+  /// How the target finished — the ONE classification every surface renders, so the REPL's closing line,
+  /// the batch exit event and the probes' report cannot describe the same outcome three different ways.
+  /// A <see cref="Terminated"/> target reports THAT rather than an exit code, because the status a killed
+  /// process carries is the OS's (−1 on Windows, 137 on POSIX) and publishing it as the program's answer
+  /// would be both a wrong answer and platform-specific noise.
+  /// </summary>
+  public enum TargetOutcome { Exited, Terminated, Running }
 
-  /// End the session by killing a still-running target — `quit` from the REPL, where the debuggee is
-  /// parked in the agent's stop-the-world loop and would otherwise never resume. Tolerates the target
-  /// exiting between the check and the kill (a normal race), so it is safe to call from Dispose too.
-  public void Terminate() {
+  public TargetOutcome Outcome =>
+    _terminated ? TargetOutcome.Terminated
+    : _process.HasExited ? TargetOutcome.Exited
+    : TargetOutcome.Running;
+
+  /// <see cref="Outcome"/> rendered for a human log line — one wording for every prose surface. The JSON
+  /// face renders <see cref="Outcome"/> structurally instead of reusing this.
+  public string OutcomeText => Outcome switch {
+    TargetOutcome.Exited => ExitCode.ToString(CultureInfo.InvariantCulture),
+    TargetOutcome.Terminated => "(terminated by the debugger)",
+    TargetOutcome.Running =>
+      throw new InvalidOperationException("the target has not finished; EndSession must run first"),
+    _ => throw new InvalidOperationException($"Unhandled target outcome {Outcome}"),
+  };
+
+  /// Wait for a RELEASED target to reach its own exit, bounded by <see cref="StopTimeout"/> — the same
+  /// deadline every other wait on the user's program uses, rather than a second number of its own. False
+  /// means it is still running.
+  public bool WaitForTargetExit() => _process.WaitForExit(StopTimeoutMilliseconds);
+
+  /// Kill a still-running target. Tolerates it exiting between the check and the kill (a normal race).
+  /// Private because <see cref="EndSession"/> is the one place a session decides the target must go —
+  /// every face that used to call this directly was stating that decision a second time.
+  private void Terminate() {
     try {
-      if (!_process.HasExited) _process.Kill();
+      if (_process.HasExited) return;
+      _process.Kill();
+      _terminated = true;
     } catch (InvalidOperationException) {
       // The process exited between the HasExited check and Kill — already gone, nothing to do.
     }
   }
 
+  /// <summary>
+  /// How <see cref="EndSession"/> treats a target that has not exited yet. The two arms are the honest
+  /// distinction between a target that can still make progress and one that cannot.
+  /// </summary>
+  public enum SessionEnd {
+    /// Wait out <see cref="StopTimeout"/> first: the target was RELEASED and is finishing the user's
+    /// program, so its remaining runtime is the program's business rather than a hang.
+    AwaitRelease,
+    /// Do not wait: the session is abandoning the target (a timeout, a `quit`, a failed handshake, a
+    /// frame nothing will continue). A target that cannot make progress is not worth waiting on.
+    Immediate,
+  }
+
+  /// <summary>
+  /// End the session: make sure the target is GONE, then drain its forwarded stdio. EVERY exit path runs
+  /// this — a clean completion, `quit`, a timeout, an error, and <see cref="Dispose"/> — because both
+  /// halves are obligations rather than conveniences, and each was missed on its own:
+  ///
+  ///   * a target still parked in the agent's stop-the-world loop OUTLIVES the driver, which is the
+  ///     orphaned debuggee a timed-out session used to strand;
+  ///   * <see cref="JoinIo"/>'s tasks only complete when the target's pipes CLOSE, so joining them while
+  ///     that orphan is alive blocks the driver forever — the same defect's other half.
+  ///
+  /// Idempotent, so a face may call it and <see cref="Dispose"/> will call it again.
+  /// </summary>
+  public void EndSession(SessionEnd how) {
+    int graceMs = how switch {
+      SessionEnd.AwaitRelease => StopTimeoutMilliseconds,
+      SessionEnd.Immediate => 0,
+      _ => throw new InvalidOperationException($"Unhandled session end {how}"),
+    };
+
+    if (!_process.WaitForExit(graceMs)) {
+      Terminate();
+      // Kill only REQUESTS termination; wait so HasExited / ExitCode are settled before a surface reports.
+      _process.WaitForExit();
+    }
+
+    JoinIo();
+  }
+
   /// Join the stdio-forwarding tasks so all of the target's output has been written before the driver
-  /// prints its own closing lines.
-  public void JoinIo() {
+  /// prints its own closing lines. Private because it is only ever correct AFTER the target is gone —
+  /// <see cref="EndSession"/> is the one place that ordering is stated.
+  private void JoinIo() {
+    try {
 #pragma warning disable VSTHRD002 // synchronous entry point, no SyncContext to deadlock against
-    _stdout.Wait();
-    _stderr.Wait();
+      _stdout.Wait();
+      _stderr.Wait();
 #pragma warning restore VSTHRD002
+    } catch (AggregateException) {
+      // A forwarding task faulted — the sink was closed, or the pipe broke as the target died. Its
+      // remaining output is lost either way, and this runs from Dispose, where rethrowing would MASK
+      // the exception that ended the session. Waiting has observed the fault, so it cannot resurface.
+    }
   }
 
   public void Dispose() {
-    // Never leave a parked target orphaned — an exceptional exit from the session loop would otherwise
-    // strand a debuggee spinning in the agent's stop-the-world loop. The normal paths have already
-    // driven it to exit, so this only bites on failure.
-    Terminate();
+    // The last line of the no-orphan guarantee: an exceptional exit from a session loop skips the face's
+    // own EndSession, and would otherwise strand a debuggee spinning in the agent's stop-the-world loop.
+    // Immediate, because a session ending in an exception is abandoning its target by definition.
+    EndSession(SessionEnd.Immediate);
     _accessor.Dispose();
     _mapping.Dispose();
     _process.Dispose();

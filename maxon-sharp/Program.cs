@@ -73,6 +73,10 @@ class Program {
     Console.WriteLine("  --symbolize <.mxdbg> <codeOffset...>");
     Console.WriteLine("                           Map .text code offsets to file:line:col");
     Console.WriteLine("  --attach-probe <exe>     Attach the in-process debug agent and read its handshake (P3a)");
+    Console.WriteLine($"  {MaxonDebugger.StopTimeoutFlag}SECS      Bound the wait for the target's next stop "
+      + $"(default {MaxonDebugger.DefaultStopTimeoutText}s;");
+    Console.WriteLine("                           prefix any live-session form). A timeout is reported as a timeout,");
+    Console.WriteLine("                           never as an exit, and the target is released rather than orphaned");
     Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
@@ -110,6 +114,20 @@ class Program {
   /// non-interactively, emitting one JSON event per stop.
   /// </summary>
   static int RunDebug(string[] args) {
+    // `--stop-timeout` is consumed as a LEADING option — before the subcommand and before the target —
+    // so it can never be mistaken for one of the arguments forwarded verbatim to the debuggee.
+    TimeSpan? stopTimeout = null;
+    while (args.Length > 0 && args[0].StartsWith(MaxonDebugger.StopTimeoutFlag, StringComparison.Ordinal)) {
+      var value = args[0][MaxonDebugger.StopTimeoutFlag.Length..];
+      if (!TryParseStopTimeout(value, out var parsed)) {
+        Console.Error.WriteLine($"maxon debug: {MaxonDebugger.StopTimeoutFlag}<seconds> needs a positive "
+          + $"number of seconds (got '{value}').");
+        return 1;
+      }
+      stopTimeout = parsed;
+      args = args[1..];
+    }
+
     if (args.Length == 0) {
       Console.Error.WriteLine("Usage: maxon debug <exe> [args...]                 (interactive REPL)");
       Console.Error.WriteLine("       maxon debug --batch --commands=<spec> <exe>  (JSON, non-interactive)");
@@ -118,16 +136,18 @@ class Program {
       Console.Error.WriteLine("       maxon debug --symbolize <.mxdbg> <codeOffset...>");
       Console.Error.WriteLine("       maxon debug --attach-probe <exe>");
       Console.Error.WriteLine("       maxon debug --bp-test <exe> <codeOffset>");
+      Console.Error.WriteLine($"Any live-session form may be prefixed with {MaxonDebugger.StopTimeoutFlag}<seconds>.");
       return 1;
     }
 
     switch (args[0]) {
       case "--batch":
-        return RunDebugBatch(args[1..]);
+        return RunDebugBatch(args[1..], stopTimeout);
 
       case "--complete": {
         // Non-interactive completion: `maxon debug --complete '<partial line>' <exe>`. Prints the
         // candidates the interactive Tab key would offer, so the pure completion engine is batch-testable.
+        if (RejectStopTimeout(stopTimeout, "--complete")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --complete needs a partial input line and a target executable "
             + "('maxon debug --complete \"<partial>\" <exe>').");
@@ -137,6 +157,7 @@ class Program {
       }
 
       case "--dump-info": {
+        if (RejectStopTimeout(stopTimeout, "--dump-info")) return 1;
         if (args.Length < 2) {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
           return 1;
@@ -146,6 +167,7 @@ class Program {
       }
 
       case "--symbolize": {
+        if (RejectStopTimeout(stopTimeout, "--symbolize")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --symbolize needs a .mxdbg path and at least one code offset.");
           return 1;
@@ -162,7 +184,7 @@ class Program {
           Console.Error.WriteLine("maxon debug --attach-probe needs a path to a Maxon executable.");
           return 1;
         }
-        return DebugAgentProbe.Run(args[1]);
+        return DebugAgentProbe.Run(args[1], stopTimeout);
       }
 
       case "--bp-test": {
@@ -180,7 +202,7 @@ class Program {
           return 1;
         }
         bool clearAtStop = args.Length > 3 && args[3] == "clear";
-        return DebugAgentProbe.RunBpTest(args[1], bpOffset, clearAtStop);
+        return DebugAgentProbe.RunBpTest(args[1], bpOffset, clearAtStop, stopTimeout);
       }
 
       default:
@@ -189,8 +211,47 @@ class Program {
           return 1;
         }
         // A bare target path (plus any args to forward): launch the interactive REPL.
-        return MaxonDebugRepl.RunInteractive(args[0], args[1..]);
+        return MaxonDebugRepl.RunInteractive(args[0], args[1..], stopTimeout);
     }
+  }
+
+  /// <summary>
+  /// Parse a <see cref="MaxonDebugger.StopTimeoutFlag"/> value: a positive number of seconds. Fractions
+  /// are accepted so a gate can drive a sub-second deadline deterministically. Zero and negatives are
+  /// REFUSED rather than clamped, because a non-positive deadline would time out every wait before the
+  /// target could possibly stop — a debugger that never stops anywhere, reported as if configured.
+  ///
+  /// The check is made on the TimeSpan the session will actually wait on, not on the double it was
+  /// spelled with, so no rounding inside <c>TimeSpan.FromSeconds</c> can hand the driver a deadline the
+  /// validator never approved. That conversion also THROWS above <c>TimeSpan.MaxValue</c>, which a
+  /// validator whose whole job is to return false must not do — `--stop-timeout=1e30` crashed out of
+  /// Main before it was caught here.
+  /// </summary>
+  static bool TryParseStopTimeout(string text, out TimeSpan value) {
+    value = default;
+    if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
+        System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+      return false;
+    if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return false;
+
+    try {
+      value = TimeSpan.FromSeconds(seconds);
+    } catch (OverflowException) {
+      return false;
+    }
+
+    return value > TimeSpan.Zero;
+  }
+
+  /// Refuse <see cref="MaxonDebugger.StopTimeoutFlag"/> on a `maxon debug` surface that has no live
+  /// session to time out. Accepting it there and doing nothing would be exactly the silent lie the flag
+  /// exists to remove.
+  static bool RejectStopTimeout(TimeSpan? stopTimeout, string surface) {
+    if (stopTimeout == null) return false;
+
+    Console.Error.WriteLine($"maxon debug {surface}: {MaxonDebugger.StopTimeoutFlag}<seconds> bounds a LIVE "
+      + "debug session (the REPL, --batch, --attach-probe, --bp-test); reading a sidecar has no target to wait for.");
+    return true;
   }
 
   /// <summary>
@@ -198,7 +259,7 @@ class Program {
   /// the REPL engine. <c>--commands</c> is a `;`-separated inline list or `@file`; the first non-option
   /// arg is the target, the rest are forwarded to it. Emits one JSON event per stop to stdout.
   /// </summary>
-  static int RunDebugBatch(string[] args) {
+  static int RunDebugBatch(string[] args, TimeSpan? stopTimeout) {
     string? commands = null;
     string? exe = null;
     var targetArgs = new List<string>();
@@ -229,7 +290,7 @@ class Program {
       Console.Error.WriteLine("maxon debug --batch needs a target executable.");
       return 1;
     }
-    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands);
+    return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout);
   }
 
   /// Load a `.mxdbg` sidecar for the given path (a `.mxdbg` file, or a binary whose sidecar is

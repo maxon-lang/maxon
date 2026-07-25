@@ -36,14 +36,14 @@ internal static class MaxonDebugRepl {
 
   // ---- Interactive REPL ----
 
-  public static int RunInteractive(string exePath, IReadOnlyList<string> targetArgs) {
+  public static int RunInteractive(string exePath, IReadOnlyList<string> targetArgs, TimeSpan? stopTimeout) {
     TryEnableUtf8();
     var sidecar = LoadSidecar(exePath);
     if (sidecar == null) return 1;
 
     MaxonDebugger dbg;
     try {
-      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar);
+      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, stopTimeout: stopTimeout);
     } catch (DebuggerException ex) {
       Console.Error.WriteLine($"maxon debug: {ex.Message}");
       return 1;
@@ -83,14 +83,12 @@ internal static class MaxonDebugRepl {
     public int Loop() {
       while (!_finished) {
         var line = _editor.ReadLine(Prompt(), BuildCompletionContext);
-        if (line == null) {                // EOF (Ctrl-D / piped input drained): leave target parked-then-kill
-          dbg.Terminate();
-          break;
-        }
+        // EOF (Ctrl-D / piped input drained) ends the session exactly as `quit` does; EndSession
+        // below is the ONE place that decides what becomes of a target still parked at that point.
+        if (line == null) break;
         Execute(line.Trim());
       }
-      dbg.WaitForExit(2000);
-      dbg.JoinIo();
+      dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
       return 0;
     }
 
@@ -149,7 +147,6 @@ internal static class MaxonDebugRepl {
           PrintHelp();
           break;
         case DebugCommand.Quit:
-          dbg.Terminate();
           _finished = true;
           break;
         case DebugCommand.Unknown:
@@ -230,25 +227,44 @@ internal static class MaxonDebugRepl {
       if (_finished) { Console.Out.WriteLine("The program has already exited."); return; }
 
       if (!dbg.Continue()) {
-        Console.Out.WriteLine("The agent did not acknowledge continue.");
+        Console.Out.WriteLine($"{ContinueUnackedText}.");
         return;
       }
 
-      if (dbg.WaitForStop(out var stop)) {
-        var report = BuildStopReport(dbg, exePath, stop);
-        _stop = report;
-        RenderStopText(report, Console.Out);
-        return;
-      }
+      var wait = dbg.WaitForStop();
+      switch (wait.Status) {
+        case MaxonDebugger.StopWaitStatus.Stopped:
+          var report = BuildStopReport(dbg, exePath, wait.Stop);
+          _stop = report;
+          RenderStopText(report, Console.Out);
+          break;
 
-      // No further stop: the program ran to completion.
-      _stop = null;
-      _finished = true;
-      dbg.WaitForExit(2000);
-      dbg.JoinIo();
-      Console.Out.WriteLine(isRun
-        ? $"Program exited with code {ExitCodeText(dbg)}."
-        : $"Program continued to completion; exit code {ExitCodeText(dbg)}.");
+        case MaxonDebugger.StopWaitStatus.Exited:
+          _stop = null;
+          _finished = true;
+          dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
+          Console.Out.WriteLine(isRun
+            ? $"Program exited with code {dbg.OutcomeText}."
+            : $"Program continued to completion; exit code {dbg.OutcomeText}.");
+          break;
+
+        case MaxonDebugger.StopWaitStatus.TimedOut:
+          // The target is ALIVE and has simply not reached a stop yet, so there is no frame to inspect
+          // and — the defect this replaced — no exit to report. It is left RUNNING rather than killed,
+          // because a human may legitimately want to keep waiting: the stop stays OUTSTANDING, so a
+          // further `continue` resumes the wait instead of posting a second one. (Posting again would be
+          // acked the moment the target parked and would resume it, and the driver would then report the
+          // stop it had just swallowed — a location the target had already left.) `quit`, EOF and Dispose
+          // all still guarantee it cannot outlive the session.
+          _stop = null;
+          Console.Out.WriteLine($"{TimeoutText(WaitingForContinueStopText, dbg.StopTimeoutText)} The target "
+            + $"is still running — 'continue' waits again, 'quit' ends the session. "
+            + MaxonDebugger.RaiseStopTimeoutText);
+          break;
+
+        default:
+          throw new InvalidOperationException($"Unhandled stop-wait status {wait.Status}");
+      }
     }
 
     private void DoBacktrace() {
@@ -336,9 +352,24 @@ internal static class MaxonDebugRepl {
         case MaxonDebugger.StepOutcomeKind.Exited:
           _stop = null;
           _finished = true;
-          dbg.WaitForExit(2000);
-          dbg.JoinIo();
-          Console.Out.WriteLine($"Program exited with code {ExitCodeText(dbg)}.");
+          dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
+          Console.Out.WriteLine($"Program exited with code {dbg.OutcomeText}.");
+          break;
+        case MaxonDebugger.StepOutcomeKind.TimedOut:
+          // Intercepted here rather than worded by StepUnavailableReason, because the honest message must
+          // state the DEADLINE, which only the live session knows.
+          //
+          // Unlike a timed-out continue, this ENDS the session. A step runner leaves temp breakpoints
+          // patched in the target, and they can only be cleared through a PARKED one — so a target still
+          // running here carries traps the driver can no longer reconcile, and letting the session go on
+          // would eventually report a stop at a breakpoint the user never set. Ending it is what makes
+          // ClearTempBreakpoints' skip safe: the patches die with the target, right here.
+          _stop = null;
+          _finished = true;
+          Console.Out.WriteLine($"{TimeoutText(WaitingForStepStopText, dbg.StopTimeoutText)} The step left "
+            + $"the target running under temporary breakpoints that can no longer be cleared, so the "
+            + $"session has ended and the target was stopped. {MaxonDebugger.RaiseStopTimeoutText}");
+          dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
           break;
         default:
           Console.Out.WriteLine($"{StepUnavailableReason(outcome.Kind)}.");
@@ -368,7 +399,27 @@ internal static class MaxonDebugRepl {
 
   // ---- Batch / JSON ----
 
-  public static int RunBatch(string exePath, IReadOnlyList<string> targetArgs, string commandsSpec) {
+  /// <summary>
+  /// The batch session's mutable state, threaded through the command dispatch. It replaces the pair of
+  /// `ref` parameters every batch command used to carry: a THIRD fact — whether a wait TIMED OUT, which
+  /// decides the driver's own exit code — is exactly the addition that made a growing `ref` list the
+  /// wrong shape for it.
+  /// </summary>
+  private sealed class BatchSession {
+    /// True once the session can issue no further commands: the target exited, was quit, or timed out.
+    public bool Finished;
+
+    /// The last stop the target reached, so a later `print`/`locals` knows which parked frame to read.
+    public MaxonDebugger.StopInfo? CurrentStop;
+
+    /// True when the target did NOT run to completion — a wait that hit the deadline, a continue the
+    /// agent never acked, or the drain cap. The driver exits NONZERO for all three: CI must not read
+    /// any of them as a pass, and a missed breakpoint least of all.
+    public bool Incomplete;
+  }
+
+  public static int RunBatch(string exePath, IReadOnlyList<string> targetArgs, string commandsSpec,
+      TimeSpan? stopTimeout) {
     TryEnableUtf8();
     var sidecar = LoadSidecar(exePath);
     if (sidecar == null) { EmitError("no debug info found for the target"); return 1; }
@@ -381,7 +432,8 @@ internal static class MaxonDebugRepl {
     MaxonDebugger dbg;
     try {
       // Target stdout -> the driver's STDERR so this mode's JSON stream on stdout stays clean.
-      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, targetStdout: Console.Error);
+      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, targetStdout: Console.Error,
+        stopTimeout: stopTimeout);
     } catch (DebuggerException ex) {
       EmitError(ex.Message);
       return 1;
@@ -393,24 +445,26 @@ internal static class MaxonDebugRepl {
         return 1;
       }
 
-      bool finished = false;
-      // The last stop the target reached, so a later `print`/`locals` knows which parked frame to read.
-      MaxonDebugger.StopInfo? currentStop = null;
+      var session = new BatchSession();
       foreach (var command in commands) {
-        if (finished) break;
-        RunBatchCommand(dbg, exePath, command, ref finished, ref currentStop);
+        if (session.Finished) break;
+        RunBatchCommand(dbg, exePath, command, session);
       }
 
       // Drain any parked state so the target is never left spinning in the stop-the-world loop.
-      DrainToExit(dbg, ref finished);
+      DrainToExit(dbg, session);
+
+      // Release the target and drain its stdio BEFORE reporting: a session that timed out (or was quit)
+      // leaves a LIVE debuggee, and the exit event must describe what actually became of it rather than
+      // guess. This is also what unblocks the stdio join, which cannot complete while that target lives.
+      dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
       EmitExit(dbg);
-      dbg.JoinIo();
-      return 0;
+      return session.Incomplete ? 1 : 0;
     }
   }
 
-  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string commandLine, ref bool finished,
-      ref MaxonDebugger.StopInfo? currentStop) {
+  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string commandLine,
+      BatchSession session) {
     var (command, word, rest) = ParseCommand(commandLine);
     switch (command) {
       case DebugCommand.Empty:
@@ -422,32 +476,31 @@ internal static class MaxonDebugRepl {
       // no prompt so both post continue and await the next event.
       case DebugCommand.Run:
       case DebugCommand.Continue:
-        BatchContinue(dbg, exePath, ref finished, ref currentStop);
+        BatchContinue(dbg, exePath, session);
         break;
       case DebugCommand.Step:
-        BatchStepCommand(dbg, exePath, dbg.StepInto, ref finished, ref currentStop);
+        BatchStepCommand(dbg, exePath, dbg.StepInto, session);
         break;
       case DebugCommand.Next:
-        BatchStepCommand(dbg, exePath, dbg.StepOver, ref finished, ref currentStop);
+        BatchStepCommand(dbg, exePath, dbg.StepOver, session);
         break;
       case DebugCommand.Finish:
-        BatchStepCommand(dbg, exePath, dbg.Finish, ref finished, ref currentStop);
+        BatchStepCommand(dbg, exePath, dbg.Finish, session);
         break;
       case DebugCommand.Until:
-        BatchUntil(dbg, exePath, rest, ref finished, ref currentStop);
+        BatchUntil(dbg, exePath, rest, session);
         break;
       case DebugCommand.Backtrace:
         EmitBacktrace(dbg.Backtrace());
         break;
       case DebugCommand.Locals:
-        BatchLocals(dbg, currentStop);
+        BatchLocals(dbg, session.CurrentStop);
         break;
       case DebugCommand.Print:
-        BatchPrint(dbg, rest, currentStop);
+        BatchPrint(dbg, rest, session.CurrentStop);
         break;
       case DebugCommand.Quit:
-        dbg.Terminate();
-        finished = true;
+        session.Finished = true;
         break;
       case DebugCommand.Help:
         EmitError("'help' is interactive-only; not available in --batch");
@@ -524,60 +577,87 @@ internal static class MaxonDebugRepl {
     }
   });
 
-  private static void BatchContinue(MaxonDebugger dbg, string exePath, ref bool finished,
-      ref MaxonDebugger.StopInfo? currentStop) {
-    if (!dbg.Continue()) { EmitError("the agent did not acknowledge continue"); return; }
+  private static void BatchContinue(MaxonDebugger dbg, string exePath, BatchSession session) {
+    if (!dbg.Continue()) { EmitError(ContinueUnackedText); return; }
 
-    if (dbg.WaitForStop(out var stop)) {
-      currentStop = stop;
-      EmitStop(BuildStopReport(dbg, exePath, stop));
-      return;
+    var wait = dbg.WaitForStop();
+    switch (wait.Status) {
+      case MaxonDebugger.StopWaitStatus.Stopped:
+        session.CurrentStop = wait.Stop;
+        EmitStop(BuildStopReport(dbg, exePath, wait.Stop));
+        break;
+      case MaxonDebugger.StopWaitStatus.Exited:
+        // Ran to completion: no parked frame to inspect any more.
+        session.CurrentStop = null;
+        session.Finished = true;
+        break;
+      case MaxonDebugger.StopWaitStatus.TimedOut:
+        // The target is ALIVE and has simply not reached its breakpoint yet. Reporting that as an exit
+        // is the defect this replaced — it made a missed breakpoint indistinguishable from a clean run.
+        EmitTimeout(WaitingForContinueStopText, dbg);
+        EndIncompleteSession(session);
+        break;
+      default:
+        throw new InvalidOperationException($"Unhandled stop-wait status {wait.Status}");
     }
-    // Ran to completion: no parked frame to inspect any more.
-    currentStop = null;
-    finished = true;
-    dbg.WaitForExit(2000);
   }
 
   /// The batch face's wording of "you must be stopped first", shared by locals / print / step / next /
   /// finish / until so they cannot drift.
   private const string NotStoppedBatchText = "not stopped — run to a breakpoint first";
 
+  /// The one wording of a continue the agent never acknowledged, shared by the interactive and batch
+  /// continue paths and by the drain loop.
+  private const string ContinueUnackedText = "the agent did not acknowledge continue";
+
   /// Run a step op that needs the current parked frame (step / next / finish) and emit its outcome.
   private static void BatchStepCommand(MaxonDebugger dbg, string exePath,
-      Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op, ref bool finished,
-      ref MaxonDebugger.StopInfo? currentStop) {
-    if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
-    ApplyBatchStepOutcome(dbg, exePath, op(stop), ref finished, ref currentStop);
+      Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op, BatchSession session) {
+    if (session.CurrentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
+    ApplyBatchStepOutcome(dbg, exePath, op(stop), session);
   }
 
-  private static void BatchUntil(MaxonDebugger dbg, string exePath, string rest, ref bool finished,
-      ref MaxonDebugger.StopInfo? currentStop) {
-    if (currentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
+  private static void BatchUntil(MaxonDebugger dbg, string exePath, string rest, BatchSession session) {
+    if (session.CurrentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
     if (!uint.TryParse(rest.Trim(), out var line) || line == 0) { EmitError("until needs a line number"); return; }
-    ApplyBatchStepOutcome(dbg, exePath, dbg.Until(stop, line), ref finished, ref currentStop);
+    ApplyBatchStepOutcome(dbg, exePath, dbg.Until(stop, line), session);
   }
 
   /// Emit one step outcome the same way every batch step command does: a Stopped emits the same
   /// `{event:"stop",…}` shape a breakpoint stop does (so a consumer parses steps and breakpoints
-  /// identically) and becomes the new parked frame; an Exited ends the run; anything else is an error
-  /// event with the shared reason.
-  private static void ApplyBatchStepOutcome(MaxonDebugger dbg, string exePath, MaxonDebugger.StepOutcome outcome,
-      ref bool finished, ref MaxonDebugger.StopInfo? currentStop) {
+  /// identically) and becomes the new parked frame; an Exited ends the run; a TimedOut ends it through
+  /// the ONE timeout event; anything else is an error event with the shared reason.
+  private static void ApplyBatchStepOutcome(MaxonDebugger dbg, string exePath,
+      MaxonDebugger.StepOutcome outcome, BatchSession session) {
     switch (outcome.Kind) {
       case MaxonDebugger.StepOutcomeKind.Stopped:
-        currentStop = outcome.Stop;
+        session.CurrentStop = outcome.Stop;
         EmitStop(BuildStopReport(dbg, exePath, outcome.Stop));
         break;
       case MaxonDebugger.StepOutcomeKind.Exited:
-        currentStop = null;
-        finished = true;
-        dbg.WaitForExit(2000);
+        session.CurrentStop = null;
+        session.Finished = true;
+        break;
+      case MaxonDebugger.StepOutcomeKind.TimedOut:
+        // Intercepted here rather than worded by StepUnavailableReason, because a timeout is not an
+        // "unavailable step" — it is a live target, and its report must state the deadline it hit.
+        EmitTimeout(WaitingForStepStopText, dbg);
+        EndIncompleteSession(session);
         break;
       default:
         EmitError(StepUnavailableReason(outcome.Kind));
         break;
     }
+  }
+
+  /// Close a batch session that did not reach the program's own exit: there is no parked frame left to
+  /// inspect, no further command can mean anything, and the driver must exit NONZERO. Stated once because
+  /// every such ending — a timeout on continue, on a step, or in the drain, an unacked continue, and the
+  /// drain cap — owes exactly the same three facts.
+  private static void EndIncompleteSession(BatchSession session) {
+    session.CurrentStop = null;
+    session.Finished = true;
+    session.Incomplete = true;
   }
 
   private static void BatchLocals(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
@@ -612,21 +692,78 @@ internal static class MaxonDebugRepl {
   }
 
   /// If the target is still parked when the command list ends, continue past any remaining breakpoints
-  /// so it runs to completion — bounded so a re-arming breakpoint cannot loop the driver forever.
-  private static void DrainToExit(MaxonDebugger dbg, ref bool finished) {
-    if (finished || dbg.HasExited) return;
+  /// so it runs to completion — bounded so a re-arming breakpoint cannot loop the driver forever, and
+  /// reporting every way the drain can END WITHOUT the program finishing, since each of those leaves a
+  /// live target the caller must dispose of rather than a clean exit code to print.
+  private static void DrainToExit(MaxonDebugger dbg, BatchSession session) {
+    if (session.Finished || dbg.HasExited) return;
 
-    for (int i = 0; i < RuntimeDrainCap && !dbg.HasExited; i++) {
-      if (!dbg.Continue()) break;
-      if (!dbg.WaitForStop(out _)) break;   // ran to exit
+    bool draining = true;
+    for (int i = 0; i < RuntimeDrainCap && draining; i++) {
+      if (!dbg.Continue()) {
+        EmitError(ContinueUnackedText);
+        EndIncompleteSession(session);
+        draining = false;
+        break;
+      }
+
+      var wait = dbg.WaitForStop();
+      switch (wait.Status) {
+        case MaxonDebugger.StopWaitStatus.Stopped:
+          break;                                       // another breakpoint parked us; continue past it
+        case MaxonDebugger.StopWaitStatus.Exited:
+          draining = false;
+          break;
+        case MaxonDebugger.StopWaitStatus.TimedOut:
+          EmitTimeout(WaitingForCompletionText, dbg);
+          EndIncompleteSession(session);
+          draining = false;
+          break;
+        default:
+          throw new InvalidOperationException($"Unhandled stop-wait status {wait.Status}");
+      }
     }
-    dbg.WaitForExit(2000);
-    finished = true;
+
+    if (draining) {
+      EmitError($"the target was still stopping at breakpoints after {RuntimeDrainCap} continues; giving up");
+      EndIncompleteSession(session);
+    }
+
+    session.Finished = true;
   }
 
   /// A generous cap on how many parked breakpoints DrainToExit will step past before giving up — far
   /// more than any batch session sets, so it only ever guards against a pathological re-arming loop.
   private const int RuntimeDrainCap = 1024;
+
+  // ---- Shared: an honest timeout ----
+
+  /// <summary>
+  /// What a timed-out wait was waiting for. A closed vocabulary stated ONCE, because the same phrase is
+  /// DATA in the batch `timeout` event and PROSE in the interactive message — and because naming the wait
+  /// is half of what makes the report honest (the other half is the deadline it hit).
+  /// </summary>
+  private const string WaitingForContinueStopText = "a stop after continue";
+  private const string WaitingForStepStopText = "a stop after a step";
+  private const string WaitingForCompletionText = "the program to run to completion";
+
+  /// <summary>
+  /// The batch face's timeout event. It is DELIBERATELY not an `exit`: the deadline elapsed while the
+  /// target was still alive, so the two facts it states — WHAT was awaited and for HOW LONG — are the
+  /// ones an `{"event":"exit"}` could never carry, and reporting the wait as an exit is precisely the
+  /// wrong answer this replaced. What then became of the target is the following exit event's business.
+  /// </summary>
+  private static void EmitTimeout(string waitingFor, MaxonDebugger dbg) => WriteEvent(w => {
+    w.WriteString("event", "timeout");
+    w.WriteString("waitingFor", waitingFor);
+    w.WriteNumber("seconds", dbg.StopTimeoutSeconds);
+  });
+
+  /// The interactive face's statement of a timeout: the same two facts the batch event carries. What can
+  /// be DONE about it differs by which wait ran out — a continue can simply be waited on again, a step
+  /// cannot — so the recourse is the caller's sentence and this is only ever the first one.
+  private static string TimeoutText(string waitingFor, string limitSeconds) =>
+    $"Timed out after {limitSeconds}s waiting for {waitingFor}.";
 
   // ---- Shared: build a stop report ----
 
@@ -786,8 +923,23 @@ internal static class MaxonDebugRepl {
 
   private static void EmitExit(MaxonDebugger dbg) => WriteEvent(w => {
     w.WriteString("event", "exit");
-    if (dbg.HasExited) w.WriteNumber("code", dbg.ExitCode);
-    else w.WriteBoolean("running", true);
+    switch (dbg.Outcome) {
+      case MaxonDebugger.TargetOutcome.Exited:
+        w.WriteNumber("code", dbg.ExitCode);
+        break;
+      case MaxonDebugger.TargetOutcome.Terminated:
+        // The DRIVER killed the target, so the status it carries is the OS's and not the program's
+        // answer; WHAT happened is stated instead of a number that would be read as a result.
+        w.WriteBoolean("terminated", true);
+        break;
+      case MaxonDebugger.TargetOutcome.Running:
+        // Unreachable: EndSession runs first and does not return while the target lives. It throws
+        // rather than reviving `{"event":"exit","running":true}` — the exact wrong answer this rung
+        // removed — if that ordering is ever broken.
+        throw new InvalidOperationException("the exit event ran before EndSession released the target");
+      default:
+        throw new InvalidOperationException($"Unhandled target outcome {dbg.Outcome}");
+    }
   });
 
   private static void EmitError(string message) => WriteEvent(w => {
@@ -1104,11 +1256,13 @@ internal static class MaxonDebugRepl {
     _ => $"reason#{reason}",
   };
 
-  /// The message a non-Stopped/non-Exited step outcome renders — stated ONCE (like
+  /// The message a step outcome that is none of Stopped / Exited / TimedOut renders — stated ONCE (like
   /// <see cref="BacktraceUnavailableReason"/>) so the text and JSON faces cannot word "rebuild" or
-  /// "no caller frame" differently. Stopped and Exited are handled per-face (a stop renders, an exit
-  /// closes the session).
+  /// "no caller frame" differently. Those three are handled per-face: a stop renders, an exit closes the
+  /// session, and a timeout must state the deadline it hit, which only the live session knows.
   private static string StepUnavailableReason(MaxonDebugger.StepOutcomeKind kind) => kind switch {
+    MaxonDebugger.StepOutcomeKind.TimedOut =>
+      throw new InvalidOperationException("a step timeout is reported by the face, with its deadline"),
     MaxonDebugger.StepOutcomeKind.UnsupportedByAgent =>
       "stepping is not supported by this binary's debug agent (rebuild to enable)",
     MaxonDebugger.StepOutcomeKind.NotAcknowledged =>
@@ -1124,7 +1278,6 @@ internal static class MaxonDebugRepl {
 
   private static string HexOffset(long offset) => $"0x{offset:x}";
 
-  private static string ExitCodeText(MaxonDebugger dbg) => dbg.HasExited ? dbg.ExitCode.ToString() : "(unknown)";
 
   private static void TryEnableUtf8() {
     try {
