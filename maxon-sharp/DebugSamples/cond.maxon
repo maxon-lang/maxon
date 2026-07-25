@@ -1,0 +1,42 @@
+// P4d-1 conditional-breakpoint gate sample. Deterministic: pure integer arithmetic in a bounded loop,
+// no stdlib in the conditioned region, and a distinct exit code (17).
+//
+// The loop runs six times with `i` = 0..5, so a condition on `i` is FALSE on most iterations and true on
+// exactly one — the property the gate needs: a breakpoint armed `if i == 4` must let the earlier hits
+// pass without ever waking the driver, then stop on the one that matches.
+//
+// The four locals are deliberately different SHAPES, because the agent's operand load dispatches on
+// width and signedness and a golden that only ever used one width would leave the rest untested:
+//   * `i` / `doubled` — 8-byte signed integers (the full-width load).
+//   * `found`         — a 1-byte bool, and the emitter parks it at an UNALIGNED frame offset, so it also
+//                       exercises the byte-at-a-time operand assembly rather than a lucky aligned read.
+//   * `label`         — a String: a managed local the condition grammar must REFUSE by name rather than
+//                       compare as raw bytes.
+// Each holds a DISTINCT value when the breakpoint line is reached, so `print` can confirm exactly which
+// iteration was caught rather than one that merely looks plausible. At the top of iteration `i`, `doubled`
+// still holds iteration i−1's result and `found` still holds `(i−1) > 3`.
+//
+// `found` is READ inside the loop (not merely assigned) on purpose: a local the register allocator can
+// keep entirely in registers has no stack home, so the sidecar honestly records no location for it and
+// no condition could name it. Reading it across the back edge is what gives it a frame slot.
+
+typealias ExitCode = int(0 to 255)
+
+function main() returns ExitCode
+	var i = 0
+	var doubled = 0
+	var found = false
+	let label = "tick"
+
+	while i < 6 'loop'
+		doubled = i + i    // conditional-breakpoint target: reached once per iteration, i = 0..5
+		if found 'seen'
+			doubled = doubled + 1
+		end 'seen'
+		found = i > 3
+		i = i + 1
+	end 'loop'
+
+	print(label)
+	return doubled + i
+end 'main'

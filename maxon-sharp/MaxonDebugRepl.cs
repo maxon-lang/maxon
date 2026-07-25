@@ -162,17 +162,26 @@ internal static class MaxonDebugRepl {
 
     private void DoBreak(string arg) {
       if (arg.Length == 0) {
-        Console.Out.WriteLine("Usage: break <file>:<line>   |   break <function>");
+        Console.Out.WriteLine($"Usage: break <file>:<line>   |   break <function>   [{BreakConditionUsage}]");
         return;
       }
-      if (TryParseFileLine(arg, out var file, out var lineNo)) {
-        RenderFileLineBreak(dbg.SetBreakpoint(file, lineNo), file, lineNo);
+      var (target, condition) = SplitBreakCondition(arg);
+      if (TryParseFileLine(target, out var file, out var lineNo)) {
+        RenderFileLineBreak(dbg.SetBreakpoint(file, lineNo, condition), file, lineNo, condition);
       } else {
-        RenderFunctionBreak(dbg.SetBreakpointAtFunction(arg), arg);
+        RenderFunctionBreak(dbg.SetBreakpointAtFunction(target, condition), target, condition);
       }
     }
 
-    private static void RenderFileLineBreak(MaxonDebugger.BreakResult r, string file, uint lineNo) {
+    private static void RenderFileLineBreak(MaxonDebugger.BreakResult r, string file, uint lineNo,
+        string condition) {
+      // A condition refusal is reported ahead of the outcome switch because its wording is shared by all
+      // four break renderers (text/JSON x file:line/function) — the switches below stay about LOCATION.
+      if (ConditionRefusalText(r) is { } refusal) {
+        Console.Out.WriteLine($"{refusal} — breakpoint not set.");
+        return;
+      }
+
       switch (r.Kind) {
         case MaxonDebugger.BreakKind.NoCode:
           Console.Out.WriteLine($"No code at {file}:{lineNo} (blank line, or no statement there).");
@@ -182,19 +191,25 @@ internal static class MaxonDebugRepl {
           break;
         case MaxonDebugger.BreakKind.Set:
           var inFn = r.Location.HasFunction ? $" in {r.Location.Function}" : "";
-          Console.Out.WriteLine($"Breakpoint set at {file}:{lineNo}{inFn} (0x{r.Offset:x}).");
+          Console.Out.WriteLine(
+            $"Breakpoint set at {file}:{lineNo}{inFn} (0x{r.Offset:x}){ConditionSuffix(condition)}.");
           break;
         default:
           throw new InvalidOperationException($"Unhandled file:line break outcome {r.Kind}");
       }
     }
 
-    private static void RenderFunctionBreak(MaxonDebugger.BreakResult r, string query) {
+    private static void RenderFunctionBreak(MaxonDebugger.BreakResult r, string query, string condition) {
+      if (ConditionRefusalText(r) is { } refusal) {
+        Console.Out.WriteLine($"{refusal} — breakpoint not set.");
+        return;
+      }
+
       switch (r.Kind) {
         case MaxonDebugger.BreakKind.Set:
           var at = r.Location.HasLine ? $" ({r.Location.File}:{r.Location.Line})" : "";
           var fn = r.Location.HasFunction ? r.Location.Function : query;
-          Console.Out.WriteLine($"Breakpoint set at {fn}{at} (0x{r.Offset:x}).");
+          Console.Out.WriteLine($"Breakpoint set at {fn}{at} (0x{r.Offset:x}){ConditionSuffix(condition)}.");
           break;
         case MaxonDebugger.BreakKind.Unacknowledged:
           Console.Out.WriteLine(BreakUnacknowledgedText);
@@ -335,6 +350,8 @@ internal static class MaxonDebugRepl {
       Console.Out.WriteLine("Commands:");
       Console.Out.WriteLine("  break <file>:<line>   (b)   set a breakpoint at a source line");
       Console.Out.WriteLine("  break <function>            set a breakpoint at a function's entry (fuzzy: leaf/prefix/typo)");
+      Console.Out.WriteLine($"  break <target> {BreakConditionUsage}");
+      Console.Out.WriteLine("                              stop only when a scalar local compares true (e.g. break f.maxon:9 if i == 3)");
       Console.Out.WriteLine("  run                   (r)   start the program (continue from entry)");
       Console.Out.WriteLine("  continue              (c)   resume from a breakpoint");
       Console.Out.WriteLine("  step                  (s)   step into: advance one statement, entering calls");
@@ -445,29 +462,42 @@ internal static class MaxonDebugRepl {
 
   private static void BatchBreak(MaxonDebugger dbg, string arg) {
     if (arg.Length == 0) { EmitError("break needs <file>:<line> or a function name"); return; }
-    if (TryParseFileLine(arg, out var file, out var lineNo)) {
-      BatchBreakFileLine(dbg.SetBreakpoint(file, lineNo), file, lineNo);
+    var (target, condition) = SplitBreakCondition(arg);
+    if (TryParseFileLine(target, out var file, out var lineNo)) {
+      BatchBreakFileLine(dbg.SetBreakpoint(file, lineNo, condition), file, lineNo, condition);
     } else {
-      BatchBreakFunction(dbg.SetBreakpointAtFunction(arg), arg);
+      BatchBreakFunction(dbg.SetBreakpointAtFunction(target, condition), target, condition);
     }
   }
 
-  private static void BatchBreakFileLine(MaxonDebugger.BreakResult r, string file, uint lineNo) {
+  private static void BatchBreakFileLine(MaxonDebugger.BreakResult r, string file, uint lineNo,
+      string condition) {
     WriteEvent(w => {
       w.WriteString("event", "breakpoint");
       w.WriteString("action", BreakActionName(r.Kind));
       w.WriteString("file", file);
       w.WriteNumber("line", lineNo);
+      if (ConditionRefusalText(r) is { } refusal) {
+        w.WriteString("reason", refusal);
+        return;
+      }
       if (r.Kind != MaxonDebugger.BreakKind.NoCode) {
         w.WriteString("offset", HexOffset(r.Offset));
         if (r.Location.HasFunction) w.WriteString("function", r.Location.Function);
+        if (condition.Length > 0) w.WriteString("condition", condition);
       }
     });
   }
 
-  private static void BatchBreakFunction(MaxonDebugger.BreakResult r, string query) => WriteEvent(w => {
+  private static void BatchBreakFunction(MaxonDebugger.BreakResult r, string query, string condition) =>
+      WriteEvent(w => {
     w.WriteString("event", "breakpoint");
     w.WriteString("action", BreakActionName(r.Kind));
+    if (ConditionRefusalText(r) is { } refusal) {
+      w.WriteString("query", query);
+      w.WriteString("reason", refusal);
+      return;
+    }
     switch (r.Kind) {
       case MaxonDebugger.BreakKind.Set:
       case MaxonDebugger.BreakKind.Unacknowledged:
@@ -477,6 +507,7 @@ internal static class MaxonDebugRepl {
           w.WriteString("file", r.Location.File);
           w.WriteNumber("line", r.Location.Line);
         }
+        if (condition.Length > 0) w.WriteString("condition", condition);
         break;
       case MaxonDebugger.BreakKind.Ambiguous:
         w.WriteString("query", query);
@@ -921,6 +952,58 @@ internal static class MaxonDebugRepl {
     return true;
   }
 
+  // ---- Conditional breakpoints (P4d-1): the shared grammar split + refusal wording ----
+
+  /// The keyword that introduces a breakpoint condition, and the usage fragment that describes it. One
+  /// spelling, so the splitter and every usage/help line stay in step.
+  private const string ConditionKeyword = "if";
+  private const string BreakConditionUsage = "if <local> <op> <literal>";
+
+  /// The message a `break … if` gets when this binary's agent cannot evaluate conditions. Stated ONCE
+  /// (like <see cref="BacktraceUnavailableReason"/>) so the text and JSON faces cannot word it differently.
+  private const string CondBpUnsupportedText =
+    "conditional breakpoints are not supported by this binary's debug agent (rebuild to enable)";
+
+  /// <summary>
+  /// The message for a break REFUSED because of its condition, or null when the outcome is not a
+  /// condition refusal. Both refusals mean the SAME thing to the user — nothing was armed — so all four
+  /// break renderers route through this rather than each growing two more arms.
+  /// </summary>
+  private static string? ConditionRefusalText(MaxonDebugger.BreakResult r) => r.Kind switch {
+    MaxonDebugger.BreakKind.ConditionUnsupported => CondBpUnsupportedText,
+    MaxonDebugger.BreakKind.ConditionInvalid => $"condition not understood: {r.ConditionError}",
+    MaxonDebugger.BreakKind.NoCode or MaxonDebugger.BreakKind.Set
+      or MaxonDebugger.BreakKind.Unacknowledged or MaxonDebugger.BreakKind.Ambiguous
+      or MaxonDebugger.BreakKind.NoMatch => null,
+    _ => throw new InvalidOperationException($"Unhandled break kind {r.Kind}"),
+  };
+
+  /// The " if <condition>" tail a "breakpoint set" line carries when the breakpoint is conditional —
+  /// one spelling for both text renderers.
+  private static string ConditionSuffix(string condition) => condition.Length > 0 ? $" if {condition}" : "";
+
+  /// <summary>
+  /// Split a `break` argument into its TARGET and its optional `if &lt;condition&gt;` tail, on the FIRST
+  /// standalone `if` token. Run BEFORE the file:line-vs-function dispatch, so `break foo.maxon:12 if n == 3`
+  /// and `break helper if n == 3` both reach their resolver with a clean target.
+  ///
+  /// Shared by the interactive and batch break paths: those two are the cross-boundary pair the P4c review
+  /// already had to single-source once, so the grammar extension is written here rather than at each end.
+  /// "Standalone" means whitespace-delimited on both sides, so a target that merely contains the letters
+  /// (`ifStream`, `verify`) is not split apart.
+  /// </summary>
+  private static (string Target, string Condition) SplitBreakCondition(string arg) {
+    for (int i = 1; i + ConditionKeyword.Length <= arg.Length; i++) {
+      if (string.CompareOrdinal(arg, i, ConditionKeyword, 0, ConditionKeyword.Length) != 0) continue;
+      if (!char.IsWhiteSpace(arg[i - 1])) continue;
+
+      int after = i + ConditionKeyword.Length;
+      if (after < arg.Length && !char.IsWhiteSpace(arg[after])) continue;
+      return (arg[..i].Trim(), arg[after..].Trim());
+    }
+    return (arg.Trim(), "");
+  }
+
   private static bool TryParseFileLine(string arg, out string file, out uint line) {
     file = "";
     line = 0;
@@ -1010,6 +1093,8 @@ internal static class MaxonDebugRepl {
     MaxonDebugger.BreakKind.Unacknowledged => "unacked",
     MaxonDebugger.BreakKind.Ambiguous => "ambiguous",
     MaxonDebugger.BreakKind.NoMatch => "no-match",
+    MaxonDebugger.BreakKind.ConditionUnsupported => "condition-unsupported",
+    MaxonDebugger.BreakKind.ConditionInvalid => "condition-invalid",
     _ => throw new InvalidOperationException($"Unhandled break kind {kind}"),
   };
 

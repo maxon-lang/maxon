@@ -1,0 +1,84 @@
+P4d-1 breakpoint-aware-stepping gate — reproducible transcript over DebugSamples/step.maxon.
+
+Reuses the committed P4b sample: `main` -> `helper` -> `deeper`, exit 8. No new sample is needed, because
+the defect is about the INTERACTION between a user breakpoint and a step command, not about new code
+shapes.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/step.maxon
+  maxon debug --batch --commands='break step.maxon:21; run; step; break step.maxon:10; finish; backtrace' maxon-sharp/DebugSamples/step.exe
+  maxon debug --batch --commands='break step.maxon:21; run; step; break step.maxon:10; next' maxon-sharp/DebugSamples/step.exe
+  maxon debug --batch --commands='break step.maxon:10; run; backtrace' maxon-sharp/DebugSamples/step.exe
+  maxon debug --batch --commands='break step.maxon:21; run; step; break step.maxon:10; finish; finish; finish' maxon-sharp/DebugSamples/step.exe
+
+RED (the same commands before this rung — the accepted P4b residual #1, "finish/next do not pause at a
+user breakpoint hit during their run"):
+  * BLOCK 1: `finish` sailed straight past the armed breakpoint at deeper:10 and reported
+    {"event":"stop","reason":"breakpoint",...,"offset":"0xab","function":"main","line":21}, with the
+    backtrace collapsed to `main:21 <- ?:?`. The breakpoint was armed (the `bp action=set` event is
+    there) and deeper() really did run — the run simply did not stop in it.
+  * BLOCK 2: `next` likewise reported {"reason":"step","function":"helper","line":16,"offset":"0x1d3"};
+    the breakpoint at deeper:10 was never reported at all.
+  * BLOCKS 3 and 4 are the CONTROL and the follow-on: block 3 was already correct before this rung and
+    must stay byte-identical, which is what isolates the defect to the STEP machinery rather than to
+    breakpoints themselves.
+
+ROOT CAUSE (fixed here): MaxonDebugger.RunUntilReturn treated EVERY stop at an equal-or-deeper frame as
+recursion re-entering its own armed return address, and continued past it. The user-breakpoint registry
+(`_userBreakpointOffsets`) was consulted only at ARM time, never at STOP time.
+
+WHAT EACH BLOCK PROVES (asserted by the JSON below):
+  * BLOCK 1 — `finish` HONORS an intervening breakpoint. The run stops at deeper:10 with reason
+    "breakpoint" (the agent published it as one; the driver did not invent a reason), and the following
+    `backtrace` shows the full three-deep stack deeper:10 <- helper:15 <- main:21, proving the stop is in
+    the callee frame and not a mislabeled stop in main.
+  * BLOCK 2 — `next` honors it too. Step-over descends into deeper() via the same RunUntilReturn path, so
+    it stops at deeper:10 with reason "breakpoint" instead of arriving at helper:16.
+  * BLOCK 3 — CONTROL. A plain breakpoint at deeper:10 with no stepping was correct before this rung and
+    is UNCHANGED by it. If this block ever moves, the fix has damaged ordinary breakpoints.
+  * BLOCK 4 — the interrupted `finish` leaves a healthy session. After stopping at deeper:10, successive
+    `finish` commands walk out one frame at a time: deeper:10 -> helper:15 (0x1d0) -> main:21 (0xab).
+    (Note: that is ONE frame per finish. The original `finish` was abandoned when the breakpoint won, so
+    reaching main again takes two more, not one.) Exit code stays 8, so the interception neither corrupts
+    the program nor leaks a temp breakpoint patch.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The event shapes, functions, lines, reasons, and backtrace DEPTH are the P4d-1 subject and are STABLE.
+  * The `.text` offsets (0x9f/0xab main's call and return, 0x1cb/0x1d0 helper's, 0x15c deeper's first
+    statement, 0x4c the entry-stub return) are build-specific and move only if codegen for those
+    functions moves.
+  * Exit code is 8, identical to the P4b golden: honoring a breakpoint changes where the program STOPS,
+    never what it computes.
+
+--- EXPECTED --batch STDOUT, BLOCK 1: finish honors the breakpoint (newline-delimited JSON) ---
+{"event":"breakpoint","action":"set","file":"step.maxon","line":21,"offset":"0x9f","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x9f","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0x9f"},{"frame":1,"offset":"0x4c"}]}
+{"event":"stop","reason":"step","offset":"0x1cb","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"col":2,"source":[{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":true},{"line":16,"text":"\treturn inner \u002B 1","current":false},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1cb"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"breakpoint","action":"set","file":"step.maxon","line":10,"offset":"0x15c","function":"deeper"}
+{"event":"stop","reason":"breakpoint","offset":"0x15c","function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"col":2,"source":[{"line":7,"text":"typealias Small = int(0 to 1000000)","current":false},{"line":8,"text":"","current":false},{"line":9,"text":"function deeper(n Small) returns Small","current":false},{"line":10,"text":"\tlet doubled = n \u002B n","current":true},{"line":11,"text":"\treturn doubled","current":false},{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false}],"backtrace":[{"frame":0,"function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"offset":"0x15c"},{"frame":1,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":2,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":3,"offset":"0x4c"}]}
+{"event":"backtrace","frames":[{"frame":0,"function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"offset":"0x15c"},{"frame":1,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":2,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":3,"offset":"0x4c"}]}
+{"event":"exit","code":8}
+
+--- EXPECTED --batch STDOUT, BLOCK 2: next honors the breakpoint ---
+{"event":"breakpoint","action":"set","file":"step.maxon","line":21,"offset":"0x9f","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x9f","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0x9f"},{"frame":1,"offset":"0x4c"}]}
+{"event":"stop","reason":"step","offset":"0x1cb","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"col":2,"source":[{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":true},{"line":16,"text":"\treturn inner \u002B 1","current":false},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1cb"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"breakpoint","action":"set","file":"step.maxon","line":10,"offset":"0x15c","function":"deeper"}
+{"event":"stop","reason":"breakpoint","offset":"0x15c","function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"col":2,"source":[{"line":7,"text":"typealias Small = int(0 to 1000000)","current":false},{"line":8,"text":"","current":false},{"line":9,"text":"function deeper(n Small) returns Small","current":false},{"line":10,"text":"\tlet doubled = n \u002B n","current":true},{"line":11,"text":"\treturn doubled","current":false},{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false}],"backtrace":[{"frame":0,"function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"offset":"0x15c"},{"frame":1,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":2,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":3,"offset":"0x4c"}]}
+{"event":"exit","code":8}
+
+--- EXPECTED --batch STDOUT, BLOCK 3: CONTROL, a plain breakpoint is unchanged ---
+{"event":"breakpoint","action":"set","file":"step.maxon","line":10,"offset":"0x15c","function":"deeper"}
+{"event":"stop","reason":"breakpoint","offset":"0x15c","function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"col":2,"source":[{"line":7,"text":"typealias Small = int(0 to 1000000)","current":false},{"line":8,"text":"","current":false},{"line":9,"text":"function deeper(n Small) returns Small","current":false},{"line":10,"text":"\tlet doubled = n \u002B n","current":true},{"line":11,"text":"\treturn doubled","current":false},{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false}],"backtrace":[{"frame":0,"function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"offset":"0x15c"},{"frame":1,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":2,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":3,"offset":"0x4c"}]}
+{"event":"backtrace","frames":[{"frame":0,"function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"offset":"0x15c"},{"frame":1,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":2,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":3,"offset":"0x4c"}]}
+{"event":"exit","code":8}
+
+--- EXPECTED --batch STDOUT, BLOCK 4: finishing out after the interception ---
+{"event":"breakpoint","action":"set","file":"step.maxon","line":21,"offset":"0x9f","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x9f","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0x9f"},{"frame":1,"offset":"0x4c"}]}
+{"event":"stop","reason":"step","offset":"0x1cb","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"col":2,"source":[{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":true},{"line":16,"text":"\treturn inner \u002B 1","current":false},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1cb"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"breakpoint","action":"set","file":"step.maxon","line":10,"offset":"0x15c","function":"deeper"}
+{"event":"stop","reason":"breakpoint","offset":"0x15c","function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"col":2,"source":[{"line":7,"text":"typealias Small = int(0 to 1000000)","current":false},{"line":8,"text":"","current":false},{"line":9,"text":"function deeper(n Small) returns Small","current":false},{"line":10,"text":"\tlet doubled = n \u002B n","current":true},{"line":11,"text":"\treturn doubled","current":false},{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false}],"backtrace":[{"frame":0,"function":"deeper","file":"maxon-sharp/DebugSamples/step.maxon","line":10,"offset":"0x15c"},{"frame":1,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":2,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":3,"offset":"0x4c"}]}
+{"event":"stop","reason":"breakpoint","offset":"0x1d0","function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"col":2,"source":[{"line":12,"text":"end \u0027deeper\u0027","current":false},{"line":13,"text":"","current":false},{"line":14,"text":"function helper(n Small) returns Small","current":false},{"line":15,"text":"\tlet inner = deeper(n)","current":true},{"line":16,"text":"\treturn inner \u002B 1","current":false},{"line":17,"text":"end \u0027helper\u0027","current":false},{"line":18,"text":"","current":false}],"backtrace":[{"frame":0,"function":"helper","file":"maxon-sharp/DebugSamples/step.maxon","line":15,"offset":"0x1d0"},{"frame":1,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":2,"offset":"0x4c"}]}
+{"event":"stop","reason":"breakpoint","offset":"0xab","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0xab"},{"frame":1,"offset":"0x4c"}]}
+{"event":"exit","code":8}

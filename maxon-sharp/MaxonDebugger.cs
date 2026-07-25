@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.MemoryMappedFiles;
 using MaxonSharp.Compiler.Ir.Runtime;
 using MaxonSharp.Debug;
@@ -191,45 +192,68 @@ internal sealed class MaxonDebugger : IDisposable {
     return PostCommand(RuntimeEmitter.DbgCmdClearBp, codeOffset);
   }
 
+  /// <summary>
+  /// True when <paramref name="stop"/> landed on an offset where the USER has armed a breakpoint —
+  /// gdb's "breakpoints win" rule, which the step runners apply to a stop they did not ask for.
+  ///
+  /// The registry used to be consulted at ARM time only (<see cref="ArmTempIfNeeded"/>, so a temp bp
+  /// never deletes a coinciding user bp); this is the STOP-time reading of the same one fact, which is
+  /// what makes `finish` and `next` honor a breakpoint hit during their run. Stated ONCE so the two
+  /// runners that need it cannot disagree about what counts as the user's breakpoint.
+  /// </summary>
+  private bool IsAtUserBreakpoint(StopInfo stop) => _userBreakpointOffsets.Contains(stop.PcOffset);
+
   public bool Continue() => PostCommand(RuntimeEmitter.DbgCmdContinue, 0);
 
   /// The outcome of resolving+arming a breakpoint, so the resolve→arm DECISION lives once here and each
   /// surface only renders it (a divergent copy of "no code vs set" would be a wrong answer, not a compile
   /// error). <see cref="Ambiguous"/> / <see cref="NoMatch"/> arise only from a `break &lt;function&gt;`
-  /// resolution (P4c); a `file:line` resolution never produces them.
-  public enum BreakKind { NoCode, Set, Unacknowledged, Ambiguous, NoMatch }
+  /// resolution (P4c); a `file:line` resolution never produces them. The two Condition* outcomes (P4d-1)
+  /// arise only from a `break … if`, and both mean the breakpoint was NOT armed.
+  public enum BreakKind {
+    NoCode, Set, Unacknowledged, Ambiguous, NoMatch, ConditionUnsupported, ConditionInvalid,
+  }
 
   /// <summary>
   /// The outcome of a break request. <see cref="Candidates"/> lists the matches for an
   /// <see cref="BreakKind.Ambiguous"/> function name; <see cref="Suggestion"/> is the closest known name
-  /// for a <see cref="BreakKind.NoMatch"/> (empty when nothing is close enough). The factories keep the
-  /// empty-list / empty-string invariants in one place so no call site scatters them.
+  /// for a <see cref="BreakKind.NoMatch"/> (empty when nothing is close enough); <see cref="ConditionError"/>
+  /// is why a <see cref="BreakKind.ConditionInvalid"/> condition could not be resolved. The factories keep
+  /// the empty-list / empty-string invariants in one place so no call site scatters them.
   /// </summary>
   public readonly record struct BreakResult(
-    BreakKind Kind, uint Offset, SymLocation Location, IReadOnlyList<string> Candidates, string Suggestion) {
+    BreakKind Kind, uint Offset, SymLocation Location, IReadOnlyList<string> Candidates, string Suggestion,
+    string ConditionError) {
 
-    public static BreakResult NoCodeAt() => new(BreakKind.NoCode, 0, default, [], "");
+    public static BreakResult NoCodeAt() => new(BreakKind.NoCode, 0, default, [], "", "");
     public static BreakResult AmbiguousMatch(IReadOnlyList<string> candidates) =>
-      new(BreakKind.Ambiguous, 0, default, candidates, "");
-    public static BreakResult NoMatchFor(string suggestion) => new(BreakKind.NoMatch, 0, default, [], suggestion);
+      new(BreakKind.Ambiguous, 0, default, candidates, "", "");
+    public static BreakResult NoMatchFor(string suggestion) => new(BreakKind.NoMatch, 0, default, [], suggestion, "");
+
+    /// A `break … if` this binary's agent cannot evaluate. Distinct from <see cref="ConditionRefused"/>
+    /// because the user actions differ: rebuild the target, versus fix the condition.
+    public static BreakResult ConditionUnsupported() =>
+      new(BreakKind.ConditionUnsupported, 0, default, [], "", "");
+
+    public static BreakResult ConditionRefused(string reason) =>
+      new(BreakKind.ConditionInvalid, 0, default, [], "", reason);
 
     /// The Set/Unacknowledged pair from an arm result — the resolve→arm outcome BOTH break paths (file:line
     /// and function) share, so an armed-but-unacknowledged breakpoint is worded identically either way.
     public static BreakResult FromAck(bool acked, uint offset, SymLocation location) =>
-      new(acked ? BreakKind.Set : BreakKind.Unacknowledged, offset, location, [], "");
+      new(acked ? BreakKind.Set : BreakKind.Unacknowledged, offset, location, [], "", "");
   }
 
   /// <summary>
-  /// Resolve a `file:line` to its `.text` offset via the sidecar and arm a breakpoint there.
-  /// <see cref="BreakKind.NoCode"/> when the line carries no statement ("no code at that line"),
-  /// <see cref="BreakKind.Unacknowledged"/> when the agent did not ack. Requires a sidecar.
+  /// Resolve a `file:line` to its `.text` offset via the sidecar and arm a breakpoint there, optionally
+  /// conditional. <see cref="BreakKind.NoCode"/> when the line carries no statement ("no code at that
+  /// line"), <see cref="BreakKind.Unacknowledged"/> when the agent did not ack. Requires a sidecar.
   /// </summary>
-  public BreakResult SetBreakpoint(string file, uint line) {
+  public BreakResult SetBreakpoint(string file, uint line, string condition = "") {
     if (Sidecar is not { } s) throw new DebuggerException("no debug info loaded; cannot resolve file:line");
     if (s.LineToOffset(file, line) is not { } off) return BreakResult.NoCodeAt();
 
-    bool acked = SetBreakpointAtOffset(off);
-    return BreakResult.FromAck(acked, off, Symbolize(off));
+    return ArmAtOffset(off, condition);
   }
 
   // ---- Fuzzy function breakpoints (P4c) ----
@@ -245,16 +269,13 @@ internal sealed class MaxonDebugger : IDisposable {
   /// distance is offered as a <see cref="BreakKind.NoMatch"/> suggestion — edit distance NEVER arms a
   /// breakpoint, so a typo suggests rather than silently stopping at the wrong place. Requires a sidecar.
   /// </summary>
-  public BreakResult SetBreakpointAtFunction(string name) {
+  public BreakResult SetBreakpointAtFunction(string name, string condition = "") {
     if (Sidecar is not { } s)
       throw new DebuggerException("no debug info loaded; cannot resolve a function name");
 
     var matches = ResolveFunctions(s, name);
-    if (matches.Count == 1) {
-      uint off = FunctionEntryOffset(s, matches[0]);
-      bool acked = SetBreakpointAtOffset(off);
-      return BreakResult.FromAck(acked, off, Symbolize(off));
-    }
+    if (matches.Count == 1) return ArmAtOffset(FunctionEntryOffset(s, matches[0]), condition);
+
     if (matches.Count > 1)
       return BreakResult.AmbiguousMatch([.. matches.Select(f => f.Name).OrderBy(n => n, StringComparer.Ordinal)]);
 
@@ -307,6 +328,212 @@ internal sealed class MaxonDebugger : IDisposable {
     return dot < 0 ? qualifiedName : qualifiedName[(dot + 1)..];
   }
 
+  // ---- Conditional breakpoints (P4d-1) ----
+
+  /// True when this binary's agent evaluates a breakpoint condition in-process before publishing a stop
+  /// (control version ≥ DbgCondBpMinVersion). The gate matters more here than for the other capabilities:
+  /// an older agent would ack the unknown set-condition command and then stop on EVERY hit, so a silent
+  /// downgrade would not be a missing feature but a wrong answer.
+  public bool CondBpSupported => AgentVersion >= RuntimeEmitter.DbgCondBpMinVersion;
+
+  /// A parsed and RESOLVED breakpoint condition: exactly the words of the agent's condition record, so
+  /// this record and <see cref="PostSetBpCond"/> are the only places the driver knows that layout.
+  private readonly record struct ResolvedCondition(long Op, long Imm, long Slot, long Width, long Signed);
+
+  /// <summary>
+  /// Arm a breakpoint at an already-resolved <paramref name="offset"/>, optionally conditional. The ONE
+  /// place a resolved offset becomes an armed breakpoint, so `break file:line` and `break &lt;function&gt;`
+  /// cannot differ in how a condition is attached, gated, or refused.
+  ///
+  /// A condition is REFUSED, never dropped — for an agent too old to evaluate one, for a condition this
+  /// grammar cannot express, and for a set-condition command that fails to land (which un-arms the
+  /// breakpoint again). Every one of those paths would otherwise turn "stop when i == 7" into "stop every
+  /// time", which is a wrong answer the user has no way to notice.
+  /// </summary>
+  private BreakResult ArmAtOffset(uint offset, string condition) {
+    if (condition.Length == 0)
+      return BreakResult.FromAck(SetBreakpointAtOffset(offset), offset, Symbolize(offset));
+
+    if (!CondBpSupported) return BreakResult.ConditionUnsupported();
+    if (!TryResolveCondition(offset, condition, out var resolved, out var error))
+      return BreakResult.ConditionRefused(error);
+
+    // The condition attaches to the table slot the ARM allocates, so it can only be posted afterwards —
+    // and if it does not land, the breakpoint must not be left behind firing unconditionally.
+    if (!SetBreakpointAtOffset(offset)) return BreakResult.FromAck(false, offset, Symbolize(offset));
+    if (!PostSetBpCond(offset, resolved)) {
+      ClearBreakpointAtOffset(offset);
+      return BreakResult.FromAck(false, offset, Symbolize(offset));
+    }
+    return BreakResult.FromAck(true, offset, Symbolize(offset));
+  }
+
+  /// The condition grammar's relational operators, paired with the agent opcode each maps to. Ordered
+  /// LONGEST-FIRST so `<=` is matched before `<` would swallow its head.
+  private static readonly (string Text, long Op)[] ConditionOperators = [
+    ("==", RuntimeEmitter.DbgCondOpEq),
+    ("!=", RuntimeEmitter.DbgCondOpNe),
+    ("<=", RuntimeEmitter.DbgCondOpLe),
+    (">=", RuntimeEmitter.DbgCondOpGe),
+    ("<", RuntimeEmitter.DbgCondOpLt),
+    (">", RuntimeEmitter.DbgCondOpGt),
+  ];
+
+  /// The sidecar's spelling of `bool`: a 0/1 byte. It is the one Primitive name the `i`/`u` signedness
+  /// convention below does not describe, and it is read UNSIGNED — the same reading
+  /// <c>DbgValueRenderer.RenderPrimitive</c> gives it, so a condition on a bool and a `print` of the same
+  /// bool can never disagree.
+  private const string BoolPrimitiveName = "i1";
+
+  /// <summary>
+  /// Parse `&lt;local&gt; &lt;relop&gt; &lt;literal&gt;` and resolve it against the function containing
+  /// <paramref name="codeOffset"/>, producing the record the agent evaluates. Deliberately tight: the
+  /// agent reads the operand inside a trap handler with no fault guard (the P4a residual), so the grammar
+  /// admits only a DIRECT stack-slot scalar local, and everything outside it is refused BY NAME rather
+  /// than approximated.
+  ///
+  /// The compiler's own expression parser is not reusable here — it is private and emits IR as a side
+  /// effect of parsing — so this is a standalone scanner over the three-token grammar.
+  /// </summary>
+  private bool TryResolveCondition(uint codeOffset, string text, out ResolvedCondition condition,
+      out string error) {
+    condition = default;
+    var s = RequireSidecar();
+    var src = text.Trim();
+
+    // IDENT — dots are consumed INTO the identifier so a dotted path is refused with a message naming
+    // the whole path, rather than tokenizing as `a` followed by an unparseable operator.
+    int i = 0;
+    while (i < src.Length && (char.IsLetterOrDigit(src[i]) || src[i] == '_' || src[i] == '.')) i++;
+    var ident = src[..i];
+    if (ident.Length == 0) {
+      error = "expected a local variable name before the comparison";
+      return false;
+    }
+    if (ident.Contains('.')) {
+      error = $"'{ident}' is a dotted path; a condition can only test a plain local";
+      return false;
+    }
+
+    while (i < src.Length && char.IsWhiteSpace(src[i])) i++;
+
+    long op = 0;
+    bool haveOp = false;
+    foreach (var (opText, opCode) in ConditionOperators) {
+      if (!src.AsSpan(i).StartsWith(opText)) continue;
+      op = opCode;
+      i += opText.Length;
+      haveOp = true;
+      break;
+    }
+    if (!haveOp) {
+      error = $"expected one of {string.Join(' ', ConditionOperators.Select(o => o.Text))} after '{ident}'";
+      return false;
+    }
+
+    if (!TryParseConditionLiteral(src[i..].Trim(), out long imm, out error)) return false;
+
+    if (s.FunctionAt(codeOffset) is not { } fn) {
+      error = "the breakpoint is not inside a known function, so it has no locals to test";
+      return false;
+    }
+
+    MxdbgReader.LocalInfo? match = null;
+    foreach (var loc in StackLocals(s, fn)) {
+      if (loc.Name != ident) continue;
+      match = loc;
+      break;
+    }
+    if (match is not { } local) {
+      var where = fn.Name.Length > 0 ? fn.Name : "that function";
+      error = $"no local named '{ident}' with a stack home in {where}";
+      return false;
+    }
+
+    if (!TryScalarOperandShape(s, local.TypeId, out long width, out long signedFlag, out error)) return false;
+
+    condition = new ResolvedCondition(op, imm, local.LocValue, width, signedFlag);
+    return true;
+  }
+
+  /// `true` / `false` / an optionally-signed decimal integer — the whole LITERAL grammar. A bool literal
+  /// resolves to the 1/0 the runtime actually stores, so `flag == true` and `flag == 1` are one condition.
+  private static bool TryParseConditionLiteral(string text, out long value, out string error) {
+    error = "";
+    value = 0;
+    if (text == "true") {
+      value = 1;
+      return true;
+    }
+    if (text == "false") return true;
+    if (long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value)) return true;
+
+    value = 0;
+    error = text.Length == 0
+      ? "expected a literal (a number, true, or false) after the comparison"
+      : $"'{text}' is not a supported literal — a condition compares a local against a number, true, or "
+        + "false, not against another expression";
+    return false;
+  }
+
+  /// <summary>
+  /// How the agent must read a local of <paramref name="typeId"/>: how many bytes, and whether to
+  /// sign-extend them. Anything that is not a scalar integer or bool is REFUSED by name, so an
+  /// unsupported operand never yields a breakpoint that quietly ignores its condition.
+  ///
+  /// Signedness comes from the sidecar's Primitive NAMING CONVENTION (`i&lt;bits&gt;` signed,
+  /// `u&lt;bits&gt;` unsigned — DebugInfoBuilder writes the IrType names straight through) and the WIDTH
+  /// from the type record's own Size field, so no per-name width table is restated here to drift.
+  /// </summary>
+  private static bool TryScalarOperandShape(MxdbgReader s, uint typeId, out long width, out long signedFlag,
+      out string error) {
+    width = 0;
+    signedFlag = 0;
+    if (typeId >= s.TypeCount) {
+      error = "this binary's debug info does not describe that local's type";
+      return false;
+    }
+
+    var t = s.Type(typeId);
+    bool signed;
+    switch (t.Kind) {
+      // A ranged alias is a signed machine integer, read exactly as DbgValueRenderer reads one.
+      case MxdbgTypeKind.IntRanged:
+        signed = true;
+        break;
+      case MxdbgTypeKind.Primitive when t.Name == BoolPrimitiveName:
+        signed = false;
+        break;
+      case MxdbgTypeKind.Primitive when t.Name.StartsWith('i'):
+        signed = true;
+        break;
+      case MxdbgTypeKind.Primitive when t.Name.StartsWith('u'):
+        signed = false;
+        break;
+      default:
+        error = $"'{t.Name}' is not an integer or bool; a condition can only compare a scalar local";
+        return false;
+    }
+
+    width = t.Size;
+    if (width != 1 && width != 2 && width != 4 && width != RuntimeEmitter.DbgCondWordSize) {
+      error = $"'{t.Name}' occupies {t.Size} bytes, which the agent's operand load does not cover (1, 2, 4, or 8)";
+      return false;
+    }
+
+    // The agent orders SIGNED. A narrower unsigned operand zero-extends into the non-negative range and
+    // compares correctly there, but a full-width one with its top bit set would order as a negative — so
+    // it is refused rather than mis-compared.
+    if (!signed && width == RuntimeEmitter.DbgCondWordSize) {
+      error = $"'{t.Name}' is a full-width unsigned integer, which this condition evaluator cannot order";
+      return false;
+    }
+
+    signedFlag = signed ? 1 : 0;
+    error = "";
+    return true;
+  }
+
   // ---- Sidecar name pools (completion + fuzzy suggestions; P4c) ----
 
   /// The names of every function the sidecar records, skipping the unnamed runtime helpers — the pool the
@@ -332,18 +559,26 @@ internal sealed class MaxonDebugger : IDisposable {
     return names;
   }
 
+  /// <summary>
+  /// The NAMED locals of <paramref name="fn"/> that have a frame-pointer-relative stack home — the only
+  /// ones anything can be resolved against at a stop, since a register-only or optimized-out local has no
+  /// stable address to read. ONE definition of the local-table window `[LocalFirst, LocalFirst+LocalCount)`
+  /// AND of the stack-slot filter, so the completion pool and the breakpoint-condition resolver cannot
+  /// drift on which locals are addressable (mirroring <c>DbgValueRenderer.StackLocals</c>, which applies
+  /// the same rule to decide which locals `print` and `locals` can read).
+  /// </summary>
+  private static IEnumerable<MxdbgReader.LocalInfo> StackLocals(MxdbgReader s, MxdbgReader.FuncInfo fn) {
+    for (uint i = fn.LocalFirst; i < fn.LocalFirst + fn.LocalCount; i++) {
+      var loc = s.Local(i);
+      if (loc.LocKind == MxdbgLocKind.StackSlotRbpRel && loc.Name.Length > 0) yield return loc;
+    }
+  }
+
   /// The named stack-slot locals of the function enclosing <paramref name="atCodeOffset"/> — the ones a
   /// later `print`/`locals` can actually read (register-only and optimized-out locals carry no stack home,
   /// so completing them would offer a name `print` then rejects). Empty outside any known function.
-  public static IReadOnlyList<string> LocalNames(MxdbgReader s, long atCodeOffset) {
-    if (s.FunctionAt((uint)atCodeOffset) is not { } fn) return [];
-    var names = new List<string>((int)fn.LocalCount);
-    for (uint i = fn.LocalFirst; i < fn.LocalFirst + fn.LocalCount; i++) {
-      var loc = s.Local(i);
-      if (loc.LocKind == MxdbgLocKind.StackSlotRbpRel && loc.Name.Length > 0) names.Add(loc.Name);
-    }
-    return names;
-  }
+  public static IReadOnlyList<string> LocalNames(MxdbgReader s, long atCodeOffset) =>
+    s.FunctionAt((uint)atCodeOffset) is { } fn ? [.. StackLocals(s, fn).Select(l => l.Name)] : [];
 
   /// Live-session conveniences over the loaded sidecar — the interactive REPL builds its completion
   /// context through these; the `--complete` gate uses the static forms on a reader it loads directly.
@@ -376,6 +611,27 @@ internal sealed class MaxonDebugger : IDisposable {
     _accessor.Write(RuntimeEmitter.DbgOffCmdArg, (long)addr);
     _accessor.Write(RuntimeEmitter.DbgOffReadLen, len);
     return RingDoorbellAndAwaitAck(RuntimeEmitter.DbgCmdReadMem);
+  }
+
+  /// <summary>
+  /// Post a set-condition command: stage the condition record at
+  /// <see cref="RuntimeEmitter.DbgOffCondStage"/>, then ring the doorbell with CmdArg = the breakpoint's
+  /// CODE OFFSET (the agent resolves that to its own table slot, which stays the agent's secret). Split
+  /// from <see cref="PostCommand"/> only because it writes the staged record first; the doorbell + ack
+  /// discipline is the shared one, and the doorbell's release is what publishes the staged bytes.
+  /// </summary>
+  private bool PostSetBpCond(long codeOffset, ResolvedCondition c) {
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffKind,
+      RuntimeEmitter.DbgCondKindScalarCompare);
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffOp, c.Op);
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffImm, c.Imm);
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffSlot, c.Slot);
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffWidth, c.Width);
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffSigned, c.Signed);
+
+    _accessor.Write(RuntimeEmitter.DbgOffCmd, RuntimeEmitter.DbgCmdSetBpCond);
+    _accessor.Write(RuntimeEmitter.DbgOffCmdArg, codeOffset);
+    return RingDoorbellAndAwaitAck(RuntimeEmitter.DbgCmdSetBpCond);
   }
 
   /// <summary>
@@ -631,6 +887,14 @@ internal sealed class MaxonDebugger : IDisposable {
       if (stepped.Kind != StepOutcomeKind.Stopped) return stepped;   // Exited / NotAcked / Unsupported
       cur = stepped.Stop;
 
+      // BREAKPOINTS WIN, in the walk too: a user breakpoint on an instruction inside the stepped range
+      // would otherwise be walked straight over, since the walk single-steps (the trap byte never runs)
+      // and only a STATEMENT boundary ends it. The stop keeps its honest reason "step" — the agent
+      // completed a single-step here, the INT3/BRK genuinely did not fire — which is a real distinction
+      // from the RunUntilReturn case, where the trap did execute and the agent said so. The LOCATION is
+      // the answer either way, and neither face has to invent a reason the agent never published.
+      if (IsAtUserBreakpoint(cur)) return new StepOutcome(StepOutcomeKind.Stopped, cur);
+
       // Returned to a shallower frame: we stepped OUT of the start function; stop in the caller.
       if (cur.Sp > startSp) return new StepOutcome(StepOutcomeKind.Stopped, cur);
 
@@ -753,6 +1017,15 @@ internal sealed class MaxonDebugger : IDisposable {
       for (int i = 0; i < MaxReturnContinues; i++) {
         if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
         if (!WaitForStop(out var stop)) return new StepOutcome(StepOutcomeKind.Exited, default);
+
+        // BREAKPOINTS WIN: a user breakpoint hit while running out reports there, ahead of the frame
+        // guard below — which would otherwise read it as recursion re-entering the armed return address
+        // and continue straight past it. Its Reason is already DbgStopReasonBreakpoint (the agent
+        // published it as one), so it renders as a breakpoint stop at the right place with no new
+        // outcome kind; the caller's `finally` cancels the run by clearing our temp bp, exactly as gdb
+        // abandons a `finish` that a breakpoint interrupts.
+        if (IsAtUserBreakpoint(stop)) return new StepOutcome(StepOutcomeKind.Stopped, stop);
+
         if (stop.Sp > innerSp) return new StepOutcome(StepOutcomeKind.Stopped, stop);
         // else: a hit at an equal-or-deeper frame (recursion) — keep unwinding.
       }
@@ -768,6 +1041,10 @@ internal sealed class MaxonDebugger : IDisposable {
   /// line was reached or the frame returned first. Temp bps WE armed are always cleared, so no patch leaks;
   /// a coinciding user bp is used as-is and left intact. Unlike <see cref="RunUntilReturn"/> the first stop
   /// is the answer (no deeper-frame skipping).
+  ///
+  /// It therefore needs no <see cref="IsAtUserBreakpoint"/> check, and the asymmetry with
+  /// <see cref="RunUntilReturn"/> is not an oversight: returning the FIRST stop already honors a user
+  /// breakpoint hit on the way, because `until` never continues past a stop in the first place.
   /// </summary>
   private StepOutcome RunToLineOrReturn(long lineOff, long? returnOff) {
     var armed = new List<long>();
