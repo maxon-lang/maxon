@@ -1,0 +1,66 @@
+P4e DebugStream-CORRELATION gate — a stop shows the trace activity that led to it, and the NEXT stop
+shows only what happened since. Reproducible transcript over DebugSamples/trace.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/trace.maxon --debugstream
+  maxon build maxon-sharp/DebugSamples/step.maxon
+
+RED (the same two command lines against a pre-P4e binary, before this rung): the word did not exist,
+so a session could see a stop and could see nothing that led to it:
+  {"event":"error","message":"unknown command 'trace'"}
+
+WHAT EACH BLOCK PROVES (asserted by the JSON below):
+  * block 1, first stop  -> the slice holds EXACTLY label(1)'s four mm events. The stop event carries
+                            them automatically (orientation), and the explicit `trace` command answers
+                            with the same window — the command re-asks a parked target, so the two
+                            agree by construction rather than by one caching the other.
+  * block 1, the STOP events -> the trace tail rides the stop itself (orientation, like the source
+                            window and the backtrace), bounded to the most recent few with the number
+                            it left out stated — `"traceOmitted":2` at the second stop. Both faces
+                            apply that bound through one computation, so the transcript and the JSON
+                            can never disagree about what a stop showed.
+  * block 1, second stop -> THE WATERMARK TEST. Between the stops the program ran label(22), label(333)
+                            and label(4444), and the slice holds those TWELVE events and NOT ONE of the
+                            first stop's. A driver that re-rendered the ring would show sixteen here;
+                            one with no watermark at all would show none. The window is a pair of ring
+                            byte positions the AGENT recorded when it published each stop
+                            (DbgOffStopDsMark), never a pair of timestamps — a stop parks the thread,
+                            so a clock reading taken around one describes the debugger, not the program.
+  * block 2              -> THE HONEST REFUSAL. step.exe is built WITHOUT --debugstream, so it has no
+                            trace hooks at all and emits nothing. `trace` names the flag rather than
+                            rendering an empty list, which would read as "nothing happened". Note the
+                            shape: `"trace":null` plus a `traceUnavailable` reason, never `[]` — the
+                            same rule the frame lists follow. Note also that the two `stop` events in
+                            this block carry NO trace key: a binary with nothing to trace emits exactly
+                            the shape it did before this rung, which is why the other 27 golden checks
+                            are untouched by it.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The event TEXTS, their ORDER, and the two window SIZES (4 then 12) are the P4e subject and are
+    STABLE: one processor, no async, and `n.toString()` allocates exactly one heap String per call, so
+    the alloc ids run 1..4 in program order. The exit code 10 (byte lengths 1+2+3+4) is stable too.
+  * The `.text` offsets (0xb5 / 0xfa the two breakpoints, 0x51 the entry-stub return, 0x9f in step.exe)
+    are build-specific and move only if codegen moves.
+  * NOT asserted, and deliberately: wall-clock deltas. The producer stamps every ring entry with one
+    and `maxon monitor` prints it, because a live timeline is what it is watching; a stop-correlated
+    slice states an ORDER and a WINDOW instead, so the driver's face carries no timestamp at all.
+
+⚠ WHAT THIS GOLDEN DOES NOT COVER — only the `mm` family. The `sched` and `dbg` families carry raw
+green-thread ADDRESSES in their payload, and `log` (the `__DebugStream` builtin) carries one too, so
+none of them can appear in an exact-diff transcript. They decode through the same shared formatter that
+`maxon monitor` uses, and monitor's own output is where they are exercised.
+
+--- EXPECTED: maxon debug --target-env=MAXON_MAX_PROCS=1 --batch --commands='break trace.maxon:32; break trace.maxon:37; run; trace; continue; trace' maxon-sharp/DebugSamples/trace.exe ---
+{"event":"breakpoint","action":"set","file":"trace.maxon","line":32,"offset":"0xb5","function":"main"}
+{"event":"breakpoint","action":"set","file":"trace.maxon","line":37,"offset":"0xfa","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0xb5","function":"main","file":"maxon-sharp/DebugSamples/trace.maxon","line":32,"col":2,"source":[{"line":29,"text":"\ttotal = total \u002B label(1)","current":false},{"line":30,"text":"","current":false},{"line":31,"text":"\t// BREAKPOINT 1 stops BEFORE this line runs, so the first slice holds exactly label(1)\u0027s events.","current":false},{"line":32,"text":"\ttotal = total \u002B label(22)","current":true},{"line":33,"text":"\ttotal = total \u002B label(333)","current":false},{"line":34,"text":"\ttotal = total \u002B label(4444)","current":false},{"line":35,"text":"","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/trace.maxon","line":32,"offset":"0xb5"},{"frame":1,"offset":"0x51"}],"trace":[{"family":"mm","text":"mm_alloc String #1 size=70"},{"family":"mm","text":"mm_incref String #1 rc=1"},{"family":"mm","text":"mm_decref String #1 rc=0"},{"family":"mm","text":"mm_free String #1"}]}
+{"event":"trace","trace":[{"family":"mm","text":"mm_alloc String #1 size=70"},{"family":"mm","text":"mm_incref String #1 rc=1"},{"family":"mm","text":"mm_decref String #1 rc=0"},{"family":"mm","text":"mm_free String #1"}]}
+{"event":"stop","reason":"breakpoint","offset":"0xfa","function":"main","file":"maxon-sharp/DebugSamples/trace.maxon","line":37,"col":2,"source":[{"line":34,"text":"\ttotal = total \u002B label(4444)","current":false},{"line":35,"text":"","current":false},{"line":36,"text":"\t// BREAKPOINT 2. Byte lengths 1 \u002B 2 \u002B 3 \u002B 4 = 10, the exit code.","current":false},{"line":37,"text":"\treturn total","current":true},{"line":38,"text":"end \u0027main\u0027","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/trace.maxon","line":37,"offset":"0xfa"},{"frame":1,"offset":"0x51"}],"traceOmitted":2,"trace":[{"family":"mm","text":"mm_decref String #2 rc=0"},{"family":"mm","text":"mm_free String #2"},{"family":"mm","text":"mm_alloc String #3 size=70"},{"family":"mm","text":"mm_incref String #3 rc=1"},{"family":"mm","text":"mm_decref String #3 rc=0"},{"family":"mm","text":"mm_free String #3"},{"family":"mm","text":"mm_alloc String #4 size=70"},{"family":"mm","text":"mm_incref String #4 rc=1"},{"family":"mm","text":"mm_decref String #4 rc=0"},{"family":"mm","text":"mm_free String #4"}]}
+{"event":"trace","trace":[{"family":"mm","text":"mm_alloc String #2 size=70"},{"family":"mm","text":"mm_incref String #2 rc=1"},{"family":"mm","text":"mm_decref String #2 rc=0"},{"family":"mm","text":"mm_free String #2"},{"family":"mm","text":"mm_alloc String #3 size=70"},{"family":"mm","text":"mm_incref String #3 rc=1"},{"family":"mm","text":"mm_decref String #3 rc=0"},{"family":"mm","text":"mm_free String #3"},{"family":"mm","text":"mm_alloc String #4 size=70"},{"family":"mm","text":"mm_incref String #4 rc=1"},{"family":"mm","text":"mm_decref String #4 rc=0"},{"family":"mm","text":"mm_free String #4"}]}
+{"event":"exit","code":10}
+
+--- EXPECTED: maxon debug --batch --commands='break step.maxon:21; run; trace' maxon-sharp/DebugSamples/step.exe ---
+{"event":"breakpoint","action":"set","file":"step.maxon","line":21,"offset":"0x9f","function":"main"}
+{"event":"stop","reason":"breakpoint","offset":"0x9f","function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"col":2,"source":[{"line":18,"text":"","current":false},{"line":19,"text":"function main() returns ExitCode","current":false},{"line":20,"text":"\tvar total = 0","current":false},{"line":21,"text":"\tlet a = helper(3)  // step from here descends into helper; next over here runs helper fully","current":true},{"line":22,"text":"\ttotal = total \u002B a  // finish from inside helper returns to about here","current":false},{"line":23,"text":"","current":false},{"line":24,"text":"\tvar i = 0","current":false}],"backtrace":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/step.maxon","line":21,"offset":"0x9f"},{"frame":1,"offset":"0x4c"}]}
+{"event":"trace","trace":null,"traceUnavailable":"this binary was built without --debugstream, so it emits no trace events (rebuild it with --debugstream to record them)"}
+{"event":"exit","code":8}

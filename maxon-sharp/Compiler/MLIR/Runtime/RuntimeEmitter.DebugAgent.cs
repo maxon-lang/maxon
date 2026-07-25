@@ -97,7 +97,15 @@ public partial class RuntimeEmitter {
   /// grew, so this version is what tells the driver how wide a record is — reading a v9 array with a v8
   /// stride does not fail, it silently reports OTHER THREADS' fields, which is the worst shape of wrong
   /// answer this segment can produce. Both new commands and the mode word are refused below it.
-  public const long DbgControlVersion = 9;
+  ///
+  /// v10 (P4e) adds DEBUGSTREAM CORRELATION: <see cref="DbgOffStopDsMark"/>, the DebugStream ring's
+  /// write watermark at the moment a stop is published, so the driver can render exactly the trace
+  /// entries between the previous stop's mark and this one's. It is a previously-zero word after
+  /// <see cref="DbgOffStopOthers"/>, so no earlier field moves — and the gate matters for the v3/v4
+  /// reason: a v9 agent never writes the word, and its zero is a PERFECTLY LEGITIMATE watermark
+  /// ("nothing has been traced yet"), so an ungated driver would render a confident empty slice for a
+  /// program that traced plenty. <see cref="DbgTraceMinVersion"/> refuses instead.
+  public const long DbgControlVersion = 10;
 
   /// The control-segment version at which the agent first understood <see cref="DbgCmdBacktrace"/>.
   /// The driver refuses to trust the frame array from an older agent (which would ack-and-ignore).
@@ -238,9 +246,40 @@ public partial class RuntimeEmitter {
   /// already be in force at the entry stop, which happens before the driver can post anything.
   public const int DbgOffStopOthers = DbgOffGtRecords + DbgMaxGreenThreads * DbgGtRecSize;
 
+  /// <summary>
+  /// The DebugStream WATERMARK at the instant a stop was published (agent writes, driver reads) — v10.
+  /// It is the ring's `write_cursor`: how many bytes of trace entries the debuggee had reserved by the
+  /// time it parked. The driver renders the entries between the PREVIOUS stop's mark and this one's,
+  /// which is the question a user actually has — "what happened since you were last stopped".
+  ///
+  /// It is a WATERMARK rather than a timestamp on purpose: a stop PARKS the thread, so wall-clock
+  /// readings taken around one describe the debugger, not the program. A byte position in the ring is
+  /// the only thing that partitions the trace at exactly the instant the stop was taken.
+  ///
+  /// Written by <c>__dbg_publish_stop</c> BEFORE its release-bump of <see cref="DbgOffStopSeq"/>, so a
+  /// driver that has seen the new sequence number has seen the mark that goes with it.
+  /// </summary>
+  public const int DbgOffStopDsMark = DbgOffStopOthers + DbgGtWordSize;
+
+  // What a NEGATIVE mark means. A real watermark is a byte count, so it can never be negative — and
+  // ZERO is a legitimate one ("nothing has been traced yet"), which is exactly why "unavailable" cannot
+  // be spelled 0: rendering that as "no events" is a wrong answer wearing an empty answer's costume.
+  //
+  // The two cases stay DISTINCT because the user's next step differs. NoStream is a compile-time fact
+  // (this binary has no trace hooks at all — rebuild it with `--debugstream`); Detached is a runtime one
+  // (the hooks are there but nothing opened the ring), and telling one as the other would send a user to
+  // rebuild a binary that is already right.
+  public const long DbgStopDsMarkNoStream = -1;
+  public const long DbgStopDsMarkDetached = -2;
+
+  /// The control-segment version at which the agent publishes <see cref="DbgOffStopDsMark"/>. The
+  /// driver refuses trace correlation below it rather than reading the word, whose zero at v9 reads as
+  /// a believable "nothing was traced".
+  public const long DbgTraceMinVersion = 10;
+
   /// One past the last byte the agent writes in the control segment — the ONE expression the emit-time
   /// page check reads, so adding a field means extending this and nothing else.
-  public const int DbgControlSegmentHighWater = DbgOffStopOthers + DbgGtWordSize;
+  public const int DbgControlSegmentHighWater = DbgOffStopDsMark + DbgGtWordSize;
 
   /// The most green threads one enumeration reports. It bounds BOTH the record array (which must fit the
   /// control page) and the LIST WALK itself, and the second is what makes it load-bearing rather than a
@@ -1399,12 +1438,45 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch1, DbgOffStopSp, VReg.Arg2);
     _b.StoreIndirect(VReg.Scratch1, DbgOffStopFp, VReg.Arg3);
 
+    EmitDbgStopDsMark(VReg.Scratch1, VReg.Scratch2, VReg.Scratch3);
+
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopSeq);
     _b.AddRegImm(VReg.Scratch2, 1);
     _b.StoreRelease(VReg.Scratch1, DbgOffStopSeq, VReg.Scratch2);
 
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Store <see cref="DbgOffStopDsMark"/> — the DebugStream watermark this stop is correlated against
+  /// (P4e). <paramref name="baseReg"/> holds the control-segment base; the two scratch registers are
+  /// clobbered.
+  ///
+  /// The `--debugstream` arm is a COMPILE-TIME branch, and it has to be: `__ds_base` is emitted only by
+  /// <see cref="EmitDebugStreamGlobals"/>, which runs only under that flag, while the agent is emitted
+  /// into EVERY binary. Referencing the global unconditionally would not degrade — it would fail to
+  /// resolve. So a binary without the hooks stores the compile-time constant that SAYS it has none,
+  /// which is the same fact the driver needs for its refusal, arrived at without a second flag to keep
+  /// in step with this one.
+  ///
+  /// Cost: this runs inside the trap handler, once per published stop — a path that has already taken a
+  /// kernel exception dispatch — so it is nowhere near the scheduler hooks invariant 2 governs.
+  /// </summary>
+  private void EmitDbgStopDsMark(VReg baseReg, VReg markReg, VReg dsBaseReg) {
+    if (Compiler.DebugStream) {
+      var storeLabel = UniqueLabel("dbg_publish_ds_mark");
+
+      _b.LoadGlobal(dsBaseReg, "__ds_base");
+      _b.MovRegImm(markReg, DbgStopDsMarkDetached);
+      _b.JumpIfZero(dsBaseReg, storeLabel);
+      _b.LoadIndirect(markReg, dsBaseReg, DsOffWriteCursor);
+      _b.DefineLabel(storeLabel);
+    } else {
+      _b.MovRegImm(markReg, DbgStopDsMarkNoStream);
+    }
+
+    _b.StoreIndirect(baseReg, DbgOffStopDsMark, markReg);
   }
 
   /// <summary>

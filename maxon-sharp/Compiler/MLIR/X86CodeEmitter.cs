@@ -487,19 +487,25 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, "__io_init"));
     EmitDword(0);
 
+    // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory).
+    //
+    // BEFORE the debug agent, and that ORDER IS LOAD-BEARING (P4e): the agent's entry stop parks inside
+    // __dbg_init, and every stop it publishes carries the ring's write watermark. Initialised the other
+    // way round, a `--debugstream` binary would report "no trace ring attached" at its own entry stop —
+    // the one moment the driver most needs to know the ring is there. DebugStream installs no exception
+    // handler, so the ordering below still holds.
+    if (Compiler.DebugStream) {
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "__debugstream_init"));
+      EmitDword(0);
+    }
+
     // Initialize the always-present debug agent (checks MAXON_DEBUG; dark and ~free if unset).
     // Emitted after __io_init so the trap handler it may arm lands in front of __gt_init's fault
     // handler in the VEH chain.
     if (!Compiler.NoDebugAgent) {
       EmitByte(0xE8);
       _relCallFixups.Add((_code.Count, "__dbg_init"));
-      EmitDword(0);
-    }
-
-    // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory)
-    if (Compiler.DebugStream) {
-      EmitByte(0xE8);
-      _relCallFixups.Add((_code.Count, "__debugstream_init"));
       EmitDword(0);
     }
 

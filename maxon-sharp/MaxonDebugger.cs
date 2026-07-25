@@ -87,8 +87,19 @@ internal sealed class MaxonDebugger : IDisposable {
   private readonly SharedMapping _mapping;
   private readonly MemoryMappedViewAccessor _accessor;
   private readonly Process _process;
-  private readonly Task _stdout;
-  private readonly Task _stderr;
+  private readonly TargetStdio _stdio;
+
+  /// <summary>
+  /// The DebugStream trace ring — a SECOND shared segment with a SECOND activation variable, not a
+  /// region of the control segment. The two share only the create-open-map helper, so a session that
+  /// wants both must create, set and map both.
+  ///
+  /// It is created for EVERY session, exactly as the control segment is, because whether the debuggee
+  /// has any trace hooks at all is a property of how it was BUILT and the driver cannot know it before
+  /// spawning. A binary built without `--debugstream` has no `__debugstream_init` to read the variable,
+  /// so the ring simply stays empty — and the agent's own stop mark says so by name.
+  /// </summary>
+  private readonly DebugStreamDecoder _trace;
 
   /// The validated sidecar, or null for a session that only needs the substrate (the P3a attach probe
   /// debugs a binary that may have no sidecar). Symbolization requires it.
@@ -123,12 +134,13 @@ internal sealed class MaxonDebugger : IDisposable {
   public bool StopOthersRequested { get; }
 
   private MaxonDebugger(SharedMapping mapping, MemoryMappedViewAccessor accessor, Process process,
-      Task stdout, Task stderr, MxdbgReader? sidecar, TimeSpan stopTimeout, bool stopOthers) {
+      TargetStdio stdio, DebugStreamDecoder trace, MxdbgReader? sidecar, TimeSpan stopTimeout,
+      bool stopOthers) {
     _mapping = mapping;
     _accessor = accessor;
     _process = process;
-    _stdout = stdout;
-    _stderr = stderr;
+    _stdio = stdio;
+    _trace = trace;
     Sidecar = sidecar;
     StopTimeout = stopTimeout;
     StopOthersRequested = stopOthers;
@@ -165,6 +177,7 @@ internal sealed class MaxonDebugger : IDisposable {
     long size = RuntimeEmitter.DbgControlSegmentSize;
     var mapping = SharedMapping.Create(size, ControlSegmentPrefix);
     MemoryMappedViewAccessor? accessor = null;
+    DebugStreamDecoder? trace = null;
 
     // Declared OUT here so the failure path can reach it: between the spawn and the constructor there is
     // a window (the two forwarding tasks) where a throw would leave a target that no MaxonDebugger owns,
@@ -173,6 +186,7 @@ internal sealed class MaxonDebugger : IDisposable {
     Process? spawned = null;
     try {
       accessor = mapping.Map.CreateViewAccessor(0, size);
+      trace = CreateTraceRing(exePath);
       // A fresh segment is zeroed; these are the fields seeded before spawn. StopAtEntry lets the driver
       // set breakpoints before user code runs, gdb-style. StopOthers must be in force at that very first
       // stop too — it describes every stop of the session, so there is no moment at which the driver
@@ -194,8 +208,13 @@ internal sealed class MaxonDebugger : IDisposable {
         foreach (var (name, value) in targetEnv) psi.EnvironmentVariables[name] = value;
 
       // The agent reads this SAME var name from its `__dbg_env_name` symdata (one definition, so the
-      // producer and consumer cannot drift and leave the agent silently dark).
+      // producer and consumer cannot drift and leave the agent silently dark). The trace ring's
+      // variable is a SECOND one, read by a SECOND init (`__ds_env_name` / `__debugstream_init`) — the
+      // two segments share a create-and-map helper and nothing else. Both are set after the caller's
+      // own variables for the same reason: each names a segment THIS session created, so letting a
+      // caller repoint either would detach the session from what it is attached to.
       psi.EnvironmentVariables[RuntimeEmitter.DbgActivationEnvVar] = mapping.SegmentName;
+      psi.EnvironmentVariables[RuntimeEmitter.DsActivationEnvVar] = trace.SegmentName;
 
       var process = new Process { StartInfo = psi };
       try {
@@ -208,24 +227,36 @@ internal sealed class MaxonDebugger : IDisposable {
       }
       spawned = process;
 
-      var stdout = Task.Run(() => {
-        var sr = process.StandardOutput;
-        while (sr.ReadLine() is { } line) stdoutSink.WriteLine(line);
-      });
-      var stderr = Task.Run(() => {
-        var sr = process.StandardError;
-        while (sr.ReadLine() is { } line) Console.Error.WriteLine(line);
-      });
+      var stdio = TargetStdio.Forward(process, stdoutSink.WriteLine, Console.Error.WriteLine);
 
       // Ownership passes to the instance here: from this point EndSession/Dispose is what ends the target.
       spawned = null;
-      return new MaxonDebugger(mapping, accessor, process, stdout, stderr, sidecar,
+      return new MaxonDebugger(mapping, accessor, process, stdio, trace, sidecar,
         stopTimeout ?? DefaultStopTimeout, stopOthers);
     } catch {
       KillUnowned(spawned);
+      trace?.Dispose();
       accessor?.Dispose();
       mapping.Dispose();
       throw;
+    }
+  }
+
+  /// <summary>
+  /// Create this session's DebugStream trace ring. It is done BEFORE the target is spawned, which is
+  /// not merely tidy: reading the executable's interned name tables can fail, and doing it afterwards
+  /// (as `maxon monitor` did) leaves a running target that nothing owns.
+  ///
+  /// A failure is a REFUSAL, not a degraded session. The only way it fails is an executable whose
+  /// symbol table cannot be located at all — a file this driver could not symbolize a single frame of
+  /// either — so carrying on with a nameless ring would be attaching to something that is not a Maxon
+  /// binary and pretending otherwise.
+  /// </summary>
+  private static DebugStreamDecoder CreateTraceRing(string exePath) {
+    try {
+      return DebugStreamDecoder.Create(exePath);
+    } catch (Exception ex) {
+      throw new DebuggerException($"cannot prepare the trace ring for '{exePath}': {ex.Message}");
     }
   }
 
@@ -976,12 +1007,26 @@ internal sealed class MaxonDebugger : IDisposable {
     var deadline = DateTime.UtcNow + StopTimeout;
     var backoff = new PollBackoff();
     while (true) {
+      // Sampled ONCE per poll, ahead of both the trace ring and the stop sequence. It is the same
+      // liveness snapshot both readers need — if the target is already gone, every store it will ever
+      // make is visible to the reads below — and sampling it once is also what keeps the trace pump
+      // from doubling this loop's per-poll syscall count.
+      bool exited = _process.HasExited;
+
+      // The debuggee's trace ring is drained HERE, in the one loop that runs while the target is
+      // RUNNING, rather than at each stop: the ring is 2 MB and a producer that fills it starts
+      // DROPPING events, so a driver that only ever looked at a stop would lose the very activity it
+      // exists to correlate. An empty ring costs two mapped reads (the write cursor and the producer's
+      // announced schema) and no syscall, since the liveness sample above is the loop's own.
+      PumpTrace(exited);
+
       Thread.MemoryBarrier();
       long seq = _accessor.ReadInt64(RuntimeEmitter.DbgOffStopSeq);
       if (seq > _stopWatermark) {
         _stopWatermark = seq;
         Thread.MemoryBarrier();
         StopOutstanding = false;
+        AdvanceTraceWindow();
         return new StopWaitResult(StopWaitStatus.Stopped, new StopInfo(
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopReason),
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopPc),
@@ -989,7 +1034,7 @@ internal sealed class MaxonDebugger : IDisposable {
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopFp)));
       }
 
-      if (_process.HasExited) {
+      if (exited) {
         StopOutstanding = false;
         return new StopWaitResult(StopWaitStatus.Exited, default);
       }
@@ -1003,6 +1048,202 @@ internal sealed class MaxonDebugger : IDisposable {
 
       backoff.Pause();
     }
+  }
+
+  // ---- DebugStream trace correlation (P4e) ----
+
+  /// True when this binary's agent records the trace watermark on every stop (control version ≥
+  /// DbgTraceMinVersion). The gate matters for the v3/v4 reason rather than the v6 one: a v9 agent
+  /// leaves the word zeroed, and ZERO IS A LEGITIMATE WATERMARK — "nothing has been traced yet" — so an
+  /// ungated driver would render a confident, empty, wrong slice for a program that traced plenty.
+  public bool TraceCorrelationSupported => AgentVersion >= RuntimeEmitter.DbgTraceMinVersion;
+
+  /// <summary>
+  /// The most trace events one window retains. A slice describes what led to a stop, so when a window
+  /// overflows it is the OLDEST that go — and how many went is reported rather than swallowed, exactly
+  /// as the green-thread listing reports its own truncation.
+  /// </summary>
+  private const int TraceWindowCap = 4096;
+
+  /// <summary>
+  /// How long <see cref="TraceSlice"/> will wait for the ring to catch up to a stop's watermark.
+  ///
+  /// It is only ever reached in one situation: ANOTHER thread reserved an entry below the watermark and
+  /// has not committed its payload yet, so the committed prefix stops short of the mark. That normally
+  /// resolves in microseconds — but under `--this-gt` the rest of the program keeps running, and a
+  /// producer that is itself parked would never commit, so the wait must be bounded and the shortfall
+  /// REPORTED rather than rendered as a complete slice.
+  /// </summary>
+  private static readonly TimeSpan TraceCatchUpTimeout = TimeSpan.FromSeconds(2);
+
+  /// Decoded events not yet consumed by a rendered window, oldest first. Bounded by
+  /// <see cref="TraceWindowCap"/>.
+  private readonly Queue<DsEvent> _traceEvents = new();
+
+  /// Events decoded and then discarded because the window was full — the DRIVER's own loss, kept apart
+  /// from the producer's (a full ring), because the two have different causes and different cures. Both
+  /// are cumulative for the session; a slice reports the DELTA over its own window.
+  private long _traceNotRetained;
+
+  /// <summary>
+  /// The two loss counters as they stood when a window opened and when it closed. A slice reports
+  /// `now − Open`, so it names the loss that happened INSIDE it rather than the run's running total.
+  ///
+  /// TWO snapshots and not one, because a window is rendered AFTER the stop that closed it: the reading
+  /// a slice needs is the one taken at the PREVIOUS stop, so the value taken at this stop has to wait a
+  /// turn before it becomes the next window's opening reading.
+  /// </summary>
+  private readonly record struct TraceLoss(long Dropped, long NotRetained);
+  private TraceLoss _traceLossAtWindowOpen;
+  private TraceLoss _traceLossPending;
+
+  /// Set once the producer's ring turns out to speak a foreign schema; every later pump is skipped and
+  /// every slice refuses. Empty while the ring is trustworthy.
+  private string _traceSchemaMismatch = "";
+
+  /// The window a slice covers: `[_prevStopDsMark, _stopDsMark)`. The lower bound starts at 0 — the
+  /// beginning of the ring — so the FIRST stop's slice is "everything since the program started", which
+  /// is exactly what "since you were last stopped" means when you never were.
+  private long _prevStopDsMark;
+  private long _stopDsMark;
+
+  /// <summary>
+  /// Drain everything the debuggee has committed to the trace ring into the pending window.
+  ///
+  /// <paramref name="targetExited"/> must be the caller's liveness snapshot taken BEFORE this call, for
+  /// the reason <see cref="DebugStreamDecoder.Drain"/> states.
+  /// </summary>
+  private void PumpTrace(bool targetExited) {
+    if (_traceSchemaMismatch.Length > 0) return;
+
+    while (true) {
+      var status = _trace.Drain(targetExited, RetainTraceEvent);
+      switch (status) {
+        case DebugStreamDecoder.DrainStatus.Decoded:
+          continue;
+        case DebugStreamDecoder.DrainStatus.Idle:
+        case DebugStreamDecoder.DrainStatus.Finished:
+          return;
+        case DebugStreamDecoder.DrainStatus.SchemaMismatch:
+          _traceSchemaMismatch = _trace.SchemaMismatchMessage;
+          return;
+        default:
+          throw new InvalidOperationException($"Unhandled DebugStream drain status {status}");
+      }
+    }
+  }
+
+  private void RetainTraceEvent(DsEvent e) {
+    if (_traceEvents.Count >= TraceWindowCap) {
+      _traceEvents.Dequeue();
+      _traceNotRetained++;
+    }
+    _traceEvents.Enqueue(e);
+  }
+
+  /// <summary>
+  /// Close the window the previous stop opened and open the next one. Called at the instant a new stop
+  /// is observed, NOT when a slice is rendered, so `trace` twice at one stop answers twice the same —
+  /// and so the events the previous window already covered can be released here.
+  /// </summary>
+  private void AdvanceTraceWindow() {
+    long mark = _accessor.ReadInt64(RuntimeEmitter.DbgOffStopDsMark);
+
+    // A negative mark is a sentinel, not a position (see DbgStopDsMark*), so it cannot move the window's
+    // lower bound; the slice refuses on it instead.
+    if (_stopDsMark >= 0) _prevStopDsMark = _stopDsMark;
+    _stopDsMark = mark;
+
+    _traceLossAtWindowOpen = _traceLossPending;
+    _traceLossPending = new TraceLoss(_trace.DroppedEvents, _traceNotRetained);
+
+    while (_traceEvents.Count > 0 && _traceEvents.Peek().Position < _prevStopDsMark) _traceEvents.Dequeue();
+  }
+
+  /// Why a trace slice could not be produced. The four refusals stay DISTINCT because each sends the
+  /// user somewhere different: rebuild the DEBUGGER's target for an old agent, rebuild it WITH
+  /// `--debugstream` for a binary with no hooks, look at the environment for a detached ring, and
+  /// rebuild both ends for a schema mismatch.
+  public enum TraceStatus {
+    /// A window was produced. It may still be EMPTY — nothing was traced between the two stops — which
+    /// is a real answer rather than a failure.
+    Ok,
+    /// The agent predates the stop watermark (control version &lt; DbgTraceMinVersion).
+    UnsupportedByAgent,
+    /// The binary carries no DebugStream hooks at all: it was not built with `--debugstream`.
+    NoStreamInBinary,
+    /// The binary has the hooks but never attached to the ring this session created.
+    StreamDetached,
+    /// The producer writes a wire schema this decoder does not speak; see <c>Reason</c>.
+    SchemaMismatch,
+  }
+
+  /// <summary>
+  /// One stop's worth of trace activity. <see cref="Dropped"/> is what the PRODUCER threw away because
+  /// the ring filled, <see cref="NotRetained"/> what this driver threw away because the window filled,
+  /// and <see cref="Incomplete"/> says an entry below the watermark was still being written. All three
+  /// are reported rather than swallowed: a slice that is quietly short is the same wrong answer as an
+  /// empty list that means "unavailable".
+  /// </summary>
+  public readonly record struct TraceSliceResult(
+    TraceStatus Status, IReadOnlyList<DsEvent> Events, long Dropped, long NotRetained, bool Incomplete,
+    string Reason);
+
+  /// <summary>
+  /// The trace events the debuggee recorded between the PREVIOUS stop and the current one — "what
+  /// happened since you were last stopped".
+  ///
+  /// The window is a pair of ring WATERMARKS, not a pair of timestamps, and that is the whole design:
+  /// a stop parks the thread, so any clock reading taken around one describes the debugger rather than
+  /// the program. A byte position in the ring partitions the trace at exactly the instant the stop was
+  /// taken, which no timestamp can.
+  /// </summary>
+  public TraceSliceResult TraceSlice() {
+    if (!TraceCorrelationSupported)
+      return new TraceSliceResult(TraceStatus.UnsupportedByAgent, [], 0, 0, false, "");
+    if (_traceSchemaMismatch.Length > 0)
+      return new TraceSliceResult(TraceStatus.SchemaMismatch, [], 0, 0, false, _traceSchemaMismatch);
+    if (_stopDsMark == RuntimeEmitter.DbgStopDsMarkNoStream)
+      return new TraceSliceResult(TraceStatus.NoStreamInBinary, [], 0, 0, false, "");
+    if (_stopDsMark == RuntimeEmitter.DbgStopDsMarkDetached)
+      return new TraceSliceResult(TraceStatus.StreamDetached, [], 0, 0, false, "");
+    if (_stopDsMark < 0)
+      throw new DebuggerException(
+        $"the debug agent published an unknown trace watermark {_stopDsMark}");
+
+    bool complete = PumpTraceUntilMark(_stopDsMark);
+
+    var events = new List<DsEvent>();
+    foreach (var e in _traceEvents) {
+      if (e.Position >= _stopDsMark) break;   // the queue is in ring order, so the window ends here
+      if (e.Position >= _prevStopDsMark) events.Add(e);
+    }
+
+    return new TraceSliceResult(TraceStatus.Ok, events,
+      _trace.DroppedEvents - _traceLossAtWindowOpen.Dropped,
+      _traceNotRetained - _traceLossAtWindowOpen.NotRetained,
+      !complete, "");
+  }
+
+  /// <summary>
+  /// Pump until the decoder has consumed the ring up to <paramref name="mark"/>, or the bounded wait
+  /// runs out. False means the slice is SHORT of the watermark and must say so — see
+  /// <see cref="TraceCatchUpTimeout"/> for the one situation that produces it.
+  /// </summary>
+  private bool PumpTraceUntilMark(long mark) {
+    var deadline = DateTime.UtcNow + TraceCatchUpTimeout;
+    var backoff = new PollBackoff();
+    while (_trace.ReadCursor < mark) {
+      bool exited = _process.HasExited;
+      PumpTrace(exited);
+      if (_trace.ReadCursor >= mark) return true;
+
+      // A dead producer commits nothing further, so waiting on it is a hang rather than patience.
+      if (exited || _traceSchemaMismatch.Length > 0) return false;
+      if (DateTime.UtcNow >= deadline) return false;
+      backoff.Pause();
+    }
+    return true;
   }
 
   // ---- Symbolization ----
@@ -2010,19 +2251,6 @@ internal sealed class MaxonDebugger : IDisposable {
   /// means it is still running.
   public bool WaitForTargetExit() => _process.WaitForExit(StopTimeoutMilliseconds);
 
-  /// Kill a still-running target. Tolerates it exiting between the check and the kill (a normal race).
-  /// Private because <see cref="EndSession"/> is the one place a session decides the target must go —
-  /// every face that used to call this directly was stating that decision a second time.
-  private void Terminate() {
-    try {
-      if (_process.HasExited) return;
-      _process.Kill();
-      _terminated = true;
-    } catch (InvalidOperationException) {
-      // The process exited between the HasExited check and Kill — already gone, nothing to do.
-    }
-  }
-
   /// <summary>
   /// How <see cref="EndSession"/> treats a target that has not exited yet. The two arms are the honest
   /// distinction between a target that can still make progress and one that cannot.
@@ -2037,14 +2265,10 @@ internal sealed class MaxonDebugger : IDisposable {
   }
 
   /// <summary>
-  /// End the session: make sure the target is GONE, then drain its forwarded stdio. EVERY exit path runs
-  /// this — a clean completion, `quit`, a timeout, an error, and <see cref="Dispose"/> — because both
-  /// halves are obligations rather than conveniences, and each was missed on its own:
-  ///
-  ///   * a target still parked in the agent's stop-the-world loop OUTLIVES the driver, which is the
-  ///     orphaned debuggee a timed-out session used to strand;
-  ///   * <see cref="JoinIo"/>'s tasks only complete when the target's pipes CLOSE, so joining them while
-  ///     that orphan is alive blocks the driver forever — the same defect's other half.
+  /// End the session: make sure the target is GONE, then drain its forwarded stdio — the pairing
+  /// <see cref="TargetStdio.EndAndJoin"/> states once for every consumer that spawns a target. What is
+  /// decided HERE is only the grace period, which is the one thing that differs between a target the
+  /// session RELEASED and one it is abandoning.
   ///
   /// Idempotent, so a face may call it and <see cref="Dispose"/> will call it again.
   /// </summary>
@@ -2055,29 +2279,9 @@ internal sealed class MaxonDebugger : IDisposable {
       _ => throw new InvalidOperationException($"Unhandled session end {how}"),
     };
 
-    if (!_process.WaitForExit(graceMs)) {
-      Terminate();
-      // Kill only REQUESTS termination; wait so HasExited / ExitCode are settled before a surface reports.
-      _process.WaitForExit();
-    }
-
-    JoinIo();
-  }
-
-  /// Join the stdio-forwarding tasks so all of the target's output has been written before the driver
-  /// prints its own closing lines. Private because it is only ever correct AFTER the target is gone —
-  /// <see cref="EndSession"/> is the one place that ordering is stated.
-  private void JoinIo() {
-    try {
-#pragma warning disable VSTHRD002 // synchronous entry point, no SyncContext to deadlock against
-      _stdout.Wait();
-      _stderr.Wait();
-#pragma warning restore VSTHRD002
-    } catch (AggregateException) {
-      // A forwarding task faulted — the sink was closed, or the pipe broke as the target died. Its
-      // remaining output is lost either way, and this runs from Dispose, where rethrowing would MASK
-      // the exception that ended the session. Waiting has observed the fault, so it cannot resurface.
-    }
+    // Latched rather than assigned: a later EndSession finds the target already gone and would report
+    // "not killed", erasing the fact that THIS session is what ended it.
+    _terminated |= _stdio.EndAndJoin(graceMs);
   }
 
   public void Dispose() {
@@ -2085,6 +2289,7 @@ internal sealed class MaxonDebugger : IDisposable {
     // own EndSession, and would otherwise strand a debuggee spinning in the agent's stop-the-world loop.
     // Immediate, because a session ending in an exception is abandoning its target by definition.
     EndSession(SessionEnd.Immediate);
+    _trace.Dispose();
     _accessor.Dispose();
     _mapping.Dispose();
     _process.Dispose();

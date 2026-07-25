@@ -1,0 +1,38 @@
+// P4e DebugStream-correlation gate sample. Built WITH `--debugstream` — its golden's HOW TO REPRODUCE
+// says so, and the gate reads the build line from there. It is the one sample in this directory that
+// has the trace hooks, which is the point: they are opt-in, and every OTHER sample here is therefore
+// also the honest-refusal case.
+//
+// The two stops are deliberately UNEQUAL in the work between them: one `label()` call before the first
+// breakpoint, three before the second. Each call allocates exactly one heap String (`n.toString()`) and
+// drops it, so the slice at the first stop is one call's worth of mm traffic and the slice at the second
+// is three calls' worth. That inequality is what proves the WATERMARK rather than merely proving that
+// events exist: a driver that re-rendered the whole ring at every stop would show four calls at the
+// second stop, and one that rendered nothing would show none.
+//
+// Deterministic on purpose: no async (so no scheduler events, whose payload carries raw green-thread
+// addresses), and nothing prints a value.
+
+typealias ExitCode = int(0 to 255)
+typealias Counter = int(0 to 1000)
+
+// One heap String per call, allocated and dropped: mm_alloc / mm_incref / mm_decref / mm_free.
+function label(n Counter) returns Counter
+	let text = n.toString()
+	return text.byteLength()
+end 'label'
+
+function main() returns ExitCode
+	var total = 0
+
+	// FIRST WINDOW — one call's worth of allocation traffic.
+	total = total + label(1)
+
+	// BREAKPOINT 1 stops BEFORE this line runs, so the first slice holds exactly label(1)'s events.
+	total = total + label(22)
+	total = total + label(333)
+	total = total + label(4444)
+
+	// BREAKPOINT 2. Byte lengths 1 + 2 + 3 + 4 = 10, the exit code.
+	return total
+end 'main'

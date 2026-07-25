@@ -25,14 +25,16 @@ internal static class MaxonDebugRepl {
 
   /// Everything the two renderers need for one stop: the raw stop (its FP/PC, which value inspection
   /// reads locals against), the symbolized location, the source window (empty when the file cannot be
-  /// read), and the symbolized backtrace (carrying its own status).
+  /// read), the symbolized backtrace (carrying its own status), and the DebugStream activity that led
+  /// here (carrying its own status too).
   private readonly record struct StopReport(
     MaxonDebugger.StopInfo Stop,
     string ReasonText,
     MaxonDebugger.SymLocation Location,
     string SourcePath,
     IReadOnlyList<SourceLine> Source,
-    MaxonDebugger.BacktraceResult Backtrace);
+    MaxonDebugger.BacktraceResult Backtrace,
+    MaxonDebugger.TraceSliceResult Trace);
 
   // ---- Interactive REPL ----
 
@@ -168,6 +170,9 @@ internal static class MaxonDebugRepl {
           break;
         case DebugCommand.Locals:
           DoLocals();
+          break;
+        case DebugCommand.Trace:
+          DoTrace();
           break;
         case DebugCommand.Help:
           PrintHelp();
@@ -402,6 +407,19 @@ internal static class MaxonDebugRepl {
       }
     }
 
+    /// `trace` — the WHOLE window of DebugStream activity since the previous stop, where the automatic
+    /// stop window shows only its tail. It answers even when there is nothing to show, refusals
+    /// included, which is exactly the difference between a command and an orientation panel.
+    private void DoTrace() {
+      if (_stop is null) {
+        Console.Out.WriteLine(NotStoppedText);
+        return;
+      }
+      // Re-asked rather than taken from the stop report: the target is still parked at the same stop, so
+      // a fresh slice is authoritative and covers whatever the ring has committed since it was built.
+      RenderTraceText(dbg.TraceSlice(), limit: null, Console.Out);
+    }
+
     /// Run a step op that needs the current parked frame (step / next / finish) and render its outcome.
     private void DoStepCommand(Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op) {
       if (_stop is not { } report) {
@@ -490,6 +508,7 @@ internal static class MaxonDebugRepl {
       Console.Out.WriteLine("  gt-resume <id>              let a parked green thread run again");
       Console.Out.WriteLine("  locals                      list the stopped function's locals with values");
       Console.Out.WriteLine("  print <expr>          (p)   render a value; dotted paths navigate (person.home.name)");
+      Console.Out.WriteLine("  trace                 (tr)  the DebugStream events recorded since the previous stop");
       Console.Out.WriteLine("  quit                  (q)   end the session");
       Console.Out.WriteLine("On every stop the source line is shown with a → marker, plus a symbolized backtrace.");
     }
@@ -625,6 +644,9 @@ internal static class MaxonDebugRepl {
         break;
       case DebugCommand.Print:
         BatchPrint(dbg, rest, session.CurrentStop);
+        break;
+      case DebugCommand.Trace:
+        BatchTrace(dbg, session.CurrentStop);
         break;
       case DebugCommand.Quit:
         session.Finished = true;
@@ -876,6 +898,20 @@ internal static class MaxonDebugRepl {
     }
   }
 
+  /// The batch twin of <see cref="Session.DoTrace"/>: the WHOLE window, and an answer even when there
+  /// is nothing in it. Unlike the stop event's optional array, this one is always present — as a list
+  /// or as a null-plus-reason — because a script that ASKED for the trace must be told why it is not
+  /// getting one.
+  private static void BatchTrace(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
+    if (currentStop is null) { EmitError(NotStoppedBatchText); return; }
+
+    var slice = dbg.TraceSlice();
+    WriteEvent(w => {
+      w.WriteString("event", "trace");
+      WriteTraceArray(w, slice, limit: null);
+    });
+  }
+
   /// If the target is still parked when the command list ends, continue past any remaining breakpoints
   /// so it runs to completion — bounded so a re-arming breakpoint cannot loop the driver forever, and
   /// reporting every way the drain can END WITHOUT the program finishing, since each of those leaves a
@@ -956,7 +992,8 @@ internal static class MaxonDebugRepl {
     var loc = dbg.Symbolize(stop.PcOffset);
     var (sourcePath, source) = ReadSourceWindow(loc, exePath);
     var backtrace = dbg.Backtrace();
-    return new StopReport(stop, ReasonText(stop.Reason), loc, sourcePath, source, backtrace);
+    return new StopReport(stop, ReasonText(stop.Reason), loc, sourcePath, source, backtrace,
+      dbg.TraceSlice());
   }
 
   private static (string Path, IReadOnlyList<SourceLine> Lines) ReadSourceWindow(
@@ -1019,6 +1056,127 @@ internal static class MaxonDebugRepl {
     }
 
     RenderBacktraceText(report.Backtrace, w);
+
+    // The trace tail appears on a stop only when it has something to SHOW. A binary without the
+    // `--debugstream` hooks — every binary, by default — would otherwise carry a refusal on every stop
+    // of every session, which is a true sentence nobody asked for. The `trace` command always answers,
+    // refusals included; the stop window is orientation, and orientation stays quiet when it is empty.
+    if (report.Trace is { Status: MaxonDebugger.TraceStatus.Ok, Events.Count: > 0 })
+      RenderTraceText(report.Trace, StopTraceTailLimit, w);
+  }
+
+  // ---- Shared renderers: DebugStream correlation (P4e) ----
+
+  /// <summary>
+  /// How many trace events the automatic stop window shows. It is a TAIL, and bounded for the reason
+  /// the source window has a radius: a stop report is orientation, and a program that allocates in a
+  /// loop can put thousands of events between two stops. The full window is one `trace` away, and the
+  /// header says how many are in it, so the bound can never be mistaken for the whole story.
+  /// </summary>
+  private const int StopTraceTailLimit = 10;
+
+  /// The message a binary WITHOUT the trace hooks gets. It names the flag, because that is the entire
+  /// content of the answer: DebugStream's event emission is opt-in (it costs a load and a branch at
+  /// every trace site plus calls on the alloc/free/refcount paths), so most debuggees emit nothing at
+  /// all — and rendering that as an empty list would read as "nothing happened", which is a different
+  /// and wrong answer.
+  private const string TraceNoStreamText =
+    "this binary was built without --debugstream, so it emits no trace events "
+    + "(rebuild it with --debugstream to record them)";
+
+  /// <summary>
+  /// Why a trace slice could not be produced, or null when it was — stated ONCE so the text and JSON
+  /// faces cannot describe an old agent, a binary with no hooks and a detached ring differently. Each
+  /// sends the user somewhere different, which is why they are four sentences and not one.
+  /// </summary>
+  private static string? TraceUnavailableReason(MaxonDebugger.TraceSliceResult slice) => slice.Status switch {
+    MaxonDebugger.TraceStatus.Ok => null,
+    MaxonDebugger.TraceStatus.UnsupportedByAgent =>
+      "trace correlation is not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.TraceStatus.NoStreamInBinary => TraceNoStreamText,
+    MaxonDebugger.TraceStatus.StreamDetached =>
+      "this binary has the --debugstream hooks but never attached to the trace ring this session "
+      + "created, so nothing was recorded",
+    MaxonDebugger.TraceStatus.SchemaMismatch => slice.Reason,
+    _ => throw new InvalidOperationException($"Unhandled trace status {slice.Status}"),
+  };
+
+  /// <summary>
+  /// What a slice LOST, or null when it lost nothing: the producer's own drops (the 2 MB ring filled
+  /// faster than the driver drained it), this driver's window cap, and an entry that was still being
+  /// written when the target parked. Reported rather than swallowed — a slice that is quietly short is
+  /// the same wrong answer as an empty list that actually meant "unavailable".
+  /// </summary>
+  private static string? TraceLossText(MaxonDebugger.TraceSliceResult slice) {
+    var losses = new List<string>();
+    if (slice.Dropped > 0) losses.Add($"{slice.Dropped} dropped by the debuggee (its trace ring filled)");
+    if (slice.NotRetained > 0) losses.Add($"{slice.NotRetained} older events not retained");
+    if (slice.Incomplete)
+      losses.Add("an entry below the watermark was still being written, so the slice stops short of the stop");
+    return losses.Count > 0 ? string.Join("; ", losses) : null;
+  }
+
+  /// <summary>
+  /// The trace-slice TEXT face, shared by the automatic stop window (bounded by
+  /// <paramref name="limit"/>) and the `trace` command (unbounded, <c>null</c>).
+  ///
+  /// It carries NO TIMESTAMP, and that is a decision rather than an omission: a stop PARKS the thread,
+  /// so a clock reading taken around one describes the debugger, not the program. What a slice states
+  /// is an ORDER and a WINDOW — "these, in this sequence, since you were last stopped". `maxon monitor`
+  /// is the face that prints a timeline, because it is watching one.
+  /// </summary>
+  private static void RenderTraceText(MaxonDebugger.TraceSliceResult slice, int? limit, TextWriter w) {
+    if (TraceUnavailableReason(slice) is { } reason) {
+      w.WriteLine($"  trace: {reason}.");
+      return;
+    }
+    if (slice.Events.Count == 0) {
+      w.WriteLine("  trace: (no trace events since the previous stop)");
+      return;
+    }
+
+    int omitted = TraceOmittedCount(slice, limit);
+    var window = omitted > 0 ? $", most recent {slice.Events.Count - omitted}" : "";
+    w.WriteLine($"  trace ({slice.Events.Count} since the previous stop{window}):");
+    for (int i = omitted; i < slice.Events.Count; i++) w.WriteLine($"    {slice.Events[i].Text}");
+    if (omitted > 0) w.WriteLine($"    … {omitted} earlier — 'trace' shows the whole window.");
+    if (TraceLossText(slice) is { } loss) w.WriteLine($"    ⚠ {loss}.");
+  }
+
+  /// <summary>
+  /// How many of a slice's events a face leaves out under <paramref name="limit"/> — always the OLDEST,
+  /// because a slice describes what led to a stop and the tail is the part nearest to it.
+  ///
+  /// ONE computation, because the automatic stop window is rendered by BOTH faces and a bound applied
+  /// twice is a bound that can differ: `trace` in a transcript and `trace` in the JSON stream would then
+  /// be two answers to one question, which is the whole thing the shared renderers exist to prevent.
+  /// </summary>
+  private static int TraceOmittedCount(MaxonDebugger.TraceSliceResult slice, int? limit) =>
+    limit is { } n && n < slice.Events.Count ? slice.Events.Count - n : 0;
+
+  /// The trace-slice JSON face. An unavailable slice is null + a reason, NEVER an empty array — the
+  /// same discipline the frame lists follow, and for the same reason: a consumer must not read
+  /// "this binary has no trace hooks" as "this program did nothing".
+  private static void WriteTraceArray(Utf8JsonWriter w, MaxonDebugger.TraceSliceResult slice, int? limit) {
+    if (WriteUnavailable(w, "trace", TraceUnavailableReason(slice))) return;
+
+    // Present only when they have something to say, so a session that loses nothing emits exactly the
+    // shape it would have without this rung — and a consumer that sees one knows it means something.
+    if (slice.Dropped > 0) w.WriteNumber("traceDropped", slice.Dropped);
+    if (slice.NotRetained > 0) w.WriteNumber("traceNotRetained", slice.NotRetained);
+    if (slice.Incomplete) w.WriteBoolean("traceIncomplete", true);
+
+    int omitted = TraceOmittedCount(slice, limit);
+    if (omitted > 0) w.WriteNumber("traceOmitted", omitted);
+
+    w.WriteStartArray("trace");
+    for (int i = omitted; i < slice.Events.Count; i++) {
+      w.WriteStartObject();
+      w.WriteString("family", slice.Events[i].Family);
+      w.WriteString("text", slice.Events[i].Text);
+      w.WriteEndObject();
+    }
+    w.WriteEndArray();
   }
 
   /// The reason a backtrace produced no usable frames, or null when it succeeded — stated ONCE so the
@@ -1095,6 +1253,12 @@ internal static class MaxonDebugRepl {
     w.WriteEndArray();
 
     WriteBacktraceArray(w, "backtrace", report.Backtrace);
+
+    // Same rule as the text face: the stop event carries a trace array only when there is trace
+    // activity to carry, so a session against an ordinary (non-`--debugstream`) binary emits exactly
+    // the shape it did before this rung, and a consumer that sees the key knows it means something.
+    if (report.Trace is { Status: MaxonDebugger.TraceStatus.Ok, Events.Count: > 0 })
+      WriteTraceArray(w, report.Trace, StopTraceTailLimit);
   });
 
   private static void EmitBacktrace(MaxonDebugger.BacktraceResult bt) => WriteEvent(w => {
@@ -1112,11 +1276,8 @@ internal static class MaxonDebugRepl {
   /// </summary>
   private static void WriteFramesOrReason(Utf8JsonWriter w, string name, string? unavailableReason,
       IReadOnlyList<MaxonDebugger.Frame> frames) {
-    if (unavailableReason is { } reason) {
-      w.WriteNull(name);
-      w.WriteString($"{name}Unavailable", reason);
-      return;
-    }
+    if (WriteUnavailable(w, name, unavailableReason)) return;
+
     w.WriteStartArray(name);
     foreach (var f in frames) {
       w.WriteStartObject();
@@ -1125,6 +1286,23 @@ internal static class MaxonDebugRepl {
       w.WriteEndObject();
     }
     w.WriteEndArray();
+  }
+
+  /// <summary>
+  /// The UNAVAILABLE half of every list the batch face emits: a null under the list's own name plus a
+  /// `&lt;name&gt;Unavailable` reason beside it, and NEVER an empty array. Returns true when it wrote
+  /// the refusal, so a caller reads as "refused, or here is the list".
+  ///
+  /// Stated once because every list this face emits owes it — frames, green threads, trace events —
+  /// and the shape is the whole guarantee: a consumer must not be able to read "unsupported by this
+  /// binary" as "a real, empty answer".
+  /// </summary>
+  private static bool WriteUnavailable(Utf8JsonWriter w, string name, string? unavailableReason) {
+    if (unavailableReason is not { } reason) return false;
+
+    w.WriteNull(name);
+    w.WriteString($"{name}Unavailable", reason);
+    return true;
   }
 
   /// A resolved location's JSON fields — the ONE spelling, so a frame and a green thread's top frame
@@ -1705,7 +1883,7 @@ internal static class MaxonDebugRepl {
   /// `Finish`/`Until` are the P4b source-line stepping commands.
   private enum DebugCommand {
     Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace, GtSelect,
-    GtPark, GtResume, Print, Locals, Help, Quit, Unknown,
+    GtPark, GtResume, Print, Locals, Trace, Help, Quit, Unknown,
   }
 
   /// One command's vocabulary AND its completion policy: the canonical word, its aliases, and the pool its
@@ -1734,6 +1912,7 @@ internal static class MaxonDebugRepl {
     new(DebugCommand.GtResume,  "gt-resume", ["gtresume"],      CompletionArgTarget.None),
     new(DebugCommand.Print,     "print",     ["p"],             CompletionArgTarget.Locals),
     new(DebugCommand.Locals,    "locals",    [],                CompletionArgTarget.Locals),
+    new(DebugCommand.Trace,     "trace",     ["tr"],            CompletionArgTarget.None),
     new(DebugCommand.Help,      "help",      ["?", "commands"], CompletionArgTarget.None),
     new(DebugCommand.Quit,      "quit",      ["q", "exit"],     CompletionArgTarget.None),
   ];

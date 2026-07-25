@@ -1319,14 +1319,20 @@ public partial class ARM64CodeEmitter() {
     // Initialize kqueue I/O subsystem
     EmitBranchLink("__io_init");
 
+    // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory).
+    //
+    // BEFORE the debug agent, and that ORDER IS LOAD-BEARING (P4e): the agent's entry stop parks inside
+    // __dbg_init, and every stop it publishes carries the ring's write watermark. Initialised the other
+    // way round, a `--debugstream` binary would report "no trace ring attached" at its own entry stop —
+    // the one moment the driver most needs to know the ring is there. DebugStream installs no signal
+    // handler, so the agent's trap handler still lands in front of __gt_init's fault handler.
+    if (Compiler.DebugStream) {
+      EmitBranchLink("__debugstream_init");
+    }
+
     // Initialize the always-present debug agent (checks MAXON_DEBUG; dark and ~free if unset).
     if (!Compiler.NoDebugAgent) {
       EmitBranchLink("__dbg_init");
-    }
-
-    // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory)
-    if (Compiler.DebugStream) {
-      EmitBranchLink("__debugstream_init");
     }
 
     // Call main
