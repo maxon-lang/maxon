@@ -1108,7 +1108,13 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId)
-		if namedAggregatesConflict(expected, got: got) 'wrongTypeArgument'
+		// ⚠ **`aggregatesConflict`, NOT the bare rule — the SAME door the parser's five coercion sites use.**
+		// The wrapper adds the P1.6-C decay: a PER-INSTANCE alias (`WA.Idx`) meeting a target that is not one
+		// carries no identity claim and decays. Spelled with the bare rule this arm read a decaying argument's
+		// name as an aggregate meeting a SCALAR — `expected` is deliberately empty for a ranged-alias type
+		// argument — and REJECTED a legal program: `takesPlain(t)` and `IntBox.create(t)` were the same value
+		// into the same `Integer`, accepted at the parser and refused here. One comparison rule, one answer.
+		if signatures.aggregatesConflict(expected, got: got) 'wrongTypeArgument'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkTypeParameterArgsAt: paramNames.get OOB at {i}")
 			// The EXPECTED side names the concrete TYPE ARGUMENT, not the identity that was compared: the
 			// two agree for an aggregate (`instanceArgAggregateName`'s nominal arm IS this call), and where

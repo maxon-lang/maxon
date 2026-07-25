@@ -146,10 +146,10 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// have to suppress on a hit, exactly as `queryParseOps` must.
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
 	signatures.evaluateInitializers()
-	// ⭐ And every instantiation's COMPILED NAME, for the same "the whole program is known now" reason —
-	// the parse READS one (a generic instance's nominal identity, P1.7) and the memo behind it is a WRITE,
-	// which a per-file fan-out must never make. See `deriveCompiledInstanceNames`.
-	signatures.deriveCompiledInstanceNames()
+	// ⭐ And every instantiation's COMPILED and CANONICAL names, for the same "the whole program is known
+	// now" reason — the parse READS both (a generic instance's nominal identity, P1.7) and each memo behind
+	// them is a WRITE, which a per-file fan-out must never make. See `deriveInstanceNames`.
+	signatures.deriveInstanceNames()
 	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)

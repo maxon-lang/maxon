@@ -1198,6 +1198,60 @@ end 'main'
 error E3005: <fragment>:20:9: argument type mismatch for 'b': expected 'Box_S0', got 'Box'
 ```
 
+<!-- test: per-instance-alias-decays-at-a-type-parameter-argument -->
+⭐ **A PER-INSTANCE alias argument DECAYS at a bare `T` parameter, exactly as it does everywhere else.**
+`WA.Idx` is a nominal identity only against another per-instance alias (P1.6-C); met by a target that is
+not one — here `T` bound to the ranged alias `Integer`, whose type-argument identity is deliberately
+empty — it carries no claim and decays to its underlying scalar.
+
+The type-parameter check must therefore ask the SAME door the parser's coercion sites ask
+(`aggregatesConflict`, which owns that decay) and not the bare rule beneath it. Asked the bare way it read
+the decaying argument as "an aggregate meeting a scalar" and REJECTED this program, while
+`takesPlain(t)` — the same value into the same `Integer` — was accepted one site over. Both forms are
+pinned here so the two can never again answer differently.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+
+typealias WA = Wrapper with Integer
+typealias IntBox = Box with Integer
+
+function takesPlain(n Integer) returns ExitCode
+	return 0
+end 'takesPlain'
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 5)
+	let t = a.getTag()
+	let b = IntBox.create(t)
+	return takesPlain(a.getTag())
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: error.self-cycle-alias -->
 ```maxon
 type S0
