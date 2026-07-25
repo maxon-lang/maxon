@@ -264,9 +264,18 @@ internal static class McpServer {
 
   // ---- Idle reaping ----
 
+  /// <summary>
+  /// How the sweep's period is derived from the timeout it enforces. A fraction rather than a fixed
+  /// period so a short timeout is still enforced promptly and a long one does not make an idle server
+  /// spin; the two bounds keep both ends sane whatever the operator asked for.
+  /// </summary>
+  private const int IdleSweepsPerTimeout = 4;
+  private const double MinIdleSweepMs = 100;
+  private const double MaxIdleSweepMs = 5000;
+
   private static Timer StartIdleSweep(TimeSpan idleTimeout) {
-    // Often enough that the reap is visibly prompt, never so often that an idle server spins.
-    var period = TimeSpan.FromMilliseconds(Math.Clamp(idleTimeout.TotalMilliseconds / 4, 100, 5000));
+    var period = TimeSpan.FromMilliseconds(Math.Clamp(
+      idleTimeout.TotalMilliseconds / IdleSweepsPerTimeout, MinIdleSweepMs, MaxIdleSweepMs));
     return new Timer(_ => SweepIdleSessions(idleTimeout), state: null, period, period);
   }
 
@@ -738,9 +747,9 @@ internal static class McpServer {
           return false;
         }
       } else if (arg.StartsWith(IdleTimeoutFlag, StringComparison.Ordinal)) {
-        if (!TryParseSeconds(arg[IdleTimeoutFlag.Length..], out idleTimeout)) {
-          Console.Error.WriteLine($"maxon mcp: {IdleTimeoutFlag}<seconds> needs a positive number of "
-            + $"seconds, got '{arg[IdleTimeoutFlag.Length..]}'.");
+        if (!PositiveSeconds.TryParse(arg[IdleTimeoutFlag.Length..], out idleTimeout)) {
+          Console.Error.WriteLine($"maxon mcp: {IdleTimeoutFlag}<seconds> "
+            + $"{PositiveSeconds.RequirementText}, got '{arg[IdleTimeoutFlag.Length..]}'.");
           return false;
         }
       } else if (arg.StartsWith(MaxSessionsFlag, StringComparison.Ordinal)) {
@@ -760,14 +769,4 @@ internal static class McpServer {
 
   private static bool TryParsePort(string text, out int port) =>
     int.TryParse(text, out port) && port is > 0 and < 65536;
-
-  private static bool TryParseSeconds(string text, out TimeSpan value) {
-    value = default;
-    if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
-        System.Globalization.CultureInfo.InvariantCulture, out var seconds)) return false;
-    if (double.IsNaN(seconds) || seconds <= 0 || seconds > TimeSpan.MaxValue.TotalSeconds) return false;
-
-    value = TimeSpan.FromSeconds(seconds);
-    return true;
-  }
 }

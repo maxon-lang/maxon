@@ -96,6 +96,12 @@ internal static class DebugTools {
           + "trapped, true holds every green thread for the duration of the stop. The hold is "
           + "COOPERATIVE, so a thread already on a processor keeps running until it next reaches the "
           + "scheduler, which `debug_threads` reports as 'pending' rather than 'held'."), Required: false),
+        new("debugStream", McpSchema.Boolean(
+          "Build the program with the DebugStream trace hooks (`maxon build --debugstream`), which is "
+          + "what makes debug_trace able to return events rather than say it has none. Off by default "
+          + "because the hooks cost real time in the debuggee. Note that this tool BUILDS the program, "
+          + "so this setting — not whatever the binary on disk was last built with — decides what the "
+          + "session gets."), Required: false),
       ],
       Start),
 
@@ -194,8 +200,9 @@ internal static class DebugTools {
     new("debug_trace",
       "The DebugStream events the debuggee recorded since the previous stop — allocations, refcounts, "
       + "frees — which is what correlates a stop with what the program was DOING to get there. Only a "
-      + "binary built with --debugstream emits them; one that was not says so rather than returning an "
-      + "empty list, because 'no hooks' and 'nothing happened' are different answers.",
+      + "binary built with --debugstream emits them, which is what debug_start's `debugStream: true` "
+      + "asks for; a binary without them says so rather than returning an empty list, because 'no "
+      + "hooks' and 'nothing happened' are different answers.",
       [],
       (session, _) => Run(session, MaxonDebugRepl.DebugCommand.Trace)),
 
@@ -223,7 +230,8 @@ internal static class DebugTools {
     session.Debug?.Dispose();
     session.Debug = null;
 
-    var debug = McpDebugSession.Start(DebugBuild.Compile(ResolveSource(session, args)),
+    var debug = McpDebugSession.Start(
+      DebugBuild.Compile(ResolveSource(session, args), McpArgs.OptionalBool(args, "debugStream") ?? false),
       McpArgs.OptionalStringArray(args, "args"),
       McpArgs.OptionalStringMap(args, "env"),
       StopTimeoutOf(args),
@@ -299,15 +307,15 @@ internal static class DebugTools {
   private static TimeSpan StopTimeoutOf(JsonElement args) {
     if (McpArgs.OptionalNumber(args, "stopTimeoutSeconds") is not { } seconds) return DefaultStopTimeout;
 
-    // Refused rather than clamped, exactly as the CLI flag is: a non-positive deadline would time out
-    // every wait before the target could possibly stop — a debugger that never stops anywhere, reported
-    // as if configured. The upper guard is the conversion's own limit, which THROWS rather than
-    // saturating, and a validator whose whole job is to refuse must not throw.
-    if (double.IsNaN(seconds) || seconds <= 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
+    // Refused rather than clamped, through the SAME rule `--stop-timeout=` is refused by: a deadline
+    // that is non-positive — or that merely ROUNDS to zero, which is how the two used to disagree —
+    // times out every wait before the target could possibly stop, and would be reported as a setting
+    // rather than as the broken one it is.
+    if (!PositiveSeconds.TryFrom(seconds, out var stopTimeout))
       throw new McpInvalidParamsException(
-        $"`stopTimeoutSeconds` must be a positive number of seconds, got {seconds}");
+        $"`stopTimeoutSeconds` {PositiveSeconds.RequirementText}, got {seconds}");
 
-    return TimeSpan.FromSeconds(seconds);
+    return stopTimeout;
   }
 
   /// <summary>

@@ -158,9 +158,9 @@ class Program {
 
       if (args[0].StartsWith(MaxonDebugger.StopTimeoutFlag, StringComparison.Ordinal)) {
         var value = args[0][MaxonDebugger.StopTimeoutFlag.Length..];
-        if (!TryParseStopTimeout(value, out var parsed)) {
-          Console.Error.WriteLine($"maxon debug: {MaxonDebugger.StopTimeoutFlag}<seconds> needs a positive "
-            + $"number of seconds (got '{value}').");
+        if (!PositiveSeconds.TryParse(value, out var parsed)) {
+          Console.Error.WriteLine($"maxon debug: {MaxonDebugger.StopTimeoutFlag}<seconds> "
+            + $"{PositiveSeconds.RequirementText} (got '{value}').");
           return 1;
         }
         stopTimeout = parsed;
@@ -275,34 +275,6 @@ class Program {
         // A bare target path (plus any args to forward): launch the interactive REPL.
         return MaxonDebugRepl.RunInteractive(args[0], args[1..], stopTimeout, targetEnv, stopOthers ?? false);
     }
-  }
-
-  /// <summary>
-  /// Parse a <see cref="MaxonDebugger.StopTimeoutFlag"/> value: a positive number of seconds. Fractions
-  /// are accepted so a gate can drive a sub-second deadline deterministically. Zero and negatives are
-  /// REFUSED rather than clamped, because a non-positive deadline would time out every wait before the
-  /// target could possibly stop — a debugger that never stops anywhere, reported as if configured.
-  ///
-  /// The check is made on the TimeSpan the session will actually wait on, not on the double it was
-  /// spelled with, so no rounding inside <c>TimeSpan.FromSeconds</c> can hand the driver a deadline the
-  /// validator never approved. That conversion also THROWS above <c>TimeSpan.MaxValue</c>, which a
-  /// validator whose whole job is to return false must not do — `--stop-timeout=1e30` crashed out of
-  /// Main before it was caught here.
-  /// </summary>
-  static bool TryParseStopTimeout(string text, out TimeSpan value) {
-    value = default;
-    if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
-        System.Globalization.CultureInfo.InvariantCulture, out var seconds))
-      return false;
-    if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return false;
-
-    try {
-      value = TimeSpan.FromSeconds(seconds);
-    } catch (OverflowException) {
-      return false;
-    }
-
-    return value > TimeSpan.Zero;
   }
 
   /// Refuse <see cref="MaxonDebugger.StopTimeoutFlag"/> on a `maxon debug` surface that has no live

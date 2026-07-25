@@ -59,8 +59,17 @@ internal static class DebugBuild {
   /// quietly omitted it would produce a binary this server cannot set a single breakpoint in. That is
   /// the same default `maxon build` applies, stated here rather than inherited, because the caller of
   /// this one has no flags to have said it with.
+  ///
+  /// ⚠ <paramref name="debugStream"/> is STATED by the caller rather than left to the process default,
+  /// and that is a correctness point, not a convenience. The trace hooks are a property of how a binary
+  /// was BUILT, and this method rebuilds whatever it is pointed at: with the flag unavailable, a
+  /// `debug_start` on a program the user had built `--debugstream` recompiled it WITHOUT the hooks and
+  /// overwrote their binary — after which `debug_trace` truthfully reported "built without
+  /// --debugstream" about a build this server had just made. That left the tool's only interesting
+  /// answer unreachable through the entire server. (Measured: the exe's hash changed across one
+  /// `debug_start`.)
   /// </summary>
-  public static string Compile(string sourcePath) {
+  public static string Compile(string sourcePath, bool debugStream) {
     if (Directory.Exists(sourcePath))
       throw new McpBuildException(
         $"'{sourcePath}' is a directory. debug_start builds ONE .maxon file (or a snippet); "
@@ -78,7 +87,11 @@ internal static class DebugBuild {
 
     lock (BuildGate) {
       var previousDebugInfo = Compiler.Compiler.DebugInfo;
+      var previousDebugStream = Compiler.Compiler.DebugStream;
       Compiler.Compiler.DebugInfo = true;
+      // Set BEFORE the cache probe below, which compares the option against the manifest: a binary
+      // built with the other setting must be seen as out of date rather than handed back as current.
+      Compiler.Compiler.DebugStream = debugStream;
       try {
         // The same cache `maxon build` consults, and consulted for a second reason here: a binary that
         // is already current must not be REWRITTEN, because a debuggee from another session may be
@@ -95,6 +108,7 @@ internal static class DebugBuild {
         BuildCache.WriteCache(projectDir, sources, outputPath, target);
       } finally {
         Compiler.Compiler.DebugInfo = previousDebugInfo;
+        Compiler.Compiler.DebugStream = previousDebugStream;
       }
     }
 

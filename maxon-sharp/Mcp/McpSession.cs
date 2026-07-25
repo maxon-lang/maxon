@@ -74,8 +74,9 @@ internal sealed class McpSession(string id) : IDisposable {
   /// never sees) is what <see cref="McpWorkspace.SweepDeadOwners"/> reclaims for the next server.
   /// </summary>
   public string Workspace() {
-    Directory.CreateDirectory(McpWorkspace.ForSession(Id));
-    return McpWorkspace.ForSession(Id);
+    var path = McpWorkspace.ForSession(Id);
+    Directory.CreateDirectory(path);
+    return path;
   }
 
   public void Dispose() {
