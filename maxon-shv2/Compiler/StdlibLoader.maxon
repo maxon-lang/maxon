@@ -94,9 +94,19 @@
 //     are caught LOUDLY by the whole-program duplicate-function check (E3006, `commitFuncSignatures` in
 //     ParseStaging), because a stdlib file merges through the identical path a user file does. Nothing
 //     to add here; `stdlib-whitelist.md` pins it.
-//   • TYPE-name-vs-builtin collisions are the maintainer's responsibility. shv2 has no
-//     builtin-type-redeclaration diagnostic at all — a user `type String` compiles today as a distinct
-//     nominal — so enforcing one is a general language matter, not a scaffolding one. Clock declares
+//   • TYPE-name collisions against a USER program, or between two listed modules, are caught LOUDLY
+//     too, by the same merge and for the same reason: every `type`/`enum`/`union`/`interface`/`typealias`
+//     files its name through `commitTypeNameDecls` (E3006, or E3061 when both are typealiases), and a
+//     listed module's declarations go through it exactly as a user file's do. ⚠ So LISTING A MODULE
+//     RESERVES ITS TYPE NAMES PROGRAM-WIDE for every kind but its own alias form — a user `type
+//     DurationMs` is now E3006 against `Clock.maxon`, while a user's own ranged `typealias DurationMs`
+//     stays legal, a typealias being file-local per alias FORM (`specs-shv2/type-name-collision.md`).
+//     Weigh that when adding an entry: a module whose type names are ordinary English words takes them
+//     away from every program that compiles.
+//   • TYPE-name-vs-BUILTIN collisions are the one shape still SILENT, and they remain the maintainer's
+//     responsibility. shv2 has no builtin-type-redeclaration diagnostic — a user `type String` compiles
+//     today as a distinct nominal, and the builtin names are not in the type-name registry at all — so
+//     enforcing one is a general language matter, not a scaffolding one. Clock declares
 //     `Clock`/`WallClock` and time typealiases, none of them builtin, so it cannot hit this. Do not list
 //     a module that redeclares a builtin.
 //   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT — which is why the builtin is RETIRED FIRST,

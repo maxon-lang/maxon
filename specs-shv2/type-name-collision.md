@@ -58,6 +58,12 @@ function-alias door wins from every file, including the ranged alias's own. Meas
 a file whose only `Handler` is `typealias Handler = int(0 to 10)` had its own `5 as Handler` rejected
 with `Cannot cast from int to function`, against a declaration in a file it never mentions.
 
+The exception is **cross-file and nothing more.** One file declaring the name twice is E3061 whether
+or not other files declare it too, and that is a property of *which* declaration a newcomer is judged
+against: the one that **most recently claimed the name**, never the first one. A registry keeping the
+first would measure both of a file's two declarations against the far file, find each of them the
+legal cross-file case, and accept the duplicate in silence — for every name in `stdlib/`'s shape.
+
 **Out of scope**, and unchanged: two *same-form* aliases in two files that do not AGREE — two function
 aliases with different signatures, or two generic-instance aliases over different instances — are
 still resolved last-wins. Making those agree is cross-file name resolution, the rung that also owns
@@ -281,6 +287,67 @@ end 'main'
 ```
 ```maxoncstderr
 error E3061: <fragment>:3:11: Duplicate typealias 'Handler'
+```
+
+
+<!-- test: error.duplicate-alias-same-file-while-another-file-declares-it -->
+The carve-out is per PAIR, and the pair that matters is the newcomer against the declaration that
+most recently claimed the name — **never** against the first one. `a.maxon` declares `L` and `b.maxon`
+declares it twice: `b.maxon`'s second `L` is a same-file duplicate and stays E3061, exactly as it
+would if `a.maxon` did not exist. Measured against a registry that kept the FIRST declaration
+instead: each of `b.maxon`'s two was compared with `a.maxon`'s, found to be the legal cross-file case,
+and accepted — the duplicate compiled in silence. That is `stdlib/`'s own shape (seven files declare
+`Byte`), so it would have been open for every name the rule exists to protect.
+```maxon
+// --- file: a.maxon
+typealias L = int(0 to 10)
+
+export function fromA() returns L
+	return 1
+end 'fromA'
+
+// --- file: b.maxon
+typealias L = int(0 to 20)
+typealias L = int(0 to 30)
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA()
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:11:11: Duplicate typealias 'L'
+```
+
+
+<!-- test: error.duplicate-generic-alias-same-file-while-another-file-declares-it -->
+The same hole for the GENERIC-INSTANCE form, which is the half of the carve-out `stdlib/` exercises
+with `ByteArray = Array with Byte` in five files. Nothing checked a generic alias for duplication
+before this rule existed, so the file-local carve-out must not hand it a way to stay unchecked.
+```maxon
+// --- file: base.maxon
+typealias Small = int(0 to 100)
+
+export type Bx uses T
+	export var value as T
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias G = Bx with Small
+
+// --- file: b.maxon
+typealias Small = int(0 to 100)
+typealias G = Bx with Small
+typealias G = Bx with Small
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3061: <fragment>:16:11: Duplicate typealias 'G'
 ```
 
 

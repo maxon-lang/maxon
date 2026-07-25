@@ -1,0 +1,24 @@
+// Test: error.duplicate-generic-alias-same-file-while-another-file-declares-it
+// --- file: base.maxon
+typealias Small = int(0 to 100)
+
+export type Bx uses T
+	export var value as T
+end 'Bx'
+
+// --- file: a.maxon
+typealias Small = int(0 to 100)
+typealias G = Bx with Small
+
+// --- file: b.maxon
+typealias Small = int(0 to 100)
+typealias G = Bx with Small
+typealias G = Bx with Small
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3061: <fragment>:16:11: Duplicate typealias 'G'

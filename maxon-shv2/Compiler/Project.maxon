@@ -470,10 +470,20 @@ export enum TypeDeclKind
 end 'TypeDeclKind'
 
 // The SOURCE KEYWORD that introduced a declaration of this kind — the word a diagnostic must call it
-// by, and the only place those words are written (`EnumLayout.kindWord` reads them from here rather
-// than spelling `enum`/`union` a second time). The three alias forms share `typealias` because that
-// is what the author typed; the form distinction is a resolution fact, not a spelling one, and a
-// message that invented `ranged typealias` would name a keyword no program contains.
+// by. The ONE place a `TypeDeclKind` is turned into that word (`EnumLayout.kindWord` reads it from
+// here rather than spelling `enum`/`union` a second time). The three alias forms share `typealias`
+// because that is what the author typed; the form distinction is a resolution fact, not a spelling
+// one, and a message that invented `ranged typealias` would name a keyword no program contains.
+//
+// ⚠ **THESE FIVE LITERALS ARE A SECOND SPELLING OF `TokenKind`'s, AND THAT IS A MEASURED CHOICE, not
+// an oversight.** `TokenKind.type.rawValue` and friends are where the language defines the words, and
+// sourcing them from there was tried: it COMPILES and it costs **+26,503 code bytes** in the
+// compiler (6,934,377 -> 6,960,880), because a string-backed enum's `rawValue` does not fold to its
+// literal at a `gives` arm — it is a real accessor, not a constant. A rung whose whole claim is
+// byte-neutral codegen does not spend 26 KB to delete five words. What holds the copies in step
+// instead is the SUITE: `specs-shv2/type-name-collision.md` pins `type`, `typealias`, `interface` and
+// `union` in a golden, and `EnumLayout.kindWord` — this function's only other reader — is golden-gated
+// for `enum` and `union` across `specs-shv2/enum-match-exhaustive.md`. Rename a keyword: those fail.
 export function typeDeclKeyword(kind TypeDeclKind) returns String
 	return match kind 'k'
 		structType gives "type"
@@ -516,7 +526,7 @@ end 'TypeNameDecl'
 // exactly the misdiagnosis this rule exists to remove.
 export typealias TypeNameDeclArray = Array with TypeNameDecl
 
-// Type name -> the declaration that WON it (the first one merged). See `TypeNameRegistry`.
+// Type name -> the most recent ACCEPTED declaration of it. See `TypeNameRegistry`.
 typealias TypeNameDeclMap = Map with (ByteArray, TypeNameDecl)
 
 // What ONE declaration collided with, and therefore which diagnostic it earns. `accepted` covers
@@ -555,9 +565,22 @@ end 'TypeNameRecordOutcome'
 // resolve last-wins. That is cross-file name resolution (the rung that also owns E3063); the ranged
 // form's half of it is already enforced as E3105.
 export type TypeNameRegistry
-	// The declaration that WON each name — the FIRST one merged, kept for the reason
-	// `commitFuncSignatures` keeps the first function: the incumbent is the line that was fine, and
-	// every later declaration of the name is reported against it.
+	// ⚠ **THE MOST RECENT *ACCEPTED* DECLARATION OF EACH NAME — NOT THE FIRST, AND THE DIFFERENCE IS
+	// THE WHOLE SAME-FILE CHECK.** A file's declarations are contiguous in the record stream (one
+	// artifact at a time, each file merged exactly once, its own decls in source order), so "the
+	// newcomer's file is the last accepted declaration's file" is EXACTLY "this file already declared
+	// this name" — the only question the same-file half of the rule asks, and one a map holding the
+	// FIRST declaration structurally cannot answer. Keeping the first instead let a file declare one
+	// name twice IN SILENCE whenever any OTHER file also declared it: each of the two was compared
+	// against the far file, found legal-repeated-alias, and accepted. That is `stdlib/`'s own shape —
+	// seven files declare `Byte` — so the hole was open for every name the rule was written to protect.
+	// It is the induction `RangedAliasRegistry` makes with `sole` + `byFile.contains(declPath)`, which
+	// is where this check used to live.
+	//
+	// A REJECTED declaration never displaces: the build is failing either way, and every later
+	// declaration of the name should be reported against one settled incumbent rather than against a
+	// predecessor that was itself refused. Only `kind` and `name` are ever read off the incumbent (see
+	// `reportTypeNameCollision`), so which ACCEPTED declaration is held changes no diagnostic text.
 	var winners as TypeNameDeclMap
 
 	export static function create() returns TypeNameRegistry
@@ -566,10 +589,6 @@ export type TypeNameRegistry
 
 	// File one declaration, and answer whether it COLLIDED. The single place the rule is applied, so
 	// the legality test and the insert cannot come to disagree about which declarations collide.
-	//
-	// A collision does NOT displace the incumbent: the build is failing either way, and keeping the
-	// first keeps every later declaration of the name reported against one fixed line rather than
-	// against its immediate predecessor.
 	export function record(decl TypeNameDecl) returns TypeNameRecordOutcome
 		let winner = try self.winners.get(decl.name) otherwise 'firstDeclarationOfThisName'
 			self.winners.upsert(decl.name, value: decl)
@@ -577,6 +596,9 @@ export type TypeNameRegistry
 		end 'firstDeclarationOfThisName'
 
 		if isLegalRepeatedAlias(winner, newcomer: decl) 'fileLocalAlias'
+			// It is ACCEPTED, so it becomes the incumbent the NEXT declaration of this name is measured
+			// against — which is what lets the next one be recognized as this file declaring it twice.
+			self.winners.upsert(decl.name, value: decl)
 			return TypeNameRecordOutcome.accepted
 		end 'fileLocalAlias'
 
@@ -590,6 +612,9 @@ end 'TypeNameRegistry'
 //     bare registries agree by construction in `stdlib/` (see `TypeNameRegistry`);
 //   • different FILE, because two declarations in ONE file are what no qualification could ever
 //     disambiguate, which is exactly what E3061 has always said (`specs/export-keyword.md`).
+//
+// ⚠ `winner` must be the LAST ACCEPTED declaration of the name and not the first, or the file test
+// asks the wrong question — see `TypeNameRegistry.winners`, where the reason is stated in full.
 function isLegalRepeatedAlias(winner TypeNameDecl, newcomer TypeNameDecl) returns bool
 	if not isTypeAliasDecl(winner.kind) or winner.kind != newcomer.kind 'notOneAliasForm'
 		return false
