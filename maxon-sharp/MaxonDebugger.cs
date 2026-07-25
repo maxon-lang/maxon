@@ -1101,8 +1101,18 @@ internal sealed class MaxonDebugger : IDisposable {
     /// True for a processor's INLINE main-thread green thread — the scheduler context an OS worker runs
     /// on, which is never spawned from a function. Derived from the processor field the agent recorded,
     /// so "is this a scheduler thread" is not a second fact that could disagree with its owner.
-    public bool IsSchedulerThread => ProcId != RuntimeEmitter.DbgGtNotAProc;
+    public bool IsSchedulerThread => IsSchedulerProc(ProcId);
   }
+
+  /// <summary>
+  /// Whether a record's processor field names a real processor — i.e. whether the thread is a P's inline
+  /// main-thread one rather than a spawned one. The ONE reading of the agent's
+  /// <see cref="RuntimeEmitter.DbgGtNotAProc"/> sentinel, because THREE separate things hang off it and
+  /// none of them would fail to compile if one drifted: whether an id is epoch-scoped (a spawned struct
+  /// is recycled, a P's is not), whether the record's entry offset means anything at all, and how the
+  /// thread is named to a user. Two of those are wrong answers rather than cosmetics.
+  /// </summary>
+  private static bool IsSchedulerProc(long procId) => procId != RuntimeEmitter.DbgGtNotAProc;
 
   /// <summary>
   /// One enumeration. <see cref="Truncated"/> is reported rather than swallowed: a thread list that
@@ -1192,8 +1202,7 @@ internal sealed class MaxonDebugger : IDisposable {
       // A processor's inline thread is pinned to its P for the whole process, so it is identified by its
       // processor index alone and keeps one id for the session. Only a SPAWNED thread — the kind whose
       // struct is recycled — is scoped to the current resume epoch.
-      bool isSchedulerThread = procId != RuntimeEmitter.DbgGtNotAProc;
-      var identity = new GtIdentity(handle, entryPc, procId, isSchedulerThread ? 0 : _resumeEpoch);
+      var identity = new GtIdentity(handle, entryPc, procId, IsSchedulerProc(procId) ? 0 : _resumeEpoch);
       if (!_gtIds.TryGetValue(identity, out int id)) id = ++_nextGtId;
       ids[identity] = id;
 
@@ -1236,7 +1245,7 @@ internal sealed class MaxonDebugger : IDisposable {
   /// every other resolution on this engine does, rather than returning a nameless thread that reads like
   /// a nameless thread.
   private string EntryFunctionName(long entryPc, long procId) =>
-    procId == RuntimeEmitter.DbgGtNotAProc ? Symbolize(entryPc).Function : "";
+    IsSchedulerProc(procId) ? "" : Symbolize(entryPc).Function;
 
   /// Why a per-green-thread backtrace produced no frames. The three refusals are DISTINCT because each
   /// needs a different sentence, and two of them are answered by the driver before anything is posted:
@@ -1257,7 +1266,16 @@ internal sealed class MaxonDebugger : IDisposable {
     Unavailable,
   }
 
-  public readonly record struct GtBacktraceResult(GtBacktraceStatus Status, IReadOnlyList<Frame> Frames);
+  /// <summary>
+  /// One per-thread walk. <see cref="Thread"/> is the thread the id resolved to, carried back because an
+  /// EMPTY frame list is a real answer whose EXPLANATION is a property of that thread — the very same
+  /// three-way rule (stopped-before-any-stop / on-cpu / never-started) the listing's top-frame column
+  /// states. A surface that re-derives it instead gets to disagree with the listing, and did: a literal
+  /// "not started — no frames yet" was printed for `main` itself at the entry stop. It is null exactly
+  /// when the id resolved to no thread, which is always accompanied by a refusal <see cref="Status"/>.
+  /// </summary>
+  public readonly record struct GtBacktraceResult(
+    GtBacktraceStatus Status, IReadOnlyList<Frame> Frames, GreenThread? Thread);
 
   /// <summary>
   /// Backtrace ONE green thread by its driver-assigned id, against the most recent
@@ -1269,7 +1287,8 @@ internal sealed class MaxonDebugger : IDisposable {
   /// on-cpu thread is refused.
   /// </summary>
   public GtBacktraceResult GtBacktrace(int id) {
-    if (!GreenThreadsSupported) return new GtBacktraceResult(GtBacktraceStatus.UnsupportedByAgent, []);
+    if (!GreenThreadsSupported)
+      return new GtBacktraceResult(GtBacktraceStatus.UnsupportedByAgent, [], null);
 
     // RE-LIST FIRST, here rather than at each caller. What this posts is a record INDEX, and an index is
     // only meaningful against the array the agent last published — which the agent republishes on every
@@ -1283,7 +1302,7 @@ internal sealed class MaxonDebugger : IDisposable {
         list.Status == GtListStatus.UnsupportedByAgent
           ? GtBacktraceStatus.UnsupportedByAgent
           : GtBacktraceStatus.Unavailable,
-        []);
+        [], null);
 
     GreenThread? match = null;
     foreach (var t in _lastGtList) {
@@ -1291,22 +1310,23 @@ internal sealed class MaxonDebugger : IDisposable {
       match = t;
       break;
     }
-    if (match is not { } thread) return new GtBacktraceResult(GtBacktraceStatus.UnknownId, []);
+    if (match is not { } thread) return new GtBacktraceResult(GtBacktraceStatus.UnknownId, [], null);
 
     if (thread.IsStopped) {
       var stoppedTrace = Backtrace();
       return new GtBacktraceResult(
         stoppedTrace.Status == BacktraceStatus.Ok ? GtBacktraceStatus.Ok : GtBacktraceStatus.Unavailable,
-        stoppedTrace.Frames);
+        stoppedTrace.Frames, thread);
     }
 
-    if (thread.OnCpu) return new GtBacktraceResult(GtBacktraceStatus.RunningOnCpu, []);
+    if (thread.OnCpu) return new GtBacktraceResult(GtBacktraceStatus.RunningOnCpu, [], thread);
 
     if (!PostCommand(RuntimeEmitter.DbgCmdGtBacktrace, thread.RecordIndex))
-      return new GtBacktraceResult(GtBacktraceStatus.Unavailable, []);
+      return new GtBacktraceResult(GtBacktraceStatus.Unavailable, [], thread);
 
     // A parked thread has no trapped PC, so even frame 0 is a return address off its saved chain.
-    return new GtBacktraceResult(GtBacktraceStatus.Ok, ReadFrameArray(frameZeroIsReturnAddress: true));
+    return new GtBacktraceResult(
+      GtBacktraceStatus.Ok, ReadFrameArray(frameZeroIsReturnAddress: true), thread);
   }
 
   // ---- Source-line stepping (P4b) ----

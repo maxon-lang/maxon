@@ -300,7 +300,7 @@ internal static class MaxonDebugRepl {
 
       var bt = dbg.GtBacktrace(id);
       RenderFramesText($"green thread #{id}", GtBacktraceUnavailableReason(bt.Status), bt.Frames,
-        Console.Out, "(not started — no frames yet)");
+        Console.Out, GtEmptyFramesText(bt));
     }
 
     private void DoPrint(string rest) {
@@ -1007,12 +1007,17 @@ internal static class MaxonDebugRepl {
 
   // ---- Shared renderers: green threads (P4d-2a) ----
 
+  /// What BOTH green-thread commands say about a pre-v8 agent. One sentence, because the two commands
+  /// share one capability gate (<c>MaxonDebugger.GreenThreadsSupported</c>) and answering the same
+  /// question two ways is how the two would come to describe one binary differently.
+  private const string GreenThreadsUnsupportedText =
+    "green threads are not supported by this binary's debug agent (rebuild to enable)";
+
   /// The reason a green-thread listing produced nothing, or null when it succeeded — stated ONCE so the
   /// text and JSON faces cannot tell the user to rebuild when the target merely exited.
   private static string? GtListUnavailableReason(MaxonDebugger.GtListStatus status) => status switch {
     MaxonDebugger.GtListStatus.Ok => null,
-    MaxonDebugger.GtListStatus.UnsupportedByAgent =>
-      "green threads are not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.GtListStatus.UnsupportedByAgent => GreenThreadsUnsupportedText,
     MaxonDebugger.GtListStatus.NotAcknowledged =>
       "threads command not acknowledged (the target may have exited)",
     _ => throw new InvalidOperationException($"Unhandled green-thread list status {status}"),
@@ -1021,8 +1026,7 @@ internal static class MaxonDebugRepl {
   /// The reason a per-green-thread backtrace produced no frames, or null when it succeeded.
   private static string? GtBacktraceUnavailableReason(MaxonDebugger.GtBacktraceStatus status) => status switch {
     MaxonDebugger.GtBacktraceStatus.Ok => null,
-    MaxonDebugger.GtBacktraceStatus.UnsupportedByAgent =>
-      "green threads are not supported by this binary's debug agent (rebuild to enable)",
+    MaxonDebugger.GtBacktraceStatus.UnsupportedByAgent => GreenThreadsUnsupportedText,
     MaxonDebugger.GtBacktraceStatus.UnknownId =>
       "no green thread with that id in the current listing (run 'threads' first)",
     MaxonDebugger.GtBacktraceStatus.RunningOnCpu =>
@@ -1066,17 +1070,34 @@ internal static class MaxonDebugRepl {
     : "<unknown>";
 
   /// <summary>
-  /// Why a green thread has no top frame, or null when it has one. THREE causes, none of them a failure,
-  /// and the stopped one has to be tested FIRST: the stopped thread is also on-cpu, so an on-cpu-first
-  /// test told the user their own stopped thread was "running on a processor" — which is exactly the
-  /// wrong answer, since the one thing that thread is not doing is running. It happens at the entry stop,
-  /// where the agent has parked before publishing any stop event and so has no PC to report.
+  /// Why a green thread has NO FRAMES. THREE causes, none of them a failure, and the stopped one has to
+  /// be tested FIRST: the stopped thread is also on-cpu, so an on-cpu-first test told the user their own
+  /// stopped thread was "running on a processor" — exactly the wrong answer, since the one thing that
+  /// thread is not doing is running. It happens at the entry stop, where the agent has parked before
+  /// publishing any stop event and so has no PC to report.
+  ///
+  /// ⭐ It answers for BOTH surfaces that can show a frameless thread — the `threads` listing's top-frame
+  /// column and an empty `gt-backtrace` — because they are the SAME walk over the SAME thread. Worded
+  /// separately they disagreed, and did: `gt-backtrace` carried a literal "not started — no frames yet",
+  /// which at the entry stop it printed about `main`, one line under a listing correctly saying that
+  /// thread was stopped before any frame was published.
   /// </summary>
-  private static string? TopFrameUnavailableReason(MaxonDebugger.GreenThread t) =>
-    t.TopKind != MaxonDebugger.GtTopFrame.None ? null
-    : t.IsStopped ? "stopped before any frame was published (the entry stop)"
+  private static string GreenThreadNoFramesReason(MaxonDebugger.GreenThread t) =>
+    t.IsStopped ? "stopped at entry, before any frame was published"
     : t.OnCpu ? "running on a processor — no stable stack to walk"
     : "not started — no frames yet";
+
+  /// Why a green thread's LISTED top frame is absent, or null when it has one. The agent reports no top
+  /// frame in exactly the cases above, so the reason is that one rule and the kind word is the test.
+  private static string? TopFrameUnavailableReason(MaxonDebugger.GreenThread t) =>
+    t.TopKind != MaxonDebugger.GtTopFrame.None ? null : GreenThreadNoFramesReason(t);
+
+  /// How an empty `gt-backtrace` frame list reads. The thread is absent only when the id resolved to
+  /// none, which always carries a refusal reason that is printed INSTEAD of this — so the fallback
+  /// wording is unreachable rather than a silent default, and it is still a true sentence if that ever
+  /// changes.
+  private static string GtEmptyFramesText(MaxonDebugger.GtBacktraceResult bt) =>
+    bt.Thread is { } t ? $"({GreenThreadNoFramesReason(t)})" : "(no frames)";
 
   private static void RenderThreadsText(MaxonDebugger.GreenThreadList list, TextWriter w) {
     if (GtListUnavailableReason(list.Status) is { } reason) {

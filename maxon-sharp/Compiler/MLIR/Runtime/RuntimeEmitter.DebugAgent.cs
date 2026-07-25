@@ -925,13 +925,6 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// <paramref name="dest"/> = &amp;records[<paramref name="index"/>] in the control segment at
-  /// <paramref name="segmentBase"/>, clobbering <paramref name="scratch"/>. The green-thread twin of
-  /// <see cref="EmitDbgCondRecAddr"/>, and it exists for the same reason: the stride and the ARRAY BASE
-  /// are one fact, and the two users (append a record, read one back for a per-thread backtrace) must
-  /// not each carry their own copy of it.
-  /// </summary>
-  /// <summary>
   /// Jump to <paramref name="noStopLabel"/> unless a stop event has actually been PUBLISHED, given the
   /// segment base in <paramref name="segmentBase"/>. Clobbers <paramref name="scratch"/>.
   ///
@@ -961,6 +954,13 @@ public partial class RuntimeEmitter {
     _b.AddRegImm(high, GtLayout.FaultStackWindowBytes);
   }
 
+  /// <summary>
+  /// <paramref name="dest"/> = &amp;records[<paramref name="index"/>] in the control segment at
+  /// <paramref name="segmentBase"/>, clobbering <paramref name="scratch"/>. The green-thread twin of
+  /// <see cref="EmitDbgCondRecAddr"/>, and it exists for the same reason: the stride and the ARRAY BASE
+  /// are one fact, and the two users (append a record, read one back for a per-thread backtrace) must
+  /// not each carry their own copy of it.
+  /// </summary>
   private void EmitDbgGtRecAddr(VReg dest, VReg index, VReg segmentBase, VReg scratch) {
     EmitDbgScaledIndex(dest, index, scratch, DbgGtRecSize);
     _b.AddRegReg(dest, segmentBase);
