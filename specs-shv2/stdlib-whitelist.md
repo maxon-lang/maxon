@@ -16,14 +16,23 @@ on the language features it needs. The filter is stated in exactly one place,
 `Compiler/StdlibWhitelist.maxon`; at this rung its only entry is `stdlib/Clock.maxon`.
 
 The whitelist is scaffolding, not a feature: it is a filter INSIDE the real loader rather than a list
-the loader walks, so removing it is a deletion rather than a rewrite. Everything downstream of the
-loader deals in two durable facts instead — "is this function stdlib source or user source?" and "is
-it reachable from `main`?" — so no pass has to be rewritten on the day the filter goes.
+the loader walks, so removing it is a deletion rather than a rewrite — of ONE file, which owns every
+mention of it including the types and the error cases it needs. Everything downstream of the loader
+deals in two durable facts instead — "is this function stdlib source or user source?" and "is it
+reachable from `main`?" — so no pass has to be rewritten on the day the filter goes.
 
 A whitelisted module is registered into the query database exactly like a user source, so it flows
 through the same tokenize → signature-index → parse → merge spine. Its declarations therefore
 populate the signature registry, and a user program can call `Clock.nowMs()` /
 `WallClock.nowUnixSeconds()` though the program itself contains no `Clock`.
+
+That sameness runs one level deeper: which files under a directory are Maxon sources is decided by
+ONE enumerator (`Compiler.collectMaxonSources`), which walks the user's own root and `stdlib/` alike,
+so the extension, the excluded build manifest and every ignore rule either walk grows are stated once.
+The loader also skips a file the project has ALREADY registered — the one case being a user root that
+lies under `stdlib/` — because a source registered under two spellings of its path is parsed twice and
+every function in it then collides with itself. (Not pinned by a test below: the harness stages every
+fragment in a temp directory and cannot place one inside the checkout's `stdlib/`.)
 
 `stdlib/` is located by walking UP from the COMPILER's own executable directory, not from the
 current working directory: the spec runner and `run_program` compile in a throwaway temp dir, so the

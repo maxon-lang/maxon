@@ -10,12 +10,15 @@
 // radius until they do.
 //
 // It is written as a FILTER INSIDE the real loader, not as a list the loader walks, and that shape is
-// the point: **the end state is a DELETION, not a rewrite.** Remove the three marked pieces below —
-// the list, the membership test, and the `continue` that consults it — and what is left already loads
-// all of `stdlib/`. A loader that walked a hardcoded list would have to be written from scratch on that
-// day.
+// the point: **the end state is a DELETION, not a rewrite.** Remove the two marked lines in
+// `loadStdlibSources` and everything below the banner, and what is left already loads all of
+// `stdlib/`. A loader that walked a hardcoded list would have to be written from scratch on that day.
 //
-// ⚠ **NOTHING OUTSIDE THIS FILE MAY KNOW A WHITELIST EXISTS.** Everything downstream deals in two
+// ⚠ **NOTHING OUTSIDE THIS FILE MAY KNOW A WHITELIST EXISTS — and that includes owning a type, a
+// constant or an error case on its behalf.** The deletion above must not leave a stranded arm in
+// `Diagnostics.maxon` and a stranded printer in `Main.maxon`, so the missing-module case raises the
+// ordinary `fileNotFound`; the directory walk is `Compiler.collectMaxonSources`, the user walk's own;
+// and the path array is `MaxonSourcePathArray`, declared beside it. Everything downstream deals in two
 // durable facts — "is this function STDLIB source or USER source?" and "is it reachable from `main`?" —
 // computed in `StdlibSource.maxon`, and both stay true when the filter goes. A pass that reasoned in
 // terms of "whitelisted" would have to be rewritten that day; a pass that reasons in terms of stdlib
@@ -115,30 +118,40 @@
 //     ⇒ THE RULE: do not list a module whose function name a bare builtin already claims. Retire the
 //     builtin first.
 
-// The stdlib modules this compile will load, in the order it loads them. A DISTINCTLY-named alias
-// rather than QueryDatabase's `FilePathArray`, whose name collides with a member typealias inside
-// stdlib's `type Directory` and so does not resolve from every compiler file (`DiagnosticArray`, the
-// same `Array with T` shape under a unique name, resolves cross-file fine — the name is the difference).
-typealias StdlibModulePathArray = Array with FilePath
-
 // ⭐ **THE LOADER.** Enumerate `stdlib/` and register each module, in the order the walk found them
 // (see the header on why it does not sort). Called by `loadProject`
 // AFTER the user's own sources are loaded (so a directory build's output name still derives from a user
 // file, not from a stdlib module, and an empty user project still fails with `noSourceFiles` rather than
 // silently compiling only stdlib).
 //
+// ⚠ THE ENUMERATION IS `Compiler.collectMaxonSources` — the SAME function that walks the user's own
+// root — because "which files under this directory are Maxon sources?" is one question and `stdlib/`
+// is not entitled to its own answer to it. A second walk here would be free to drift on the extension,
+// on the build manifest, and on every ignore rule either walk grows.
+//
 // ⚠ LOUD, NEVER SILENT. An unreadable module propagates `readError` naming it; a PARSE failure surfaces
 // through the ordinary parse-diagnostic path (`queryParseOps` → `reportParseError`), which already
 // renders the file path. There is no arm that drops a stdlib module quietly.
 export function loadStdlibSources(project Project) throws CompileError
-	// ⬇ WHITELIST (1 of 3) — the list, and the check that it names files this checkout actually has.
-	// Delete these two lines with the rest of the filter.
+	// ⬇ WHITELIST (1 of 2) — the list, and the check that it names files this checkout actually has.
+	// Delete this line with the rest of the filter.
 	let listed = try whitelistedStdlibModules(project.stdlibDir)
 
-	var modules = StdlibModulePathArray.create()
-	try collectStdlibModules(project.stdlibDir, listed: listed, into: modules)
+	var found = MaxonSourcePathArray.create()
+	try collectMaxonSources(project.stdlibDir, into: found)
+	let usersOwn = registeredPathsWhenTheRootIsInsideStdlib(project)
 
-	for path in modules 'each'
+	for path in found 'each'
+		// ⬇ WHITELIST (2 of 2) — the ONLY thing between this loader and all of `stdlib/`.
+		// Delete this `if` and every stdlib module is loaded.
+		if not listed.contains(path) 'notListed'
+			continue
+		end 'notListed'
+
+		if usersOwn.contains(path) 'theUsersOwnFile'
+			continue
+		end 'theUsersOwnFile'
+
 		try loadOneSourceFile(project, path: path)
 		// RECORDED, because it is the answer to "which of this compile's files are stdlib source?" and
 		// this loop is the one place that knows it for free — every path here came out of an enumeration
@@ -148,61 +161,81 @@ export function loadStdlibSources(project Project) throws CompileError
 	end 'each'
 end 'loadStdlibSources'
 
-// Every `.maxon` file under `dir`, descending subdirectories (`stdlib/helpers/**` is stdlib too).
-function collectStdlibModules(dir FilePath, listed StdlibWhitelistSet, into StdlibModulePathArray) throws CompileError
-	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
-	for entry in entries 'each'
-		if Directory.isDirectory(entry) 'isSubdir'
-			try collectStdlibModules(entry, listed: listed, into: into)
-		end 'isSubdir' else if entry.filename().endsWith(StdlibSourceExtension) 'isModule'
-			// ⬇ WHITELIST (2 of 3) — the ONLY thing between this loader and all of `stdlib/`.
-			// Delete this `if` and every stdlib module is loaded.
-			if not listed.contains(entry) 'notListed'
-				continue
-			end 'notListed'
-			into.push(entry)
-		end 'isModule'
+// ⚠ **A FILE THE PROJECT ALREADY REGISTERED MUST NOT BE LOADED A SECOND TIME**, and the one way a
+// single file can be reached by BOTH walks is a user root that lies under `stdlib/` — which is exactly
+// what `maxon-shv2 build stdlib/Clock.maxon` is, the command that checks whether a module is ready to
+// be listed.
+//
+// It matters because the query database keys a source on its `FilePath` and `FilePath.equals` compares
+// the path TEXT (case-insensitively on Windows) rather than resolving it — so a relative
+// `stdlib/Clock.maxon` and this loader's absolute spelling of the SAME FILE are two identities,
+// `fileChanged` dedups neither against the other, and the file is parsed twice: every function in it
+// then collides with ITSELF. MEASURED before this guard: FIVE `E3006 duplicate definition of function
+// 'Clock.nowMs'`, each pointing at Clock's own lines. The ABSOLUTE spelling of the same command was
+// already clean, which is what identifies the fault as the spelling and not the double load.
+//
+// ⚠ **ASKED ONCE PER COMPILE, OF THE ROOT** — every source the project loaded lies under it, so one
+// `isInside` settles it for the whole compile and an ordinary project pays nothing per file and gets an
+// empty set. That bound is the point and not an optimization: re-deriving stdlib-ness per FILE was
+// measured at +60…+1,920 allocations across the scale ladder and rejected (StdlibSource's header), and
+// making a compile's diagnostics carry resolved paths instead was measured HERE at +824…+5,009 — a
+// guard that cost either would be that decision undone.
+//
+// The file stays the USER's: they named it as their project, so its functions are user source and a
+// diagnostic raised in it belongs at its own lines — which are lines they asked to compile.
+function registeredPathsWhenTheRootIsInsideStdlib(project Project) returns MaxonSourcePathSet
+	var registered = MaxonSourcePathSet.create()
+
+	let cwd = Directory.currentPath()
+	if not project.rootPath.resolve(cwd).isInside(project.stdlibDir) 'rootIsElsewhere'
+		return registered
+	end 'rootIsElsewhere'
+
+	for path in project.db.sourcePaths 'each'
+		registered.insert(path.resolve(cwd))
 	end 'each'
-end 'collectStdlibModules'
-
-// The extension a stdlib module carries. Named here rather than shared with `Compiler.maxon`'s
-// user-source constant because they answer to different owners: one is what a USER project's files are
-// named, the other is what `stdlib/` contains, and a day that changes one need not change the other.
-let StdlibSourceExtension = ".maxon"
+	return registered
+end 'registeredPathsWhenTheRootIsInsideStdlib'
 
 // ============================================================================================
-// ⬇ WHITELIST (3 of 3) — THE WHOLE OF THE SCAFFOLDING. Everything above this line is the real
-// loader and stays. Delete from here down, plus the two marked call sites, and shv2 loads all of
-// `stdlib/`.
+// ⬇ THE WHOLE OF THE SCAFFOLDING. Everything above this line is the real loader and stays.
+// Delete from here down, plus the two marked lines in `loadStdlibSources`, and shv2 loads all of
+// `stdlib/` — with nothing left to change in any other file.
 // ============================================================================================
 
-// The listed modules, as a SET rather than a list — because the membership test runs once per file
-// under `stdlib/` and THIS LIST IS DESIGNED TO GROW, one entry per widening rung, until it names every
-// file there. A scan would therefore cost O(files x listed), and each pair is not a byte compare:
-// `FilePath.equals` canonicalizes BOTH sides, which on Windows clones and lower-cases each path, so a
-// pair is about four String allocations. MEASURED against the 49 files this checkout has: a 48-entry
-// scan costs ~9,400 allocations a compile where the hash lookup costs ~98, flat in the list's length.
-typealias StdlibWhitelistSet = Set with FilePath
-
-// The stdlib modules this rung loads. Resolved against the checkout root (the parent of `stdlib/`) so
-// both sides of the membership test are built the same way — `FilePath.join` normalizes separators, so
-// a `/`-spelled entry matches an enumerated `\` path.
+// The listed modules are a `MaxonSourcePathSet` — a SET rather than a list, because the membership
+// test runs once per file under `stdlib/` and THIS LIST IS DESIGNED TO GROW, one entry per widening
+// rung, until it names every file there. A scan would therefore cost O(files x listed), and each pair
+// is about four String allocations (see the alias). MEASURED against the 49 files this checkout has:
+// a 48-entry scan costs ~9,400 allocations a compile where the hash lookup costs ~98, flat in the
+// list's length.
+//
+// The stdlib modules this rung loads, each named RELATIVE TO `stdlib/` and resolved against the very
+// directory the loader enumerates — so both sides of the membership test are built by the same `join`
+// off the same base, and a `/`-spelled entry matches an enumerated `\` path. Naming them relative to
+// the CHECKOUT ROOT instead would spell the directory's own name a second time (`StdlibSource` already
+// owns it as `StdlibDirName`), and a rename would leave this list silently pointing nowhere.
 //
 // ⭐ WIDENING IS ONE LINE: add another `listWhitelistedModule` call.
-function whitelistedStdlibModules(stdlibDir FilePath) returns StdlibWhitelistSet throws CompileError
-	let root = try stdlibDir.parent() otherwise throw CompileError.stdlibNotFound
-
-	var listed = StdlibWhitelistSet.create()
-	try listWhitelistedModule(root, relative: "stdlib/Clock.maxon", into: listed)
+function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet throws CompileError
+	var listed = MaxonSourcePathSet.create()
+	try listWhitelistedModule(stdlibDir, relative: "Clock.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 
 // One listed module. A listed module the checkout does not have is a hard error naming it, never a
 // silent skip: the whole point of the list is that what it names is present.
-function listWhitelistedModule(root FilePath, relative String, into StdlibWhitelistSet) throws CompileError
-	let path = root.join(relative)
+//
+// It raises the SAME `fileNotFound` a user's own missing input raises, and deliberately not a
+// scaffolding-specific arm of its own. A private error case would be a second thing that has to be
+// deleted the day the filter goes — in `Diagnostics.maxon` and again in `Main.maxon`'s printer —
+// which is exactly the "one mention, one place" property this file exists to keep. The fact is the
+// same either way: a path this compile was told to load is not there.
+function listWhitelistedModule(stdlibDir FilePath, relative String, into MaxonSourcePathSet) throws CompileError
+	let path = stdlibDir.join(relative)
 	if not File.exists(path) 'missing'
-		throw CompileError.stdlibModuleMissing(path)
+		throw CompileError.fileNotFound(path)
 	end 'missing'
+
 	into.insert(path)
 end 'listWhitelistedModule'

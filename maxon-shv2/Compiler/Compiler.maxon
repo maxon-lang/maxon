@@ -109,8 +109,9 @@ end 'writeTargetIr'
 // diagnostics and propagate straight to the caller, which prints a specific
 // message. `loadSourceFiles` is what raises them.
 export function loadProject(inputPath FilePath, target Target) returns Project throws CompileError
-	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it: it is
-	// what later passes tell stdlib source from user source with (`isStdlibFunction`).
+	// The checkout's `stdlib/` is found BEFORE the project exists, because the project carries it to
+	// the loader below. Nothing after the load asks where `stdlib/` is — a later pass asks about a
+	// FUNCTION (`isStdlibFunction`), which is answered from a set the loader already built.
 	var project = createProject(inputPath, target: target, stdlibDir: try locateStdlibDir())
 	try loadSourceFiles(project, path: project.rootPath)
 	// AFTER the user's own sources — so a directory build's output name still derives from a user
@@ -379,20 +380,43 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 	end 'noFiles'
 end 'loadSourceFiles'
 
-// Recursively load every `.maxon` file under `dir`, descending subdirectories.
+// Load every Maxon source file under `dir`.
 function loadSourceDirectory(project Project, dir FilePath) throws CompileError
+	var paths = MaxonSourcePathArray.create()
+	try collectMaxonSources(dir, into: paths)
+
+	for path in paths 'each'
+		try loadOneSourceFile(project, path: path)
+	end 'each'
+end 'loadSourceDirectory'
+
+// ⭐ **WHAT COUNTS AS A MAXON SOURCE FILE UNDER A DIRECTORY — asked in ONE place.** Every `.maxon`
+// file beneath `dir`, subdirectories included, minus the build manifest (a project description, not
+// a compilation unit).
+//
+// ⚠ BOTH of a compile's directory walks go through it — the USER's own root (`loadSourceDirectory`)
+// and the checkout's `stdlib/` (`loadStdlibSources`) — because that is ONE question, and two copies
+// of the answer are two copies that can come to disagree. The next clauses this rule grows are
+// already named in `loadSourceFiles`: v1's `.maxonignore`, and `.test`-fragment stripping. Added to
+// one walk and not the other, either would read as correct at BOTH sites while a file was silently
+// compiled on one side and silently skipped on the other.
+//
+// It COLLECTS rather than loading, because the callers do different things with the answer: the user
+// walk registers every path it is given, while the stdlib loader filters first and records what it
+// kept.
+export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray) throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'
-			try loadSourceDirectory(project, dir: entry)
+			try collectMaxonSources(entry, into: into)
 		end 'isSubdir' else 'isFile'
 			let name = entry.filename()
 			if name != BuildManifestName and name.endsWith(MaxonSourceExtension) 'isSource'
-				try loadOneSourceFile(project, path: entry)
+				into.push(entry)
 			end 'isSource'
 		end 'isFile'
 	end 'each'
-end 'loadSourceDirectory'
+end 'collectMaxonSources'
 
 // Read one source file and register its content with the query system. Exported so stdlib modules
 // are loaded through the identical read+register path a user file takes.
@@ -404,9 +428,23 @@ end 'loadOneSourceFile'
 // --- Output path resolution ---
 
 // The build manifest filename and Maxon source extension. Named, not bare
-// literals — both are file-discovery contracts.
+// literals — both are file-discovery contracts, and `collectMaxonSources` is the
+// only reader of either: `stdlib/` is enumerated by that same function, so what a
+// source file is called is stated once for the whole compiler.
 let BuildManifestName = "build.maxon"
 let MaxonSourceExtension = ".maxon"
+
+// Paths of Maxon source files, in the order a walk found them — what `collectMaxonSources`
+// produces and what `Project.stdlibSourcePaths` keeps. A DISTINCTLY-named alias rather than
+// QueryDatabase's `FilePathArray`, whose name collides with a member typealias inside stdlib's
+// `type Directory` and so does not resolve from every compiler file (`DiagnosticArray`, the same
+// `Array with T` shape under a unique name, resolves cross-file fine — the name is the difference).
+export typealias MaxonSourcePathArray = Array with FilePath
+
+// The same paths where the question is MEMBERSHIP rather than order, so it is answered by one hash
+// instead of a scan — and each pair a scan would compare is about four String allocations, because
+// `FilePath.equals` canonicalizes both sides (on Windows it clones and lower-cases each).
+export typealias MaxonSourcePathSet = Set with FilePath
 
 // Extension of the `--emit-ir` Target-IR sidecar written beside the exe. A format
 // contract shared with the spec runner (which reads back the same file), so it is

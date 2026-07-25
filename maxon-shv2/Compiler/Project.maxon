@@ -991,14 +991,15 @@ end 'slotCallArgs'
 export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
-	// The checkout's `stdlib/` directory, located once at load time (`locateStdlibDir`). The stdlib
-	// loader enumerates it; nothing else needs to know where it is.
+	// The checkout's `stdlib/` directory, located once at load time (`locateStdlibDir`). Read by the
+	// stdlib loader, which enumerates it, and by nothing else — every later pass asks about a
+	// FUNCTION, not a path (`isStdlibFunction`).
 	export var stdlibDir as FilePath
 	// Every file the stdlib loader parsed out of that directory — which is exactly "the STDLIB source
 	// this compile contains", established by construction rather than by re-testing paths later (see
 	// StdlibSource). Empty until the loader runs; it grows with the stdlib shv2 can load, and in the end
 	// state it is every file under `stdlib/`.
-	export var stdlibSourcePaths as StdlibSourcePathArray
+	export var stdlibSourcePaths as MaxonSourcePathArray
 	// What THIS compile knows about the stdlib source it loaded (`deriveStdlibFacts`), computed once
 	// after the module is merged: which stdlib functions the program cannot reach, and which of the
 	// ones it CAN reach need the x64-windows substrate. Every PRE-elimination pass that examines
@@ -1096,7 +1097,7 @@ export type Project
 		return Self{
 			db: db,
 			stdlibDir: stdlibDir,
-			stdlibSourcePaths: StdlibSourcePathArray.create(),
+			stdlibSourcePaths: MaxonSourcePathArray.create(),
 			stdlibFacts: StdlibFacts.empty(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
@@ -1126,8 +1127,8 @@ end 'Project'
 // constructor a driver needs; mirrors v1's `createProject` (which additionally
 // seeds three empty memo sentinels — QueryDatabase.create owns those in shv2).
 // `stdlibDir` is passed IN rather than located here so the project is born with a
-// valid one: `isStdlibFunction` reads it, and a field that is briefly wrong is a
-// field a later pass can read while it is wrong.
+// valid one: the stdlib loader reads it before the first pass runs, and a field
+// that is briefly wrong is a field something can read while it is wrong.
 export function createProject(rootPath FilePath, target Target, stdlibDir FilePath) returns Project
 	return Project.create(QueryDatabase.create(), rootPath: rootPath, target: target, stdlibDir: stdlibDir)
 end 'createProject'
