@@ -242,10 +242,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: method-call-on-call-result -->
-<!-- P1.1b enums+match (`match a.get().compare(…)`), AND a primitive extension method
-     (`.compare` on an Integer call-result receiver) — which is on NO rung of the ladder;
-     cf. OPEN.md #26's overloading gap. NOT blocked by instance methods. -->
+<!-- test: method-call-on-call-result -->
 A method call whose receiver is the primitive result of a prior call
 (`a.get().compare(b.get())`). The receiver of `.compare` is the `Integer`
 returned by `get()`, not a variable — the parser must resolve the primitive

@@ -1541,6 +1541,12 @@ end 'requireCalleeIsNotReservedName'
 let StringAppendMethod = b"append"
 let StringByteLengthMethod = b"byteLength"
 
+// The argument slot a builtin-conformance dispatch spends on its RECEIVER (P1.7a direct dispatch). The
+// synthesized impls take `self` positionally in argument 0 — `int.compare(self, other)` — exactly as an
+// instance method's receiver does, so an interface formal `j` is actual `j + 1` and the user-visible arity
+// is the actual count less this. One name, read by the arity check and the `Self`-argument check.
+let BuiltinConformanceReceiverArgs = 1
+
 // The value a short-circuit merge takes on the SKIPPED path: `false` for `and` (a false left
 // operand determines the whole expression), `true` for `or`.
 function shortCircuitSeed(takesRhsWhenTrue bool) returns ParsedInt
@@ -7995,22 +8001,33 @@ export type Parser
 		return names
 	end 'paramAggregateNamesOf'
 
-	// ⭐ **DOES `nameId` NAME A RANGED FLOAT ALIAS?** — the F2 fact `named` was too coarse to carry. A
-	// `float(low to high)` alias (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE
-	// is a genuine float; an `int(low to high)` alias is `named` too and is an int. It is decided through
-	// the SAME whole-program `aliasOf` door `valueIsUnsigned`/`fieldStorageType` already ask, so a float
-	// alias declared in ANY file resolves — and NEVER a String/struct/union `named` (`aliasOf` answers
-	// `undeclared` for those). The parse-time twin of `TypeResolution.resolveNamedType`'s alias arm.
+	// ⭐ **THE PRIMITIVE TAG THE RANGED ALIAS `nameId` REDUCES TO**, or `named` when no ranged alias
+	// declares that name. It is decided through the SAME whole-program `aliasOf` door
+	// `valueIsUnsigned`/`fieldStorageType` already ask, so an alias declared in ANY file resolves — and
+	// NEVER a String/struct/union `named` (`aliasOf` answers `undeclared` for those, and the name keeps
+	// its `named` tag). The parse-time twin of `TypeResolution.resolveNamedType`'s alias arm.
 	//
 	// ⚠ The caller must know the tag is `named` before asking: `nameId` for a non-`named` type is
 	// `UnnamedTypeId`, which is not in the interner (`internedName` would panic). `floatResolvedTag` /
-	// `resolveFloatAliasType` are the two gated doors, and every reader goes through one of them.
-	function namedIsFloatAlias(nameId TypeNameId) returns bool
-		let name = self.internedName(nameId)
-		return match self.signatures.aliasOf(name) 'a'
-			declared(alias) gives tagIsFloat(maxonTypeTag(alias.underlying))
-			undeclared gives false
+	// `resolveFloatAliasType` / `builtinConformerOfType` are the gated doors, and every reader goes
+	// through one of them.
+	//
+	// TWO facts are read off this ONE reduction, and they must not become two lookups: whether a `named`
+	// is a FLOAT alias (F2a — the tag `named` was too coarse to carry), and whether it is an INT alias
+	// (the builtin-conformance receiver classifier, which must see `Byte` and `Integer` as `int` exactly
+	// as `ProgramSignatures.conformerTypeArgName` does for a witness type argument).
+	function rangedAliasTag(nameId TypeNameId) returns ValueTypeTag
+		return match self.signatures.aliasOf(self.internedName(nameId)) 'a'
+			declared(alias) gives maxonTypeTag(alias.underlying)
+			undeclared gives ValueTypeTag.named
 		end 'a'
+	end 'rangedAliasTag'
+
+	// Does `nameId` name a ranged FLOAT alias? A `float(low to high)` alias
+	// (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE is a genuine float; an
+	// `int(low to high)` alias is `named` too and is an int.
+	function namedIsFloatAlias(nameId TypeNameId) returns bool
+		return tagIsFloat(self.rangedAliasTag(nameId))
 	end 'namedIsFloatAlias'
 
 	// A `named` TAG that names a ranged float alias resolves to `float`; every other tag passes through —
@@ -8039,6 +8056,48 @@ export type Parser
 		end 'notNamed'
 		return MaxonType.float if self.namedIsFloatAlias(typeNameIdOf(t)) else t
 	end 'resolveFloatAliasType'
+
+	// ⭐ **THE BUILTIN CONFORMER A `(tag, nameId)` TYPE DISPATCHES ITS `.hash()`/`.equals()`/`.compare()`
+	// UNDER (P1.7a direct dispatch)** — THE one classifier behind both spellings of a direct dispatch (a
+	// binding receiver in `parseMethodCall`, a call-result receiver in `parsePostfix`), so the two cannot
+	// come to disagree about which values carry a builtin conformance.
+	//
+	// A ranged INT alias reduces to `integer` FIRST, which is what makes `Integer`, `Byte`, `HashValue` and
+	// a bare `int` one conformer rather than four: `Byte.compare` does not exist and never will — the
+	// witness path already collapses a ranged type ARGUMENT the same way
+	// (`ProgramSignatures.conformerTypeArgName` → `canonicalizeRangedAlias`), so both dispatch paths key the
+	// same `int.compare` symbol off the same type.
+	//
+	// Every tag with no synthesized impl answers `notABuiltinConformer` (`builtinConformerOfTag`), which is
+	// what keeps a `float`/`bool` receiver a clean diagnostic instead of a call to a symbol nothing installs.
+	function builtinConformerOfType(tag ValueTypeTag, nameId TypeNameId) returns BuiltinConformerLookup
+		return builtinConformerOfTag(tag if tag != ValueTypeTag.named else self.rangedAliasTag(nameId))
+	end 'builtinConformerOfType'
+
+	// The classifier above, asked of an SSA VALUE's own type — the form the postfix loop and the
+	// `Self`-argument check need (a call result and a method argument are values, not bindings).
+	function builtinConformerOfValue(value ValueId) returns BuiltinConformerLookup
+		return self.builtinConformerOfType(self.tagOf(value), nameId: self.valueNameId(value))
+	end 'builtinConformerOfValue'
+
+	// Does `value` carry a builtin conformance at all? The postfix loop's gate, kept a plain bool because a
+	// `match` arm cannot both rebind the loop's cursor and `continue`. It reads the SAME classifier the
+	// dispatch itself resolves the conformer name through, so the gate and the dispatch are one fact.
+	function valueIsBuiltinConformer(value ValueId) returns bool
+		return match self.builtinConformerOfValue(value) 'lookup'
+			conformer gives true
+			notABuiltinConformer gives false
+		end 'lookup'
+	end 'valueIsBuiltinConformer'
+
+	// Is `value` a value of the conformer named `typeName`? The concrete-receiver twin of
+	// `isReceiverTypeParamValue`: what a `Self`-typed formal accepts.
+	function valueIsConformer(value ValueId, typeName ByteArray) returns bool
+		return match self.builtinConformerOfValue(value) 'lookup'
+			conformer(actualName) gives actualName.equals(typeName)
+			notABuiltinConformer gives false
+		end 'lookup'
+	end 'valueIsConformer'
 
 	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
@@ -14046,6 +14105,17 @@ export type Parser
 				continue
 			end 'witnessMethod'
 
+			// A `.method(…)` on a value with a BUILTIN CONFORMANCE (P1.7a direct dispatch) —
+			// `a.get().compare(b.get())`, where the receiver of `.compare` is the `Integer` a prior call
+			// RETURNED and so is no binding at all. Keyed on the value's conformer, the same classifier the
+			// binding path matches on, so both spellings dispatch the identical impl. It chains like every
+			// other hop (`i.hash().hash()` is legal — a `HashValue` is an `int`), which is why it rebinds the
+			// cursor and continues rather than returning.
+			if self.at(TokenKind.dot) and self.valueIsBuiltinConformer(current) 'builtinConformanceMethod'
+				current = try self.parseBuiltinConformanceMethodOnValue(func, receiver: current)
+				continue
+			end 'builtinConformanceMethod'
+
 			break
 		end 'postfix'
 		return current
@@ -16209,6 +16279,19 @@ export type Parser
 				return try self.parseSetMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
 			end 'setMethod'
 
+			// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
+			// synthesized conformance impl rather than through `requireStructBase`, which would reject an
+			// `int` as not a struct. The split is on the binding's declared TYPE reduced to its conformer
+			// (`builtinConformerOfType` — the parser's type oracle again), and it must sit AFTER the String
+			// arm above: `String` is a conformer too, but a String receiver's methods are
+			// `parseStringMethodCall`'s (`s.hash()` direct dispatch is its own slice).
+			match self.builtinConformerOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType)) 'builtinConformer'
+				conformer(typeName) then return try self.parseBuiltinConformanceMethodCall(func, binding: binding, baseTok: baseTok, typeName: typeName)
+				// Not a builtin conformer — a struct, a generic instance, or a type with no conformance at
+				// all. Fall through to the struct path, which resolves the first two and reports the third.
+				notABuiltinConformer then break 'builtinConformer'
+			end 'builtinConformer'
+
 			self.advance()
 			try self.consume(TokenKind.dot)
 			return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
@@ -16415,6 +16498,133 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 		return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
 	end 'parseStringByteLength'
+
+	// --- Direct builtin-conformance dispatch (P1.7a): `i.compare(j)` / `i.hash()` / `i.equals(j)` ---
+
+	// ⭐ **ONE BODY SERVES BOTH DISPATCH PATHS.** A concrete receiver calls `int.compare` DIRECTLY — the
+	// very symbol a `__witness_int_Comparable` slot is stamped with (`ensureWitnessTable`'s funcAbs64
+	// reloc), built by the very same `BuiltinConformanceRuntime.buildIntCompare`. There is no second
+	// impl for the direct path and no thunk between them: the dictionary-passing form loads the pointer
+	// out of `.rdata` and the concrete form names the symbol, and they land in the same function. That is
+	// v1's arrangement (`BuildWitnessTables.maxon:57-143` fills a slot with a reloc to the qualified
+	// `"{typeName}.{method}"`, which is also what its concrete dispatch calls) and shv2 already minted
+	// that exact name, so the only thing this rung adds is the CALL.
+	//
+	// ⚠ **THE INSTALLER MUST SEE THIS REFERENCE.** `installBuiltinConformanceRuntime` builds an impl iff
+	// the program REFERENCES it, and a direct call creates no `.rdata` reloc — see that file's header for
+	// how the reference is found. A dispatch emitted here that the installer cannot see is a link-time
+	// panic (`resolveCallFixups: call to unknown function 'int.compare'`), never a silent wrong answer.
+
+	// `i.compare(j)` on a BINDING receiver. The cursor sits on the base token; the conformer has already
+	// been resolved from the binding's declared type by `parseMethodCall`.
+	function parseBuiltinConformanceMethodCall(func IrFunction, binding VarInfo, baseTok Token, typeName ByteArray) returns ValueId throws ParseError
+		let receiver = try self.builtinConformanceReceiverValue(baseTok, binding: binding)
+		self.advance()
+		try self.consume(TokenKind.dot)
+		return try self.dispatchBuiltinConformanceMethod(func, receiver: receiver, typeName: typeName, baseTok: baseTok)
+	end 'parseBuiltinConformanceMethodCall'
+
+	// The same dispatch on a VALUE that is not a binding — a call result (`a.get().compare(b.get())`), an
+	// indirect-call result, an array element. Reached from the postfix loop with the cursor on the `.`.
+	function parseBuiltinConformanceMethodOnValue(func IrFunction, receiver ValueId) returns ValueId throws ParseError
+		let dotTok = self.current()
+		try self.consume(TokenKind.dot)
+		return try self.dispatchBuiltinConformanceMethod(func, receiver: receiver, typeName: self.requireBuiltinConformerOf(receiver), baseTok: dotTok)
+	end 'parseBuiltinConformanceMethodOnValue'
+
+	// The conformer of a value the CALLER has already gated (`valueIsBuiltinConformer`). It panics on a
+	// miss for `requireBuiltinInterface`'s reason: only a gated caller may ask, so a miss is a driver
+	// invariant violation rather than user input.
+	function requireBuiltinConformerOf(value ValueId) returns ByteArray
+		match self.builtinConformerOfValue(value) 'lookup'
+			conformer(typeName) then return typeName
+			notABuiltinConformer then panic("requireBuiltinConformerOf: v{value} carries no builtin conformance, but the postfix loop gated this dispatch on `valueIsBuiltinConformer` — the gate and the resolution must read one classifier")
+		end 'lookup'
+	end 'requireBuiltinConformerOf'
+
+	// ⭐ **THE VALUE A BUILTIN-CONFORMANCE RECEIVER DENOTES — AND A SELF-FIELD ALIAS HAS NONE.**
+	// `createSelfField` leaves `VarInfo.boundValue` 0 because a read of the alias is a `loadIndirect`
+	// through the receiver, **and ValueId 0 IS the receiver** — so taking `boundValue` for a bare
+	// `count.hash()` inside a method would hash the receiver's BOX POINTER and return it as the field's
+	// hash. A wrong answer with no diagnostic anywhere, which is exactly the class `requireStructBase`'s
+	// header records having measured three times. The field is therefore MATERIALIZED by the same load a
+	// bare read emits (`parseSelfFieldRead`); every other binding already holds its value.
+	function builtinConformanceReceiverValue(baseTok Token, binding VarInfo) returns ValueId throws ParseError
+		if binding.isSelfField 'selfFieldAlias'
+			return try self.parseSelfFieldRead(baseTok, binding: binding)
+		end 'selfFieldAlias'
+		return binding.boundValue
+	end 'builtinConformanceReceiverValue'
+
+	// Resolve the method name against the conformer's INTRINSIC conformances and emit the call. The cursor
+	// sits on the method NAME. A name no intrinsic conformance supplies is a clean positioned reject — never
+	// a route to a `<type>.<method>` symbol nothing installs.
+	function dispatchBuiltinConformanceMethod(func IrFunction, receiver ValueId, typeName ByteArray, baseTok Token) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		match builtinConformerMethod(typeName, methodName: methodTok.value) 'lookup'
+			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, typeName: typeName, method: method, baseTok: baseTok, methodTok: methodTok)
+			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — the builtin conformances supply `hash`, `equals` and `compare`; `toString`/`clone` need the Stringable/Cloneable impls, which are not built", line: methodTok.line, column: methodTok.column)
+		end 'lookup'
+	end 'dispatchBuiltinConformanceMethod'
+
+	// Parse the argument list and emit the call. The receiver is argument 0 and is BORROWED — all three
+	// impls read their operands as by-value scalars and free nothing — so no incref is emitted here and no
+	// drop is owed there, exactly as an instance method's receiver rides.
+	//
+	// It goes through `emitRuntimeCall` rather than `emitCall` for that door's stated reason: a synthesized
+	// impl is built at the Std tier AFTER the pipeline, so no file declares it, `mintCallResult` would type
+	// it `unresolved`, and the argument order is the compiler's own rather than a signature's. The result is
+	// typed from the interface method's declared return (`interfaceReturnMaxonType` — the SAME typing the
+	// witness-dispatched form gets), so `compare`'s `Ordering` carries the enum's `named` tag a `match`
+	// recognizes and `hash`'s `HashValue` carries the ranged alias's.
+	function emitBuiltinConformanceCall(func IrFunction, receiver ValueId, typeName ByteArray, method InterfaceMethodSig, baseTok Token, methodTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		var args = ValueIdArray.create()
+		args.push(receiver)
+		if not self.at(TokenKind.rightParen) 'hasArgs'
+			while true 'argLoop'
+				args.push(try self.parseValueExpression(func))
+				if not self.at(TokenKind.comma) 'endArgs'
+					break
+				end 'endArgs'
+				try self.consume(TokenKind.comma)
+			end 'argLoop'
+		end 'hasArgs'
+		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		// A builtin has no signature for `SemanticCheck`'s arity check to consult, so it is raised here —
+		// the same `builtinArity` every other builtin raises, counted in USER arguments (the receiver slot
+		// is the compiler's, and reporting it would name an argument the author never wrote).
+		let userArgs = args.count() - BuiltinConformanceReceiverArgs
+		if userArgs != method.paramTypeNames.count() 'arity'
+			throw ParseError.builtinArity(String.from(method.name), expected: method.paramTypeNames.count(), got: userArgs, line: methodTok.line, column: methodTok.column)
+		end 'arity'
+
+		try self.requireBuiltinConformanceSelfArgs(method, args: args, typeName: typeName, methodTok: methodTok)
+
+		let resultType = self.interfaceReturnMaxonType(method.returnTypeName)
+		return self.emitRuntimeCall(qualifiedMethodName(typeName, methodName: method.name), args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: SourceRange.between(baseTok, last: rparenTok))
+	end 'emitBuiltinConformanceCall'
+
+	// ⭐ **A `Self`-TYPED FORMAL TAKES A VALUE OF THE RECEIVER'S OWN CONFORMER, AND NOTHING ELSE.**
+	// `Equatable.equals` and `Comparable.compare` both declare `other Self`, and `int.equals(self, other)`
+	// compares two RAW i64s — so a `String` actual would be compared as its heap POINTER and a struct as its
+	// box address. A silent wrong answer, which is precisely what `requireGenuineSelfArgs` refuses for the
+	// witness-dispatched form; this is the same question asked of a CONCRETE conformer instead of a type
+	// parameter. Interface formal `j` is actual `j + BuiltinConformanceReceiverArgs`; arity was checked above.
+	function requireBuiltinConformanceSelfArgs(method InterfaceMethodSig, args ValueIdArray, typeName ByteArray, methodTok Token) throws ParseError
+		for j in 0 upto method.paramTypeNames.count() 'eachFormal'
+			let formalTypeName = try method.paramTypeNames.get(j) otherwise panic("requireBuiltinConformanceSelfArgs: paramTypeNames.get OOB at {j} below count {method.paramTypeNames.count()}")
+			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
+				continue
+			end 'notSelfFormal'
+
+			let actual = try args.get(j + BuiltinConformanceReceiverArgs) otherwise panic("requireBuiltinConformanceSelfArgs: args.get OOB at {j + BuiltinConformanceReceiverArgs} below count {args.count()} — the arity check ran first")
+			if not self.valueIsConformer(actual, typeName: typeName) 'notSameConformer'
+				throw ParseError.builtinOperandType(String.from(method.name), required: String.from(typeName), got: typeTagName(self.tagOf(actual)), line: methodTok.line, column: methodTok.column)
+			end 'notSameConformer'
+		end 'eachFormal'
+	end 'requireBuiltinConformanceSelfArgs'
 
 	// --- Builtin `Array` parsing (P1.7 slice 1) ---
 

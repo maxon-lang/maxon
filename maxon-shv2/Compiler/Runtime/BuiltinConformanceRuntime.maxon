@@ -11,12 +11,29 @@
 // here the target is synthesized rather than user-written. (`String` is a MANAGED concrete type, not a
 // primitive — hence the neutral "builtin" spelling over the older "primitive".)
 //
-// ⭐ **INSTALL IS DRIVEN BY THE RELOC, NOT BY A SEPARATE SCAN.** A slot of `__witness_int_Hashable` /
-// `__witness_String_Equatable` / … is stamped with a `funcAbs64` reloc naming `int.hash` / `String.equals` /
-// … iff the program actually dispatches through it (`ensureWitnessTable`, during lowering). So the install
-// simply asks `globalData` "does any pending rdata reloc name this impl?" — the impl exists iff the table that
-// needs it was built. Table-built ⟺ impl-installed, with no second predicate to drift from the first, and
-// golden-neutral for every program that builds no builtin witness table (the whole conformance-free corpus).
+// ⭐ **INSTALL IS DRIVEN BY THE REFERENCE, NOT BY A SEPARATE SCAN.** The install asks the emitted program
+// one question — *"does anything NAME this impl?"* — and builds the impl iff the answer is yes.
+// **REFERENCED ⟺ INSTALLED**, with no second predicate to drift from the first.
+//
+// There are exactly TWO ways a program can name one, and the question covers both because both are read off
+// what was actually emitted rather than off a parallel record of intent:
+//
+//   • **A WITNESS-TABLE SLOT.** A slot of `__witness_int_Hashable` / `__witness_String_Equatable` / … is
+//     stamped with a `funcAbs64` reloc naming `int.hash` / `String.equals` / … iff the program dispatches
+//     through it (`ensureWitnessTable`, during lowering). The reference is the RELOC.
+//   • **A DIRECT DISPATCH.** `i.compare(j)` on a concrete value is an ordinary `call int.compare`
+//     (`Parser.emitBuiltinConformanceCall`) and creates NO reloc at all — the witness table it would have
+//     ridden is never built. The reference is the CALL.
+//
+// ⚠ The reloc half alone was the whole predicate until direct dispatch shipped, and *"no pending reloc ⇒
+// return early"* then silently declined to install the very impl a direct call had just named — a link-time
+// `resolveCallFixups: call to unknown function 'int.compare'`. The invariant that survives both is
+// REFERENCED, not table-built; the shape it is asked in — one walk of the finished module — is what makes a
+// third kind of reference impossible to forget, because a reference is by definition something the module
+// spells.
+//
+// Golden-neutral for every program that names no impl (the conformance-free corpus and the whole wasm
+// suite): the walk builds nothing, and `eliminateDeadFunctions` would prune an over-installed impl anyway.
 //
 // The SEMANTICS match the reference compilers' monomorphizing source (`stdlib/PrimitiveExtensions.maxon`,
 // `stdlib/helpers/string/hash.maxon`): `int.hash() = self & 0xFFFFFFFF` (the low-32 mask — identity for a
@@ -46,54 +63,155 @@ let Djb2Multiplier = 33
 // construction `ensureWitnessTable` names its reloc target by, so the built function, the reloc, and the
 // dispatch cannot disagree on the symbol.
 export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable)
-	// A program with NO rdata function relocation built no witness table, so it references no synthesized
-	// builtin impl — short-circuit before minting the impl NAMES (the `qualifiedMethodName` allocations),
-	// keeping this allocation-free for every non-witness program (the whole conformance-free scale corpus and
-	// the wasm suite). The same allocation-free gate `checkConformance`/`checkWhereConstraints` open with.
-	if globalData.pendingRdataRelocs.count() == 0 'noWitnessTables'
-		return
-	end 'noWitnessTables'
-
 	let intHash = qualifiedMethodName(IntConformerName, methodName: HashMethodName)
-	if witnessTableReferencesImpl(globalData, funcName: intHash) 'intHash'
-		buildIntHash(module, name: intHash)
-	end 'intHash'
-
 	let intEquals = qualifiedMethodName(IntConformerName, methodName: EqualsMethodName)
-	if witnessTableReferencesImpl(globalData, funcName: intEquals) 'intEquals'
-		buildIntEquals(module, name: intEquals)
-	end 'intEquals'
-
 	// `int.compare` (P1.7a slice 2b-ii). `String` has NO `Comparable` conformance (a byte record has no
 	// ordering — `isIntrinsicBuiltinConformance`), so there is no `String.compare` twin to install.
 	let intCompare = qualifiedMethodName(IntConformerName, methodName: CompareMethodName)
-	if witnessTableReferencesImpl(globalData, funcName: intCompare) 'intCompare'
+	let strHash = qualifiedMethodName(StringConformerName, methodName: HashMethodName)
+	let strEquals = qualifiedMethodName(StringConformerName, methodName: EqualsMethodName)
+
+	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the five answers independent of the
+	// order they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very
+	// function had already appended; none of the five bodies calls another today, but that is a property of
+	// their current shape rather than of the mechanism, and the single up-front call needs no such promise.
+	let referenced = referencedBuiltinImpls(module, globalData: globalData, impls: builtinImplNames(intHash, intEquals: intEquals, intCompare: intCompare, strHash: strHash, strEquals: strEquals))
+
+	if referenced.contains(intHash) 'intHash'
+		buildIntHash(module, name: intHash)
+	end 'intHash'
+
+	if referenced.contains(intEquals) 'intEquals'
+		buildIntEquals(module, name: intEquals)
+	end 'intEquals'
+
+	if referenced.contains(intCompare) 'intCompare'
 		buildIntCompare(module, name: intCompare)
 	end 'intCompare'
 
-	let strHash = qualifiedMethodName(StringConformerName, methodName: HashMethodName)
-	if witnessTableReferencesImpl(globalData, funcName: strHash) 'strHash'
+	if referenced.contains(strHash) 'strHash'
 		buildStrHash(module, name: strHash)
 	end 'strHash'
 
 	// `String.equals` is `__str_eq`'s byte-compare emitted under the witness-visible symbol — ONE graph, two
 	// names (`StringRuntime.buildStrEq`), so the operator path and the witness path cannot drift.
-	let strEquals = qualifiedMethodName(StringConformerName, methodName: EqualsMethodName)
-	if witnessTableReferencesImpl(globalData, funcName: strEquals) 'strEquals'
+	if referenced.contains(strEquals) 'strEquals'
 		buildStrEq(module, name: strEquals)
 	end 'strEquals'
 end 'installBuiltinConformanceRuntime'
 
-// Does any pending `.rdata` funcAbs64 reloc name `funcName`? The one question the install asks — a witness
-// slot naming a synthesized builtin impl is precisely the signal that impl must exist.
-function witnessTableReferencesImpl(globalData GlobalDataTable, funcName ByteArray) returns bool
-	for reloc in globalData.pendingRdataRelocs 'each'
-		if reloc.funcName.equals(funcName) 'match'
+// The five synthesized impl symbols, as the candidate list the reference walk matches against. Taken as
+// parameters rather than re-minted here so the names the walk looks for and the names the builders are
+// installed under are the SAME `ByteArray`s, not two joins that happen to agree.
+function builtinImplNames(intHash ByteArray, intEquals ByteArray, intCompare ByteArray, strHash ByteArray, strEquals ByteArray) returns ByteArrayArray
+	var impls = ByteArrayArray.create()
+	impls.push(intHash)
+	impls.push(intEquals)
+	impls.push(intCompare)
+	impls.push(strHash)
+	impls.push(strEquals)
+	return impls
+end 'builtinImplNames'
+
+// ⭐ **WHICH OF `impls` THIS PROGRAM NAMES BUT DOES NOT DEFINE** — the install's ONE question, answered for
+// all five at once so the module is walked ONCE rather than once per impl. Both reference kinds are
+// collected here (see the header): every pending `.rdata` funcAbs64 slot target, and every function name the
+// emitted ops spell.
+//
+// ⚠ **"NAMES BUT DOES NOT DEFINE" — AND THE SECOND HALF IS NOT PEDANTRY, IT IS A MEASURED WRONG ANSWER.**
+// A synthesized impl exists to SUPPLY a symbol nothing else provides; a symbol the module already defines
+// needs none, and installing one anyway appends a SECOND function under that name, which the by-name link
+// then resolves to whichever it likes. `int.*` cannot collide (`int` is a keyword, so no user method can
+// wear that qualifier), but `String.*` can: a user `type String` with its own `hash()` mints exactly the
+// symbol `String.hash`. MEASURED — crediting that call site made `String.create(7).hash()` return **5381**,
+// djb2's seed read off the user's box, instead of `7`. So the candidates are narrowed to the UNDEFINED ones
+// before a single reference is credited.
+//
+// ⚠ It walks the FLAT `module.ops` array, ORPHANS INCLUDED, and that is deliberate rather than a slip of
+// the `liveOpIndices` rule. The rule exists for passes asking *"what is actually here?"*, where a dead op is
+// a false positive that matters; this asks *"could the program reference this?"*, where the only cost of a
+// false positive is an impl `eliminateDeadFunctions` then prunes — while `liveOpIndices` would allocate an
+// ops-sized index array PER FUNCTION to answer it. Over-approximating is free here and under-approximating
+// is a link failure, so the walk is deliberately the cheap, wide one.
+function referencedBuiltinImpls(module StdModule, globalData GlobalDataTable, impls ByteArrayArray) returns FunctionNameSet
+	var referenced = FunctionNameSet.create()
+
+	let synthesizable = undefinedImplNames(module, impls: impls)
+	if synthesizable.count() == 0 'nothingToSynthesize'
+		return referenced
+	end 'nothingToSynthesize'
+
+	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
+		noteBuiltinImplReference(reloc.funcName, impls: synthesizable, referenced: referenced)
+	end 'eachRdataSlot'
+
+	for opIndex in 0 upto module.ops.count() 'eachOp'
+		noteOpBuiltinImplReference(try module.ops.get(opIndex) otherwise panic("referencedBuiltinImpls: op index {opIndex} below count {module.ops.count()} is not in module.ops"), impls: synthesizable, referenced: referenced)
+	end 'eachOp'
+
+	return referenced
+end 'referencedBuiltinImpls'
+
+// The candidate impls no function in the module already defines — see `referencedBuiltinImpls`' second
+// warning for the wrong answer this exists to prevent. `module.functions` is walked once, and the inner test
+// is five byte compares that almost always fail on length.
+function undefinedImplNames(module StdModule, impls ByteArrayArray) returns ByteArrayArray
+	var undefined = ByteArrayArray.create()
+	for impl in impls 'eachImpl'
+		if not moduleDefinesFunction(module, funcName: impl) 'undefined'
+			undefined.push(impl)
+		end 'undefined'
+	end 'eachImpl'
+	return undefined
+end 'undefinedImplNames'
+
+function moduleDefinesFunction(module StdModule, funcName ByteArray) returns bool
+	for i in 0 upto module.funcCount() 'eachFunc'
+		if module.getFunc(i).name.equals(funcName) 'match'
 			return true
 		end 'match'
-	end 'each'
+	end 'eachFunc'
 	return false
-end 'witnessTableReferencesImpl'
+end 'moduleDefinesFunction'
+
+// The function NAME one `StdOp` spells, credited if it is one of the candidate impls. THREE variants carry
+// one — `call`, `tryCall` and `funcAddr` — the same three `DeadFunctionElimination.markCalleeOf` walks for
+// its reachability edges, and for the same reason: those are the ops that can make a symbol required.
+//
+// The arms RANGE over the whole union in declaration order, ending at the current last variant, so a variant
+// appended past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
+// working in the reviewer's favour (StdDialect's header). A new variant carrying a callee name must be added
+// as its own arm.
+function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced FunctionNameSet)
+	match op 'op'
+		// arith + control + the call band up to `call`: pure computation, branches, `ret`, `param`.
+		const to param then break 'op'
+		call(_, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
+		// `retVoid` … `rdataAddr`: returns, `.data`/`.rdata` ADDRESSES (labels, not functions), loads,
+		// stores, and the two OS primitives that name no Maxon function.
+		retVoid to rdataAddr then break 'op'
+		tryCall(_, _, callee, _) then noteBuiltinImplReference(callee, impls: impls, referenced: referenced)
+		// `errorReturn` reads two local virtuals; `osExit` is an OS primitive.
+		errorReturn to osExit then break 'op'
+		funcAddr(_, funcName) then noteBuiltinImplReference(funcName, impls: impls, referenced: referenced)
+		// `callIndirect`/`witnessCall` consume a code pointer some `funcAddr` or `.rdata` slot already
+		// produced, so they name no symbol; nor do the appended `os*` primitives or `switch`.
+		callIndirect to osWriteFile then break 'op'
+		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
+		osReadWallClock then break 'op'
+	end 'op'
+end 'noteOpBuiltinImplReference'
+
+// Credit `name` if it is one of the candidate impls. A linear scan of five, which is why the candidates are
+// an array rather than a set: at five entries the compare is cheaper than a hash, and this runs per op.
+function noteBuiltinImplReference(name ByteArray, impls ByteArrayArray, referenced FunctionNameSet)
+	for impl in impls 'eachImpl'
+		if name.equals(impl) 'match'
+			referenced.insert(impl)
+			return
+		end 'match'
+	end 'eachImpl'
+end 'noteBuiltinImplReference'
 
 // `int.hash(self) -> HashValue` — `self & 0xFFFFFFFF`, one `and` against the low-32 mask. The receiver is a
 // by-value scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight in

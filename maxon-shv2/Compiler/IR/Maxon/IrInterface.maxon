@@ -335,10 +335,17 @@ export let StringConformerName = b"String"
 // Cloneable`, and no extension adds `Comparable`). That asymmetry is why the interface test below is per
 // conformer rather than one shared disjunction.
 //
+// ⭐ **DIRECT DISPATCH ON A CONCRETE VALUE (`i.compare(j)`, `i.hash()`, `i.equals(j)`) SHIPS**, and it is
+// gated on THIS predicate — see `builtinConformerMethod` below and `Parser.dispatchBuiltinConformanceMethod`.
+// So a receiver whose type has no intrinsic conformance gets a diagnostic instead of a call to a symbol
+// nothing installs, and the parser's dispatch, the E3017 conformance answer and the installed impl set
+// cannot drift: they are one function's three readers.
+//
 // Still DELIBERATELY excluded, each its own future slice: FLOAT conformance (needs a NaN total order and a
 // `floatToBits` intrinsic), `bool` and `Character` conformance (no `Character` type exists yet), and direct
-// `.hash()`/`.compare()` dispatch on a CONCRETE value. (`Set`-with-`String` keys SHIP, P1.7b, riding exactly
-// this `String` Hashable/Equatable answer.)
+// dispatch on a `String` VALUE (`s.hash()` — a String receiver is routed to `parseStringMethodCall` before
+// the conformer classifier is asked). (`Set`-with-`String` keys SHIP, P1.7b, riding exactly this `String`
+// Hashable/Equatable answer.)
 export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray) returns bool
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
@@ -348,3 +355,78 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	end 'string'
 	return false
 end 'isIntrinsicBuiltinConformance'
+
+// --- Direct dispatch on a CONCRETE value (`i.compare(j)`) ---
+
+// The builtin conformer a receiver's RESOLVED value tag dispatches under, or `notABuiltinConformer` when
+// that tag has none. Its `typeName` is the CANONICAL conformer name — the key of the intrinsic-conformance
+// answer, of the `__witness_int_*` tables and of the `int.hash`/`int.equals`/`int.compare` impl symbols — so
+// a direct dispatch and a witness dispatch on the same type reach the same body.
+export union BuiltinConformerLookup
+	conformer(typeName ByteArray)
+	notABuiltinConformer
+end 'BuiltinConformerLookup'
+
+// ⭐ **THE CONFORMER NAME A RESOLVED VALUE TAG CARRIES** — the ONE place a receiver's TYPE becomes the name
+// `isIntrinsicBuiltinConformance` and the impl symbol are keyed by. `IntConformerName`'s own header states
+// the invariant this rests on: it MUST equal `primitiveTypeTagName(ValueTypeTag.integer)`, i.e. `int` is
+// what a resolved `integer` is called everywhere in the compiler.
+//
+// The caller resolves ranged ALIASES to their underlying tag first (`Parser.rangedAliasTag`), exactly as
+// `ProgramSignatures.conformerTypeArgName` reduces a witness type ARGUMENT — so `Integer`, `Byte` and a bare
+// `int` all arrive here as `integer` and all dispatch `int.*`.
+//
+// ⚠ **EVERY OTHER TAG ANSWERS `notABuiltinConformer`, INCLUDING TAGS THAT WILL LATER HAVE ONE.** `float`
+// and `boolean` have no synthesized impls (their rung is next) and `string` is routed to
+// `parseStringMethodCall` before this is asked, so admitting either here would name a symbol nothing
+// installs — a link-time panic in place of a clean diagnostic. A tag joins this map when its impl does.
+export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformerLookup
+	if tag == ValueTypeTag.integer 'int'
+		return BuiltinConformerLookup.conformer(IntConformerName)
+	end 'int'
+	return BuiltinConformerLookup.notABuiltinConformer
+end 'builtinConformerOfTag'
+
+// The protocol method a builtin conformer supplies under a given name, or `notSupplied`.
+export union BuiltinConformerMethodLookup
+	supplied(method InterfaceMethodSig)
+	notSupplied
+end 'BuiltinConformerMethodLookup'
+
+// The protocols a BUILTIN type can intrinsically conform to — the only interface names
+// `isIntrinsicBuiltinConformance` ever answers `true` for, listed once so the method search below covers
+// exactly the set that predicate admits and not one name more.
+function builtinConformableProtocolNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(HashableInterfaceName)
+	names.push(EquatableInterfaceName)
+	names.push(ComparableInterfaceName)
+	return names
+end 'builtinConformableProtocolNames'
+
+// ⭐ **THE METHOD A DIRECT `<value>.<name>(…)` DISPATCH RESOLVES TO ON A BUILTIN CONFORMER** — searched
+// through the conformer's INTRINSIC conformances, so the method set is DERIVED from
+// `isIntrinsicBuiltinConformance` plus the synthesized protocol declarations rather than listed a second
+// time. Two consequences are the point:
+//
+//   • the parser cannot route a method the installer will not install (`int.compare` resolves because `int`
+//     conforms to `Comparable`; a `Comparable`-less conformer's `.compare()` simply is not found), and
+//   • the returned `InterfaceMethodSig` carries the method's NAME (which spells the impl symbol), its
+//     formal TYPES (which the `Self`-argument check reads) and its RETURN TYPE (which types the call's
+//     result) — all three fetched off the one declaration instead of respelled at the dispatch site, the
+//     same "fetch, don't describe" rule `requireBuiltinInterface` exists for.
+export function builtinConformerMethod(typeName ByteArray, methodName ByteArray) returns BuiltinConformerMethodLookup
+	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
+		if not isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'doesNotConform'
+			continue
+		end 'doesNotConform'
+
+		let iface = requireBuiltinInterface(protocolName)
+		let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
+		if methodIndex < iface.methods.count() 'declaresMethod'
+			return BuiltinConformerMethodLookup.supplied(try iface.methods.get(methodIndex) otherwise panic("builtinConformerMethod: methods.get OOB at {methodIndex} below count {iface.methods.count()} for protocol '{String.from(protocolName)}'"))
+		end 'declaresMethod'
+	end 'eachProtocol'
+
+	return BuiltinConformerMethodLookup.notSupplied
+end 'builtinConformerMethod'
