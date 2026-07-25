@@ -94,11 +94,23 @@ function buildEscapeSummary(module MaxonModule) returns ParamEscapeSummary
 	return summary
 end 'buildEscapeSummary'
 
+// Is parameter `param` of `func` `function`-TYPED? The one place that reads the published per-value tag
+// column for this question — the GATE below and the per-parameter BITS below it are the same test asked of
+// one function and then of each of its parameters, and a copy each would be one fact with two spellings free
+// to drift (the shape this file's `isMarkedCapturingClosure` exists to prevent for the closure column).
+//
+// A parameter's ValueId IS its index. The column trails the values it describes, so a `paramCount` that runs
+// past it is a parser/IR disagreement, not a parameter of some other type — hence the bounds test, and the
+// `panic` behind it for the read the bounds test has already made impossible.
+function isFunctionTypedParam(func IrFunction, param ValueId) returns bool
+	return param < func.valueTags.count() and (try func.valueTags.get(param) otherwise panic("isFunctionTypedParam: valueTags.get OOB at {param} inside its own count()")) == ValueTypeTag.function
+end 'isFunctionTypedParam'
+
 // Does `func` take at least one `function`-typed parameter? The cheap gate that keeps the escape scan (and
 // its per-function `BoolArray`) off the overwhelming first-order function — a bounded tag check, no allocation.
 function functionHasFunctionParam(func IrFunction) returns bool
 	for i in 0 upto func.paramCount 'eachParam'
-		if i < func.valueTags.count() and (try func.valueTags.get(i) otherwise ValueTypeTag.void) == ValueTypeTag.function 'isFunction'
+		if isFunctionTypedParam(func, param: i as ValueId) 'isFunction'
 			return true
 		end 'isFunction'
 	end 'eachParam'
@@ -111,8 +123,8 @@ end 'functionHasFunctionParam'
 function escapingParamBits(func IrFunction, module MaxonModule) returns BoolArray
 	var bits = BoolArray.create()
 	for i in 0 upto func.paramCount 'eachParam'
-		let isFunctionParam = i < func.valueTags.count() and (try func.valueTags.get(i) otherwise ValueTypeTag.void) == ValueTypeTag.function
-		bits.push(isFunctionParam and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(i as ValueId))))
+		let param = i as ValueId
+		bits.push(isFunctionTypedParam(func, param: param) and escapeSiteFound(valueEscapeSite(func, module: module, subject: EscapeScanSubject.oneParameter(param))))
 	end 'eachParam'
 	return bits
 end 'escapingParamBits'
@@ -1007,7 +1019,11 @@ function checkCapturingClosureEscape(project Project, func IrFunction, callee By
 			continue
 		end 'paramSafe'
 		let argId = try argIds.get(i) otherwise panic("checkCapturingClosureEscape: argIds.get OOB at {i}")
-		if argId < func.valueIsCapturingClosure.count() and (try func.valueIsCapturingClosure.get(argId) otherwise false) 'capturingEscapes'
+		// ⭐ THE SAME `isMarkedCapturingClosure` the derived rule asks — not a second reading of the mark
+		// column. These two checks are the arrangement's two halves (this one owns the direct-call argument
+		// slot the derived scan delegates to it, in `directCallArgEscapes`), so "which values are capturing
+		// closures" is exactly the fact they must never come to answer differently.
+		if isMarkedCapturingClosure(argId, func: func) 'capturingEscapes'
 			reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: "cannot pass a closure that captures to '{String.from(callee)}', which stores or returns it: {CapturingClosureEscapeSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'capturingEscapes'

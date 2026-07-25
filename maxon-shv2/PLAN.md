@@ -845,7 +845,13 @@ implicit-self is noted with the P1.4b closed-box / the future-rungs list):
   the field token, is unreconstructible later). SABOTAGE-PROVED non-load-bearing: with
   `rejectEscapingClosure` disabled, every one of the 14 pinned escape programs is still REFUSED (6 by this
   rule as E3099 in generic words, the rest by pre-existing type rules) and every accept stays green — so
-  soundness is this rule's and only the wording is the parser's.
+  soundness is this rule's and only the wording is the parser's. **Reviewer's sabotage went further and the
+  answer is stronger than "a type rule caught it":** the three that stopped at a type rule
+  (`ternary-used-in-frame`, `match-arm`, `ternary-to-global`) do so only because those particular corpus
+  programs also mismatch `Integer` against the closure's inferred `int` — an EARLIER pass, so the derived
+  rule never ran. Rewritten so the arms' types agree, all three reach E3099 from
+  `checkCapturingClosureUses` as `mergedIntoPhi` with the parser gate still off. **No live escape route
+  rests on the parser or on a type rule.**
   It also closed two holes the delegation had left open, both by the same principle (*delegate a slot only
   where the delegate actually RUNS*): a capturing closure at a **witness dispatch** (no callee name keys an
   escape summary — it reached lowering and PANICKED) and one handed to a **compiler-internal `__` callee**
