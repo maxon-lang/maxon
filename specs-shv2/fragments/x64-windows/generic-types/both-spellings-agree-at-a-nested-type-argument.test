@@ -1,4 +1,4 @@
-// Test: both-spellings-agree-at-the-comparison
+// Test: both-spellings-agree-at-a-nested-type-argument
 type S0
 	export var s as String
 	export static function make(t String) returns Self
@@ -12,23 +12,16 @@ type Box uses T
 	end 'create'
 end 'Box'
 typealias N0 = Box with S0
-typealias ViaAlias = Box with N0
-typealias ViaInline = Box with (Box with S0)
-function takes(b ViaAlias) returns ExitCode
+typealias N1 = Box with N0
+typealias DeepAlias = Box with (Box with N0)
+typealias DeepInline = Box with (Box with (Box with S0))
+function takes(b DeepAlias) returns ExitCode
 	return 0
 end 'takes'
-function makeIt() returns ViaAlias
-	let v0 = N0.create(S0.make("r"))
-	let r = ViaInline.create(v0)
-	return r
-end 'makeIt'
 function main() returns ExitCode
-	let a = ViaAlias.create(N0.create(S0.make("a")))
-	let b = ViaInline.create(N0.create(S0.make("b")))
-	var swap = ViaAlias.create(N0.create(S0.make("c")))
-	swap = ViaInline.create(N0.create(S0.make("d")))
-	let q = makeIt()
-	return takes(ViaInline.create(N0.create(S0.make("e"))))
+	let d = DeepAlias.create(N1.create(N0.create(S0.make("x"))))
+	let e = DeepInline.create(N1.create(N0.create(S0.make("y"))))
+	return takes(DeepInline.create(N1.create(N0.create(S0.make("z")))))
 end 'main'
 ---
 ExitCode: 0
@@ -82,7 +75,7 @@ func @takes {
     x64.ret
 }
 
-func @makeIt {
+func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -90,7 +83,8 @@ func @makeIt {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -114,27 +108,16 @@ func @makeIt {
     x64.callDirect S0.make
     x64.movRegReg rcx, r8
     x64.callDirect Box.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.create
     x64.movRegReg rcx, r8
     x64.callDirect Box.create
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
-func @main {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.pushReg r15
-    x64.prologue 56
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Box_S0
     x64.leaRegRdata rax, [rip + __str_rec_3]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
@@ -163,55 +146,31 @@ func @main {
     x64.callDirect __mm_incref
     x64.movRegReg rcx, rbx
     x64.callDirect Box.create
-    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect Box.create
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_S0
     x64.leaRegRdata rax, [rip + __str_rec_5]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 49
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 48
-    x64.movRegReg rcx, r14
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
+    x64.movRegReg rax, r13
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r14, r12
-    x64.storeBaseDispReg.word64 [r13 + 0], r14
-    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
     x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegReg rcx, r13
-    x64.callDirect S0.make
-    x64.movRegReg rcx, r8
-    x64.callDirect Box.create
-    x64.movRegReg rcx, r8
-    x64.callDirect Box.create
-    x64.storeSlotReg slot1, r8
-    x64.leaRegRdata rax, [rip + __str_rec_7]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.leaRegRegImm32 rcx, r12, 49
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r13, r8
-    x64.leaRegRegImm32 r14, r13, 48
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegReg rcx, r14
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r14, r12
-    x64.storeBaseDispReg.word64 [r13 + 0], r14
-    x64.storeBaseDispReg.word64 [r13 + 8], r12
-    x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r13 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegReg rcx, r13
     x64.callDirect S0.make
     x64.movRegReg rcx, r8
     x64.callDirect Box.create
@@ -220,80 +179,22 @@ func @main {
     x64.callDirect __mm_incref
     x64.movRegReg rcx, rbx
     x64.callDirect Box.create
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect Box.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect takes
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Box_Box_Box_S0
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Box_S0
-    x64.leaRegRdata rax, [rip + __str_rec_9]
-    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, r13
-    x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r14 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.movRegReg rcx, r14
-    x64.callDirect S0.make
-    x64.movRegReg rcx, r8
-    x64.callDirect Box.create
-    x64.movRegReg rcx, r8
-    x64.callDirect Box.create
-    x64.storeSlotReg slot2, r8
     x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Box_N0
-    x64.callDirect makeIt
-    x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_11]
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, r13
-    x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r14 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.movRegReg rcx, r14
-    x64.callDirect S0.make
-    x64.movRegReg rcx, r8
-    x64.callDirect Box.create
-    x64.movRegReg rcx, r8
-    x64.callDirect Box.create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect takes
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_Box_Box_S0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_Box_N0
-    x64.loadRegSlot rcx, slot2
-    x64.callDirect __destruct_Box_Box_S0
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __destruct_Box_Box_S0
+    x64.callDirect __destruct_Box_Box_Box_S0
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __destruct_Box_N0
-    x64.movRegReg r8, r13
-    x64.epilogue 56
+    x64.callDirect __destruct_Box_Box_N0
+    x64.movRegReg r8, r14
+    x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13

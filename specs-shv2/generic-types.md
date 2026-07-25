@@ -1056,6 +1056,10 @@ export typealias N0 = Box with S0
 ```
 
 <!-- test: both-spellings-agree-at-the-comparison -->
+`Box with N0` and `Box with (Box with S0)` are the SAME type spelled two ways. They intern as two
+instances with two compiled names, so every site that decides type IDENTITY must canonicalize — and
+must agree with every other site. This exercises all four: the type-ARGUMENT read, a call ARGUMENT,
+a `var` REASSIGNMENT, and a `return`.
 ```maxon
 type S0
 	export var s as String
@@ -1072,11 +1076,55 @@ end 'Box'
 typealias N0 = Box with S0
 typealias ViaAlias = Box with N0
 typealias ViaInline = Box with (Box with S0)
-function main() returns ExitCode
-	let v0 = N0.create(S0.make("x"))
-	let a = ViaAlias.create(v0)
-	let b = ViaInline.create(v0)
+function takes(b ViaAlias) returns ExitCode
 	return 0
+end 'takes'
+function makeIt() returns ViaAlias
+	let v0 = N0.create(S0.make("r"))
+	let r = ViaInline.create(v0)
+	return r
+end 'makeIt'
+function main() returns ExitCode
+	let a = ViaAlias.create(N0.create(S0.make("a")))
+	let b = ViaInline.create(N0.create(S0.make("b")))
+	var swap = ViaAlias.create(N0.create(S0.make("c")))
+	swap = ViaInline.create(N0.create(S0.make("d")))
+	let q = makeIt()
+	return takes(ViaInline.create(N0.create(S0.make("e"))))
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: both-spellings-agree-at-a-nested-type-argument -->
+The same agreement one level DEEPER, where the instance's own type argument is a nested instance
+spelled through an alias. This is a separate identity read from the one above — the type-ARGUMENT
+extractor rather than the value extractor — and the two diverge at depth 2 if only one canonicalizes.
+```maxon
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias N0 = Box with S0
+typealias N1 = Box with N0
+typealias DeepAlias = Box with (Box with N0)
+typealias DeepInline = Box with (Box with (Box with S0))
+function takes(b DeepAlias) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	let d = DeepAlias.create(N1.create(N0.create(S0.make("x"))))
+	let e = DeepInline.create(N1.create(N0.create(S0.make("y"))))
+	return takes(DeepInline.create(N1.create(N0.create(S0.make("z")))))
 end 'main'
 ```
 ```exitcode

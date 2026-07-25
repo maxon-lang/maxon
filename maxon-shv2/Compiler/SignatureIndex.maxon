@@ -1267,6 +1267,11 @@ export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstan
 // mangling is settled the moment it exists.
 export typealias CompiledInstanceNameMap = Map with (GenericInstanceId, ByteArray)
 
+// The CANONICAL (comparison) name of each instance — see `canonicalInstanceName`. A SECOND map, deliberately
+// separate from `CompiledInstanceNameMap`: that one names EMITTED symbols (`__destruct_…`, `__layout_…`) and
+// must not move, while this one exists only to answer "are these two values the same type?".
+export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArray)
+
 // The element type NAMES whose `Array with <name>` literal instance the sweep has ALREADY over-interned
 // (P1.7 slice 3). `internArrayLiteralAggregateInstances` runs once per file that materializes a
 // `[<identifier>…]` literal and over-interns `Array with <every declared struct/union>`; because the
@@ -1629,6 +1634,7 @@ export type ProgramSignatures
 	// Each interned instance's COMPILED name, derived on first ask and kept — see `CompiledInstanceNameMap`
 	// for the quadratic this removes. Empty for a program that instantiates no generic.
 	var compiledInstanceNames as CompiledInstanceNameMap
+	var canonicalInstanceNames as CanonicalInstanceNameMap
 	// The element type names whose `Array with <name>` managed-literal instance has already been over-interned
 	// by an earlier file's sweep (P1.7 slice 3) — the dedup that keeps `internArrayLiteralAggregateInstances`
 	// O(types) rather than O(files × types). See `ArrayLiteralElementNameSet`.
@@ -1708,7 +1714,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -3331,6 +3337,72 @@ export type ProgramSignatures
 		return name
 	end 'mangleGenericInstance'
 
+	// ⭐⭐ **THE ONE CANONICAL TYPE IDENTITY OF A GENERIC INSTANCE (P1.7).** `mangleGenericInstance` names
+	// the instance as it was INTERNED, and one type can be interned twice — `Box with N0` and
+	// `Box with (Box with S0)` are the same type spelled two ways, and they compile to `Box_N0` and
+	// `Box_Box_S0`. That duplicate is pre-existing and is its own rung; what must not be pre-existing is two
+	// answers to "are these the same TYPE?", so every comparison site asks THIS, which resolves an
+	// alias-named argument through the alias table and therefore gives both spellings ONE string.
+	//
+	// ⚠ **COMPARISON ONLY — it names nothing that is emitted.** The symbol names (`__destruct_<name>`,
+	// `__layout_<name>`) and the E3006 compiled-name space keep asking `mangleGenericInstance`, so no
+	// emitted byte moves. That separation is the whole reason this is a second function and a second memo
+	// rather than a change to the first.
+	export function canonicalInstanceName(id GenericInstanceId) returns ByteArray
+		if let derived = try self.canonicalInstanceNames.get(id) 'alreadyDerived'
+			return derived
+		end 'alreadyDerived'
+
+		var path = GenericInstanceIdArray.create()
+		let name = self.canonicalNameWithin(id, path: path)
+		self.canonicalInstanceNames.upsert(id, value: name)
+		return name
+	end 'canonicalInstanceName'
+
+	// The recursive half, carrying the instances already open on this walk.
+	//
+	// ⚠ **THE PATH GUARD IS LOAD-BEARING, because this runs in the PARSER** — `aggregateNameOf` asks it, and
+	// the parse completes before `checkGenericAliasCycles` (E3091) refuses a cyclic alias. Resolving alias
+	// arguments is exactly what makes `typealias A = Box with A` a cycle here, where `mangleTypeArg` never
+	// followed one. On revisit it falls back to the INTERNED name, which terminates and is deterministic;
+	// the program is refused moments later by E3091 regardless, so the fallback's only job is to get there.
+	function canonicalNameWithin(id GenericInstanceId, path GenericInstanceIdArray) returns ByteArray
+		for open in path 'eachOpen'
+			if open == id 'cyclic'
+				return self.mangleGenericInstance(id)
+			end 'cyclic'
+		end 'eachOpen'
+
+		path.push(id)
+		var out = String.from(self.genericInstanceBaseName(id))
+		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
+			out.append("_")
+			out.append(self.canonicalTypeArgName(arg, path: path))
+		end 'eachArg'
+		_ = try path.pop() otherwise panic("canonicalNameWithin: path.pop on a path this call pushed to")
+		return out.toByteArray()
+	end 'canonicalNameWithin'
+
+	// One type argument in canonical form — `mangleTypeArg`'s comparison twin. It differs in exactly one arm:
+	// a `named` leaf that names a generic-instance ALIAS becomes THAT instance's canonical name instead of
+	// the alias's bare spelling, which is what collapses the two spellings of one type.
+	function canonicalTypeArgName(t MaxonType, path GenericInstanceIdArray) returns String
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.genericInstance 'nested'
+			return String.from(self.canonicalNameWithin(typeNameIdOf(t), path: path))
+		end 'nested'
+
+		if tag == ValueTypeTag.named 'namedLeaf'
+			let name = self.nameOfId(typeNameIdOf(t))
+			if let aliased = try self.genericAliases.get(name) 'namesAnInstance'
+				return String.from(self.canonicalNameWithin(aliased, path: path))
+			end 'namesAnInstance'
+			return String.from(name)
+		end 'namedLeaf'
+
+		return self.mangleTypeArg(t)
+	end 'canonicalTypeArgName'
+
 	// ⭐ **DERIVE EVERY SWEPT INSTANCE'S COMPILED NAME NOW, SO THE PARSE ONLY EVER READS ONE (P1.7).**
 	//
 	// `mangleGenericInstance` memoizes by WRITING into `compiledInstanceNames`, and the real parse became a
@@ -3383,7 +3455,9 @@ export type ProgramSignatures
 			string then return EmptySourceText
 			function then return EmptySourceText
 			typeParameter then return EmptySourceText
-			genericInstance then return self.instanceArgTypeName(gid, position: position)
+			// CANONICAL, not `instanceArgTypeName`: a nested instance's identity must match what the two
+			// value-side extractors produce for the same type, whichever way it was spelled.
+			genericInstance then return self.canonicalInstanceName(typeNameIdOf(self.substitutedInstanceArg(gid, position: position)))
 		end 'k'
 	end 'instanceArgAggregateName'
 
@@ -3405,7 +3479,7 @@ export type ProgramSignatures
 	function namedTypeArgIdentity(arg MaxonType) returns ByteArray
 		let name = self.nameOfId(typeNameIdOf(arg))
 		if let aliased = try self.genericAliases.get(name) 'namesAnInstance'
-			return self.mangleGenericInstance(aliased)
+			return self.canonicalInstanceName(aliased)
 		end 'namesAnInstance'
 
 		// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
