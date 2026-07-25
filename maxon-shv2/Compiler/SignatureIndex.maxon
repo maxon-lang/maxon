@@ -260,12 +260,15 @@ end 'topLevelStorageKey'
 // is why it is a function and not an inlined interpolation at the two sites: a reader and a writer
 // that spelled this key differently would file a declaration nothing could ever find.
 //
-// EXPORTED because ranged typealiases are filed by the same rule and must be filed by the same
-// SPELLING (`RangedAliasRegistry`, Project.maxon). A second key builder for the second declaration
-// kind is this project's signature bug — one fact written down twice — and its failure mode here is
-// the silent one: a writer and a reader that disagree file an alias nothing can ever find, so every
-// lookup quietly falls through to the bare name and file scoping evaporates with no test failing.
-export function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteArray
+// ⚠ **IT COSTS ~4 ALLOCATIONS PER CALL** — `String.from`, the interpolation, `toByteArray` — and
+// `declFor` builds one on EVERY top-level-name probe, before it knows whether the name is even
+// file-private. Ranged typealiases resolve by the same scoped-first rule and deliberately do NOT
+// come through here: they are asked once per named TYPE reference and would have paid this per use
+// of any name two files declare (measured at 24 allocations per use — see `RangedAliasRegistry`).
+// They use a two-level map instead, which needs no composite key. This site keeps the string key
+// because `declIndex` is one flat map shared with `topLevelStorageKey`'s writes; giving it the same
+// treatment is a change to that map's shape and to its writer, not to this function.
+function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteArray
 	return "{declFilePath.toString()}{FileScopedKeySeparator}{String.from(name)}".toByteArray()
 end 'fileScopedDeclKey'
 
@@ -718,9 +721,8 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	// where the UNION was declared, which `EnumLayout` does not record. Passing the classifying file
 	// would not be a partial answer, it would be the wrong one — this is asked from the emitted
 	// runtime's walk of `project.enumTypes` as well as from the parser.
-	match signatures.aliasOfAnyFile(name) 'alias'
-		declared(alias) then return aliasPayloadClass(alias)
-		undeclared then break 'alias'
+	if let underlying = try signatures.aliasUnderlyingInAnyFile(name) 'alias'
+		return aliasPayloadClass(underlying)
 	end 'alias'
 
 	// A payload-FREE enum's value is an i64 tag — a scalar; a BOXED union is a managed heap pointer
@@ -742,11 +744,11 @@ end 'classifyUnionPayload'
 
 // A ranged-int alias payload is a scalar of its underlying width. A float-underlying alias would be a
 // float payload, rejected the same way a bare `float` is.
-function aliasPayloadClass(alias RangedTypeAlias) returns PayloadClass
-	if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
+function aliasPayloadClass(underlying MaxonType) returns PayloadClass
+	if maxonTypeTag(underlying) == ValueTypeTag.float 'floatAlias'
 		return PayloadClass.floatPayload
 	end 'floatAlias'
-	return PayloadClass.scalar(alias.underlying)
+	return PayloadClass.scalar(underlying)
 end 'aliasPayloadClass'
 
 // A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its i64
@@ -2671,10 +2673,11 @@ export type ProgramSignatures
 	end 'aliasOf'
 
 	// The bare-name door, for the readers that have no file to ask from — see
-	// `RangedAliasRegistry.lookupInAnyFile`, which is where the (narrow) residual is written down.
-	export function aliasOfAnyFile(name ByteArray) returns DeclaredAlias
-		return self.typeAliases.lookupInAnyFile(name)
-	end 'aliasOfAnyFile'
+	// `RangedAliasRegistry.underlyingInAnyFile`, which is where the (narrow) residual is written down
+	// and why it hands back the primitive rather than the alias.
+	export function aliasUnderlyingInAnyFile(name ByteArray) returns MaxonType throws MapError
+		return try self.typeAliases.underlyingInAnyFile(name)
+	end 'aliasUnderlyingInAnyFile'
 
 	// --- Inner + per-instance ranged aliases (P1.6-C) ---
 
@@ -3198,12 +3201,11 @@ export type ProgramSignatures
 	//
 	// ⚠ Bare-name for `classifyUnionPayload`'s reason: the file that governs a generic INSTANCE's type
 	// argument is the one that wrote the instantiation, and a `GenericInstanceId` does not carry it.
-	// Only `underlying` is read, never the range.
+	// Only `underlying` is reachable through that door, never the range.
 	function canonicalizeRangedAlias(t MaxonType) returns MaxonType
 		if maxonTypeTag(t) == ValueTypeTag.named 'named'
-			match self.aliasOfAnyFile(self.nameOfId(typeNameIdOf(t))) 'rangedAlias'
-				declared(alias) then return alias.underlying
-				undeclared then break 'rangedAlias'
+			if let underlying = try self.aliasUnderlyingInAnyFile(self.nameOfId(typeNameIdOf(t))) 'rangedAlias'
+				return underlying
 			end 'rangedAlias'
 		end 'named'
 		return t
