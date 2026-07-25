@@ -201,6 +201,15 @@ public class DebugStreamMonitor {
         }
         process.WaitForExit();
 
+        // Drain the forwarded stdio before returning, the same obligation the normal exit below has: the
+        // target is gone so its pipes are closed and these complete promptly, but skipping them threw
+        // away whatever it had already written — on the one path where the user is diagnosing a version
+        // mismatch and needs every line the target managed to produce.
+#pragma warning disable VSTHRD002 // synchronous entry point, no SyncContext to deadlock against
+        stdoutTask.Wait();
+        stderrTask.Wait();
+#pragma warning restore VSTHRD002
+
         return SchemaMismatchExit;
       }
 

@@ -147,6 +147,12 @@ internal sealed class MaxonDebugger : IDisposable {
     long size = RuntimeEmitter.DbgControlSegmentSize;
     var mapping = SharedMapping.Create(size, ControlSegmentPrefix);
     MemoryMappedViewAccessor? accessor = null;
+
+    // Declared OUT here so the failure path can reach it: between the spawn and the constructor there is
+    // a window (the two forwarding tasks) where a throw would leave a target that no MaxonDebugger owns,
+    // and therefore one that nothing will ever EndSession. It is the same no-orphan obligation Dispose
+    // carries, at the one moment there is no instance to carry it.
+    Process? spawned = null;
     try {
       accessor = mapping.Map.CreateViewAccessor(0, size);
       // A fresh segment is zeroed; StopAtEntry is the one field seeded before spawn, so the driver can
@@ -174,6 +180,7 @@ internal sealed class MaxonDebugger : IDisposable {
         process.Dispose();
         throw new DebuggerException($"cannot launch '{exePath}': {ex.Message}");
       }
+      spawned = process;
 
       var stdout = Task.Run(() => {
         var sr = process.StandardOutput;
@@ -184,12 +191,32 @@ internal sealed class MaxonDebugger : IDisposable {
         while (sr.ReadLine() is { } line) Console.Error.WriteLine(line);
       });
 
+      // Ownership passes to the instance here: from this point EndSession/Dispose is what ends the target.
+      spawned = null;
       return new MaxonDebugger(mapping, accessor, process, stdout, stderr, sidecar,
         stopTimeout ?? DefaultStopTimeout);
     } catch {
+      KillUnowned(spawned);
       accessor?.Dispose();
       mapping.Dispose();
       throw;
+    }
+  }
+
+  /// Kill a target that was spawned but never handed to an instance, so the no-orphan guarantee holds
+  /// across the one window where there is no instance to hold it. Every failure is swallowed on purpose:
+  /// this runs while an exception is already in flight, and masking that exception with a kill failure
+  /// would hide the reason the attach failed at all.
+  private static void KillUnowned(Process? spawned) {
+    if (spawned == null) return;
+
+    try {
+      if (!spawned.HasExited) spawned.Kill(entireProcessTree: true);
+      spawned.WaitForExit();
+    } catch (Exception) {
+      // Already gone, or not killable; nothing further this path can do about it.
+    } finally {
+      spawned.Dispose();
     }
   }
 
@@ -273,41 +300,64 @@ internal sealed class MaxonDebugger : IDisposable {
 
   // ---- Commands ----
 
-  /// The offsets where the USER (not a transient step temp bp) has armed a breakpoint. The agent stores
-  /// one 0xCC/BRK per offset, so a step's temp bp set where a user bp already sits would SHARE that byte
-  /// and the temp's cleanup would silently delete the user's bp. The step temp-bp runners consult this to
-  /// leave a coinciding user bp untouched. Populated by the user-facing arm/clear below; the temp runners
-  /// arm/clear through PostCommand directly, so a temp never enters this set.
-  private readonly HashSet<long> _userBreakpointOffsets = [];
+  /// <summary>
+  /// What the driver knows about one breakpoint the USER armed. "There is a user breakpoint at this
+  /// offset" and "and this is when it fires" are ONE record on purpose: they were two facts for exactly
+  /// as long as it took a conditional breakpoint to make them disagree (see
+  /// <see cref="ArmTempIfNeeded"/>).
+  /// </summary>
+  private sealed class UserBreakpoint(ResolvedCondition condition) {
+
+    /// The condition the AGENT evaluates before publishing a hit here.
+    public ResolvedCondition Condition = condition;
+
+    /// True while a step runner has temporarily replaced <see cref="Condition"/> in the target with the
+    /// unconditional record, because it needs this one trap byte to fire on the next hit whatever the
+    /// user's condition says. Restored when that runner finishes.
+    public bool ConditionSuspended;
+  }
+
+  /// The breakpoints the USER armed, by code offset (a transient step temp bp is never one). The agent
+  /// stores one 0xCC/BRK per offset, so a step's temp bp set where a user bp already sits would SHARE
+  /// that byte and the temp's cleanup would silently delete the user's bp. The step temp-bp runners
+  /// consult this to leave a coinciding user bp untouched. Populated by the user-facing arm/clear below;
+  /// the temp runners arm/clear through PostCommand directly, so a temp never enters this map.
+  private readonly Dictionary<long, UserBreakpoint> _userBreakpoints = [];
 
   /// The registry mirrors what is ARMED IN THE TARGET, so both sides update only once the post has
   /// LANDED. Recording a breakpoint that never armed would make the step runners believe a user bp sits
   /// there and skip planting their own temp, so a `next`/`finish` would run straight past the place it
   /// meant to stop; forgetting one that is still armed is the mirror error, and lets a temp bp be planted
   /// on the user's live 0xCC and then delete it. Both became reachable once a post can be refused outright
-  /// (see <see cref="StopOutstanding"/>) rather than only failing after a 20s stall.
+  /// (see <see cref="StopOutstanding"/>, and the agent's own refusal of a full table) rather than only
+  /// failing after a 20s stall. The recorded condition is UNCONDITIONAL because that is __dbg_set_bp's
+  /// postcondition — it resets the slot's condition on both the fresh and the re-arm path.
   public bool SetBreakpointAtOffset(long codeOffset) {
     if (!PostCommand(RuntimeEmitter.DbgCmdSetBp, codeOffset)) return false;
-    _userBreakpointOffsets.Add(codeOffset);
+    _userBreakpoints[codeOffset] = new UserBreakpoint(ResolvedCondition.Unconditional);
     return true;
   }
 
   public bool ClearBreakpointAtOffset(long codeOffset) {
     if (!PostCommand(RuntimeEmitter.DbgCmdClearBp, codeOffset)) return false;
-    _userBreakpointOffsets.Remove(codeOffset);
+    _userBreakpoints.Remove(codeOffset);
     return true;
   }
 
   /// <summary>
-  /// True when <paramref name="stop"/> landed on an offset where the USER has armed a breakpoint —
-  /// gdb's "breakpoints win" rule, which the step runners apply to a stop they did not ask for.
+  /// True when <paramref name="stop"/> landed on an offset where the USER has armed a breakpoint that
+  /// would FIRE there — gdb's "breakpoints win" rule, which the step runners apply to a stop they did
+  /// not ask for. Stated ONCE so the two runners that need it cannot disagree about what counts as the
+  /// user's breakpoint.
   ///
-  /// The registry used to be consulted at ARM time only (<see cref="ArmTempIfNeeded"/>, so a temp bp
-  /// never deletes a coinciding user bp); this is the STOP-time reading of the same one fact, which is
-  /// what makes `finish` and `next` honor a breakpoint hit during their run. Stated ONCE so the two
-  /// runners that need it cannot disagree about what counts as the user's breakpoint.
+  /// A breakpoint whose condition this very step SUSPENDED is excluded, and that is the point of
+  /// tracking the suspension: while suspended the trap fires for US, so a hit there is our temp stop and
+  /// must be judged by the runner's own rule (<see cref="RunUntilReturn"/>'s frame guard), not reported
+  /// as the user's breakpoint winning. Reporting it as the user's would abort a `finish` at a recursive
+  /// re-entry the user's condition excluded.
   /// </summary>
-  private bool IsAtUserBreakpoint(StopInfo stop) => _userBreakpointOffsets.Contains(stop.PcOffset);
+  private bool IsAtUserBreakpoint(StopInfo stop) =>
+    _userBreakpoints.TryGetValue(stop.PcOffset, out var bp) && !bp.ConditionSuspended;
 
   /// <summary>
   /// Resume the target. When a previous wait TIMED OUT the stop it asked for is still outstanding and the
@@ -449,9 +499,25 @@ internal sealed class MaxonDebugger : IDisposable {
   /// downgrade would not be a missing feature but a wrong answer.
   public bool CondBpSupported => AgentVersion >= RuntimeEmitter.DbgCondBpMinVersion;
 
+  /// <summary>
   /// A parsed and RESOLVED breakpoint condition: exactly the words of the agent's condition record, so
   /// this record and <see cref="PostSetBpCond"/> are the only places the driver knows that layout.
-  private readonly record struct ResolvedCondition(long Op, long Imm, long Slot, long Width, long Signed);
+  ///
+  /// <see cref="Unconditional"/> is a first-class value rather than an absent one, because "fires on
+  /// every hit" is a record the driver POSTS — both to describe a plain `break` and to suspend a user
+  /// condition for the duration of a step (see <see cref="ArmTempIfNeeded"/>).
+  /// </summary>
+  private readonly record struct ResolvedCondition(long Kind, long Op, long Imm, long Slot, long Width,
+      long Signed) {
+
+    public static ResolvedCondition Unconditional =>
+      new(RuntimeEmitter.DbgCondKindUnconditional, 0, 0, 0, 0, 0);
+
+    public static ResolvedCondition ScalarCompare(long op, long imm, long slot, long width, long signed) =>
+      new(RuntimeEmitter.DbgCondKindScalarCompare, op, imm, slot, width, signed);
+
+    public bool FiresOnEveryHit => Kind == RuntimeEmitter.DbgCondKindUnconditional;
+  }
 
   /// <summary>
   /// Arm a breakpoint at an already-resolved <paramref name="offset"/>, optionally conditional. The ONE
@@ -478,25 +544,25 @@ internal sealed class MaxonDebugger : IDisposable {
       ClearBreakpointAtOffset(offset);
       return BreakResult.FromAck(false, offset, Symbolize(offset));
     }
+
+    // The registry records WHEN it fires, not merely that it exists: a step runner that shares this one
+    // trap byte has to know it may not fire on its own (see ArmTempIfNeeded).
+    _userBreakpoints[offset].Condition = resolved;
     return BreakResult.FromAck(true, offset, Symbolize(offset));
   }
 
-  /// The condition grammar's relational operators, paired with the agent opcode each maps to. Ordered
-  /// LONGEST-FIRST so `<=` is matched before `<` would swallow its head.
-  private static readonly (string Text, long Op)[] ConditionOperators = [
-    ("==", RuntimeEmitter.DbgCondOpEq),
-    ("!=", RuntimeEmitter.DbgCondOpNe),
-    ("<=", RuntimeEmitter.DbgCondOpLe),
-    (">=", RuntimeEmitter.DbgCondOpGe),
-    ("<", RuntimeEmitter.DbgCondOpLt),
-    (">", RuntimeEmitter.DbgCondOpGt),
-  ];
-
-  /// The sidecar's spelling of `bool`: a 0/1 byte. It is the one Primitive name the `i`/`u` signedness
-  /// convention below does not describe, and it is read UNSIGNED — the same reading
-  /// <c>DbgValueRenderer.RenderPrimitive</c> gives it, so a condition on a bool and a `print` of the same
-  /// bool can never disagree.
-  private const string BoolPrimitiveName = "i1";
+  /// <summary>
+  /// The condition grammar's relational operators — read from the ONE table the agent's evaluator emits
+  /// its dispatch from, so an operator this grammar accepts is one the agent can evaluate BY
+  /// CONSTRUCTION rather than by two lists happening to agree. (They would have failed in the dangerous
+  /// direction: an operator the agent does not recognise reaches its unrecognised-operator arm, which
+  /// STOPS — a conditional breakpoint silently promoted to an unconditional one.)
+  ///
+  /// Sorted LONGEST-TEXT-FIRST here rather than relying on the table's row order, so `&lt;=` is matched
+  /// before `&lt;` would swallow its head however the rows are written.
+  /// </summary>
+  private static readonly RuntimeEmitter.DbgCondOperator[] ConditionOperators =
+    [.. RuntimeEmitter.DbgCondOperators.OrderByDescending(o => o.Text.Length)];
 
   /// <summary>
   /// Parse `&lt;local&gt; &lt;relop&gt; &lt;literal&gt;` and resolve it against the function containing
@@ -532,10 +598,10 @@ internal sealed class MaxonDebugger : IDisposable {
 
     long op = 0;
     bool haveOp = false;
-    foreach (var (opText, opCode) in ConditionOperators) {
-      if (!src.AsSpan(i).StartsWith(opText)) continue;
-      op = opCode;
-      i += opText.Length;
+    foreach (var candidate in ConditionOperators) {
+      if (!src.AsSpan(i).StartsWith(candidate.Text)) continue;
+      op = candidate.Code;
+      i += candidate.Text.Length;
       haveOp = true;
       break;
     }
@@ -565,7 +631,7 @@ internal sealed class MaxonDebugger : IDisposable {
 
     if (!TryScalarOperandShape(s, local.TypeId, out long width, out long signedFlag, out error)) return false;
 
-    condition = new ResolvedCondition(op, imm, local.LocValue, width, signedFlag);
+    condition = ResolvedCondition.ScalarCompare(op, imm, local.LocValue, width, signedFlag);
     return true;
   }
 
@@ -594,9 +660,10 @@ internal sealed class MaxonDebugger : IDisposable {
   /// sign-extend them. Anything that is not a scalar integer or bool is REFUSED by name, so an
   /// unsupported operand never yields a breakpoint that quietly ignores its condition.
   ///
-  /// Signedness comes from the sidecar's Primitive NAMING CONVENTION (`i&lt;bits&gt;` signed,
-  /// `u&lt;bits&gt;` unsigned — DebugInfoBuilder writes the IrType names straight through) and the WIDTH
-  /// from the type record's own Size field, so no per-name width table is restated here to drift.
+  /// The shape itself comes from <see cref="DbgValueRenderer.TryScalarShape"/> — the SAME rule `print`
+  /// reads the same local by — so a condition and a printed value can never disagree about a local's
+  /// width or signedness. What is added here is only what the AGENT additionally requires: a width its
+  /// operand load has an arm for, and an ordering it can perform signed.
   /// </summary>
   private static bool TryScalarOperandShape(MxdbgReader s, uint typeId, out long width, out long signedFlag,
       out string error) {
@@ -608,29 +675,15 @@ internal sealed class MaxonDebugger : IDisposable {
     }
 
     var t = s.Type(typeId);
-    bool signed;
-    switch (t.Kind) {
-      // A ranged alias is a signed machine integer, read exactly as DbgValueRenderer reads one.
-      case MxdbgTypeKind.IntRanged:
-        signed = true;
-        break;
-      case MxdbgTypeKind.Primitive when t.Name == BoolPrimitiveName:
-        signed = false;
-        break;
-      case MxdbgTypeKind.Primitive when t.Name.StartsWith('i'):
-        signed = true;
-        break;
-      case MxdbgTypeKind.Primitive when t.Name.StartsWith('u'):
-        signed = false;
-        break;
-      default:
-        error = $"'{t.Name}' is not an integer or bool; a condition can only compare a scalar local";
-        return false;
+    if (!DbgValueRenderer.TryScalarShape(t, out int shapeWidth, out bool signed)) {
+      error = $"'{t.Name}' is not an integer or bool; a condition can only compare a scalar local";
+      return false;
     }
 
-    width = t.Size;
-    if (width != 1 && width != 2 && width != 4 && width != RuntimeEmitter.DbgCondWordSize) {
-      error = $"'{t.Name}' occupies {t.Size} bytes, which the agent's operand load does not cover (1, 2, 4, or 8)";
+    width = shapeWidth;
+    if (!RuntimeEmitter.DbgCondOperandWidths.Contains(shapeWidth)) {
+      error = $"'{t.Name}' occupies {t.Size} bytes, which the agent's operand load does not cover "
+        + $"({string.Join(", ", RuntimeEmitter.DbgCondOperandWidths)})";
       return false;
     }
 
@@ -708,12 +761,6 @@ internal sealed class MaxonDebugger : IDisposable {
   /// races to exit after, which is treated as done (the program legitimately ran to completion).
   /// </summary>
   private bool PostCommand(long cmd, long arg) {
-    // The mailbox is only serviced by a PARKED target. With a stop outstanding the target is still
-    // running, so a post would sit unacked for the whole AttachTimeout and then — if the target parked
-    // meanwhile — be acked and resume it, consuming the stop that was outstanding. Refused fast instead,
-    // so a surface reports "not acknowledged" immediately rather than stalling for 20s on each command.
-    if (StopOutstanding) return false;
-
     _accessor.Write(RuntimeEmitter.DbgOffCmd, cmd);
     _accessor.Write(RuntimeEmitter.DbgOffCmdArg, arg);
     return RingDoorbellAndAwaitAck(cmd);
@@ -740,8 +787,7 @@ internal sealed class MaxonDebugger : IDisposable {
   /// discipline is the shared one, and the doorbell's release is what publishes the staged bytes.
   /// </summary>
   private bool PostSetBpCond(long codeOffset, ResolvedCondition c) {
-    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffKind,
-      RuntimeEmitter.DbgCondKindScalarCompare);
+    _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffKind, c.Kind);
     _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffOp, c.Op);
     _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffImm, c.Imm);
     _accessor.Write(RuntimeEmitter.DbgOffCondStage + RuntimeEmitter.DbgCondOffSlot, c.Slot);
@@ -754,13 +800,30 @@ internal sealed class MaxonDebugger : IDisposable {
   }
 
   /// <summary>
-  /// Ring the command doorbell for a command whose fields are already written, and wait for its ack.
-  /// After a full barrier (matching the agent's release/acquire on CmdSeq) it bumps CmdSeq to a fresh
-  /// sequence and waits for AckSeq to reach it. Returns false on timeout or target exit — except a
-  /// Continue the target races to exit after, treated as done. Shared by every mailbox poster so the
+  /// Ring the command doorbell for a command whose fields are already written, and wait for the agent to
+  /// answer it. After a full barrier (matching the agent's release/acquire on CmdSeq) it bumps CmdSeq to
+  /// a fresh sequence and waits for AckSeq to reach it. Returns false on timeout or target exit — except
+  /// a Continue the target races to exit after, treated as done. Shared by every mailbox poster so the
   /// publish-and-await protocol lives in exactly one place.
+  ///
+  /// An ack alone is NOT success, which is what this used to return. The agent acks every command it
+  /// PROCESSED, including ones it could not carry out — an offset outside `.text`, a full 16-slot
+  /// breakpoint table, a condition for a breakpoint that is not armed — and the driver reported those to
+  /// the user as "Breakpoint set" (measured: the 17th of 17 breakpoints, reported set, never hit). So the
+  /// outcome the agent published alongside the ack is the answer, and the ack is only what makes it
+  /// readable. <see cref="CommandOutcomeSupported"/> covers an older agent, which writes no outcome.
   /// </summary>
   private bool RingDoorbellAndAwaitAck(long cmd) {
+    // The mailbox is only serviced by a PARKED target. With a stop outstanding the target is still
+    // running, so a post would sit unacked for the whole AttachTimeout and then — if the target parked
+    // meanwhile — be acked and resume it, consuming the stop that was outstanding. Refused fast instead,
+    // so a surface reports "not acknowledged" immediately rather than stalling for 20s on each command.
+    //
+    // The guard lives HERE, on the one publisher every poster shares, rather than on PostCommand alone:
+    // the read-memory and set-condition posters bypass that one, and their safety was only ever a
+    // property of who happened to call them — a step runner cannot start with a stop outstanding TODAY.
+    if (StopOutstanding) return false;
+
     Thread.MemoryBarrier();
     _cmdSeq += 1;
     _accessor.Write(RuntimeEmitter.DbgOffCmdSeq, _cmdSeq);
@@ -769,12 +832,19 @@ internal sealed class MaxonDebugger : IDisposable {
     var backoff = new PollBackoff();
     while (true) {
       Thread.MemoryBarrier();
-      if (_accessor.ReadInt64(RuntimeEmitter.DbgOffAckSeq) >= _cmdSeq) return true;
+      if (_accessor.ReadInt64(RuntimeEmitter.DbgOffAckSeq) >= _cmdSeq)
+        return !CommandOutcomeSupported
+          || _accessor.ReadInt64(RuntimeEmitter.DbgOffCmdResult) == RuntimeEmitter.DbgCmdResultOk;
       if (_process.HasExited) return cmd == RuntimeEmitter.DbgCmdContinue;
       if (DateTime.UtcNow >= deadline) return false;
       backoff.Pause();
     }
   }
+
+  /// True when this binary's agent ANSWERS a command rather than only acking it. Below it the outcome
+  /// word is the zeroed segment's 0 — indistinguishable from a refusal — so the driver falls back to the
+  /// older, weaker "an ack means processed" contract rather than calling every command refused.
+  private bool CommandOutcomeSupported => AgentVersion >= RuntimeEmitter.DbgCmdResultMinVersion;
 
   // ---- Memory reads (value inspection) ----
 
@@ -1068,6 +1138,13 @@ internal sealed class MaxonDebugger : IDisposable {
       // completed a single-step here, the INT3/BRK genuinely did not fire — which is a real distinction
       // from the RunUntilReturn case, where the trap did execute and the agent said so. The LOCATION is
       // the answer either way, and neither face has to invent a reason the agent never published.
+      //
+      // A CONDITIONAL breakpoint therefore wins here without its condition having been evaluated: the
+      // trap never ran, and the driver must not evaluate the condition itself — a second evaluator
+      // beside the agent's is the divergence this rung spent its effort removing. That errs toward a
+      // SPURIOUS stop, which is the same direction __dbg_cond_holds takes for every shape it does not
+      // recognise, and for the same reason: an extra stop is visible and costs a `continue`, while
+      // walking past a breakpoint the user set is a miss they have no way to notice.
       if (IsAtUserBreakpoint(cur)) return new StepOutcome(StepOutcomeKind.Stopped, cur);
 
       // Returned to a shallower frame: we stepped OUT of the start function; stop in the caller.
@@ -1159,44 +1236,85 @@ internal sealed class MaxonDebugger : IDisposable {
   }
 
   /// <summary>
-  /// Arm a TEMP breakpoint at <paramref name="offset"/> unless a USER breakpoint already sits there — in
-  /// which case the user's bp already stops execution at that offset, so we must not arm (the agent would
-  /// share the single 0xCC/BRK) nor later clear it (which would silently delete the user's bp). Appends to
-  /// <paramref name="armed"/> only what WE armed, so the caller's cleanup touches only its own temps.
-  /// Returns false only on a genuine arm failure. Arms/clears through <see cref="PostCommand"/> directly so
-  /// a temp never enters <see cref="_userBreakpointOffsets"/>.
+  /// What ONE step runner did to the target's breakpoint state and owes back. Two lists, because the two
+  /// ways to make a trap fire where a runner needs one have different undos: a trap it PLANTED is
+  /// cleared, a user's trap whose condition it SUSPENDED has that condition restored.
   /// </summary>
-  private bool ArmTempIfNeeded(long offset, List<long> armed) {
-    if (_userBreakpointOffsets.Contains(offset)) return true;   // a user bp already stops here; leave it
+  private sealed class TempBreakpoints {
+    public readonly List<long> Armed = [];
+    public readonly List<long> Suspended = [];
+  }
+
+  /// <summary>
+  /// Make sure execution STOPS at <paramref name="offset"/> for the duration of one step runner, and
+  /// record in <paramref name="temps"/> what has to be undone. Three cases, and the third is the one this
+  /// rung's conditional breakpoints created:
+  ///
+  ///   * nothing there — plant a temp bp, to be cleared afterwards;
+  ///   * an UNCONDITIONAL user bp — it already stops here every time, so plant nothing (the agent stores
+  ///     one 0xCC/BRK per address, and clearing "ours" afterwards would delete the user's);
+  ///   * a CONDITIONAL user bp — the trap byte is there but it may NOT FIRE, because the agent evaluates
+  ///     the user's condition before publishing. Sharing it was correct only while every breakpoint fired
+  ///     on every hit: measured, `break f:32 if i == 4` followed by `until 32` armed nothing at line 32,
+  ///     the agent skipped the hit whose condition was false, and `until` reported a stop in the ENTRY
+  ///     STUB instead of at the line the user named. So the user's condition is SUSPENDED (replaced in
+  ///     the target by the unconditional record) for the runner's duration and restored afterwards.
+  ///
+  /// Returns false only on a genuine failure. Arms/clears through <see cref="PostCommand"/> directly so a
+  /// temp never enters <see cref="_userBreakpoints"/>.
+  /// </summary>
+  private bool ArmTempIfNeeded(long offset, TempBreakpoints temps) {
+    if (_userBreakpoints.TryGetValue(offset, out var user)) {
+      if (user.Condition.FiresOnEveryHit) return true;
+      if (!PostSetBpCond(offset, ResolvedCondition.Unconditional)) return false;
+
+      user.ConditionSuspended = true;
+      temps.Suspended.Add(offset);
+      return true;
+    }
+
     if (!PostCommand(RuntimeEmitter.DbgCmdSetBp, offset)) return false;
-    armed.Add(offset);
+    temps.Armed.Add(offset);
     return true;
   }
 
   /// <summary>
-  /// Clear every temp bp WE armed (never a coinciding user bp, which was not added to the list) — the one
+  /// Undo everything <see cref="ArmTempIfNeeded"/> did: clear every temp bp WE armed (never a coinciding
+  /// user bp, which was never added to the list) and restore every user condition we suspended — the one
   /// cleanup both step runners share.
   ///
-  /// A step that TIMED OUT is the one exit that cannot clear them: the target is still running, so each
-  /// clear would be posted to an unserviced mailbox. Those patches instead die with the target, which
-  /// every timeout path now guarantees — batch ends the session, and the interactive step-timeout arm
-  /// ends it too, precisely because temp traps in a running target cannot be reconciled from here.
+  /// A step that TIMED OUT is the one exit that can do neither: the target is still running, so each post
+  /// would go to an unserviced mailbox. Those patches — and the suspended conditions — instead die with
+  /// the target, which every timeout path now guarantees: batch ends the session, and the interactive
+  /// step-timeout arm ends it too, precisely because breakpoint state in a running target cannot be
+  /// reconciled from here.
   /// </summary>
-  private void ClearTempBreakpoints(List<long> armed) {
+  private void ReleaseTempBreakpoints(TempBreakpoints temps) {
     if (StopOutstanding) return;
-    foreach (var off in armed) PostCommand(RuntimeEmitter.DbgCmdClearBp, off);
+
+    foreach (var off in temps.Armed) PostCommand(RuntimeEmitter.DbgCmdClearBp, off);
+
+    foreach (var off in temps.Suspended) {
+      // A failed restore means the agent can no longer answer at all (the target exited, or the post
+      // timed out), so the session is over either way; the flag stays set rather than claiming a
+      // condition is back in force when nothing confirmed it.
+      if (_userBreakpoints.TryGetValue(off, out var user) && PostSetBpCond(off, user.Condition))
+        user.ConditionSuspended = false;
+    }
   }
 
   /// <summary>
   /// Arm a temp bp at <paramref name="retOff"/>, Continue until the stop is in a frame shallower than
   /// <paramref name="innerSp"/> (skipping a hit in an equal-or-deeper frame, which is recursion re-entering
-  /// the same return address), and clear the temp bp — even on early return, so no patch leaks. If a user
-  /// bp already sits at <paramref name="retOff"/> it is used as-is (and left intact).
+  /// the same return address), and release what was armed — even on early return, so no patch leaks. A
+  /// user bp already sitting at <paramref name="retOff"/> is used in place (see
+  /// <see cref="ArmTempIfNeeded"/>) and left as it was found.
   /// </summary>
   private StepOutcome RunUntilReturn(long retOff, long innerSp) {
-    var armed = new List<long>();
-    if (!ArmTempIfNeeded(retOff, armed)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+    var temps = new TempBreakpoints();
     try {
+      if (!ArmTempIfNeeded(retOff, temps)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+
       for (int i = 0; i < MaxReturnContinues; i++) {
         if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
 
@@ -1217,31 +1335,31 @@ internal sealed class MaxonDebugger : IDisposable {
       }
       return new StepOutcome(StepOutcomeKind.LimitReached, default);
     } finally {
-      ClearTempBreakpoints(armed);
+      ReleaseTempBreakpoints(temps);
     }
   }
 
   /// <summary>
   /// Arm a temp bp at <paramref name="lineOff"/> and (when a caller exists) at <paramref name="returnOff"/>,
   /// Continue once, and report the resulting stop — the caller reads the stop's location to see whether the
-  /// line was reached or the frame returned first. Temp bps WE armed are always cleared, so no patch leaks;
-  /// a coinciding user bp is used as-is and left intact. Unlike <see cref="RunUntilReturn"/> the first stop
-  /// is the answer (no deeper-frame skipping).
+  /// line was reached or the frame returned first. Everything armed here is released afterwards, so no
+  /// patch and no suspended condition leaks; a coinciding user bp is used in place and left as it was
+  /// found. Unlike <see cref="RunUntilReturn"/> the first stop is the answer (no deeper-frame skipping).
   ///
   /// It therefore needs no <see cref="IsAtUserBreakpoint"/> check, and the asymmetry with
   /// <see cref="RunUntilReturn"/> is not an oversight: returning the FIRST stop already honors a user
   /// breakpoint hit on the way, because `until` never continues past a stop in the first place.
   /// </summary>
   private StepOutcome RunToLineOrReturn(long lineOff, long? returnOff) {
-    var armed = new List<long>();
+    var temps = new TempBreakpoints();
     try {
-      if (!ArmTempIfNeeded(lineOff, armed)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
-      if (returnOff is { } r && r != lineOff && !ArmTempIfNeeded(r, armed))
+      if (!ArmTempIfNeeded(lineOff, temps)) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
+      if (returnOff is { } r && r != lineOff && !ArmTempIfNeeded(r, temps))
         return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
       if (!Continue()) return new StepOutcome(StepOutcomeKind.NotAcknowledged, default);
       return StepOutcomeOf(WaitForStop());
     } finally {
-      ClearTempBreakpoints(armed);
+      ReleaseTempBreakpoints(temps);
     }
   }
 

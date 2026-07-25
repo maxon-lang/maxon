@@ -143,7 +143,7 @@ internal sealed class DbgValueRenderer {
     var t = _sidecar.Type(typeId);
     return t.Kind switch {
       MxdbgTypeKind.Primitive => RenderPrimitive(name, addr, t),
-      MxdbgTypeKind.IntRanged => Leaf(name, t.Name, t.Kind, ReadSigned(addr, (int)t.Size).ToString()),
+      MxdbgTypeKind.IntRanged => RenderScalar(name, addr, t),
       MxdbgTypeKind.FloatRanged => Leaf(name, t.Name, t.Kind, FormatFloat(addr, (int)t.Size)),
       MxdbgTypeKind.Struct => RenderStruct(name, addr, t, depth),
       MxdbgTypeKind.Enum or MxdbgTypeKind.Union => RenderEnum(name, addr, t, depth),
@@ -154,15 +154,71 @@ internal sealed class DbgValueRenderer {
     };
   }
 
+  /// The sidecar's spelling of `bool`: a 0/1 byte. It is the one integer Primitive the `i`/`u`
+  /// signedness convention below does not describe, so it is named rather than spelled at each reader.
+  public const string BoolPrimitiveName = "i1";
+
+  /// <summary>
+  /// How a sidecar type is read as a MACHINE INTEGER: how many bytes at the address, and whether those
+  /// bytes SIGN-extend. False for anything that is not an integer or a bool.
+  ///
+  /// The ONE reading of a scalar's shape, and it has two consumers on opposite sides of the debugger: the
+  /// renderer below, and the breakpoint-condition resolver that tells the in-process agent how to load
+  /// the same local (<c>MaxonDebugger.TryScalarOperandShape</c>). Two copies would diverge into a wrong
+  /// answer nothing reports — `print x` showing one number while `break … if x == that number` never
+  /// fires — so both ask here.
+  ///
+  /// Signedness comes from the Primitive NAMING CONVENTION (`i&lt;bits&gt;` signed, `u&lt;bits&gt;`
+  /// unsigned — DebugInfoBuilder writes the IrType names straight through), except the bool, which is
+  /// read UNSIGNED; a ranged alias is a signed machine integer. The WIDTH is always the type record's own
+  /// Size, so no per-name width table is restated to drift from the layout codegen actually emitted.
+  /// </summary>
+  public static bool TryScalarShape(MxdbgReader.TypeInfo t, out int width, out bool signed) {
+    width = (int)t.Size;
+    signed = false;
+
+    if (t.Kind == MxdbgTypeKind.IntRanged) {
+      signed = true;
+      return true;
+    }
+    if (t.Kind != MxdbgTypeKind.Primitive) {
+      width = 0;
+      return false;
+    }
+    if (t.Name == BoolPrimitiveName) return true;
+    if (t.Name.StartsWith('u')) return true;
+    if (t.Name.StartsWith('i')) {
+      signed = true;
+      return true;
+    }
+
+    width = 0;
+    return false;
+  }
+
+  /// A scalar integer or bool, read through <see cref="TryScalarShape"/> so the value shown and the value
+  /// a breakpoint condition compares are read the same way. Bool prints true/false; every other integer
+  /// prints decimal, signed or not per its shape.
+  private DbgValue RenderScalar(string name, ulong addr, MxdbgReader.TypeInfo t) {
+    if (!TryScalarShape(t, out int width, out bool signed))
+      throw new InvalidOperationException($"'{t.Name}' is not a scalar integer or bool");
+
+    string display =
+      t.Name == BoolPrimitiveName ? (ReadUnsigned(addr, width) != 0 ? "true" : "false")
+      : signed ? ReadSigned(addr, width).ToString()
+      : ReadUnsigned(addr, width).ToString();
+    return Leaf(name, t.Name, t.Kind, display);
+  }
+
   /// A machine scalar, interpreted by its type NAME (the sidecar's Primitive kind covers i*/u*/f*/bool/
-  /// void/cstring/fn). Signedness and width come from the name, not a guess.
+  /// void/cstring/fn). The integers and the bool go through the shared shape rule; the rest of the kind —
+  /// void, the floats, cstring, fn — carries no width/signedness question to share.
   private DbgValue RenderPrimitive(string name, ulong addr, MxdbgReader.TypeInfo t) {
+    if (TryScalarShape(t, out _, out _)) return RenderScalar(name, addr, t);
+
     int size = (int)t.Size;
     string display = t.Name switch {
       "void" => "void",
-      "i1" => ReadUnsigned(addr, 1) != 0 ? "true" : "false",
-      "i8" or "i16" or "i32" or "i64" => ReadSigned(addr, size).ToString(),
-      "u8" or "u16" or "u32" or "u64" => ReadUnsigned(addr, size).ToString(),
       "f32" or "f64" => FormatFloat(addr, size),
       "cstring" => FormatCString(addr),
       "fn" => $"fn@0x{ReadPointer(addr):x}",

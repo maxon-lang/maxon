@@ -72,7 +72,15 @@ public partial class RuntimeEmitter {
   /// unknown set-condition command and then stop unconditionally, which is not a missing feature but a
   /// WRONG ANSWER (a breakpoint that fires when the user said it should not). So the driver refuses to
   /// arm a conditional breakpoint below version 6 rather than silently downgrading it.
-  public const long DbgControlVersion = 6;
+  ///
+  /// v7 adds <see cref="DbgOffCmdResult"/>, the word a command ANSWERS with — an ack only ever said "I
+  /// processed this", never "I could do it", so a `break` the agent silently dropped (a full table, an
+  /// offset outside `.text`) was reported to the user as set. It is a schema addition, so it takes a
+  /// version of its own rather than widening v6 in place: an agent that announces v6 does not write the
+  /// word, its zero reads as <see cref="DbgCmdResultRefused"/>, and a driver that believed it would call
+  /// every command on that binary refused. Gated by <see cref="DbgCmdResultMinVersion"/> exactly like
+  /// every capability above.
+  public const long DbgControlVersion = 7;
 
   /// The control-segment version at which the agent first understood <see cref="DbgCmdBacktrace"/>.
   /// The driver refuses to trust the frame array from an older agent (which would ack-and-ignore).
@@ -170,6 +178,29 @@ public partial class RuntimeEmitter {
   // assignment stays the agent's single secret. 0x488 + 48 = 0x4B8 &lt; 4096, so it stays inside the page.
   public const int DbgOffCondStage = 0x488;
 
+  // Command-outcome word (agent writes, driver reads) — v7. Placed at the first free offset after the
+  // condition staging area (0x488 + 48), so it was previously zero. 0x4B8 + 8 = 0x4C0 &lt; 4096.
+  //
+  // It exists because an ACK only ever said "I processed your command", never "I could DO it", and the
+  // driver read the ack as success: __dbg_set_bp silently ignores an offset outside `.text` AND a full
+  // 16-slot table, so a 17th `break` was reported to the user as "Breakpoint set" and then never fired
+  // (measured: 17 breakpoints armed, the 17th never hit). __dbg_set_bp_cond has the same shape — it is
+  // a no-op when no breakpoint is armed at that offset, which is exactly what a dropped arm leaves.
+  //
+  // Written by the park loop BEFORE the ack's store-release, so a driver that has seen the ack sees the
+  // outcome. The loop publishes Ok before dispatching, and a handler that could not do what it was asked
+  // overwrites it — the commands that cannot fail (continue / step / backtrace / read) therefore need no
+  // line of their own, and a NEW command that CAN fail says so where it fails.
+  public const int DbgOffCmdResult = 0x4B8;
+  public const long DbgCmdResultOk = 1;
+  public const long DbgCmdResultRefused = 0;
+
+  /// The control-segment version at which the agent first ANSWERS a command. Below it the word is the
+  /// zeroed segment's 0, which is indistinguishable from a refusal, so the driver falls back to the old
+  /// weaker contract there (an ack means the command was processed) rather than calling every command on
+  /// an older binary refused.
+  public const long DbgCmdResultMinVersion = 7;
+
   /// The width of every word in a condition record. The record is six i64s so the agent can read each
   /// with the neutral 8-byte <see cref="IEmitterBackend.LoadIndirect"/> and the driver can write each
   /// with one accessor write — stated once, and the record's SIZE is derived from it below.
@@ -181,7 +212,7 @@ public partial class RuntimeEmitter {
   public const int DbgCondOffOp = 1 * DbgCondWordSize;      // DbgCondOp* — the relational operator
   public const int DbgCondOffImm = 2 * DbgCondWordSize;     // the right-hand literal, sign-extended to 64 bits
   public const int DbgCondOffSlot = 3 * DbgCondWordSize;    // SIGNED frame-pointer-relative offset: addr = fp + slot
-  public const int DbgCondOffWidth = 4 * DbgCondWordSize;   // bytes to load at that address: 1 | 2 | 4 | 8
+  public const int DbgCondOffWidth = 4 * DbgCondWordSize;   // bytes to load at that address: DbgCondOperandWidths
   public const int DbgCondOffSigned = 5 * DbgCondWordSize;  // 1 = sign-extend the loaded value, 0 = zero-extend
 
   /// One condition record: the six words above. DERIVED from the field count and the word size rather
@@ -194,15 +225,41 @@ public partial class RuntimeEmitter {
   public const long DbgCondKindUnconditional = 0;
   public const long DbgCondKindScalarCompare = 1;
 
-  // The relational operators a scalar-compare condition can carry. The comparison is always performed
-  // SIGNED by the agent; the driver guarantees that is correct by refusing any operand whose 64-bit
-  // normalized value could exceed the signed range (see MaxonDebugger.TryResolveCondition).
-  public const long DbgCondOpEq = 1;
-  public const long DbgCondOpNe = 2;
-  public const long DbgCondOpLt = 3;
-  public const long DbgCondOpLe = 4;
-  public const long DbgCondOpGt = 5;
-  public const long DbgCondOpGe = 6;
+  /// <summary>
+  /// The operand widths <see cref="EmitDbgCondHolds"/> can load, in bytes. The agent emits ONE dispatch
+  /// arm per entry and the driver refuses an operand of any other width, both by reading THIS array — so
+  /// the closed set is stated once. Two independent lists would fail in the dangerous direction: a width
+  /// the driver accepted and the agent did not recognise reaches the agent's unrecognised-width arm,
+  /// which STOPS — i.e. a `break … if` that fires on every hit, the wrong answer conditions exist to
+  /// remove. The full word must be present (it is the no-extension arm) and is deliberately last.
+  /// </summary>
+  public static readonly int[] DbgCondOperandWidths = [1, 2, 4, DbgCondWordSize];
+
+  /// <summary>
+  /// One relational operator of a scalar-compare condition: the wire code in the record, the surface
+  /// spelling `break … if` accepts, and the branch the agent emits for it.
+  ///
+  /// All three live in ONE row for the same reason as the widths above, and the failure was the same
+  /// shape: the grammar's operator table and the evaluator's dispatch each enumerated this set, and an
+  /// operator added to the grammar but not the evaluator would reach the agent's unrecognised-operator
+  /// arm — which STOPS, turning a condition into a breakpoint that fires unconditionally.
+  ///
+  /// The comparison is always performed SIGNED by the agent; the driver guarantees that is correct by
+  /// refusing any operand whose 64-bit normalized value could exceed the signed range (see
+  /// <c>MaxonDebugger.TryScalarOperandShape</c>).
+  /// </summary>
+  public readonly record struct DbgCondOperator(long Code, string Text, Condition Branch);
+
+  /// The whole operator vocabulary. Row ORDER carries no meaning: the parser matches longest-text-first
+  /// by DERIVING that order (else `&lt;` would swallow the head of `&lt;=` depending on how this reads).
+  public static readonly DbgCondOperator[] DbgCondOperators = [
+    new(1, "==", Condition.Equal),
+    new(2, "!=", Condition.NotEqual),
+    new(3, "<", Condition.Less),
+    new(4, "<=", Condition.LessEqual),
+    new(5, ">", Condition.Greater),
+    new(6, ">=", Condition.GreaterEqual),
+  ];
 
   /// The read-memory result-buffer capacity: the most bytes one DbgCmdReadMem copies. The driver chunks
   /// a larger read into ≤ this many bytes per command; the agent clamps ReadLen to it so a driver bug
@@ -591,20 +648,23 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// __dbg_set_bp(codeOffset) — arm a breakpoint at &mrt_start + codeOffset. Ignored (but still acked
-  /// by the park loop) when the offset is outside `.text` or when the table is full. Re-arming an address
-  /// that already carries one leaves the PATCH alone (re-saving would store the trap byte itself as the
-  /// "original") but still resets its CONDITION — see the re-arm path below.
+  /// __dbg_set_bp(codeOffset) — arm a breakpoint at &mrt_start + codeOffset. REFUSED
+  /// (<see cref="DbgCmdResultRefused"/>, but still acked by the park loop) when the offset is outside
+  /// `.text` or when the table is full — both used to be SILENT, and an ack the driver read as success
+  /// is how a 17th `break` was reported "set" and then never fired. Re-arming an address that already
+  /// carries one leaves the PATCH alone (re-saving would store the trap byte itself as the "original")
+  /// but still resets its CONDITION — see the re-arm path below.
   ///
-  /// Its postcondition is therefore uniform, which is what the driver relies on: after __dbg_set_bp, a
-  /// breakpoint at that address is armed and UNCONDITIONAL. Only <see cref="EmitDbgSetBpCond"/> makes one
-  /// conditional, so "is this breakpoint conditional" has exactly one writer and no path that leaves it
-  /// stale.
+  /// Its postcondition is therefore uniform, which is what the driver relies on: after a SUCCESSFUL
+  /// __dbg_set_bp, a breakpoint at that address is armed and UNCONDITIONAL. Only
+  /// <see cref="EmitDbgSetBpCond"/> makes one conditional, so "is this breakpoint conditional" has
+  /// exactly one writer and no path that leaves it stale.
   /// </summary>
   private void EmitDbgSetBp() {
     _b.FunctionStart("__dbg_set_bp", 1, 0x80);
 
     var doneLabel = UniqueLabel("dbg_set_bp_done");
+    var refusedLabel = UniqueLabel("dbg_set_bp_refused");
     var reArmLabel = UniqueLabel("dbg_set_bp_rearm");
 
     // BOUNDS: a driver-supplied offset must never let the patch below write 0xCC/BRK outside `.text`.
@@ -615,7 +675,7 @@ public partial class RuntimeEmitter {
     _b.SubRegReg(VReg.Scratch1, VReg.Scratch2);           // textsize
     _b.LoadLocal(VReg.Scratch2, 0);                       // codeOffset
     _b.CmpRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.JumpIf(Condition.AboveEqual, doneLabel);           // outside .text -> ignore
+    _b.JumpIf(Condition.AboveEqual, refusedLabel);        // outside .text
 
     EmitDbgAbsFromOffset();
 
@@ -627,7 +687,7 @@ public partial class RuntimeEmitter {
     _b.ZeroReg(VReg.Arg0);
     _b.Call("__dbg_bp_slot");                             // find a free slot
     _b.CmpRegImm(VReg.Ret, 0);
-    _b.JumpIf(Condition.Less, doneLabel);                 // table full
+    _b.JumpIf(Condition.Less, refusedLabel);              // table full
     _b.StoreLocal(2, VReg.Ret);                           // slot2 = idx
 
     // Slots are recycled, so a freshly allocated one must not inherit the condition of whatever
@@ -662,6 +722,10 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(reArmLabel);
     _b.MovRegReg(VReg.Arg0, VReg.Ret);
     _b.Call("__dbg_cond_zero");
+    _b.Jump(doneLabel);
+
+    _b.DefineLabel(refusedLabel);
+    EmitDbgStoreCmdResult(DbgCmdResultRefused);
 
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
@@ -812,8 +876,9 @@ public partial class RuntimeEmitter {
   /// <summary>
   /// __dbg_set_bp_cond(codeOffset) — copy the driver's staged condition record
   /// (<see cref="DbgOffCondStage"/>) into the condition table entry for the breakpoint armed at
-  /// &amp;mrt_start + codeOffset. A no-op (still acked by the park loop) when the agent has detached or
-  /// no breakpoint is armed there, which is the honest answer: there is nothing to attach a condition to.
+  /// &amp;mrt_start + codeOffset. REFUSED (<see cref="DbgCmdResultRefused"/>, still acked by the park
+  /// loop) when no breakpoint is armed there: there is nothing to attach a condition to, and the driver
+  /// must not report a conditional breakpoint it does not have.
   ///
   /// The offset→slot step goes through <see cref="EmitDbgBpSlot"/> — the SAME lookup set/clear/hit all
   /// use — so a condition can never end up attached to a different slot than the breakpoint it names.
@@ -822,6 +887,7 @@ public partial class RuntimeEmitter {
     _b.FunctionStart("__dbg_set_bp_cond", 1, 0x80);
 
     var doneLabel = UniqueLabel("dbg_set_bp_cond_done");
+    var refusedLabel = UniqueLabel("dbg_set_bp_cond_refused");
 
     // Frame slots: 0=codeOffset (param) 1=abs (EmitDbgAbsFromOffset) 2=slotIdx 3=dst 4=src.
     const int slotAbs = 1;
@@ -830,14 +896,14 @@ public partial class RuntimeEmitter {
     const int slotSrc = 4;
 
     _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
-    _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: nothing staged to copy
+    _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: no segment to read or answer into
 
     EmitDbgAbsFromOffset();                              // slot1 = &mrt_start + codeOffset
 
     _b.LoadLocal(VReg.Arg0, slotAbs);
     _b.Call("__dbg_bp_slot");
     _b.CmpRegImm(VReg.Ret, 0);
-    _b.JumpIf(Condition.Less, doneLabel);                // no breakpoint armed there
+    _b.JumpIf(Condition.Less, refusedLabel);             // no breakpoint armed there
     _b.StoreLocal(slotIdx, VReg.Ret);
 
     _b.LoadLocal(VReg.Arg0, slotIdx);
@@ -856,9 +922,33 @@ public partial class RuntimeEmitter {
       _b.LoadLocal(VReg.Scratch1, slotDst);
       _b.StoreIndirect(VReg.Scratch1, off, VReg.Scratch2);
     }
+    _b.Jump(doneLabel);
+
+    _b.DefineLabel(refusedLabel);
+    EmitDbgStoreCmdResult(DbgCmdResultRefused);
 
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Publish the outcome of the command currently being processed into
+  /// <see cref="DbgOffCmdResult"/> — the answer the park loop's ack store-release then makes visible.
+  /// Clobbers Scratch1/Scratch2, so it is only ever emitted where neither is live.
+  ///
+  /// Guarded on a live base rather than assuming one: every caller runs under the park loop, where the
+  /// base is non-zero, but a store through a detached (unmapped) segment would be a fault rather than a
+  /// missing answer — and a detached agent never acks, so the driver already reads that as a refusal.
+  /// </summary>
+  private void EmitDbgStoreCmdResult(long result) {
+    var skipLabel = UniqueLabel("dbg_cmd_result_skip");
+
+    _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
+    _b.JumpIfZero(VReg.Scratch1, skipLabel);
+    _b.MovRegImm(VReg.Scratch2, result);
+    _b.StoreIndirect(VReg.Scratch1, DbgOffCmdResult, VReg.Scratch2);
+
+    _b.DefineLabel(skipLabel);
   }
 
   /// <summary>
@@ -960,10 +1050,11 @@ public partial class RuntimeEmitter {
     var stopLabel = UniqueLabel("dbg_cond_stop");
     var skipLabel = UniqueLabel("dbg_cond_skip");
     var compareLabel = UniqueLabel("dbg_cond_compare");
-    var width1Label = UniqueLabel("dbg_cond_w1");
-    var width2Label = UniqueLabel("dbg_cond_w2");
-    var width4Label = UniqueLabel("dbg_cond_w4");
-    var width8Label = UniqueLabel("dbg_cond_w8");
+
+    // One arm per supported width, and one per operator — both ENUMERATED from the tables the driver
+    // validates against, so the evaluator and the grammar cannot come to know a different closed set.
+    var widthLabels = DbgCondOperandWidths.ToDictionary(w => w, w => UniqueLabel($"dbg_cond_w{w}"));
+    var opLabels = DbgCondOperators.ToDictionary(o => o.Code, o => UniqueLabel($"dbg_cond_op{o.Code}"));
 
     _b.LoadLocal(VReg.Arg0, slotIdxArg);
     EmitDbgCondRecAddr(VReg.Scratch1, VReg.Arg0, VReg.Scratch2);
@@ -982,22 +1073,18 @@ public partial class RuntimeEmitter {
     _b.StoreLocal(slotAddr, VReg.Scratch2);
 
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgCondOffWidth);
-    _b.CmpRegImm(VReg.Scratch2, 1);
-    _b.JumpIf(Condition.Equal, width1Label);
-    _b.CmpRegImm(VReg.Scratch2, 2);
-    _b.JumpIf(Condition.Equal, width2Label);
-    _b.CmpRegImm(VReg.Scratch2, 4);
-    _b.JumpIf(Condition.Equal, width4Label);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondWordSize);
-    _b.JumpIf(Condition.Equal, width8Label);
+    foreach (int width in DbgCondOperandWidths) {
+      _b.CmpRegImm(VReg.Scratch2, width);
+      _b.JumpIf(Condition.Equal, widthLabels[width]);
+    }
     _b.Jump(stopLabel);                                  // unrecognized width: stop rather than guess
 
-    EmitDbgCondWidthArm(1, slotRec, slotAddr, slotValue, width1Label, compareLabel);
-    EmitDbgCondWidthArm(2, slotRec, slotAddr, slotValue, width2Label, compareLabel);
-    EmitDbgCondWidthArm(4, slotRec, slotAddr, slotValue, width4Label, compareLabel);
+    foreach (int width in DbgCondOperandWidths.Where(w => w != DbgCondWordSize))
+      EmitDbgCondWidthArm(width, slotRec, slotAddr, slotValue, widthLabels[width], compareLabel);
 
-    // A full-width operand needs no extension: the eight bytes ARE the 64-bit value either way.
-    _b.DefineLabel(width8Label);
+    // A full-width operand needs no extension: the eight bytes ARE the 64-bit value either way. Laid out
+    // LAST so it falls straight into the operator dispatch instead of jumping to it.
+    _b.DefineLabel(widthLabels[DbgCondWordSize]);
     _b.LoadLocal(VReg.Scratch1, slotAddr);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, 0);
     _b.StoreLocal(slotValue, VReg.Scratch2);
@@ -1008,35 +1095,16 @@ public partial class RuntimeEmitter {
     // always non-negative. An 8-byte UNSIGNED operand (whose top bit would flip the meaning of a signed
     // compare) is refused at `break` time rather than mis-compared here.
     _b.DefineLabel(compareLabel);
-    var opEqLabel = UniqueLabel("dbg_cond_op_eq");
-    var opNeLabel = UniqueLabel("dbg_cond_op_ne");
-    var opLtLabel = UniqueLabel("dbg_cond_op_lt");
-    var opLeLabel = UniqueLabel("dbg_cond_op_le");
-    var opGtLabel = UniqueLabel("dbg_cond_op_gt");
-    var opGeLabel = UniqueLabel("dbg_cond_op_ge");
-
     _b.LoadLocal(VReg.Scratch1, slotRec);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgCondOffOp);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondOpEq);
-    _b.JumpIf(Condition.Equal, opEqLabel);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondOpNe);
-    _b.JumpIf(Condition.Equal, opNeLabel);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondOpLt);
-    _b.JumpIf(Condition.Equal, opLtLabel);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondOpLe);
-    _b.JumpIf(Condition.Equal, opLeLabel);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondOpGt);
-    _b.JumpIf(Condition.Equal, opGtLabel);
-    _b.CmpRegImm(VReg.Scratch2, DbgCondOpGe);
-    _b.JumpIf(Condition.Equal, opGeLabel);
+    foreach (var op in DbgCondOperators) {
+      _b.CmpRegImm(VReg.Scratch2, op.Code);
+      _b.JumpIf(Condition.Equal, opLabels[op.Code]);
+    }
     _b.Jump(stopLabel);                                  // unrecognized operator: stop rather than guess
 
-    EmitDbgCondCompareArm(opEqLabel, Condition.Equal, slotRec, slotValue, stopLabel, skipLabel);
-    EmitDbgCondCompareArm(opNeLabel, Condition.NotEqual, slotRec, slotValue, stopLabel, skipLabel);
-    EmitDbgCondCompareArm(opLtLabel, Condition.Less, slotRec, slotValue, stopLabel, skipLabel);
-    EmitDbgCondCompareArm(opLeLabel, Condition.LessEqual, slotRec, slotValue, stopLabel, skipLabel);
-    EmitDbgCondCompareArm(opGtLabel, Condition.Greater, slotRec, slotValue, stopLabel, skipLabel);
-    EmitDbgCondCompareArm(opGeLabel, Condition.GreaterEqual, slotRec, slotValue, stopLabel, skipLabel);
+    foreach (var op in DbgCondOperators)
+      EmitDbgCondCompareArm(opLabels[op.Code], op.Branch, slotRec, slotValue, stopLabel, skipLabel);
 
     _b.DefineLabel(skipLabel);
     _b.ZeroReg(VReg.Ret);
@@ -1306,6 +1374,15 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Equal, idleLabel);               // no new command
 
     _b.StoreLocal(0, VReg.Scratch2);                     // remember the seq we are about to process
+
+    // The command's outcome, published ahead of the ack that makes it visible. Ok is the default because
+    // most commands genuinely cannot fail; the two that CAN — set-breakpoint and set-condition — overwrite
+    // it where they fail, so a new command that can fail says so at the point it fails rather than needing
+    // a line here. Written BEFORE the dispatch so the paths that leave the loop (continue / step) carry it
+    // too, and so a handler's own store always wins.
+    _b.MovRegImm(VReg.Scratch3, DbgCmdResultOk);
+    _b.StoreIndirect(VReg.Scratch1, DbgOffCmdResult, VReg.Scratch3);
+
     _b.LoadIndirect(VReg.Ret, VReg.Scratch1, DbgOffCmd);
     _b.CmpRegImm(VReg.Ret, DbgCmdContinue);
     _b.JumpIf(Condition.Equal, contLabel);

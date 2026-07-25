@@ -1180,6 +1180,14 @@ public partial class X86CodeEmitter() {
   private void EmitMovRegImm(X86Register dest, long immediate) {
     if (!Is64BitReg(dest) && !Is32BitReg(dest))
       throw new ArgumentException($"EmitMovRegImm: unsupported register size: {dest}");
+    // A 32-BIT destination can only hold 32 bits, so an immediate outside [int.MinValue, uint.MaxValue]
+    // has no encoding for it at all and both 32-bit arms below would silently keep the low dword — the
+    // same truncation EmitImm32Operand refuses for the arithmetic forms. (The 64-bit arms ARE total:
+    // sign-extended imm32, zero-extended imm32, then the full mov r64, imm64.)
+    if (Is32BitReg(dest) && (immediate < int.MinValue || immediate > uint.MaxValue))
+      throw new ArgumentOutOfRangeException(nameof(immediate),
+        $"EmitMovRegImm: 0x{immediate:X} does not fit the 32-bit register {dest} — use a 64-bit register");
+
     if (immediate == 0) {
       EmitXorRegReg(dest, dest);
       return;

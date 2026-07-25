@@ -76,9 +76,13 @@ internal static class MaxonDebugRepl {
     /// frame (backtrace / print / locals / step / next / finish / until).
     private const string NotStoppedText = "Not stopped — run to a breakpoint first.";
 
-    /// The one wording of a breakpoint the agent did not acknowledge, shared by the file:line and function
-    /// break renderers so they cannot drift.
-    private const string BreakUnacknowledgedText = "The agent did not acknowledge the breakpoint.";
+    /// The one wording of a breakpoint the agent did not confirm, shared by the file:line and function
+    /// break renderers so they cannot drift. It names both causes because the driver genuinely cannot
+    /// tell them apart from the outcome word alone — and the load-bearing half of the sentence is that
+    /// the breakpoint is NOT armed, which the agent used to leave the driver to guess wrong.
+    private static readonly string BreakUnacknowledgedText =
+      "The agent did not confirm the breakpoint, so it is NOT set (the target may have exited, or its "
+      + $"{Compiler.Ir.Runtime.RuntimeEmitter.DbgMaxBreakpoints}-breakpoint table is full).";
 
     public int Loop() {
       while (!_finished) {
@@ -363,7 +367,8 @@ internal static class MaxonDebugRepl {
           // patched in the target, and they can only be cleared through a PARKED one — so a target still
           // running here carries traps the driver can no longer reconcile, and letting the session go on
           // would eventually report a stop at a breakpoint the user never set. Ending it is what makes
-          // ClearTempBreakpoints' skip safe: the patches die with the target, right here.
+          // ReleaseTempBreakpoints' skip safe: the patches — and any user condition it suspended to make
+          // its own stop fire — die with the target, right here.
           _stop = null;
           _finished = true;
           Console.Out.WriteLine($"{TimeoutText(WaitingForStepStopText, dbg.StopTimeoutText)} The step left "
