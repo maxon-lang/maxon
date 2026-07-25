@@ -3317,6 +3317,59 @@ export type ProgramSignatures
 		return name
 	end 'mangleGenericInstance'
 
+	// ⭐ **DERIVE EVERY SWEPT INSTANCE'S COMPILED NAME NOW, SO THE PARSE ONLY EVER READS ONE (P1.7).**
+	//
+	// `mangleGenericInstance` memoizes by WRITING into `compiledInstanceNames`, and the real parse became a
+	// caller when a generic instance gained its nominal identity (`Parser.aggregateNameOf`). Every other
+	// caller — ParseStaging's E3006 sweep, lowering's descriptor labels, the destructor cascade — runs after
+	// parsing, single-threaded; the parser does NOT, and a per-file fan-out writing one shared memo is the
+	// race the "a file's parse is a pure function of its inputs" invariant exists to prevent. Deriving the
+	// whole set here, at the one point the sweep is complete, leaves the index READ-ONLY for the parse.
+	//
+	// ⚠ It warms the instances the SWEEP interned, which is exactly the set a parse can name. The builtin
+	// instances minted later (`internArrayByteInstance`, `arrayInstanceForString`, …) still derive lazily on
+	// first ask — they are interned during lowering, long after the last parse, so they are never contended.
+	export function deriveCompiledInstanceNames()
+		for id in 0 upto self.genericInstances.count() 'eachInstance'
+			_ = self.mangleGenericInstance(id)
+		end 'eachInstance'
+	end 'deriveCompiledInstanceNames'
+
+	// ⭐ **THE NOMINAL IDENTITY OF INSTANCE `gid`'s TYPE ARGUMENT AT `position` (P1.7)** — what a parameter
+	// declared with the bare type parameter `T` actually demands at a call made through this instance. It is
+	// the third source of the aggregate name `namedAggregatesConflict` compares, beside the parser's
+	// `aggregateNameOf` and SemanticCheck's `aggregateNameFor`, and it exists for the reason those two are
+	// twins rather than one function: the name is resolved against a DIFFERENT interner — an instance's
+	// argument types are interned HERE, not in the merged `project.typeNames`. The comparison RULE is still
+	// the single shared one; only the extraction is local.
+	//
+	// `EmptySourceText` for a scalar, a `String`, a ranged alias or an opaque `typeParameter` argument: those
+	// carry no nominal identity and meet their argument by TAG (`checkDeclaredType`), so a `Box with Integer`
+	// keeps accepting a plain `int` literal.
+	export function instanceArgAggregateName(gid GenericInstanceId, position TypeParamId) returns ByteArray
+		let arg = self.substitutedInstanceArg(gid, position: position)
+		let tag = maxonTypeTag(arg)
+
+		// A struct argument is named by itself and a nested instance by its compiled name — the same two
+		// spellings `mangleTypeArg` produces for them, which is why it is asked rather than re-derived.
+		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.genericInstance 'nominal'
+			return self.instanceArgTypeName(gid, position: position)
+		end 'nominal'
+
+		if tag != ValueTypeTag.named 'notNamed'
+			return EmptySourceText
+		end 'notNamed'
+
+		// `named` is OVERLOADED — a declared union/enum VALUE (a boxed aggregate) and a ranged numeric alias
+		// share it — so only a registered aggregate carries identity here, exactly as both twins decide it.
+		let name = self.nameOfId(typeNameIdOf(arg))
+		if self.containsStruct(name) or self.containsEnum(name) 'registeredAggregate'
+			return name
+		end 'registeredAggregate'
+
+		return EmptySourceText
+	end 'instanceArgAggregateName'
+
 	// --- Generic-instance managed drop (P1.6-B2) ---
 	//
 	// A generic instance is a monomorphized base struct: its box is `Box`'s box, and a managed type

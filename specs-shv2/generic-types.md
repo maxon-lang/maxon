@@ -595,3 +595,354 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.instance-arg-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+function takes(b LeafBox) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(OtherBox.create(Other.make("x")))
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:26:9: argument type mismatch for 'b': expected 'Box_Leaf', got 'Box_Other'
+```
+
+<!-- test: error.type-parameter-arg-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias OtherBox = Box with Other
+typealias LeafBoxBox = Box with (Box with Leaf)
+function main() returns ExitCode
+	let bad = LeafBoxBox.create(OtherBox.create(Other.make("x")))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'Box_Other'
+```
+
+<!-- test: error.type-parameter-arg-wrong-instance-bound -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias OtherBox = Box with Other
+typealias LeafBoxBox = Box with (Box with Leaf)
+function main() returns ExitCode
+	let wrong = OtherBox.create(Other.make("x"))
+	let bad = LeafBoxBox.create(wrong)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:24:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'Box_Other'
+```
+
+<!-- test: error.method-arg-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+type Holder
+	export var b as LeafBox
+	export static function create(b LeafBox) returns Self
+		return Self{b: b}
+	end 'create'
+	export function replace(n LeafBox) returns ExitCode
+		return 0
+	end 'replace'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.create(LeafBox.create(Leaf.make("a")))
+	return h.replace(OtherBox.create(Other.make("x")))
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:33:9: argument type mismatch for 'n': expected 'Box_Leaf', got 'Box_Other'
+```
+
+<!-- test: error.return-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+function wrong() returns LeafBox
+	return OtherBox.create(Other.make("x"))
+end 'wrong'
+function main() returns ExitCode
+	let v = wrong()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:2: Cannot return 'Box_Other' from function declared to return 'Box_Leaf'
+```
+
+<!-- test: error.reassign-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+function main() returns ExitCode
+	var b = LeafBox.create(Leaf.make("a"))
+	b = OtherBox.create(Other.make("x"))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:24:2: cannot assign 'Box_Other' to variable 'b' of type 'Box_Leaf'
+```
+
+<!-- test: error.struct-field-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+type Holder
+	export var b as LeafBox
+	export static function create(v OtherBox) returns Self
+		return Self{b: v}
+	end 'create'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.create(OtherBox.create(Other.make("x")))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:15: cannot assign 'Box_Other' to variable 'Holder.b' of type 'Box_Leaf'
+```
+
+<!-- test: error.plain-struct-into-instance-arg -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+function takes(b LeafBox) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(Leaf.make("x"))
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:9: argument type mismatch for 'b': expected 'Box_Leaf', got 'Leaf'
+```
+
+<!-- test: error.nested-pair-arg-wrong-instance -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+type Pair uses A, B
+	export var first as A
+	export var second as B
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+typealias LeafBox = Box with Leaf
+typealias WrongPair = Pair with (Box with Leaf, Leaf)
+typealias Deep = Box with (Pair with (Box with Leaf, Box with (Box with Leaf)))
+function main() returns ExitCode
+	let d = Deep.create(WrongPair.create(LeafBox.create(Leaf.make("q")), second: Leaf.make("r")))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:10: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'Pair_Box_Leaf_Leaf'
+```
+
+<!-- test: two-aliases-one-instance-agree -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias LeafBoxAgain = Box with Leaf
+function takes(b LeafBox) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(LeafBoxAgain.create(Leaf.make("a")))
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: nested-instance-arg-matching-instance-agrees -->
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias LeafBoxBox = Box with (Box with Leaf)
+function main() returns ExitCode
+	let inner = LeafBox.create(Leaf.make("a"))
+	let outer = LeafBoxBox.create(inner)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

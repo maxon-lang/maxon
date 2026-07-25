@@ -8086,6 +8086,17 @@ export type Parser
 			return self.internedName(nameId)
 		end 'struct'
 
+		// ⭐ A GENERIC INSTANCE IS A NOMINAL AGGREGATE, IDENTIFIED BY ITS COMPILED NAME (P1.7). `Box with
+		// Leaf` and `Box with Other` are both `genericInstance`-tagged pointers to a base `Box` box, so the
+		// tag check reads them as one type and the wrong one, stored where the other is declared, is later
+		// dropped by the wrong `__destruct_<instance>` — the identical wild free two distinct STRUCTS sharing
+		// `structRef` would be, one abstraction up. The id a `genericInstance` carries is a
+		// `GenericInstanceId`, which is whole-program (not a file-local interner id), so it needs no
+		// `internedName` — and its name is a pure READ here, pre-derived by `queryProgramSignatures`.
+		if tag == ValueTypeTag.genericInstance 'genericInstance'
+			return self.signatures.mangleGenericInstance(nameId)
+		end 'genericInstance'
+
 		if tag != ValueTypeTag.named 'notNamed'
 			return EmptySourceText
 		end 'notNamed'

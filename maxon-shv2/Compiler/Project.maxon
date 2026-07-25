@@ -1339,6 +1339,20 @@ export type FuncSignature
 	export function takesReceiver() returns bool
 		return self.paramNames.count() > 0 and (try self.paramNames.get(0) otherwise panic("FuncSignature.takesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
 	end 'takesReceiver'
+
+	// Does any parameter declare a bare type parameter (`create(v T)`) — i.e. is this the SHARED body of a
+	// generic type's method, whose signature cannot say what its arguments must be (P1.7)? The
+	// allocation-free gate `checkTypeParameterArgs` asks before deriving the call's concrete instance, the
+	// twin of `ProgramSignatures.hasInnerAliasParams`: a `CallGenericInstance` is a Maxon union VALUE and so
+	// a heap box, and every call in a generics-free program would mint one just to read `none`.
+	export function hasTypeParameterParam() returns bool
+		for paramType in self.paramTypes 'each'
+			if maxonTypeTag(paramType) == ValueTypeTag.typeParameter 'opaque'
+				return true
+			end 'opaque'
+		end 'each'
+		return false
+	end 'hasTypeParameterParam'
 end 'FuncSignature'
 
 // Registry: qualified function name -> its parameter signature. Populated by
