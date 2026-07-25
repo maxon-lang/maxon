@@ -1218,6 +1218,27 @@ public partial class X86CodeEmitter() {
     }
   }
 
+  /// <summary>
+  /// Emit a 32-bit immediate operand, REFUSING one that does not fit rather than truncating it.
+  /// x86-64's arithmetic/compare forms encode at most imm32 (sign-extended to 64 bits), so a wider
+  /// value has no encoding here — and silently narrowing it would compare/add against a DIFFERENT
+  /// number than the caller wrote, with nothing to show for it. (A width-4 sign bit 0x80000000 would
+  /// sign-extend to 0xFFFFFFFF80000000; a 0xFFFFFFFF mask would become -1, i.e. "keep all 64 bits"
+  /// instead of "keep the low 32".)
+  ///
+  /// This throws rather than widening through a scratch register the way arm64's EmitCmpImm does:
+  /// arm64 may use X16 because the ABI reserves it, whereas x86-64 has no architecturally reserved
+  /// scratch, so picking one here could clobber a live value — trading a visible refusal for a new
+  /// silent miscompile. The caller materializes the wide value into a register it knows is free.
+  /// </summary>
+  private void EmitImm32Operand(long immediate, string op) {
+    if (immediate < int.MinValue || immediate > int.MaxValue)
+      throw new ArgumentOutOfRangeException(nameof(immediate),
+        $"{op}: immediate 0x{immediate:X} does not fit in imm32 — materialize it into a register first");
+
+    EmitDword((int)immediate);
+  }
+
   private void EmitSubRegImm(X86Register dest, long immediate) {
     Require64BitGpr(dest, nameof(EmitSubRegImm));
     if (immediate >= -128 && immediate <= 127) {
@@ -1231,7 +1252,7 @@ public partial class X86CodeEmitter() {
       Rex.W().Rm(dest).Emit(this);
       EmitByte(0x81);
       EmitByte((byte)(0xE8 | RegCode(dest)));
-      EmitDword((int)immediate);
+      EmitImm32Operand(immediate, nameof(EmitSubRegImm));
     }
   }
 
@@ -1248,7 +1269,7 @@ public partial class X86CodeEmitter() {
       Rex.W().Rm(dest).Emit(this);
       EmitByte(0x81);
       EmitByte((byte)(0xC0 | RegCode(dest)));
-      EmitDword((int)immediate);
+      EmitImm32Operand(immediate, nameof(EmitAddRegImm));
     }
   }
 
@@ -1274,7 +1295,7 @@ public partial class X86CodeEmitter() {
       Rex.W().Rm(dest).Emit(this);
       EmitByte(0x81);
       EmitByte((byte)(0xE0 | RegCode(dest)));
-      EmitDword((int)immediate);
+      EmitImm32Operand(immediate, nameof(EmitAndRegImm));
     }
   }
 
@@ -1291,7 +1312,7 @@ public partial class X86CodeEmitter() {
       Rex.W().Rm(dest).Emit(this);
       EmitByte(0x81);
       EmitByte((byte)(0xC8 | RegCode(dest)));
-      EmitDword((int)immediate);
+      EmitImm32Operand(immediate, nameof(EmitOrRegImm));
     }
   }
 
@@ -1455,7 +1476,7 @@ public partial class X86CodeEmitter() {
       Rex.W().Rm(lhs).Emit(this);
       EmitByte(0x81);
       EmitByte((byte)(0xF8 | RegCode(lhs)));
-      EmitDword((int)immediate);
+      EmitImm32Operand(immediate, nameof(EmitCmpRegImm));
     }
   }
 
