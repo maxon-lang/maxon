@@ -717,6 +717,84 @@ export typealias EnumLayoutArray = Array with EnumLayout
 // declared `enum`/`union` to its integer representation (an enum value IS its i64 tag).
 export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 
+// ⭐ **THE COMPILER-KNOWN `Ordering` ENUM (P1.7a slice 2b-ii)** — `Comparable.compare`'s result type,
+// transcribed VERBATIM from `stdlib/Interfaces.maxon:34-38`:
+//
+//     export enum Ordering
+//         lessThan
+//         equalTo
+//         greaterThan
+//     end 'Ordering'
+//
+// shv2 reads no stdlib, so it SYNTHESIZES this declaration exactly as `builtinInterface` synthesizes the
+// protocol interfaces `Ordering` serves — and it builds it through the SAME `EnumLayout`/`addCase` shape a
+// user `enum` gets, so every downstream reader (a qualified case value, a `match` scrutinee, TypeResolution's
+// erase-to-`integer`, the aggregate-identity check) sees an ordinary enum and needs no arm of its own.
+export function builtinOrderingEnum() returns EnumLayout
+	var layout = EnumLayout.create(OrderingTypeName, isUnion: false)
+	addBuiltinOrderingCase(layout, caseName: OrderingLessThanCaseName)
+	addBuiltinOrderingCase(layout, caseName: OrderingEqualToCaseName)
+	addBuiltinOrderingCase(layout, caseName: OrderingGreaterThanCaseName)
+	return layout
+end 'builtinOrderingEnum'
+
+// Append one payload-free case carrying the AUTO-INCREMENT tag a bare `enum` case gets. The case count so
+// far IS the next tag (`Parser.readEnumCaseInto`'s counter starts at 0 and steps by 1), so the tag is
+// DERIVED from declaration order rather than written down — this type's header explains why a tag and a
+// declaration position must never be the same stored field, and writing `0`/`1`/`2` here would smuggle the
+// conflation back in through the builder.
+function addBuiltinOrderingCase(layout EnumLayout, caseName ByteArray)
+	layout.addCase(caseName, tag: layout.caseCount(), payloads: PayloadFieldArray.create())
+end 'addBuiltinOrderingCase'
+
+// The TAG of one `Ordering` case, read back OFF the layout (P1.7a slice 2b-ii). THE door the synthesized
+// `int.compare` (which RETURNS these tags) and the `<`/`>`/`<=`/`>=` lowering (which TESTS its dispatch result
+// against them) get a tag through, so reordering the transcription above moves both together. The bootstrap
+// instead spells 0/1/2 as literals at its consumer sites with nothing tying them back to the declaration
+// (`2-Parser.cs:22293-22302`); shv2 deliberately does not.
+//
+// It takes the layout rather than fetching one, so a caller that needs SEVERAL tags builds ONE — this is asked
+// three times per synthesized `int.compare` and twice per ordering operator in the program, and
+// `builtinOrderingEnum` is a CONSTRUCTOR (a record, three parallel columns and three empty payload arrays),
+// not a lookup.
+export function orderingTagOf(layout EnumLayout, caseName ByteArray) returns ParsedInt
+	let index = layout.indexOfCase(caseName)
+	if index >= layout.caseCount() 'noSuchCase'
+		panic("orderingTagOf: `{layout.kindWord()} {String.from(layout.name)}` declares no case '{String.from(caseName)}' — a caller may only name one of the cases `builtinOrderingEnum` declares")
+	end 'noSuchCase'
+	return layout.tagOfIndex(index)
+end 'orderingTagOf'
+
+// ⭐ **AN ENUM REGISTRY, SEEDED WITH THE COMPILER-KNOWN ENUMS (P1.7a slice 2b-ii)** — THE one constructor
+// of an `EnumLayoutMap`, used by BOTH registries that hold declared enums (`Project.enumTypes`, the
+// authority, and `ProgramSignatures.enumTypes`, the parser's whole-program index).
+//
+// Seeding at the map's single creation point is what makes `Ordering` visible to EVERY reader of either
+// registry at once — `containsEnum`/`enumOf` (a qualified case value, a `match` scrutinee's enum, a field's
+// storage width), `resolveNamedType`'s erase-to-`integer`, `aggregateNameFor`'s nominal identity — with no
+// per-reader by-name arm to add today or to forget tomorrow. Three by-name special cases were the
+// alternative, and this project's signature bug is one fact written more than once.
+//
+// It stays GOLDEN-NEUTRAL because `Ordering` is a payload-FREE enum: every pass that WALKS this registry to
+// EMIT something (`installUnionDestructors`, `noteDestructorUsage`, `noteClonerUsage`) selects only unions with
+// a managed payload, so the seeded entry contributes no code to any program. **MEASURED: zero modified
+// `specs-shv2/fragments` goldens across the whole suite.** Its cost is a FLAT per-compile constant — measured
+// +68 allocations / +2,376 bytes, IDENTICAL at scale-test rung 0 and rung 5, i.e. with no growing term —
+// almost all of it the two registries' first `Map` upsert initializing their slot arrays. That constant is the
+// deliberate price of "every reader, no arm": demand-gating the seed would put the "is it registered yet?"
+// question back at each reader, which is the shape this exists to remove.
+//
+// A user declaration cannot displace the seed — a declaration that would mint a nominal identity under a
+// compiler-owned type name is refused (`Parser.requireTypeNameNotCompilerOwned`) — so the registry's
+// `Ordering` is always `builtinOrderingEnum()`'s. That is what lets the tag READERS (`int.compare` and the
+// `<`/`>`/`<=`/`>=` lowering) build their own copy of the layout without risking a different answer from the
+// one a `match` gets out of this registry.
+export function createEnumRegistry() returns EnumLayoutMap
+	var registry = EnumLayoutMap.create()
+	registry.upsert(OrderingTypeName, value: builtinOrderingEnum())
+	return registry
+end 'createEnumRegistry'
+
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //
 // GROWTH: this is the M1 `Project`. v1's `Project` has ~90 fields and ~28
@@ -995,7 +1073,7 @@ export type Project
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),
-			enumTypes: EnumLayoutMap.create(),
+			enumTypes: createEnumRegistry(),
 			interfaces: IrInterfaceMap.create(),
 			conformances: ConformanceDeclArray.create(),
 			typeNames: TypeNameInterner.create(),

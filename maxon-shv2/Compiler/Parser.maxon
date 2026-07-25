@@ -214,12 +214,15 @@ export union ParseError implements Error
 	// bools is LEGAL (`a == b`); it is the MIXTURE that is meaningless, because the compare
 	// would be over the bool's 0/1 payload rather than over anything the source wrote.
 	comparisonTypeMismatch(left String, right String, line LineNumber, column ColumnNumber)
-	// `==`/`!=` on an UNCONSTRAINED type parameter (`item == other` where `item` is a `T` with no `where T is
-	// Equatable`). Renders as **E3005**, positioned at the operator. Equality on a type parameter dispatches
-	// through its Equatable witness; without the constraint there is no witness, and a scalar `compare` would
+	// A COMPARISON OPERATOR on an UNCONSTRAINED type parameter — `item == other` with no `where T is
+	// Equatable`, or `item < other` with no `where T is Comparable`. Renders as **E3005**, positioned at the
+	// operator. Both families dispatch through a witness (equality through `Equatable.equals`, ordering
+	// through `Comparable.compare`); without the constraint there is no witness, and a scalar `compare` would
 	// silently compare two opaque words (a POINTER compare for a struct `T`). `op` is the operator spelling,
-	// `typeParamName` the parameter's declared name (both appear in the message).
-	equalityRequiresEquatable(op String, typeParamName String, line LineNumber, column ColumnNumber)
+	// `typeParamName` the parameter's declared name, `interfaceName` the interface whose constraint the
+	// operator needs — ONE variant and ONE message for both families, because the sentence is identical but
+	// for that name, and two copies of it would be free to drift.
+	operatorRequiresConformance(op String, typeParamName String, interfaceName String, line LineNumber, column ColumnNumber)
 	// A CONCRETE value supplied for a `Self`-typed witness-method argument (`item == 42` / `item.equals(42)`
 	// inside `type Box uses T where T is Equatable`, T a struct). Renders as **E3005**, positioned at the
 	// operator / method. The `where` constraint only proves `equals(Self)` — equality against another value of
@@ -574,6 +577,14 @@ export union ParseError implements Error
 	// why this reservation is what makes `MmRuntime.isCompilerInternalCallee` sound rather than a
 	// hopeful shortcut. `name` is the offending identifier, for the message.
 	reservedIdentifier(name String, line LineNumber, column ColumnNumber)
+	// A user declaration giving a NOMINAL type identity to a name the COMPILER owns — `type Ordering`,
+	// `enum HashValue`, a `function`/`Base with Args` typealias over either (`Ordering`, `HashValue`,
+	// `ExitCode`; see `TypeResolution.isCompilerOwnedTypeName` for the coupling and the measured fault it
+	// closes, and `requireTypeNameNotCompilerOwned` for why a RANGED typealias is legal). Renders as
+	// **E2015**, positioned at the declared name. It is `reservedIdentifier`'s sibling: the same "a user
+	// declaration may not take this name" rule over a different name set. `name` is the offending type
+	// name, for the message.
+	declarationTakesCompilerOwnedTypeName(name String, line LineNumber, column ColumnNumber)
 	// --- The scalar-error arms (P1.4b) ---
 	//
 	// An `otherwise` handler with no `try` expression to attach to — `let v = mayFail() otherwise 0`.
@@ -5103,6 +5114,10 @@ export type Parser
 		// is the real parse's signal that this alias's `#81` display string is wanted (it will be merged and
 		// read by the value-merge check); the sweep and the nested-alias reader pass false.
 		if self.at(TokenKind.function) 'functionAlias'
+			// A function alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference to
+			// `function`), so it may not take a compiler-owned type name — unlike the ranged form below, which
+			// erases. See `requireTypeNameNotCompilerOwned`.
+			try self.requireTypeNameNotCompilerOwned(nameTok)
 			functionOut.push(try self.readFunctionTypeAlias(nameTok, buildDisplay: buildFunctionDisplay))
 			return
 		end 'functionAlias'
@@ -5111,6 +5126,9 @@ export type Parser
 		// identifier followed by `with`. It records its own registry (`GenericAliasEntry`), not the
 		// ranged one, and (in the REAL parse) checks the instantiation's arity and managed arguments.
 		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'genericAlias'
+			// A generic-instance alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference
+			// to `genericInstance`, an owned heap box), the function alias's case exactly.
+			try self.requireTypeNameNotCompilerOwned(nameTok)
 			try self.readGenericInstanceAlias(nameTok, genericOut: genericOut)
 			return
 		end 'genericAlias'
@@ -5620,9 +5638,11 @@ export type Parser
 	// are declared BELOW its methods parses identically to one that declares them above.
 	function parseTypeDeclaration() throws ParseError
 		let nameTok = try self.readTypeHeader()
-		// The real parse alone rejects a reserved `type __T` — `readTypeHeader` stays a pure reader
-		// shared with the tolerant sweep, which is not a validator (see `recordScannedType`).
+		// The real parse alone rejects a reserved `type __T` or a compiler-owned `type Ordering` —
+		// `readTypeHeader` stays a pure reader shared with the tolerant sweep, which is not a validator
+		// (see `recordScannedType`).
 		try self.requireUnreservedName(nameTok)
+		try self.requireTypeNameNotCompilerOwned(nameTok)
 		self.enclosingType = nameTok.value
 
 		var layout = StructLayout.create(nameTok.value)
@@ -5869,6 +5889,7 @@ export type Parser
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
+		try self.requireTypeNameNotCompilerOwned(nameTok)
 		try self.skipOptionalImplementsClause()
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
@@ -7733,6 +7754,27 @@ export type Parser
 			throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'reserved'
 	end 'requireUnreservedName'
+
+	// ⭐ **A DECLARATION MAY NOT GIVE A COMPILER-OWNED TYPE NAME A *NOMINAL* IDENTITY (P1.7a slice 2b-ii).**
+	// `requireUnreservedName`'s sibling, and the two are separate rules over separate name sets rather than one
+	// combined check, because they govern different things: `__` is reserved at EVERY declaration (a local, a
+	// field, a function, an enum case), while `Ordering`/`HashValue`/`ExitCode` are reserved only where a
+	// declaration would mint a TYPE IDENTITY under the name — `let Ordering = 5` binds a value and collides
+	// with nothing.
+	//
+	// ⚠ **NOMINAL is the precise line, and a RANGED typealias is deliberately on the legal side of it.** A
+	// `type`, an `enum`/`union`, a FUNCTION typealias and a GENERIC-INSTANCE typealias each make the name mean
+	// a distinct thing the parser re-tags a `named` reference INTO (`structRef`, an enum layout, `function`,
+	// `genericInstance`) — and that is precisely where the parser and `resolveNamedType` come to disagree about
+	// a compiler-owned name (see `TypeResolution.isCompilerOwnedTypeName` for the measured 0xC0000005). A
+	// RANGED alias mints no identity at all: it ERASES to `integer`/`float`, which is what the builtin does
+	// too, so the two answers agree and there is nothing to refuse. `specs-shv2/generic-type-nested-array-
+	// typealias.md` declares `typealias ExitCode = int(0 to 125)` in all 27 of its cases and is correct to.
+	function requireTypeNameNotCompilerOwned(nameTok Token) throws ParseError
+		if isCompilerOwnedTypeName(nameTok.value) 'compilerOwned'
+			throw ParseError.declarationTakesCompilerOwnedTypeName(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'compilerOwned'
+	end 'requireTypeNameNotCompilerOwned'
 
 	// The COERCION rule for an ASSIGNMENT — shared by the local path and the global one, which
 	// were already two copies of the same three lines and would now have been two copies of the
@@ -14187,17 +14229,24 @@ export type Parser
 			throw ParseError.unionNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'unionCompare'
 
-		// ⭐ `==`/`!=` ON AN ENCLOSING (opaque) TYPE PARAMETER dispatches through its Equatable witness (P1.7a
-		// slice 2b) — the SAME table `<T>.equals()` uses. Inside the shared body `T`'s concrete type is unknown,
-		// so a scalar `compare` would compare two opaque WORDS: right for an `int` by luck, a POINTER compare for
-		// a struct `T` (a silent wrong answer). An UNCONSTRAINED enclosing `T` has no witness and is E3005.
+		// ⭐ **EVERY COMPARISON ON AN ENCLOSING (opaque) TYPE PARAMETER dispatches through a witness** — `==`/`!=`
+		// through `Equatable.equals` (P1.7a slice 2b), `<`/`>`/`<=`/`>=` through `Comparable.compare` (slice
+		// 2b-ii) — the SAME tables `<T>.equals()` / `<T>.compare()` use. Inside the shared body `T`'s concrete
+		// type is unknown, so a scalar `compare` would compare two opaque WORDS: right for an `int` by luck, a
+		// POINTER compare for a struct `T` (a silent wrong answer). An UNCONSTRAINED enclosing `T` has no witness
+		// and is E3005.
+		//
+		// ⚠ ALL SIX operators are gated, and the ordering half is why: until slice 2b-ii, `<` on a type parameter
+		// fell straight past here to the raw `MaxonOp.compare` below, because `typeClassesAgree` lets a
+		// `typeParameter` agree with anything (TypeRules) — the same pointer-compare wrong answer the equality
+		// half already refused, reachable the moment anything could conform to `Comparable`.
 		// ⚠ Only a value of an ENCLOSING type parameter opts in: a `typeParameter`-tagged value in a NON-generic
 		// caller is a concrete generic-method result (`let v = intBox.get()`) whose real type IS known (`int`) —
 		// it must stay a scalar compare (`isEnclosingTypeParam` is false there, so it falls through to
-		// `comparableOperands`). ORDERING (`<`/…) on a type parameter is Comparable's, a separate slice.
-		if (op == MaxonCmpOp.eq or op == MaxonCmpOp.ne) and (self.isEnclosingTypeParam(lhs) or self.isEnclosingTypeParam(rhs)) 'typeParamEquality'
-			return try self.emitTypeParamEquality(lhs, rhs: rhs, op: op, opTok: opTok, leftIsParam: self.isEnclosingTypeParam(lhs))
-		end 'typeParamEquality'
+		// `comparableOperands`).
+		if self.isEnclosingTypeParam(lhs) or self.isEnclosingTypeParam(rhs) 'typeParamComparison'
+			return try self.emitTypeParamComparison(lhs, rhs: rhs, op: op, opTok: opTok, leftIsParam: self.isEnclosingTypeParam(lhs))
+		end 'typeParamComparison'
 
 		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
@@ -14236,52 +14285,97 @@ export type Parser
 		return self.valueNameId(v) < self.enclosingTypeParams.count()
 	end 'isEnclosingTypeParam'
 
-	// ⭐ **LOWER `==`/`!=` ON A CONSTRAINED TYPE PARAMETER to an Equatable witness dispatch (P1.7a slice 2b).**
-	// The `typeParameter` operand is the witness receiver (equality is symmetric, so a `T`-vs-value mix uses
-	// whichever side is the parameter); `equals(other Self)` is dispatched through the constraint's witness with
-	// `[receiver, other]`, exactly the shape `parseWitnessMethodOnValue` builds for `<T>.equals(other)`. `==`
-	// returns the bool verdict directly; `!=` negates it (`logicalNot`), built from the SAME dispatch so the two
-	// can never disagree — the `emitStringCompare` shape. The result is a trivial scalar bool (no ownership).
-	function emitTypeParamEquality(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token, leftIsParam bool) returns ValueId throws ParseError
+	// ⭐ **LOWER A COMPARISON ON A CONSTRAINED TYPE PARAMETER TO A WITNESS DISPATCH (P1.7a slice 2b / 2b-ii).**
+	// ONE shape serves both operator families, because both are "dispatch one interface method through the
+	// constraint's witness, then read a verdict off its result": `==`/`!=` dispatch `Equatable.equals` and take
+	// (or negate) its bool; `<`/`>`/`<=`/`>=` dispatch `Comparable.compare` and test its `Ordering` against a
+	// case tag. The receiver choice, the constraint search, the `Self`-argument check, the result typing and the
+	// emit are therefore written ONCE, and only the (method, interface) pair and the verdict differ. The
+	// dispatch shape is exactly what `parseWitnessMethodOnValue` builds for `<T>.equals(other)` /
+	// `<T>.compare(other)`, so the operator form and the method form cannot come to mean different things.
+	//
+	// The `typeParameter` operand is the witness receiver. Equality is symmetric, so a `T`-vs-value mix may use
+	// whichever side is the parameter; ORDERING IS NOT — `self.a < self.b` must dispatch on the LEFT operand —
+	// and the shared `Self`-argument check is what guarantees it does: `compare`'s formal is `Self`, so an actual
+	// that is not a value of `T` is rejected BEFORE anything is emitted. The emit is therefore only ever reached
+	// with both operands values of the enclosing `T`, where `leftIsParam` holds and the receiver IS `lhs`; a
+	// `42 < self.item` never reaches it to be silently flipped into `self.item > 42`.
+	function emitTypeParamComparison(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token, leftIsParam bool) returns ValueId throws ParseError
 		let receiver = lhs if leftIsParam else rhs
 		let other = rhs if leftIsParam else lhs
 		let paramPos = self.valueNameId(receiver)
-		let target = try self.requireEquatableWitness(paramPos, op: op, opTok: opTok)
+		let isEquality = op == MaxonCmpOp.eq or op == MaxonCmpOp.ne
+		let target = try self.requireOperatorWitness(paramPos, methodName: EqualsMethodName if isEquality else CompareMethodName, interfaceName: EquatableInterfaceName if isEquality else ComparableInterfaceName, op: op, opTok: opTok)
 
-		// The `other` operand fills `equals`'s `Self`-typed formal, so it must be a value of `T` — a concrete
-		// literal (`item == 42`) would be marshalled into the `Self` pointer and faulted. Same reject the
-		// method-call form runs, one shared helper.
+		// The `other` operand fills the method's `Self`-typed formal, so it must be a value of `T` — a concrete
+		// literal (`item == 42`, `item < 42`) would be marshalled into the `Self` pointer and faulted. Same
+		// reject the method-call form runs, one shared helper.
 		let args = pairArgs(receiver, second: other)
 		try self.requireGenuineSelfArgs(target, args: args, what: comparisonOpSpelling(op), receiverParamPos: paramPos, errorTok: opTok)
 
-		let equalsResult = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(equalsResult, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: false), range: SourceRange.ofToken(opTok))
+		// Typed through the SAME witness-dispatch result typer the `.method()` form uses, so `equals`'s `bool`
+		// and `compare`'s `Ordering` are minted here exactly as they are there (the `Ordering` result carries the
+		// enum's `named` tag, which is what lets a `match` on a `compare()` result recognize it). Its void and
+		// `Self` arms cannot fire for an operator: `Equatable`/`Comparable` each declare one value-returning
+		// method, and `resultUsed` is true because a comparison is only ever parsed for its verdict.
+		let dispatchResult = try self.mintWitnessDispatchResult(target, receiverParamPos: paramPos, methodTok: opTok, resultUsed: true)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(dispatchResult, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: false), range: SourceRange.ofToken(opTok))
 
-		match op 'result'
-			eq then return equalsResult
-			ne then return self.emitUnaryOp(equalsResult, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
-			lt to ge then panic("emitTypeParamEquality: only `==`/`!=` reach here — emitCompare gates ordering out")
-		end 'result'
-	end 'emitTypeParamEquality'
+		// The verdict. `==` is the dispatch's own bool and `!=` negates that SAME dispatch, so the two can never
+		// disagree about what equality means (the `emitStringCompare` shape); the four ordering operators read
+		// the `Ordering` (below).
+		match op 'verdict'
+			eq then return dispatchResult
+			ne then return self.emitUnaryOp(dispatchResult, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			lt to ge then return self.emitOrderingVerdict(dispatchResult, op: op, opTok: opTok)
+		end 'verdict'
+	end 'emitTypeParamComparison'
 
-	// The Equatable witness for a `==`/`!=` on type parameter `paramPos` (P1.7a slice 2b), or E3005 when the
-	// parameter carries no Equatable constraint. `equals` is Equatable's method, so a constraint declaring it is
-	// exactly a `where <paramPos> is Equatable` — the same by-method search `.equals()` dispatch uses, here with
-	// its own diagnostic for the miss.
-	function requireEquatableWitness(paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		match try self.findWitnessDispatch(paramPos, methodName: EqualsMethodName, errorTok: opTok) 'lookup'
+	// The ordinal test that turns a `compare` dispatch's `Ordering` into an ordering operator's bool (P1.7a
+	// slice 2b-ii). It reads the THREE-VALUED result: `<` is `lessThan` and `>` is `greaterThan`, while the
+	// INCLUSIVE pair is the NEGATION of the strict opposite — `<=` is "not greaterThan", `>=` is "not lessThan"
+	// — which is what makes `equalTo` satisfy both without a second compare, and is the bootstrap's mapping
+	// (`2-Parser.cs:22293-22302`, the correct 3-valued reading).
+	//
+	// Every tag is read OFF the `Ordering` layout (`orderingTagOf`), never written as a literal; the layout is
+	// fetched ONCE here rather than per arm. The compare itself is `emitDispatchCompare`, the SAME tag compare
+	// an enum `match` arm emits — so `a < b` and a hand-written `match a.compare(b)` agree by construction.
+	function emitOrderingVerdict(orderingResult ValueId, op MaxonCmpOp, opTok Token) returns ValueId
+		let ordering = builtinOrderingEnum()
+		let lessThanTag = orderingTagOf(ordering, caseName: OrderingLessThanCaseName)
+		let greaterThanTag = orderingTagOf(ordering, caseName: OrderingGreaterThanCaseName)
+
+		match op 'ordinal'
+			eq to ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, handled by emitTypeParamComparison before it routes an ORDERING operator here")
+			lt then return self.emitDispatchCompare(orderingResult, tag: lessThanTag, op: MaxonCmpOp.eq, opTok: opTok)
+			gt then return self.emitDispatchCompare(orderingResult, tag: greaterThanTag, op: MaxonCmpOp.eq, opTok: opTok)
+			le then return self.emitDispatchCompare(orderingResult, tag: greaterThanTag, op: MaxonCmpOp.ne, opTok: opTok)
+			ge then return self.emitDispatchCompare(orderingResult, tag: lessThanTag, op: MaxonCmpOp.ne, opTok: opTok)
+		end 'ordinal'
+	end 'emitOrderingVerdict'
+
+	// The witness a comparison operator on type parameter `paramPos` dispatches through (P1.7a slice 2b/2b-ii),
+	// or E3005 when the parameter carries no constraint declaring `methodName`. A constraint whose interface
+	// declares `equals` IS a `where <paramPos> is Equatable`, and one declaring `compare` IS a `where <paramPos>
+	// is Comparable` — so the search runs by METHOD (the same by-method search `.equals()`/`.compare()` dispatch
+	// uses, one shared core) while the diagnostic names the INTERFACE the author has to write.
+	function requireOperatorWitness(paramPos TypeParamId, methodName ByteArray, interfaceName ByteArray, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
+		match try self.findWitnessDispatch(paramPos, methodName: methodName, errorTok: opTok) 'lookup'
 			found(target) then return target
-			notFound then throw ParseError.equalityRequiresEquatable(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), line: opTok.line, column: opTok.column)
+			notFound then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(interfaceName), line: opTok.line, column: opTok.column)
 		end 'lookup'
-	end 'requireEquatableWitness'
+	end 'requireOperatorWitness'
 
 	// ⭐ **REJECT A CONCRETE VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT (P1.7a slice 2b).** A
-	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s `other Self`) requires an ACTUAL
-	// argument that is a value of the receiver's enclosing type parameter `T` — the only thing the `where`
-	// constraint proves. A concrete literal or concrete-typed value marshalled into that `Self` pointer/slot is
-	// a MISCOMPILE: for a struct `T` the callee's `equals(other Point)` dereferences an int literal as its
-	// `other` pointer (0xC0000005). Run UNIFORMLY for the operator (`T == 42`) and method-call (`T.equals(42)`)
-	// forms — their one shared arg-validation point. `args[0]` is the receiver; interface formal `j` maps to
+	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s and `Comparable.compare`'s `other
+	// Self`) requires an ACTUAL argument that is a value of the receiver's enclosing type parameter `T` — the
+	// only thing the `where` constraint proves. A concrete literal or concrete-typed value marshalled into that
+	// `Self` pointer/slot is a MISCOMPILE: for a struct `T` the callee's `equals(other Point)` dereferences an
+	// int literal as its `other` pointer (0xC0000005). Run UNIFORMLY for the operator (`T == 42`, `T < 42`) and
+	// method-call (`T.equals(42)`, `T.compare(42)`) forms — their one shared arg-validation point. It also
+	// carries a SECOND guarantee for the asymmetric ordering operators: rejecting a non-`T` `Self` actual is
+	// what proves the ordering dispatch's receiver is always the LEFT operand (see
+	// `emitTypeParamComparison`). `args[0]` is the receiver; interface formal `j` maps to
 	// `args[j+1]`. This closes ONLY the `Self`-arg crash class: a genuine type-parameter argument of ANY
 	// position passes (a cross-type-param mismatch `A == B` is a separate future rung, not narrowed here), and a
 	// missing actual is an arity concern left to the caller, not read past here.
@@ -16626,8 +16720,9 @@ export type Parser
 	// `receiverParamPos`'s type parameter whose interface declares `methodName`, returning its slot index, the
 	// method's decl-order index, and its return type — or `notFound` when none does. Shared by the `.method()`
 	// dispatch (`resolveWitnessDispatch`, which rejects a miss as "no constraint provides this method") and the
-	// `==`/`!=` lowering (`requireEquatableWitness`, which rejects a miss as E3005), so the constraint search is
-	// written once and each caller owns its own diagnostic. `errorTok` positions `requireInterfaceForParse`'s
+	// COMPARISON-OPERATOR lowering (`requireOperatorWitness`, which rejects a miss as E3005 — for `equals` and
+	// for `compare` alike), so the constraint search is written once and each caller owns its own diagnostic for
+	// the miss. `errorTok` positions `requireInterfaceForParse`'s
 	// undeclared-interface reject.
 	function findWitnessDispatch(receiverParamPos TypeParamId, methodName ByteArray, errorTok Token) returns WitnessDispatchLookup throws ParseError
 		for i in 0 upto self.enclosingWhereConstraints.count() 'eachConstraint'

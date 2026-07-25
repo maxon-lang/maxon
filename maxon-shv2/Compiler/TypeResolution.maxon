@@ -173,6 +173,23 @@ function resolveType(project Project, t MaxonType) returns MaxonType
 	end 'r'
 end 'resolveType'
 
+// ⭐ **THE TYPE NAMES THE COMPILER OWNS — a user declaration may not bind one (P1.7a slice 2b-ii).** Homed
+// here because this is where the coupling lives: `resolveNamedType` below claims `ExitCode` and `HashValue`
+// BEFORE it consults `structTypes`/`enumTypes`, and `createEnumRegistry` seeds `Ordering` INTO those
+// registries — so under all three names the AUTHORITY's answer is fixed, while the PARSER's own `named`
+// resolution (`resolveNamedStruct`, which reads the struct registry and knows nothing of these names) would
+// happily follow a user declaration instead. That disagreement is not academic: **MEASURED — a user
+// `type HashValue` made `Hashable.hash()`'s witness result a `structRef`, adopted as an owned struct box and
+// dropped as one, faulting with 0xC0000005.** shv2 has no namespacing to keep a user's `Ordering` distinct
+// from the builtin (the reference compilers do — theirs come from a stdlib MODULE), so the cure is to make
+// the collision unrepresentable: `Parser.requireTypeNameNotCompilerOwned` refuses any declaration that would
+// mint a NOMINAL identity under one of these names, which is what makes the arms below and the registry seed
+// the SOLE writers of them. (A RANGED typealias over one is still legal — it erases to the same primitive
+// the builtin does, so it cannot disagree; see that function.)
+export function isCompilerOwnedTypeName(name ByteArray) returns bool
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(OrderingTypeName)
+end 'isCompilerOwnedTypeName'
+
 function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
 	if name.equals(ExitCodeBuiltinName) 'isExitCode'
@@ -217,6 +234,9 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	// signature index at PARSE time, long before this pass runs. So the id is dropped, exactly as a
 	// ranged alias's is. (Float-backed enums resolve to `integer` too: the bits ARE an i64, matched
 	// by an i64 compare — see EnumLayout.)
+	//
+	// The compiler-known `Ordering` resolves HERE rather than through an inline arm of its own, because
+	// `createEnumRegistry` seeds it INTO this registry — one registration, every reader, no arm to add.
 	if project.enumTypes.contains(name) 'isEnum'
 		return MaxonType.integer
 	end 'isEnum'

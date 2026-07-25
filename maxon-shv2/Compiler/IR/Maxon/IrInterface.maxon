@@ -75,8 +75,11 @@ end 'witnessTableLabel'
 let StringableInterfaceName = b"Stringable"
 let FormattedStringableInterfaceName = b"FormattedStringable"
 let HashableInterfaceName = b"Hashable"
-let EquatableInterfaceName = b"Equatable"
-let ComparableInterfaceName = b"Comparable"
+// `Equatable`/`Comparable` are EXPORTED because the operator lowerings name them in their
+// "constrain the parameter with `where T is <Iface>`" reject (`==`/`!=` is Equatable's, `<`/`>`/`<=`/`>=`
+// is Comparable's) — one spelling, shared by the interface synthesis and the diagnostic.
+export let EquatableInterfaceName = b"Equatable"
+export let ComparableInterfaceName = b"Comparable"
 let CloneableInterfaceName = b"Cloneable"
 let ErrorInterfaceName = b"Error"
 
@@ -84,14 +87,28 @@ let ErrorInterfaceName = b"Error"
 // stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
 export let HashMethodName = b"hash"
 export let EqualsMethodName = b"equals"
-let CompareMethodName = b"compare"
+// Exported for `EqualsMethodName`'s reason: the `<`/`>`/`<=`/`>=` lowering searches the enclosing type's
+// constraints for the interface declaring THIS method, exactly as the `==` lowering searches for `equals`.
+export let CompareMethodName = b"compare"
 let CloneMethodName = b"clone"
 let FormatParamName = b"format"
 let OtherParamName = b"other"
 let StringTypeName = b"String"
 export let HashValueTypeName = b"HashValue"
 let BoolTypeName = b"bool"
-let OrderingTypeName = b"Ordering"
+// Exported: `Comparable.compare`'s result type is a COMPILER-KNOWN ENUM, and the enum registries are
+// seeded with its layout under this exact name (`Project.builtinOrderingEnum`). One spelling for the
+// interface's rendered return type, the seeded layout's name, and the declaration reject that keeps a
+// user from binding the name.
+export let OrderingTypeName = b"Ordering"
+
+// `Ordering`'s three cases, in DECLARATION order, verbatim from stdlib/Interfaces.maxon:34-38. Named
+// rather than spelled at each use because THREE parties depend on the exact bytes: the layout builder
+// that declares them, the synthesized `int.compare` that returns their tags, and the `<`/`>`/`<=`/`>=`
+// lowering that tests its dispatch result against them.
+export let OrderingLessThanCaseName = b"lessThan"
+export let OrderingEqualToCaseName = b"equalTo"
+export let OrderingGreaterThanCaseName = b"greaterThan"
 
 // One method SIGNATURE declared in an interface body (no body). Its type columns are
 // rendered SOURCE strings (see the header). `paramNames`/`paramTypeNames` are parallel.
@@ -163,8 +180,8 @@ end 'InterfaceLookup'
 // that constraint's interface (the witness-table slot); `returnTypeName` is the interface method's rendered
 // return type, used to type the dispatch result exactly as a direct call types its own. `paramTypeNames` are
 // the method's rendered formal parameter types (P1.7a slice 2b) — read to reject a concrete value marshalled
-// into a `Self`-typed formal (`Equatable.equals`'s `other Self`), which would fault (a struct `equals`
-// dereferences an int literal as its `other` pointer).
+// into a `Self`-typed formal (`Equatable.equals`'s and `Comparable.compare`'s `other Self`), which would fault
+// (a struct `equals` dereferences an int literal as its `other` pointer).
 export type WitnessDispatchTarget
 	export let constraintIndex as WitnessSlotIndex
 	export let methodIndex as WitnessMethodIndex
@@ -278,21 +295,33 @@ export let IntConformerName = b"int"
 // witness-table label, and the impl symbol cannot drift on how they spell it.
 export let StringConformerName = b"String"
 
-// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slice 2b + P1.7b) — the SINGLE source of "does a builtin
-// type conform to this protocol?"** The primitive `int` AND the managed concrete `String` conform to
-// `Hashable` and `Equatable` with NO user `implements`: shv2 synthesizes their `int.hash`/`int.equals` and
-// `String.hash`/`String.equals` impls natively (the type-side twin of the synthesized `Hashable`/`Equatable`
-// interfaces), so `Box with Integer where T is Hashable` and `Box with String where T is Hashable and
-// Equatable` are legal and their witness slots resolve to real `.text` symbols. `typeConformsTo` ORs this
-// with the user registry, and the install-need decision reads it too, so the E3017 answer, the witness table,
-// and the synthesized-impl set cannot drift. `typeName` is the CANONICAL conformer name (`Integer` already
-// collapsed to `int`; a `String` argument already named `String`). `String` is a MANAGED type, not a
-// primitive — hence the neutral "builtin" spelling. `Comparable`/`Ordering`, float, bool and `Character`
-// conformance and direct `.hash()` on a concrete value are DELIBERATELY excluded — each is its own future
-// slice. (`Set`-with-`String` keys now SHIP, P1.7b, riding exactly this `String` Hashable/Equatable answer.)
+// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slice 2b/2b-ii + P1.7b) — the SINGLE source of "does a
+// builtin type conform to this protocol?"** The primitive `int` AND the managed concrete `String` conform to
+// `Hashable` and `Equatable` with NO user `implements`, and `int` alone additionally conforms to
+// `Comparable`: shv2 synthesizes their `int.hash`/`int.equals`/`int.compare` and `String.hash`/`String.equals`
+// impls natively (the type-side twin of the synthesized `Hashable`/`Equatable`/`Comparable` interfaces), so
+// `Box with Integer where T is Hashable`, `Pair with Integer where T is Comparable` and `Box with String
+// where T is Hashable and Equatable` are legal and their witness slots resolve to real `.text` symbols.
+// `typeConformsTo` ORs this with the user registry, and the install-need decision reads it too, so the E3017
+// answer, the witness table, and the synthesized-impl set cannot drift. `typeName` is the CANONICAL conformer
+// name (`Integer` already collapsed to `int`; a `String` argument already named `String`). `String` is a
+// MANAGED type, not a primitive — hence the neutral "builtin" spelling.
+//
+// ⚠ **`String` is deliberately NOT `Comparable`** — a byte record has no ordering, and neither reference
+// compiler gives it one (`stdlib/String.maxon:34` lists `BuiltinStringLiteral, Hashable, Equatable, Iterable,
+// Cloneable`, and no extension adds `Comparable`). That asymmetry is why the interface test below is per
+// conformer rather than one shared disjunction.
+//
+// Still DELIBERATELY excluded, each its own future slice: FLOAT conformance (needs a NaN total order and a
+// `floatToBits` intrinsic), `bool` and `Character` conformance (no `Character` type exists yet), and direct
+// `.hash()`/`.compare()` dispatch on a CONCRETE value. (`Set`-with-`String` keys SHIP, P1.7b, riding exactly
+// this `String` Hashable/Equatable answer.)
 export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray) returns bool
-	if not (typeName.equals(IntConformerName) or typeName.equals(StringConformerName)) 'notBuiltin'
-		return false
-	end 'notBuiltin'
-	return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+	if typeName.equals(IntConformerName) 'int'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+	end 'int'
+	if typeName.equals(StringConformerName) 'string'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+	end 'string'
+	return false
 end 'isIntrinsicBuiltinConformance'

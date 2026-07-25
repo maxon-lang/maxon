@@ -1528,6 +1528,13 @@ export type ProgramSignatures
 	// `typeNames` on the way in (`remapEnumLayoutPayloadTypes`, the enum twin of
 	// `remapStructLayoutFieldTypes`), and the parser re-interns on the way out (`adoptType`, the
 	// same door `fieldTypeOf` uses). A payload-FREE enum carries no ids and travels by name alone.
+	//
+	// ⭐ **SEEDED, NOT EMPTY** (P1.7a slice 2b-ii): `createEnumRegistry` builds it holding the
+	// compiler-known `Ordering`, so the parser resolves `Ordering.lessThan`, `match <compare result>` and a
+	// `o Ordering` parameter through the ordinary enum doors. The seed deliberately does NOT ride
+	// `self.hash` (which `recordEnum` folds a DECLARED enum into): the hash exists to invalidate a parse
+	// memo when a declaration a reader COPIED FROM changes, and this declaration is byte-identical in every
+	// program — mixing a constant would move every program's hash and invalidate nothing.
 	var enumTypes as EnumLayoutMap
 	// ⭐ Generic-instance interner (P1.6-A) — `Box with Integer` ⇒ a `GenericInstanceId`, id ⇒
 	// `(baseId, argTypes)`. LIKE `structTypes` IT CARRIES IDS (an arg is a `MaxonType`), so `foldFile`
@@ -1613,7 +1620,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the

@@ -430,7 +430,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// now a perfectly good way to say "shift every bit out".
 		shiftCountNegative(count, line, column) then reportPositioned(project, code: ErrorCode.shiftCountNegative, message: "Shift count {count} is negative: a shift distance must be {MinShiftCount} or greater (a count of {ShiftCountBits} or more is legal — it shifts every bit out)", line: line, column: column, filePath: path)
 		comparisonTypeMismatch(left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: 'cannot compare {left} with {right}'", line: line, column: column, filePath: path)
-		equalityRequiresEquatable(op, typeParamName, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Operator '{op}' requires type parameter '{typeParamName}' to be constrained with 'where {typeParamName} is Equatable'", line: line, column: column, filePath: path)
+		operatorRequiresConformance(op, typeParamName, interfaceName, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "Operator '{op}' requires type parameter '{typeParamName}' to be constrained with 'where {typeParamName} is {interfaceName}'", line: line, column: column, filePath: path)
 		witnessSelfArgNotTypeParam(what, typeParamName, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{what}' on type parameter '{typeParamName}' requires an argument of type '{typeParamName}' (the `Self` its constraint provides), not a concrete value", line: line, column: column, filePath: path)
 		nonBoolCondition(keyword, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
 		assignTypeMismatch(name, got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign '{got}' to variable '{name}' of type '{expected}'", line: line, column: column, filePath: path)
@@ -518,6 +518,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.
 		reservedIdentifier(name, line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
+		declarationTakesCompilerOwnedTypeName(name, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: a declaration of the type name '{name}', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one", line: line, column: column, filePath: path)
 		// The scalar-error arms (P1.4b). E3058/E3059/E2049 render the parser's error-handling diagnostics
 		// (the `ParseError` variants are declared in `Parser.maxon`; this is their render half). Each
 		// message is byte-for-byte the reference compiler's — the `error-handling.md`/`match-statements.md`

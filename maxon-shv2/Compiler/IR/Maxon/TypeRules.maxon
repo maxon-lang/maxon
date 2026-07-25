@@ -159,6 +159,13 @@ function typeClassesAgree(left TypeClass, right TypeClass) returns bool
 	// A TYPE PARAMETER agrees with anything (P1.6-A) — the same deferral `unknown` gets, for the
 	// different reason that `T` is a real, opaque type that ANY concrete type may inhabit at this
 	// trivial slice (no substitution). Tested after `noValue` so a `T` never meets a non-value.
+	//
+	// ⚠ **A COMPARISON NEVER REACHES THIS DEFERRAL FOR A VALUE OF AN *ENCLOSING* TYPE PARAMETER.** All six
+	// comparison operators on such a value are intercepted upstream and dispatched through the parameter's
+	// `Equatable`/`Comparable` witness (`Parser.emitCompare`, P1.7a slice 2b/2b-ii) — because letting them
+	// through here would compare two opaque WORDS, i.e. two POINTERS for a struct `T`, a silent wrong answer.
+	// The deferral is still right for what DOES reach it: a concrete generic-method result in a non-generic
+	// caller, and every non-comparison agreement question (an argument, a `return`, an assignment).
 	if left == TypeClass.typeParameter or right == TypeClass.typeParameter 'typeParam'
 		return true
 	end 'typeParam'

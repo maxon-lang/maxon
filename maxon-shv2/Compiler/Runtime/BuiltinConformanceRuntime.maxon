@@ -1,15 +1,15 @@
-// BuiltinConformanceRuntime.maxon — the synthesized `int.hash`/`int.equals` (P1.7a slice 2b) and
-// `String.hash`/`String.equals` (P1.7b) impls that make the BUILTIN types `int` and `String` conform to
-// `Hashable`/`Equatable`.
+// BuiltinConformanceRuntime.maxon — the synthesized `int.hash`/`int.equals` (P1.7a slice 2b),
+// `int.compare` (P1.7a slice 2b-ii) and `String.hash`/`String.equals` (P1.7b) impls that make the BUILTIN
+// types `int` and `String` conform to `Hashable`/`Equatable`, and `int` additionally to `Comparable`.
 //
-// ⭐ **`int` and `String` conform to `Hashable`/`Equatable` NATIVELY, the type-side twin of the synthesized
-// `Hashable`/`Equatable` interfaces (`builtinInterface`).** shv2 reads no stdlib, so there is no user
-// `int.hash` / `String.equals` to point a witness slot at — these are hand-built Std bodies, exactly like
-// `__str_eq` / the array runtime, installed after the pipeline so they are never re-optimized. They are NOT
-// `__`-prefixed, so they carry a real `.text` symbol the witness-table reloc (`recordFuncAbs64InRdata`) can
-// name — the SAME funcAbs64 reloc that stamps `__witness_<Struct>_Digest`, only here the target is
-// synthesized rather than user-written. (`String` is a MANAGED concrete type, not a primitive — hence the
-// neutral "builtin" spelling over the older "primitive".)
+// ⭐ **`int` and `String` conform NATIVELY, the type-side twin of the synthesized
+// `Hashable`/`Equatable`/`Comparable` interfaces (`builtinInterface`).** shv2 reads no stdlib, so there is no
+// user `int.hash` / `int.compare` / `String.equals` to point a witness slot at — these are hand-built Std
+// bodies, exactly like `__str_eq` / the array runtime, installed after the pipeline so they are never
+// re-optimized. They are NOT `__`-prefixed, so they carry a real `.text` symbol the witness-table reloc
+// (`recordFuncAbs64InRdata`) can name — the SAME funcAbs64 reloc that stamps `__witness_<Struct>_Digest`, only
+// here the target is synthesized rather than user-written. (`String` is a MANAGED concrete type, not a
+// primitive — hence the neutral "builtin" spelling over the older "primitive".)
 //
 // ⭐ **INSTALL IS DRIVEN BY THE RELOC, NOT BY A SEPARATE SCAN.** A slot of `__witness_int_Hashable` /
 // `__witness_String_Equatable` / … is stamped with a `funcAbs64` reloc naming `int.hash` / `String.equals` /
@@ -20,9 +20,9 @@
 //
 // The SEMANTICS match the reference compilers' monomorphizing source (`stdlib/PrimitiveExtensions.maxon`,
 // `stdlib/helpers/string/hash.maxon`): `int.hash() = self & 0xFFFFFFFF` (the low-32 mask — identity for a
-// value that already fits u32); `int.equals(other) = self == other`; `String.hash() = djb2` over the bytes;
-// `String.equals(other) = __str_eq`'s content compare. x64-only rides the witness reloc, which the
-// arm64/wasm writers already refuse.
+// value that already fits u32); `int.equals(other) = self == other`; `int.compare(other)` = the
+// `lessThan`/`greaterThan`/`equalTo` cascade; `String.hash() = djb2` over the bytes; `String.equals(other) =
+// __str_eq`'s content compare. x64-only rides the witness reloc, which the arm64/wasm writers already refuse.
 
 // The low-32-bit mask `int.hash`/`String.hash` fold their result through — `HashValue` is `int(0 to u32.max)`,
 // so a hash is the low 32 bits. The one place the mask is spelled, shared by both hashers (it IS `HashValue`'s
@@ -63,6 +63,13 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	if witnessTableReferencesImpl(globalData, funcName: intEquals) 'intEquals'
 		buildIntEquals(module, name: intEquals)
 	end 'intEquals'
+
+	// `int.compare` (P1.7a slice 2b-ii). `String` has NO `Comparable` conformance (a byte record has no
+	// ordering — `isIntrinsicBuiltinConformance`), so there is no `String.compare` twin to install.
+	let intCompare = qualifiedMethodName(IntConformerName, methodName: CompareMethodName)
+	if witnessTableReferencesImpl(globalData, funcName: intCompare) 'intCompare'
+		buildIntCompare(module, name: intCompare)
+	end 'intCompare'
 
 	let strHash = qualifiedMethodName(StringConformerName, methodName: HashMethodName)
 	if witnessTableReferencesImpl(globalData, funcName: strHash) 'strHash'
@@ -132,6 +139,50 @@ function buildIntEquals(module StdModule, name ByteArray)
 
 	module.functions.push(func)
 end 'buildIntEquals'
+
+// `int.compare(self, other) -> Ordering` (P1.7a slice 2b-ii) — `lessThan` when `self < other`, `greaterThan`
+// when `self > other`, `equalTo` otherwise. Both reference compilers state exactly that cascade
+// (`stdlib/PrimitiveExtensions.maxon:11-19`), and its `<`/`>` are plain int compares, so there is no
+// recursion back into `Comparable`. An `Ordering` value IS its i64 tag, so the shape is `buildIntEquals`'s
+// verdict shape with a third exit: two fused `cmp`+`jcc` tests, each falling through to the next, and one
+// `const`-returning block per case.
+//
+// ⭐ The three returned tags come from `orderingTagOf` — read OFF the `Ordering` layout, so reordering the
+// transcription in `Project.builtinOrderingEnum` moves this body and the `<`/`>`/`<=`/`>=` lowering's tag tests
+// together. The bootstrap writes them as literals at its consumer sites with nothing tying them back to the
+// declaration; that is a latent coupling shv2 deliberately does not copy.
+function buildIntCompare(module StdModule, name ByteArray)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+	let ordering = builtinOrderingEnum()
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lessBlock = module.addBlock(func, label: b"less")
+	var notLessBlock = module.addBlock(func, label: b"notLess")
+	var greaterBlock = module.addBlock(func, label: b"greater")
+	var equalBlock = module.addBlock(func, label: b"equal")
+
+	emitParams(module, block: entry, count: 2)
+	let receiver = 0 as ValueId
+	let other = 1 as ValueId
+
+	let isLess = emitCmp(module, block: entry, a: receiver, b: other, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isLess, thenBlockId: lessBlock.id, elseBlockId: notLessBlock.id))
+
+	let lessTag = emitConst(module, block: lessBlock, value: orderingTagOf(ordering, caseName: OrderingLessThanCaseName), ids: ids)
+	module.setTerminator(lessBlock, op: StdOp.ret(lessTag))
+
+	let isGreater = emitCmp(module, block: notLessBlock, a: receiver, b: other, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(notLessBlock, op: StdOp.condBranch(isGreater, thenBlockId: greaterBlock.id, elseBlockId: equalBlock.id))
+
+	let greaterTag = emitConst(module, block: greaterBlock, value: orderingTagOf(ordering, caseName: OrderingGreaterThanCaseName), ids: ids)
+	module.setTerminator(greaterBlock, op: StdOp.ret(greaterTag))
+
+	let equalTag = emitConst(module, block: equalBlock, value: orderingTagOf(ordering, caseName: OrderingEqualToCaseName), ids: ids)
+	module.setTerminator(equalBlock, op: StdOp.ret(equalTag))
+
+	module.functions.push(func)
+end 'buildIntCompare'
 
 // `String.hash(self) -> HashValue` — djb2 over the String's bytes. `self` is a by-value String POINTER in
 // arg-0 (the witness dispatch passes `self.item`, an opaque `T` field read, straight in — a `String` rides
