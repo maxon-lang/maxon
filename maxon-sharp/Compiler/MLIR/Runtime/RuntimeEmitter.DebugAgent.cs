@@ -896,6 +896,14 @@ public partial class RuntimeEmitter {
   /// the green-thread records) so neither can grow a private copy of the derivation.
   /// </summary>
   private void EmitDbgScaledIndex(VReg dest, VReg index, VReg scratch, int stride) {
+    // dest is zeroed and scratch is overwritten before either is added, so an index aliasing either one
+    // is destroyed and the arithmetic silently produces a wrong ADDRESS — the sort of thing that reads
+    // as a corrupt record rather than as a bug in here. Both current callers pass three distinct
+    // registers; this makes that a requirement rather than a coincidence.
+    if (dest == index || scratch == index)
+      throw new InvalidOperationException(
+        $"{nameof(EmitDbgScaledIndex)} needs its index in a register distinct from dest and scratch");
+
     _b.ZeroReg(dest);
     for (int bit = 63; bit >= 0; bit--) {
       if ((stride & (1L << bit)) == 0) continue;
@@ -914,6 +922,49 @@ public partial class RuntimeEmitter {
     EmitDbgScaledIndex(dest, slotIdx, scratch, DbgCondRecSize);
     _b.LeaGlobal(scratch, DbgBpCondGlobal);
     _b.AddRegReg(dest, scratch);
+  }
+
+  /// <summary>
+  /// <paramref name="dest"/> = &amp;records[<paramref name="index"/>] in the control segment at
+  /// <paramref name="segmentBase"/>, clobbering <paramref name="scratch"/>. The green-thread twin of
+  /// <see cref="EmitDbgCondRecAddr"/>, and it exists for the same reason: the stride and the ARRAY BASE
+  /// are one fact, and the two users (append a record, read one back for a per-thread backtrace) must
+  /// not each carry their own copy of it.
+  /// </summary>
+  /// <summary>
+  /// Jump to <paramref name="noStopLabel"/> unless a stop event has actually been PUBLISHED, given the
+  /// segment base in <paramref name="segmentBase"/>. Clobbers <paramref name="scratch"/>.
+  ///
+  /// Two readers ask this and neither can be allowed to answer it privately: the stopped-thread
+  /// backtrace, to decide "empty trace", and the green-thread record, to decide whether the stopped
+  /// thread has an EXACT top frame. Both are false at the entry stop, where the agent parks before any
+  /// breakpoint. Change how a published stop is detected in one place only and the other keeps the old
+  /// rule — surfacing as a wrong top frame or a wrong empty trace, never as a compile error.
+  /// </summary>
+  private void EmitDbgJumpIfNoStopPublished(VReg segmentBase, VReg scratch, string noStopLabel) {
+    _b.LoadIndirect(scratch, segmentBase, DbgOffStopFp);
+    _b.JumpIfZero(scratch, noStopLabel);
+  }
+
+  /// <summary>
+  /// Set the walk window [<paramref name="low"/>, low + <see cref="GtLayout.FaultStackWindowBytes"/>)
+  /// from a stack pointer — the bound to trust when a stack's REAL extent is not recorded anywhere.
+  ///
+  /// Two callers need it and they are the two halves this rung unified: a stop can be taken on an OS
+  /// thread stack whose bounds nothing owns, and a processor's inline main-thread green thread runs on
+  /// exactly such a stack (its struct records no extent, which is the runtime's own test for it). Stating
+  /// the rule twice would let the stopped-thread walk and the green-thread walk come to trust different
+  /// windows for the same kind of stack.
+  /// </summary>
+  private void EmitDbgUnknownExtentWindow(VReg low, VReg high) {
+    _b.MovRegReg(high, low);
+    _b.AddRegImm(high, GtLayout.FaultStackWindowBytes);
+  }
+
+  private void EmitDbgGtRecAddr(VReg dest, VReg index, VReg segmentBase, VReg scratch) {
+    EmitDbgScaledIndex(dest, index, scratch, DbgGtRecSize);
+    _b.AddRegReg(dest, segmentBase);
+    _b.AddRegImm(dest, DbgOffGtRecords);
   }
 
   /// <summary>
@@ -1255,9 +1306,8 @@ public partial class RuntimeEmitter {
     _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: write nothing
     _b.StoreLocal(slotBase, VReg.Scratch1);
 
-    // fp = the stopped frame pointer. Zero at the entry stop (no stop event published) -> empty trace.
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopFp);
-    _b.JumpIfZero(VReg.Scratch2, emptyLabel);
+    // No stop published yet (the entry stop parks before any breakpoint) -> empty trace.
+    EmitDbgJumpIfNoStopPublished(VReg.Scratch1, VReg.Scratch2, emptyLabel);
 
     // Frame 0 = the exact stop-PC offset (already a validated `.text` code offset). BtFrames[0] = it,
     // and the shared walk then fills 1..N from the saved-rbp chain.
@@ -1268,8 +1318,7 @@ public partial class RuntimeEmitter {
     // be taken on an OS thread stack whose real bounds nothing records, so this is the sane bound rather
     // than a known one — unlike a parked green thread, whose own struct carries its extent.
     _b.LoadIndirect(VReg.Arg1, VReg.Scratch1, DbgOffStopSp);
-    _b.MovRegReg(VReg.Arg2, VReg.Arg1);
-    _b.AddRegImm(VReg.Arg2, GtLayout.FaultStackWindowBytes);
+    EmitDbgUnknownExtentWindow(VReg.Arg1, VReg.Arg2);
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, DbgOffStopFp);
     _b.MovRegImm(VReg.Arg3, 1);                           // frame 0 is already written
     _b.Call("__dbg_walk_frames");
@@ -1352,9 +1401,16 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch2, slotStackLow);
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
     _b.JumpIf(Condition.Below, noneLabel);                // below the stack's low bound
+    // The frame link is TWO words — [fp] and [fp + 8] are both read below — so the high bound has to
+    // leave room for both, not merely for fp itself. `fp < high` alone would read a qword AT high, which
+    // is one past the end of a green thread's stack. It went unnoticed while the only caller passed the
+    // fault handler's arbitrary 64 MiB window; a parked thread passes its EXACT extent, where the last
+    // frame in the stack sits precisely at the boundary.
     _b.LoadLocal(VReg.Scratch2, slotStackHigh);
+    _b.AddRegImm(VReg.Scratch1, 2 * DbgGtWordSize);       // the two words this frame will read
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
-    _b.JumpIf(Condition.AboveEqual, noneLabel);           // at or beyond its high bound
+    _b.JumpIf(Condition.Above, noneLabel);                // fp + 16 > high: the link runs off the end
+    _b.LoadLocal(VReg.Scratch1, slotFp);                  // restore fp (the bound test consumed it)
 
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 8);         // ra = [fp + 8]
     _b.Call("__dbg_text_offset");
@@ -1538,10 +1594,16 @@ public partial class RuntimeEmitter {
   // interrupted thread may already hold it, and os_unfair_lock is not recursive. The agent's stated
   // property is async-signal-safety, and the runtime's own precedent agrees: `__gt_cleanup` walks this
   // same list unlocked, and mrt_fault_backtrace walks stacks unlocked. So this follows the handler-context
-  // discipline the codebase already uses — VALIDATE AND BOUND rather than lock — and the bound is
-  // DbgMaxGreenThreads, which is what keeps a chain another M is mutating from spinning the debuggee.
-  // The cost is that a thread completing concurrently may be listed or missed; a debugger's thread list
-  // is a snapshot either way, and it is reported as such.
+  // discipline the codebase already uses, and what it actually provides is a BOUND — DbgMaxGreenThreads
+  // — which is what keeps a chain another M is mutating from spinning the debuggee.
+  //
+  // Be precise about what is NOT provided: the NODES are not validated. A node unlinked and recycled
+  // while we walk yields a garbage stackBase/stackSize, and the frame walk then bounds itself with a
+  // window read from that same untrusted memory. What keeps that from being a wild read today is the
+  // runtime's own ordering — __gt_trampoline unlinks a thread from this list BEFORE its stack is freed,
+  // so a node still on the list still owns its stack — plus the `.text` range check on every return
+  // address. That is a narrow accepted risk, not a validated walk, and calling it one would be the kind
+  // of overstated comment a later reader trusts.
 
   /// <summary>
   /// __dbg_p_at(index) -> the ACTIVE processor at <c>index</c>, or 0.
@@ -1671,11 +1733,20 @@ public partial class RuntimeEmitter {
     _b.StoreLocal(slotStackHigh, VReg.Scratch2);
     _b.Jump(walkLabel);
 
+    // ⚠ WHY THIS IS SAFE, written where it is DEPENDED ON. Seeding from gt->rsp with a 64 MiB window
+    // trusts a saved stack pointer, and the park gate above only established that no processor is
+    // RUNNING this thread — not that its stack still exists. For a processor's inline thread that holds
+    // because of two facts elsewhere: a P struct is VirtualAlloc'd zeroed, so an unused P's inline
+    // mainThread has rbp == 0 and the walk stops at once; and a P is set PStatusUnused only on the
+    // shutdown path (X86CodeEmitter.Runtime.cs / ARM64CodeEmitter.Runtime.cs worker exit), so an ACTIVE
+    // P never carries a stale mainThread.rbp pointing into an OS-thread stack that has gone away.
+    // Make workers exit when idle — a natural future optimisation — and this becomes a wild read inside
+    // a trap handler. The rbp == 0 check in __dbg_frame_ra is the only thing standing behind it.
     _b.DefineLabel(osStackLabel);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtLayout.GtOffRsp);
     _b.StoreLocal(slotStackLow, VReg.Scratch2);
-    _b.AddRegImm(VReg.Scratch2, GtLayout.FaultStackWindowBytes);
-    _b.StoreLocal(slotStackHigh, VReg.Scratch2);
+    EmitDbgUnknownExtentWindow(VReg.Scratch2, VReg.Scratch1);
+    _b.StoreLocal(slotStackHigh, VReg.Scratch1);
 
     _b.DefineLabel(walkLabel);
     _b.LoadLocal(VReg.Scratch0, slotGt);
@@ -1722,10 +1793,7 @@ public partial class RuntimeEmitter {
     _b.CmpRegImm(VReg.Scratch2, DbgMaxGreenThreads);
     _b.JumpIf(Condition.AboveEqual, truncatedLabel);
 
-    // rec = base + DbgOffGtRecords + count * DbgGtRecSize
-    EmitDbgScaledIndex(VReg.Scratch3, VReg.Scratch2, VReg.Scratch0, DbgGtRecSize);
-    _b.AddRegReg(VReg.Scratch3, VReg.Scratch1);
-    _b.AddRegImm(VReg.Scratch3, DbgOffGtRecords);
+    EmitDbgGtRecAddr(VReg.Scratch3, VReg.Scratch2, VReg.Scratch1, VReg.Scratch0);
     _b.StoreLocal(slotRec, VReg.Scratch3);
 
     _b.LoadLocal(VReg.Scratch0, slotGt);
@@ -1764,10 +1832,8 @@ public partial class RuntimeEmitter {
     _b.Jump(parkedTopLabel);
 
     _b.DefineLabel(stoppedTopLabel);
-    // A stop event must actually have been published: at the entry stop the agent parks before any
-    // breakpoint, so StopFp is 0 and the recorded PC would be a zero nobody set.
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopFp);
-    _b.JumpIfZero(VReg.Scratch2, noTopLabel);
+    // A stop event must actually have been published, or the recorded PC is a zero nobody set.
+    EmitDbgJumpIfNoStopPublished(VReg.Scratch1, VReg.Scratch2, noTopLabel);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopPc);
     _b.StoreLocal(slotTopPc, VReg.Scratch2);
     _b.MovRegImm(VReg.Scratch2, DbgGtTopFrameExact);
@@ -1997,9 +2063,7 @@ public partial class RuntimeEmitter {
     _b.CmpRegReg(VReg.Scratch2, VReg.Scratch3);
     _b.JumpIf(Condition.AboveEqual, refusedLabel);       // unsigned: a negative index is huge here
 
-    EmitDbgScaledIndex(VReg.Scratch3, VReg.Scratch2, VReg.Scratch0, DbgGtRecSize);
-    _b.AddRegReg(VReg.Scratch3, VReg.Scratch1);
-    _b.AddRegImm(VReg.Scratch3, DbgOffGtRecords);
+    EmitDbgGtRecAddr(VReg.Scratch3, VReg.Scratch2, VReg.Scratch1, VReg.Scratch0);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch3, DbgGtRecOffHandle);
     _b.StoreLocal(slotGt, VReg.Scratch2);
 

@@ -293,20 +293,14 @@ internal static class MaxonDebugRepl {
     /// array the agent last published. Listing here keeps those two in step without the user having to
     /// remember to type `threads` first.
     private void DoGtBacktrace(string rest) {
-      if (!uint.TryParse(rest.Trim(), out var id) || id == 0) {
+      if (!TryParseGtId(rest, out int id)) {
         Console.Out.WriteLine($"Usage: {GtBacktraceUsageText}");
         return;
       }
 
-      var list = dbg.ListGreenThreads();
-      if (GtListUnavailableReason(list.Status) is { } reason) {
-        Console.Out.WriteLine($"gt-backtrace: {reason}.");
-        return;
-      }
-
-      var bt = dbg.GtBacktrace((int)id);
+      var bt = dbg.GtBacktrace(id);
       RenderFramesText($"green thread #{id}", GtBacktraceUnavailableReason(bt.Status), bt.Frames,
-        Console.Out);
+        Console.Out, "(not started — no frames yet)");
     }
 
     private void DoPrint(string rest) {
@@ -706,18 +700,12 @@ internal static class MaxonDebugRepl {
   /// only means something against a current listing, so a `--commands` script that asks for one without
   /// a preceding `threads` still gets a correct answer rather than an empty one.
   private static void BatchGtBacktrace(MaxonDebugger dbg, string rest) {
-    if (!uint.TryParse(rest.Trim(), out var id) || id == 0) {
+    if (!TryParseGtId(rest, out int id)) {
       EmitError($"gt-backtrace needs a green-thread id ({GtBacktraceUsageText})");
       return;
     }
 
-    var list = dbg.ListGreenThreads();
-    if (GtListUnavailableReason(list.Status) is { } reason) {
-      EmitError(reason);
-      return;
-    }
-
-    EmitGtBacktrace((int)id, dbg.GtBacktrace((int)id));
+    EmitGtBacktrace(id, dbg.GtBacktrace(id));
   }
 
   private static void BatchLocals(MaxonDebugger dbg, MaxonDebugger.StopInfo? currentStop) {
@@ -908,7 +896,8 @@ internal static class MaxonDebugRepl {
   };
 
   private static void RenderBacktraceText(MaxonDebugger.BacktraceResult bt, TextWriter w) =>
-    RenderFramesText("backtrace", BacktraceUnavailableReason(bt.Status), bt.Frames, w);
+    RenderFramesText("backtrace", BacktraceUnavailableReason(bt.Status), bt.Frames, w,
+      "(no stack — stopped at entry)");
 
   /// <summary>
   /// The frame-list TEXT face, shared by the stopped-thread backtrace and the per-green-thread one so a
@@ -917,13 +906,16 @@ internal static class MaxonDebugRepl {
   /// one that has never run) and says so rather than borrowing the unavailable wording.
   /// </summary>
   private static void RenderFramesText(string label, string? unavailableReason,
-      IReadOnlyList<MaxonDebugger.Frame> frames, TextWriter w) {
+      IReadOnlyList<MaxonDebugger.Frame> frames, TextWriter w, string emptyText) {
     if (unavailableReason is { } reason) {
       w.WriteLine($"  {label}: {reason}.");
       return;
     }
     if (frames.Count == 0) {
-      w.WriteLine($"  {label}: (no stack)");
+      // An empty list is a real answer, not a failure — and it has exactly one cause per caller, so the
+      // caller words it. A stopped thread with no frames is stopped at entry; a green thread with none
+      // has not started. Neither is the unavailable wording above.
+      w.WriteLine($"  {label}: {emptyText}");
       return;
     }
     w.WriteLine($"  {label}:");
@@ -993,20 +985,24 @@ internal static class MaxonDebugRepl {
       w.WriteStartObject();
       w.WriteNumber("frame", f.Index);
       WriteLocationFields(w, f.Location);
-      w.WriteString("offset", HexOffset(f.CodeOffset));
       w.WriteEndObject();
     }
     w.WriteEndArray();
   }
 
-  /// A resolved location's JSON fields, each omitted when it could not be resolved — the ONE spelling,
-  /// so a frame and a green thread's top frame carry the same keys.
+  /// A resolved location's JSON fields — the ONE spelling, so a frame and a green thread's top frame
+  /// carry the same keys. The function and line are omitted when they could not be resolved; the OFFSET
+  /// never is, because it is what the location IS (a code offset the sidecar was asked about) and is the
+  /// only field that is always known. Writing it here rather than at each call site also removes the
+  /// second copy of it that `Frame.CodeOffset` had become — `Symbolize` records its unbiased input as
+  /// `SymLocation.CodeOffset`, so the two were always the same number spelled twice.
   private static void WriteLocationFields(Utf8JsonWriter w, MaxonDebugger.SymLocation loc) {
     if (loc.HasFunction) w.WriteString("function", loc.Function);
     if (loc.HasLine) {
       w.WriteString("file", loc.File);
       w.WriteNumber("line", loc.Line);
     }
+    w.WriteString("offset", HexOffset(loc.CodeOffset));
   }
 
   // ---- Shared renderers: green threads (P4d-2a) ----
@@ -1037,9 +1033,18 @@ internal static class MaxonDebugRepl {
     _ => throw new InvalidOperationException($"Unhandled green-thread backtrace status {status}"),
   };
 
+  /// <summary>
   /// The runtime's own state word for a green thread. Reported ALONGSIDE the on-cpu fact rather than
   /// folded into it: `running` here means the scheduler last set it running, which a PARKED thread still
   /// reads, so collapsing the two would turn an honest pair of facts into a wrong one.
+  ///
+  /// An unrecognised value RENDERS (`status#N`) where its sibling <c>MaxonDebugger.TopFrameKindOf</c>
+  /// THROWS, and the asymmetry is deliberate rather than an oversight. That one decodes a word the AGENT
+  /// wrote from a closed set both ends share, so a value outside it means the segment is being misread.
+  /// This one is a field of a live runtime struct, read unlocked, from a thread another processor may be
+  /// recycling underneath us — a value nobody expected is a benign race, and crashing the debugger on it
+  /// would be strictly worse than showing it. It is not a silent default: the raw value is printed.
+  /// </summary>
   private static string GreenThreadStatusText(long status) => status switch {
     Compiler.Ir.Runtime.GtLayout.GtStatusReady => "ready",
     Compiler.Ir.Runtime.GtLayout.GtStatusRunning => "running",
@@ -1121,7 +1126,6 @@ internal static class MaxonDebugRepl {
       } else {
         w.WriteStartObject("topFrame");
         WriteLocationFields(w, t.TopLocation);
-        w.WriteString("offset", HexOffset(t.TopLocation.CodeOffset));
         w.WriteEndObject();
       }
       w.WriteEndObject();
@@ -1138,6 +1142,16 @@ internal static class MaxonDebugRepl {
   /// The usage line for `gt-backtrace`, shared by both faces so they cannot describe the argument
   /// differently.
   private const string GtBacktraceUsageText = "gt-backtrace <id>   (an id from 'threads')";
+
+  /// <summary>
+  /// Parse a green-thread id argument. It parses as the driver's OWN id type, and that is the fix rather
+  /// than a tidy-up: parsing as `uint` and casting made `gt-backtrace 4294967295` answer
+  /// `{"event":"gt-backtrace","id":-1,…}` — the refusal was right, but the response named a request the
+  /// user never made, and a batch consumer correlating by id is handed a number it never sent.
+  /// Ids are minted from 1, so 0 and negatives are refused as usage errors rather than looked up.
+  /// </summary>
+  private static bool TryParseGtId(string text, out int id) =>
+    int.TryParse(text.Trim(), out id) && id > 0;
 
   private static void EmitExit(MaxonDebugger dbg) => WriteEvent(w => {
     w.WriteString("event", "exit");

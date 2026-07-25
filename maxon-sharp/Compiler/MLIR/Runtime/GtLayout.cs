@@ -34,7 +34,7 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0xC8  fault_redirect_rsp       SP to resume at
 ///   0xD0  fault_redirect_fp        FP to resume at
 ///
-/// ProcContext struct (344 bytes = 0x158):
+/// ProcContext struct (352 bytes = 0x160):
 ///   0x00  local_queue_head         per-P run queue (no lock needed)
 ///   0x08  local_queue_tail
 ///   0x10  local_queue_len
@@ -54,7 +54,10 @@ namespace MaxonSharp.Compiler.Ir.Runtime;
 ///   0x70  system_stack_sp          saved OS thread RSP (for system calls / morestack)
 ///   0x78  remote_free_head         atomic head of the Mimalloc-style MPSC remote-free queue
 ///                                  (cross-thread slab frees push here; owner drains on alloc slow path)
-///   0x80  main_thread              inline GT struct (replaces global __gt_main_thread)
+///   0x80  main_thread              inline GT struct (replaces global __gt_main_thread); NEVER linked
+///                                  into __gt_all_head, so any enumeration of live green threads must
+///                                  walk the __sched_procs array as well as that list
+///   0x158 pending_sync_req         deferred sync-I/O request handed off by a parking worker GT
 /// </summary>
 public static class GtLayout {
 

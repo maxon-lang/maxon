@@ -451,7 +451,7 @@ public partial class RuntimeEmitter {
 
     // Skip inactive workers
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, POffStatus);
-    _b.CmpRegImm(VReg.Scratch1, 1);
+    _b.CmpRegImm(VReg.Scratch1, PStatusActive);
     _b.JumpIf(Condition.NotEqual, "__gt_steal_loop");
 
     // Lock

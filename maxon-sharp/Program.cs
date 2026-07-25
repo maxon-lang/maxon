@@ -77,7 +77,7 @@ class Program {
       + $"(default {MaxonDebugger.DefaultStopTimeoutText}s;");
     Console.WriteLine("                           prefix any live-session form). A timeout is reported as a timeout,");
     Console.WriteLine("                           never as an exit, and the target is released rather than orphaned");
-    Console.WriteLine($"  {TargetEnvFlag}N=V     Set a variable in the DEBUGGEE's environment (repeatable;");
+    Console.WriteLine($"  {TargetEnvFlag}N=V         Set a variable in the DEBUGGEE's environment (repeatable;");
     Console.WriteLine("                           prefix any target-spawning form). MAXON_MAX_PROCS=1 pins the");
     Console.WriteLine("                           scheduler to one processor, which makes a green-thread run reproducible");
     Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
@@ -173,7 +173,7 @@ class Program {
       case "--complete": {
         // Non-interactive completion: `maxon debug --complete '<partial line>' <exe>`. Prints the
         // candidates the interactive Tab key would offer, so the pure completion engine is batch-testable.
-        if (RejectStopTimeout(stopTimeout, "--complete") || RejectTargetEnv(targetEnv, "--complete")) return 1;
+        if (RejectSessionOptions(stopTimeout, targetEnv, "--complete")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --complete needs a partial input line and a target executable "
             + "('maxon debug --complete \"<partial>\" <exe>').");
@@ -183,7 +183,7 @@ class Program {
       }
 
       case "--dump-info": {
-        if (RejectStopTimeout(stopTimeout, "--dump-info") || RejectTargetEnv(targetEnv, "--dump-info")) return 1;
+        if (RejectSessionOptions(stopTimeout, targetEnv, "--dump-info")) return 1;
         if (args.Length < 2) {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
           return 1;
@@ -193,7 +193,7 @@ class Program {
       }
 
       case "--symbolize": {
-        if (RejectStopTimeout(stopTimeout, "--symbolize") || RejectTargetEnv(targetEnv, "--symbolize")) return 1;
+        if (RejectSessionOptions(stopTimeout, targetEnv, "--symbolize")) return 1;
         if (args.Length < 3) {
           Console.Error.WriteLine("maxon debug --symbolize needs a .mxdbg path and at least one code offset.");
           return 1;
@@ -303,6 +303,15 @@ class Program {
     value = text[(eq + 1)..];
     return true;
   }
+
+  /// <summary>
+  /// Refuse BOTH session options on a `maxon debug` surface that starts no target. Stated once, because
+  /// "these surfaces only read a sidecar" is one fact about the command set and each option restating it
+  /// is how the two would eventually disagree about which surfaces those are.
+  /// </summary>
+  static bool RejectSessionOptions(TimeSpan? stopTimeout, IReadOnlyDictionary<string, string>? targetEnv,
+      string surface) =>
+    RejectStopTimeout(stopTimeout, surface) || RejectTargetEnv(targetEnv, surface);
 
   /// Refuse <see cref="TargetEnvFlag"/> on a `maxon debug` surface that spawns no target, exactly as
   /// <see cref="RejectStopTimeout"/> does — accepting it there and doing nothing is the same silent lie.

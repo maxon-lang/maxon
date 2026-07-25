@@ -1271,6 +1271,20 @@ internal sealed class MaxonDebugger : IDisposable {
   public GtBacktraceResult GtBacktrace(int id) {
     if (!GreenThreadsSupported) return new GtBacktraceResult(GtBacktraceStatus.UnsupportedByAgent, []);
 
+    // RE-LIST FIRST, here rather than at each caller. What this posts is a record INDEX, and an index is
+    // only meaningful against the array the agent last published — which the agent republishes on every
+    // per-thread command. While both REPL faces happened to list beforehand, that made the invariant a
+    // property of who calls this rather than of the engine: the next surface to reach for it (the MCP
+    // batch shape this ladder is heading to) would get a plausible backtrace OF THE WRONG THREAD, with
+    // nothing to catch it. Listing is cheap and the target is parked either way.
+    var list = ListGreenThreads();
+    if (list.Status != GtListStatus.Ok)
+      return new GtBacktraceResult(
+        list.Status == GtListStatus.UnsupportedByAgent
+          ? GtBacktraceStatus.UnsupportedByAgent
+          : GtBacktraceStatus.Unavailable,
+        []);
+
     GreenThread? match = null;
     foreach (var t in _lastGtList) {
       if (t.Id != id) continue;
