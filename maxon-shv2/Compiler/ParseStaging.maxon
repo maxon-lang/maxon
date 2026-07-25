@@ -105,34 +105,34 @@ export type FileParseArtifact
 	// This file's range-check contributions (P1.9), one per function that has a cast into a
 	// ranged alias or a ranged `return`. Folded into `project.rangeChecks` by `commitRangeChecks`.
 	export var rangeChecks as FunctionRangeCheckEntryArray
-	// This file's ranged-typealias declarations, in declaration order. Unlike the two
-	// registries above these carry no source position: nothing reports a diagnostic
-	// against a typealias DECLARATION yet (a same-named alias in another file is legal
-	// — specs/duplicate-typealias.md — so a merge-time collision is not an error the
-	// way a duplicate function is).
+	// This file's ranged-typealias declarations, in declaration order. Each carries its declaring file
+	// and its name token's position: the file makes resolution file-scoped and the position anchors
+	// the E3105 a cross-file underlying conflict earns (see RangedTypeAlias).
 	export var typeAliases as RangedTypeAliasArray
 	// This file's declared FUNCTION typealiases (P1.5-A1), in declaration order. The twin of
-	// `typeAliases`, and positionless + remap-free for the same reasons: nothing reports a diagnostic
-	// against a typealias DECLARATION, and a function alias's return type is stored interner-free (a tag
+	// `typeAliases`, and remap-free: a function alias's return type is stored interner-free (a tag
 	// + a name ByteArray), so `mergeArtifact` folds it by NAME with no id rewrite.
 	export var functionTypeAliases as FunctionTypeAliasArray
-	// This file's declared struct types (`type Point`), in declaration order. The twin of
-	// `typeAliases`, and positionless for the same reason: nothing reports a diagnostic against a
-	// `type` DECLARATION yet. (A duplicate `type` name across files IS a real gap — it is not
-	// diagnosed, and the merge is last-wins. It needs the positioned check `commitFuncSignatures`
-	// does for functions, and no spec case covers it; see `commitStructTypes`.)
+	// This file's declared struct types (`type Point`), in declaration order.
 	export var structTypes as StructLayoutArray
 	// This file's declared enum/union types, in declaration order. The twin of `structTypes`, but
 	// UNLIKE it carries no type-name ids — a case is a plain NAME and a tag is a plain INT, so
 	// `mergeArtifact` needs no remap for these (contrast `remapArtifact`, which rewrites struct
-	// field types). Positionless for `structTypes`' reason: no diagnostic is raised against an
-	// enum DECLARATION at merge time.
+	// field types).
 	export var enumTypes as EnumLayoutArray
 	// This file's declared `interface` types (P1.7a slice 1), in declaration order. Remap-free like
 	// `enumTypes`: an interface method's types are stored as rendered source STRINGS (see IrInterface),
-	// not interner ids, so `mergeArtifact` folds it by name with no id rewrite. Positionless for
-	// `enumTypes`' reason: no diagnostic is raised against an interface DECLARATION.
+	// not interner ids, so `mergeArtifact` folds it by name with no id rewrite.
 	export var interfaces as IrInterfaceArray
+	// ⭐ **EVERY DECLARATION THAT MINTED A TYPE NAME, IN SOURCE ORDER** — one entry per `type` /
+	// `enum` / `union` / `interface` / `typealias`, carrying the kind and the name token's position
+	// (see TypeNameDecl). It is what `commitTypeNameDecls` folds through `TypeNameRegistry` to decide
+	// whether a name is declared twice.
+	//
+	// ⚠ It is a SEPARATE array and not a position bolted onto the five arrays above, because the fact
+	// it holds is one none of them can hold: they are five arrays, so which of a file's `type Box` and
+	// `typealias Box` came SECOND is nowhere in them, and a collision must blame the later one.
+	export var typeNameDecls as TypeNameDeclArray
 	// This file's `type X implements …` conformance declarations (P1.7a slice 1). Each carries the
 	// type-name token position so the whole-program `checkConformance` can anchor an E3015/E3016 on it.
 	// Remap-free (all names are plain ByteArrays). Folded into `project.conformances` by `mergeArtifact`.
@@ -179,6 +179,7 @@ export type FileParseArtifact
 			structTypes: StructLayoutArray.create(),
 			enumTypes: EnumLayoutArray.create(),
 			interfaces: sharedEmptyInterfaces,
+			typeNameDecls: TypeNameDeclArray.create(),
 			conformances: sharedEmptyConformances,
 			typeNames: TypeNameInterner.create(),
 			currentFuncIndex: 0,
@@ -300,6 +301,13 @@ export type FileParseArtifact
 		self.interfaces.push(iface)
 	end 'recordInterface'
 
+	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
+	// every `record*` above follows. Called from `Parser.dispatchTopLevel`, the ONE place that sees all
+	// five declaring keywords, so this array's order IS the file's source order across kinds.
+	export function recordTypeNameDecl(decl TypeNameDecl)
+		self.typeNameDecls.push(decl)
+	end 'recordTypeNameDecl'
+
 	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`
 	// (P1.7a slice 1). The type-name position travels with it so `checkConformance` anchors on the name.
 	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface`.
@@ -354,6 +362,10 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitFuncSignatures(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
+	// BEFORE the five per-kind commits below, because it is the one that can REFUSE a declaration: a
+	// name reported here is one whose meaning the registries beneath cannot agree on, and reporting it
+	// first keeps a program's diagnostics in the order a reader meets the declarations.
+	commitTypeNameDecls(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact)
 	commitStructTypes(project, artifact: artifact)
@@ -373,19 +385,50 @@ function commitDiagnostics(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitDiagnostics'
 
+// ⭐ **COMMIT EVERY TYPE-NAME DECLARATION, AND REPORT A NAME DECLARED TWICE.** The whole-program
+// duplicate check for the TYPE namespace, exactly as `commitFuncSignatures` is for functions and for
+// the same reason it lives at the merge rather than in the parser: a file-local check cannot see a
+// second file, and the parser must stay pure. The rule itself, and the one carve-out it has, are
+// stated once on `TypeNameRegistry`; this function only chooses the CODE and writes the text.
+//
+// ⚠ **WHICH CODE IS A PROPERTY OF THE PAIR, NOT OF THIS SITE.** E3061 says "two typealiases in scope
+// declare the same name", so it is right exactly when BOTH declarations are typealiases — including
+// two different FORMS across two files, which is the pair the file-local carve-out does not cover.
+// Everything else is E3006, the code a name declared twice already carries for a function and for a
+// top-level `let`/`var` (`specs/static-variables.md`, where the kind of keyword is likewise
+// irrelevant).
+//
+// Both arms blame the DECLARATION THE AUTHOR JUST WROTE — its own file, its own name token — and name
+// the incumbent's KEYWORD, which is the half that is invisible from the line being reported. The
+// incumbent's PATH is deliberately not in the text, for the reason E3105 states: a second absolute
+// path inside a message is machine-dependent and unmatchable in a spec golden.
+function commitTypeNameDecls(project Project, artifact FileParseArtifact)
+	for decl in artifact.typeNameDecls 'each'
+		match project.typeNameDecls.record(decl) 'collision'
+			accepted then break 'collision'
+			collides(winner) then reportTypeNameCollision(project, decl: decl, winner: winner)
+		end 'collision'
+	end 'each'
+end 'commitTypeNameDecls'
+
+// The two texts a collision can have, kept together because the CHOICE between them is the thing
+// worth reading in one place.
+function reportTypeNameCollision(project Project, decl TypeNameDecl, winner TypeNameDecl)
+	if isTypeAliasDecl(decl.kind) and isTypeAliasDecl(winner.kind) 'bothAreTypeAliases'
+		reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(decl.name)}'", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+		return
+	end 'bothAreTypeAliases'
+
+	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{String.from(decl.name)}' — already declared as `{typeDeclKeyword(winner.kind)} {String.from(winner.name)}`", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+end 'reportTypeNameCollision'
+
 // Commit the artifact's declared struct types into the project registry — the registry
 // `TypeResolution.resolveNamedType` turns a `MaxonType.named` for a declared `type` into a
 // `structRef` against.
 //
-// A plain upsert. ⚠ Two files declaring the same `type` name is therefore LAST-WINS and silent.
-// That is a real gap and it is not this rung's: two structs of one name are a genuine duplicate and
-// want a positioned diagnostic, and no spec case covers it today.
-//
-// ⚠ **DO NOT COPY `commitTypeAliases` HERE WITHOUT READING WHY IT SPLITS.** An alias's rule is
-// same-file duplicate ⇒ E3061, cross-file ⇒ legal and resolved per file, because a non-exported
-// typealias is FILE-LOCAL (`specs/duplicate-typealias.md`, and `stdlib/` depends on it). Whether a
-// `type` is file-local in the same way is a question no spec answers yet, so the split cannot simply
-// be transplanted — it needs per-file type scoping, which arrives with cross-file name resolution.
+// A plain upsert, and it stays one: a second `type` of the same name is refused by
+// `commitTypeNameDecls` above, which runs first and fails the build, so the overwrite is never
+// observed. That is the same relationship `commitFuncReturnTypes` has with `commitFuncSignatures`.
 function commitStructTypes(project Project, artifact FileParseArtifact)
 	for layout in artifact.structTypes 'each'
 		project.structTypes.upsert(layout.name, value: layout)
@@ -394,9 +437,8 @@ end 'commitStructTypes'
 
 // Commit the artifact's declared enum/union types into the project registry — the registry
 // `TypeResolution.resolveNamedType` reads to resolve a `MaxonType.named` naming a declared
-// `enum`/`union` to `integer`. A plain upsert, matching `commitStructTypes`, and LAST-WINS on a
-// same-named collision for the same (unfixed) reason: cross-file type scoping, which no spec case
-// covers, is the prerequisite for the positioned duplicate check.
+// `enum`/`union` to `integer`. A plain upsert, matching `commitStructTypes` and unobservable on a
+// collision for its reason.
 function commitEnumTypes(project Project, artifact FileParseArtifact)
 	for layout in artifact.enumTypes 'each'
 		upsertDeclaredEnum(project.enumTypes, layout: layout)
@@ -404,8 +446,7 @@ function commitEnumTypes(project Project, artifact FileParseArtifact)
 end 'commitEnumTypes'
 
 // Commit the artifact's declared `interface`s into the project registry (P1.7a slice 1) — a plain
-// upsert keyed by name, matching `commitEnumTypes`. LAST-WINS on a same-named collision for the
-// same (unfixed) reason cross-file type scoping is the prerequisite for a positioned duplicate check.
+// upsert keyed by name, matching `commitEnumTypes` and unobservable on a collision for its reason.
 function commitInterfaces(project Project, artifact FileParseArtifact)
 	for iface in artifact.interfaces 'each'
 		project.interfaces.upsert(iface.name, value: iface)
@@ -431,19 +472,20 @@ function commitRangeChecks(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitRangeChecks'
 
-// Commit the artifact's ranged-typealias declarations into the project registry, and raise the
-// diagnostic a collision earns — E3061 for a SAME-FILE redeclaration, E3105 for two FILES that
-// declare one name over two different underlying primitives.
+// Commit the artifact's ranged-typealias declarations into the project registry, and raise E3105 —
+// two FILES declaring one name over two different underlying primitives.
 //
-// ⭐ **NEITHER IS "TWO FILES DECLARED THIS NAME", and the distinction is the whole point.** A
+// ⭐ **THAT IS NOT "TWO FILES DECLARED THIS NAME", and the distinction is the whole point.** A
 // non-exported typealias is FILE-LOCAL, so two FILES may each declare `MyInt` over their own RANGE
 // and neither is an error (`specs/duplicate-typealias.md`, and `stdlib/` relies on it — seven files
-// privately declare `Byte = int(0 to u8.max)`). What the two rejected cases have in common is that
-// nothing downstream could pick a winner: two declarations in ONE file no qualification could ever
-// disambiguate (which is why the reference compilers reject exactly that — `specs/export-keyword.md`,
-// `error.duplicate-typealias-same-file`), and two primitives for one name, which the file-less
-// readers resolve through a bare door holding one entry (`RangedAliasRegistry.record`).
-// `record` decides WHICH case a declaration is, so the three cannot be confused here.
+// privately declare `Byte = int(0 to u8.max)`). What is rejected is the pair no reader downstream
+// could pick a winner for: two PRIMITIVES for one name, which the file-less readers resolve through a
+// bare door holding one entry (`RangedAliasRegistry.record`).
+//
+// ⚠ **A DUPLICATE DECLARATION IS NOT THIS FUNCTION'S** — `commitTypeNameDecls` reports it, for every
+// declaration kind at once, which is why this one no longer has a same-file arm. This registry sees
+// only ranged aliases, so it could never have decided a `type`/`typealias` pair, and two structures
+// answering one question for overlapping inputs is how they come to disagree.
 //
 // ⚠ **WHOLE-PROGRAM, NOT PARSE-TIME.** It runs at the merge, where `commitFuncSignatures` raises
 // E3006, and not in the parser — a file-local check cannot see a forward reference or a second file,
@@ -451,17 +493,17 @@ end 'commitRangeChecks'
 // records positions and nothing else.
 function commitTypeAliases(project Project, artifact FileParseArtifact)
 	for alias in artifact.typeAliases 'each'
-		// Every arm blames the DECLARATION THE USER JUST WROTE — its own name token, in its own file —
-		// and never the incumbent, which is the line that was fine. `prior` supplies the name only.
-		match project.typeAliases.record(alias) 'collision'
-			redeclaredInSameFile(prior) then reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(prior.name)}'", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
+		match project.typeAliases.record(alias) 'conflict'
+			// Blames the DECLARATION THE USER JUST WROTE — its own name token, in its own file — and
+			// never the incumbent, which is the line that was fine.
+			//
 			// ⚠ The other declaration's PATH is deliberately not in the text. A diagnostic names its file
 			// once, in the position the runner rewrites to `<fragment>`; a second path inside the
 			// message would be an absolute temp path in every spec golden, machine-dependent and
 			// unmatchable. The alias name and the two underlying types are what makes it actionable.
 			conflictingUnderlying(prior) then reportPositioned(project, code: ErrorCode.semanticTypeAliasUnderlyingConflict, message: "Typealias '{String.from(prior.name)}' is declared over '{maxonTypeName(alias.underlying, typeNames: project.typeNames)}' here and over '{maxonTypeName(prior.underlying, typeNames: project.typeNames)}' in another file — two files may declare one alias name over different RANGES, but not over different underlying types", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
-			accepted then break 'collision'
-		end 'collision'
+			accepted then break 'conflict'
+		end 'conflict'
 	end 'each'
 end 'commitTypeAliases'
 
@@ -554,7 +596,7 @@ end 'commitFuncReturnTypes'
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
-			reportPositioned(project, code: ErrorCode.duplicateFunction, message: "duplicate definition of function '{String.from(entry.name)}'", line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of function '{String.from(entry.name)}'", line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
 			continue
 		end 'duplicate'
 		project.funcSignatures.upsert(entry.name, value: entry.signature)

@@ -223,24 +223,25 @@ typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 // a program where no name is declared twice, which is nearly every program — see `RangedAliasRegistry`.
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
 
-// What ONE `typealias` declaration collided with when it was filed — `RangedAliasRegistry.record`'s
-// answer, and the ONLY thing that decides which diagnostic a collision earns.
+// What ONE `typealias` declaration conflicted with when it was filed — `RangedAliasRegistry.record`'s
+// answer, and the ONLY thing that decides whether E3105 is raised.
+//
+// ⚠ **IT DOES NOT ANSWER "IS THIS NAME ALREADY DECLARED?"** — `TypeNameRegistry` does, for every
+// declaration kind at once, and a duplicate typealias is reported from there. This registry knows
+// only about ranged aliases, so it could never have decided a `type`/`typealias` pair, and two
+// structures answering the same question for overlapping inputs is how they come to disagree.
 //
 // It is a separate union from `DeclaredAlias` rather than a case added to it because the two answer
 // different questions: `DeclaredAlias` is what a LOOKUP found, asked once per named type reference,
-// while this is what a WRITE displaced, asked once per declaration. Folding them would put a
+// while this is what a WRITE conflicted with, asked once per declaration. Folding them would put a
 // record-only case in front of every `aliasOf` caller's `match`.
-//
-// Each colliding case carries the declaration it collided WITH, and the reporter blames the NEWCOMER
-// — its own file, its own name token. The incumbent is the line that was fine.
 export union AliasRecordOutcome
-	// Nothing to report: the first declaration of a name, or a legal cross-file one (a non-exported
-	// typealias is FILE-LOCAL, so two files declaring `Limit` over two ranges is the case file scoping
-	// exists to serve — `specs/duplicate-typealias.md`).
+	// Nothing to report: the range is this declaration's own business, and a cross-file pair over two
+	// RANGES is exactly what file scoping exists to serve (`specs/duplicate-typealias.md`).
 	accepted
-	// Two declarations of one name in ONE file — E3061. No qualification could ever disambiguate them.
-	redeclaredInSameFile(prior RangedTypeAlias)
-	// Two FILES declare one name over DIFFERENT underlying primitives — E3105. See `record`.
+	// Two FILES declare one name over DIFFERENT underlying primitives — E3105. See `record`. It
+	// carries the incumbent, because the reporter blames the NEWCOMER — its own file, its own name
+	// token — and names what the incumbent was declared over.
 	conflictingUnderlying(prior RangedTypeAlias)
 end 'AliasRecordOutcome'
 
@@ -308,9 +309,9 @@ export type RangedAliasRegistry
 		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create()}
 	end 'create'
 
-	// File one declaration, and answer WHAT IT COLLIDED WITH — the one place that decides which of the
-	// two collisions this is, so the duplicate test, the conflict test and the insert sit on one
-	// structure and cannot come to disagree about which declarations collide.
+	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with the one every
+	// earlier declaration of the name shares — the one place that decides it, so the conflict test and
+	// the insert sit on one structure and cannot come to disagree about which declarations conflict.
 	export function record(alias RangedTypeAlias) returns AliasRecordOutcome
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
 		// single one of them — collides with nothing and contests nothing. It costs ONE probe and one
@@ -331,23 +332,20 @@ export type RangedAliasRegistry
 		// files that declare this name — off two different sources, because "the files that declare
 		// this name" lives in `byFile` once a name is contested and in `sole` alone before that. What
 		// each arm records is that FACT; what the fact MEANS is decided once, after them.
+		//
+		// A SAME-FILE redeclaration is not this registry's to report (`TypeNameRegistry` owns it, for
+		// every declaration kind), but it is still this registry's to CLASSIFY: it must not make the
+		// name contested, because a name whose duplicate is already an error has exactly one meaning.
 		var declaredByAnotherFile = false
 
 		if byFile.count() > 0 'alreadyContested'
-			if let prior = try byFile.get(declPath) 'sameFileRedeclaration'
-				outcome = AliasRecordOutcome.redeclaredInSameFile(prior)
-			end 'sameFileRedeclaration' else 'anotherFileDeclaresIt'
-				declaredByAnotherFile = true
-			end 'anotherFileDeclaresIt'
+			declaredByAnotherFile = not byFile.contains(declPath)
 		end 'alreadyContested' else 'secondDeclarationOfThisName'
-			// `sole` is the ONLY other declaration of this name, so it settles both questions: the
-			// same file again is the duplicate E3061 reports, a different file makes it contested.
+			// `sole` is the ONLY other declaration of this name, so it settles the question on its own.
 			let solePath = sole.declFilePath.toString()
-			if solePath.equals(declPath) 'sameFileRedeclaration'
-				outcome = AliasRecordOutcome.redeclaredInSameFile(sole)
-			end 'sameFileRedeclaration' else 'secondFileDeclaresIt'
-				declaredByAnotherFile = true
+			declaredByAnotherFile = not solePath.equals(declPath)
 
+			if declaredByAnotherFile 'secondFileDeclaresIt'
 				// The incumbent goes in WITH the newcomer: the invariant is "every declaration or
 				// none", and an entry holding only the second file's would answer with the WRONG
 				// file's range for the first file's own uses — the defect file scoping exists to fix.
@@ -365,19 +363,19 @@ export type RangedAliasRegistry
 		// primitive, so the bare answer IS the answer a scoped lookup would give, for every reader,
 		// always.
 		//
-		// ⚠ CROSS-FILE ONLY, and never instead of the same-file test: a file that declares one name
-		// twice is a duplicate (E3061) whichever primitives it picked, and diagnosing that as a
-		// cross-file conflict would blame the wrong thing. `sole` carries the comparison because it is
-		// the last declaration recorded for this name, and by induction every earlier one agrees with
-		// it — the first pair that disagreed stopped the program here.
+		// ⚠ CROSS-FILE ONLY, and never for a same-file pair: a file that declares one name twice is a
+		// duplicate (E3061, from `TypeNameRegistry`) whichever primitives it picked, and diagnosing
+		// that as a cross-file conflict would blame the wrong thing. `sole` carries the comparison
+		// because it is the last declaration recorded for this name, and by induction every earlier one
+		// agrees with it — the first pair that disagreed stopped the program here.
 		if declaredByAnotherFile and maxonTypeTag(alias.underlying) != maxonTypeTag(sole.underlying) 'underlyingConflict'
 			outcome = AliasRecordOutcome.conflictingUnderlying(sole)
 		end 'underlyingConflict'
 
 		// Non-empty here means the name is contested — either it already was, or the branch above
 		// just made it so by filing the incumbent. A same-file redeclaration of a name only one file
-		// declares leaves it empty and un-filed, which is right: E3061 is reported and the name still
-		// has exactly one meaning.
+		// declares leaves it empty and un-filed, which is right: E3061 is reported against it and the
+		// name still has exactly one meaning.
 		if byFile.count() > 0 'contested'
 			byFile.upsert(declPath, value: alias)
 			self.multiplyDeclared.upsert(alias.name, value: byFile)
@@ -447,6 +445,158 @@ export type RangedAliasRegistry
 		return any.underlying
 	end 'underlyingInAnyFile'
 end 'RangedAliasRegistry'
+
+// --- The TYPE-NAME namespace: one name, one declaration ---
+
+// ⭐ **THE KIND OF DECLARATION THAT MINTED A TYPE NAME.** Five keywords mint one, and `typealias`
+// mints THREE different things, so this is SEVEN cases and not five: the alias forms denote a
+// primitive, a function type and a generic instance respectively, and only the first of them is
+// resolved per declaring FILE. That difference is the whole axis the cross-file carve-out turns on
+// (see `TypeNameRegistry`), so it may not be collapsed to the keyword.
+//
+// ⚠ **THE ALIAS FORMS ARE A CONTIGUOUS BAND, AND TWO RANGE ARMS READ IT** —
+// `typeDeclKeyword` (they share one keyword) and `isTypeAliasDecl` (they share the carve-out and the
+// code a collision earns). Append a new alias form INSIDE the band and any other kind BEFORE it; a
+// kind inserted between `rangedAlias` and `genericAlias` is silently swallowed by both, with no
+// missing-case error. This is `StdOp`'s band-append invariant, on a much smaller union.
+export enum TypeDeclKind
+	structType
+	enumType
+	unionType
+	interfaceType
+	rangedAlias
+	functionAlias
+	genericAlias
+end 'TypeDeclKind'
+
+// The SOURCE KEYWORD that introduced a declaration of this kind — the word a diagnostic must call it
+// by, and the only place those words are written (`EnumLayout.kindWord` reads them from here rather
+// than spelling `enum`/`union` a second time). The three alias forms share `typealias` because that
+// is what the author typed; the form distinction is a resolution fact, not a spelling one, and a
+// message that invented `ranged typealias` would name a keyword no program contains.
+export function typeDeclKeyword(kind TypeDeclKind) returns String
+	return match kind 'k'
+		structType gives "type"
+		enumType gives "enum"
+		unionType gives "union"
+		interfaceType gives "interface"
+		rangedAlias to genericAlias gives "typealias"
+	end 'k'
+end 'typeDeclKeyword'
+
+// Is this one of the `typealias` forms? It decides two things at once, which is why it is asked
+// rather than re-derived: WHICH CODE a collision earns (E3061 is "two typealiases in scope declare
+// the same name"; everything else is E3006) and whether a cross-file pair is legal at all.
+export function isTypeAliasDecl(kind TypeDeclKind) returns bool
+	return match kind 'k'
+		structType to interfaceType gives false
+		rangedAlias to genericAlias gives true
+	end 'k'
+end 'isTypeAliasDecl'
+
+// ONE declaration that minted a type name, with where it was written. The position is the NAME
+// token's, never the keyword's — a collision blames the declaration the author just wrote, and
+// `RangedTypeAlias` already anchors E3061 that way.
+export type TypeNameDecl
+	export let name as ByteArray
+	export let kind as TypeDeclKind
+	export let declFilePath as FilePath
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
+
+	export static function create(name ByteArray, kind TypeDeclKind, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber) returns TypeNameDecl
+		return Self{name: name, kind: kind, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn}
+	end 'create'
+end 'TypeNameDecl'
+
+// One file's type-name declarations, IN SOURCE ORDER. The order is the point and it is why this is
+// one array rather than a position added to each of the four layout types: `structTypes`,
+// `enumTypes`, `interfaces` and `typeAliases` are separate arrays, so which of a file's `type Box`
+// and `typealias Box` came SECOND is a fact none of them holds. Blaming the wrong one of a pair is
+// exactly the misdiagnosis this rule exists to remove.
+export typealias TypeNameDeclArray = Array with TypeNameDecl
+
+// Type name -> the declaration that WON it (the first one merged). See `TypeNameRegistry`.
+typealias TypeNameDeclMap = Map with (ByteArray, TypeNameDecl)
+
+// What ONE declaration collided with, and therefore which diagnostic it earns. `accepted` covers
+// both "first declaration of this name" and the legal cross-file alias case; the collision arm
+// carries the INCUMBENT, because the reporter blames the newcomer and names the incumbent's keyword.
+export union TypeNameRecordOutcome
+	accepted
+	collides(winner TypeNameDecl)
+end 'TypeNameRecordOutcome'
+
+// ⭐ **THE TYPE-NAME REGISTRY — the ONE decider of "is this type name already declared?".**
+//
+// Every one of `type` / `enum` / `union` / `interface` / `typealias` files its name in a whole-program
+// map keyed by the BARE name, and nothing checked that two of them had not claimed the same one. A
+// FIXED cascade then picked the winner (`denotedNamedType`: struct, then enum, then alias), so the
+// answer was decided by the compiler's arm order and by the merge order, never by the author:
+// `type Box` plus `typealias Box` compiled completely clean with the alias discarded, and the same
+// pair written the other way round reported `E3009: Cannot cast from int to struct` — a consequence,
+// not a diagnosis.
+//
+// **THE RULE: a type name is declared exactly once**, with ONE exception.
+//
+// ⚠ **THE EXCEPTION IS PER ALIAS FORM, NOT PER KEYWORD, and `stdlib/` needs both halves of that.**
+// A non-exported `typealias` is FILE-LOCAL (`specs/duplicate-typealias.md`), so two files may each
+// declare one — SEVEN stdlib files declare `Byte = int(0 to u8.max)` (ranged) and FIVE declare
+// `ByteArray = Array with Byte` (generic-instance). So the carve-out must cover the generic form as
+// well as the ranged one, or all of `stdlib/` stops loading.
+//
+// It must NOT cover a pair of DIFFERENT forms, and that is measured rather than assumed: only the
+// RANGED registry is file-scoped, so a `typealias Handler = function() returns int` in one file
+// answers for every file, and a file whose own `Handler` is `int(0 to 10)` had its own
+// `5 as Handler` rejected with `Cannot cast from int to function`.
+//
+// **OUT OF SCOPE, and unchanged:** two SAME-FORM aliases in two files that do not AGREE — two
+// function aliases with different signatures, two instance aliases over different instances — still
+// resolve last-wins. That is cross-file name resolution (the rung that also owns E3063); the ranged
+// form's half of it is already enforced as E3105.
+export type TypeNameRegistry
+	// The declaration that WON each name — the FIRST one merged, kept for the reason
+	// `commitFuncSignatures` keeps the first function: the incumbent is the line that was fine, and
+	// every later declaration of the name is reported against it.
+	var winners as TypeNameDeclMap
+
+	export static function create() returns TypeNameRegistry
+		return Self{winners: TypeNameDeclMap.create()}
+	end 'create'
+
+	// File one declaration, and answer whether it COLLIDED. The single place the rule is applied, so
+	// the legality test and the insert cannot come to disagree about which declarations collide.
+	//
+	// A collision does NOT displace the incumbent: the build is failing either way, and keeping the
+	// first keeps every later declaration of the name reported against one fixed line rather than
+	// against its immediate predecessor.
+	export function record(decl TypeNameDecl) returns TypeNameRecordOutcome
+		let winner = try self.winners.get(decl.name) otherwise 'firstDeclarationOfThisName'
+			self.winners.upsert(decl.name, value: decl)
+			return TypeNameRecordOutcome.accepted
+		end 'firstDeclarationOfThisName'
+
+		if isLegalRepeatedAlias(winner, newcomer: decl) 'fileLocalAlias'
+			return TypeNameRecordOutcome.accepted
+		end 'fileLocalAlias'
+
+		return TypeNameRecordOutcome.collides(winner)
+	end 'record'
+end 'TypeNameRegistry'
+
+// The ONE exception to "a type name is declared exactly once": the SAME alias form, in a DIFFERENT
+// file. Both halves are load-bearing and each is stated where it is enforced —
+//   • same FORM, because only the ranged registry is file-scoped and only same-form pairs of the two
+//     bare registries agree by construction in `stdlib/` (see `TypeNameRegistry`);
+//   • different FILE, because two declarations in ONE file are what no qualification could ever
+//     disambiguate, which is exactly what E3061 has always said (`specs/export-keyword.md`).
+function isLegalRepeatedAlias(winner TypeNameDecl, newcomer TypeNameDecl) returns bool
+	if not isTypeAliasDecl(winner.kind) or winner.kind != newcomer.kind 'notOneAliasForm'
+		return false
+	end 'notOneAliasForm'
+
+	return not winner.declFilePath.equals(newcomer.declFilePath)
+end 'isLegalRepeatedAlias'
 
 // --- Range-check sites (P1.9) — the parser's carrier for `InsertRangeChecks` ---
 //
@@ -952,10 +1102,12 @@ export type EnumLayout
 		return self.indexOfCase(wanted) < self.caseCount()
 	end 'hasCase'
 
-	// The declaring keyword, for a diagnostic — `union` vs `enum`. One place, so a message can never
-	// call the same declaration by both names.
+	// The declaring keyword, for a diagnostic — `union` vs `enum`. The WORDS come from
+	// `typeDeclKeyword`, which every other kind's diagnostics already read, so a declaration cannot be
+	// called `union` here and something else there; this method only picks WHICH of the two applies to
+	// this layout, which is the one fact `isUnion` holds and that function cannot.
 	export function kindWord() returns String
-		return "union" if self.isUnion else "enum"
+		return typeDeclKeyword(TypeDeclKind.unionType if self.isUnion else TypeDeclKind.enumType)
 	end 'kindWord'
 end 'EnumLayout'
 
@@ -1269,6 +1421,12 @@ export type Project
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedAliasRegistry
+	// Every declaration that minted a TYPE NAME, whatever keyword minted it (see TypeNameRegistry).
+	// The one decider of "is this type name already declared?", which each per-kind registry above
+	// structurally cannot answer — it sees only its own kind. Reset with the other merge targets: it
+	// is FIRST-WINS, so a warm rebuild that re-merged the same files would report every declaration
+	// in the program as a duplicate of itself.
+	export var typeNameDecls as TypeNameRegistry
 	// Range-check sites, keyed by function name (see FunctionRangeChecks) — P1.9. The parser
 	// records every `as` cast into a ranged alias and every ranged `return`; `InsertRangeChecks`
 	// (Std tier) reads this to emit the guards / E3005. Kept SEPARATE from `funcReturnTypes`
@@ -1352,6 +1510,7 @@ export type Project
 			funcSignatures: FuncSignatureMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			typeAliases: RangedAliasRegistry.create(),
+			typeNameDecls: TypeNameRegistry.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),

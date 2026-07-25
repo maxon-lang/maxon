@@ -175,7 +175,7 @@ public enum ErrorCode {
   /// </summary>
   SemanticTypeMismatch = 3005,
   /// <summary>
-  /// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, or a local shadowing a 'self' field.
+  /// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
   /// a duplicate definition or a local-vs-self-field shadow. Two
   /// shapes share the code: (a) two function definitions with the same
   /// name and signature -- fires from `reportDuplicateFunction` in the
@@ -188,7 +188,15 @@ public enum ErrorCode {
   /// fires from `isRedeclaredBinding` at the real parse in shv2 and from a
   /// per-file declared-name set in the bootstrap's CollectAndEvaluateTopLevelDecls;
   /// a `let` and a `var` share one storage key, so kind is irrelevant. The
-  /// top-level twin of (a).
+  /// top-level twin of (a); (d) a TYPE name claimed by two declarations --
+  /// `type` / `enum` / `union` / `interface` / `typealias` all file one name
+  /// in one whole-program namespace, and a fixed resolution cascade used to
+  /// pick the winner silently. Fires from `commitTypeNameDecls` in shv2 at the
+  /// merge. Kind-independent exactly as (c) is: what is refused is the SECOND
+  /// declaration of the name, whichever keyword introduced either of them. The
+  /// one exception is two `typealias` declarations, which are E3061 -- and
+  /// which are legal outright when they are the same alias FORM in different
+  /// files, a non-exported typealias being file-local.
   /// </summary>
   SemanticDuplicateDefinition = 3006,
   /// <summary>
@@ -322,6 +330,14 @@ public enum ErrorCode {
   SemanticErrorTypeMismatch = 3059,
   /// <summary>
   /// Two typealiases in scope declare the same name.
+  /// Two declarations of one name are legal only when both are `typealias` of
+  /// the SAME FORM (both ranged, both function, both generic-instance) in
+  /// DIFFERENT files -- a non-exported typealias is file-local
+  /// (specs/duplicate-typealias.md). Every other pair collides: same file
+  /// whatever the forms, and different files whenever the forms differ, since
+  /// only the ranged registry is scoped per declaring file. shv2 raises this
+  /// from `commitTypeNameDecls` when BOTH declarations are typealiases; a pair
+  /// involving a `type`/`enum`/`union`/`interface` is E3006 instead.
   /// </summary>
   SemanticDuplicateTypeAlias = 3061,
   /// <summary>

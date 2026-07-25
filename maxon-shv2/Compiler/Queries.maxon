@@ -183,9 +183,11 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
-		// A failed parse is never cached (preserves v1's invariant): the empty
-		// artifact is returned so the caller rolls forward to the error gate.
-		return FileParseArtifact.create(path)
+		// A failed parse is never cached (preserves v1's invariant). What IS returned carries only the
+		// type names the file had declared before it stopped — see `Parser.abortedParseArtifact`, which
+		// states why that one registry crosses an abort and the rest cannot. Everything else is empty,
+		// so the caller rolls forward to the error gate exactly as before.
+		return parser.abortedParseArtifact()
 	end 'parseFail'
 
 	// Only cache a clean parse — a parse that reported a diagnostic must re-run. The memo is
@@ -342,6 +344,9 @@ function resetMergeTargets(project Project)
 	project.conformances = ConformanceDeclArray.create()
 	project.interfaces = IrInterfaceMap.create()
 	project.typeAliases = RangedAliasRegistry.create()
+	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every
+	// name already claimed by its own declaration and report the whole program as duplicates.
+	project.typeNameDecls = TypeNameRegistry.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.structTypes = StructLayoutMap.create()
 	project.typeNames = TypeNameInterner.create()
@@ -455,7 +460,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserInvalidCharacterLiteral, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
 		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
 		voidCallResultUsed(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
-		duplicateTopLevelDeclaration(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateFunction, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
+		duplicateTopLevelDeclaration(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{name}'", line: line, column: column, filePath: path)
 		// ⚠ The three top-level-constant arms carry the BOOTSTRAP'S EXACT TEXT — `specs-shv2/top-level-let.md`
 		// gates two of them byte-for-byte, and both suites compare stderr exactly, so the two compilers
 		// must not drift. (2-Parser.cs:4955-4957, :5281-5283, :4984-4986.)
@@ -484,7 +489,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		//
 		// ⚠ Byte-for-byte the bootstrap's text for both, because `export-var-fields.md` gates this
 		// stderr exactly and the two suites run the same spec file.
-		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateFunction, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
+		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
 		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
 		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: "cannot pass '{name}' to function that mutates parameter 'self' (in {functionName})", line: line, column: column, filePath: path)
 		// The scalar-match arms (P1.1b wave A). Each carries the code its meaning is registered under

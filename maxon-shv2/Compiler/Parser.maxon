@@ -3071,6 +3071,31 @@ export type Parser
 		return self.artifact
 	end 'parseModule'
 
+	// ⭐ **WHAT AN ABORTED PARSE STILL KNOWS — and it is exactly ONE thing.** A `ParseError` stops the
+	// file mid-way, so its module, its spans and its value origins are half-built and must be thrown
+	// away: `queryParseOps` hands back a fresh artifact and the file contributes nothing to the merge.
+	//
+	// The TYPE NAMES it declared are carried across, and not for symmetry — **because the parse error
+	// is so often the collision's own CONSEQUENCE.** A `typealias Box` and a `type Box` in one file
+	// make every `as Box` in it resolve to the struct, so the file dies on
+	// `E3009: Cannot cast from int to struct` and the duplicate that caused it is never reported at
+	// all: the diagnosis is suppressed by its own symptom, which is the exact failure
+	// `commitTypeNameDecls` exists to end.
+	//
+	// It is sound because each entry is a FINISHED record — a name, a kind and a name-token position,
+	// pushed by `dispatchTopLevel` only after its declaration parsed. Unlike every other artifact
+	// field there is no partial state in the array to salvage, so there is nothing to decide about
+	// where the parse stopped. Copied rather than aliased: two artifacts sharing one array is the
+	// hazard `IrBlock`'s header states, and this path is cold.
+	export function abortedParseArtifact() returns FileParseArtifact
+		var salvaged = FileParseArtifact.create(self.filePath)
+		for decl in self.artifact.typeNameDecls 'eachDecl'
+			salvaged.recordTypeNameDecl(decl)
+		end 'eachDecl'
+
+		return salvaged
+	end 'abortedParseArtifact'
+
 	// Sweep this file's tokens for every `function <name>(…) [returns <Type>]` it declares, and fold
 	// what is found into the whole-program `index`. THE way the signature index is built
 	// (`queryProgramSignatures` does this once per file, in source-path order); nothing else calls
@@ -4586,8 +4611,12 @@ export type Parser
 	// the sweep and the parse cannot drift into two opinions of what a range MEANS. That shared
 	// routine consumes the `typealias` keyword before it can fail, so the cursor always advances and
 	// the caller's loop cannot spin.
+	//
+	// The FORM it read is discarded here alone: the sweep's job is the registries, and the type-name
+	// collision the form feeds is decided at the merge from the REAL parse's artifact (whose position
+	// is the one a diagnostic must be anchored on).
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
-		try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, buildFunctionDisplay: false) otherwise return
+		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, buildFunctionDisplay: false) otherwise return
 	end 'recordScannedTypeAlias'
 
 	// Cursor is AT `type`. Append the struct it declares, plus a `FuncReturnTypeEntry` for each
@@ -5066,17 +5095,32 @@ export type Parser
 			visibility = Visibility.module
 		end 'exported'
 
+		// ⭐ **THE ONE PLACE THAT SEES ALL FIVE TYPE-MINTING KEYWORDS**, which is why the type-name
+		// declaration record is taken here and not inside each of the five parsers: the record's whole
+		// value is that its ORDER is the file's source order ACROSS kinds, and no per-kind site can
+		// know that. The name token sits one past the keyword in every one of the five grammars, so its
+		// INDEX is captured before the dispatch (each of those parsers leaves the cursor past its own
+		// `end`) and the token itself is fetched only on the paths that record one — a `function` or a
+		// `let` pays a scalar add and nothing else. The record is pushed only if the declaration
+		// PARSED: a malformed one is the ParseError's, and must not claim a name.
+		let nameIndex = self.pos + 1
+
 		if self.at(TokenKind.function) 'isFunction'
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, buildFunctionDisplay: true)
+			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, buildFunctionDisplay: true)
+			self.recordTypeName(nameIndex, kind: form)
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration()
+			self.recordTypeName(nameIndex, kind: TypeDeclKind.structType)
 		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
-			try self.parseEnumDeclaration(self.at(TokenKind.union))
+			let isUnion = self.at(TokenKind.union)
+			try self.parseEnumDeclaration(isUnion)
+			self.recordTypeName(nameIndex, kind: TypeDeclKind.unionType if isUnion else TypeDeclKind.enumType)
 		end 'isEnumDecl' else if self.at(TokenKind.interface) 'isInterfaceDecl'
 			try self.parseInterfaceDeclaration()
+			self.recordTypeName(nameIndex, kind: TypeDeclKind.interfaceType)
 		end 'isInterfaceDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
 			// The declaration EMITS NOTHING — for a `var` exactly as for a `let`. A constant inlines at
 			// every read; a var's slot is laid down by the backend from the arena
@@ -5090,6 +5134,16 @@ export type Parser
 			throw ParseError.unsupported("top-level {tok.kind.rawValue}", line: tok.line, column: tok.column)
 		end 'unsupported'
 	end 'dispatchTopLevel'
+
+	// File the type name a top-level declaration just minted, for the whole-program duplicate check
+	// `commitTypeNameDecls` makes at the merge. The position is the NAME token's — the collision blames
+	// the declaration the author wrote, never the keyword and never the incumbent. Takes the token's
+	// INDEX rather than the token, because the cursor has already moved past the declaration by the
+	// time this is called and `dispatchTopLevel` must not pay for a token it may never record.
+	function recordTypeName(nameIndex TokenIndex, kind TypeDeclKind)
+		let nameTok = self.tokenAt(nameIndex)
+		self.artifact.recordTypeNameDecl(TypeNameDecl.create(nameTok.value, kind: kind, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+	end 'recordTypeName'
 
 	// ⭐ A TOP-LEVEL `let` IS A COMPILE-TIME CONSTANT, AND THE DECLARATION IS WHERE ITS DIAGNOSTIC
 	// LANDS — but not where its VALUE is computed.
@@ -5238,7 +5292,13 @@ export type Parser
 	// checked at run time, and that check is a later milestone. It IS read, and by more than the
 	// registry — a range whose low bound is 0 declares an UNSIGNED type, and that decides how every
 	// `shr` on a value of it fills (TypeRules' `rangeIsUnsigned`).
-	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, buildFunctionDisplay bool) throws ParseError
+	//
+	// It RETURNS THE FORM it read, and that is not a convenience: the three forms denote three
+	// different things and only the ranged one is resolved per declaring FILE, so a duplicate-name
+	// rule has to tell them apart (`TypeNameRegistry`). The alternative — the caller inferring the
+	// form from which array grew, or re-deciding it off the tokens — would be a second copy of the
+	// discrimination this function already makes, which is this project's signature bug.
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, buildFunctionDisplay bool) returns TypeDeclKind throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -5255,7 +5315,7 @@ export type Parser
 			// erases. See `requireTypeNameNotCompilerOwned`.
 			try self.requireTypeNameNotCompilerOwned(nameTok)
 			functionOut.push(try self.readFunctionTypeAlias(nameTok, buildDisplay: buildFunctionDisplay))
-			return
+			return TypeDeclKind.functionAlias
 		end 'functionAlias'
 
 		// A GENERIC-INSTANCE typealias (P1.6-A) — `IntBox = Box with Integer`. Recognized by a base
@@ -5266,7 +5326,7 @@ export type Parser
 			// to `genericInstance`, an owned heap box), the function alias's case exactly.
 			try self.requireTypeNameNotCompilerOwned(nameTok)
 			try self.readGenericInstanceAlias(nameTok, genericOut: genericOut)
-			return
+			return TypeDeclKind.genericAlias
 		end 'genericAlias'
 
 		// `int(...)` or `float(...)`. A `bool` alias has no range, a generic alias (`Array with T`)
@@ -5294,6 +5354,8 @@ export type Parser
 
 		let underlying = MaxonType.float if isFloat else MaxonType.integer
 		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high, declFilePath: self.filePath, nameLine: nameTok.line, nameColumn: nameTok.column))
+
+		return TypeDeclKind.rangedAlias
 	end 'readTypeAliasDeclaration'
 
 	// Is the cursor at a nested typealias declaration inside a type body (P1.6-C) — `typealias …` or the
@@ -5317,23 +5379,30 @@ export type Parser
 		var ranged = RangedTypeAliasArray.create()
 		var functionAliases = FunctionTypeAliasArray.create()
 		var generics = GenericAliasEntryArray.create()
-		try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, buildFunctionDisplay: false)
+
+		// The FORM comes from the reader that decided it, never from which array grew: that inference
+		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
+		// drift the day a fourth form appears.
+		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, buildFunctionDisplay: false)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
 		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(pos)`), keyed whole-program by
 		// the caller under its base-qualified name so a same-named inner alias of another generic type stays
 		// distinct, exactly as a ranged inner alias is.
-		if generics.count() == 1 'genericInstance'
-			let entry = try generics.get(0) otherwise panic("readNestedTypeAlias: generics.count() == 1 but get(0) failed")
+		if form == TypeDeclKind.genericAlias 'genericInstance'
+			let entry = try generics.get(0) otherwise panic("readNestedTypeAlias: the generic-instance form was read but generics.get(0) failed")
 			self.recordInnerAliasName(entry.aliasName)
 			return NestedAliasResult.genericInstance(entry)
 		end 'genericInstance'
 
-		if ranged.count() != 1 'notSupported'
+		// Every remaining form is unsupported nested — today that is the FUNCTION one, and the message
+		// names it; a nominal kind cannot reach here at all, `typealias` being the only keyword this
+		// reader consumes.
+		if form != TypeDeclKind.rangedAlias 'notSupported'
 			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) or a generic-instance alias (`typealias ElementArray = Array with T`); a nested function alias is a later slice", line: aliasTok.line, column: aliasTok.column)
 		end 'notSupported'
 
-		let alias = try ranged.get(0) otherwise panic("readNestedTypeAlias: ranged.count() == 1 but get(0) failed")
+		let alias = try ranged.get(0) otherwise panic("readNestedTypeAlias: the ranged form was read but ranged.get(0) failed")
 		self.recordInnerAliasName(alias.name)
 		return NestedAliasResult.ranged(alias)
 	end 'readNestedTypeAlias'
