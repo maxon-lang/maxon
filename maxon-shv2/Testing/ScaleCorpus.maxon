@@ -250,7 +250,7 @@ let LoopNestBase = 2 as KnobSize
 // phis by construction, so that class of bug cannot hide here again.
 let FloatOpsBase = 64 as KnobSize
 
-// ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live ACROSS a call — the most
+// ONE function, N loops, each holding `floatsLivePerSpillLoop()` floats live ACROSS a call — the most
 // expensive thing a float does on this target, and a shape no GPR knob can stand in for.
 //
 // ⚠ WHAT THIS KNOB MEASURES CHANGED AT WAVE 2. Under Wave 1 every XMM was caller-saved, so a float
@@ -258,7 +258,9 @@ let FloatOpsBase = 64 as KnobSize
 // at every call, which is what made `regalloc:splitting` superlinear in the number of cross-call
 // floats. Wave 2 gave the XMM file a callee-saved half (xmm6-15, `calleeSavedMask`), so cross-call
 // floats now live in registers exactly as `callChain`'s GPRs do, and this knob spills only the
-// OVERFLOW past ten — which is why `FloatsLivePerSpillLoop` moved from 4 to 12 in the same commit.
+// OVERFLOW past that half — which is why `floatsLivePerSpillLoop()` stopped being the literal 4 and
+// became the half's width plus headroom, DERIVED from `calleeSavedMask` so the next move of that
+// line retunes it instead of blinding it.
 // It is forced spilling rather than E5001: the amended Rule 2 permits a spill whose placement is
 // forced by a call bracket.
 let FloatSpillLoopsBase = 2 as KnobSize
@@ -270,8 +272,10 @@ let FloatSpillLoopsBase = 2 as KnobSize
 // separation `WorkingLocalsPerFunction` keeps against `pressuredLoops`.
 let WorkingFloatsPerFunction = 4 as KnobSize
 
-// How many floats each spill loop holds live across its call — enough to OVERFLOW the callee-saved
-// XMM half, because that half is now where a cross-call float lives.
+// THE FLOAT-SPILL KNOB'S WIDTH — spelled below as a HEADROOM constant plus a DERIVED half-width,
+// which is why this block covers two declarations. Each spill loop holds this many floats live
+// across its call: enough to OVERFLOW the callee-saved XMM half, because that half is now where a
+// cross-call float lives.
 //
 // ⚠⚠ IT NEEDS A HEADROOM CALCULATION AGAIN, AND WAVE 2 IS WHY. It was 4, under a comment saying it
 // "needs no headroom calculation because the XMM file's answer for a value live across a call is ∅
@@ -281,10 +285,37 @@ let WorkingFloatsPerFunction = 4 as KnobSize
 // to end (see the `pressuredLoops` note): an instrument that cannot express the feature reports Δ0
 // and the Δ0 reads as evidence.
 //
-// So it is now the float twin of `PressuredValuesPerLoop` in the way that matters: `regMaskPopcount`
-// of the callee-saved XMM half is TEN, and this must EXCEED it for a bracket to be forced. Twelve is
-// ten plus the same slack the GPR knob keeps over its five.
-let FloatsLivePerSpillLoop = 12 as KnobSize
+// So it is now the float twin of `PressuredValuesPerLoop` in the way that matters: the width of the
+// callee-saved XMM half is what the set live across the call must EXCEED for a bracket to be forced.
+//
+// ⭐⭐ AND THAT WIDTH IS **DERIVED FROM THE ALLOCATOR'S OWN MASKS**, NOT WRITTEN DOWN HERE AS A TEN.
+// Raising the count to 12 fixes today's number and leaves the trap described above fully ARMED for
+// the next change to `calleeSavedMask` — and a knob that has gone blind that way once will go blind
+// that way again. Reading the width out of the mask instead makes that change RETUNE THE KNOB WITH
+// IT, which is the difference between a number that is right today and one that stays right.
+//
+// ⚠ THE SET LIVE ACROSS THE CALL IS THIS KNOB PLUS ONE — `total` is a float accumulator live across
+// every loop's call too — so the first forced bracket appears when this knob reaches the half's full
+// width, not one past it. MEASURED, rather than reasoned, on a 64-loop ladder of exactly this shape
+// (`regalloc:splitting` allocations, `--metrics`, this compiler): 4 → 784, 6 → 784, 8 → 2,064,
+// 9 → 2,714, 10 → 31,364, 11 → 57,644, 12 → 87,418. 784 is the per-function floor, so the knob was
+// INERT at 4 and at 6, barely engaged at 8–9, and forcing brackets from 10 up — which is the half's
+// width, exactly as the derivation says.
+//
+// ⚠ THE HEADROOM IS **NOT** "the same slack the GPR knob keeps over its five", which this comment
+// claimed until it was checked: `PressuredValuesPerLoop` is 8 against 5, a slack of THREE. The two
+// knobs have different pools AND different accumulator counts, so their knees are in different
+// places and neither slack derives from the other. Re-derive this one from the sweep above, never by
+// copying the GPR figure.
+let FloatSpillHeadroom = 2 as KnobSize
+
+// How many floats each spill loop holds live across its call: the callee-saved XMM half's width plus
+// `FloatSpillHeadroom`. A FUNCTION rather than a `let` only because a global initializer may not call
+// one (E2045) — the value is a constant of the target, decided here and read at every use.
+function floatsLivePerSpillLoop() returns KnobSize
+	let calleeSavedXmms = regMaskPopcount(calleeSavedMask() and classRegisterMask(RegClass.xmm, file: x64RegisterFile()))
+	return (calleeSavedXmms as KnobSize) + FloatSpillHeadroom
+end 'floatsLivePerSpillLoop'
 
 // ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
 //
@@ -1265,10 +1296,10 @@ end 'floatOpsSource'
 
 let FloatSpillDriver = "scaleFloatSpill"
 
-// The `floatSpill` knob: ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live
-// across a call to `scaleOpaque` — TWELVE of them, two more than the callee-saved XMM half is wide,
-// so at least two spill in every loop. See `FloatsLivePerSpillLoop` for why that count is now a
-// headroom calculation rather than a free choice.
+// The `floatSpill` knob: ONE function, N loops, each holding `floatsLivePerSpillLoop()` floats live
+// across a call to `scaleOpaque` — `FloatSpillHeadroom` more than the callee-saved XMM half is wide,
+// so at least that many spill in every loop. See `floatsLivePerSpillLoop` for why that count is
+// DERIVED from the allocator's masks rather than chosen.
 //
 // The call is an INTEGER function, and that is not a compromise: a float ARGUMENT and a float RETURN
 // are both Wave 2, so an int callee is the only call a float can currently be live across — and it
@@ -1301,28 +1332,31 @@ let FloatSpillDriver = "scaleFloatSpill"
 // share a shape and stay apart for the same kind of reason.)
 function floatSpillSource(loopCount KnobSize) returns String
 	var out = StringBuilder.create()
-	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {FloatsLivePerSpillLoop} floats live across a call in each (more than the callee-saved XMM half, so the overflow is a forced spill).\n")
+	// Read ONCE, so the header line and the three emit loops cannot disagree about how many floats
+	// this knob is generating — the count is a property of the target, not of the loop it is in.
+	let floatsPerLoop = floatsLivePerSpillLoop()
+	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {floatsPerLoop} floats live across a call in each (more than the callee-saved XMM half, so the overflow is a forced spill).\n")
 	out.append("function {FloatSpillDriver}(a int) returns int\n")
 	out.append("\tvar total = 0.0\n")
 
 	for loopIndex in 0 upto loopCount 'eachLoop'
 		// Fresh names per loop, so the loops' live ranges do not overlap and peak XMM pressure stays
 		// at one loop's worth however many loops there are — `pressuredLoops`' rule, in the other file.
-		for v in 0 upto FloatsLivePerSpillLoop 'declValues'
+		for v in 0 upto floatsPerLoop 'declValues'
 			out.append("\tvar g{loopIndex}_{v} = a + {v + 1}.25\n")
 		end 'declValues'
 		out.append("\tvar j{loopIndex} = 0\n")
 		out.append("\twhile j{loopIndex} < {GeneratedLoopTrips} 'q{loopIndex}'\n")
 		out.append("\t\tlet k{loopIndex} = {OpaqueCalleeName}(j{loopIndex})\n")
 
-		for v in 0 upto FloatsLivePerSpillLoop 'updateValues'
+		for v in 0 upto floatsPerLoop 'updateValues'
 			out.append("\t\tg{loopIndex}_{v} = g{loopIndex}_{v} + (k{loopIndex} + 0.5)\n")
 		end 'updateValues'
 
 		out.append("\t\tj{loopIndex} = j{loopIndex} + 1\n")
 		out.append("\tend 'q{loopIndex}'\n")
 
-		for v in 0 upto FloatsLivePerSpillLoop 'sumValues'
+		for v in 0 upto floatsPerLoop 'sumValues'
 			out.append("\ttotal = total + g{loopIndex}_{v}\n")
 		end 'sumValues'
 	end 'eachLoop'
