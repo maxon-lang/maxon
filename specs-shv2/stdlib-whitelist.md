@@ -87,8 +87,8 @@ A whitelisted module must declare no name a user program declares and no builtin
   whitelist a module that redeclares a builtin.
 
 - FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, so the builtin is RETIRED FIRST — which is
-  what made `stdlib/Sleep.maxon` the second entry. The parser recognizes a handful of BARE names
-  (`print`, `trunc`, `runProcess`, the math intrinsics) before any registry is consulted, so while
+  what made `stdlib/Sleep.maxon` the second entry. The parser recognizes a set of BARE names —
+  `print` and `trunc` among them — before any registry is consulted, so while
   one of them claims a name, a CALL to that name never reaches a declaration of it: whitelisting
   such a module would load code no ordinary call site can reach while charging the per-compile load
   cost for zero delivered capability, and the name would have two routes — `let f = sleep` is not a
@@ -99,7 +99,12 @@ A whitelisted module must declare no name a user program declares and no builtin
   still reached the builtin — a wrong answer. Deleting the bare-name `sleep` builtin and listing
   the module repaired both, and it is the pattern for every builtin still standing in for a stdlib
   module. **The rule: do not whitelist a module whose function name a bare builtin claims. Retire
-  the builtin first.**
+  the builtin first — and check the roster at its source, `parseCallNamed`'s bare-name `if` chain,
+  never against a list written in prose.** Neither this spec nor `StdlibLoader.maxon` restates the
+  roster, deliberately: nothing makes a prose copy agree with the chain, and both copies had already
+  drifted, naming four of the fifteen names standing after `sleep` left and omitting `spawnReadLine`
+  and all seven `subp*`. A maintainer who checked a module against the list rather than the chain
+  would have been told a claimed name was free.
 
   What a listed module then owns, it owns whole: a user program that declares its own `function
   sleep` is now the ordinary duplicate, `E3006`, naming `stdlib/Sleep.maxon` — loud where it was

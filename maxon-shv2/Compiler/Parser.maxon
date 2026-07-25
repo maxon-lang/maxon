@@ -1390,6 +1390,17 @@ let PrintArity = 1 as ParamCount
 // `runProcess` the way `sleep` used to claim its own: a declaration of that name anywhere is silently
 // unreachable, because this test runs before any registry is consulted. Retire it the same way — delete the
 // name here and list the stdlib module that declares it — when that module compiles.
+//
+// TWO things the `sleep` retirement had that this note would otherwise let a reader assume come free:
+//   • The stdlib body needs a FLOOR to bottom out on, and the only one is a `__Builtins.*` intrinsic — the
+//     table below. `sleep` was retirable because `__Builtins.sleep` already existed and `stdlib/Sleep.maxon`
+//     was already written against it; there is no `__Builtins.runProcess`, so retiring this one MINTS that
+//     intrinsic first and the bare name second.
+//   • It CHANGES TARGET BEHAVIOUR for calls nothing reaches, and that is a decision, not a side effect: the
+//     runtime entry moves out of user code (where the target gate is reachability-BLIND) and into stdlib
+//     source (where it is reachability-AWARE), so an unreached call to the retired name starts compiling for
+//     targets that cannot lower its entry. `SemanticCheck.requireTargetSupportsCallee`'s header states the
+//     asymmetry and names the pair of spec cases that pin both halves for `sleep`. Pin both halves again.
 let RunProcessBuiltinName = b"runProcess"
 
 // `runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the child's exit

@@ -101,7 +101,7 @@
 //     a module that redeclares a builtin.
 //   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT — which is why the builtin is RETIRED FIRST,
 //     and `stdlib/Sleep.maxon` is the entry that was added that way. `Parser.parseCallNamed` recognizes a
-//     handful of BARE names (`print`, `trunc`, `runProcess`, the math intrinsics) BEFORE `emitCall`
+//     set of BARE names — `print` and `trunc` among them — BEFORE `emitCall`
 //     consults any registry, so while one of them claims a name, a CALL to that name never reaches a
 //     declaration of it: listing such a module loads code no ordinary call site can reach — `sleep(5)`
 //     still emitted the builtin's `__gt_sleep` — while charging the per-module load cost for zero
@@ -117,7 +117,13 @@
 //     and rung 5 of the scale ladder, and the emitted code of a program that never sleeps is
 //     byte-identical (`codeBytes` equal at all six rungs — DFE prunes the module it does not reach).
 //     ⇒ THE RULE: do not list a module whose function name a bare builtin claims. Retire the builtin
-//     first. `runProcess` and the streaming-subprocess names are the ones still standing in this way.
+//     first.
+//     ⚠ **AND CHECK THE ROSTER AT ITS SOURCE — `parseCallNamed`'s bare-name `if` chain — NEVER against a
+//     list written here or in a spec.** This bullet is deliberately not one: nothing makes a prose roster
+//     agree with the chain, and both prose copies of it were already wrong. They named four of the FIFTEEN
+//     names standing after `sleep` left, omitting `spawnReadLine` and all seven `subp*` — so a maintainer
+//     checking a module against the list rather than the chain would have been told a claimed name was
+//     free, and got back exactly the silent shadow this rule exists to prevent.
 
 // ⭐ **THE LOADER.** Enumerate `stdlib/` and register each module, in the order the walk found them
 // (see the header on why it does not sort). Called by `loadProject`

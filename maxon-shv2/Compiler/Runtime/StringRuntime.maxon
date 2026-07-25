@@ -481,8 +481,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// `await`/`try await` are detected by op KIND above because their `__gt_*` calls do not exist until
 	// lowering, but `__Builtins.sleep(ms)` lowers in the FRONT END to a `call __gt_sleep`, which IS a Maxon
 	// `call` this scan sees — so any `__gt_*` callee here turns on the scheduler (and, via `recordGtUsage`,
-	// the heap). A source `sleep(ms)` reaches it one frame down, inside `stdlib/Sleep.maxon`'s body, and is
-	// seen for the same reason every stdlib body is: stdlib source is merged into the module this walks.
+	// the heap). A source `sleep(ms)` reaches it one frame down, inside `stdlib/Sleep.maxon`'s body, which
+	// this scan walks because stdlib source is merged into the module it walks — but ONLY IF A PATH FROM
+	// `main` REACHES THAT BODY. `scanRuntimeUsage`'s `unreachableStdlib` filter (above) skips the rest, and
+	// that qualifier is the load-bearing half, not a footnote: it is what keeps listing a stdlib module
+	// byte-neutral for a program that does not use it, and it is why an unreached `sleep(ms)` compiles for a
+	// target with no `__gt_sleep` while an unreached `__Builtins.sleep(ms)` in USER code is still refused.
 	if isGtRuntimeCallee(callee) 'gt'
 		recordGtUsage(usage)
 	end 'gt'
