@@ -2133,31 +2133,47 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 	rootManagedOpaqueArrayElementClones(usage, signatures: signatures)
 	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references no cloner,
 	// so its `neededCloners` is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
-	// the per-type `clonerSymbol` allocations in the fixpoint below are paid only by a program that deep-clones —
-	// a managed-copy-gated cost, not a per-compile one on every struct/enum in the program.
+	// the per-type `clonerSymbol` allocations of the registration below are paid only by a program that deep-clones
+	// — a managed-copy-gated cost, not a per-compile one on every struct/enum in the program.
 	if usage.neededCloners.count() == 0 'noCloners'
 		return
 	end 'noCloners'
-	var changed = true
-	while changed 'fixpoint'
-		changed = false
-		for (_, layout) in project.structTypes 'eachStruct'
-			if usage.neededCloners.contains(clonerSymbol(layout.name)) 'referenced'
-				usage.usesHeap = true
-				if noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures) 'grew'
-					changed = true
-				end 'grew'
-			end 'referenced'
-		end 'eachStruct'
-		for (_, layout) in project.enumTypes 'eachUnion'
-			if usage.neededCloners.contains(clonerSymbol(layout.name)) 'referenced'
-				usage.usesHeap = true
-				if noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures) 'grew'
-					changed = true
-				end 'grew'
-			end 'referenced'
-		end 'eachUnion'
-	end 'fixpoint'
+
+	// ⭐ Closed by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the DROP
+	// dual (`MmRuntime.closeDestructorNeeds`). Both used to be a `while changed` RE-SCAN of every declared type,
+	// which is one quadratic written down twice: a cloner chain of depth D cost D passes over all T types and
+	// re-minted every type's `__clone_` symbol on each. Each referenced node is now expanded exactly once.
+	//
+	// NO generic-instance nodes are registered, and that asymmetry with the drop side is real rather than an
+	// omission: a generic instance has a `__destruct_<mangled>` but no `__clone_<mangled>` at this slice (an
+	// instance element is rejected as uncopyable by `genericTypeFieldHasUncopyableInstantiation`), so the drain's
+	// instance arm is unreachable here and says so.
+	var work = CascadeWorklist.create()
+
+	for (_, layout) in project.structTypes 'eachStruct'
+		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredStruct(layout))
+	end 'eachStruct'
+
+	for (_, layout) in project.enumTypes 'eachUnion'
+		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
+	end 'eachUnion'
+
+	work.seed(usage.neededCloners)
+
+	// Every cloner ALLOCATES a fresh box, so one referenced cloner anywhere means the program touches the
+	// heap — a fact about the queue being non-empty, not about any single node in it.
+	if work.hasPending() 'anyClonerReferenced'
+		usage.usesHeap = true
+	end 'anyClonerReferenced'
+
+	while work.hasPending() 'drain'
+		let node = work.take()
+		match node 'node'
+			declaredStruct(layout) then noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
+			declaredUnion(layout) then noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
+			genericInstance(id) then panic("noteClonerUsage: generic instance {id} was queued as a CLONER node, but no `__clone_<mangled-instance>` exists at this slice and none is registered — the drop cascade's instance arm has no clone twin")
+		end 'node'
+	end 'drain'
 end 'noteClonerUsage'
 
 // ⭐ **INSTALL EVERY MANAGED OPAQUE-`T` `Array` ELEMENT CLONER the `funcAbs64InRdata` copyFunc relocs will bake
@@ -2175,25 +2191,20 @@ function rootManagedOpaqueArrayElementClones(usage RuntimeUsage, signatures Prog
 	end 'eachInstance'
 end 'rootManagedOpaqueArrayElementClones'
 
-// Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner;
-// return whether the set grew.
-function noteStructClonerNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures) returns bool
-	var grew = false
+// Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner,
+// queueing each newly-needed cloner on `work` so its OWN nesting is closed in turn.
+function noteStructClonerNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructClonerNeeds: fieldTypes.get OOB at {i}")
-		if noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)) 'added'
-			grew = true
-		end 'added'
+		noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType), work: work)
 	end 'eachField'
-	return grew
 end 'noteStructClonerNeeds'
 
 // The union twin of `noteStructClonerNeeds` — over each managed payload of each case.
-function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures) returns bool
-	var grew = false
+function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		let payloads = layout.payloadsAt(ci)
 		for fi in 0 upto payloads.count() 'eachField'
@@ -2201,20 +2212,16 @@ function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Pro
 			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'scalar'
 				continue
 			end 'scalar'
-			if noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'added'
-				grew = true
-			end 'added'
+			noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
 		end 'eachField'
 	end 'eachCase'
-	return grew
 end 'noteUnionClonerNeeds'
 
-// Turn on the bits a managed field's clone STRATEGY needs, inserting a nested cloner into `neededCloners`;
-// return whether the set grew.
-function noteFieldCloneNeeds(usage RuntimeUsage, strategy ManagedCloneStrategy) returns bool
+// Turn on the bits a managed field's clone STRATEGY needs, inserting a nested cloner into `neededCloners`.
+function noteFieldCloneNeeds(usage RuntimeUsage, strategy ManagedCloneStrategy, work CascadeWorklist)
 	match strategy 'strategy'
-		direct(callee) then return noteCloneCalleeNeeds(usage, callee: callee)
-		managedArray(elementClone) then return noteManagedArrayFieldNeeds(usage, elementClone: elementClone)
+		direct(callee) then noteCloneCalleeNeeds(usage, callee: callee, work: work)
+		managedArray(elementClone) then noteManagedArrayFieldNeeds(usage, elementClone: elementClone, work: work)
 		unsupported then panic("noteFieldCloneNeeds: an unsupported managed field strategy reached the cloner-needs closure — arrayElementSupportsDeepClone gates the front end")
 	end 'strategy'
 end 'noteFieldCloneNeeds'
@@ -2222,20 +2229,24 @@ end 'noteFieldCloneNeeds'
 // A managed-element array FIELD clones through `__arr_clone_managed(field, funcAddr(elementClone))` — route
 // BOTH callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a
 // direct scan of those calls (no second spelling of "__arr_clone_managed → usesManagedArrayCopy").
-function noteManagedArrayFieldNeeds(usage RuntimeUsage, elementClone ByteArray) returns bool
+function noteManagedArrayFieldNeeds(usage RuntimeUsage, elementClone ByteArray, work CascadeWorklist)
 	recordCallUsage(ArrCloneManagedName, usage: usage)
-	return noteCloneCalleeNeeds(usage, callee: elementClone)
+	noteCloneCalleeNeeds(usage, callee: elementClone, work: work)
 end 'noteManagedArrayFieldNeeds'
 
 // A single `(box) -> newBox` clone callee the synthesized cloner will CALL: its usage bits are exactly what a
 // direct scan of that call records, so route through `recordCallUsage` — THE ONE callee→bit map — rather than
-// restating "__str_clone → usesStrClone+copy, __arr_clone → usesArray, __clone_<T> → neededCloners". Returns
-// whether a nested `__clone_<T>` was NEWLY joined to `neededCloners` (the fixpoint's growth signal); the leaf
-// callees never grow the set.
-function noteCloneCalleeNeeds(usage RuntimeUsage, callee ByteArray) returns bool
+// restating "__str_clone → usesStrClone+copy, __arr_clone → usesArray, __clone_<T> → neededCloners". A nested
+// `__clone_<T>` that is NEWLY joined to `neededCloners` is announced to `work`, which queues the declaration
+// that symbol names; announcing exactly on the newly-added edge is what makes the closure O(types + fields).
+// The leaf callees (`__str_clone`, `__arr_clone`) name no cascade node and announce nothing.
+function noteCloneCalleeNeeds(usage RuntimeUsage, callee ByteArray, work CascadeWorklist)
 	let grew = bytesStartWith(callee, prefix: ClonerPrefix) and not usage.neededCloners.contains(callee)
 	recordCallUsage(callee, usage: usage)
-	return grew
+
+	if grew 'newlyNeeded'
+		work.discovered(callee)
+	end 'newlyNeeded'
 end 'noteCloneCalleeNeeds'
 
 // ⭐ **THE PER-STRUCT DEEP-CLONER INSTALLER (P1.7 slice 3b-vi-b)** — the clone twin of `installStructDestructors`.

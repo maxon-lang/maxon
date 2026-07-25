@@ -1,0 +1,146 @@
+// CascadeNeeds — the ONE worklist engine behind BOTH per-type cascade closures.
+//
+// ⭐ **TWO CLOSURES, ONE MECHANISM (P1.7 Workstream O).** A synthesized per-type cascade calls other
+// synthesized per-type cascades from inside a body the Maxon-module scan cannot see: a
+// `__destruct_<Outer>` calls its managed field's `__destruct_<Inner>` (`MmRuntime.closeDestructorNeeds`),
+// and the CLONE dual `__clone_<Outer>` calls that field's `__clone_<Inner>`
+// (`ArrayRuntime.noteClonerUsage`). Both therefore grow a needed-SYMBOL set to a fixpoint over the SAME
+// node space — declared structs, declared unions, and (destructors only) generic instances — under the
+// SAME monotone rule. Written twice, they carried the same quadratic twice: each was a `while changed`
+// RE-SCAN of every declared type, so a cascade chain of depth D cost D passes over T types —
+// **O(passes × types)** — and re-minted every type's `__destruct_`/`__clone_` symbol on every one of
+// them. Written once here, each node is EXPANDED EXACTLY ONCE and each symbol minted ONCE:
+// **O(types + fields)**.
+//
+// ⚠ **DEMAND-DRIVEN, AND THAT IS THE CONTRACT, NOT AN OPTIMIZATION.** The graph is deliberately NOT
+// built up front, the way the parser's descriptor-need fixpoint builds a CSR and marks reachability
+// over it (`Parser.solveDescriptorNeedFixpoint`). It cannot be: EXPANDING a node is what turns on that
+// type's transitive `RuntimeUsage` bits (`usesStrDecref`, `usesArray`, `usesStrClone`, `usesHeap`, …),
+// so a node the program does not reference must never be expanded — a graph built over every declared
+// type's fields would declare runtime needs for types nothing drops or clones and install runtime the
+// program does not carry. That is why `register` (cheap, every type) is separate from
+// `seed`/`discovered`, which enqueue only REFERENCED ones.
+//
+// The two drivers keep their own per-field dispatch (`addNested*Destructors` / `note*ClonerNeeds`) —
+// they classify different things and are separately reviewed duals. What is single-sourced here is the
+// part that was identical and that carried the cost: the node space, the seeding rule, the
+// expand-at-most-once discipline, and the termination argument.
+
+// One node of the cascade graph — a type whose synthesized cascade body may call other cascades. The
+// LAYOUT travels with the node rather than its name, so a driver never re-fetches it: a struct layout
+// read back out of `signatures` instead of `project` misresolves its field-type ids against the wrong
+// interner (the OPEN #56 mismatch `managedStructFieldDropCallee` exists to prevent). Registered from
+// one table, expanded from the same object.
+export union CascadeNode
+	declaredStruct(layout StructLayout)
+	declaredUnion(layout EnumLayout)
+	// A monomorphized generic instance (`Box with String`). DESTRUCTOR-side only: an instance has no
+	// `__clone_<T>` at this slice, so the cloner driver registers none and panics if it is handed one.
+	genericInstance(id GenericInstanceId)
+end 'CascadeNode'
+
+export typealias CascadeNodeArray = Array with CascadeNode
+// A position in `CascadeWorklist.nodes` — the dense key the pending queue and the by-symbol index both
+// address nodes by, so neither holds a second copy of a node.
+export typealias CascadeNodeIndex = int(0 to u64.max)
+export typealias CascadeNodeIndexArray = Array with CascadeNodeIndex
+typealias CascadeNodeIndexBucketMap = Map with (ByteArray, CascadeNodeIndexArray)
+// The needed-symbol set a closure is closing — `RuntimeUsage.neededDestructors` or its
+// `neededCloners` dual, which are the same `Set with ByteArray` seen from the two sides.
+export typealias CascadeSymbolSet = Set with ByteArray
+
+// ⭐ **THE SHARED NEEDS-CLOSURE WORKLIST.** Registration is the whole node space; the queue is only what
+// the program actually references. See the file header for why the two are separate.
+export type CascadeWorklist
+	// Every registered node, in registration order — which is the order each closure's own scan used
+	// before this engine existed, so the expansion order is unchanged from the fixpoint's first pass.
+	var nodes as CascadeNodeArray
+	// Symbol ⇒ the node positions it names — the only direction
+	// `discovered` can ask in (a nested cascade is discovered as a CALLEE SYMBOL; the field classifier
+	// that produced it has already discarded which declaration it came from). A BUCKET, not a single
+	// position, because two declarations CAN mint one symbol — a `type Box_String` alongside a
+	// `Box with String` whose mangling is also `Box_String`. That collision is a pre-existing
+	// duplicate-symbol problem at synthesis time and not this engine's to adjudicate; expanding every
+	// claimant is exactly what the old all-types re-scan did, so the bucket keeps the behaviour
+	// identical instead of silently picking one.
+	var bySymbol as CascadeNodeIndexBucketMap
+	// FIFO of node positions discovered but not yet expanded; `head` is the read cursor. Never
+	// compacted — `head` only advances and `pending` only grows, so a node's position is stable.
+	var pending as CascadeNodeIndexArray
+	var head as CascadeNodeIndex
+	// Parallel to `nodes`: already queued? This is what makes termination STRUCTURAL rather than
+	// argued — a node enters `pending` at most once, so the drain is bounded by the node count no
+	// matter what a caller discovers, and each node's fields are classified exactly once.
+	var pushed as BoolArray
+
+	export static function create() returns Self
+		return Self{nodes: CascadeNodeArray.create(), bySymbol: CascadeNodeIndexBucketMap.create(), pending: CascadeNodeIndexArray.create(), head: 0, pushed: BoolArray.create()}
+	end 'create'
+
+	// Add `node` to the node space under the cascade `symbol` its synthesized body will be installed as.
+	// Registration alone enqueues NOTHING — see the header.
+	export function register(symbol ByteArray, node CascadeNode)
+		let at = self.nodes.count()
+		self.nodes.push(node)
+		self.pushed.push(false)
+
+		if var claimants = try self.bySymbol.get(symbol) 'shared'
+			claimants.push(at)
+			self.bySymbol.upsert(symbol, value: claimants)
+			return
+		end 'shared'
+
+		var first = CascadeNodeIndexArray.create()
+		first.push(at)
+		self.bySymbol.upsert(symbol, value: first)
+	end 'register'
+
+	// Enqueue the nodes the ALREADY-referenced symbols name — the closure's seeds.
+	//
+	// Driven from the NEEDED SET, not from the node space: the old fixpoint's first pass asked the
+	// question the other way round, probing the set once for every declared type, which is O(types) even
+	// for a program that drops one thing. A seed is by definition a symbol already in the set, so asking
+	// each of THOSE what it names is the same answer for O(referenced) work — and it is the same question
+	// `discovered` answers, so it is asked in one place rather than two.
+	export function seed(needed CascadeSymbolSet)
+		for symbol in needed 'eachReferenced'
+			self.discovered(symbol)
+		end 'eachReferenced'
+	end 'seed'
+
+	// A cascade symbol has just NEWLY joined the needed set: enqueue whatever it names. A symbol naming
+	// no registered node adds nothing — that is an ANSWER, not an unhandled case: the drop/clone
+	// classifiers hand back leaf callees (`__str_decref`, `__mm_decref`, `__arr_clone`) and over-rooted
+	// element cascades alike, and only a symbol belonging to a declaration in THIS node space has a body
+	// with nested cascades to close over. The old fixpoint ignored such a symbol the same way, by never
+	// finding a type whose symbol matched it.
+	export function discovered(symbol ByteArray)
+		if let claimants = try self.bySymbol.get(symbol) 'known'
+			for at in claimants 'eachClaimant'
+				self.enqueue(at)
+			end 'eachClaimant'
+		end 'known'
+	end 'discovered'
+
+	export function hasPending() returns bool
+		return self.head < self.pending.count()
+	end 'hasPending'
+
+	// Take the next node to expand. Precondition: `hasPending` — the drain loop's own condition.
+	export function take() returns CascadeNode
+		let at = try self.pending.get(self.head) otherwise panic("CascadeWorklist.take: pending.get({self.head}) OOB — take() called without hasPending()")
+		self.head = self.head + 1
+		return try self.nodes.get(at) otherwise panic("CascadeWorklist.take: nodes.get({at}) OOB — pending holds only registered positions")
+	end 'take'
+
+	function enqueue(at CascadeNodeIndex)
+		let queued = try self.pushed.get(at) otherwise panic("CascadeWorklist.enqueue: pushed.get({at}) OOB — parallel to nodes")
+
+		if queued 'already'
+			return
+		end 'already'
+
+		try self.pushed.set(at, value: true) otherwise panic("CascadeWorklist.enqueue: pushed.set({at}) OOB — parallel to nodes")
+		self.pending.push(at)
+	end 'enqueue'
+end 'CascadeWorklist'

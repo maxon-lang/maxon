@@ -1232,6 +1232,17 @@ end 'singletonInteger'
 export typealias GenericInstanceIndexMap = Map with (ByteArray, GenericInstanceId)
 export typealias GenericAliasMap = Map with (ByteArray, GenericInstanceId)
 
+// Base type-name id ⇒ the instances interned for THAT base — the second index on the instance registry,
+// beside the payload⇒id one above. It exists for the per-instantiation GATES
+// (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`), which ask "does any instance OF
+// THIS BASE classify its argument at `position` as …?" and used to answer it by walking the whole registry
+// and `.equals`-ing every base name — O(call sites × TOTAL instances), a cost that allocates nothing and so
+// is invisible to `scale-test`'s memory columns. Keyed by base ID rather than base name because the
+// registry interns by id and holds no interner of its own: the one writer is `intern`, so the buckets
+// cannot drift from the columns they index.
+export typealias GenericInstanceIdArray = Array with GenericInstanceId
+export typealias GenericInstancesByBaseMap = Map with (TypeNameId, GenericInstanceIdArray)
+
 // The element type NAMES whose `Array with <name>` literal instance the sweep has ALREADY over-interned
 // (P1.7 slice 3). `internArrayLiteralAggregateInstances` runs once per file that materializes a
 // `[<identifier>…]` literal and over-interns `Array with <every declared struct/union>`; because the
@@ -1257,9 +1268,12 @@ export type GenericInstanceRegistry
 	var baseIds as TypeNameIdArray
 	var argLists as MaxonTypeArrayArray
 	var index as GenericInstanceIndexMap
+	// Base id ⇒ its instances, in intern order. The SECOND payload⇒id index (see
+	// `GenericInstancesByBaseMap`), written only by `intern` alongside the columns it indexes.
+	var byBase as GenericInstancesByBaseMap
 
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), index: GenericInstanceIndexMap.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create()}
 	end 'create'
 
 	// The cheap composite key that makes interning O(1): the base id and each arg's (tag, id) pair,
@@ -1285,8 +1299,29 @@ export type GenericInstanceRegistry
 		self.baseIds.push(baseId)
 		self.argLists.push(args)
 		self.index.upsert(key, value: id)
+		self.recordBase(baseId, id: id)
 		return id
 	end 'intern'
+
+	// File the new instance under its base. Appended, never re-sorted, so a base's bucket is in intern
+	// order — the same order the gates' old whole-registry walk visited them in.
+	function recordBase(baseId TypeNameId, id GenericInstanceId)
+		if var siblings = try self.byBase.get(baseId) 'seenBase'
+			siblings.push(id)
+			self.byBase.upsert(baseId, value: siblings)
+			return
+		end 'seenBase'
+
+		var first = GenericInstanceIdArray.create()
+		first.push(id)
+		self.byBase.upsert(baseId, value: first)
+	end 'recordBase'
+
+	// The instances interned for base `baseId`. Throws for a base with none — which is an ANSWER (no
+	// instantiation of that type exists), not a failure, and is why the gates ask through `if let`.
+	export function instancesOfBase(baseId TypeNameId) returns GenericInstanceIdArray throws MapError
+		return try self.byBase.get(baseId)
+	end 'instancesOfBase'
 
 	export function instanceBaseId(id GenericInstanceId) returns TypeNameId
 		return try self.baseIds.get(id) otherwise panic("GenericInstanceRegistry.instanceBaseId: invalid GenericInstanceId {id}")
@@ -3316,19 +3351,30 @@ export type ProgramSignatures
 	end 'typeArgIsOwned'
 
 	// Does ANY interned instance of generic type `baseName` classify its type argument at `position` as
-	// `kind`? The ONE instance-registry scan the three type-parameter-instantiation gates
-	// (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`) delegate to — so the loop and
+	// `kind`? The ONE instance-registry read the three type-parameter-instantiation gates
+	// (`genericTypeFieldHas{Managed,CoOwnedTrivial,Uncopyable}Instantiation`) delegate to — so the lookup and
 	// the `position < args.count()` bound are written once for all three and cannot drift between them. The
 	// per-kind predicate is the only thing that varies, in `typeArgHasKind`.
+	//
+	// ⭐ **THROUGH THE BY-BASE INDEX, NOT A WHOLE-REGISTRY WALK (P1.7 Workstream O).** It used to run
+	// `0 upto genericInstances.count()` comparing every instance's base NAME, making the three gates
+	// O(call sites × TOTAL instances) — a term that allocates nothing (`nameOf` borrows, `.equals` copies
+	// nothing), so no memory instrument could ever show it. `byBase` is filed by the same `intern` that
+	// assigns the ids, so this visits only THIS base's instances and the gates become O(instances of the
+	// base). A base with no instantiation has no bucket, and that is the answer: nothing instantiates it,
+	// so no instantiation classifies anything as `kind`.
 	function anyInstanceTypeArgHasKind(baseName ByteArray, position TypeParamId, kind TypeArgInstantiationKind) returns bool
-		for id in 0 upto self.genericInstances.count() 'eachInstance'
-			if self.genericInstanceBaseName(id).equals(baseName) 'sameBase'
-				let args = self.genericInstances.instanceArgs(id)
-				if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.anyInstanceTypeArgHasKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
-					return true
-				end 'match'
-			end 'sameBase'
-		end 'eachInstance'
+		if let baseId = try self.typeNames.idOf(baseName) 'namedType'
+			if let siblings = try self.genericInstances.instancesOfBase(baseId) 'instantiated'
+				for id in siblings 'eachInstance'
+					let args = self.genericInstances.instanceArgs(id)
+					if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.anyInstanceTypeArgHasKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
+						return true
+					end 'match'
+				end 'eachInstance'
+			end 'instantiated'
+		end 'namedType'
+
 		return false
 	end 'anyInstanceTypeArgHasKind'
 

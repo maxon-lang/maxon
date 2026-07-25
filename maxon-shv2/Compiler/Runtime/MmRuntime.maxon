@@ -878,34 +878,52 @@ function rootManagedOpaqueArrayElementDrops(usage RuntimeUsage, signatures Progr
 end 'rootManagedOpaqueArrayElementDrops'
 
 // Grow `usage.neededDestructors` to a fixpoint over destructor NESTING: for every referenced managed
-// struct/union destructor, add the `__destruct_<T>` of each managed field that itself owns managed heap (a
-// nested struct/union), because that nested destructor is CALLED by the cascade but named nowhere the module
-// scan can see. Monotonic — a symbol once added stays added — so the loop terminates in at most (#types)
-// passes. A String or scalar-only field's drop callee is not a destructor symbol and adds nothing.
+// struct/union/instance destructor, add the `__destruct_<T>` of each managed field that itself owns managed
+// heap (a nested struct/union/instance), because that nested destructor is CALLED by the cascade but named
+// nowhere the module scan can see. So `Box with (Box with String)`, reached only through the outer cascade,
+// still gets the inner instance destructor synthesized.
+//
+// ⭐ Driven by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the CLONE
+// dual (`ArrayRuntime.noteClonerUsage`). Both used to be a `while changed` RE-SCAN of every declared type,
+// which is one quadratic written down twice: a cascade chain of depth D cost D passes over all T types and
+// re-minted every type's `__destruct_` symbol on each. Registration walks the node space ONCE, the drain
+// expands each referenced node exactly once, and the loop no longer needs a growth flag at all — the queue
+// IS the growth signal. See that file for why the graph is demand-driven rather than built up front.
 function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures ProgramSignatures)
-	var changed = true
-	while changed 'fixpoint'
-		changed = false
-		for (_, layout) in project.structTypes 'eachStruct'
-			if usage.neededDestructors.contains(destructorSymbol(layout.name)) and addNestedStructDestructors(usage, layout: layout, project: project, signatures: signatures) 'grew'
-				changed = true
-			end 'grew'
-		end 'eachStruct'
-		for (_, layout) in project.enumTypes 'eachUnion'
-			if usage.neededDestructors.contains(destructorSymbol(layout.name)) and addNestedUnionDestructors(usage, layout: layout, project: project, signatures: signatures) 'grew'
-				changed = true
-			end 'grew'
-		end 'eachUnion'
-		// A REFERENCED managed instance destructor whose SUBSTITUTED field is itself a nested struct/union/
-		// instance calls that field's own `__destruct_<T>`, which the module names nowhere the scan can see —
-		// so `Box with (Box with String)`, reached only through the outer cascade, still gets the inner
-		// instance destructor synthesized. Monotonic, like the struct/union closure above.
-		for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-			if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray())) and addNestedInstanceDestructors(usage, id: id, signatures: signatures) 'grew'
-				changed = true
-			end 'grew'
-		end 'eachInstance'
-	end 'fixpoint'
+	// A program that drops no managed type has an EMPTY needed set, and a monotone closure over an empty
+	// seed set can only stay empty — nothing derives a nested destructor from no destructor. Early-out then,
+	// so registering the node space (a `destructorSymbol` per declared type and a `mangleGenericInstance` per
+	// instance) is paid only by a program that actually drops something. This is the same early-out, for the
+	// same reason, that the CLONE dual `noteClonerUsage` has always had; the drop side simply never had it,
+	// and so re-minted every type's symbol twice on every compile that dropped nothing at all.
+	if usage.neededDestructors.count() == 0 'noDestructors'
+		return
+	end 'noDestructors'
+
+	var work = CascadeWorklist.create()
+
+	for (_, layout) in project.structTypes 'eachStruct'
+		work.register(destructorSymbol(layout.name), node: CascadeNode.declaredStruct(layout))
+	end 'eachStruct'
+
+	for (_, layout) in project.enumTypes 'eachUnion'
+		work.register(destructorSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
+	end 'eachUnion'
+
+	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		work.register(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray()), node: CascadeNode.genericInstance(id))
+	end 'eachInstance'
+
+	work.seed(usage.neededDestructors)
+
+	while work.hasPending() 'drain'
+		let node = work.take()
+		match node 'node'
+			declaredStruct(layout) then addNestedStructDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
+			declaredUnion(layout) then addNestedUnionDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
+			genericInstance(id) then addNestedInstanceDestructors(usage, id: id, signatures: signatures, work: work)
+		end 'node'
+	end 'drain'
 end 'closeDestructorNeeds'
 
 // The drop callee for MANAGED field `index` of PROJECT struct `layout` — its field-type id read off the
@@ -920,25 +938,21 @@ function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, pro
 	return managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)
 end 'managedStructFieldDropCallee'
 
-// Add the nested `__destruct_<T>` of each managed field of struct `layout` to the needed set; return whether
-// the set grew. A field whose drop callee is a destructor symbol (a managed struct/union) contributes its
-// symbol; a String (`__str_decref`) or scalar-only box (`__mm_decref`) contributes none.
-function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures) returns bool
-	var grew = false
+// Add the nested `__destruct_<T>` of each managed field of struct `layout` to the needed set, queueing each
+// newly-needed cascade on `work` so its OWN nesting is closed in turn. A field whose drop callee is a
+// destructor symbol (a managed struct/union) contributes its symbol; a String (`__str_decref`) or scalar-only
+// box (`__mm_decref`) contributes none.
+function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
-		if insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures)) 'added'
-			grew = true
-		end 'added'
+		insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures), work: work)
 	end 'eachField'
-	return grew
 end 'addNestedStructDestructors'
 
 // The union twin of `addNestedStructDestructors` — add each managed payload field's nested destructor.
-function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures) returns bool
-	var grew = false
+function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
 	for ci in 0 upto layout.caseCount() 'eachCase'
 		let payloads = layout.payloadsAt(ci)
 		for fi in 0 upto payloads.count() 'eachField'
@@ -947,43 +961,39 @@ function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, projec
 			if not payloadClassIsManaged(class) 'scalar'
 				continue
 			end 'scalar'
-			if insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'added'
-				grew = true
-			end 'added'
+			insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
 		end 'eachField'
 	end 'eachCase'
-	return grew
 end 'addNestedUnionDestructors'
 
 // The instance twin of `addNestedStructDestructors` (P1.6-B2) — add the nested `__destruct_<T>` of each
 // managed SUBSTITUTED field of instance `id` (a nested struct/union/instance) to the needed set. A String
 // field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
 // every fact is answered inside `signatures`, over its own interner.
-function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures) returns bool
-	var grew = false
+function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
-		if insertIfDestructorSymbol(usage, callee: signatures.genericInstanceFieldDropCallee(id, index: i)) 'added'
-			grew = true
-		end 'added'
+		insertIfDestructorSymbol(usage, callee: signatures.genericInstanceFieldDropCallee(id, index: i), work: work)
 	end 'eachField'
-	return grew
 end 'addNestedInstanceDestructors'
 
-// Insert `callee` into the needed set iff it is a `__destruct_<T>` symbol not already present; return
-// whether it was newly added. A `__str_decref`/`__mm_decref` callee (a leaf drop) is not a destructor and
-// is left out — only synthesized cascades are collected here.
-function insertIfDestructorSymbol(usage RuntimeUsage, callee ByteArray) returns bool
+// Insert `callee` into the needed set iff it is a `__destruct_<T>` symbol not already present, and — only
+// when it is NEWLY added — announce it to `work`, whose job is to find the declaration that symbol names and
+// queue that declaration's own nested cascades. Announcing exactly on the newly-added edge is what makes the
+// closure O(types + fields): a symbol can be new only once, so a node is queued at most once. A
+// `__str_decref`/`__mm_decref` callee (a leaf drop) is not a destructor and is left out — only synthesized
+// cascades are collected here.
+function insertIfDestructorSymbol(usage RuntimeUsage, callee ByteArray, work CascadeWorklist)
 	if not bytesStartWith(callee, prefix: DestructorPrefix) 'notDestructor'
-		return false
+		return
 	end 'notDestructor'
 	if usage.neededDestructors.contains(callee) 'present'
-		return false
+		return
 	end 'present'
 	usage.neededDestructors.insert(callee)
-	return true
+	work.discovered(callee)
 end 'insertIfDestructorSymbol'
 
 // The `StructLayout` of a struct the caller already knows is declared (it named a needed destructor). ONE

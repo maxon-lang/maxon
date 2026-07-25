@@ -24,6 +24,9 @@ export typealias TypeNameIdMap = Map with (ByteArray, TypeNameId)
 // against), never user input.
 export union TypeNameInternerError implements Error
 	unknownId(id TypeNameId)
+	// `idOf` was asked for a name this interner never saw — an ANSWER ("no type of that name has been
+	// interned"), not a bug, unlike `unknownId`.
+	unknownName(name ByteArray)
 end 'TypeNameInternerError'
 
 export type TypeNameInterner
@@ -54,6 +57,16 @@ export type TypeNameInterner
 	export function nameOf(id TypeNameId) returns ByteArray throws TypeNameInternerError
 		return try names.get(id) otherwise throw TypeNameInternerError.unknownId(id)
 	end 'nameOf'
+
+	// Resolve a NAME to its id WITHOUT interning it — the read-only half of `intern`, for a caller
+	// that has a name and needs the id some id-keyed index is filed under (the generic-instance
+	// registry's by-base buckets). It must be separate from `intern`: interning on a miss APPENDS,
+	// which moves `count()` and every id assigned after it, and those ids reach the emitted mangling —
+	// so a mere lookup by a caller holding a name that is not a type would silently rewrite output.
+	// Unlike `nameOf`'s, this throw is not a compiler bug: "no such type name" is a legitimate answer.
+	export function idOf(name ByteArray) returns TypeNameId throws TypeNameInternerError
+		return try ids.get(name) otherwise throw TypeNameInternerError.unknownName(name)
+	end 'idOf'
 
 	export function count() returns TypeNameId
 		return names.count()

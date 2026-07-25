@@ -55,3 +55,63 @@ end 'main'
 ```exitcode
 20
 ```
+
+<!-- test: clone-managed-three-level-cascade -->
+### Clone and drop of a THREE-level managed nesting
+`Outer` owns a `Mid` owns a `Leaf` owns a `String`, so both per-type cascades are three deep:
+`__clone_Outer` → `__clone_Mid` → `__clone_Leaf` → `__str_clone`, and the same chain on the drop side.
+Neither inner cascade is named anywhere the module scan can see — each is reached only THROUGH its
+parent — so both needs-closures have to grow the set transitively rather than one level. The source is
+freed before the clone is read, which is what makes a missed level observable: a cascade that stopped
+short would leave the clone sharing the freed original's `String` rather than owning its own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Leaf
+		export var label as String
+		export var value as Integer
+
+		static function create(label String, value Integer) returns Self
+			return Self{label: label, value: value}
+		end 'create'
+end 'Leaf'
+
+type Mid
+		export var leaf as Leaf
+
+		static function create(leaf Leaf) returns Self
+			return Self{leaf: leaf}
+		end 'create'
+end 'Mid'
+
+type Outer
+		export var mid as Mid
+
+		static function create(mid Mid) returns Self
+			return Self{mid: mid}
+		end 'create'
+end 'Outer'
+
+typealias OuterArray = Array with Outer
+
+function makeClone() returns OuterArray
+		var src = OuterArray.create()
+		src.push(Outer.create(Mid.create(Leaf.create("a nested label long enough to reach the heap", value: 7))))
+		return src.clone()
+		// src and its whole three-level element graph are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+		let cloned = makeClone()
+
+		if cloned.count() != 1 'badCount'
+				return 99
+		end 'badCount'
+
+		let outer = try cloned.get(0) otherwise Outer.create(Mid.create(Leaf.create("", value: 0)))
+		return outer.mid.leaf.value
+end 'main'
+```
+```exitcode
+7
+```
