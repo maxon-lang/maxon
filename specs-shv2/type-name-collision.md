@@ -69,6 +69,53 @@ aliases with different signatures, or two generic-instance aliases over differen
 still resolved last-wins. Making those agree is cross-file name resolution, the rung that also owns
 E3063; the ranged form's half of it is already enforced (E3105).
 
+## The COMPILED name of a generic instantiation is in that same namespace
+
+A generic instantiation has no source-level name of its own, so the compiler builds one: `Box with
+String` becomes **`Box_String`**, the base name joined to each argument's name. Every per-type symbol
+the backend emits is derived from that string — `__destruct_Box_String`, `__layout_Box_String`,
+`__clone_Box_String` — and a declared `type Box_String` derives *its* symbols from the identical
+string. **There is one namespace, and two producers wrote into it with nothing comparing them.**
+
+The consequence is not a resolution ambiguity, which the author might at least see: both claimants are
+installed as functions of the same name, and the last one linked wins.
+
+- **A LEAK.** `type Box_String` with two `String` fields, plus a `Box with String` anywhere in the
+  program: the instance's one-field cascade services both, the struct's second `String` is never
+  released, and the program exits **101** with a clean build and not one diagnostic.
+- **Worse, a SILENT SUCCESS.** When the two layouts happen to agree, the surviving destructor is
+  *plausible* for the type it was never written for — a `Holder`-field struct destroyed through
+  `__str_decref` — and the program returns the right answer. Nothing is ever reported, and the
+  type confusion is invisible until a field moves.
+- **Worse again, two INSTANTIATIONS can collide with each other**, because the join is not injective:
+  `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`. One
+  pair is then destroyed through the other's per-field callees — measured: **SIGSEGV**, from a build
+  that exited 0.
+
+**The rule: one compiled type name, one claimant.** A `type` / `enum` / `union` / `interface` whose
+name is what some instantiation compiles to is **E3006**, reported at that declaration — the name the
+author chose, and the one they can change; the instantiation is named in the message, because it is
+the half that is invisible from the line being reported. Two instantiations that compile to one name
+are the same E3006, reported at the `typealias` that names the later of them.
+
+The claimant that SETTLES a name is the first one, and a rejected claimant never displaces it — so a
+THIRD instantiation of one compiled name is reported against the same incumbent the second was, at its
+own line, rather than against a claimant that was itself refused.
+
+Only a top-level `typealias` records a source anchor, so an instantiation NESTED inside another
+(`Wrap with (Pair with …)`) has none: the report falls back to the other claimant's alias, and when
+neither has one it is whole-program (`line == 0`, the anchorless form E3001 uses). Blaming the
+enclosing alias instead would name a line whose own instantiation is fine.
+
+It is decided in the FRONT END, over the interned instantiations and the same whole-program type-name
+registry the rule above uses, **not** at symbol-emission time: a diagnostic raised where the symbol is
+minted has no user span to land on, and would blame a file the author never opened.
+
+⚠ **A `typealias` is NOT a claimant, and that is load-bearing.** An alias mints no symbol of its own —
+a generic instance's methods are emitted under its BASE's name — so `typealias Box_Integer = Box with
+Integer`, whose alias name is exactly what the instance it names compiles to, is perfectly legal and
+stays legal. Only the four NOMINAL keywords claim a compiled name.
+
 ## Tests
 
 <!-- test: error.type-then-typealias -->
@@ -427,4 +474,353 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+
+<!-- test: error.instantiation-compiles-onto-declared-type -->
+The LEAK. `Box with String` compiles to `Box_String`, and so does the `type Box_String` below —
+`installGenericInstanceDestructors` and `installStructDestructors` each emit a `__destruct_Box_String`
+and the later install wins. The struct's SECOND `String` is then never released: the build exited 0
+with no diagnostic whatever and the program exited **101**, the leak-check code.
+```maxon
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+typealias SBox = Box with String
+
+type Box_String
+	export var a as String
+	export var b as String
+	export static function make() returns Self
+		return Self{a: "x", b: "y"}
+	end 'make'
+end 'Box_String'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let t = Box_String.make()
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:11:6: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name
+```
+
+
+<!-- test: error.instantiation-compiles-onto-declared-type-matching-layout -->
+The SILENT SUCCESS, which is the more dangerous half. The two claimants now have the SAME layout — one
+pointer field — so the surviving cascade is *plausible* for the type it was never written for: the
+struct's `Holder` box is released through the instance's `__str_decref`, which lands on a refcount
+header that is really there. The program returned **4** and leaked nothing. Nothing was reported, and
+nothing would be until a field moved. The rule does not look at layouts, so it catches this shape and
+the leaking one identically.
+```maxon
+type Holder
+	export var s as String
+	export static function make() returns Self
+		return Self{s: "held"}
+	end 'make'
+end 'Holder'
+
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+typealias SBox = Box with String
+
+type Box_String
+	export var h as Holder
+	export static function make() returns Self
+		return Self{h: Holder.make()}
+	end 'make'
+end 'Box_String'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let t = Box_String.make()
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:18:6: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name
+```
+
+
+<!-- test: error.two-instantiations-compile-to-one-name -->
+No declared type is involved at all: the base name and the arguments are joined with `_`, and `_` is a
+legal character in a type name, so the join is **not injective**. `Pair with (Box_Int, Str)` and `Pair
+with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`, one `__destruct_Pair_Box_Int_Str` survives,
+and each pair's two fields are released through the OTHER pair's per-field callees. Measured on the
+compiler before this rule: build exit 0, no diagnostic, **SIGSEGV**. It is reported at the `typealias`
+that names the later instantiation, for the reason the whole file reports at the later declaration.
+```maxon
+type Str
+	export var s as String
+	export static function make() returns Self
+		return Self{s: "a"}
+	end 'make'
+end 'Str'
+
+type Box
+	export var s as String
+	export static function make() returns Self
+		return Self{s: "b"}
+	end 'make'
+end 'Box'
+
+type Box_Int
+	export var s as String
+	export var t as String
+	export var u as String
+	export static function make() returns Self
+		return Self{s: "c", t: "cc", u: "ccc"}
+	end 'make'
+end 'Box_Int'
+
+type Int_Str
+	export var s as String
+	export var t as String
+	export var u as String
+	export static function make() returns Self
+		return Self{s: "d", t: "dd", u: "ddd"}
+	end 'make'
+end 'Int_Str'
+
+type Pair uses A, B
+	export var first as A
+	export var second as B
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+typealias P1 = Pair with (Box_Int, Str)
+typealias P2 = Pair with (Box, Int_Str)
+
+function main() returns ExitCode
+	let a = P1.create(Box_Int.make(), second: Str.make())
+	let b = P2.create(Box.make(), second: Int_Str.make())
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:43:11: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+```
+
+
+<!-- test: alias-named-like-its-own-compiled-name -->
+The guard against overreach. A `typealias` claims no compiled name — a generic instance's methods are
+emitted under its BASE's name, and nothing is named after the alias — so an alias spelled exactly like
+what the instance it names compiles to is legal, and the rule must leave it alone. Only the four
+NOMINAL keywords claim.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Box'
+
+typealias Box_Integer = Box with Integer
+
+function main() returns ExitCode
+	let b = Box_Integer.create(7)
+	return b.get()
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: error.nested-instantiation-reported-at-the-aliased-one -->
+Only a top-level `typealias X = Base with Args` records a source anchor; a NESTED instantiation is
+interned as it is resolved and has none of its own. When the newcomer is the nested one the report
+falls back to the INCUMBENT's alias — the line that names the other half of the pair — rather than at
+the enclosing `Wrap` alias, whose own instantiation is fine.
+```maxon
+typealias Small = int(0 to 100)
+
+type Box
+	export var v as Small
+end 'Box'
+
+type Str
+	export var v as Small
+end 'Str'
+
+type Box_Int
+	export var v as Small
+end 'Box_Int'
+
+type Int_Str
+	export var v as Small
+end 'Int_Str'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+type Wrap uses Z
+	export var only as Z
+end 'Wrap'
+
+typealias P1 = Pair with (Box_Int, Str)
+typealias W1 = Wrap with (Pair with (Box, Int_Str))
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:29:11: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+```
+
+
+<!-- test: error.nested-instantiations-compile-to-one-name -->
+The corner where NEITHER claimant is named by a `typealias`: both colliding instantiations are nested,
+inside two DIFFERENT outer generics, so the outer pair does not collide and nothing carries an anchor.
+The collision is real and is still reported — whole-program, the anchorless form E3001 uses — naming
+both instantiations, because pointing at either enclosing alias would blame a line that is correct.
+```maxon
+typealias Small = int(0 to 100)
+
+type Box
+	export var v as Small
+end 'Box'
+
+type Str
+	export var v as Small
+end 'Str'
+
+type Box_Int
+	export var v as Small
+end 'Box_Int'
+
+type Int_Str
+	export var v as Small
+end 'Int_Str'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+type Wrap uses Z
+	export var only as Z
+end 'Wrap'
+
+type Hold uses Z
+	export var only as Z
+end 'Hold'
+
+typealias W1 = Wrap with (Pair with (Box_Int, Str))
+typealias H1 = Hold with (Pair with (Box, Int_Str))
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+```
+
+
+<!-- test: error.three-instantiations-compile-to-one-name -->
+The THIRD claimant, which is a different question from the second: each newcomer is measured against
+the declaration that SETTLED the name, never against the one immediately before it, so a rejected
+claimant does not become the incumbent. Both `Q2` and `Q3` are reported, each at its own line and each
+naming `Q1` — `Pair_A_B_C_D` splits three ways because `_` is a legal name character.
+```maxon
+typealias Small = int(0 to 100)
+
+type A
+	export var v as Small
+end 'A'
+
+type B_C_D
+	export var v as Small
+end 'B_C_D'
+
+type A_B
+	export var v as Small
+end 'A_B'
+
+type C_D
+	export var v as Small
+end 'C_D'
+
+type A_B_C
+	export var v as Small
+end 'A_B_C'
+
+type D
+	export var v as Small
+end 'D'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+typealias Q1 = Pair with (A_B_C, D)
+typealias Q2 = Pair with (A_B, C_D)
+typealias Q3 = Pair with (A, B_C_D)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:34:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A_B, C_D)` compile to that same name
+error E3006: <fragment>:35:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A, B_C_D)` compile to that same name
+```
+
+
+<!-- test: error.crossfile-instantiation-compiles-onto-declared-type -->
+The compiled namespace is whole-program, like the declared one: the instantiation is written in
+`a.maxon` and the colliding declaration is in `b.maxon`, and neither file names the other. That is why
+the rule is applied after the merge rather than per file — nothing `b.maxon` can see tells it that
+`Box_String` is taken.
+```maxon
+// --- file: a.maxon
+export type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+export typealias SBox = Box with String
+
+// --- file: b.maxon
+export type Box_String
+	export var a as String
+	export static function make() returns Self
+		return Self{a: "x"}
+	end 'make'
+end 'Box_String'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let t = Box_String.make()
+	return 4
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:13:13: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name
 ```

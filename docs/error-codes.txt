@@ -386,7 +386,16 @@ E3006 SemanticDuplicateDefinition
 	doc declaration of the name, whichever keyword introduced either of them. The
 	doc one exception is two `typealias` declarations, which are E3061 -- and
 	doc which are legal outright when they are the same alias FORM in different
-	doc files, a non-exported typealias being file-local.
+	doc files, a non-exported typealias being file-local; (e) a name claimed
+	doc twice in the COMPILED type namespace -- a generic instantiation has no
+	doc source name, so the compiler joins its base to its arguments (`Box with
+	doc String` -> `Box_String`) and derives every per-type symbol from that
+	doc string, which a declared `type Box_String` derives its own from too.
+	doc Fires from `checkTypeSymbolNamespace` in shv2, whole-program, after the
+	doc instantiations are interned. Two INSTANTIATIONS can claim one compiled
+	doc name as well, `_` being a legal name character and the join therefore
+	doc not injective. A `typealias` is not a claimant here: it mints no symbol
+	doc of its own.
 
 E3007 SemanticAmbiguousFunctionCall
 	csharp SemanticAmbiguousFunctionCall

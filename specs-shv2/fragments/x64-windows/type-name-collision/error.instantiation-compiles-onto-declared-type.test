@@ -1,0 +1,26 @@
+// Test: error.instantiation-compiles-onto-declared-type
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+typealias SBox = Box with String
+
+type Box_String
+	export var a as String
+	export var b as String
+	export static function make() returns Self
+		return Self{a: "x", b: "y"}
+	end 'make'
+end 'Box_String'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let t = Box_String.make()
+	return 4
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:11:6: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name

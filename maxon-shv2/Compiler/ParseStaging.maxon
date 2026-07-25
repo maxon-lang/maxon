@@ -439,6 +439,188 @@ function reportTypeNameCollision(project Project, decl TypeNameDecl, winner Type
 	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{String.from(decl.name)}' — already declared as `{typeDeclKeyword(winner.kind)} {String.from(winner.name)}`", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
 end 'reportTypeNameCollision'
 
+// --- The COMPILED half of the same namespace: one emitted type name, one claimant ---
+
+// The compiled type names claimed so far by the instantiation walk, each holding the instance that
+// claimed it FIRST — the incumbent a later instantiation of the same compiled name is reported
+// against. Built only by `checkTypeSymbolNamespace`, and only for a program that instantiates a generic.
+typealias CompiledTypeNameClaimMap = Map with (ByteArray, GenericInstanceId)
+
+// Who, if anyone, already claims a compiled type name.
+//
+// ⚠ A `typealias` is deliberately NOT a claimant, so an alias spelled like a mangling reads
+// `unclaimed` — see `checkTypeSymbolNamespace`, which owns the reason.
+union CompiledNameClaimant
+	unclaimed
+	// A `type` / `enum` / `union` / `interface` declared with exactly this name.
+	declaration(decl TypeNameDecl)
+	// An EARLIER instantiation that compiles to the same name.
+	instantiation(gid GenericInstanceId)
+end 'CompiledNameClaimant'
+
+// Where a colliding instantiation was WRITTEN. A top-level `typealias X = Base with Args` records one
+// (`ProgramSignatures.instantiationSites`); a NESTED instantiation and the compiler-synthesized array
+// instances are interned without one.
+union InstantiationAnchor
+	anchored(site GenericInstantiationSite)
+	unanchored
+end 'InstantiationAnchor'
+
+// ⭐⭐ **THE COMPILED TYPE-NAME NAMESPACE — one emitted name, one claimant.** The whole-program half of
+// the rule `commitTypeNameDecls` enforces over SOURCE declarations, and the same namespace: a generic
+// instantiation has no source name, so the compiler builds one (`mangleGenericInstance` joins the base
+// name to each argument's — `Box with String` ⇒ `Box_String`), and EVERY per-type symbol the backend
+// emits is derived from that string — `__destruct_<name>`, `__layout_<name>`, `__clone_<name>`. A
+// declared `type Box_String` derives its own symbols from the identical string, and nothing compared
+// the two: `installStructDestructors` and `installGenericInstanceDestructors` each pushed a
+// `__destruct_Box_String` into the module and the later one linked won.
+//
+// Measured, all three from a build that exited 0 with no diagnostic at all:
+//   • a LEAK (exit 101) when the loser owned a field the winner does not drop;
+//   • a SILENT SUCCESS when the two layouts happened to agree and the surviving cascade was merely
+//     PLAUSIBLE for the type it was never written for — the dangerous shape, because nothing is wrong
+//     until a field moves;
+//   • a SIGSEGV between two INSTANTIATIONS and no declaration at all, because `_` is a legal name
+//     character and the join is therefore NOT injective: `Pair with (Box_Int, Str)` and `Pair with
+//     (Box, Int_Str)` both compile to `Pair_Box_Int_Str`.
+//
+// ⚠ **DECIDED HERE, IN THE FRONT END, AND NOT WHERE THE SYMBOL IS MINTED.** The mangling is consumed by
+// the backend, but the NAMESPACE is a source-level fact and the claimants are source declarations. A
+// diagnostic raised at symbol-emission time has no user span to land on and would blame a file the
+// author never opened — the defect E3104, E3061/E3105 and E3006 have each had fixed once already.
+//
+// ⚠ **A `typealias` CLAIMS NOTHING**, which is why the declared-side probe is filtered by
+// `isTypeAliasDecl`. An alias mints no symbol of its own — an instance's methods are emitted under its
+// BASE's name — so `typealias Box_Integer = Box with Integer`, whose name is exactly what the instance
+// it names compiles to, is legal and stays legal (`specs-shv2/type-name-collision.md`).
+//
+// Called once per compile from `compileToCodeResult`, after `queryProgramSignatures` has interned every
+// instantiation and `queryAllModule` has merged every file's declarations — the same placement, and for
+// the same two reasons, as `checkWhereConstraints`.
+export function checkTypeSymbolNamespace(project Project, signatures ProgramSignatures)
+	let instantiationCount = signatures.genericInstanceCount()
+	// A program that instantiates no generic claims no compiled name and can contest nothing. That is
+	// the whole generics-free corpus, and it leaves here having allocated nothing whatever.
+	if instantiationCount == 0 'noInstantiations'
+		return
+	end 'noInstantiations'
+
+	// A prior diagnostic leaves both registries INCOMPLETE — a file whose parse failed merged neither
+	// its declarations nor its instantiations — so refuse to check a malformed program, exactly as
+	// `checkConformance` and `checkWhereConstraints` do. The real diagnostic already fails the build.
+	if projectHasErrors(project) 'malformedProject'
+		return
+	end 'malformedProject'
+
+	// Walked in gid order, which is intern order and therefore source-path order over the sweep — so
+	// which instantiation of a colliding pair is the NEWCOMER is a property of the program rather than
+	// of a map's iteration.
+	var claimed = CompiledTypeNameClaimMap.create()
+	for gid in 0 upto instantiationCount 'eachInstantiation'
+		let compiled = signatures.mangleGenericInstance(gid).toByteArray()
+		match claimantOf(project, claimed: claimed, compiled: compiled) 'claimant'
+			unclaimed then claimed.upsert(compiled, value: gid)
+			declaration(decl) then reportCompiledNameCollision(project, signatures: signatures, gid: gid, decl: decl)
+			instantiation(incumbent) then reportInstantiationPairCollision(project, signatures: signatures, compiled: compiled, incumbent: incumbent, newcomer: gid)
+		end 'claimant'
+	end 'eachInstantiation'
+end 'checkTypeSymbolNamespace'
+
+// Who already claims `compiled`. The declared side is asked FIRST, so a name claimed by both a
+// declaration and an earlier instantiation reports against the declaration — the claimant that is
+// always positioned, and the one the author can rename.
+//
+// A rejected claimant is deliberately NOT recorded in `claimed` by the caller: the incumbent stays the
+// one every later instantiation is measured against, which is `TypeNameRegistry`'s own rule (a rejected
+// declaration never displaces) applied to the compiled half.
+function claimantOf(project Project, claimed CompiledTypeNameClaimMap, compiled ByteArray) returns CompiledNameClaimant
+	if let decl = try project.typeNameDecls.declarationOf(compiled) 'nameIsDeclared'
+		if not isTypeAliasDecl(decl.kind) 'nominalDeclaration'
+			return CompiledNameClaimant.declaration(decl)
+		end 'nominalDeclaration'
+	end 'nameIsDeclared'
+
+	if let incumbent = try claimed.get(compiled) 'earlierInstantiation'
+		return CompiledNameClaimant.instantiation(incumbent)
+	end 'earlierInstantiation'
+
+	return CompiledNameClaimant.unclaimed
+end 'claimantOf'
+
+// A declared `type`/`enum`/`union`/`interface` whose name is what an instantiation compiles to. It
+// blames the DECLARATION — the name the author chose and the only one of the two they can change, the
+// instantiation being an ordinary thing to write — and names the instantiation in the message, which is
+// the half that is invisible from the reported line. That is the same split `reportTypeNameCollision`
+// makes when it names the incumbent's keyword.
+function reportCompiledNameCollision(project Project, signatures ProgramSignatures, gid GenericInstanceId, decl TypeNameDecl)
+	reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "duplicate definition of '{String.from(decl.name)}' — the generic instantiation `{renderInstantiation(signatures, gid: gid)}` already compiles to that name", line: decl.nameLine, column: decl.nameColumn, filePath: decl.declFilePath)
+end 'reportCompiledNameCollision'
+
+// Two instantiations that compile to one name — the shape no declaration takes part in, which the
+// join's non-injectivity makes possible on its own.
+function reportInstantiationPairCollision(project Project, signatures ProgramSignatures, compiled ByteArray, incumbent GenericInstanceId, newcomer GenericInstanceId)
+	let message = "duplicate definition of '{String.from(compiled)}' — the generic instantiations `{renderInstantiation(signatures, gid: incumbent)}` and `{renderInstantiation(signatures, gid: newcomer)}` compile to that same name"
+	match instantiationAnchor(signatures, newcomer: newcomer, incumbent: incumbent) 'anchor'
+		anchored(site) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: message, line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		// No `typealias` names EITHER instantiation, so both are nested (`Box with (Pair with …)`) and
+		// neither was interned with an anchor. Whole-program then — the anchorless form E3001 uses —
+		// rather than pointing at an enclosing alias whose own instantiation is fine.
+		unanchored then reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.duplicateDefinition, message: message))
+	end 'anchor'
+end 'reportInstantiationPairCollision'
+
+// The site a pair collision is reported at: the NEWCOMER's `typealias` if one names it, else the
+// INCUMBENT's, else none. Preferring the newcomer mirrors `reportTypeNameCollision`, which blames the
+// declaration the author wrote last.
+//
+// ⚠ **A LINEAR SCAN OF THE SITE LIST, DELIBERATELY.** It is asked only once a collision has already
+// been found — never on a program that compiles — so a gid⇒site index would cost every build to serve
+// none. One pass answers both halves: a newcomer hit returns at once, and an incumbent hit is retained
+// as the fallback.
+function instantiationAnchor(signatures ProgramSignatures, newcomer GenericInstanceId, incumbent GenericInstanceId) returns InstantiationAnchor
+	var fallback = InstantiationAnchor.unanchored
+	for site in signatures.instantiationSites() 'eachSite'
+		if site.gid == newcomer 'namesTheNewcomer'
+			return InstantiationAnchor.anchored(site)
+		end 'namesTheNewcomer'
+
+		if site.gid == incumbent 'namesTheIncumbent'
+			fallback = InstantiationAnchor.anchored(site)
+		end 'namesTheIncumbent'
+	end 'eachSite'
+
+	return fallback
+end 'instantiationAnchor'
+
+// A colliding instantiation spelled back out the way its author wrote it — `Box with String`,
+// `Pair with (Box_Int, Str)`. A single argument takes no parentheses and a list does, matching the
+// source form (`specs-shv2/generic-types.md`).
+//
+// The arguments come through `instanceArgTypeName`, so a NESTED instantiation appears in its own
+// COMPILED spelling (`Box with Pair_Int_Bool`) rather than as `Box with (Pair with (Int, Bool))`. That
+// is the right rendering and not a shortcut: the compiled spelling is what collided, and the source
+// form would hide the very join the message is about.
+function renderInstantiation(signatures ProgramSignatures, gid GenericInstanceId) returns String
+	let argCount = signatures.genericInstanceArgCount(gid)
+	var rendered = "{String.from(signatures.genericInstanceBaseName(gid))} with "
+	if argCount > 1 'openArgumentList'
+		rendered.append("(")
+	end 'openArgumentList'
+
+	for position in 0 upto argCount 'eachArgument'
+		if position > 0 'afterFirst'
+			rendered.append(", ")
+		end 'afterFirst'
+		rendered.append(String.from(signatures.instanceArgTypeName(gid, position: position)))
+	end 'eachArgument'
+
+	if argCount > 1 'closeArgumentList'
+		rendered.append(")")
+	end 'closeArgumentList'
+
+	return rendered
+end 'renderInstantiation'
+
 // Commit the artifact's declared struct types into the project registry — the registry
 // `TypeResolution.resolveNamedType` turns a `MaxonType.named` for a declared `type` into a
 // `structRef` against.

@@ -2892,6 +2892,18 @@ export type ProgramSignatures
 		return self.mangleTypeArg(self.substitutedInstanceArg(gid, position: position)).toByteArray()
 	end 'instanceArgTypeName'
 
+	// How many type arguments instance `gid` carries — `Box with String` ⇒ 1, `Pair with (A, B)` ⇒ 2.
+	// The BOUND on `instanceArgTypeName`/`substitutedInstanceArg`'s `position`, for a reader that walks
+	// an instance's whole argument list rather than one constrained parameter of it
+	// (`renderInstantiation`, which spells a colliding instantiation back out in source form).
+	//
+	// ⚠ It is NOT `genericInstanceFieldCount`, which is the BASE STRUCT's field count: the two agree for
+	// a plain generic struct and disagree for the builtin bases, where `Array with Integer` has one type
+	// argument and no base struct at all (`genericInstanceFieldCount` panics on it).
+	export function genericInstanceArgCount(gid GenericInstanceId) returns TypeParamId
+		return self.genericInstances.instanceArgs(gid).count()
+	end 'genericInstanceArgCount'
+
 	// Is `name` a declared `type` — the `bool` half of `structOf`, and a HOT-PATH allocation guard, the
 	// twin of `containsEnum`. `structOf` returns a `DeclaredStruct`, a Maxon union VALUE that boxes on
 	// its `undeclared` case as much as any other, so a caller that only needs "is it a struct?" for the

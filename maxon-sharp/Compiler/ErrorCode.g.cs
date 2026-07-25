@@ -196,7 +196,16 @@ public enum ErrorCode {
   /// declaration of the name, whichever keyword introduced either of them. The
   /// one exception is two `typealias` declarations, which are E3061 -- and
   /// which are legal outright when they are the same alias FORM in different
-  /// files, a non-exported typealias being file-local.
+  /// files, a non-exported typealias being file-local; (e) a name claimed
+  /// twice in the COMPILED type namespace -- a generic instantiation has no
+  /// source name, so the compiler joins its base to its arguments (`Box with
+  /// String` -&gt; `Box_String`) and derives every per-type symbol from that
+  /// string, which a declared `type Box_String` derives its own from too.
+  /// Fires from `checkTypeSymbolNamespace` in shv2, whole-program, after the
+  /// instantiations are interned. Two INSTANTIATIONS can claim one compiled
+  /// name as well, `_` being a legal name character and the join therefore
+  /// not injective. A `typealias` is not a claimant here: it mints no symbol
+  /// of its own.
   /// </summary>
   SemanticDuplicateDefinition = 3006,
   /// <summary>

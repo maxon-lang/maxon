@@ -1,0 +1,43 @@
+// Test: error.three-instantiations-compile-to-one-name
+typealias Small = int(0 to 100)
+
+type A
+	export var v as Small
+end 'A'
+
+type B_C_D
+	export var v as Small
+end 'B_C_D'
+
+type A_B
+	export var v as Small
+end 'A_B'
+
+type C_D
+	export var v as Small
+end 'C_D'
+
+type A_B_C
+	export var v as Small
+end 'A_B_C'
+
+type D
+	export var v as Small
+end 'D'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+typealias Q1 = Pair with (A_B_C, D)
+typealias Q2 = Pair with (A_B, C_D)
+typealias Q3 = Pair with (A, B_C_D)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:34:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A_B, C_D)` compile to that same name
+error E3006: <fragment>:35:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A, B_C_D)` compile to that same name
