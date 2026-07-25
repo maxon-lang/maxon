@@ -358,34 +358,69 @@ end 'isIntrinsicBuiltinConformance'
 
 // --- Direct dispatch on a CONCRETE value (`i.compare(j)`) ---
 
-// The builtin conformer a receiver's RESOLVED value tag dispatches under, or `notABuiltinConformer` when
-// that tag has none. Its `typeName` is the CANONICAL conformer name — the key of the intrinsic-conformance
-// answer, of the `__witness_int_*` tables and of the `int.hash`/`int.equals`/`int.compare` impl symbols — so
-// a direct dispatch and a witness dispatch on the same type reach the same body.
-export union BuiltinConformerLookup
-	conformer(typeName ByteArray)
-	notABuiltinConformer
-end 'BuiltinConformerLookup'
+// The builtin conformer a receiver's RESOLVED value tag dispatches under, or `notAConformer` when that tag
+// has none.
+//
+// ⚠ **PAYLOAD-FREE ON PURPOSE, AND THE REASON IS MEASURED.** The obvious shape is a union carrying the
+// conformer's NAME (`conformer(typeName ByteArray)`), and it was written that way first. But this is asked
+// on the PER-METHOD-CALL path — `Parser.parseMethodCall` classifies every receiver that is not a String,
+// Array or Set, and the postfix loop classifies every value a `.` follows — and a union with an associated
+// value is heap-BOXED, so that shape allocated a 16-byte box at every one of those sites, including the
+// overwhelming majority (a plain struct receiver) whose answer is "no conformer at all". `scale-test` read
+// it as the WHOLE of this feature's per-rung cost: +32/+64/+128/+256/+512/+1,024 allocations across the
+// doubling ladder, exactly one per struct-method call site in the corpus, in `phase:parse` and nowhere
+// else. A payload-free enum is a scalar, so the classification is free and only a dispatch that is going
+// to HAPPEN pays for a name (`builtinConformerName`).
+export enum BuiltinConformer
+	notAConformer
+	intConformer
+end 'BuiltinConformer'
 
-// ⭐ **THE CONFORMER NAME A RESOLVED VALUE TAG CARRIES** — the ONE place a receiver's TYPE becomes the name
-// `isIntrinsicBuiltinConformance` and the impl symbol are keyed by. `IntConformerName`'s own header states
-// the invariant this rests on: it MUST equal `primitiveTypeTagName(ValueTypeTag.integer)`, i.e. `int` is
-// what a resolved `integer` is called everywhere in the compiler.
+// ⭐ **THE BUILTIN CONFORMER A RESOLVED VALUE TAG CARRIES** — the ONE place a receiver's TYPE becomes the
+// conformer the intrinsic-conformance answer and the impl symbol are keyed by.
 //
 // The caller resolves ranged ALIASES to their underlying tag first (`Parser.rangedAliasTag`), exactly as
 // `ProgramSignatures.conformerTypeArgName` reduces a witness type ARGUMENT — so `Integer`, `Byte` and a bare
 // `int` all arrive here as `integer` and all dispatch `int.*`.
 //
-// ⚠ **EVERY OTHER TAG ANSWERS `notABuiltinConformer`, INCLUDING TAGS THAT WILL LATER HAVE ONE.** `float`
+// ⚠ **EVERY OTHER TAG ANSWERS `notAConformer`, INCLUDING TAGS THAT WILL LATER HAVE ONE.** `float`
 // and `boolean` have no synthesized impls (their rung is next) and `string` is routed to
 // `parseStringMethodCall` before this is asked, so admitting either here would name a symbol nothing
 // installs — a link-time panic in place of a clean diagnostic. A tag joins this map when its impl does.
-export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformerLookup
+export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
 	if tag == ValueTypeTag.integer 'int'
-		return BuiltinConformerLookup.conformer(IntConformerName)
+		return BuiltinConformer.intConformer
 	end 'int'
-	return BuiltinConformerLookup.notABuiltinConformer
+	return BuiltinConformer.notAConformer
 end 'builtinConformerOfTag'
+
+// Does `conformer` carry a builtin conformance at all? The gate BOTH dispatch paths open with (a binding
+// receiver in `parseMethodCall`, a value receiver in the postfix loop), named once so the two cannot come
+// to disagree about it, and written as a comparison rather than a per-variant match so a conformer added
+// above is admitted by both paths without an edit here.
+export function isBuiltinConformer(conformer BuiltinConformer) returns bool
+	return conformer != BuiltinConformer.notAConformer
+end 'isBuiltinConformer'
+
+// ⭐ **THE CANONICAL NAME A CONFORMER IS KEYED BY** — the key of the intrinsic-conformance answer, of the
+// `__witness_int_*` tables and of the `int.hash`/`int.equals`/`int.compare` impl symbols, so a direct
+// dispatch and a witness dispatch on the same type reach the same body. `IntConformerName`'s own header
+// states the invariant this rests on: it MUST equal `primitiveTypeTagName(ValueTypeTag.integer)`, i.e. `int`
+// is what a resolved `integer` is called everywhere in the compiler.
+//
+// Fetched only where a name is actually spelled — a dispatch that is going to be emitted, or a diagnostic
+// naming the receiver's type — never on the classification path. The match is EXHAUSTIVE, so a conformer
+// added to `BuiltinConformer` fails to compile here until it is given its name, which is the check that
+// keeps this map and the tag map above from drifting apart.
+//
+// It PANICS on `notAConformer` for `requireBuiltinInterface`'s reason: only a caller the gate above has
+// already admitted may ask for a name, so a miss is a driver invariant violation rather than user input.
+export function builtinConformerName(conformer BuiltinConformer) returns ByteArray
+	match conformer 'c'
+		intConformer then return IntConformerName
+		notAConformer then panic("builtinConformerName: asked for the name of a value that carries no builtin conformance — every caller is gated on `isBuiltinConformer`, so the gate and the name must read one classifier")
+	end 'c'
+end 'builtinConformerName'
 
 // ⭐ **IS `name` A SYMBOL ONLY THE DIRECT BUILTIN-CONFORMANCE DISPATCH CAN HAVE MINTED?** The second half
 // of `MmRuntime.isCompilerInternalCallee`, and the reason that predicate needed one: a synthesized impl is
