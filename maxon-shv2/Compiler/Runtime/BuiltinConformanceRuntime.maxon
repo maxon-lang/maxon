@@ -283,6 +283,11 @@ end 'createTwoOperandImpl'
 // than minting a third array builder. An integer operand of ANY width declares i64 parameters: every
 // synthesized chunk uses the GPR-only internal ABI, in which a machine word carries a `bool` as readily as
 // an `int` (see `MmRuntime.emitParams`).
+//
+// ⚠ **CALLED ONCE PER IMPL — the `param` ops read the array off the FUNCTION** (`func.paramTypes`, which
+// `createFromStd` stores by reference), never from a second call to this. Two calls would be two
+// derivations of one fact, free to disagree the day an operand type maps to a param shape conditionally,
+// and they cost one `StdTypeArray` each: MEASURED at +2 allocations per installed impl.
 function twoOperandParams(operandType StdType) returns StdTypeArray
 	match operandType 'shape'
 		i1 to u64 then return twoI64Params()
@@ -312,7 +317,7 @@ function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdTyp
 	var equalBlock = module.addBlock(func, label: b"equal")
 	var notEqualBlock = module.addBlock(func, label: b"notEqual")
 
-	emitTypedParams(module, block: entry, paramTypes: twoOperandParams(operandType))
+	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0 as ValueId
 	let other = 1 as ValueId
 
@@ -367,7 +372,7 @@ function buildOrderingCompare(module StdModule, name ByteArray, operandType StdT
 	var greaterBlock = module.addBlock(func, label: b"greater")
 	var equalBlock = module.addBlock(func, label: b"equal")
 
-	emitTypedParams(module, block: entry, paramTypes: twoOperandParams(operandType))
+	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0 as ValueId
 	let other = 1 as ValueId
 
@@ -415,7 +420,7 @@ function buildFloatCompare(module StdModule, name ByteArray)
 	var greaterBlock = module.addBlock(func, label: b"greater")
 	var equalBlock = module.addBlock(func, label: b"equal")
 
-	emitTypedParams(module, block: entry, paramTypes: twoOperandParams(StdType.f64))
+	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0 as ValueId
 	let other = 1 as ValueId
 
