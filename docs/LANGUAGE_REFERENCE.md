@@ -4147,7 +4147,7 @@ end 'join'
 - **Multi-threaded** -- green threads are distributed across OS worker threads (one per CPU core)
 - **Work stealing** -- idle workers steal from busy workers' local queues for load balancing
 - **Cooperative scheduling** -- context switches at `await` points, `sleep` calls, and I/O operations
-- **Growable stacks** -- 2KB initial, doubles when needed
+- **Growable stacks** -- 8KB initial (2KB for Maxon frames + a 6KB OS fault reserve), doubles when needed
 - **Thread-safe memory** -- atomic reference counting and lock-protected shared state
 - **Fire-and-forget safe** -- unawaited green threads are drained at program exit
 

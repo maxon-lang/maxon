@@ -861,7 +861,7 @@ end 'each'
 - Green threads are distributed across OS worker threads (one per CPU core) on native targets
 - On `wasm32-wasi`, async/await runs single-threaded and cooperative (Binaryen Asyncify), not multi-threaded
 - Context switches at `await` points and I/O operations
-- Growable stacks (2KB initial, doubles as needed)
+- Growable stacks (8KB initial (2KB for Maxon frames + a 6KB OS fault reserve), doubles as needed)
 - Throwing async functions require `try await` (not plain `await`)
 - `async` target must yield (contain I/O or `await` points)
 - Unawaited green threads are drained at program exit
