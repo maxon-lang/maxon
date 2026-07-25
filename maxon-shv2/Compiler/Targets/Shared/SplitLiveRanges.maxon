@@ -1577,11 +1577,13 @@ end 'recordDefLiveAfter'
 // ⚠ GROWN WITH `growFilled`, WHICH IS NOT INTERCHANGEABLE WITH `resize`/`refill` HERE — and `refill` is
 // what this used to be. The value space widens with every split (each mints reload ids), so this row is
 // a column that is EXTENDED, and `resize` goes through `reserve`, which takes the ask at FACE VALUE: a
-// row extended a word at a time is reallocated and copied IN FULL at every tick of `wordsPerRow`, which
-// is the same Θ(splits × values) shape being removed here, merely with a smaller constant. `growFilled`
-// grows capacity GEOMETRICALLY (see `grownCapacity` in stdlib/Array.maxon), so a function's whole row
-// growth is amortized linear in its final value count and this function allocates NOTHING once the row
-// is wide enough.
+// row extended a word at a time is reallocated and copied IN FULL at every tick of `wordsPerRow`. That is
+// Θ(wordsPerRow²) words — one whole-row realloc per 64 ids minted, NOT one per split — so it is still
+// superlinear in the value space, at about 1/64 of the term being removed here rather than none of it.
+// (Worth stating exactly: "it only reallocates on a tick" is TRUE, and is not a reason to go back.)
+// `growFilled` grows capacity GEOMETRICALLY (see `grownCapacity` in stdlib/Array.maxon), so a row's
+// whole growth is amortized linear in its final value count and this function allocates NOTHING once
+// the row is wide enough.
 //
 // The zeroing is WHOLESALE — O(words), no allocation — rather than an undo of exactly the bits the
 // previous fill set. These rows are LIVENESS data: a bit left standing from the previous split is a
