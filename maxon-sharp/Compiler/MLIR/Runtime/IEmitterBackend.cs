@@ -490,11 +490,13 @@ public interface IEmitterBackend {
   /// <summary>
   /// Emit a symbolized stack trace after the fault panic line. Called by the shared
   /// EmitGtFaultDiagnostic just before process exit, running on the redirected stack.
-  /// x64-Windows walks the faulting thread's saved-RBP chain (stashed in
-  /// __gt_fault_last_rbp / __gt_fault_last_rsp) and resolves each return address
-  /// against the embedded symbol table, mirroring the ordinary mrt_panic trace.
-  /// Backends without a frame-walking fault diagnostic (arm64-macOS) implement this
-  /// as a no-op, so only the panic line is printed.
+  /// BOTH backends implement it as a call to their own mrt_fault_backtrace, which walks
+  /// the faulting thread's saved-frame-pointer chain (stashed in __gt_fault_last_rbp /
+  /// __gt_fault_last_rsp, bounded above by __gt_stack_high_current) and resolves each
+  /// return address against the embedded symbol table, mirroring the ordinary mrt_panic
+  /// trace. It stays a backend method rather than a shared emit because the walk itself
+  /// is hand-encoded per architecture — see EmitStackTraceHeader (ARM64CodeEmitter.Runtime.cs)
+  /// for why those four walks are four and not one.
   /// </summary>
   void EmitFaultBacktrace();
 }

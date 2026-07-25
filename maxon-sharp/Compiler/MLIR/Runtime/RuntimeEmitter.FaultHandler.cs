@@ -67,8 +67,8 @@ public partial class RuntimeEmitter {
     // exit-time output today.
     _b.DefineGlobal("__gt_fault_last_addr", 8, 0);
     _b.DefineGlobal("__gt_fault_last_rbp", 8, 0);
-    // RSP at fault time, stashed alongside RBP so EmitFaultBacktrace can bound its
-    // saved-RBP walk to the still-mapped faulted stack ([rsp, rsp + 64 MiB)).
+    // RSP at fault time, stashed alongside RBP so EmitFaultBacktrace can bound its saved-RBP walk to
+    // the still-mapped faulted stack: [rsp, __gt_stack_high_current(rsp)).
     _b.DefineGlobal("__gt_fault_last_rsp", 8, 0);
   }
 
@@ -118,35 +118,76 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch2, 2);                                       // RSP at fault (slot 2)
     _b.StoreGlobal("__gt_fault_last_rsp", VReg.Scratch2);
 
-    // Redirect target: pc=__gt_fault_diagnostic, fp=0, sp=faultRsp (intact stack)
-    // OR gt.stack_base+4096 for stack-overflow (exhausted stack needs a clean spot).
+    // Redirect target: pc=__gt_fault_diagnostic, fp=0, sp=faultRsp — the faulting stack is intact for
+    // every fault EXCEPT a stack overflow, which is handled below.
     _b.MovRegImm(VReg.Scratch2, 0);
     _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectFp, VReg.Scratch2);
     _b.LeaGlobal(VReg.Scratch2, "__gt_fault_diagnostic_addr");
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch2, 0);
     _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectRip, VReg.Scratch2);
 
-    var notStackOvfLabel = UniqueLabel("fault_not_stkovf");
-    var rspChosenLabel   = UniqueLabel("fault_rsp_chosen");
-    _b.LoadLocal(VReg.Scratch1, 0);
-    _b.CmpRegImm(VReg.Scratch1, FaultCodeStackOverflow);
-    _b.JumpIf(Condition.NotEqual, notStackOvfLabel);
-
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtOffStackBase);
-    _b.AddRegImm(VReg.Scratch2, 4096);
-    _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectRsp, VReg.Scratch2);
-    _b.Jump(rspChosenLabel);
-
-    _b.DefineLabel(notStackOvfLabel);
-    _b.LoadLocal(VReg.Scratch2, 2);
-    _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectRsp, VReg.Scratch2);
-
-    _b.DefineLabel(rspChosenLabel);
+    EmitChooseFaultRedirectRsp();
 
     // Recover sentinel — the per-backend epilog rewrites the OS context with the
     // values we just wrote into gt.fault_redirect_*.
     _b.MovRegImm(VReg.Ret, 0);
     _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Store the RSP the diagnostic resumes on into gt.fault_redirect_rsp. Scratch0 must hold gt.
+  ///
+  /// Every fault but one leaves the faulting stack usable, so the answer is the faulting RSP itself.
+  /// A STACK OVERFLOW cannot resume there — it is the stack that just ran out — so it needs an RSP
+  /// with room BELOW it that the exhausted region cannot reach, and WHICH stack that is depends on
+  /// whether the green thread owns one. The two arms are not interchangeable:
+  ///
+  ///   * A thread WITH its own stack resumes inside that stack's own <see cref="GtOsFaultReserve"/>,
+  ///     which is committed with the rest of the allocation and sits below every frame the prologue
+  ///     guard will ever place, so it is untouched by construction. It must NOT resume on the P's
+  ///     system stack: for a gt with a stackBase, every Win32 call the diagnostic makes goes through
+  ///     EmitCallImportOnSystemStack, which switches RSP to the system stack TOP unconditionally —
+  ///     straight over the diagnostic's own frames.
+  ///   * A thread with NO stack of its own — a processor's inline main-thread GT, running on the OS
+  ///     thread's stack, where stackBase == 0 is the runtime's own test for it — has no reserve, and
+  ///     `0 + anything` is not an address. It resumes on the P's system stack, which is mapped, 64 KB,
+  ///     and provably idle (nothing on an OS-thread stack ever switches to it — the same stackBase
+  ///     test makes EmitCallImportOnSystemStack call straight through instead of switching).
+  ///
+  /// ⚠ Today only the SECOND arm is reachable, and it is why this is stated rather than inherited:
+  /// Windows raises EXCEPTION_STACK_OVERFLOW only for a GUARD PAGE inside an OS thread's stack, and a
+  /// green-thread stack is plain committed pages, so overflowing one is an ACCESS VIOLATION instead.
+  /// The old `gt.stack_base + 4096` therefore always evaluated to 0x1000 — an unmapped address in the
+  /// null page — and every main-thread stack overflow died `0xC0000005` with no output at all, in
+  /// place of the `panic: stack overflow` + symbolized trace this handler already had the message for.
+  /// (Measured 2026-07-25 on unbounded recursion in `main`; it now prints the trace and exits 1.)
+  /// </summary>
+  private void EmitChooseFaultRedirectRsp() {
+    var notStackOvfLabel = UniqueLabel("fault_not_stkovf");
+    var noOwnStackLabel = UniqueLabel("fault_stkovf_no_own_stack");
+    var rspChosenLabel = UniqueLabel("fault_rsp_chosen");
+
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.CmpRegImm(VReg.Scratch1, FaultCodeStackOverflow);
+    _b.JumpIf(Condition.NotEqual, notStackOvfLabel);
+
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtOffStackBase);
+    _b.JumpIfZero(VReg.Scratch2, noOwnStackLabel);
+    _b.AddRegImm(VReg.Scratch2, GtOsFaultReserve);
+    _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectRsp, VReg.Scratch2);
+    _b.Jump(rspChosenLabel);
+
+    _b.DefineLabel(noOwnStackLabel);
+    _b.LoadCurrentP(VReg.Scratch2);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch2, POffSystemStackSP);
+    _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectRsp, VReg.Scratch2);
+    _b.Jump(rspChosenLabel);
+
+    _b.DefineLabel(notStackOvfLabel);
+    _b.LoadLocal(VReg.Scratch2, 2);                                       // RSP at fault (slot 2)
+    _b.StoreIndirect(VReg.Scratch0, GtOffFaultRedirectRsp, VReg.Scratch2);
+
+    _b.DefineLabel(rspChosenLabel);
   }
 
   /// <summary>
@@ -243,8 +284,8 @@ public partial class RuntimeEmitter {
     // Symbolized stack trace. Our own RBP is meaningless (we were redirected with
     // FP=0), so this walks the FAULTING thread's stashed RBP chain
     // (__gt_fault_last_rbp/_rsp), which is still mapped — the diagnostic runs on the
-    // same thread with a fresh RSP. x64-Windows prints "Stack trace:" + frames;
-    // arm64-macOS has no frame-walking diagnostic yet and emits nothing here.
+    // same thread with a fresh RSP. BOTH backends implement it as a call to their own
+    // mrt_fault_backtrace, so both print "Stack trace:" + frames.
     _b.EmitFaultBacktrace();
 
     // Exit the process with status 1.

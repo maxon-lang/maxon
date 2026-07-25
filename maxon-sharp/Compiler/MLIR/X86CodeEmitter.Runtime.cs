@@ -384,15 +384,32 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// mrt_panic(cstr_ptr_in_rcx): write message to stderr, print stack trace, then ExitProcess(1).
+  ///
+  /// ⚠ WHY THIS WALK IS NOT THE SAME CODE AS mrt_fault_backtrace's, twenty lines down — written here
+  /// because two of the tree's four hand-encoded frame walks live in THIS file and a reader of it
+  /// should not have to find the note in the arm64 twin (see EmitStackTraceHeader,
+  /// ARM64CodeEmitter.Runtime.cs, for the same statement on that side). The three differences are
+  /// deliberate: mrt_panic is a controlled call, so it trusts an otherwise well-formed chain, while
+  /// mrt_fault_backtrace validates a possibly-CORRUPT one (a low bound and strict ascent) because a
+  /// fault is exactly the case where the chain may be the thing that broke. Merging them would mean
+  /// reworking mrt_panic_print_frame's caller-frame contract — it reads symtable_ptr/count/text_offset
+  /// out of ITS CALLER'S frame at fixed negative offsets — across two hand-encoded backends, on the
+  /// fatal-fault path. What they DO share is single-sourced instead: <see cref="GtLayout.FrameLinkBytes"/>,
+  /// <see cref="GtLayout.MaxBacktraceFrames"/>, __gt_stack_high_current, and mrt_panic_print_frame
+  /// itself — because running off the TOP of a green-thread stack is not a corrupt-chain question and
+  /// every walk meets it.
+  ///
   /// Stack layout:
   ///   [rbp-0x08] = cstr_ptr (panic message)
   ///   [rbp-0x10] = text_base (absolute address of mrt_start)
   ///   [rbp-0x18] = symtable_ptr (absolute address of __symtable in .symtab)
   ///   [rbp-0x20] = current frame rbp for stack walk
-  ///   [rbp-0x28] = frame counter (counts down from 32)
+  ///   [rbp-0x28] = frame counter (counts down from MaxBacktraceFrames)
   ///   [rbp-0x30] = symtable entry count
   ///   [rbp-0x38] = text_offset for current frame lookup
-  ///   [rbp-0x40] = stack_high (exclusive upper bound of the panicking thread's stack)
+  ///   [rbp-0x40] = stack_high (exclusive upper bound of the panicking thread's stack).
+  ///                ⚠ mrt_fault_backtrace spells stack_high at -0x48 and uses -0x40 for its stack_LOW;
+  ///                the two frames agree only on the four slots mrt_panic_print_frame reads.
   /// </summary>
   private void EmitMaxonPanic() {
     DefineSymdata("__panic_stacktrace", System.Text.Encoding.UTF8.GetBytes("Stack trace:\n\0"));
@@ -4589,8 +4606,9 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// __gt_spawn(func_ptr_rcx, arg_count_rdx, arg_buf_r8) -> promise in RAX
-  /// Allocates a GreenThread struct and a 2KB stack, initializes them,
-  /// enqueues the thread in the run queue, and returns the GreenThread ptr.
+  /// Allocates a GreenThread struct and a GtLayout.GtInitialStackSize stack (the Maxon
+  /// frames plus the OS fault reserve — see GtLayout's stack-growth block), initializes
+  /// them, enqueues the thread in the run queue, and returns the GreenThread ptr.
   /// </summary>
   private void EmitGtSpawn() {
     EmitRuntimeFunctionStart("__gt_spawn", 3, 0x40);
@@ -5981,8 +5999,10 @@ public partial class X86CodeEmitter {
     // so the function can use them after we return.
     //
     // Key design: all register saves go on the SYSTEM stack, not the GT stack.
-    // This means the GT stack guard only needs to cover the switch sequence itself
-    // (~32 bytes), enabling much smaller initial GT stacks (2KB with 128-byte guard).
+    // This means morestack itself costs the GT stack nothing, so the guard has to cover
+    // only what the guard is FOR — GtUncheckedFrameMargin of unchecked leaf frames, plus
+    // the GtOsFaultReserve the OS writes below RSP. Both terms live in GtLayout; neither
+    // is restated here.
     //
     // Flow:
     //   1. Load P* via TLS, save GT entry RSP, switch RSP to system stack

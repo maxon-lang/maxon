@@ -89,8 +89,11 @@ public partial class RuntimeEmitter {
   ///
   /// Three cases, and only the first has a real answer:
   ///   * a green thread with a recorded extent, containing sp -> stackBase + stackSize, exact;
-  ///   * a thread with NO recorded extent (a processor's inline main-thread GT runs on the OS
-  ///     thread's stack, where stackSize == 0 is the runtime's own test for it) -> the sane window;
+  ///   * a thread with NO stack of its own (a processor's inline main-thread GT runs on the OS
+  ///     thread's stack) -> the sane window. The test is stackBase == 0, which is the SAME test the
+  ///     rest of the runtime already spells that way — __io_complete_gt, __gt_signal_waiter and
+  ///     EmitCallImportOnSystemStack among a dozen others. A second field would be a second opinion
+  ///     about what "no thread of its own" looks like, and the two would agree only by accident.
   ///   * an sp OUTSIDE that thread's stack — a fault taken while switched to the P's system stack —
   ///     -> also the sane window, because the green thread's extent would reject every frame and
   ///     silently produce an EMPTY trace, which reads as "no frames" rather than "wrong stack".
@@ -104,10 +107,10 @@ public partial class RuntimeEmitter {
 
     _b.LoadLocal(VReg.Scratch0, slotGt);
     _b.JumpIfZero(VReg.Scratch0, unknownLabel);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtOffStackSize);
-    _b.JumpIfZero(VReg.Scratch1, unknownLabel);
-
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtOffStackBase);
+    _b.JumpIfZero(VReg.Scratch2, unknownLabel);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtOffStackSize);
+
     _b.LoadLocal(VReg.Scratch3, slotSp);
     _b.CmpRegReg(VReg.Scratch3, VReg.Scratch2);
     _b.JumpIf(Condition.Below, unknownLabel);
