@@ -1,0 +1,31 @@
+// Test: int.hash
+function main() returns ExitCode
+	let i = 42
+	let h = i.hash()
+	return h
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 42
+    x64.callDirect int.hash
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}

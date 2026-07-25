@@ -1002,12 +1002,52 @@ let DetachedBlockLabel = b"detached"
 // E3004 "call to undefined function 'Point.create'", pointing at a call that is perfectly correct.
 let MethodNameSeparator = "."
 
+// The same separator as a BYTE, for the join's INVERSE (`isQualifiedUnderTypeName`), which compares one
+// byte of a callee name and must not allocate.
+//
+// ⚠ **YES, THIS IS THE SEPARATOR WRITTEN DOWN TWICE — DELIBERATELY, AND WITH A CHECK BETWEEN THE COPIES.**
+// The single-constant version was written first and MEASURED: rendering a `ByteArray` separator into the
+// join costs one extra `String.from` per `qualifiedMethodName` call, and that function runs once per method
+// DECLARATION, once per method CALL SITE and again in the declaration pre-scan — so the cost is LINEAR in
+// the program. scale-test read it as +338/+570/+1,034/+1,962/+3,818/+7,530 allocations across the doubling
+// ladder (a ratio converging to 2.00 from below: a linear term, not the flat install cost it was mistaken
+// for). A cosmetic single-spelling is not worth a linear term on the compiler's hottest name mangler.
+//
+// What makes the duplication safe is not this comment: it is that the two copies have a TEST between them.
+// Every direct builtin-conformance dispatch resolves through `isCompilerInternalCallee` →
+// `isBuiltinConformanceImplName` → `isQualifiedUnderTypeName`, so a byte here that disagrees with the join
+// above makes every `int.compare`/`int.hash`/`int.equals` call fail to be recognized as compiler-owned and
+// the eight `primitive-comparable`/`primitive-hashable`/`method-call-on-call-result` cases go RED with
+// E3004. The copies cannot drift silently.
+let MethodNameSeparatorBytes = b"."
+
 // `Point.create` — the name a type's method is declared and called under. ONE spelling, read by
 // `Parser.declaredMethodName` (the declaration) and `Parser.parseQualifiedCall` (the use). See
 // `MethodNameSeparator` for what a second spelling would cost.
 export function qualifiedMethodName(typeName ByteArray, methodName ByteArray) returns ByteArray
 	return "{String.from(typeName)}{MethodNameSeparator}{String.from(methodName)}".toByteArray()
 end 'qualifiedMethodName'
+
+// ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
+// The join's INVERSE, and deliberately allocation-free: its caller
+// (`IrInterface.isBuiltinConformanceImplName` → `MmRuntime.isCompilerInternalCallee`) is asked of EVERY
+// callee in the program by `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall`, so materializing
+// a joined name here would allocate once per call site in every compile.
+//
+// ⚠ **THE SEPARATOR TEST IS LOAD-BEARING, NOT TIDINESS.** Without it this is a bare `bytesStartWith`, and
+// a user function called `internNames` begins with `int` — it would be classified compiler-internal and
+// so skip arity validation and signature slotting. A miscompile, from a missing byte compare.
+export function isQualifiedUnderTypeName(name ByteArray, typeName ByteArray) returns bool
+	if name.count() <= typeName.count() 'noRoomForAMethod'
+		return false
+	end 'noRoomForAMethod'
+	if not bytesStartWith(name, prefix: typeName) 'differentType'
+		return false
+	end 'differentType'
+
+	let separator = try MethodNameSeparatorBytes.get(0) otherwise panic("isQualifiedUnderTypeName: MethodNameSeparatorBytes is a one-byte literal")
+	return (try name.get(typeName.count()) otherwise panic("isQualifiedUnderTypeName: index {typeName.count()} is below count {name.count()} by the guard above, but get failed")) == separator
+end 'isQualifiedUnderTypeName'
 
 // ⭐ THE TRIVIAL DESTRUCTOR — the `destructor` argument every `__mm_alloc` at this rung passes.
 //

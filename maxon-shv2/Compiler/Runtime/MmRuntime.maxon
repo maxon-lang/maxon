@@ -141,8 +141,22 @@ let CompilerInternalPrefix = b"__"
 // print-only or string-`==`-only program must NOT, so that decision cannot widen to every `__` name.
 // This one decides only "skip the user-function checks", which is true of `__print_string`/`__str_eq`
 // just as much as of `__mm_alloc`.
+//
+// ⭐⭐ **"COMPILER-OWNED" IS NOT THE SAME FACT AS "`__`-PREFIXED", AND THE SECOND CLAUSE IS WHERE THEY PART.**
+// The synthesized builtin-conformance impls (`int.hash`/`int.equals`/`int.compare`) are as compiler-owned as
+// `__str_eq` — no file declares them, and they are built at the Std tier after the pipeline — but they
+// deliberately wear NO prefix, because a witness-table reloc has to name a real `.text` symbol
+// (`BuiltinConformanceRuntime`'s header). The prefix test was therefore ALREADY wrong about them; it simply
+// never mattered while nothing called one by NAME. Direct dispatch (`i.compare(j)`) does, and the first
+// reader to notice reported **E3004 "call to undefined function 'int.compare'"** against a call the user
+// never wrote — the exact failure this predicate exists to prevent for `__mm_alloc`.
+//
+// ⚠ The second clause is `int.`-QUALIFIED ONLY, and that bound is load-bearing rather than conservative —
+// see `isBuiltinConformanceImplName` for why `String.` must stay out and why a keyword qualifier is what
+// makes the claim sound. It is allocation-free (`isQualifiedUnderTypeName`), because this sits on the
+// per-call path of `validateCall` and `lowerCall`.
 export function isCompilerInternalCallee(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: CompilerInternalPrefix)
+	return bytesStartWith(callee, prefix: CompilerInternalPrefix) or isBuiltinConformanceImplName(callee)
 end 'isCompilerInternalCallee'
 
 // The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.

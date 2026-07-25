@@ -1,0 +1,51 @@
+// Test: int.equals.different
+function main() returns ExitCode
+	let a = 42
+	let b = 17
+	if a.equals(b) 'eq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 42
+    x64.movRegImm32 rdx, 17
+    x64.callDirect int.equals
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, eq
+    x64.jmp ifcont
+  eq:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

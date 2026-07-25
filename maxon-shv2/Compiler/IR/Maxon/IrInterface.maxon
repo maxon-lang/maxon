@@ -387,6 +387,31 @@ export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
 	return BuiltinConformerLookup.notABuiltinConformer
 end 'builtinConformerOfTag'
 
+// ⭐ **IS `name` A SYMBOL ONLY THE DIRECT BUILTIN-CONFORMANCE DISPATCH CAN HAVE MINTED?** The second half
+// of `MmRuntime.isCompilerInternalCallee`, and the reason that predicate needed one: a synthesized impl is
+// compiler-owned but wears NO `__` prefix — it carries a real `.text` symbol so a witness-table reloc can
+// name it (BuiltinConformanceRuntime's header) — so the prefix test cannot see it, and every reader that
+// asks "is this the compiler's own callee?" was answering `false` for `int.compare`.
+//
+// **It is a QUALIFIER test, and the qualifier is the whole soundness argument.** `int` is a KEYWORD, so no
+// user type may be declared under it and no user method symbol can ever wear `int.` — every callee under
+// that qualifier is one the compiler minted. That is why no method LIST is needed here and why one must not
+// be added: the fact being stated is *"the `int.` qualifier belongs to the compiler"*, which is one fact,
+// where "and these three methods" would be a second copy of `builtinConformerMethod`'s answer.
+//
+// ⚠ **`String.` IS DELIBERATELY ABSENT AND MUST STAY SO UNTIL DIRECT STRING DISPATCH SHIPS.** `String` is
+// NOT in `TypeResolution.isCompilerOwnedTypeName`, so a user `type String` with its own `hash()` legitimately
+// owns the symbol `String.hash` — admitting it here would route a genuine user call past arity validation and
+// signature slotting, and would make `Parser.requireCalleeIsNotReservedName` reject a legal
+// `String.hash(…)` static call outright. The builtin `String.hash`/`String.equals` impls are reached ONLY
+// through witness relocs, which never consult this predicate.
+//
+// The conformers listed here are exactly those `builtinConformerOfTag` can return, because those are the
+// only qualifiers the parser can emit a direct dispatch under. A tag joins that map and this one together.
+export function isBuiltinConformanceImplName(name ByteArray) returns bool
+	return isQualifiedUnderTypeName(name, typeName: IntConformerName)
+end 'isBuiltinConformanceImplName'
+
 // The protocol method a builtin conformer supplies under a given name, or `notSupplied`.
 export union BuiltinConformerMethodLookup
 	supplied(method InterfaceMethodSig)
