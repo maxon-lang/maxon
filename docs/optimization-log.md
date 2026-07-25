@@ -10,6 +10,14 @@ turn green — it is an instrument, and this document is what it is an instrumen
 of each table below is the previous datapoint: every run reads it and reports the delta from it, so
 you still see exactly what moved, without anything failing.
 
+⚠ **When a row's headline was measured on a HAND-BUILT ladder rather than the corpus, the ladder must
+be committed, not described.** `scale-test`'s corpus is a list of shapes someone thought to generate,
+so most optimizer passes end up building one to answer a question the corpus cannot express — and
+every one that threw it away left a number nobody could re-run. The Wave 2 rung reported a base
+column that came out **~60× different** when someone rebuilt the ladder: it had measured a different
+program, and there was nothing to check that against. **The generators live in
+`maxon-shv2/Testing/ladders/` — add yours there and name it in your row.**
+
 ## How rows get here
 
 Rows are **appended by the tool, not by hand**. Running
