@@ -2164,7 +2164,61 @@ so retiring one and deleting the whitelist point the same way. `SleepBuiltinName
   shadow the rule exists to prevent. Both rosters deleted; the chain is named as the one authority. *(One fact
   written down twice — in the documentation of the rule against writing one fact down twice.)*
 
-### ⛔ NEXT RUNG, AND IT GATES FURTHER RETIREMENTS — duplicate `typealias` is a SILENT WRONG ANSWER
+### ✅ TYPEALIAS RESOLUTION IS FILE-SCOPED — CLOSED 2026-07-25 (x64 1596→**1604/0**, wasm 1405→**1413/0**)
+**ONE defect, four symptoms.** `project.typeAliases` was a single whole-program map keyed by the BARE name and
+upserted LAST-WINS, with `RangedTypeAlias` carrying no file, no position, no export bit ⇒ same-file duplicate
+silently last-wins · **stdlib clobbering the user** · cross-file user-vs-user **silent wrong answer** · the live
+`Utf16UnitCount` landmine (`int(1 to 2)` in `helpers/string/utf16.maxon` vs `int(0 to u64.max)` in `views.maxon`,
+one slot, winner decided by filesystem order). ⇒ same-file duplicate = **E3061** (claimed on the EXISTING entry);
+cross-file = **resolved per declaring file**. `Utf16UnitCount` defused by the mechanism, `stdlib/` untouched.
+
+⚠⚠ **THE COORDINATOR'S DESIGN RULING WAS WRONG AND THE IMPLEMENTER REFUSED IT — correctly.** I ruled "any duplicate
+typealias is an error, including user-vs-stdlib", reasoning by consistency with E3006. **Function names are
+whole-program in Maxon; a NON-EXPORTED TYPEALIAS IS FILE-SCOPED BY THE LANGUAGE** — that is the whole difference,
+and I generalised from the wrong neighbour. Three authorities contradict it: `specs/duplicate-typealias.md`
+(**status: stable**, cross-file non-exported duplicates legal, both cases passing), `specs/typealias-collision.md:116`
+(`project-export-shadows-stdlib-export` — the user-shadows-stdlib the ruling forbade by name), and **stdlib itself**
+(`Byte = int(0 to u8.max)` in SEVEN files — file-private re-declaration IS the stdlib idiom, so the ruling would have
+made the load-all-stdlib end state unreachable). The brief also said "take the next free number"; **E3061 already
+existed** for csharp+selfhosted, and minting a second would have been the duplicated-fact bug the registry prevents.
+
+⭐ **THE REVIEW CAUGHT A REACHABLE DEFECT THE RUNG ITSELF INTRODUCED** — the exact class this gate exists for. The
+rung scoped the PARSER and left four readers BARE: two deciders, nothing making them agree. With
+`a.maxon: typealias Measure = int(…)` and `b.maxon: typealias Measure = float(…)`, the parser answered `int`
+(scoped) and `resolveNamedType` answered `float` (bare, last-wins) ⇒ **x64 ICE** (`X64Backend.maxon:1367`, xmm in
+the gpr file, no diagnostic), a **wasm component its own validator rejects**, and a struct field **silently the
+wrong width**. ⚠ Coordinator-verified: **base main COMPILES that program clean (exit 0)** — a latent silent
+miscompile that scoping would have promoted to an ICE. Fixed with **E3105** (137→138 codes): `record` refuses a
+cross-file pair whose underlying PRIMITIVES differ, blamed on the second file's own token; **two files over two
+RANGES stays legal**. That makes the bare door's contract **structural rather than a bet about the corpus**: every
+declaration of a name shares one primitive in any program that compiles, so the bare answer IS the scoped answer.
+
+⭐ **OPTIMIZER: THE CORPUS PRICED THE REAL COST AT ZERO.** Contested-name lookup was **24 allocations / 2,224 bytes
+per USE** (`46 + 24N`, exact) — invisible because all 169 rung-5 corpus declarations have DISTINCT names, while
+stdlib has NINE contested ones. Now flat to the byte over an 8× span. It also corrected its predecessor's
+per-declaration constant (wrong denominator — 20.2, not 5.9) and found `lookupInAnyFile` WAS on the hot path
+(`resolveNamedType`), hiding a term that scaled with the PROGRAM because `DeclaredAlias` is an associated-value
+union ⇒ heap-boxed per call — **the same defect the P1.7a pass fixed one rung earlier**. The door now returns a
+`MaxonType` and structurally cannot return the alias. Net `42 − 14·2ⁿ` allocations = **−406 at rung 5: the rung
+leaves the compiler CHEAPER at scale than before it**, because the boxing fix repaid a pre-existing cost in
+`classifyUnionPayload`. Path-spelling hazard probed across 7 spellings — **negative**, and structurally so: one
+`FilePath` value per file, writer and reader taking it from the same object.
+
+### ⬜ FILED BY THIS RUNG — three, none of them its to fix
+- **⭐ `5 as MadeUpName` COMPILES SILENTLY** and returns 5 (oracle: `E2003`). Identical on base and branch. **It is
+  why `cast-to-stdlib-internal-typealias` is GREEN — for the wrong reason**: `ElementCount` lives in the
+  un-whitelisted `stdlib/Array.maxon`, so nothing resolves and the cast vanishes. **A test that passes because a
+  lookup fails.** Fixing it means deciding that test's fate, entangled with the `Map`/`__ManagedMemory` cone. **Its
+  own rung — and it is why any future alias-scoping mistake would be SILENT rather than loud.**
+- **`commitStructTypes` is LAST-WINS for duplicate `type` names**, and a `typealias` + `type` of one name compiles
+  silently (probed same-file and cross-file, no panic). The same defect this rung just fixed for aliases, one
+  declaration-kind over. Wants per-file TYPE scoping.
+- **E3063 / `export` as a resolution key** — deliberately out of scope; needs cross-file name resolution.
+- ⏭ `recordAlias`'s content hash omits `declFilePath`. Traced NOT reachable (the fold runs in `sourcePaths` order so
+  position encodes file identity; E3061/E3105 are raised at the merge, which is not per-file memoized). Sound, but
+  **the argument is unwritten — write it down before someone reorders the fold.**
+
+### ⛔ SUPERSEDED — duplicate `typealias` is a SILENT WRONG ANSWER (CLOSED above)
 **shv2 has no duplicate-`typealias` diagnostic and resolution is LAST-REGISTERED-WINS. stdlib registers AFTER user
 source, so a listed module's typealias SILENTLY OVERRIDES the user's.** Coordinator-verified against the oracle:
 ```maxon
