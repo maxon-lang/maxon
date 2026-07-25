@@ -1,0 +1,33 @@
+// P4d-GT-STACK slice A gate sample: a breakpoint INSIDE an async function — i.e. a stop taken on a
+// GREEN-THREAD stack rather than on the OS thread's.
+//
+// Until this rung that killed the debuggee outright (0xC0000005, no stop event AND no panic). Windows
+// delivers an exception on the current thread's own stack: KiUserExceptionDispatcher writes an
+// EXCEPTION_RECORD + a CONTEXT + its own dispatch frames — 2577 bytes, measured — below RSP before a
+// single instruction of any handler runs, and a green-thread stack was 2 KB in total. The kernel's
+// write ran off the bottom into unmapped memory, so the process was gone before either the debug trap
+// handler or __gt_fault_handler could execute. GtLayout.GtOsFaultReserve now reserves that space
+// INSIDE every green-thread stack, counted in both the allocation and the guard so __gt_morestack
+// maintains it across a grow.
+//
+// The first breakpoint is deliberately on the FIRST statement of `work`, which is the WORST case: the
+// green thread has not yielded yet, so its stack has never grown and the headroom is whatever a fresh
+// stack was given. A breakpoint further in would be met by an already-relocated (and so much larger)
+// stack and would prove far less.
+
+typealias ExitCode = int(0 to 255)
+typealias Integer = int(i64.min to i64.max)
+
+function work(seed Integer) returns Integer
+	sleep(20)  // breakpoint: FIRST statement, on a stack nothing has grown yet
+	let tag = "async work"  // a MANAGED local always has a stack home, so `locals` has something
+	let doubled = seed + seed  // to read out of the GREEN thread's frame rather than the OS thread's
+	print(tag)
+	return doubled + 1  // breakpoint: the same green thread, after a park and a resume
+end 'work'
+
+function main() returns ExitCode
+	let p = async work(3)
+	let r = await p
+	return r as ExitCode
+end 'main'

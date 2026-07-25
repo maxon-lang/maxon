@@ -392,6 +392,7 @@ public partial class X86CodeEmitter {
   ///   [rbp-0x28] = frame counter (counts down from 32)
   ///   [rbp-0x30] = symtable entry count
   ///   [rbp-0x38] = text_offset for current frame lookup
+  ///   [rbp-0x40] = stack_high (exclusive upper bound of the panicking thread's stack)
   /// </summary>
   private void EmitMaxonPanic() {
     DefineSymdata("__panic_stacktrace", System.Text.Encoding.UTF8.GetBytes("Stack trace:\n\0"));
@@ -429,6 +430,13 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, MaxBacktraceFrames);
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
 
+    // stack_high: this walk runs on the panicking thread's own stack, and on a GREEN thread that
+    // stack ENDS — the spawn trampoline's frame pointer is its topmost word, so reading that frame's
+    // return address without a bound runs one word off the end and turns a panic into a second fault.
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rsp);
+    EmitCallRuntimeLabel("__gt_stack_high_current");
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);
+
     // Stack walk loop
     DefineLabel("rt_panic_walk_loop");
 
@@ -445,6 +453,14 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "rt_panic_walk_done");
+
+    // frame_rbp + FrameLinkBytes > stack_high → done. Both words of the link are read below, so the
+    // bound has to leave room for both; `frame < high` alone reads a qword AT high.
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitAddRegImm(X86Register.Rax, FrameLinkBytes);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("a", "rt_panic_walk_done");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // restore frame_rbp (the bound test consumed it)
 
     // Get return address: [frame_rbp + 8]
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 8);
@@ -573,8 +589,8 @@ public partial class X86CodeEmitter {
   /// fault, then return (the diagnostic ExitProcess()es afterward). Frame 0 is the
   /// faulting instruction, symbolized from P->currentGt->fault_rip; the remaining frames
   /// come from walking the faulting thread's saved-RBP chain (__gt_fault_last_rbp upward),
-  /// range-validated against [__gt_fault_last_rsp, +64 MiB) and required to strictly
-  /// ascend so a corrupt RBP degrades to a short trace instead of a second fault. Reuses
+  /// range-validated against [__gt_fault_last_rsp, __gt_stack_high(...)) and required to
+  /// strictly ascend so a corrupt RBP degrades to a short trace instead of a second fault. Reuses
   /// mrt_panic_print_frame via its caller-frame contract (symtable_ptr @ [rbp-0x18],
   /// count @ [rbp-0x30], text_offset @ [rbp-0x38]). Mirrors the self-hosted
   /// mrt_fault_backtrace + mrt_panic_walk_frames (runtime.std) so both compilers print an
@@ -623,12 +639,14 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_fbt_after_rip");
 
     // ---- Frames 1..N: walk the saved-RBP chain ----
-    // stack_low = fault RSP; stack_high = stack_low + FaultStackWindowBytes (larger than
-    // any thread or grown green-thread stack, so a corrupt RBP can't wander into unmapped
-    // pages).
+    // stack_low = fault RSP; stack_high = the END of the stack that RSP is on. On a GREEN thread
+    // that is an exact bound and it MATTERS: the spawn trampoline's frame pointer is the topmost
+    // word of the stack, so a walk bounded by the fallback window reads its return address one word
+    // past the end and faults a second time inside the fault handler.
     EmitGlobalLoadReg(X86Register.Rax, "__gt_fault_last_rsp");
     EmitMovMemReg(-0x40, X86Register.Rax, 8);
-    EmitAddRegImm(X86Register.Rax, FaultStackWindowBytes);
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitCallRuntimeLabel("__gt_stack_high_current");
     EmitMovMemReg(-0x48, X86Register.Rax, 8);
     // current frame = fault RBP
     EmitGlobalLoadReg(X86Register.Rax, "__gt_fault_last_rbp");
@@ -652,10 +670,13 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x40, 8);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("b", "rt_fbt_walk_done");
-    // frame >= stack_high → done (beyond the sane stack window)
+    // frame + FrameLinkBytes > stack_high → done: both words of the link are read below, so the
+    // bound must leave room for both rather than for the frame pointer alone.
     EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitAddRegImm(X86Register.Rax, FrameLinkBytes);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ae", "rt_fbt_walk_done");
+    EmitJcc("a", "rt_fbt_walk_done");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // restore frame (the bound test consumed it)
     // ret_addr = [frame + 8]
     EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 8);
     EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
@@ -4236,6 +4257,8 @@ public partial class X86CodeEmitter {
     EmitGtProcessPendingWaiter();
     // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64)
     var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
+    schedRt.EmitGtStackHigh();
+    schedRt.EmitGtStackHighCurrent();
     schedRt.EmitGtEnqueue();
     schedRt.EmitGtDequeue();
     schedRt.EmitGtStealWork();

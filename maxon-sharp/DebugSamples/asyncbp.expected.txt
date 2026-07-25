@@ -1,0 +1,78 @@
+P4d-GT-STACK slice A gate — a breakpoint INSIDE an async function, i.e. a stop taken on a GREEN-THREAD
+stack. Reproducible transcript over DebugSamples/asyncbp.maxon.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/asyncbp.maxon
+  maxon debug --target-env=MAXON_MAX_PROCS=1 --batch --commands='break asyncbp.maxon:22; break asyncbp.maxon:26; run; backtrace; threads; gt-backtrace 1; continue; locals; print tag; backtrace; continue' maxon-sharp/DebugSamples/asyncbp.exe
+
+RED (the same command against a pre-P4d-GT-STACK binary, before this rung): the breakpoint ARMED and
+then the debuggee died outright, with no stop event and no panic — and the driver reported SUCCESS:
+  {"event":"breakpoint","action":"set","file":"asyncbp.maxon","line":22,"offset":"0x273","function":"work"}
+  {"event":"exit","code":-1073741819}
+  driver exit code 0
+0xC0000005 is STATUS_ACCESS_VIOLATION. Windows delivers an exception on the CURRENT thread's stack, and
+it writes the whole frame BEFORE any handler runs: measured on the reference host with a native VEH
+probe, 2577 bytes below RSP (an EXCEPTION_RECORD at faultRsp-552, a 1232-byte CONTEXT at faultRsp-1816,
+then KiUserExceptionDispatcher / RtlDispatchException / RtlpCallVectoredHandlers). A green-thread stack
+was GtInitialStackSize = 2 KB in total, so that write ran off the bottom into unmapped memory and the
+process was gone before either the debug trap handler or __gt_fault_handler could execute. The same
+breakpoint in `main` — the OS thread's stack — stopped perfectly. Only the stack differed.
+
+WHAT EACH COMMAND PROVES (asserted by the JSON below):
+  * break :22 / run  -> THE HEADLINE. The stop is taken on a green-thread stack and reports the right
+                        function and line. Line 22 is the FIRST statement of `work`, which is the worst
+                        case available: the thread has not yielded yet, so __gt_morestack has never run
+                        and the headroom is exactly what a FRESH stack was given. GtOsFaultReserve is
+                        counted in the allocation AND in the guard, so both the fresh stack and every
+                        relocated one carry it.
+  * backtrace        -> the stopped GREEN thread's own frames. Frame 1 is the spawn trampoline, which is
+                        runtime code and so has no source location — the same shape `gt-backtrace` gives
+                        for the entry stub. This is also the command that found the SECOND defect this
+                        rung fixes: the stopped-thread walk bounded itself by the fault handler's 64 MiB
+                        window, which is right for an OS thread stack and off the end of an 8 KB one —
+                        the trampoline's frame pointer sits at the very top of a green-thread stack, so
+                        reading its return-address word faulted INSIDE the trap handler. It now takes
+                        the window from the stopped thread's own extent, the same rule the per-thread
+                        walk uses.
+  * threads          -> the union again, from the other side: #2 is the stopped GREEN thread (P4d-2a's
+                        golden could only ever stop in `main`), and #1 is main's inline scheduler thread,
+                        genuinely `parked` in the await rather than stopped.
+  * gt-backtrace 1   -> the OTHER thread is still walkable while the debugger is stopped inside a green
+                        one — main's frame at the await, then the entry stub.
+  * continue         -> the same green thread stops AGAIN at line 26, after it has parked in sleep(20)
+                        and been resumed. A stop that only worked before the first yield would pass the
+                        first breakpoint and fail here.
+  * locals / print   -> value inspection reads out of the GREEN thread's frame. `tag` is a managed local,
+                        so it always has a stack home; a scalar local may live in a register and is the
+                        register allocator's business, not this rung's.
+  * final exit       -> the program finishes with ITS OWN exit code (7 = 3+3+1), not a termination
+                        status. A debuggee that CRASHES now emits {"event":"crash","status":"0x…"} and
+                        makes the driver exit NONZERO; this run proves the normal path is unchanged.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * That the stop happens at all, its function/line, the thread set and which thread is stopped, the
+    frame FUNCTIONS and LINES, the local's rendered value, and the exit code 7 are this rung's subject
+    and are STABLE.
+  * The `.text` offsets are build-specific and move when codegen moves. 0x273/0x2d5 (the two
+    breakpoints), 0xf0 (main's await) and 0x51 (the entry-stub return) are USER-code offsets and move
+    only with user codegen. ⚠ 0xf8e7 is the spawn TRAMPOLINE, i.e. RUNTIME code — it moves whenever the
+    emitted runtime changes size, which is the most volatile field in this file.
+  * NOT asserted, deliberately: the target's own stdout (`async work`, which --batch forwards to the
+    driver's stderr) and wall-clock timing.
+
+⚠ --target-env=MAXON_MAX_PROCS=1 pins the debuggee to a SINGLE processor for the same reason
+threads.expected.txt does: with the default the scheduler spawns worker processors on demand and the
+number of `kind:"scheduler"` rows becomes machine- and timing-dependent.
+
+--- EXPECTED --batch STDOUT (newline-delimited JSON, one event per line) ---
+{"event":"breakpoint","action":"set","file":"asyncbp.maxon","line":22,"offset":"0x273","function":"work"}
+{"event":"breakpoint","action":"set","file":"asyncbp.maxon","line":26,"offset":"0x2d5","function":"work"}
+{"event":"stop","reason":"breakpoint","offset":"0x273","function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":22,"col":2,"source":[{"line":19,"text":"typealias Integer = int(i64.min to i64.max)","current":false},{"line":20,"text":"","current":false},{"line":21,"text":"function work(seed Integer) returns Integer","current":false},{"line":22,"text":"\tsleep(20)  // breakpoint: FIRST statement, on a stack nothing has grown yet","current":true},{"line":23,"text":"\tlet tag = \u0022async work\u0022  // a MANAGED local always has a stack home, so \u0060locals\u0060 has something","current":false},{"line":24,"text":"\tlet doubled = seed \u002B seed  // to read out of the GREEN thread\u0027s frame rather than the OS thread\u0027s","current":false},{"line":25,"text":"\tprint(tag)","current":false}],"backtrace":[{"frame":0,"function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":22,"offset":"0x273"},{"frame":1,"offset":"0xf8e7"}]}
+{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":22,"offset":"0x273"},{"frame":1,"offset":"0xf8e7"}]}
+{"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"waiting","cpu":"parked","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":31,"offset":"0xf0"}},{"id":2,"kind":"green","entry":"work","status":"running","cpu":"stopped","topFrame":{"function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":22,"offset":"0x273"}}]}
+{"event":"gt-backtrace","id":1,"frames":[{"frame":0,"function":"main","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":31,"offset":"0xf0"},{"frame":1,"offset":"0x51"}]}
+{"event":"stop","reason":"breakpoint","offset":"0x2d5","function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":26,"col":2,"source":[{"line":23,"text":"\tlet tag = \u0022async work\u0022  // a MANAGED local always has a stack home, so \u0060locals\u0060 has something","current":false},{"line":24,"text":"\tlet doubled = seed \u002B seed  // to read out of the GREEN thread\u0027s frame rather than the OS thread\u0027s","current":false},{"line":25,"text":"\tprint(tag)","current":false},{"line":26,"text":"\treturn doubled \u002B 1  // breakpoint: the same green thread, after a park and a resume","current":true},{"line":27,"text":"end \u0027work\u0027","current":false},{"line":28,"text":"","current":false},{"line":29,"text":"function main() returns ExitCode","current":false}],"backtrace":[{"frame":0,"function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":26,"offset":"0x2d5"},{"frame":1,"offset":"0xf8e7"}]}
+{"event":"locals","values":[{"name":"tag","type":"String","kind":"String","display":"\u0022async work\u0022 (len=10)"}]}
+{"event":"value","name":"tag","type":"String","kind":"String","display":"\u0022async work\u0022 (len=10)"}
+{"event":"backtrace","frames":[{"frame":0,"function":"work","file":"maxon-sharp/DebugSamples/asyncbp.maxon","line":26,"offset":"0x2d5"},{"frame":1,"offset":"0xf8e7"}]}
+{"event":"exit","code":7}

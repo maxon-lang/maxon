@@ -2,12 +2,12 @@
 // two async tasks with long, unequal sleeps give a wide window in which BOTH exist and BOTH are parked
 // in the timer heap. A trivial `async` body would finish inside one scheduler quantum and show nothing.
 //
-// ⚠ The breakpoint is deliberately in `main`, NOT inside an async function, and moving it into slowTask
-// or fastTask kills the debuggee (0xC0000005, no stop event and no panic). Windows writes its ~1.5 KB
-// exception frame below RSP before any handler runs, and a green-thread stack is 2 KB total with only
-// GtStackGuardMargin of slack — so the kernel's write runs off the bottom of the GT stack. That is a
-// runtime/scheduler defect upstream of the debug agent, and it has its own rung. Do not "improve" this
-// sample by moving the breakpoint into a task.
+// The breakpoints are deliberately in `main`, NOT inside an async function. That used to be forced —
+// a stop on a green-thread stack killed the debuggee outright — and it is now a CHOICE: P4d-GT-STACK
+// reserved the space Windows writes below RSP inside every green-thread stack, and DebugSamples/
+// asyncbp.maxon is the sample that covers stopping inside a task. Keep this one stopping in `main`,
+// because `main` is what exercises the half of the thread enumeration that a list built from the
+// spawned-thread list alone would miss — see below.
 //
 // Stopping in `main` is also the case that matters most here: main runs on the processor's INLINE
 // main-thread green thread, which is initialised directly and is never linked into `__gt_all_head` — so

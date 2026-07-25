@@ -488,7 +488,13 @@ internal static class MaxonDebugRepl {
       // leaves a LIVE debuggee, and the exit event must describe what actually became of it rather than
       // guess. This is also what unblocks the stdio join, which cannot complete while that target lives.
       dbg.EndSession(MaxonDebugger.SessionEnd.Immediate);
-      EmitExit(dbg);
+
+      // A crashed debuggee IS an incomplete session — the program did not run to completion, and any
+      // breakpoint still ahead of it was missed. It folds in HERE rather than in the command loop
+      // because it is only knowable once the target is gone and its status is settled.
+      if (dbg.Outcome == MaxonDebugger.TargetOutcome.Crashed) session.Incomplete = true;
+
+      EmitOutcome(dbg);
       return session.Incomplete ? 1 : 0;
     }
   }
@@ -1174,15 +1180,27 @@ internal static class MaxonDebugRepl {
   private static bool TryParseGtId(string text, out int id) =>
     int.TryParse(text.Trim(), out id) && id > 0;
 
-  private static void EmitExit(MaxonDebugger dbg) => WriteEvent(w => {
-    w.WriteString("event", "exit");
+  /// <summary>
+  /// The batch face's ONE closing event. A CRASH is a different event, not an exit with an odd number:
+  /// a process the OS killed for an unhandled exception has no exit code, it has a termination status,
+  /// and writing that status into `code` is exactly what let `{"event":"exit","code":-1073741819}` read
+  /// as a completed run. The `terminated` arm has said so structurally since P4b; the crash arm is the
+  /// same refusal applied to the OTHER way a target ends without answering.
+  /// </summary>
+  private static void EmitOutcome(MaxonDebugger dbg) => WriteEvent(w => {
     switch (dbg.Outcome) {
       case MaxonDebugger.TargetOutcome.Exited:
+        w.WriteString("event", "exit");
         w.WriteNumber("code", dbg.ExitCode);
+        break;
+      case MaxonDebugger.TargetOutcome.Crashed:
+        w.WriteString("event", "crash");
+        w.WriteString("status", dbg.CrashStatusText);
         break;
       case MaxonDebugger.TargetOutcome.Terminated:
         // The DRIVER killed the target, so the status it carries is the OS's and not the program's
         // answer; WHAT happened is stated instead of a number that would be read as a result.
+        w.WriteString("event", "exit");
         w.WriteBoolean("terminated", true);
         break;
       case MaxonDebugger.TargetOutcome.Running:

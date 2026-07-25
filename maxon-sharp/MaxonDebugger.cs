@@ -1668,21 +1668,79 @@ internal sealed class MaxonDebugger : IDisposable {
   /// <summary>
   /// How the target finished — the ONE classification every surface renders, so the REPL's closing line,
   /// the batch exit event and the probes' report cannot describe the same outcome three different ways.
-  /// A <see cref="Terminated"/> target reports THAT rather than an exit code, because the status a killed
-  /// process carries is the OS's (−1 on Windows, 137 on POSIX) and publishing it as the program's answer
-  /// would be both a wrong answer and platform-specific noise.
+  /// Neither a <see cref="Terminated"/> nor a <see cref="Crashed"/> target reports an exit code, because
+  /// the status each carries is the OS's, not the program's: publishing it as the program's answer would
+  /// be a wrong answer, and for a crash it is the wrong answer that MATTERS — a debuggee killed by an
+  /// access violation used to be reported as `{"event":"exit","code":-1073741819}` with a driver exit of
+  /// 0, i.e. a missed breakpoint that reads as a pass.
   /// </summary>
-  public enum TargetOutcome { Exited, Terminated, Running }
+  public enum TargetOutcome { Exited, Crashed, Terminated, Running }
 
   public TargetOutcome Outcome =>
     _terminated ? TargetOutcome.Terminated
-    : _process.HasExited ? TargetOutcome.Exited
-    : TargetOutcome.Running;
+    : !_process.HasExited ? TargetOutcome.Running
+    : AbnormalTerminationStatus(ExitCode) is null ? TargetOutcome.Exited
+    : TargetOutcome.Crashed;
+
+  /// The OS's own spelling of the status a <see cref="TargetOutcome.Crashed"/> target died with — the
+  /// only honest rendering, since there is no exit code to report. Throws rather than inventing one for
+  /// a target that finished normally, so a caller cannot print a crash status for a clean run.
+  public string CrashStatusText => AbnormalTerminationStatus(ExitCode)
+    ?? throw new InvalidOperationException($"exit code {ExitCode} is a normal termination");
+
+  // ---- Abnormal-termination classification ----
+
+  // Windows reports an unhandled exception by making the NTSTATUS the process exit status. A system
+  // status is identified by its SEVERITY (WARNING or ERROR) together with a clear customer bit and
+  // FACILITY_NULL — 0xC0000005 (access violation), 0xC00000FD (stack overflow), 0xC0000409 (fastfail),
+  // 0x80000003 (breakpoint with no debugger). Testing severity ALONE would misread the common
+  // `return -1` convention (0xFFFFFFFF, facility 0xFFF) as a crash.
+  private const int NtStatusSeverityShift = 30;
+  private const uint NtStatusSeverityWarning = 2;
+  private const uint NtStatusCustomerAndFacilityMask = 0x3FFF0000;
+
+  // .NET renders a POSIX signal death as 128 + signum. Only the signals that mean the process was
+  // KILLED BY A FAULT are classified as a crash: a SIGTERM'd target is a target something stopped,
+  // which is a different fact, and the debugger's own kill path already reports it as Terminated.
+  //
+  // The numbers are DARWIN's, which is this compiler's only POSIX target — its runtime installs its
+  // fault and trap handlers with the same values (ARM64CodeEmitter.Runtime.cs SignalSegv/Bus/Fpe/Trap).
+  // They are fixed by an OS ABI rather than chosen here, so they cannot drift; SIGBUS is the one that
+  // would need a second set if a Linux target ever landed (7 there, 10 here).
+  private const int PosixSignalExitBase = 128;
+  private const int SignalIll = 4;
+  private const int SignalTrap = 5;
+  private const int SignalAbort = 6;
+  private const int SignalFpe = 8;
+  private const int SignalBus = 10;
+  private const int SignalSegv = 11;
+  private static readonly int[] PosixFatalFaultSignals =
+    [SignalIll, SignalTrap, SignalAbort, SignalFpe, SignalBus, SignalSegv];
+
+  /// <summary>
+  /// The OS's own spelling of an ABNORMAL termination, or null when <paramref name="exitCode"/> is the
+  /// program's own answer. Per-OS by necessity: Windows and POSIX encode "died from a fault" in the exit
+  /// status in completely different ways, and neither encoding is readable as the other.
+  /// </summary>
+  private static string? AbnormalTerminationStatus(int exitCode) {
+    if (OperatingSystem.IsWindows()) {
+      var status = unchecked((uint)exitCode);
+      bool isSystemStatus = (status >> NtStatusSeverityShift) >= NtStatusSeverityWarning
+        && (status & NtStatusCustomerAndFacilityMask) == 0;
+      return isSystemStatus ? $"0x{status:X8}" : null;
+    }
+
+    var signal = exitCode - PosixSignalExitBase;
+    return Array.IndexOf(PosixFatalFaultSignals, signal) >= 0
+      ? $"signal {signal.ToString(CultureInfo.InvariantCulture)}"
+      : null;
+  }
 
   /// <see cref="Outcome"/> rendered for a human log line — one wording for every prose surface. The JSON
   /// face renders <see cref="Outcome"/> structurally instead of reusing this.
   public string OutcomeText => Outcome switch {
     TargetOutcome.Exited => ExitCode.ToString(CultureInfo.InvariantCulture),
+    TargetOutcome.Crashed => $"(crashed: {CrashStatusText})",
     TargetOutcome.Terminated => "(terminated by the debugger)",
     TargetOutcome.Running =>
       throw new InvalidOperationException("the target has not finished; EndSession must run first"),

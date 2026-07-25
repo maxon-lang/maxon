@@ -940,18 +940,30 @@ public partial class RuntimeEmitter {
   }
 
   /// <summary>
-  /// Set the walk window [<paramref name="low"/>, low + <see cref="GtLayout.FaultStackWindowBytes"/>)
-  /// from a stack pointer — the bound to trust when a stack's REAL extent is not recorded anywhere.
+  /// Write the walk window for the stack green thread <paramref name="gt"/> is running on into the frame
+  /// slots <paramref name="slotStackLow"/> / <paramref name="slotStackHigh"/>: from
+  /// <paramref name="sp"/> up to that stack's end.
   ///
-  /// Two callers need it and they are the two halves this rung unified: a stop can be taken on an OS
-  /// thread stack whose bounds nothing owns, and a processor's inline main-thread green thread runs on
-  /// exactly such a stack (its struct records no extent, which is the runtime's own test for it). Stating
-  /// the rule twice would let the stopped-thread walk and the green-thread walk come to trust different
-  /// windows for the same kind of stack.
+  /// The upper bound is <c>__gt_stack_high</c>, the runtime's own answer, shared with mrt_panic and
+  /// mrt_fault_backtrace — the agent must not carry a second opinion about where a stack ends, because
+  /// getting it wrong is not a cosmetic difference, it FAULTS. A green-thread stack is
+  /// GtLayout.GtInitialStackSize and the spawn trampoline's frame pointer sits at the very top of it, so
+  /// a walk bounded by the 64 MiB fallback reads the return-address word one past the end and takes an
+  /// access violation inside the trap handler. That is exactly what the stopped-thread backtrace did the
+  /// moment a breakpoint could first be taken on a green-thread stack.
+  ///
+  /// The low bound is <paramref name="sp"/> itself rather than the stack's base: every live frame is
+  /// above the stack pointer the walk starts from, so it is both correct and tighter, and it is the one
+  /// bound that also means something for a stack with no recorded extent.
+  ///
+  /// Makes a Call, so callers must have nothing live in a caller-saved register across it.
   /// </summary>
-  private void EmitDbgUnknownExtentWindow(VReg low, VReg high) {
-    _b.MovRegReg(high, low);
-    _b.AddRegImm(high, GtLayout.FaultStackWindowBytes);
+  private void EmitDbgStackWindow(VReg gt, VReg sp, int slotStackLow, int slotStackHigh) {
+    _b.StoreLocal(slotStackLow, sp);                      // consumed first, so sp may be any register
+    _b.MovRegReg(VReg.Arg0, gt);
+    _b.LoadLocal(VReg.Arg1, slotStackLow);
+    _b.Call("__gt_stack_high");
+    _b.StoreLocal(slotStackHigh, VReg.Ret);
   }
 
   /// <summary>
@@ -1301,6 +1313,8 @@ public partial class RuntimeEmitter {
     // Frame slots: 0=base 1=count. The walk itself is a Call now, so both live across it.
     const int slotBase = 0;
     const int slotCount = 1;
+    const int slotStackLow = 2;
+    const int slotStackHigh = 3;
 
     _b.LoadGlobal(VReg.Scratch1, "__dbg_base");
     _b.JumpIfZero(VReg.Scratch1, doneLabel);              // detached: write nothing
@@ -1314,12 +1328,20 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Scratch3, VReg.Scratch1, DbgOffStopPc);
     _b.StoreIndirect(VReg.Scratch1, DbgOffBtFrames, VReg.Scratch3);
 
-    // The stopped frame's window is the fault backtrace's: [sp, sp + FaultStackWindowBytes). A stop can
-    // be taken on an OS thread stack whose real bounds nothing records, so this is the sane bound rather
-    // than a known one — unlike a parked green thread, whose own struct carries its extent.
-    _b.LoadIndirect(VReg.Arg1, VReg.Scratch1, DbgOffStopSp);
-    EmitDbgUnknownExtentWindow(VReg.Arg1, VReg.Arg2);
+    // The stopped frame's window comes from the thread the stop was taken ON — which since
+    // P4d-GT-STACK may be a GREEN thread, whose stack is three orders of magnitude smaller than the
+    // fallback window and whose topmost frame pointer sits at its very top. The park loop runs on that
+    // same thread, so this processor's currentGt IS the stopped thread; a null P or a thread with no
+    // recorded extent (a processor's inline main-thread GT, i.e. an OS thread stack) falls back to the
+    // sane window, exactly as the per-green-thread walk does.
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, DbgOffStopSp);
+    EmitLoadCurrentGtOrZero(VReg.Scratch0);
+    EmitDbgStackWindow(VReg.Scratch0, VReg.Scratch2, slotStackLow, slotStackHigh);
+
+    _b.LoadLocal(VReg.Scratch1, slotBase);
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, DbgOffStopFp);
+    _b.LoadLocal(VReg.Arg1, slotStackLow);
+    _b.LoadLocal(VReg.Arg2, slotStackHigh);
     _b.MovRegImm(VReg.Arg3, 1);                           // frame 0 is already written
     _b.Call("__dbg_walk_frames");
     _b.StoreLocal(slotCount, VReg.Ret);
@@ -1403,11 +1425,9 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.Below, noneLabel);                // below the stack's low bound
     // The frame link is TWO words — [fp] and [fp + 8] are both read below — so the high bound has to
     // leave room for both, not merely for fp itself. `fp < high` alone would read a qword AT high, which
-    // is one past the end of a green thread's stack. It went unnoticed while the only caller passed the
-    // fault handler's arbitrary 64 MiB window; a parked thread passes its EXACT extent, where the last
-    // frame in the stack sits precisely at the boundary.
+    // is one past the end of a green thread's stack, where the spawn trampoline's frame pointer sits.
     _b.LoadLocal(VReg.Scratch2, slotStackHigh);
-    _b.AddRegImm(VReg.Scratch1, 2 * DbgGtWordSize);       // the two words this frame will read
+    _b.AddRegImm(VReg.Scratch1, GtLayout.FrameLinkBytes);
     _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
     _b.JumpIf(Condition.Above, noneLabel);                // fp + 16 > high: the link runs off the end
     _b.LoadLocal(VReg.Scratch1, slotFp);                  // restore fp (the bound test consumed it)
@@ -1701,12 +1721,9 @@ public partial class RuntimeEmitter {
   /// <summary>
   /// __dbg_gt_frames(gt) -> the frame count written to DbgOffBtFrames for a PARKED green thread.
   ///
-  /// The one place a green thread's own stack extent is decided, so the thread LIST (which wants only
-  /// the top frame) and the per-thread BACKTRACE cannot disagree about the window they trust. A spawned
-  /// thread carries its exact extent in its struct; a processor's inline main-thread GT runs on the OS
-  /// thread's stack and records no extent at all (stackBase == 0 is the runtime's own test for it, the
-  /// same one __io_complete_gt uses), so that case falls back to the fault handler's sane window from
-  /// the saved sp — the identical bound the stopped-thread backtrace trusts for the same reason.
+  /// The thread LIST (which wants only the top frame) and the per-thread BACKTRACE both come through
+  /// here, so they cannot disagree; which window to trust is <see cref="EmitDbgStackWindow"/>'s answer,
+  /// shared with the stopped-thread backtrace for the same reason.
   ///
   /// It does NOT check parked-ness: the callers do, because they have different things to say about a
   /// running thread. Seeding the walk from the saved rbp means frame 0 is the return address into
@@ -1716,39 +1733,24 @@ public partial class RuntimeEmitter {
   private void EmitDbgGtFrames() {
     _b.FunctionStart("__dbg_gt_frames", 1, 0x60);
 
-    var osStackLabel = UniqueLabel("dbg_gt_frames_os_stack");
-    var walkLabel = UniqueLabel("dbg_gt_frames_walk");
-
     const int slotGt = 0;
     const int slotStackLow = 1;
     const int slotStackHigh = 2;
 
+    // ⚠ WHY THE FALLBACK IS SAFE HERE, written where it is DEPENDED ON. For a thread with no recorded
+    // extent EmitDbgStackWindow seeds a 64 MiB window from the stack pointer passed in — here gt->rsp,
+    // a SAVED one — and the park gate above only established that no processor is RUNNING this thread,
+    // not that its stack still exists. For a processor's inline thread that holds because of two facts
+    // elsewhere: a P struct is VirtualAlloc'd zeroed, so an unused P's inline mainThread has rbp == 0
+    // and the walk stops at once; and a P is set PStatusUnused only on the shutdown path
+    // (X86CodeEmitter.Runtime.cs / ARM64CodeEmitter.Runtime.cs worker exit), so an ACTIVE P never
+    // carries a stale mainThread.rbp pointing into an OS-thread stack that has gone away. Make workers
+    // exit when idle — a natural future optimisation — and this becomes a wild read inside a trap
+    // handler. The rbp == 0 check in __dbg_frame_ra is the only thing standing behind it.
     _b.LoadLocal(VReg.Scratch0, slotGt);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtLayout.GtOffStackSize);
-    _b.JumpIfZero(VReg.Scratch1, osStackLabel);
-
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtLayout.GtOffStackBase);
-    _b.StoreLocal(slotStackLow, VReg.Scratch2);
-    _b.AddRegReg(VReg.Scratch2, VReg.Scratch1);
-    _b.StoreLocal(slotStackHigh, VReg.Scratch2);
-    _b.Jump(walkLabel);
-
-    // ⚠ WHY THIS IS SAFE, written where it is DEPENDED ON. Seeding from gt->rsp with a 64 MiB window
-    // trusts a saved stack pointer, and the park gate above only established that no processor is
-    // RUNNING this thread — not that its stack still exists. For a processor's inline thread that holds
-    // because of two facts elsewhere: a P struct is VirtualAlloc'd zeroed, so an unused P's inline
-    // mainThread has rbp == 0 and the walk stops at once; and a P is set PStatusUnused only on the
-    // shutdown path (X86CodeEmitter.Runtime.cs / ARM64CodeEmitter.Runtime.cs worker exit), so an ACTIVE
-    // P never carries a stale mainThread.rbp pointing into an OS-thread stack that has gone away.
-    // Make workers exit when idle — a natural future optimisation — and this becomes a wild read inside
-    // a trap handler. The rbp == 0 check in __dbg_frame_ra is the only thing standing behind it.
-    _b.DefineLabel(osStackLabel);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtLayout.GtOffRsp);
-    _b.StoreLocal(slotStackLow, VReg.Scratch2);
-    EmitDbgUnknownExtentWindow(VReg.Scratch2, VReg.Scratch1);
-    _b.StoreLocal(slotStackHigh, VReg.Scratch1);
+    EmitDbgStackWindow(VReg.Scratch0, VReg.Scratch2, slotStackLow, slotStackHigh);
 
-    _b.DefineLabel(walkLabel);
     _b.LoadLocal(VReg.Scratch0, slotGt);
     _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, GtLayout.GtOffRbp);
     _b.LoadLocal(VReg.Arg1, slotStackLow);
@@ -1903,8 +1905,6 @@ public partial class RuntimeEmitter {
     var spawnedInitLabel = UniqueLabel("dbg_gt_scan_spawned_init");
     var spawnedLoopLabel = UniqueLabel("dbg_gt_scan_spawned");
     var truncatedLabel = UniqueLabel("dbg_gt_scan_truncated");
-    var noProcLabel = UniqueLabel("dbg_gt_scan_no_proc");
-    var storeStoppedLabel = UniqueLabel("dbg_gt_scan_store_stopped");
     var doneLabel = UniqueLabel("dbg_gt_scan_done");
 
     // Frame slots: 0=findHandle (param) 1=base 2=index/nodes 3=gt 4=found.
@@ -1925,15 +1925,7 @@ public partial class RuntimeEmitter {
 
     // The stopped green thread = this M's currentGt. Published BEFORE any record is written, because
     // __dbg_gt_record reads it back to decide whose top frame is the exact stopped PC.
-    _b.LoadCurrentP(VReg.Scratch2);
-    _b.JumpIfZero(VReg.Scratch2, noProcLabel);
-    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch2, GtLayout.POffCurrentGt);
-    _b.Jump(storeStoppedLabel);
-
-    _b.DefineLabel(noProcLabel);
-    _b.ZeroReg(VReg.Scratch2);
-
-    _b.DefineLabel(storeStoppedLabel);
+    EmitLoadCurrentGtOrZero(VReg.Scratch2);
     _b.LoadLocal(VReg.Scratch1, slotBase);
     _b.StoreIndirect(VReg.Scratch1, DbgOffGtStopped, VReg.Scratch2);
 

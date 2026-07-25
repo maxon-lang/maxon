@@ -744,6 +744,7 @@ public partial class ARM64CodeEmitter {
   //   [x29+64] = text_offset (current frame)
   //   [x29+72] = saved X19 (callee-saved)
   //   [x29+80] = symdata_base (addr of __symdata_base)
+  //   [x29+88] = stack_high (exclusive upper bound of the panicking thread's stack)
   /// <summary>
   /// Emit the stack-trace preamble shared by mrt_panic and mrt_fault_backtrace: cache
   /// text_base (&amp;mrt_start) @ [x29+24], the symtab pointer @ [x29+32] and its entry count
@@ -751,10 +752,12 @@ public partial class ARM64CodeEmitter {
   /// identical [x29+*] contract mrt_panic_print_frame reads back through its caller's saved
   /// X29, so their frames must keep these four slots at these offsets.
   ///
-  /// The FP-chain WALK that follows is deliberately NOT shared: mrt_panic trusts a
-  /// well-formed chain, while mrt_fault_backtrace range-validates a possibly-corrupt one
-  /// (stack bounds + strict ascent) — a fault is exactly the case where the chain may be
-  /// the thing that broke.
+  /// The FP-chain WALK that follows is deliberately NOT shared: mrt_fault_backtrace
+  /// range-validates a possibly-corrupt chain (a low bound + strict ascent) because a fault is
+  /// exactly the case where the chain may be the thing that broke, while mrt_panic trusts an
+  /// otherwise well-formed one. What they DO share is the upper bound — __gt_stack_high — because
+  /// running off the TOP of a green-thread stack is not a corrupt-chain question: the trampoline's
+  /// frame pointer is legitimately the topmost word, so every walk meets it.
   /// </summary>
   private void EmitStackTraceHeader() {
     if (!_symdataLabels.ContainsKey("__panic_stacktrace"))
@@ -813,8 +816,15 @@ public partial class ARM64CodeEmitter {
     // current_frame = [x29] (panic's caller's saved X29 — from our STP prologue)
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 0, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // current_frame
-    EmitMovRegImm(ARM64Register.X0, 32);
+    EmitMovRegImm(ARM64Register.X0, MaxBacktraceFrames);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // counter
+
+    // stack_high: this walk runs on the panicking thread's own stack, and on a GREEN thread that
+    // stack ENDS — the spawn trampoline's frame pointer is its topmost word, so reading that frame's
+    // return address without a bound runs one word off the end and turns a panic into a fault.
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.Sp);
+    EmitBranchLink("__gt_stack_high_current");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 88, 8); // stack_high
 
     // Stack walk loop
     DefineLabel("rt_panic_walk_loop");
@@ -832,6 +842,14 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     _condBranchFixups.Add((_code.Count, "rt_panic_walk_done"));
     EmitWord(0xB4000000); // CBZ X0, rt_panic_walk_done
+
+    // frame_fp + FrameLinkBytes > stack_high → done. Both words of the link are read (the return
+    // address here, the previous frame pointer when advancing), so the bound has to leave room for
+    // both; `frame < high` alone reads a word AT high, which is one past a green thread's stack.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 88, 8); // stack_high
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X0, FrameLinkBytes, isAdd: true);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X2) << 5)); // CMP
+    EmitBranchCond(ARM64ConditionCode.Hi, "rt_panic_walk_done");
 
     // Get return address: [frame_fp + 8]
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 8, 8); // X1 = return addr
@@ -889,7 +907,7 @@ public partial class ARM64CodeEmitter {
   /// fault, then return (the diagnostic exits afterward). Frame 0 is the faulting
   /// instruction, symbolized from P-&gt;currentGt-&gt;fault_rip; the remaining frames come from
   /// walking the faulting thread's saved-FP chain (__gt_fault_last_rbp upward),
-  /// range-validated against [__gt_fault_last_rsp, +FaultStackWindowBytes) and required to
+  /// range-validated against [__gt_fault_last_rsp, __gt_stack_high(...)) and required to
   /// strictly ascend so a corrupt FP degrades to a short trace instead of faulting a second
   /// time inside the handler. Reuses mrt_panic_print_frame via its caller-frame contract,
   /// so the slots below must match mrt_panic's. Mirrors the x86 mrt_fault_backtrace so both
@@ -907,7 +925,7 @@ public partial class ARM64CodeEmitter {
   ///   [+64] = text_offset                     (read by mrt_panic_print_frame)
   ///   [+80] = symdata_base                    (read by mrt_panic_print_frame)
   ///   [+88] = stack_low  (fault SP)
-  ///   [+96] = stack_high (fault SP + FaultStackWindowBytes)
+  ///   [+96] = stack_high (the end of the stack the fault SP is on)
   /// </summary>
   private void EmitMaxonFaultBacktrace() {
     EmitRuntimeFunctionStart("mrt_fault_backtrace", 0, 0x70);
@@ -933,10 +951,14 @@ public partial class ARM64CodeEmitter {
     DefineLabel("rt_fbt_after_pc");
 
     // ---- Frames 1..N: walk the saved-FP chain ----
+    // stack_high is the END of the stack the fault RSP is on. On a GREEN thread that is an exact
+    // bound and it MATTERS: the spawn trampoline's frame pointer is the topmost word of the stack,
+    // so a walk bounded by the fallback window reads its return address one word past the end and
+    // faults a second time inside the fault handler.
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_fault_last_rsp");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 88, 8); // stack_low
-    EmitMovRegImm(ARM64Register.X1, FaultStackWindowBytes);
-    EmitAluRegReg(0x8B000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 88, 8);
+    EmitBranchLink("__gt_stack_high_current");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 96, 8); // stack_high
 
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_fault_last_rbp");
@@ -955,13 +977,15 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     EmitCbz(ARM64Register.X0, "rt_fbt_walk_done");
 
-    // frame outside [stack_low, stack_high) → done (corrupt; don't deref it)
+    // frame below stack_low, or its two-word link running past stack_high → done (corrupt, or one
+    // past the end of a green thread's stack; either way do not deref it).
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 88, 8);
     EmitWord(0xEB00001F | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5)); // CMP
     EmitBranchCond(ARM64ConditionCode.Lo, "rt_fbt_walk_done");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 96, 8);
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5)); // CMP
-    EmitBranchCond(ARM64ConditionCode.Hs, "rt_fbt_walk_done");
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X0, FrameLinkBytes, isAdd: true);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X2) << 5)); // CMP
+    EmitBranchCond(ARM64ConditionCode.Hi, "rt_fbt_walk_done");
 
     // ret_addr = [frame + 8] (saved LR)
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X0, 8, 8);
@@ -3462,6 +3486,8 @@ public partial class ARM64CodeEmitter {
     EmitGtInit();
     // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64)
     var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
+    schedRt.EmitGtStackHigh();
+    schedRt.EmitGtStackHighCurrent();
     schedRt.EmitGtEnqueue();
     schedRt.EmitGtDequeue();
     schedRt.EmitGtStealWork();
@@ -3849,7 +3875,7 @@ public partial class ARM64CodeEmitter {
     // in EmitInstallFaultHandler only covers the main thread; without a per-worker
     // altstack a fault on this M runs the SA_ONSTACK handler on a possibly-exhausted
     // stack and escalates to a fatal SIGILL. Does not clobber X28 (=P*).
-    EmitInstallWorkerSigaltstack();
+    EmitInstallThreadSigaltstack();
 
     // Atomically increment active_workers (mirrors x86's LOCK INC on worker entry).
     // Balances the decrement at __sched_worker_loop_exit so the count stays accurate
@@ -4002,9 +4028,11 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_spawn_have_gt");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save gt_ptr
 
-    // Allocate stack via mmap(NULL, 64KB, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+    // Allocate stack via mmap(NULL, GtInitialStackSize, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0).
+    // mmap rounds up to a page, and macOS/arm64 pages are 16 KB, so the OS fault reserve folded into
+    // GtInitialStackSize costs this target nothing at all.
     EmitMovRegImm(ARM64Register.X0, 0);                    // addr = NULL
-    EmitMovRegImm(ARM64Register.X1, GtInitialStackSize);    // length = 64KB
+    EmitMovRegImm(ARM64Register.X1, GtInitialStackSize);    // length (grows via __gt_morestack)
     EmitMovRegImm(ARM64Register.X2, 3);                     // prot = PROT_READ|PROT_WRITE
     EmitMovRegImm(ARM64Register.X3, 0x1002);                // flags = MAP_ANON|MAP_PRIVATE
     EmitMovRegImm(ARM64Register.X4, -1);                    // fd = -1
@@ -7451,66 +7479,30 @@ public partial class ARM64CodeEmitter {
     EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, "__gt_fault_diagnostic");
     EmitGlobalStoreReg(ARM64Register.X0, "__gt_fault_diagnostic_addr");
 
-    // Carve 0x40 bytes of scratch under SP for the sigaction struct (at +0x00) and
-    // the sigaltstack struct (at +0x20).
-    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x40, isAdd: false);
+    EmitInstallSignalHandler(thunkLabel, SaSiginfo | SaOnstack | SaRestart,
+        SignalSegv, SignalFpe, SignalBus);
 
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToSp(0x00, ARM64Register.X0);
-    EmitStoreToSp(0x08, ARM64Register.X0);
-    EmitStoreToSp(0x10, ARM64Register.X0);
-    EmitStoreToSp(0x18, ARM64Register.X0);
-
-    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, thunkLabel);
-    EmitStoreToSp(SigactionOffHandler, ARM64Register.X0);
-
-    EmitMovRegImm(ARM64Register.X0, SaSiginfo | SaOnstack | SaRestart);
-    EmitStoreIndirect(ARM64Register.Sp, SigactionOffFlags, ARM64Register.X0, 4);
-
-    foreach (var sig in new[] { SignalSegv, SignalFpe, SignalBus }) {
-      EmitMovRegImm(ARM64Register.X0, sig);
-      EmitMovRegReg(ARM64Register.X1, ARM64Register.Sp);
-      EmitMovRegImm(ARM64Register.X2, 0);
-      EmitCallImport("sigaction");
-    }
-
-    // Stack-overflow SIGSEGV needs an altstack to run on; allocate one with mmap
-    // and hand it to sigaltstack.
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitMovRegImm(ARM64Register.X1, SigaltstackSize);
-    EmitMovRegImm(ARM64Register.X2, 0x03);    // PROT_READ|PROT_WRITE
-    EmitMovRegImm(ARM64Register.X3, 0x1002);  // MAP_ANON|MAP_PRIVATE
-    EmitMovRegImm(ARM64Register.X4, -1);
-    EmitMovRegImm(ARM64Register.X5, 0);
-    EmitCallImport("mmap");
-    EmitStoreToSp(0x20 + SigstackOffSp, ARM64Register.X0);
-    EmitMovRegImm(ARM64Register.X1, SigaltstackSize);
-    EmitStoreToSp(0x20 + SigstackOffSize, ARM64Register.X1);
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitStoreIndirect(ARM64Register.Sp, 0x20 + SigstackOffFlags, ARM64Register.X1, 4);
-
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.Sp, 0x20, isAdd: true);
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitCallImport("sigaltstack");
-
-    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x40, isAdd: true);
+    // SA_ONSTACK is only half of the contract — the calling thread also needs an altstack to be
+    // switched TO, and this install runs on the main thread. Worker Ms register their own.
+    EmitInstallThreadSigaltstack();
   }
 
-  /// Install a fresh per-thread sigaltstack for the calling OS thread.
+  /// Install a fresh sigaltstack for the calling OS thread.
   ///
   /// sigaction (installed once on the main thread in EmitInstallFaultHandler) is
-  /// process-global, but sigaltstack is PER-THREAD on POSIX. A SA_ONSTACK fault
-  /// handler with no altstack registered for THIS pthread runs on the (possibly
-  /// exhausted) thread stack and double-faults on a stack-overflow SIGSEGV. Worker
-  /// Ms (__sched_worker_loop) therefore need their own altstack — without it a
-  /// transient SEGV/BUS/FPE on a worker thread is mis-handled and escalates to a
-  /// fatal SIGILL (process-wide) instead of a clean panic + exit. mmap leaks for
-  /// the thread's lifetime (correct: it must outlive every fault). Mirrors the
-  /// self-hosted emitArm64SchedWorkerLoop per-thread altstack (Arm64MacosGreenThread.maxon).
+  /// process-global, but sigaltstack is PER-THREAD on POSIX. A SA_ONSTACK handler
+  /// with no altstack registered for THIS pthread runs on the (possibly exhausted,
+  /// and on a green thread always TINY) thread stack. So EVERY thread that can run
+  /// Maxon code needs one: the main thread (from EmitInstallFaultHandler) and each
+  /// worker M (from __sched_worker_loop) — without it a transient SEGV/BUS/FPE on a
+  /// worker thread is mis-handled and escalates to a fatal SIGILL (process-wide)
+  /// instead of a clean panic + exit. mmap leaks for the thread's lifetime (correct:
+  /// it must outlive every fault). Mirrors the self-hosted emitArm64SchedWorkerLoop
+  /// per-thread altstack (Arm64MacosGreenThread.maxon).
   ///
   /// Clobbers X0, X1 and the call-clobbered set; callers must not have live values
   /// in those across this call. X28 (=P*) is NOT touched.
-  private void EmitInstallWorkerSigaltstack() {
+  private void EmitInstallThreadSigaltstack() {
     // Carve 0x20 bytes of scratch under SP for the sigaltstack struct (stack_t).
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
 
@@ -7662,32 +7654,41 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// Install the dieFromSignal thunk for SIGTERM(15) and SIGINT(2) — asynchronous signals, so no
-  /// SA_ONSTACK (the normal stack is fine; there is no altstack dependency). Process-global, so
+  /// Install the dieFromSignal thunk for SIGTERM(15) and SIGINT(2). These are ASYNCHRONOUS signals
+  /// that arrive on whatever thread the kernel picks and whose handler only sets the process on its
+  /// way out, so the normal stack really is fine and SA_ONSTACK would buy nothing. Process-global, so
   /// installing once on the main thread in __gt_init covers every M. Shares its sigaction machinery
-  /// with the debug agent's trap install via <see cref="EmitInstallSignalHandler"/>.
+  /// with the fault and trap installs via <see cref="EmitInstallSignalHandler"/>.
   internal void EmitInstallDieFromSignalHandler(string thunkLabel) {
-    EmitInstallSignalHandler(thunkLabel, SignalTerm, SignalInt);
+    EmitInstallSignalHandler(thunkLabel, SaSiginfo | SaRestart, SignalTerm, SignalInt);
   }
 
   /// <summary>
   /// Install the debug agent's trap handler: sigaction(SIGTRAP, &amp;thunk). SIGTRAP is distinct from
   /// the fault handler's SEGV/BUS/FPE, so the two coexist by owning different signals — the POSIX
-  /// analogue of the Windows VEH chaining. NO SA_ONSTACK: a breakpoint is not a stack-overflow fault,
-  /// so the normal stack is fine and there is no altstack dependency. Called only from __dbg_init.
+  /// analogue of the Windows VEH chaining. Called only from __dbg_init.
+  ///
+  /// SA_ONSTACK, for the same reason the fault handler has it: the hazard is not an OVERFLOWED stack,
+  /// it is a TINY stack meeting a LARGE signal frame. A green-thread stack is GtMaxonStackSize of
+  /// Maxon frames, and Darwin/arm64's siginfo + ucontext + mcontext carries 528 bytes of NEON state
+  /// alone before the handler's own frames — so the kernel must be switched to the per-thread
+  /// altstack here exactly as it is for a fault. (This handler ran on the green-thread stack until
+  /// P4d-GT-STACK; the Windows twin of that exposure is what GtOsFaultReserve exists for, VEH having
+  /// no altstack to switch to.)
   /// </summary>
   internal void EmitInstallTrapHandler(string thunkLabel) {
-    EmitInstallSignalHandler(thunkLabel, SignalTrap);
+    EmitInstallSignalHandler(thunkLabel, SaSiginfo | SaOnstack | SaRestart, SignalTrap);
   }
 
   /// <summary>
-  /// Register <paramref name="thunkLabel"/> as an SA_SIGINFO|SA_RESTART handler for each of
-  /// <paramref name="signals"/> (no SA_ONSTACK — these are not stack-overflow faults, so no altstack
-  /// is required). Shared by the dieFromSignal install (SIGTERM/SIGINT) and the debug agent's trap
-  /// install (SIGTRAP): identical sigaction machinery, different signal set. Process-global, so
-  /// installing once on the main thread covers every M.
+  /// Register <paramref name="thunkLabel"/> as a handler for each of <paramref name="signals"/> with
+  /// <paramref name="flags"/>. Shared by all three installs — the fault handler (SEGV/FPE/BUS), the
+  /// dieFromSignal thunk (SIGTERM/SIGINT) and the debug agent's trap handler (SIGTRAP): identical
+  /// sigaction machinery, different signal set, and SA_ONSTACK is the one flag they do not all agree
+  /// on, so it is a PARAMETER rather than a second copy of this code. Process-global, so installing
+  /// once on the main thread covers every M.
   /// </summary>
-  private void EmitInstallSignalHandler(string thunkLabel, params int[] signals) {
+  private void EmitInstallSignalHandler(string thunkLabel, long flags, params int[] signals) {
     // Carve 0x20 of SP scratch for the struct sigaction (24 bytes).
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 0x20, isAdd: false);
 
@@ -7700,7 +7701,7 @@ public partial class ARM64CodeEmitter {
     EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, thunkLabel);
     EmitStoreToSp(SigactionOffHandler, ARM64Register.X0);
 
-    EmitMovRegImm(ARM64Register.X0, SaSiginfo | SaRestart);
+    EmitMovRegImm(ARM64Register.X0, flags);
     EmitStoreIndirect(ARM64Register.Sp, SigactionOffFlags, ARM64Register.X0, 4);
 
     foreach (var sig in signals) {

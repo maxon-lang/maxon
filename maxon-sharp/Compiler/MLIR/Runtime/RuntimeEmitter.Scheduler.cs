@@ -41,6 +41,89 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(pReg, POffRng, dest);
   }
 
+  /// <summary>
+  /// <paramref name="dest"/> = P-&gt;currentGt, or 0 when this OS thread owns no processor (an I/O worker,
+  /// or anything running before the scheduler exists).
+  ///
+  /// The ONE guarded statement of it. The unguarded per-backend loads (EmitLoadCurrentGtInline /
+  /// EmitLoadCurrentGt) are right where a processor is guaranteed — a Maxon function prologue, or the
+  /// fault handler, which has already refused a null currentGt — but the panic path and the debug agent
+  /// both have to be able to answer "there is no green thread" rather than dereference null, and each
+  /// writing its own guard is how the two would come to disagree about what "no thread" looks like.
+  /// Clobbers only <paramref name="dest"/>.
+  /// </summary>
+  private void EmitLoadCurrentGtOrZero(VReg dest) {
+    var doneLabel = UniqueLabel("cur_gt_or_zero_done");
+
+    _b.LoadCurrentP(dest);
+    _b.JumpIfZero(dest, doneLabel);                       // no P: dest already holds 0, which IS "none"
+    _b.LoadIndirect(dest, dest, POffCurrentGt);
+
+    _b.DefineLabel(doneLabel);
+  }
+
+  /// <summary>
+  /// __gt_stack_high_current(sp) -> <see cref="EmitGtStackHigh"/> for the thread the CALLER is running
+  /// on. Not a pass-through: it answers a different question ("where does MY stack end") and it is the
+  /// question the panic and fault backtraces ask, on both architectures, from hand-emitted code that
+  /// would otherwise each need its own copy of the guarded currentGt load.
+  /// </summary>
+  public void EmitGtStackHighCurrent() {
+    _b.FunctionStart("__gt_stack_high_current", 1, 0x40);
+
+    EmitLoadCurrentGtOrZero(VReg.Arg0);
+    _b.LoadLocal(VReg.Arg1, 0);
+    _b.Call("__gt_stack_high");
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_stack_high(gt, sp) -> the EXCLUSIVE upper bound of the stack <c>sp</c> is running on.
+  ///
+  /// The one place a stack's extent is decided, because getting it wrong FAULTS rather than merely
+  /// reporting badly, and four walkers ask the question: mrt_panic, mrt_fault_backtrace (both
+  /// architectures) and the debug agent's shared frame walk. A green-thread stack is
+  /// GtInitialStackSize and the spawn trampoline's frame pointer sits at its very TOP, so a walker
+  /// bounded by FaultStackWindowBytes reads the frame link one word past the end — inside a fault or
+  /// trap handler, where a second fault is the end of the process.
+  ///
+  /// Three cases, and only the first has a real answer:
+  ///   * a green thread with a recorded extent, containing sp -> stackBase + stackSize, exact;
+  ///   * a thread with NO recorded extent (a processor's inline main-thread GT runs on the OS
+  ///     thread's stack, where stackSize == 0 is the runtime's own test for it) -> the sane window;
+  ///   * an sp OUTSIDE that thread's stack — a fault taken while switched to the P's system stack —
+  ///     -> also the sane window, because the green thread's extent would reject every frame and
+  ///     silently produce an EMPTY trace, which reads as "no frames" rather than "wrong stack".
+  /// </summary>
+  public void EmitGtStackHigh() {
+    _b.FunctionStart("__gt_stack_high", 2, 0x40);
+
+    const int slotGt = 0;
+    const int slotSp = 1;
+    var unknownLabel = UniqueLabel("gt_stack_high_unknown");
+
+    _b.LoadLocal(VReg.Scratch0, slotGt);
+    _b.JumpIfZero(VReg.Scratch0, unknownLabel);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtOffStackSize);
+    _b.JumpIfZero(VReg.Scratch1, unknownLabel);
+
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, GtOffStackBase);
+    _b.LoadLocal(VReg.Scratch3, slotSp);
+    _b.CmpRegReg(VReg.Scratch3, VReg.Scratch2);
+    _b.JumpIf(Condition.Below, unknownLabel);
+    _b.AddRegReg(VReg.Scratch2, VReg.Scratch1);            // top = base + size
+    _b.CmpRegReg(VReg.Scratch3, VReg.Scratch2);
+    _b.JumpIf(Condition.AboveEqual, unknownLabel);
+
+    _b.MovRegReg(VReg.Ret, VReg.Scratch2);
+    _b.FunctionEnd();
+
+    _b.DefineLabel(unknownLabel);
+    _b.LoadLocal(VReg.Ret, slotSp);
+    _b.AddRegImm(VReg.Ret, FaultStackWindowBytes);
+    _b.FunctionEnd();
+  }
+
   // =========================================================================
   // __gt_enqueue(gt): Add a GreenThread to the scheduling system.
   // =========================================================================

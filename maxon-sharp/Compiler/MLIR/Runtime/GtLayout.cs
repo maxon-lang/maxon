@@ -96,17 +96,29 @@ public static class GtLayout {
   public const int GtOffFaultRedirectFp = 0xD0;   // resume FP/RBP
   public const int GtStructSize = 0xD8;      // 216 bytes
 
-  // ---- Backtrace walk limits (shared by every backend's mrt_fault_backtrace) ----
+  // ---- Backtrace walk limits (shared by every frame-chain walk: both backends' mrt_panic and
+  //      mrt_fault_backtrace, and the debug agent's __dbg_walk_frames) ----
 
   // Cap the frame-pointer-chain walk so a corrupt or cyclic chain can't spin the
   // backtrace forever.
   public const int MaxBacktraceFrames = 32;
 
-  // Sane upper bound on a single stack's span — larger than any OS thread or grown
-  // green-thread stack. A faulting-thread frame pointer outside
-  // [fault_sp, fault_sp + this) is treated as corrupt and ends the walk instead of
+  // Sane upper bound on a single stack's span, used ONLY when a stack's real extent is
+  // not recorded anywhere — an OS thread's, whose bounds nothing owns. A frame pointer
+  // outside [sp, sp + this) is treated as corrupt and ends the walk instead of
   // dereferencing an unmapped page.
+  //
+  // ⚠ It is NOT a substitute for a green thread's own extent, which __gt_stack_high
+  // returns whenever there is one. A green-thread stack is GtInitialStackSize, and the
+  // spawn trampoline's frame pointer sits at the very TOP of it, so a walk bounded by
+  // this window reads the frame link one word past the end and faults.
   public const long FaultStackWindowBytes = 0x4000000; // 64 MiB
+
+  // A frame link is TWO words — the caller's saved frame pointer at [fp] and the return
+  // address at [fp + 8] — so a walk's upper bound must leave room for BOTH before it
+  // dereferences fp, not merely for fp itself. Every frame-chain walk states the test as
+  // `fp + FrameLinkBytes <= stackHigh`, and it is one constant because it is one fact.
+  public const int FrameLinkBytes = 16;
 
   // ---- GT status values ----
   public const int GtStatusReady = 0;
@@ -115,12 +127,76 @@ public static class GtLayout {
   public const int GtStatusWaiting = 3;
 
   // ---- Stack growth ----
-  public const int GtInitialStackSize = 0x800;   // 2 KB; grows on demand via __gt_morestack.
-                                                 // Matches Go's _StackMin on amd64.
-  public const int GtStackGuardMargin = 0x3A0;   // 928 bytes; matches Go's _StackGuard on amd64.
-                                                 // Covers worst-case unchecked stack consumption
-                                                 // (PUSH RBP + CALL overhead) between successive
-                                                 // prologue stack checks.
+  //
+  // A green-thread stack has TWO parts, and both are counted TWICE — once in the ALLOCATION and once
+  // in the GUARD — so __gt_morestack maintains the split for free across every grow and relocate:
+  //
+  //   base                  base+GtOsFaultReserve        stackguard              base+size
+  //     |<-- GtOsFaultReserve -->|<-- GtUncheckedFrameMargin -->|<-- checked frames -->|
+  //         the OS writes here      leaf frames the prologue       every frame the
+  //                                 check does not cover           prologue check placed
+  //
+  // The prologue check refuses to place a frame below `stackguard`, so RSP never drops below
+  // base+GtOsFaultReserve, and the reserve below it is still intact when the OS needs it.
+
+  /// <summary>
+  /// Stack the OPERATING SYSTEM writes BELOW RSP when it delivers an exception, before a single
+  /// instruction of any handler runs — so no Maxon-side accounting can see it and nothing but a
+  /// reserve can protect it. On Windows there is no alternate stack for a vectored exception
+  /// handler: KiUserExceptionDispatcher builds its frame on the faulting thread's own stack.
+  ///
+  /// MEASURED on this project's reference host (Windows 10.0.26200, x64) with a native VEH probe,
+  /// three ways — a plain thread stack, a thread with live AVX state, and RSP inside a small
+  /// VirtualAlloc'd region with the TIB's StackBase/StackLimit repointed at it (a green thread's
+  /// exact configuration). All three agree:
+  ///
+  ///   EXCEPTION_RECORD          152 B   at faultRsp-552
+  ///   CONTEXT                  1232 B   at faultRsp-1816  (no XSAVE area is appended: the number is
+  ///                                     identical with YMM state live)
+  ///   ntdll dispatch frames             KiUserExceptionDispatcher / RtlDispatchException /
+  ///                                     RtlpCallVectoredHandlers
+  ///   ------------------------------------------------------------------------------------------
+  ///   faultRsp - VEH entry RSP 2577 B   consumed before ANY handler code runs
+  ///
+  /// On top of that sits the runtime's own handler chain, measured by decoding the emitted
+  /// prologues out of a built binary: 216 B for the fault path (__gt_fault_handler_thunk ->
+  /// __gt_fault_handler) and 1336 B for the debug agent's deepest trap path
+  /// (__dbg_trap_handler_thunk -> __dbg_on_breakpoint -> __dbg_park_loop -> __dbg_gt_backtrace ->
+  /// __dbg_gt_scan -> __dbg_gt_record -> __dbg_gt_frames -> __dbg_walk_frames -> __dbg_frame_ra ->
+  /// __dbg_text_offset). Every Win32 call those paths make is emitted through
+  /// EmitCallImportOnSystemStack, which switches to the P's 64 KB system stack, so the kernel side
+  /// of VirtualProtect/FlushInstructionCache costs the green-thread stack one 8-byte push.
+  ///
+  ///   worst case = 2577 + 1336 = 3913 B
+  ///
+  /// The reserve is 6 KB: that measurement rounded up to a page, plus a page and a half of margin for
+  /// the two things a measurement on one host cannot cover — another Windows build's dispatcher
+  /// frames, and the next rung that deepens the agent's park-loop chain (P4d-2a alone deepened it by
+  /// 736 B). The margin is free: 6 KB is exactly what makes GtInitialStackSize two 4 KB pages, and
+  /// VirtualAlloc commits whole pages, so a 4 KB reserve would cost the same memory for less safety.
+  ///
+  /// macOS/arm64 pays nothing for it — a 16 KB page holds the whole stack either way — and it is
+  /// defence in depth there rather than dead weight: the fault and (as of this rung) trap handlers
+  /// run SA_ONSTACK on a per-thread sigaltstack, but that is host-unverifiable from Windows.
+  /// </summary>
+  public const int GtOsFaultReserve = 0x1800;    // 6 KB
+
+  /// Worst-case UNCHECKED stack consumption (PUSH RBP + CALL return address, through leaf functions
+  /// whose zero-sized frames emit no check) between successive prologue stack checks. 928 bytes, the
+  /// value Go carries in _StackGuard for the same reason.
+  public const int GtUncheckedFrameMargin = 0x3A0;
+
+  /// The Maxon half of a fresh green-thread stack — everything but the OS reserve, and the only part
+  /// __gt_morestack's doubling is about. Unchanged at 2 KB, so a fresh green thread still gets exactly
+  /// the same GtMaxonStackSize - GtUncheckedFrameMargin = 1120 bytes of frames before its first
+  /// relocation as it did before the reserve existed: the reserve is purely additive.
+  public const int GtMaxonStackSize = 0x800;
+
+  // Both totals are the SUM, which is what makes the reserve survive a grow: __gt_morestack rewrites
+  // stackguard as new_base + GtStackGuardMargin, so the reserve is re-established below every
+  // relocated stack without the relocation code knowing it exists.
+  public const int GtInitialStackSize = GtMaxonStackSize + GtOsFaultReserve;        // 0x2000, 8 KB
+  public const int GtStackGuardMargin = GtUncheckedFrameMargin + GtOsFaultReserve;  // 0x1BA0
 
   // ---- ProcContext status values (POffStatus) ----
   // A P struct is allocated for every possible processor at __gt_init, so "does this P exist" and "is
