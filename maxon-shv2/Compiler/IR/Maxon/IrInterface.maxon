@@ -74,10 +74,14 @@ end 'witnessTableLabel'
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
 let StringableInterfaceName = b"Stringable"
 let FormattedStringableInterfaceName = b"FormattedStringable"
-let HashableInterfaceName = b"Hashable"
-// `Equatable`/`Comparable` are EXPORTED because the operator lowerings name them in their
-// "constrain the parameter with `where T is <Iface>`" reject (`==`/`!=` is Equatable's, `<`/`>`/`<=`/`>=`
-// is Comparable's) — one spelling, shared by the interface synthesis and the diagnostic.
+// `Hashable`/`Equatable`/`Comparable` are EXPORTED, the other protocol names are not, and the three consumers
+// are the reason: the comparison-operator lowerings pick their PROTOCOL by name (`==`/`!=` is Equatable's,
+// `<`/`>`/`<=`/`>=` is Comparable's) and then read everything else off the synthesized interface
+// (`requireBuiltinInterface`); and the `Set` runtime threads a key's `Hashable`/`Equatable` witness tables by
+// name (`LowerMaxonToStd.appendSetWitnessArgs` materializes `rdataAddr(__witness_<key>_Hashable)`), whose label
+// must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of keeping
+// its own — `SetRuntime` used to keep a second copy of two of them.
+export let HashableInterfaceName = b"Hashable"
 export let EquatableInterfaceName = b"Equatable"
 export let ComparableInterfaceName = b"Comparable"
 let CloneableInterfaceName = b"Cloneable"
@@ -87,8 +91,11 @@ let ErrorInterfaceName = b"Error"
 // stdlib/Interfaces.maxon (the SAME file the reference compilers parse).
 export let HashMethodName = b"hash"
 export let EqualsMethodName = b"equals"
-// Exported for `EqualsMethodName`'s reason: the `<`/`>`/`<=`/`>=` lowering searches the enclosing type's
-// constraints for the interface declaring THIS method, exactly as the `==` lowering searches for `equals`.
+// All three are exported for ONE reason: `BuiltinConformanceRuntime` names the SYNTHESIZED impl it installs
+// (`int.hash`/`int.equals`/`int.compare`, `String.hash`/`String.equals`) by joining a conformer name to the
+// method name, and that symbol must be the one the witness-table reloc points at. The operator lowerings do
+// NOT name them — they read the method off the protocol `builtinInterface` synthesizes
+// (`requireBuiltinInterface`), so the method searched for and its result type stay one fact.
 export let CompareMethodName = b"compare"
 let CloneMethodName = b"clone"
 let FormatParamName = b"format"
@@ -279,6 +286,22 @@ export function builtinInterface(name ByteArray) returns InterfaceLookup
 
 	return InterfaceLookup.notFound
 end 'builtinInterface'
+
+// ⭐ **THE SYNTHESIZED PROTOCOL UNDER `name`, FOR A CALLER THAT NEEDS ITS *DECLARATION* AND NOT MERELY ITS
+// NAME.** A consumer that must agree with a protocol about more than one fact — the comparison-operator
+// lowering needs `Comparable`'s METHOD NAME to search the `where` constraints for, AND that method's RESULT
+// TYPE to read the dispatch's verdict off — reads both off the interface `builtinInterface` synthesizes here,
+// instead of spelling them a second time at the consumer. Three parallel spellings of one interface (name,
+// method, result) are exactly the shape that drifts; one fetch cannot.
+//
+// It PANICS on a miss because the only legitimate caller names a protocol this function synthesizes; a
+// user-declared interface is resolved through the registries (`requireInterfaceForParse`), never here.
+export function requireBuiltinInterface(name ByteArray) returns IrInterface
+	match builtinInterface(name) 'lookup'
+		found(iface) then return iface
+		notFound then panic("requireBuiltinInterface: '{String.from(name)}' is not one of the synthesized protocol interfaces — only a caller naming a protocol `builtinInterface` declares may ask for its declaration")
+	end 'lookup'
+end 'requireBuiltinInterface'
 
 // The canonical conformer name of the primitive `int` — what `ProgramSignatures.conformerTypeArgName`
 // reduces every ranged int alias to, and the key of `int`'s witness tables (`__witness_int_*`) and its

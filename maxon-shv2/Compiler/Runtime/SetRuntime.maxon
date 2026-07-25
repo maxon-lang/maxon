@@ -124,13 +124,12 @@ export function isSetRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: SetRuntimePrefix)
 end 'isSetRuntimeCallee'
 
-// ⭐ **THE KEY'S CONSTRAINTS — `Set`'s `where Element is Hashable and Equatable`.** The interface NAMES whose
-// witness tables `insert`/`contains`/`remove` are threaded (`LowerMaxonToStd.appendSetWitnessArgs`
-// materializes `rdataAddr(__witness_<key>_Hashable)` / `__witness_<key>_Equatable`). They MATCH the builtin
-// interface names IrInterface synthesizes (that file keeps them private), so the label a set dispatch takes
-// its `rdataAddr` of and the label the builtin-conformance table registers under are the same string.
-export let SetHashableInterfaceName = b"Hashable"
-export let SetEquatableInterfaceName = b"Equatable"
+// ⭐ **THE KEY'S CONSTRAINTS — `Set`'s `where Element is Hashable and Equatable` — are named by
+// `IrInterface`'s OWN `HashableInterfaceName`/`EquatableInterfaceName`, not by copies here.**
+// `LowerMaxonToStd.appendSetWitnessArgs` materializes `rdataAddr(__witness_<key>_Hashable)` /
+// `__witness_<key>_Equatable`, and the label it takes an address of must be the label the builtin-conformance
+// table registers under; this file used to restate both spellings because IrInterface kept them private, which
+// made the agreement a coincidence two edits could break. Both are exported now, so there is one spelling.
 
 // The witness-table slot index of the SOLE method of `Hashable` (`hash`) and of `Equatable` (`equals`) — each
 // interface declares one method, at decl-order index 0, so the fused `witnessCall` reads its function pointer

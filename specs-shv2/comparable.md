@@ -41,6 +41,20 @@ POINTER compare for a struct type argument — a silent wrong answer. Comparing 
 value (`self.item < 42`) is the same E3005 the `==` form gives: `Comparable` proves ordering against
 another `Self` (= `T`) only, and marshalling a literal into that `Self` slot would fault.
 
+`Self` means the RECEIVER'S OWN type parameter, not "some type parameter". In a generic with two
+constrained parameters (`type Mix uses A, B where A is Comparable, B is Comparable`), `self.a < self.b`
+is the same E3005 — the dispatch goes through `A`'s witness table, so a `B` handed to `compare`'s `Self`
+formal would be read as an `A` (for a struct `A` that is a dereference of whatever word `B` held). A
+genuine cross-parameter comparison needs a second witness and a conversion, and is not this rung. The
+`.compare()` method form is refused at the same shared check.
+
+A constraint is only `Comparable` if it declares `compare` with `Comparable`'s own RESULT. The witness
+search matches by method NAME (it is shared with ordinary `.method()` dispatch), so a user
+`interface Weird` declaring `function compare(other Self) returns Integer` would otherwise be accepted
+and its integer result read as an `Ordering` TAG — `a < b` would mean `a.compare(b) == 0`, i.e. "less
+than" whenever the author's `compare` said EQUAL. Such a constraint gets the same "constrain it with
+`where T is Comparable`" E3005 as no constraint at all. `Equatable`/`==` is guarded identically.
+
 A `typeParameter`-tagged value that is NOT one of an ENCLOSING type's parameters — a concrete
 generic-method result read in a non-generic caller (`let v = intBox.get()`) — has a known concrete type
 and keeps its ordinary scalar comparison.
@@ -582,4 +596,134 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:4:6: Unsupported: a declaration of the type name 'HashValue', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+```
+
+<!-- test: comparable.error.cross-type-param-ordering -->
+`Self` is the RECEIVER'S OWN type parameter. With two constrained parameters, `self.a < self.b`
+dispatches `A`'s witness table — `Point.compare` — and would hand it a `B`, so the callee would
+dereference the integer `9` as its `other Point`. Rejected at compile time as the same E3005 a concrete
+literal gets, naming the parameter the offending operand actually has. Target-independent.
+```maxon
+typealias Coord = int(0 to 1000)
+typealias Integer = int(0 to u32.max)
+
+type Point implements Comparable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function compare(other Point) returns Ordering
+		if self.x < other.x 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		return Ordering.greaterThan
+	end 'compare'
+end 'Point'
+
+type Mix uses A, B where A is Comparable, B is Comparable
+	export var a as A
+	export var b as B
+	export static function create(a A, b B) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function cross() returns bool
+		return self.a < self.b
+	end 'cross'
+end 'Mix'
+
+typealias PointIntMix = Mix with (Point, Integer)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: '<' on type parameter 'A' requires an argument of type 'A' (the `Self` its constraint provides), not a value of type parameter 'B'
+```
+
+<!-- test: comparable.error.cross-type-param-compare-method -->
+The method-call twin, at the SAME shared witness-dispatch argument check: `self.a.compare(self.b)` over
+two different type parameters is E3005. Reversed here (`A` is the int, `B` the struct) to show the
+direction that does not fault but silently compares an int against a heap pointer — equally refused.
+Target-independent.
+```maxon
+typealias Coord = int(0 to 1000)
+typealias Integer = int(0 to u32.max)
+
+type Point implements Comparable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function compare(other Point) returns Ordering
+		if self.x < other.x 'lt'
+			return Ordering.lessThan
+		end 'lt'
+		return Ordering.greaterThan
+	end 'compare'
+end 'Point'
+
+type Mix uses A, B where A is Comparable, B is Comparable
+	export var a as A
+	export var b as B
+	export static function create(a A, b B) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function crossMethod() returns Ordering
+		return self.a.compare(self.b)
+	end 'crossMethod'
+end 'Mix'
+
+typealias IntPointMix = Mix with (Integer, Point)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: 'compare' on type parameter 'A' requires an argument of type 'A' (the `Self` its constraint provides), not a value of type parameter 'B'
+```
+
+<!-- test: comparable.error.non-protocol-compare-result -->
+A constraint that declares a method NAMED `compare` is not `Comparable` unless it returns `Ordering`.
+The witness search matches by method name (shared with ordinary `.method()` dispatch), so without this
+check `Weird`'s `Integer` result would be read as an `Ordering` tag and `a < b` would mean
+`a.compare(b) == 0` — "less than" whenever the author's `compare` said EQUAL. It reports the same E3005
+as no constraint at all, because the cure is the same sentence. Target-independent.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+interface Weird
+	function compare(other Self) returns Integer
+end 'Weird'
+
+type Thing implements Weird
+	export var v as Integer
+	export static function create(v Integer) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function compare(other Thing) returns Integer
+		return 0
+	end 'compare'
+end 'Thing'
+
+type Pair uses T where T is Weird
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function lt() returns bool
+		return self.a < self.b
+	end 'lt'
+end 'Pair'
+
+typealias ThingPair = Pair with Thing
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be constrained with 'where T is Comparable'
 ```

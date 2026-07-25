@@ -788,12 +788,39 @@ end 'orderingTagOf'
 // compiler-owned type name is refused (`Parser.requireTypeNameNotCompilerOwned`) — so the registry's
 // `Ordering` is always `builtinOrderingEnum()`'s. That is what lets the tag READERS (`int.compare` and the
 // `<`/`>`/`<=`/`>=` lowering) build their own copy of the layout without risking a different answer from the
-// one a `match` gets out of this registry.
+// one a `match` gets out of this registry. `upsertDeclaredEnum` below is what makes that an INVARIANT of the
+// registry rather than a count of parse-time call sites — the reject is the user's diagnostic, not the guarantee.
 export function createEnumRegistry() returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
 	registry.upsert(OrderingTypeName, value: builtinOrderingEnum())
 	return registry
 end 'createEnumRegistry'
+
+// ⭐ **THE ONE DOOR A *DECLARED* ENUM ENTERS EITHER REGISTRY THROUGH, AND IT WILL NOT DISPLACE A SEED** —
+// `Project.enumTypes` (the authority, via `commitEnumTypes`) and `ProgramSignatures.enumTypes` (the parser's
+// whole-program index, via `ProgramSignatures.recordEnum`). Both maps are built by `createEnumRegistry`, and the
+// soundness of that seed rests on one claim: the entry under a compiler-owned name is always
+// `builtinOrderingEnum()`'s, because the tag READERS (`int.compare`, the `<`/`>`/`<=`/`>=` lowering) build their
+// own copy of the layout rather than fetching this one.
+//
+// ⚠ **THE PARSE-TIME REJECT ALONE DOES NOT MAKE THAT CLAIM TRUE, AND A REVIEW PROBE PROVED IT.** The
+// whole-program DECLARATION SWEEP is deliberately not a validator (`Parser.recordScannedType`), so it folds a
+// user `enum Ordering` into `ProgramSignatures.enumTypes` BEFORE the real parse gets to refuse it — measured by
+// making this function panic, which fired from `ProgramSignatures.recordEnum` on `enum Ordering … end`. The
+// claim held only because such a program never reaches codegen; it was a comment, not an invariant.
+//
+// So the seed is simply NOT DISPLACEABLE: a declared layout under a compiler-owned name is dropped here, at the
+// single write, and the user-facing error stays the parse-time `E2015`
+// (`Parser.requireTypeNameNotCompilerOwned`). That makes the collision unrepresentable rather than merely
+// diagnosed — a future declaration form that forgets the reject can then only produce a clean error about the
+// builtin's own cases, never a `match` reading different tags from the ones `int.compare` returns.
+export function upsertDeclaredEnum(registry EnumLayoutMap, layout EnumLayout)
+	if isCompilerOwnedTypeName(layout.name) 'compilerOwned'
+		return
+	end 'compilerOwned'
+
+	registry.upsert(layout.name, value: layout)
+end 'upsertDeclaredEnum'
 
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //

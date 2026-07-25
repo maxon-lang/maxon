@@ -25,6 +25,18 @@ WITNESS TABLE (dictionary-passing), whose slots for an `int` argument point at t
 `int.hash`/`int.equals`. Using `==`/`!=` on a type parameter that is NOT constrained with `where T is
 Equatable` is a compile error (E3005): there is no witness to dispatch through.
 
+Two further E3005 rejects keep that dispatch honest, and both are shared verbatim with the ordering
+operators (see `comparable.md`):
+
+- `equals`'s formal is `Self`, which means the RECEIVER'S OWN type parameter — not "some type parameter".
+  A concrete literal is refused, and so is a value of a DIFFERENT parameter of the same generic type
+  (`type Mix uses A, B where A is Equatable, B is Equatable`, then `self.a == self.b`): the dispatch goes
+  through `A`'s witness table, so a struct `A`'s `equals` would dereference whatever word `B` held.
+- a constraint is only `Equatable` if it declares `equals` with `Equatable`'s own `bool` RESULT. The
+  witness search matches by method NAME (shared with ordinary `.method()` dispatch), so a user
+  `interface Weird` with `function equals(other Self) returns Integer` would otherwise be accepted and
+  `a == b` would evaluate to whatever integer the author's `equals` returned.
+
 The witness dispatch rides the x64 rdata function-pointer relocation, so these cases are x64-only (as the
 `where-clauses` witness cases are); the E3005 reject is a compile error and is target-independent.
 
@@ -302,4 +314,87 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:20:20: 'equals' on type parameter 'T' requires an argument of type 'T' (the `Self` its constraint provides), not a concrete value
+```
+
+<!-- test: primitive-conformance.error.eq-cross-type-param -->
+`Self` is the RECEIVER'S OWN type parameter, so `self.a == self.b` over two DIFFERENT constrained
+parameters is the same E3005 a concrete literal gets: the dispatch goes through `A`'s witness table, and
+a struct `A`'s `equals(other Point)` would dereference the integer `B` held as its `other` pointer. The
+message names the parameter the offending operand actually has. Target-independent.
+```maxon
+typealias Coord = int(0 to 1000)
+typealias Integer = int(0 to u32.max)
+
+type Point implements Equatable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function equals(other Point) returns bool
+		return self.x == other.x
+	end 'equals'
+end 'Point'
+
+type Mix uses A, B where A is Equatable, B is Equatable
+	export var a as A
+	export var b as B
+	export static function create(a A, b B) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function cross() returns bool
+		return self.a == self.b
+	end 'cross'
+end 'Mix'
+
+typealias PointIntMix = Mix with (Point, Integer)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:17: '==' on type parameter 'A' requires an argument of type 'A' (the `Self` its constraint provides), not a value of type parameter 'B'
+```
+
+<!-- test: primitive-conformance.error.non-protocol-equals-result -->
+A constraint that declares a method NAMED `equals` is not `Equatable` unless it returns `bool`. The
+witness search matches by method name (shared with ordinary `.method()` dispatch), so without this check
+`Weird`'s `Integer` result would BE the value of `a == b` — a comparison evaluating to `7`. It reports
+the same E3005 as no constraint at all, because the cure is the same sentence. Target-independent.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+interface Weird
+	function equals(other Self) returns Integer
+end 'Weird'
+
+type Thing implements Weird
+	export var v as Integer
+	export static function create(v Integer) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function equals(other Thing) returns Integer
+		return 7
+	end 'equals'
+end 'Thing'
+
+type Pair uses T where T is Weird
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function eq() returns bool
+		return self.a == self.b
+	end 'eq'
+end 'Pair'
+
+typealias ThingPair = Pair with Thing
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```

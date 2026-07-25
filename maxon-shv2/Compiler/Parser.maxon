@@ -223,13 +223,16 @@ export union ParseError implements Error
 	// operator needs — ONE variant and ONE message for both families, because the sentence is identical but
 	// for that name, and two copies of it would be free to drift.
 	operatorRequiresConformance(op String, typeParamName String, interfaceName String, line LineNumber, column ColumnNumber)
-	// A CONCRETE value supplied for a `Self`-typed witness-method argument (`item == 42` / `item.equals(42)`
-	// inside `type Box uses T where T is Equatable`, T a struct). Renders as **E3005**, positioned at the
-	// operator / method. The `where` constraint only proves `equals(Self)` — equality against another value of
-	// the SAME type parameter T — so a concrete literal or concrete-typed value is not a `Self`; marshalling it
-	// into the `Self` pointer/slot faults (a struct `equals` dereferences an int literal as its `other`
-	// pointer). `what` is the operator or method spelling, `typeParamName` the constrained parameter's name.
-	witnessSelfArgNotTypeParam(what String, typeParamName String, line LineNumber, column ColumnNumber)
+	// A value that is NOT of the receiver's own type parameter supplied for a `Self`-typed witness-method
+	// argument (`item == 42` / `item.equals(42)` inside `type Box uses T where T is Equatable`, T a struct).
+	// Renders as **E3005**, positioned at the operator / method. The `where` constraint only proves
+	// `equals(Self)` — against another value of the SAME type parameter T — so anything else is not a `Self`;
+	// marshalling it into the `Self` pointer/slot faults (a struct `equals` dereferences an int literal as its
+	// `other` pointer). `what` is the operator or method spelling, `typeParamName` the constrained parameter's
+	// name, and `got` describes what was supplied instead — the TWO ways an actual can fail (a concrete value,
+	// and a value of a DIFFERENT type parameter of the same generic type) share one variant and one sentence,
+	// differing only in that phrase, because they are one rule with one cure.
+	witnessSelfArgNotTypeParam(what String, typeParamName String, got String, line LineNumber, column ColumnNumber)
 	// An `if` / `while` condition that is not a `bool` (`if 4`). Renders as E3005, positioned
 	// at the CONDITION's first token — the expression the message is about, not the keyword
 	// that introduced it. `keyword` is "if"/"while", so one message template serves both.
@@ -14297,19 +14300,20 @@ export type Parser
 	// The `typeParameter` operand is the witness receiver. Equality is symmetric, so a `T`-vs-value mix may use
 	// whichever side is the parameter; ORDERING IS NOT — `self.a < self.b` must dispatch on the LEFT operand —
 	// and the shared `Self`-argument check is what guarantees it does: `compare`'s formal is `Self`, so an actual
-	// that is not a value of `T` is rejected BEFORE anything is emitted. The emit is therefore only ever reached
-	// with both operands values of the enclosing `T`, where `leftIsParam` holds and the receiver IS `lhs`; a
-	// `42 < self.item` never reaches it to be silently flipped into `self.item > 42`.
+	// that is not a value of the RECEIVER'S OWN parameter is rejected BEFORE anything is emitted. The emit is
+	// therefore only ever reached with both operands values of the SAME enclosing parameter, where `leftIsParam`
+	// holds and the receiver IS `lhs`; a `42 < self.item` never reaches it to be silently flipped into
+	// `self.item > 42`, and neither does a `self.a < self.b` over two DIFFERENT parameters (see
+	// `isReceiverTypeParamValue` — that second half was not true until a review probe segfaulted on it).
 	function emitTypeParamComparison(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token, leftIsParam bool) returns ValueId throws ParseError
 		let receiver = lhs if leftIsParam else rhs
 		let other = rhs if leftIsParam else lhs
 		let paramPos = self.valueNameId(receiver)
-		let isEquality = op == MaxonCmpOp.eq or op == MaxonCmpOp.ne
-		let target = try self.requireOperatorWitness(paramPos, methodName: EqualsMethodName if isEquality else CompareMethodName, interfaceName: EquatableInterfaceName if isEquality else ComparableInterfaceName, op: op, opTok: opTok)
+		let target = try self.requireOperatorWitness(paramPos, op: op, opTok: opTok)
 
-		// The `other` operand fills the method's `Self`-typed formal, so it must be a value of `T` — a concrete
-		// literal (`item == 42`, `item < 42`) would be marshalled into the `Self` pointer and faulted. Same
-		// reject the method-call form runs, one shared helper.
+		// The `other` operand fills the method's `Self`-typed formal, so it must be a value of the receiver's own
+		// `T` — a concrete literal (`item == 42`, `item < 42`) would be marshalled into the `Self` pointer and
+		// faulted. Same reject the method-call form runs, one shared helper.
 		let args = pairArgs(receiver, second: other)
 		try self.requireGenuineSelfArgs(target, args: args, what: comparisonOpSpelling(op), receiverParamPos: paramPos, errorTok: opTok)
 
@@ -14355,30 +14359,58 @@ export type Parser
 	end 'emitOrderingVerdict'
 
 	// The witness a comparison operator on type parameter `paramPos` dispatches through (P1.7a slice 2b/2b-ii),
-	// or E3005 when the parameter carries no constraint declaring `methodName`. A constraint whose interface
-	// declares `equals` IS a `where <paramPos> is Equatable`, and one declaring `compare` IS a `where <paramPos>
-	// is Comparable` — so the search runs by METHOD (the same by-method search `.equals()`/`.compare()` dispatch
-	// uses, one shared core) while the diagnostic names the INTERFACE the author has to write.
-	function requireOperatorWitness(paramPos TypeParamId, methodName ByteArray, interfaceName ByteArray, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		match try self.findWitnessDispatch(paramPos, methodName: methodName, errorTok: opTok) 'lookup'
-			found(target) then return target
-			notFound then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(interfaceName), line: opTok.line, column: opTok.column)
+	// or E3005 when the parameter carries no constraint that PROVIDES THE OPERATOR'S PROTOCOL — `Equatable` for
+	// `==`/`!=`, `Comparable` for `<`/`>`/`<=`/`>=`.
+	//
+	// ⭐ **THE PROTOCOL IS FETCHED, NOT DESCRIBED.** The method name the constraints are searched for AND the
+	// result type the verdict reads are both taken off the interface `builtinInterface` synthesizes, so this
+	// function names ONE fact (which protocol the operator belongs to) instead of three parallel spellings of it.
+	function requireOperatorWitness(paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
+		let isEquality = op == MaxonCmpOp.eq or op == MaxonCmpOp.ne
+		let protocol = requireBuiltinInterface(EquatableInterfaceName if isEquality else ComparableInterfaceName)
+		let method = try protocol.methods.get(0) otherwise panic("requireOperatorWitness: the synthesized protocol '{String.from(protocol.name)}' declares no method — a comparison operator dispatches its SOLE method (`singleMethodInterface`), so `builtinInterface` must give it exactly one")
+
+		// The search itself runs by METHOD (the shared core `.equals()`/`.compare()` dispatch uses), so the hit
+		// still has to be PROVED to be the protocol's — see `requireProtocolResult`.
+		match try self.findWitnessDispatch(paramPos, methodName: method.name, errorTok: opTok) 'lookup'
+			found(target) then return try self.requireProtocolResult(target, protocolName: protocol.name, wantResult: method.returnTypeName, paramPos: paramPos, op: op, opTok: opTok)
+			notFound then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
 		end 'lookup'
 	end 'requireOperatorWitness'
 
-	// ⭐ **REJECT A CONCRETE VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT (P1.7a slice 2b).** A
+	// ⭐ **A CONSTRAINT DECLARING A METHOD OF THE PROTOCOL'S NAME IS NOT THE PROTOCOL** — and the verdict below
+	// reads the dispatch result as if it were. `findWitnessDispatch` matches by METHOD NAME because the
+	// `.method()` dispatch it is shared with must, so a USER interface with its own `compare`/`equals` satisfies
+	// it: **MEASURED — an `interface Weird` declaring `function compare(other Self) returns Integer` made
+	// `a < b` mean `a.compare(b) == 0`, i.e. "less than" whenever the author's `compare` said EQUAL; the twin
+	// with `equals` made `a == b` evaluate to the raw `7` that `equals` returned.** Both are silent wrong
+	// answers, not crashes, so nothing downstream was ever going to catch them.
+	//
+	// Requiring the found method's RESULT to be the protocol's own declared result is what makes the target
+	// genuinely the protocol's — `equals` must yield the `bool` the `eq`/`ne` arms take, `compare` the `Ordering`
+	// whose tags `emitOrderingVerdict` tests. A near-miss reports the SAME E3005 as no constraint at all,
+	// because the author's cure is the same sentence: constrain the parameter with the protocol. (Constructed
+	// inline at both sites rather than through a shared factory — `throw self.helperReturningAParseError(…)`
+	// leaks the boxed union under the bootstrap's refcounting; see `nestedUnionPayloadMessage`.)
+	function requireProtocolResult(target WitnessDispatchTarget, protocolName ByteArray, wantResult ByteArray, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
+		if not target.returnTypeName.equals(wantResult) 'notTheProtocol'
+			throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocolName), line: opTok.line, column: opTok.column)
+		end 'notTheProtocol'
+
+		return target
+	end 'requireProtocolResult'
+
+	// ⭐ **REJECT ANY NON-`Self` VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT (P1.7a slice 2b).** A
 	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s and `Comparable.compare`'s `other
-	// Self`) requires an ACTUAL argument that is a value of the receiver's enclosing type parameter `T` — the
-	// only thing the `where` constraint proves. A concrete literal or concrete-typed value marshalled into that
-	// `Self` pointer/slot is a MISCOMPILE: for a struct `T` the callee's `equals(other Point)` dereferences an
-	// int literal as its `other` pointer (0xC0000005). Run UNIFORMLY for the operator (`T == 42`, `T < 42`) and
-	// method-call (`T.equals(42)`, `T.compare(42)`) forms — their one shared arg-validation point. It also
-	// carries a SECOND guarantee for the asymmetric ordering operators: rejecting a non-`T` `Self` actual is
-	// what proves the ordering dispatch's receiver is always the LEFT operand (see
-	// `emitTypeParamComparison`). `args[0]` is the receiver; interface formal `j` maps to
-	// `args[j+1]`. This closes ONLY the `Self`-arg crash class: a genuine type-parameter argument of ANY
-	// position passes (a cross-type-param mismatch `A == B` is a separate future rung, not narrowed here), and a
-	// missing actual is an arity concern left to the caller, not read past here.
+	// Self`) requires an ACTUAL argument that is a value of the receiver's OWN enclosing type parameter — the
+	// only thing the `where` constraint proves. Anything else marshalled into that `Self` pointer/slot is a
+	// MISCOMPILE: the callee's `equals(other Point)` dereferences whatever word it was handed as its `other`
+	// pointer (0xC0000005). Run UNIFORMLY for the operator (`T == 42`, `T < 42`) and method-call
+	// (`T.equals(42)`, `T.compare(42)`) forms — their one shared arg-validation point. It also carries a SECOND
+	// guarantee for the asymmetric ordering operators: rejecting a non-`Self` actual is what proves the ordering
+	// dispatch's receiver is always the LEFT operand (see `emitTypeParamComparison`). `args[0]` is the receiver;
+	// interface formal `j` maps to `args[j+1]`. A missing actual is an arity concern left to the caller, not read
+	// past here.
 	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
 		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
 			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
@@ -14390,11 +14422,37 @@ export type Parser
 			end 'noActual'
 
 			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: args.get OOB at {j + 1} below count {args.count()}")
-			if not self.isEnclosingTypeParam(actual) 'concreteSelfArg'
-				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), line: errorTok.line, column: errorTok.column)
-			end 'concreteSelfArg'
+			if not self.isReceiverTypeParamValue(actual, receiverParamPos: receiverParamPos) 'notSelfArg'
+				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
+			end 'notSelfArg'
 		end 'eachFormal'
 	end 'requireGenuineSelfArgs'
+
+	// ⭐ **IS `actual` A VALUE OF THE RECEIVER'S OWN TYPE PARAMETER — the ONLY thing a `Self`-typed formal
+	// accepts?** "A value of SOME enclosing type parameter" is not enough, and the difference is a **MEASURED
+	// 0xC0000005**: in `type Mix uses A, B where A is Comparable, B is Comparable` instantiated at
+	// `(Point, Integer)`, `self.a < self.b` dispatched `A`'s witness — `Point.compare` — with a `B` actual, so
+	// the callee dereferenced the integer `9` as its `other Point`. Reversed to `(Integer, Point)` it does not
+	// fault but silently compares an int against a heap pointer, and the `.compare()` METHOD form takes the same
+	// route. `Self` means the receiver's parameter, not "a type parameter", and the witness table it dispatches
+	// through belongs to ONE parameter, so the position must match.
+	//
+	// (A genuine cross-parameter COMPARISON — `A` vs `B` where both conform — is a real feature and needs a
+	// second witness plus a conversion; it is not this, and refusing it is what keeps the door shut until then.)
+	function isReceiverTypeParamValue(actual ValueId, receiverParamPos TypeParamId) returns bool
+		return self.isEnclosingTypeParam(actual) and self.valueNameId(actual) == receiverParamPos
+	end 'isReceiverTypeParamValue'
+
+	// WHAT was supplied where a `Self` was required, for `witnessSelfArgNotTypeParam`'s message — the two ways
+	// an actual fails `isReceiverTypeParamValue`, described in ONE place so the diagnostic never calls a value
+	// of another type parameter "a concrete value".
+	function selfArgActualDescription(actual ValueId) returns String
+		if not self.isEnclosingTypeParam(actual) 'concrete'
+			return "a concrete value"
+		end 'concrete'
+
+		return "a value of type parameter '{String.from(self.enclosingTypeParamName(self.valueNameId(actual)))}'"
+	end 'selfArgActualDescription'
 
 	// The declared NAME of the enclosing type's type parameter at `pos` (P1.7a slice 2b) — `T` in `type Box uses
 	// T`. `enclosingTypeParams` is name-by-position, populated for every generic type body, so a `typeParameter`
