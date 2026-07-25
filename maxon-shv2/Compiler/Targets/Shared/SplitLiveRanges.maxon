@@ -144,7 +144,7 @@
 // ==========================================================================
 //
 // Everything the per-split path touches has to be proportional to the dirty region, so NOTHING on it
-// may be sized by the function — including the buffers. Four costs were superlinear and none of them
+// may be sized by the function — including the buffers. SIX costs were superlinear and none of them
 // was the traversal:
 //
 //  • `hallVerdictAt` HEAP-ALLOCATED its five working columns on every call, two of them PER LIVE VALUE
@@ -159,6 +159,20 @@
 //  • `defLiveAfter`'s "no store anchor" sentinel used to be `valueCount + 1`, which changes whenever a
 //    split mints an id — so the whole column had to be re-stamped. It is a constant
 //    (`NoStoreAnchorPressure`), and nothing reads it: see there.
+//  • `materializePeak` took a FRESH `wordsPerRow` row per analysis to carry the peak's live-before set,
+//    and `refreshPeak` materializes a peak after EVERY split — O(splits × values) BYTES per function.
+//    (`SplitScratch.peakLiveBefore`; `usesAtPeakOp`'s row is the same shape and shares `zeroRow`.)
+//  • `markBlocksReachableFromPeak` allocated its BFS worklist INSIDE the walk, and the walk pushes a
+//    block per IN-EDGE — an O(edges) allocation per un-memoized (peak block, def block) pair.
+//    (`ReachCache.worklist`.)
+//
+// ⚠ THE LAST TWO HID BEHIND A LINEAR ALLOCATION COUNT, which is why they outlived the four above them:
+// one allocation per split IS linear, and only the BYTES carry the value space it is multiplied by. So
+// they are visible in `scale-test`'s byte column and in nothing else. MEASURED on the P1.7a-era corpus,
+// 8 rungs: together they took `regalloc:splitting` bytes from ×192.1 over a ×128 ladder (per-rung ratio
+// climbing monotonically 1.77 → 2.61, allocations linear at ×2.03) to ×111.7 (per-rung 2.04, flat) —
+// the peak row 48.5 MB of the saving at rung 7, the worklist 104.2 MB. The old corpus could not see
+// either: its splits were confined to small functions, so splits and values did not grow together.
 
 // One memoized reachability ROW of `ReachCache` — one per distinct DEF BLOCK the peak's candidates
 // have, so there are at most `numBlocks` of them and `numBlocks` is the "not walked yet" sentinel.
@@ -654,6 +668,16 @@ type SplitScratch
 	export var usedAtPeak as BitWordArray
 	export var candidates as ValueIdArray
 	export var reach as ReachCache
+	// The PEAK's live-before row: the row `materializePeak` fills and the `PressurePeak` it returns
+	// POINTS AT — it is not copied out, exactly as `PressureAnalysis.defLiveAfter` is this scratch's own
+	// column rather than a copy of it (see the file header for the cost of copying it).
+	//
+	// ⚠ SO IT HOLDS THE CURRENT ANALYSIS'S PEAK AND NOTHING ELSE, and that is the lifetime every reader
+	// already respects: `chooseVictim`, the E5001 diagnostic and `verifyPeak` all read `peak.liveBefore`
+	// within the iteration that produced it, and the driver replaces `analysis` on the same line that
+	// `refreshPeak` refills this. A reader that outlived that would see the NEXT peak's row — which is
+	// the same lifetime `defLiveAfter` has had all along, so it is one rule, not a new one.
+	export var peakLiveBefore as BitWordArray
 	// The incremental machinery: the per-block peak tournament, one split's dirty region, its insertion
 	// log, and the memo its liveness re-walks use. `dirty` and `marks` are sized by `beginSplitting`,
 	// which the driver calls only when the function turns out to need a split at all.
@@ -667,7 +691,7 @@ type SplitScratch
 	export var opEffective as RegCountColumn
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow()}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow()}
 	end 'create'
 
 	// Size the two block-keyed memos the incremental update needs. Deferred until the function turns out
@@ -1352,7 +1376,12 @@ end 'analyzeBlockPressure'
 // The winning rank, with its live-before row attached — the `PressurePeak` the driver, `chooseVictim`
 // and the E5001 diagnostic all read. Built ONCE per analysis, for the winner alone.
 function materializePeak(module TargetModule, liveness LivenessResult, rank PeakRank, scratch SplitScratch) returns PressurePeak
-	var liveBefore = zeroRow(liveness.wordsPerRow)
+	// The FUNCTION's row, returned to zero (which is what `fillLiveBeforeOp` requires on entry) — not a
+	// fresh one per analysis, which is the per-split byte term the file header's fifth bullet names. The
+	// peak this returns POINTS AT it, so it stays the current peak's row until the next analysis refills
+	// it (`SplitScratch.peakLiveBefore`).
+	var liveBefore = scratch.peakLiveBefore
+	zeroRow(liveBefore, wordsPerRow: liveness.wordsPerRow)
 	var peakOpIdx = 0 as OpIndex
 	if rank.found 'derivePeakRow'
 		fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
@@ -1540,10 +1569,31 @@ function recordDefLiveAfter(defLiveAfter RegCountColumn, buf OperandList, liveBy
 	end 'eachOperand'
 end 'recordDefLiveAfter'
 
-function zeroRow(wordsPerRow BitWordCount) returns BitWordArray
-	var row = BitWordArray.create()
-	row.resize(wordsPerRow)
-	return row
+// Return one of the splitter's `SplitScratch` bitset ROWS to `wordsPerRow` words of ZERO, reusing the
+// storage it already has. The two callers are the per-split pair `materializePeak` (the peak's
+// live-before set) and `usesAtPeakOp` (the peak op's own uses), and both want the same thing: a row of
+// the CURRENT value space with nothing left in it from the previous split.
+//
+// ⚠ GROWN WITH `growFilled`, WHICH IS NOT INTERCHANGEABLE WITH `resize`/`refill` HERE — and `refill` is
+// what this used to be. The value space widens with every split (each mints reload ids), so this row is
+// a column that is EXTENDED, and `resize` goes through `reserve`, which takes the ask at FACE VALUE: a
+// row extended a word at a time is reallocated and copied IN FULL at every tick of `wordsPerRow`, which
+// is the same Θ(splits × values) shape being removed here, merely with a smaller constant. `growFilled`
+// grows capacity GEOMETRICALLY (see `grownCapacity` in stdlib/Array.maxon), so a function's whole row
+// growth is amortized linear in its final value count and this function allocates NOTHING once the row
+// is wide enough.
+//
+// The zeroing is WHOLESALE — O(words), no allocation — rather than an undo of exactly the bits the
+// previous fill set. These rows are LIVENESS data: a bit left standing from the previous split is a
+// wrong live set, hence a wrong victim and a silently wrong program, and "every word is 0" is checkable
+// where "exactly the bits that fill could have set" is an argument. It adds no growth term the pass does
+// not already pay per split anyway — `chooseVictim` walks this same row with `bitsetCollectRow`, which
+// is O(words) too.
+function zeroRow(row BitWordArray, wordsPerRow BitWordCount)
+	row.growFilled(wordsPerRow, value: 0)
+	for w in 0 upto wordsPerRow 'eachWord'
+		try row.set(w, value: 0) otherwise panic("zeroRow: set OOB at word {w} — the row was just grown to {wordsPerRow} words")
+	end 'eachWord'
 end 'zeroRow'
 
 // ==========================================================================
@@ -1757,7 +1807,7 @@ end 'storeFitsPool'
 // registers — so at least four confined values survive this cut.
 function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak PressurePeak, scratch SplitScratch) returns BitWordArray
 	var row = scratch.usedAtPeak
-	row.refill(liveness.wordsPerRow, value: 0)
+	zeroRow(row, wordsPerRow: liveness.wordsPerRow)
 	let op = try module.ops.get(peak.peakOpIdx) otherwise panic("usesAtPeakOp: peak op not in module.ops")
 	var buf = scratch.sweep.buf
 	targetOpOperands(op, buf: buf)
@@ -2075,6 +2125,12 @@ type ReachCache
 	var rowOf as ReachRowColumn
 	var rows as BoolArray
 	var rowCount as ReachRow
+	// The BFS worklist every row's walk steps with — owned by the CACHE, exactly as
+	// `LivenessMarkScratch` owns the worklist of the other CFG walk in this pass, and for the reason the
+	// file header gives. `clear()` keeps the capacity, so after a function's first walk the walks
+	// allocate nothing. It carries nothing BETWEEN walks: `markBlocksReachableFromPeak` clears it on
+	// entry and drains it to empty, so it is storage only.
+	var worklist as CfgIndexArray
 
 	// `rowOf` is left EMPTY here and sized by the first `retargetTo` (`Array.refill` resizes as well
 	// as fills). The overwhelmingly common function needs no split at all — 1202 of 1202 in the
@@ -2082,7 +2138,7 @@ type ReachCache
 	// column eagerly would put a per-function allocation, proportional to the block count, on every
 	// function in the program to serve the few that spill.
 	static function create(numBlocks CfgIndex) returns ReachCache
-		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, rowOf: ReachRowColumn.create(), rows: BoolArray.create(), rowCount: 0}
+		return Self{numBlocks: numBlocks, hasPeak: false, peakBlockLocal: 0, rowOf: ReachRowColumn.create(), rows: BoolArray.create(), rowCount: 0, worklist: CfgIndexArray.create()}
 	end 'create'
 
 	// Aim the cache at the peak `chooseVictim` is about to ask about. Everything walked from a
@@ -2138,7 +2194,7 @@ type ReachCache
 		// `growFilled`'s fill runs over `[existing, newLength) == [base, base + numBlocks)`.
 		let base = self.slotOf(row, block: 0)
 		self.rows.growFilled(self.rowCount * self.numBlocks, value: false)
-		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base)
+		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base, worklist: self.worklist)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
 		return row
 	end 'rowFor'
@@ -2149,8 +2205,11 @@ end 'ReachCache'
 // definition. The walk starts at the peak block's SUCCESSORS (so the peak's own block is reached
 // only via a genuine cycle) and never expands into `defBlock` (entering it redefines the value;
 // see `killsValueAtPeak`). Worklist-driven: no CFG traversal in the allocator may recurse.
-function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ReachSlot)
-	var worklist = CfgIndexArray.create()
+//
+// `worklist` is the CACHE's, not this walk's (see `ReachCache.worklist`) — a block is pushed once per
+// in-edge, so a fresh one here was an O(edges) allocation per walk.
+function markBlocksReachableFromPeak(topo FuncTopology, peakBlockLocal CfgIndex, defBlock CfgIndex, rows BoolArray, base ReachSlot, worklist CfgIndexArray)
+	worklist.clear()
 	let deg = topo.succ.degree(peakBlockLocal)
 	for k in 0 upto deg 'seed'
 		worklist.push(topo.succ.neighbour(peakBlockLocal, k: k))
