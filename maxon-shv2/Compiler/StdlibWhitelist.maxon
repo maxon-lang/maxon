@@ -26,16 +26,38 @@
 // parse → merge spine with no query-spine change. Its declarations therefore populate `funcSignatures`,
 // and a user program can call `Clock.nowMs()` though the program itself contains no Clock.
 //
-// ⭐ **LOAD ORDER: SORTED, AND FOR A DIFFERENT REASON THAN THE BOOTSTRAP'S.** The bootstrap sorts its
-// stdlib file list (`0-Compiler.cs:967` — `Interfaces.maxon` first, then helper subdirectories, then
-// top level) because ITS front end needs declarations to have been seen before a use is compiled.
-// **shv2 does not have that constraint and this loader deliberately does not copy it**:
-// `queryProgramSignatures` sweeps EVERY file's tokens for declarations before any file is parsed, so
-// visibility is order-independent (ARCHITECTURE's query-spine section). What shv2 DOES share is the
-// other half of the bootstrap's reason — a directory listing comes back in filesystem order, and an
-// order that varies by machine would make the emitted function order, and therefore the committed
-// goldens, vary with it. So the paths are sorted, byte-lexicographically, and nothing depends on which
-// order that is beyond its being the same everywhere.
+// ⭐ **LOAD ORDER: WHATEVER THE FILESYSTEM SAYS. THE LOADER DOES NOT SORT, ON PURPOSE.** The bootstrap
+// sorts its stdlib file list (`0-Compiler.cs:967` — `Interfaces.maxon` first, then helper
+// subdirectories, then top level) because ITS front end needs declarations to have been seen before a
+// use is compiled. **shv2 does not have that constraint**: `queryProgramSignatures` sweeps EVERY file's
+// tokens for declarations before any file is parsed, so visibility is order-independent (ARCHITECTURE's
+// query-spine section).
+//
+// ⚠ **AND SHV2 DOES NOT SORT FOR DETERMINISM EITHER — a sort here would be the WRONG FIX** (user
+// ruling, 2026-07-24). Forcing a canonical input order does not remove an order dependence; it makes
+// one *reliably hidden*, so a latent "this only works because the files arrived in this order" bug
+// stays latent until the machine, the filesystem or a refactor changes the order. **The compiler must
+// not depend on file order to work correctly**, and the way that stays true is by not constraining the
+// input, so any dependence surfaces where it can be fixed. Where an ORDER genuinely matters it is
+// canonicalized at the point of emission, from something stable — never by constraining what the
+// loader was handed.
+//
+// ⭐ MEASURED, not assumed, by running the loaders in raw `Directory.list` order and again in
+// DELIBERATELY REVERSED order (2026-07-24; the numbers are in this rung's optimization-log row):
+//
+//   • SEMANTICS DO NOT MOVE. Reversing the USER directory walk (`Compiler.loadSourceDirectory`, the one
+//     that actually walks many files today) leaves all 1586 x64 tests and all 1394 wasm tests PASSING,
+//     and reversing the stdlib walk over 48 modules — with the filter deleted, so the whole set loads —
+//     produces a program that runs identically and Target IR that is a PURE PERMUTATION of the other
+//     order's, the same lines in a different order. Nothing computes a different answer.
+//
+//   • ⚠ EMISSION ORDER DOES. Reversing the user walk moves 14 committed cross-file fragments: 13 are
+//     `func @…` blocks in a different order, and one swaps which of two same-named FILE-PRIVATE globals
+//     gets the `$1` disambiguating suffix — both assigned by the order the files were encountered. So
+//     the emitted byte image is a function of the filesystem's order today. That is real and it is NOT
+//     repaired by sorting the input, which would only hide it: the repair belongs at the point of
+//     emission, deriving the order from something stable like the declaration name. Reported, not
+//     papered over — see PLAN.md.
 //
 // ⚠ Two further things the bootstrap does that this does NOT, both deliberate:
 //   • It EXCLUDES `stdlib/Internals.maxon` (the `__Internals.*` intrinsic namespace it does not
@@ -99,11 +121,8 @@
 // same `Array with T` shape under a unique name, resolves cross-file fine — the name is the difference).
 typealias StdlibModulePathArray = Array with FilePath
 
-// A position in that array. The sort below shuffles these rather than the paths (see `sortedStdlibModules`).
-typealias StdlibModuleIndex = int(0 to u64.max)
-typealias StdlibModuleIndexArray = Array with StdlibModuleIndex
-
-// ⭐ **THE LOADER.** Enumerate `stdlib/`, order the result, register each module. Called by `loadProject`
+// ⭐ **THE LOADER.** Enumerate `stdlib/` and register each module, in the order the walk found them
+// (see the header on why it does not sort). Called by `loadProject`
 // AFTER the user's own sources are loaded (so a directory build's output name still derives from a user
 // file, not from a stdlib module, and an empty user project still fails with `noSourceFiles` rather than
 // silently compiling only stdlib).
@@ -118,9 +137,8 @@ export function loadStdlibSources(project Project) throws CompileError
 
 	var modules = StdlibModulePathArray.create()
 	try collectStdlibModules(project.stdlibDir, listed: listed, into: modules)
-	let ordered = sortedStdlibModules(modules)
 
-	for path in ordered 'each'
+	for path in modules 'each'
 		try loadOneSourceFile(project, path: path)
 		// RECORDED, because it is the answer to "which of this compile's files are stdlib source?" and
 		// this loop is the one place that knows it for free — every path here came out of an enumeration
@@ -131,7 +149,7 @@ export function loadStdlibSources(project Project) throws CompileError
 end 'loadStdlibSources'
 
 // Every `.maxon` file under `dir`, descending subdirectories (`stdlib/helpers/**` is stdlib too).
-function collectStdlibModules(dir FilePath, listed StdlibModulePathArray, into StdlibModulePathArray) throws CompileError
+function collectStdlibModules(dir FilePath, listed StdlibWhitelistSet, into StdlibModulePathArray) throws CompileError
 	let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir)
 	for entry in entries 'each'
 		if Directory.isDirectory(entry) 'isSubdir'
@@ -139,7 +157,7 @@ function collectStdlibModules(dir FilePath, listed StdlibModulePathArray, into S
 		end 'isSubdir' else if entry.filename().endsWith(StdlibSourceExtension) 'isModule'
 			// ⬇ WHITELIST (2 of 3) — the ONLY thing between this loader and all of `stdlib/`.
 			// Delete this `if` and every stdlib module is loaded.
-			if not isWhitelistedStdlibModule(entry, listed: listed) 'notListed'
+			if not listed.contains(entry) 'notListed'
 				continue
 			end 'notListed'
 			into.push(entry)
@@ -152,99 +170,39 @@ end 'collectStdlibModules'
 // named, the other is what `stdlib/` contains, and a day that changes one need not change the other.
 let StdlibSourceExtension = ".maxon"
 
-// Order the modules byte-lexicographically by full path, so the load order — and therefore the emitted
-// function order and every committed golden — is the same on every machine rather than whatever order
-// the filesystem handed back. Insertion sort: it runs over the FILTERED list, so today (one module) it
-// does no comparisons at all, and in the end state it is a few thousand byte-compares over a fixed-size
-// directory, once per compile. Nothing depends on WHICH order this is, only on its being stable (see
-// this file's header on why shv2, unlike the bootstrap, needs no semantic ordering).
-//
-// ⚠ It sorts an INDEX column and materializes the paths once at the end, rather than swapping the paths
-// in place. Reading an element out of an array while writing that same array is a read-borrow held
-// across a mutation, which the ownership checker refuses (E3070) — correctly, since the write may
-// reallocate what the read borrowed. An index is a scalar copy, so the column can be shuffled freely.
-function sortedStdlibModules(modules StdlibModulePathArray) returns StdlibModulePathArray
-	var order = StdlibModuleIndexArray.create()
-	for i in 0 upto modules.count() 'seed'
-		order.push(i)
-	end 'seed'
-
-	for i in 1 upto order.count() 'place'
-		let moved = try order.get(i) otherwise panic("sortedStdlibModules: order.get({i}) below its own count()")
-		var j = i
-		while j > 0 'shift'
-			let prior = try order.get(j - 1) otherwise panic("sortedStdlibModules: order.get({j}-1) below its own count()")
-			if not pathSortsBefore(moduleAt(modules, index: moved), other: moduleAt(modules, index: prior)) 'inPlace'
-				break
-			end 'inPlace'
-			try order.set(j, value: prior) otherwise panic("sortedStdlibModules: order.set({j}) below its own count()")
-			j = j - 1
-		end 'shift'
-		try order.set(j, value: moved) otherwise panic("sortedStdlibModules: order.set({j}) below its own count()")
-	end 'place'
-
-	var sorted = StdlibModulePathArray.create()
-	for index in order 'emit'
-		sorted.push(moduleAt(modules, index: index))
-	end 'emit'
-	return sorted
-end 'sortedStdlibModules'
-
-// One module path by index. The bounds failure is impossible — every index in `order` was seeded from
-// `modules`' own count — so it panics rather than inventing a path.
-function moduleAt(modules StdlibModulePathArray, index StdlibModuleIndex) returns FilePath
-	return try modules.get(index) otherwise panic("moduleAt: index {index} is outside the {modules.count()} collected modules")
-end 'moduleAt'
-
-// Byte-lexicographic `a < b` over two paths: the first differing byte decides, and a proper prefix
-// sorts first. Written here because `String` has no ordering comparison — only `equals` — and a total
-// order is the whole requirement.
-function pathSortsBefore(a FilePath, other FilePath) returns bool
-	let left = a.toString().toByteArray()
-	let right = other.toString().toByteArray()
-	let shared = left.count() if left.count() < right.count() else right.count()
-
-	for i in 0 upto shared 'compare'
-		let lb = try left.get(i) otherwise panic("pathSortsBefore: left.get({i}) below the shared length")
-		let rb = try right.get(i) otherwise panic("pathSortsBefore: right.get({i}) below the shared length")
-		if lb != rb 'differs'
-			return lb < rb
-		end 'differs'
-	end 'compare'
-
-	return left.count() < right.count()
-end 'pathSortsBefore'
-
 // ============================================================================================
 // ⬇ WHITELIST (3 of 3) — THE WHOLE OF THE SCAFFOLDING. Everything above this line is the real
 // loader and stays. Delete from here down, plus the two marked call sites, and shv2 loads all of
 // `stdlib/`.
 // ============================================================================================
 
-// The stdlib modules this rung loads, as paths RELATIVE to the checkout root (the parent of `stdlib/`).
-// Resolved against the located directory so both sides of the membership test below are built the same
-// way — `FilePath.join` normalizes separators, so a `/`-spelled entry matches an enumerated `\` path.
-// A listed module the checkout does not have is a hard error naming it, never a silent skip: the whole
-// point of the list is that what it names is present.
-function whitelistedStdlibModules(stdlibDir FilePath) returns StdlibModulePathArray throws CompileError
+// The listed modules, as a SET rather than a list — because the membership test runs once per file
+// under `stdlib/` and THIS LIST IS DESIGNED TO GROW, one entry per widening rung, until it names every
+// file there. A scan would therefore cost O(files x listed), and each pair is not a byte compare:
+// `FilePath.equals` canonicalizes BOTH sides, which on Windows clones and lower-cases each path, so a
+// pair is about four String allocations. MEASURED against the 49 files this checkout has: a 48-entry
+// scan costs ~9,400 allocations a compile where the hash lookup costs ~98, flat in the list's length.
+typealias StdlibWhitelistSet = Set with FilePath
+
+// The stdlib modules this rung loads. Resolved against the checkout root (the parent of `stdlib/`) so
+// both sides of the membership test are built the same way — `FilePath.join` normalizes separators, so
+// a `/`-spelled entry matches an enumerated `\` path.
+//
+// ⭐ WIDENING IS ONE LINE: add another `listWhitelistedModule` call.
+function whitelistedStdlibModules(stdlibDir FilePath) returns StdlibWhitelistSet throws CompileError
 	let root = try stdlibDir.parent() otherwise throw CompileError.stdlibNotFound
 
-	var listed = StdlibModulePathArray.create()
-	listed.push(root.join("stdlib/Clock.maxon"))
-
-	for path in listed 'exists'
-		if not File.exists(path) 'missing'
-			throw CompileError.stdlibModuleMissing(path)
-		end 'missing'
-	end 'exists'
+	var listed = StdlibWhitelistSet.create()
+	try listWhitelistedModule(root, relative: "stdlib/Clock.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 
-function isWhitelistedStdlibModule(path FilePath, listed StdlibModulePathArray) returns bool
-	for entry in listed 'each'
-		if entry.equals(path) 'match'
-			return true
-		end 'match'
-	end 'each'
-	return false
-end 'isWhitelistedStdlibModule'
+// One listed module. A listed module the checkout does not have is a hard error naming it, never a
+// silent skip: the whole point of the list is that what it names is present.
+function listWhitelistedModule(root FilePath, relative String, into StdlibWhitelistSet) throws CompileError
+	let path = root.join(relative)
+	if not File.exists(path) 'missing'
+		throw CompileError.stdlibModuleMissing(path)
+	end 'missing'
+	into.insert(path)
+end 'listWhitelistedModule'
