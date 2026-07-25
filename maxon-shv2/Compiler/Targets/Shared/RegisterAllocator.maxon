@@ -418,6 +418,13 @@ function assertX64CallClobbers()
 	// `0xFFFF0FC7` literal must equal the pool, or a value live across it is mis-constrained. The
 	// arm64 twin holds `arm64Syscall` here for the identical reason (`assertArm64CallClobbers`).
 	assertOneCallClobber(TargetOp.x64Syscall(0), name: "x64Syscall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+	// The fused witness call's MEMORY-indirect form (P1.7a): a call destroys the caller-saved set
+	// whether its target is a name, a register or a memory operand. It was the one call op carrying
+	// the clobber literal and NOT answering here — while `TargetDialect.callMem`'s own header said it
+	// was "held equal to `callerSavedMask()` by `assertX64CallClobbers`" — so the guard four ops were
+	// covered by was a sentence for the fifth. Wave 2 then hand-edited that unguarded literal
+	// (0xFFFF0FC7 → 0x003F0FC7) while reading the sentence promising it could not drift.
+	assertOneCallClobber(TargetOp.callMem(TargetVReg.virtual(0), disp: 0), name: "callMem", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 end 'assertX64CallClobbers'
 
 // The arm64 call ops against the arm64 caller-saved pool, with x19 (callee-saved) the drift witness.
@@ -511,10 +518,25 @@ end 'arm64CallerSavedMask'
 // ⚠ AN EMPTY ALLOWED SET IS STILL THE CASE `valueConfinedTo` GUARDS, and it is no longer reachable
 // through a float across a call. See `SplitLiveRanges.noVictimAtPeak` for what can still reach it.
 //
-// Spelled register by register rather than folded out of `calleeSavedXmmOrder`'s complement: this
-// function is on the COLORER's per-value path (`preferredVolatilityMask`), so it must stay a handful
-// of shifts rather than an array walk. `assertCalleeSavedListsMatchMasks` is what keeps it honest —
-// the derivation lives there, run once per module, where it costs nothing.
+// ⭐⭐ SPELLED REGISTER BY REGISTER BECAUSE THE DERIVED FORM **ALLOCATED**, AND THAT IS MEASURED, NOT
+// STYLISTIC. This function is on the COLORER's per-value path (`preferredVolatilityMask`, up to twice
+// per `chooseRegister`). Wave 1 built the XMM half as
+// `classRegisterMask(RegClass.xmm, file: x64RegisterFile())` — and **`x64RegisterFile()` CONSTRUCTS A
+// HEAP `RegisterFile`**, so every colouring decision allocated one. Fifteen shifts and fifteen ors
+// allocate nothing.
+//
+// MEASURED (Wave 2's optimizer pass): a probe build of the BASE compiler changing only that one
+// expression to a literal reproduces −10,358…−294,501 allocations across the scale ladder with
+// `codeBytes` identical at all six rungs — **99.9% of the whole A/B delta, ~75% of this rung's entire
+// improvement.** The A/B attributes `regalloc:coloring` −10,369…−294,884 against `regalloc:splitting`
+// −2,518…−93,023, so the row the rung first credited to the splitter is three quarters this.
+//
+// ⇒ **DO NOT "SIMPLIFY" THIS BACK TOWARDS `classRegisterMask(…, file: x64RegisterFile())`**, or any
+// form that calls `x64RegisterFile()` per value; the operation COUNT was never the cost, the
+// allocation was. Caching the mask in a module-level constant would be fine if it measured better,
+// but that is an optimization on top of a large win, not a repair. `assertCalleeSavedListsMatchMasks`
+// is what keeps the spelling honest — the derivation lives there, run once per module, where a heap
+// `RegisterFile` costs nothing.
 export function callerSavedMask() returns RegMask
 	var mask = 0 as RegMask
 	mask = mask or regMaskOf(X64Register.xmm0)
@@ -541,9 +563,10 @@ end 'callerSavedMask'
 // `push`/`pop`, the XMMs in frame SLOTS (x86-64 has no `push xmm`). rsp/rbp are the frame and are
 // never allocatable.
 //
-// Spelled register by register for the reason `callerSavedMask` gives; the ORDERED lists
-// (`calleeSavedOrder`, `calleeSavedXmmOrder`) are what the prologue and the GT context switch walk,
-// and `assertCalleeSavedListsMatchMasks` holds those lists and these two masks to one another.
+// Spelled register by register for the MEASURED reason `callerSavedMask` gives — the derived form
+// allocated a heap `RegisterFile` per colouring decision. The ORDERED lists (`calleeSavedOrder`,
+// `calleeSavedXmmOrder`) are what the prologue and the GT context switch walk, and
+// `assertCalleeSavedListsMatchMasks` holds those lists and these two masks to one another.
 export function calleeSavedMask() returns RegMask
 	var mask = 0 as RegMask
 	mask = mask or regMaskOf(X64Register.rbx)

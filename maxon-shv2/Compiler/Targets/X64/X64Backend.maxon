@@ -655,15 +655,23 @@ end 'roundsdImm8'
 // ops. Win64 nominally asks a callee to preserve all 128 bits, but that obligation is owed to
 // EXTERNAL callers and shv2 has none; the full argument, and the condition that would invalidate it,
 // is stated once in `X64PrologueEpilogue`'s header.
+//
+// ⚠⚠ BOTH OPERANDS ARE CLASS-GATED, AND THE REASON IS THIS PAIR'S CALLERS, NOT DEFENSIVENESS. They were
+// EXPORTED at Wave 2 so the two hand-assembled GT chunks (X64GtRuntime's context switch and
+// `__gt_morestack`) could preserve XMMs, and those hand off registers straight from an ordered LIST —
+// `calleeSavedXmmOrder`, `argFpRegisters` — with no allocator and no class column between the list and the
+// encoder. A GPR in either list assembles as the XMM sharing its low nibble (`rbx` → `xmm3`) and a GPR in
+// the BASE position would address off the wrong register, both silently. That is exactly the doctrine
+// `requireClass` states, applied to the two functions this commit widened the blast radius of.
 export function encodeMovsdRegBaseDisp(code ByteArray, destReg X64Register, base X64Register, disp Imm32)
-	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: destReg, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRegRm, regField: requireClass(destReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
 end 'encodeMovsdRegBaseDisp'
 
-// `movsd [base + disp], srcXmm` (F2 0F 11 /r) — the store mirror of `encodeMovsdRegBaseDisp`.
-// The opcode is the ONLY difference (0x11 puts the XMM in the reg field as the SOURCE, the
-// same reg-field-is-source shape `mov r/m, r` has).
+// `movsd [base + disp], srcXmm` (F2 0F 11 /r) — the store mirror of `encodeMovsdRegBaseDisp`, class
+// gates included, for the reason stated there. The opcode is the ONLY other difference (0x11 puts the
+// XMM in the reg field as the SOURCE, the same reg-field-is-source shape `mov r/m, r` has).
 export function encodeMovsdBaseDispReg(code ByteArray, base X64Register, disp Imm32, srcReg X64Register)
-	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRmReg, regField: srcReg, base: base, disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
+	encodeModRmBaseDisp(code, twoByteEscape: true, opcode: OpcodeMovsdRmReg, regField: requireClass(srcReg, class: RegClass.xmm), base: requireClass(base, class: RegClass.gpr), disp: disp, wide: false, ssePrefix: SseMandatoryPrefix.scalarDouble)
 end 'encodeMovsdBaseDispReg'
 
 // `movsd dest, [rip + <.rdata constant>]` — materialize an f64 literal. The float twin of

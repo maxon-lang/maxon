@@ -440,3 +440,98 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: async-scheduler.a-float-argument-survives-a-stack-grow -->
+<!-- targets: x64-windows -->
+A recursive float-taking function runs on a green thread's 2 KB stack, so `__gt_morestack` fires
+part-way down the recursion and relocates the stack underneath it.
+
+**The stack guard is emitted at offset 0 of the entry block — before `push rbp` and before the
+`param` captures — so an incoming FLOAT argument is still sitting in xmm0–5 when the guard `call`s
+`__gt_morestack`**, which calls `VirtualAlloc`/`VirtualFree`. Those are Win64-volatile in xmm0–5, so
+the grower must save and restore that half by hand exactly as it saves the thirteen GPRs
+(`X64GtRuntime.morestackSavedXmmOrder`). Without it `x` reads 0 from the level the guard fires at
+downwards, and since `0 * 2.0` is 0 for ever the sweep saturates: **20 / 60 / 60 / 60** instead of
+20 / 60 / 140 / 300. The same recursion run synchronously is correct, because nothing grows a
+non-GT stack — only a RUN through `await async` can see this, and no golden fragment covers the
+hand-assembled GT runtime.
+
+`scale(20.0, depth: n)` sums 20 + 40 + … + 20·2ⁿ, so the four depths are 20, 60, 140, 300; each
+mismatch returns its own exit code so a partial corruption names the level it started at.
+```maxon
+function scale(x float, depth int) returns int
+	if depth == 0 'base'
+		return trunc(x)
+	end 'base'
+	return trunc(x) + scale(x * 2.0, depth: depth - 1)
+end 'scale'
+
+function sweep() returns int
+	let d0 = scale(20.0, depth: 0)
+	if d0 != 20 'bad0'
+		return 1
+	end 'bad0'
+
+	let d1 = scale(20.0, depth: 1)
+	if d1 != 60 'bad1'
+		return 2
+	end 'bad1'
+
+	let d2 = scale(20.0, depth: 2)
+	if d2 != 140 'bad2'
+		return 3
+	end 'bad2'
+
+	let d3 = scale(20.0, depth: 3)
+	if d3 != 300 'bad3'
+		return 4
+	end 'bad3'
+
+	return 0
+end 'sweep'
+
+function main() returns ExitCode
+	let p = async sweep()
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-scheduler.every-fp-argument-register-survives-a-stack-grow -->
+<!-- targets: x64-windows -->
+The sibling of the test above, widened from one FP argument register to **all six**: `six` spends
+every one of the parser's six parameter slots on a float, so xmm0–5 are ALL live at the stack guard
+when `__gt_morestack` fires. A save list that covered only some of them would still pass the
+one-argument test.
+
+Each level contributes `trunc(1.5)+trunc(2.5)+trunc(3.5)+trunc(4.5)+trunc(5.5)` = 15, and the
+recursion runs while `a >= 1.0` from 6.0 down to 0.0 — seven levels, 105. A destroyed xmm0 ends the
+recursion at the first level (15); a destroyed xmm1–5 drops that register's term from every level.
+```maxon
+function six(a float, b float, c float, d float, e float, f float) returns int
+	let sum = trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
+	if a < 1.0 'base'
+		return sum
+	end 'base'
+	return sum + six(a - 1.0, b: b, c: c, d: d, e: e, f: f)
+end 'six'
+
+function fpArgs() returns int
+	return six(6.0, b: 1.5, c: 2.5, d: 3.5, e: 4.5, f: 5.5)
+end 'fpArgs'
+
+function main() returns ExitCode
+	let p = async fpArgs()
+	let r = await p
+	if r == 105 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```

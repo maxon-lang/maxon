@@ -18,15 +18,29 @@
 //
 // ⚠⚠ EIGHT BYTES PER XMM IS SUFFICIENT, AND THAT IS A LIVE PRECONDITION RATHER THAN A SHORTCUT.
 // Win64 nominally obliges a callee to preserve all 128 bits of xmm6–15, and a slot store of an XMM
-// emits `movsd`, which saves only the low 64. That obligation is owed to EXTERNAL callers, and shv2
-// has none: it exports no DLL entry, hands no callback to any Win32 API, and its only external
-// boundary is OUTBOUND `iatCall` into kernel32, where shv2 is the CALLER and the callee preserves
-// shv2's registers. shv2 also has no type wider than 64 bits and never reads bits 64–127 of an XMM,
-// so the low half IS the value. This is the same latitude AAPCS64 gives arm64 for d8–d15, which is
-// why its 8-byte slots are correct there too.
-// ⇒ **IF shv2 EVER GAINS A VECTOR TYPE WIDER THAN 64 BITS, OR EVER EXPOSES A FUNCTION TO EXTERNAL
-// CODE, THIS MUST WIDEN TO 16 BYTES** (a `movups` pair and a 16-byte slot stride) — here AND in the
-// GT context switch, which saves the same set by hand.
+// emits `movsd`, which saves only the low 64. shv2 also has no type wider than 64 bits and never
+// reads bits 64–127 of an XMM, so the low half IS the value. This is the same latitude AAPCS64 gives
+// arm64 for d8–d15, which is why its 8-byte slots are correct there too.
+//
+// The 128-bit obligation is owed to an EXTERNAL caller of a shv2 function, and the enumeration of
+// those is the live precondition — so it is stated exactly rather than as a slogan. shv2 exports no
+// DLL entry and its only OUTBOUND boundary is `iatCall` into kernel32, where shv2 is the CALLER and
+// the callee preserves shv2's registers. It does hand the OS **three inbound entry points** of its
+// own, and each is safe for a stated reason rather than by assumption:
+//   • `__io_completion_loop` — a `CreateThread` **ThreadProc** (Runtime/GtRuntime, lowered by
+//     StdToX64Conversion). It is a genuine Win64 callee, so it owes its OS caller all 128 bits of
+//     xmm6–15 — and it pays: it is hand-assembled, touches NO XMM at all, and the one shv2 function
+//     it calls (`__gt_enqueue`) is pure pointer work with no float in it. Nothing there can be
+//     coloured into an XMM, so there is nothing to preserve.
+//   • `mrt_fault_thunk` — a **Vectored Exception Handler** (X64Runtime), and its Linux SIGFPE twin.
+//     Both run only on the way to `mrt_panic` and terminate the process; neither returns to the OS,
+//     so no register state is owed back.
+// ⇒ **IF shv2 EVER GAINS A VECTOR TYPE WIDER THAN 64 BITS, OR EVER HANDS THE OS A CALLBACK THAT
+// RETURNS AND MAY TOUCH AN XMM, THIS MUST WIDEN TO 16 BYTES** (a `movups` pair and a 16-byte slot
+// stride). There is exactly one number to change — `XmmSaveSlotBytes` below — and every frame that
+// preserves an XMM reads it, so widening it and forgetting the GT half is a compile-time panic
+// (`assertGtFrameConsistent`, X64GtRuntime) rather than the upper 64 bits of xmm6–15 quietly dying
+// across every `await`.
 //
 // ⭐ WHY A FRAME POINTER, AND WHY ON EVERY FUNCTION INCLUDING LEAVES
 //
@@ -111,6 +125,23 @@ export let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13
 // returning. Two shared lists, not second copies free to drift into register corruption.
 export let calleeSavedXmmOrder = [X64Register.xmm6, X64Register.xmm7, X64Register.xmm8, X64Register.xmm9, X64Register.xmm10, X64Register.xmm11, X64Register.xmm12, X64Register.xmm13, X64Register.xmm14, X64Register.xmm15]
 
+// The frame bytes ONE preserved XMM occupies — **the single home of the "8 bytes per XMM" decision
+// this file's header argues for**, read by every frame that preserves one: the prologue's
+// callee-saved slots below, the GT context switch's hand-built save area, and `__gt_morestack`'s
+// FP-argument save area (both X64GtRuntime).
+//
+// It IS `SpillSlotBytes` and says so rather than repeating an 8, because a preserved XMM is exactly a
+// SPILLED f64: the prologue preserves one with the spiller's own `storeSlotReg`/`loadRegSlot` ops, so
+// its slot rides the spiller's grid and its width cannot be anything else.
+//
+// ⚠ IT USED TO BE TWO NUMBERS — `SpillSlotBytes` in the prologue's reservation and `GtArgSlotBytes`
+// (the ASYNC ARGUMENT-BUFFER stride, a different fact that happens to be 8) in the GT half — under a
+// comment promising that `assertGtFrameConsistent` made forgetting one a compile-time panic. It could
+// not: it read only the GT spelling. Now both halves read this, so widening it to 16 moves
+// `assertGtFrameConsistent`'s derived frame off `GtInitialFrameBytes` and the next async compile
+// panics, which is what that comment always claimed.
+export let XmmSaveSlotBytes = SpillSlotBytes
+
 typealias X64RegisterArray = Array with X64Register
 
 // Insert prologue/epilogue ops for every function in the module.
@@ -192,7 +223,7 @@ end 'computeGuardFrameBytes'
 // under plain register pressure in a function that calls nothing, and that register still belongs to
 // this function's caller.
 function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount, xmmSaveCount RegCount) returns StackSize
-	let xmmSaveBytes = xmmSaveCount * SpillSlotBytes
+	let xmmSaveBytes = xmmSaveCount * XmmSaveSlotBytes
 	if not makesCall 'leaf'
 		return alignUp(func.stackSize + xmmSaveBytes, alignment: StackFrameAlignment)
 	end 'leaf'

@@ -86,9 +86,16 @@ let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Regist
 // register-argument cap the same way `argRegisters`' is. xmm0 doubles as the float RETURN register
 // (`callResultRegister`), exactly as an integer first-arg register never conflicts with R8: an
 // argument is consumed by the callee before the call, and the return value overwrites xmm0 after it.
-// All 16 XMMs are caller-saved (see `callerSavedMask`), so a float live across the call is spilled by
-// the allocator with no hand-holding — these registers being clobbered is already handled.
-let argFpRegisters = [X64Register.xmm0, X64Register.xmm1, X64Register.xmm2, X64Register.xmm3, X64Register.xmm4, X64Register.xmm5]
+// All six are CALLER-saved (`callerSavedMask`) — the whole caller-saved XMM half since Wave 2 made
+// xmm6–15 callee-saved — so a float live ACROSS a call is confined to xmm6–15 by the liveness census
+// with no hand-holding at a call site.
+//
+// EXPORTED for the reason `argRegisterAt` is: `__gt_morestack` (X64GtRuntime) runs from a stack guard
+// emitted BEFORE the `param` captures, so an incoming float argument is still sitting in these
+// registers when it calls VirtualAlloc/VirtualFree — which are Win64-volatile in exactly them. It must
+// therefore save and restore this list, and a second hand-written spelling of xmm0–5 over there is the
+// one-fact-written-twice bug this file's header warns of.
+export let argFpRegisters = [X64Register.xmm0, X64Register.xmm1, X64Register.xmm2, X64Register.xmm3, X64Register.xmm4, X64Register.xmm5]
 
 // The `VirtualAlloc` call shape `lowerOsAllocPages` emits. Named rather than spelled as bare
 // hex at the call site: `0x3000` is unreadable and `MEM_COMMIT|MEM_RESERVE` is the fact.

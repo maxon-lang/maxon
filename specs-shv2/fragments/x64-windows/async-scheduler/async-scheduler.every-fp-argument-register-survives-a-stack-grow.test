@@ -1,0 +1,128 @@
+// Test: async-scheduler.every-fp-argument-register-survives-a-stack-grow
+function six(a float, b float, c float, d float, e float, f float) returns int
+	let sum = trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
+	if a < 1.0 'base'
+		return sum
+	end 'base'
+	return sum + six(a - 1.0, b: b, c: c, d: d, e: e, f: f)
+end 'six'
+
+function fpArgs() returns int
+	return six(6.0, b: 1.5, c: 2.5, d: 3.5, e: 4.5, f: 5.5)
+end 'fpArgs'
+
+function main() returns ExitCode
+	let p = async fpArgs()
+	let r = await p
+	if r == 105 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_system_stack_top@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_clock_ticks@80 = i64 0
+  __gt_clock_freq@88 = i64 0
+  __gt_proc_count@96 = i64 0
+  __gt_proc_handles_base@104 = i64 0
+  __gt_proc_gts_base@112 = i64 0
+  __gt_free_list_head@120 = i64 0
+  __gt_live_count@128 = i64 0
+  __gt_startup_base@136 = i64 0
+  __gt_procinfo_base@144 = i64 0
+  __gt_exitcode_base@152 = i64 0
+  __gt_cmdline_buf_base@160 = i64 0
+  __gt_cmdline_buf_cap@168 = i64 0
+}
+
+func @six {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.storeSlotReg slot0, xmm6
+    x64.cvttsd2siRegReg rax, xmm1
+    x64.cvttsd2siRegReg rcx, xmm2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm4
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm5
+    x64.leaRegRegReg rbx, rax, rcx
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm6, xmm0
+    x64.jcc above, base
+    x64.jmp ifcont
+  base:
+    x64.movRegReg r8, rbx
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.subsdRegReg xmm0, xmm0, xmm6
+    x64.callDirect six
+    x64.leaRegRegReg r8, rbx, r8
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @fpArgs {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.movsdRegRip xmm2, [rip + __fconst_3]
+    x64.movsdRegRip xmm3, [rip + __fconst_4]
+    x64.movsdRegRip xmm4, [rip + __fconst_5]
+    x64.movsdRegRip xmm5, [rip + __fconst_6]
+    x64.callDirect six
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + fpArgs]
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.cmpRegImm32 r8, 105
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

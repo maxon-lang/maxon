@@ -38,10 +38,12 @@
 // switch-in's `ret` enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at
 // chunk-build time, deriving it from BOTH lists.
 //
-// ⚠ ONE 8-BYTE WORD PER XMM, matching the prologue's 8-byte slots exactly — the low 64 bits ARE the value in
-// shv2 (no type is wider, and nothing reads bits 64-127). The full argument and the condition that would
-// invalidate it live once in `X64PrologueEpilogue`'s header; if that widens to 16 bytes, THIS widens with it,
-// and `assertGtFrameConsistent` is what makes forgetting the second half a compile-time panic.
+// ⚠ ONE `XmmSaveSlotBytes` WORD PER XMM — the SAME constant the prologue's slots stride by, not a second 8
+// that happens to agree. The low 64 bits ARE the value in shv2 (no type is wider, and nothing reads bits
+// 64-127); the full argument and the condition that would invalidate it live once in `X64PrologueEpilogue`'s
+// header, beside that constant. Widen it there and `assertGtFrameConsistent` — which now DERIVES from it,
+// where it used to derive from `GtArgSlotBytes` (the async argument-buffer stride, a different fact that
+// happens to be 8) and so could never have seen the prologue widen — panics on the next async compile.
 
 // The register the context switch reads `from` (arg 0) and `to` (arg 1) from — the ABI's first two integer
 // argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
@@ -95,10 +97,11 @@ let GtTrampGtReg = X64Register.r12
 let GtTrampArgBufReg = X64Register.r10
 let GtTrampFuncPtrReg = X64Register.r11
 
-// The bytes the context switch reserves below its GPR pushes for the callee-saved XMM half — one word per
-// register of `calleeSavedXmmOrder`, the same 8-byte width the prologue's slots use.
+// The bytes the context switch reserves below its GPR pushes for the callee-saved XMM half — one
+// `XmmSaveSlotBytes` slot per register of `calleeSavedXmmOrder`, which IS the width the prologue's slots use
+// because it is the same constant.
 function gtXmmSaveAreaBytes() returns StackSize
-	return calleeSavedXmmOrder.count() * GtArgSlotBytes
+	return calleeSavedXmmOrder.count() * XmmSaveSlotBytes
 end 'gtXmmSaveAreaBytes'
 
 // ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays `GtInitialFrameBytes`)
@@ -114,9 +117,15 @@ end 'gtXmmSaveAreaBytes'
 // `calleeSavedOrder` ALONE would have kept it passing while covering only half the frame — and the GT hazard
 // would have gone silent exactly as the callee-saved set grew. An assert that covers only the half that did
 // not change is worse than none: it reads as protection.
+//
+// ⚠⚠ AND IT IS DERIVED FROM THE PROLOGUE'S OWN STRIDE (`XmmSaveSlotBytes`, via `gtXmmSaveAreaBytes`), which
+// is the second half of the same lesson. It used to compute the XMM half from `GtArgSlotBytes` — 8 for an
+// unrelated reason — so widening the prologue's slots to 16 would have left THIS still passing while the
+// context switch saved 8 of every 16 bytes: the upper halves of xmm6-15 destroyed across every `await`,
+// under a comment promising this assert would catch exactly that.
 function assertGtFrameConsistent()
-	let gprBytes = calleeSavedOrder.count() * GtArgSlotBytes
-	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + GtArgSlotBytes
+	let gprBytes = calleeSavedOrder.count() * StackWordBytes
+	let framedBytes = gprBytes + gtXmmSaveAreaBytes() + StackWordBytes
 
 	if framedBytes != GtInitialFrameBytes 'drift'
 		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved GPR words ({gprBytes} bytes) + {calleeSavedXmmOrder.count()} callee-saved XMM words ({gtXmmSaveAreaBytes()} bytes) + 1 return-address word = {framedBytes} bytes, but GtInitialFrameBytes (the frame __gt_spawn lays) is {GtInitialFrameBytes} — a mismatch is a wild ret on the first switch-in")
@@ -149,7 +158,7 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	encodePrologue(code, stackSize: gtXmmSaveAreaBytes())
 	for k in 0 upto calleeSavedXmmOrder.count() 'saveXmm'
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: save index derived from count is in range")
-		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: (k * GtArgSlotBytes) as Imm32, srcReg: reg)
+		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32, srcReg: reg)
 	end 'saveXmm'
 
 	// from->sp = rsp ; from->fp = rbp.
@@ -176,7 +185,7 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	// its own word rather than a stack position); only the GPR pops below are LIFO.
 	for k in 0 upto calleeSavedXmmOrder.count() 'restoreXmm'
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: restore index derived from count is in range")
-		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: (k * GtArgSlotBytes) as Imm32)
+		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32)
 	end 'restoreXmm'
 	encodeEpilogue(code, stackSize: gtXmmSaveAreaBytes())
 
@@ -431,9 +440,28 @@ end 'emitGtShimmedIatCall'
 //
 // ENTRY CONTRACT (from the prologue guard): r11 = the current GT, r10 = the system-stack top (both non-arg
 // scratch the guard loaded, so this chunk needs no `.data` of its own for them), rsp = the GT stack pointing at
-// the return address the guard's `call` pushed. It PRESERVES EVERY register the guarded function's incoming args
-// and caller-saved chain occupy (rax/rcx/rdx/r8/r9/rsi/rdi + rbx/rbp/r12-r15) — saved on the SYSTEM stack, so the
-// tiny GT stack the guard is protecting never holds this frame — and returns onto the RELOCATED (2x) stack.
+// the return address the guard's `call` pushed. Everything it saves goes on the SYSTEM stack, so the tiny GT
+// stack the guard is protecting never holds this frame, and it returns onto the RELOCATED (2x) stack.
+//
+// ⭐⭐ WHAT IT PRESERVES, AND WHY THAT SET AND NOT ANOTHER. The guard is emitted at offset 0 of the entry block
+// — BEFORE `push rbp` and before the `param` captures (X64Backend.emitFunctionChunk) — so when it `call`s here
+// the guarded function has established NOTHING yet: every incoming argument is still in its ABI register, and
+// every callee-saved register still holds its CALLER's value. What must be saved is therefore
+// (live at a function entry) ∩ (destroyed by this chunk or its callees):
+//   • GPRs — the six integer arg registers, the five callee-saved whose caller values are unpushed, rbp (the
+//     chain link) and r8: `morestackSavedGprOrder`, all thirteen, because this chunk's own body uses rbx/r12-r15
+//     as its working registers and rax/rcx/rdx/rsi/rdi/r8/r9 as VirtualAlloc/VirtualFree argument registers.
+//   • XMMs — the six FP ARGUMENT registers, `argFpRegisters` (xmm0-5). This chunk emits no SSE instruction at
+//     all, but VirtualAlloc and VirtualFree are ordinary Win64 callees and xmm0-5 are Win64-VOLATILE, so they
+//     come back destroyed. xmm6-15 need no save for the mirror-image reason: Win64 obliges kernel32 to preserve
+//     them, which is the same guarantee `iatCall`'s clobber mask already rests on for every register-allocated
+//     function in the program.
+//
+// ⚠⚠ THE XMM HALF WAS MISSING UNTIL THIS COMMIT, AND IT WAS A SILENT WRONG ANSWER, NOT A CRASH: a float
+// PARAMETER of any function deep enough to trip the guard read 0 from that call downwards, on the green thread
+// only. `specs-shv2/async-scheduler.md`'s `a-float-argument-survives-a-stack-grow` /
+// `every-fp-argument-register-survives-a-stack-grow` are the two RUNS that say so — no golden fragment covers a
+// hand-assembled chunk, and the sync form of the same program is correct because nothing grows a non-GT stack.
 
 // The GPRs `__gt_morestack` saves on the system stack, in PUSH order (pop = reverse). v1's exact 13-register set
 // (`X64Backend.maxon:7113`), a SUPERSET of everything live at a shv2 prologue: the six arg registers
@@ -442,12 +470,28 @@ end 'emitGtShimmedIatCall'
 // back by a fixed displacement to write the rebased live rbp (see `savedRbpDisp` in `buildGtMorestackChunk`).
 let morestackSavedGprOrder = [X64Register.rbp, X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15, X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax]
 
+// The bytes `__gt_morestack` reserves below its GPR pushes: the Win64 shadow space its VirtualAlloc/VirtualFree
+// calls owe their callees, plus one `XmmSaveSlotBytes` slot per FP argument register ABOVE it.
+//
+// ABOVE, and that ordering is the same one `spillSlotBaseDisp` decides for a register-allocated frame: a callee
+// may freely clobber its caller's 32-byte shadow space, so a float parked inside it would be destroyed by the
+// very call it is being saved across.
+function gtMorestackFrameBytes() returns StackSize
+	return ShadowSpaceBytes + (argFpRegisters.count() * XmmSaveSlotBytes)
+end 'gtMorestackFrameBytes'
+
+// The rsp displacement of FP argument slot `k` inside that frame — spelled once so the save and the restore
+// cannot disagree, which for a hand-assembled chunk is the difference between a preserved float and a wild one.
+function gtMorestackXmmSlotDisp(k RegCount) returns Imm32
+	return (ShadowSpaceBytes + (k * XmmSaveSlotBytes)) as Imm32
+end 'gtMorestackXmmSlotDisp'
+
 // The ferried entry-rsp word sits one machine word below the system-stack top (`[systemStackTop - 8]`), and rsp
 // is positioned there before the pushes begin.
-let MorestackFerryDisp = (0 - GtArgSlotBytes) as Imm32
+let MorestackFerryDisp = (0 - StackWordBytes) as Imm32
 
 // The `+8 rsp` that skips the ferried entry-rsp slot after the GPR pops, before switching to the new GT stack.
-let MorestackFerrySkipBytes = GtArgSlotBytes as Imm32
+let MorestackFerrySkipBytes = StackWordBytes as Imm32
 
 // The two frame-slot displacements are DERIVED from the saved-register count at build time (`morestackSavedGprOrder`
 // is a runtime array, so its `.count()` cannot appear in a top-level `let`) — see `buildGtMorestackChunk`.
@@ -491,22 +535,31 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var iatRelocs = RelocationArray.create()
 
-	// Two frame slots are read back by fixed displacement, both DERIVED from the saved-register count so a change
-	// to `morestackSavedGprOrder` cannot leave a stale magic offset:
-	//   • the rebased LIVE rbp is written to rbp's saved slot BEFORE the shadow is released — `ShadowSpaceBytes`
-	//     above the `count-1` words below rbp (rbp is the FIRST push, so it is the top saved GPR).
-	//   • the ferried ENTRY rsp is read AFTER the shadow is released — `count` words above the post-release rsp.
+	// Two frame slots are read back by fixed displacement, both DERIVED from the saved-register count and the
+	// frame size so a change to `morestackSavedGprOrder` or to the FP save area cannot leave a stale magic offset:
+	//   • the rebased LIVE rbp is written to rbp's saved slot BEFORE the frame is released — the whole frame plus
+	//     the `count-1` words below rbp (rbp is the FIRST push, so it is the top saved GPR).
+	//   • the ferried ENTRY rsp is read AFTER the frame is released — `count` words above the post-release rsp.
 	let savedGprCount = morestackSavedGprOrder.count()
-	let savedRbpDisp = (ShadowSpaceBytes + ((savedGprCount - 1) * (GtArgSlotBytes as StackSize))) as Imm32
-	let entryRspDisp = (savedGprCount * (GtArgSlotBytes as StackSize)) as Imm32
+	let frameBytes = gtMorestackFrameBytes()
+	let savedRbpDisp = (frameBytes + ((savedGprCount - 1) * StackWordBytes)) as Imm32
+	let entryRspDisp = (savedGprCount * StackWordBytes) as Imm32
 
 	// ⭐ 16-byte alignment at the VirtualAlloc/VirtualFree calls, enforced so a future register added to
-	// `morestackSavedGprOrder` cannot silently break it (feedback: DERIVE > CHECK > COMMENT). The ferry sets rsp to
-	// `systemStackTop - 8` (the top is 16-aligned, so rsp ≡ 8), then the GPR pushes and the 16-aligned shadow move
-	// it; rsp lands 16-aligned at the calls iff `1 ferried word + savedGprCount` GPR words is EVEN. A misalignment
-	// is a crash inside kernel32's SSE, arbitrarily far from the cause — so it is a compile-time panic here.
-	if (1 + savedGprCount) mod 2 != 0 'alignment'
-		panic("__gt_morestack misaligned: 1 ferried word + {savedGprCount} saved GPRs = {1 + savedGprCount} words; must be EVEN so rsp is 16-aligned at the VirtualAlloc/VirtualFree calls — restore the parity when changing morestackSavedGprOrder")
+	// `morestackSavedGprOrder` — or a change to the FP save area's size — cannot silently break it (feedback:
+	// DERIVE > CHECK > COMMENT). The ferry sets rsp to `systemStackTop - 8` (the top is 16-aligned, so rsp ≡ 8),
+	// then `savedGprCount` pushes and the `sub rsp, frameBytes` move it further, so rsp lands 16-aligned at the
+	// calls iff those two together are a whole number of 16-byte units. A misalignment is a crash inside
+	// kernel32's SSE, arbitrarily far from the cause — so it is a compile-time panic here.
+	//
+	// ⚠ IT COUNTS THE RESERVATION, NOT JUST THE PUSHES. It used to test `1 + savedGprCount` alone, which was
+	// sufficient only while the reservation was `ShadowSpaceBytes` and therefore always a multiple of 16. The
+	// FP save area made the reservation VARIABLE — six 8-byte slots today, and an odd count would flip the
+	// residue — so a check over the half that did not change would have read as protection while covering
+	// nothing (the lesson `assertGtFrameConsistent` above records).
+	let stackedWordBytes = (1 + savedGprCount) * StackWordBytes
+	if (stackedWordBytes + frameBytes) mod StackFrameAlignment != 0 'alignment'
+		panic("__gt_morestack misaligned: 1 ferried word + {savedGprCount} saved GPRs = {stackedWordBytes} bytes, plus a {frameBytes}-byte frame ({ShadowSpaceBytes} shadow + {argFpRegisters.count()} FP argument slots) = {stackedWordBytes + frameBytes}, which is not a multiple of {StackFrameAlignment} — rsp must be 16-aligned at the VirtualAlloc/VirtualFree calls. Restore the parity when changing morestackSavedGprOrder or the FP save area.")
 	end 'alignment'
 
 	// Step 1: switch to the system stack, ferrying the GT entry rsp (rsp on entry — the guard's return-addr slot)
@@ -515,11 +568,22 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(code, base: ShimGtRspReg, disp: MorestackFerryDisp, srcReg: X64Register.rsp)  // [r10-8] = entryRsp
 	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: ShimGtRspReg, disp: MorestackFerryDisp)  // rsp = r10 - 8
 
-	// Step 2: save the 13 GPRs, then reserve the shadow space (rsp lands 16-aligned at the calls below).
+	// Step 2: save the 13 GPRs, then reserve the frame — shadow space + the FP-argument save area — and write
+	// the six FP argument registers into it. rsp lands 16-aligned at the calls below (asserted above).
+	//
+	// ⭐ THE XMM HALF IS NOT SYMMETRY FOR ITS OWN SAKE. `argFpRegisters` hold this function's incoming FLOAT
+	// arguments (the guard runs before the `param` captures), and the two kernel calls below destroy exactly
+	// them — see this chunk's ENTRY CONTRACT. Reading `argFpRegisters` rather than spelling xmm0-5 again is the
+	// point: the ABI's FP argument file is stated once, in StdToX64Conversion, and a second copy here could only
+	// ever drift into a float that silently reads 0.
 	for reg in morestackSavedGprOrder 'push'
 		encodePushReg(code, reg: reg)
 	end 'push'
-	encodePrologue(code, stackSize: ShadowSpaceBytes)
+	encodePrologue(code, stackSize: frameBytes)
+	for k in 0 upto argFpRegisters.count() 'saveXmm'
+		let reg = try argFpRegisters.get(k) otherwise panic("buildGtMorestackChunk: save index derived from count is in range")
+		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: gtMorestackXmmSlotDisp(k as RegCount), srcReg: reg)
+	end 'saveXmm'
 
 	// gt is still in r11 (nothing above clobbered it) — move it to rbx for the body, freeing r11 for the walk.
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreGtReg, src: ShimGtReg, wide: true)  // rbx = gt
@@ -611,7 +675,14 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	emitLoadTibFromGt(code, gtReg: GtMoreGtReg, scratch: X64Register.rcx)
 
 	// Step 12: tear down + return onto the RELOCATED GT stack. new GT rsp = entry rsp (ferried) + offset.
-	encodeEpilogue(code, stackSize: ShadowSpaceBytes)  // add rsp, shadow
+	// The FP argument registers come back FIRST, while their slots are still inside the reserved frame — and
+	// after the last kernel call (step 10's VirtualFree), which is the call that destroyed them. `movsd` touches
+	// no GPR, so the offset in rax and the GT in rbx are untouched by this loop.
+	for k in 0 upto argFpRegisters.count() 'restoreXmm'
+		let reg = try argFpRegisters.get(k) otherwise panic("buildGtMorestackChunk: restore index derived from count is in range")
+		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: gtMorestackXmmSlotDisp(k as RegCount))
+	end 'restoreXmm'
+	encodeEpilogue(code, stackSize: frameBytes)  // add rsp, shadow + FP save area
 	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: X64Register.rsp, disp: entryRspDisp, wide: true)  // r10 = entryRsp
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: ShimGtRspReg, src: GtMoreOffsetReg, wide: true)  // r10 += offset
 	for i in 0 upto morestackSavedGprOrder.count() 'pop'

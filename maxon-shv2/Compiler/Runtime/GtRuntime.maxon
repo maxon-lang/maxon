@@ -186,8 +186,12 @@ let GtStatusWaiting = 3
 // The green-thread stack: the INITIAL region a spawned GT gets. The relocating morestack (P1.5-B1a′) grows it
 // on demand (2x per guard fault, copy + rbp-chain relocation), so this is a small SEED, not a ceiling — the
 // syscall shim (slice 1) already moved every kernel call off this stack onto the 64 KB system stack, which is
-// what makes a tiny GT stack safe. ⚠ BRING-UP: kept at 0x100000 (1 MiB) while the guard is proven inert, then
-// shrunk to 0x800 (2 KB) once morestack is disassembly-verified — see this file's git history / the B1a′ brief.
+// what makes a tiny GT stack safe.
+//
+// 2 KB is the SHIPPED value, and it is small on purpose: at this size the guard fires within a couple of
+// frames of a green thread's entry, so `__gt_morestack` is exercised by ordinary spec programs rather than
+// only by a contrived deep recursion. (It was brought up at 0x100000 while the guard was still proven inert,
+// and shrunk here once morestack was disassembly-verified — that step is done; see the B1a′ history.)
 export let GtStackSize = 0x800
 
 // The GUARD MARGIN (P1.5-B1a′): the cushion a function's prologue projects below its frame before comparing
@@ -230,6 +234,16 @@ export let MaxAsyncArgs = 6
 // at, and `ArgBufBytes` sizes by — one fact, so the three cannot drift.
 export let GtArgSlotBytes = 8
 export let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
+
+// One machine word ON THE STACK: what a `push r64` moves rsp by, what a `call`'s pushed return address
+// occupies, and the stride of every saved-register word in the hand-laid frames this file's `__gt_spawn`
+// lays and `__gt_context_switch`/`__gt_morestack` build (X64GtRuntime).
+//
+// ⚠ DISTINCT FROM `GtArgSlotBytes` THOUGH BOTH ARE 8. That one is the async ARGUMENT BUFFER's stride — a
+// heap object's layout — and it had quietly become the spelling for "a stack word" as well, in four
+// unrelated places across two files. Two facts sharing one name means an edit to either silently moves the
+// other; naming them apart is what makes changing the argument buffer's width a local change.
+export let StackWordBytes = 8
 
 // --- Timer store (P1.5 mid-body-yield) ---
 // The parked-GT deadline store: a fixed array of (deadline, gt) entries, one per sleeping GT. Its ENTRY
@@ -968,13 +982,14 @@ function buildGtSpawn(module StdModule, usesIocp bool)
 	let stackGuard = ids.mint()
 	module.appendOp(initBlock, op: StdOp.binOp(stackGuard, lhs: stackBase, rhs: guardMarginConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffStackGuard, valueId: stackGuard, valueType: StdType.i64))
-	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The five callee-saved slots below
-	// it are the MEM_COMMIT zeros — DON'T-CARE, because they become this GT's initial callee-saved registers, which
-	// the user function establishes before it reads them. Only the trampoline return-address slot must be written.
-	let eightConst = ids.mint()
-	module.appendOp(initBlock, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
+	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The FIFTEEN callee-saved slots
+	// below it — five GPR words and ten XMM words since Wave 2 — are the MEM_COMMIT zeros, DON'T-CARE, because
+	// they become this GT's initial callee-saved registers, which the user function establishes before it reads
+	// them. Only the trampoline return-address slot must be written.
+	let retWordConst = ids.mint()
+	module.appendOp(initBlock, op: StdOp.const(retWordConst, value: StackWordBytes, valueType: StdType.i64))
 	let retSlotAddr = ids.mint()
-	module.appendOp(initBlock, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(initBlock, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: retWordConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let trampAddr = ids.mint()
 	module.appendOp(initBlock, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
