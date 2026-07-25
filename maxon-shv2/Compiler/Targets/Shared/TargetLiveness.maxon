@@ -1739,9 +1739,28 @@ export type UseIndex
 
 	// Passed to a phi on some branch edge.
 	var edgePassed as BoolArray
-	// Some `storeSlotReg` already spills it (an earlier splitter iteration split it), and the slot
-	// that store writes — the slot any FURTHER relief of the same value reloads out of.
+	// Some `storeSlotReg` already spills THIS id — an earlier splitter iteration split it and wrote it
+	// out. It is the tier-2 discriminator ONLY (`isSpillVictim` routes such a value to tier 4's
+	// reloads-only relief); what a spill needs to know about the STORE it is about to emit is
+	// `slotResident` below, which is a strictly wider set.
 	var spillStored as BoolArray
+	// MEMORY ALREADY HOLDS THIS VALUE, and the slot it is in. True for a stored value AND for a
+	// RELOAD's destination: `loadRegSlot(f, slot: s)` means `f` IS the content of slot `s`, so slot `s`
+	// still holds `f` afterwards and a further relief of `f` needs no store at all — only more loads,
+	// out of that same slot.
+	//
+	// ⚠ WITHOUT THE RELOAD HALF, EVERY RE-SPLIT OF A RELOAD WRITES MEMORY BACK TO MEMORY. The fresh id
+	// a split mints had no `storeSlotReg` of its own, so the next split treated it as a FIRST spill:
+	// it emitted `loadRegSlot rcx, slot22` / `storeSlotReg slot23, rcx` — a value copied out of one
+	// stack slot straight into another — and burned a second 8-byte slot on the same value. 36
+	// committed goldens carried that pair.
+	//
+	// ⚠ IT IS SOUND BECAUSE A SLOT BELONGS TO ONE LINEAGE. `slotForSpillOf` hands back an existing slot
+	// only to a value already resident in it, and `nextSlot` only ever increments — so the only writer
+	// of slot `s` is the def-anchored store of the value the lineage started from. That store dominates
+	// the `loadRegSlot` that defines `f` (it is at the def, and the def dominates every use by Rule 1),
+	// hence it dominates every reload of `f` placed at one of `f`'s uses.
+	var slotResident as BoolArray
 	var spillSlot as SpillSlotArray
 	// Appears as an operand — def OR use — of an op in a block at loop depth > 0.
 	var touchesLoop as BoolArray
@@ -1749,7 +1768,7 @@ export type UseIndex
 	// An EMPTY index over a `valueCount`-value, `numBlocks`-block function — the shape `buildUseIndex`
 	// fills in place, through the very same mutators a split edits it with.
 	static function create(valueCount ValueId, numBlocks CfgIndex) returns UseIndex
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0 as OpSeq, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: zeroColumn(valueCount), lastUseOfValue: zeroColumn(valueCount), nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: zeroColumn(numBlocks), firstUseInBlock: zeroColumn(numBlocks), nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), defOpIdx: zeroColumn(valueCount), defOpBlock: zeroColumn(valueCount), isPhi: falseColumn(valueCount), phiBlock: zeroColumn(valueCount), edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), spillSlot: zeroColumn(valueCount), touchesLoop: falseColumn(valueCount)}
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0 as OpSeq, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: zeroColumn(valueCount), lastUseOfValue: zeroColumn(valueCount), nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: zeroColumn(numBlocks), firstUseInBlock: zeroColumn(numBlocks), nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), defOpIdx: zeroColumn(valueCount), defOpBlock: zeroColumn(valueCount), isPhi: falseColumn(valueCount), phiBlock: zeroColumn(valueCount), edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: zeroColumn(valueCount), touchesLoop: falseColumn(valueCount)}
 	end 'create'
 
 	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -1838,16 +1857,23 @@ export type UseIndex
 		return try self.edgePassed.get(valueId) otherwise panic("UseIndex.isEdgePassed: value {valueId} out of range")
 	end 'isEdgePassed'
 
-	// True iff some `storeSlotReg` already spills `valueId`.
+	// True iff some `storeSlotReg` already spills `valueId` — the tier-2 discriminator. Ask
+	// `isSlotResident` instead when the question is "must this spill emit a store?".
 	export function hasSpillStore(valueId ValueId) returns bool
 		return try self.spillStored.get(valueId) otherwise panic("UseIndex.hasSpillStore: value {valueId} out of range")
 	end 'hasSpillStore'
 
-	// The slot `valueId` is already spilled into, or `none` (see `ValueSpillSlot`).
+	// True iff memory already holds `valueId` — it was stored, or it IS a reload's destination (see
+	// `slotResident`). A spill of such a value emits reloads only.
+	export function isSlotResident(valueId ValueId) returns bool
+		return try self.slotResident.get(valueId) otherwise panic("UseIndex.isSlotResident: value {valueId} out of range")
+	end 'isSlotResident'
+
+	// The slot memory already holds `valueId` in, or `none` (see `ValueSpillSlot`).
 	export function spillSlotOf(valueId ValueId) returns ValueSpillSlot
-		if not self.hasSpillStore(valueId) 'notSpilled'
+		if not self.isSlotResident(valueId) 'notInASlot'
 			return ValueSpillSlot.none
-		end 'notSpilled'
+		end 'notInASlot'
 		return ValueSpillSlot.slot(try self.spillSlot.get(valueId) otherwise panic("UseIndex.spillSlotOf: spillSlot.get OOB for value {valueId}"))
 	end 'spillSlotOf'
 
@@ -2093,6 +2119,7 @@ export type UseIndex
 		try self.isPhi.set(valueId, value: false) otherwise panic("UseIndex.resetValue: isPhi.set OOB for value {valueId}")
 		try self.edgePassed.set(valueId, value: false) otherwise panic("UseIndex.resetValue: edgePassed.set OOB for value {valueId}")
 		try self.spillStored.set(valueId, value: false) otherwise panic("UseIndex.resetValue: spillStored.set OOB for value {valueId}")
+		try self.slotResident.set(valueId, value: false) otherwise panic("UseIndex.resetValue: slotResident.set OOB for value {valueId}")
 		try self.touchesLoop.set(valueId, value: false) otherwise panic("UseIndex.resetValue: touchesLoop.set OOB for value {valueId}")
 	end 'resetValue'
 
@@ -2104,19 +2131,34 @@ export type UseIndex
 		try self.defOpBlock.set(valueId, value: blockLocal) otherwise panic("UseIndex.setOpDef: defOpBlock.set OOB for value {valueId}")
 	end 'setOpDef'
 
-	// Record that a `storeSlotReg` spills `valueId` into `slot` — the two facts a LATER relief of the
-	// same value needs (skip the redundant second store; reload out of the slot it already has).
-	export function setSpillStore(valueId ValueId, slot SpillSlot)
+	// Record that a `storeSlotReg` spills `valueId`. A stored value is also RESIDENT — memory holds it
+	// — so this is strictly a refinement of `recordSlotResidency`, which the caller has already run.
+	function setSpillStore(valueId ValueId)
 		try self.spillStored.set(valueId, value: true) otherwise panic("UseIndex.setSpillStore: value {valueId} out of range (valueCount={self.valueCount})")
-		try self.spillSlot.set(valueId, value: slot) otherwise panic("UseIndex.setSpillStore: spillSlot.set OOB for value {valueId}")
 	end 'setSpillStore'
 
-	// `setSpillStore` for the op-level answer: the slot a `storeSlotReg` writes, or `none` for every op
-	// that is not one. Resolved ONCE per op (`spillStoreSlotOf`) rather than per operand.
+	// Record that memory holds `valueId` in `slot` — the two facts a LATER relief of the same value
+	// needs (skip the redundant second store; reload out of the slot it already has).
+	function setSlotResidency(valueId ValueId, slot SpillSlot)
+		try self.slotResident.set(valueId, value: true) otherwise panic("UseIndex.setSlotResidency: value {valueId} out of range (valueCount={self.valueCount})")
+		try self.spillSlot.set(valueId, value: slot) otherwise panic("UseIndex.setSlotResidency: spillSlot.set OOB for value {valueId}")
+	end 'setSlotResidency'
+
+	// The op-level answer: `slotResidencyOf` says the op puts its virtual operand's value in a slot (a
+	// store writes it there; a reload reads it OUT of there and leaves it there). Resolved ONCE per op
+	// rather than per operand.
+	function recordSlotResidency(residency ValueSpillSlot, valueId ValueId)
+		match residency 'inASlot'
+			none then break 'inASlot'
+			slot(s) then self.setSlotResidency(valueId, slot: s)
+		end 'inASlot'
+	end 'recordSlotResidency'
+
+	// `setSpillStore` for the op-level answer: a `storeSlotReg`'s source, and nothing else.
 	function recordSpillStore(storeSlot ValueSpillSlot, valueId ValueId)
 		match storeSlot 'store'
 			none then break 'store'
-			slot(s) then self.setSpillStore(valueId, slot: s)
+			slot then self.setSpillStore(valueId)
 		end 'store'
 	end 'recordSpillStore'
 
@@ -2159,6 +2201,7 @@ export type UseIndex
 		self.phiBlock.growFilled(newValueCount, value: 0)
 		self.edgePassed.growFilled(newValueCount, value: false)
 		self.spillStored.growFilled(newValueCount, value: false)
+		self.slotResident.growFilled(newValueCount, value: false)
 		self.spillSlot.growFilled(newValueCount, value: 0)
 		self.touchesLoop.growFilled(newValueCount, value: false)
 
@@ -2234,6 +2277,7 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 		let op = try module.ops.get(opIdx) otherwise panic("indexBlockFacts: opIdx not in module.ops")
 		targetOpOperands(op, buf: buf)
 		let storeSlot = spillStoreSlotOf(op)
+		let residency = slotResidencyOf(op)
 
 		for k in 0 upto buf.count() 'eachOperand'
 			let o = try buf.get(k) otherwise panic("indexBlockFacts: buf.get OOB")
@@ -2248,6 +2292,11 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 			if inLoop 'insideLoop'
 				index.setTouchesLoop(v)
 			end 'insideLoop'
+
+			// Residency is recorded for the op's ONE virtual operand whichever side it is on: a
+			// `storeSlotReg`'s source (a use) and a `loadRegSlot`'s destination (a def) both end with
+			// the value sitting in that slot. Every other op answers `none`.
+			index.recordSlotResidency(residency, valueId: v)
 
 			if operandIsDef(o) 'def'
 				index.setOpDef(v, opIdx: opIdx, blockLocal: blockLocal)
@@ -2870,7 +2919,8 @@ end 'ParamCrossForbid'
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
 function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
-	targetOpOperands(op, buf: buf)
+	// This also fills `buf` with the op's operands, which everything below reads.
+	let clobberMask = opClobberMask(op, buf: buf)
 
 	// Read the reuse-copy transient BEFORE the backward step mutates `liveRow` — it still
 	// holds the live-AFTER set here, which is where "does the reuse input outlive the op?"
@@ -2879,20 +2929,6 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	classRowZero(pressureOut)
 	addReuseTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
-	// Registers this op writes without being a virtual def: physical def operands +
-	// the implicit-def mask (a call's clobbers, M5; `idiv`'s RAX/RDX). Values live
-	// across must avoid them.
-	var clobberMask = op.rawValue.implicitDefs
-	for o in buf 'physDefs'
-		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
-			// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this
-			// SHARED census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call
-			// emits, which the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked
-			// on. `regMaskAdd` forms the same clobber bit from the `RegNum` directly — bit-identical for the
-			// x64 registers this already handled (an `X64Register.rawValue` IS its `RegNum`).
-			clobberMask = regMaskAdd(clobberMask, regNum: operandPhysicalRegNum(o))
-		end 'physDef'
-	end 'physDefs'
 	if clobberMask != 0 'hasClobber'
 		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 	end 'hasClobber'
@@ -2919,6 +2955,34 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 		classRowSet(pressureOut, class: class, value: classRowGet(pressureOut, class: class) + classRowGet(liveByClass, class: class))
 	end 'eachClass'
 end 'stepBackwardOverOp'
+
+// Every register `op` WRITES without being a virtual def: its implicit-def mask (a call's 9
+// caller-saved plus all 16 XMMs, an `idiv`'s RAX/RDX) plus each PHYSICAL def operand (an argument
+// pre-move's `mov argReg, v`). A value live ACROSS the op must avoid every one of them, which is
+// exactly what `forbidden` accumulates.
+//
+// ⚠ IT IS ONE FUNCTION BECAUSE IT IS ONE FACT. The liveness sweep folds this mask into `forbidden`;
+// the splitter asks the same question in the other direction — "would a reload spanning this op be
+// left with NO register at all?" (`opStrandsClass`). Written twice, the two would drift, and the
+// splitter would then mint reloads it believes are free of a clobber the sweep has already forbidden
+// them — which is a value the driver re-picks for ever, not a wrong answer any test would notice.
+//
+// `buf` is filled with `op`'s operands as a side effect, which every caller wants anyway.
+export function opClobberMask(op TargetOp, buf OperandList) returns RegMask
+	targetOpOperands(op, buf: buf)
+	var mask = op.rawValue.implicitDefs
+	for o in buf 'physDefs'
+		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
+			// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this
+			// SHARED census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call
+			// emits, which the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked
+			// on. `regMaskAdd` forms the same clobber bit from the `RegNum` directly — bit-identical for the
+			// x64 registers this already handled (an `X64Register.rawValue` IS its `RegNum`).
+			mask = regMaskAdd(mask, regNum: operandPhysicalRegNum(o))
+		end 'physDef'
+	end 'physDefs'
+	return mask
+end 'opClobberMask'
 
 // Add the REUSE-COPY TRANSIENT to `pressureOut`, in the FILE its destination register belongs to.
 //
@@ -3085,6 +3149,27 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		callMem gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
+
+// The slot an op leaves its ONE virtual operand's value sitting in: a spill STORE's slot (it just
+// wrote the value there) or a spill RELOAD's slot (it just read the value out of there, and a read
+// does not vacate a stack slot). `none` for every other op.
+//
+// It is the wider twin of `spillStoreSlotOf`, which answers the NARROWER question `rewriteOpAt` and
+// the tier-2 discriminator ask — "is this op a spill STORE?" — and it is written as a refinement of
+// it rather than as a second copy of the same forty-arm band walk, so a new op cannot be classified
+// one way here and the other way there.
+export function slotResidencyOf(op TargetOp) returns ValueSpillSlot
+	match op 'reload'
+		loadRegSlot(_, slot) then return ValueSpillSlot.slot(slot)
+		prologue to storeSlotReg then break 'reload'
+		andRegReg to leaRegRdata then break 'reload'
+		arm64Ret to arm64Syscall then break 'reload'
+		leaRegFunc to x64Syscall then break 'reload'
+		x64JumpTable to arm64JumpTable then break 'reload'
+		callMem then break 'reload'
+	end 'reload'
+	return spillStoreSlotOf(op)
+end 'slotResidencyOf'
 
 // The block's ops in execution order: body `opRefs` then the terminator op.
 export function collectBlockOps(block IrBlock, out OpIndexArray)

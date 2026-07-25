@@ -689,9 +689,17 @@ type SplitScratch
 	// sweeps write into, allocated once per function like every other buffer here.
 	export var blockDemand as RegCountColumn
 	export var opEffective as RegCountColumn
+	// THE MUTATORS' buffers: one flag per use site of the victim (does that use start a fresh reload —
+	// `markRunStarts`), the block-op list that pre-pass walks, and the operand list the
+	// use-rewriter fills. All three used to be allocated per SPLIT (`OperandList.create()` inside
+	// `spillOneValue` / `rematerializeConstant`), which is the same per-split allocation term the rest
+	// of this type exists to remove.
+	export var runStarts as BoolArray
+	export var splitOps as OpIndexArray
+	export var splitOperands as OperandList
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow()}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), runStarts: BoolArray.create(), splitOps: OpIndexArray.create(), splitOperands: OperandList.create()}
 	end 'create'
 
 	// Size the two block-keyed memos the incremental update needs. Deferred until the function turns out
@@ -804,15 +812,16 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		let freshFrom = nextValueId
 		match choice 'act'
 			none then panic("splitLiveRanges: `victimAtPeak` returned for a `none` choice — it must throw")
-			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage, edits: scratch.edits)
-			spill(v, scope) then nextValueId = spillOneValue(module, index: index, cfg: cfg, valueId: v, peak: peak, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: nextSlot), nextValueId: nextValueId, stats: stats, lineage: lineage, edits: scratch.edits)
+			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch)
+			spill(v, scope) then nextValueId = spillOneValue(module, index: index, cfg: cfg, liveness: liveness, valueId: v, peak: peak, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: nextSlot), pool: pool, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch)
 		end 'act'
-		// Only a FIRST spill of a value consumes a slot: a value relieved again at a second peak
-		// reloads out of the slot its def-anchored store already wrote (see `slotForSpillOf`). The index
-		// is not rebuilt until `refreshAfterSplit` below, so `hasSpillStore` still answers about the
-		// state the choice was made in — the store this iteration may have just inserted is invisible.
+		// Only a spill of a value memory does NOT already hold consumes a slot: a value relieved again
+		// at a second peak reloads out of the slot it is already resident in (see `slotForSpillOf`), and
+		// so does a RELOAD id relieved in its turn. The index is not rebuilt until `refreshAfterSplit`
+		// below, so `isSlotResident` still answers about the state the choice was made in — the store
+		// this iteration may have just inserted is invisible.
 		match choice 'countSlot'
-			spill(v, _) then nextSlot = nextSlot if index.hasSpillStore(v) else nextSlot + 1
+			spill(v, _) then nextSlot = nextSlot if index.isSlotResident(v) else nextSlot + 1
 			none to remat then break 'countSlot'
 		end 'countSlot'
 
@@ -1857,6 +1866,12 @@ end 'isRematVictim'
 //
 //  1. not already stored — a value an earlier iteration already wrote to a slot needs no second
 //                          store, so its relief is tier 4's (reloads only), not this one's.
+//                          ⚠ It asks `hasSpillStore`, the NARROW question, deliberately: a RELOAD id
+//                          is slot-RESIDENT without ever having been stored, and refusing those here
+//                          would leave them with no tier at all at a COLD peak (tiers 3 and 4 are
+//                          confined-only) — a false E5001 on a program that compiles today. Tier 2
+//                          relieves them correctly: `spillOneValue` skips the store for anything
+//                          resident, so the emitted code is the reloads-only bracket either way.
 //  2. `isSpillable`      — its shape suits the peak's PLACEMENT (cold needs a depth-0, non-phi,
 //                          non-edge-passed value; forced needs only a store anchor).
 //  3. `storeFitsPool`    — its store has a register-free anchor point.
@@ -1895,8 +1910,8 @@ end 'isFullRematVictim'
 //
 //  • no store anchor — impossible for a value this function defines, but `hasStoreAnchor` is the one
 //    place that is stated, so it is asked rather than assumed;
-//  • a NEW store that does not fit the pool — a value already in a slot needs no new store at all, so
-//    that gate applies only to a first spill.
+//  • a NEW store that does not fit the pool — a value memory already holds needs no new store at all,
+//    so that gate applies only to a spill that must write one.
 //
 // CONFINED peaks only, for the same reason tier 3 is: at a FULL-pool peak, reloading a value the loop
 // uses at every one of its uses is exactly the per-iteration cost E5001 refuses to pay silently.
@@ -1907,7 +1922,7 @@ function isForcedBracketVictim(index UseIndex, valueId ValueId, placement SpillP
 	if not hasStoreAnchor(index, valueId: valueId) 'noAnchor'
 		return false
 	end 'noAnchor'
-	if index.hasSpillStore(valueId) 'alreadyInASlot'
+	if index.isSlotResident(valueId) 'alreadyInASlot'
 		return true
 	end 'alreadyInASlot'
 	return storeFitsPool(defLiveAfter, valueId: valueId, poolSize: poolSize)
@@ -2063,8 +2078,8 @@ end 'opIsConstMaterialization'
 // The loop bound in `while i < n` is the case that exposed this: `n`'s only use is the header's
 // compare, which sits BEFORE the loop's call in layout order — so the splitter would store `n` and
 // emit NO reload, while `n` stays live across the call via the back edge. A wasted slot, a wasted
-// store in the loop header every iteration, and ZERO pressure relief. (It converged only because
-// `hasSpillStore` refuses to store the same id twice, which is an accident, not the termination
+// store in the loop header every iteration, and ZERO pressure relief. (It converged only because a
+// value memory already holds is never stored again, which is an accident, not the termination
 // argument: the potential Φ did not decrease that iteration.)
 //
 // Reachability must respect SSA. A value has exactly ONE def, so if a before-peak use is reachable
@@ -2287,31 +2302,38 @@ end 'markBlocksReachableFromPeak'
 // The index is read ONLY through fields that survive the insertions below: an op's `module.ops`
 // index (the table is append-only) and a use's owning block. Positions inside a block shift as ops
 // are spliced in, and every insertion re-derives its own (see `positionInBlock`).
-function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, scope SplitScope, slot SpillSlot, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, edits SplitEdits) returns ValueId
+function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, liveness LivenessResult, valueId ValueId, peak PressurePeak, scope SplitScope, slot SpillSlot, pool RegMask, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
 	let peakSeq = peak.peakSeq
 	let placement = placementOf(peak)
 	let useSites = index.useCount(valueId)
 	let keepsOriginal = keepsOriginalBeforePeak(scope)
+	var edits = scratch.edits
+	var buf = scratch.splitOperands
 
-	// STORE: at the def, which dominates every reload below — and ONCE per value. An earlier split
-	// already wrote this exact id to this exact slot (`slotForSpillOf` handed it back), and a second
-	// store at the same def would write a value the first store already wrote, into a second slot.
-	if not index.hasSpillStore(valueId) 'firstSpillOfThisValue'
+	// WHERE THE RUNS MUST BREAK, decided BEFORE a single op moves — see `markRunStarts`.
+	// It reads the block's op list, which the insertions below extend, so it runs first; it compares
+	// `module.ops` INDICES and never positions, so nothing it produces can be invalidated by them.
+	markRunStarts(module, index: index, topo: cfg.topo, valueId: valueId, class: liveness.classOf(valueId), pool: pool, file: liveness.registerFile, runStarts: scratch.runStarts, ordered: scratch.splitOps, buf: buf)
+
+	// STORE: at the def, which dominates every reload below — and ONLY when memory does not already
+	// hold this value. It does when an earlier split stored it, AND when this id IS a reload (its
+	// defining `loadRegSlot` read it out of a slot that still holds it — see `UseIndex.slotResident`);
+	// storing either one again would copy a stack slot into a second stack slot.
+	if not index.isSlotResident(valueId) 'notAlreadyInMemory'
 		insertStore(module, cfg: cfg, valueId: valueId, defSite: index.defSiteOf(valueId), slot: slot, placement: placement, edits: edits)
-	end 'firstSpillOfThisValue'
+	end 'notAlreadyInMemory'
 
-	// RELOAD: one per (use-block, side-of-the-peak) RUN of the uses this split rewrites. Use sites are
-	// in layout order, so a block's uses are contiguous and its before-peak ones precede its after-peak
-	// ones; each boundary — a new block, or the peak falling between two uses of the SAME block —
-	// starts a fresh reload id, which dominates the run it serves (it precedes the run's first use,
-	// and a block's edge arg is read after every op in it).
+	// RELOAD: one per RUN of the uses this split rewrites — a maximal group in ONE block, on ONE side of
+	// the peak, with no CONFINING op between consecutive members. Use sites are in layout order, so a
+	// block's uses are contiguous and its before-peak ones precede its after-peak ones; each boundary
+	// starts a fresh reload id, which dominates the run it serves (it precedes the run's first use, and
+	// a block's edge arg is read after every op in it).
 	//
 	// An `afterPeakUses` split skips the before-peak runs entirely: those uses keep the ORIGINAL value
 	// in its original register, for free. An `everyUse` split rewrites them too, which is what leaves
 	// the original with no reader but its own store — see `SplitScope`.
 	var freshId = nextValueId
 	var reloadCount = 0 as EventCount
-	var buf = OperandList.create()
 	if useSites > 0 'hasUses'
 		// A cursor over the value's use thread, and `j` counting how far along it we are — the thread is
 		// circular, so the count is what ends the walk (see `UseIndex.firstUseOf`).
@@ -2331,7 +2353,8 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 			// E5001 blocking set chases back to that value's source origin (see SplitLineage).
 			lineage.record(freshId, sourceId: valueId)
 
-			while j < useSites and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) 'sameRun'
+			let runStart = j
+			while j < useSites and useContinuesRun(scratch.runStarts, useOrdinal: j, runStart: runStart) and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) 'sameRun'
 				match index.useKindAt(record) 'kind'
 					op then rewriteOpAt(module, opIdx: index.useOpAt(record), from: valueId, to: freshId, buf: buf)
 					edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
@@ -2354,10 +2377,165 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 	return freshId
 end 'spillOneValue'
 
+// ==========================================================================
+// A RELOAD MUST NOT BE BORN WITH NOWHERE TO LIVE — where a reload run has to break
+// ==========================================================================
+//
+// A reload serves a RUN of uses, so it is live from its own site to the last use of that run. If an
+// op inside that span denies the reload's register file EVERY register, the fresh reload inherits
+// that clobber into `forbidden` the moment liveness is re-derived — its allowed set is EMPTY, it
+// cannot be coloured anywhere, and the driver is obliged to find it at the next peak and split it
+// again. The split that was supposed to relieve the value has minted its own next victim.
+//
+// ⚠ THAT IS A CASCADE, AND IT IS QUADRATIC. Each re-split's dirty region is the fresh value's live
+// range, which still reaches the end of the run — so N such ops cost N splits of Θ(function) each
+// while the emitted code grows only linearly. MEASURED on a straight-line function holding two f64
+// locals read after each of N calls (Wave 1 makes every XMM caller-saved, so a float live across a
+// call is forbidden its ENTIRE file): `regalloc:splitting` bytes grew x3.84 and x3.98 per doubling
+// at N=128/256/512 — 19.4 MB, 74.6 MB, 296.6 MB — against x2.02/x1.95 for the same program with the
+// two locals declared `int`. `valuesSplit` was 2 per call site, and every one of them re-split the
+// PREVIOUS reload, storing it to a FRESH slot each time (3 calls: six slots and six stores for two
+// values).
+//
+// The REMAT path never had this problem: it re-emits the constant before EVERY use, so its fresh ids
+// live one op each. The spill path grouped uses into per-block runs, and that asymmetry IS the
+// cascade. Breaking the run removes it at the root: one split of the ORIGINAL value now mints every
+// reload the value needs, none of them able to become a victim, so `valuesSplit` is 2 whatever N is.
+// Same reload count, ONE store instead of N, ONE slot instead of N — and 39% less emitted code.
+//
+// ⚠⚠ THE TEST IS "LEAVES THIS FILE NO REGISTER AT ALL", **NOT** "clobbers something this value could
+// have used", AND THE DIFFERENCE IS BOTH CORRECTNESS AND CODE SIZE.
+//
+//  • A reload that spans a call and keeps SOME register is FINE. An int live across a call is denied
+//    the 9 caller-saved registers and takes one of the 5 callee-saved; it is coloured, it is never
+//    re-picked, and there is no cascade to break. Breaking there would emit a reload per call for
+//    every spilled int in the program and buy nothing — MEASURED at 112 moved goldens, almost all of
+//    them a reload that merely moved from a callee-saved register to a caller-saved one.
+//  • ⚠ AND IT MISCOMPILES. Call arguments are plain physical pre-moves (`mov rcx, a; mov rdx, b;
+//    call`) with no parallel-copy sequencer, and the allocator keeps them apart by forbidding a
+//    pre-move's register to every value live ACROSS it. A value DEFINED BETWEEN two pre-moves is live
+//    across neither, so it is forbidden nothing and may be coloured into an argument register an
+//    EARLIER pre-move has already loaded. Breaking a GPR run at a pre-move puts a `loadRegSlot`
+//    exactly there. MEASURED: all nine `streaming-subprocess` tests returned the wrong answer (a
+//    `ReadFile` handed a clobbered argument reads 0 bytes and reports EOF), with the golden gate
+//    silent because the runtime's own IR is not pinned.
+//
+// So the rule is the one the defect actually states: a value whose allowed set is EMPTY *must* be
+// split again, so a split must never create one. A value that keeps a register might never be
+// touched again, so leave it alone. On x64 that makes this fire for XMM values at a call and NOWHERE
+// else — no op clobbers all 14 GPRs — which is why every non-float program's codegen is untouched.
+//
+// Fill `runStarts[k]` — must use ordinal `k` of `valueId` start a FRESH reload? A use in a different
+// block, or on the other side of the peak, already starts one (`useIsInRun`); this adds the third
+// reason.
+//
+// It walks each use-block's op list ONCE, advancing a single cursor across the uses sited there — the
+// uses of a value in a block are contiguous in its thread and ascending by sequence, so the scans
+// cover disjoint stretches and the whole pre-pass is O(the blocks the victim is used in). That cost
+// is already inside the dirty region the split re-derives afterwards.
+//
+// ⚠ IT COMPARES `module.ops` INDICES, NEVER POSITIONS. `spillOneValue` splices ops in as it goes, so
+// every position in the block shifts under it; an op's index never moves (the table is append-only),
+// which is the same field the rest of the mutator restricts itself to.
+function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, ordered OpIndexArray, buf OperandList)
+	let useSites = index.useCount(valueId)
+	runStarts.refill(useSites, value: false)
+	if useSites == 0 'neverUsed'
+		return
+	end 'neverUsed'
+
+	let classPool = poolOfClass(pool, class: class, file: file)
+	var record = index.firstUseOf(valueId)
+	// `numBlocks` is "no block walked yet" — no block index can equal it (the same sentinel
+	// `ReachCache` and `PeakTree` use).
+	var walkedBlock = topo.numBlocks
+	var scanFrom = 0 as BlockOpPos
+	var previousOpIdx = 0 as OpIndex
+	var havePrevious = false
+
+	for k in 0 upto useSites 'eachUse'
+		let blockLocal = index.useBlockAt(record)
+		if blockLocal != walkedBlock 'newBlock'
+			walkedBlock = blockLocal
+			ordered.clear()
+			collectBlockOps(blockAt(module, topo: topo, local: blockLocal), out: ordered)
+			scanFrom = 0
+			havePrevious = false
+		end 'newBlock'
+
+		let opIdx = index.useOpAt(record)
+		// TWO records can name the SAME op — a value read by a block's terminator (an `x64JumpTable`
+		// index) and also passed on one of that block's edges yields an op use and an edge use at the
+		// same op index. Nothing lies between them, and the scan below would run off the end looking
+		// for an op it has already passed.
+		if havePrevious and opIdx == previousOpIdx 'sameOp'
+			record = index.nextUseOf(record)
+			continue
+		end 'sameOp'
+
+		var pos = scanFrom
+		var stranded = false
+		while pos < ordered.count() 'toTheUse'
+			let scanned = try ordered.get(pos) otherwise panic("markRunStarts: ordered.get OOB at {pos}")
+			if scanned == opIdx 'reachedTheUse'
+				break
+			end 'reachedTheUse'
+
+			// Only the OPEN interval between two uses is scanned: the endpoints are ops this value is an
+			// OPERAND of, and an operand's own op forbids it only through `forbidOperandsFromImplicit`,
+			// which cannot empty a file (it is what keeps an `idiv` divisor out of RAX/RDX, not out of
+			// every register).
+			if opStrandsClass(module, opIdx: scanned, classPool: classPool, buf: buf) 'noRegisterLeft'
+				stranded = true
+			end 'noRegisterLeft'
+			pos = pos + 1
+		end 'toTheUse'
+
+		if pos >= ordered.count() 'useOpNotInItsBlock'
+			panic("markRunStarts: use {k} of value {valueId} names op {opIdx}, which block {blockLocal} does not hold at or after position {scanFrom} — a use record's block IS its sequence number's block, and its op must be one of that block's")
+		end 'useOpNotInItsBlock'
+
+		if stranded and havePrevious 'separated'
+			try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
+		end 'separated'
+
+		scanFrom = pos + 1
+		previousOpIdx = opIdx
+		havePrevious = true
+		record = index.nextUseOf(record)
+	end 'eachUse'
+end 'markRunStarts'
+
+// Would a value of this register file, live ACROSS `opIdx`, be left with NO register at all — is
+// EVERY register of `classPool` inside the op's clobber? Read off the SAME mask the liveness sweep
+// folds into `forbidden` (`opClobberMask`), so the splitter's question and the sweep's answer cannot
+// drift: written twice, this would decide a run boundary from one notion of "clobber" while the
+// sweep forbade registers by another, and a reload the splitter believed was free would come back
+// as the next victim for ever.
+function opStrandsClass(module TargetModule, opIdx OpIndex, classPool RegMask, buf OperandList) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("opStrandsClass: opIdx not in module.ops")
+	return (classPool and not opClobberMask(op, buf: buf)) == 0
+end 'opStrandsClass'
+
+// Does the use at ordinal `useOrdinal` CONTINUE the run that opened at `runStart`? The run's first use
+// always does — the reload was placed for exactly that use, so the break flag that OPENED the run must
+// not also close it — and any later one does unless `markRunStarts` found an op between it and its
+// predecessor that would leave the reload no register.
+function useContinuesRun(runStarts BoolArray, useOrdinal UseOrdinal, runStart UseOrdinal) returns bool
+	if useOrdinal == runStart 'theUseTheReloadWasPlacedFor'
+		return true
+	end 'theUseTheReloadWasPlacedFor'
+	return not (try runStarts.get(useOrdinal) otherwise panic("useContinuesRun: runStarts.get OOB at use {useOrdinal}"))
+end 'useContinuesRun'
+
 // Is `record` in the run one reload serves — the same block, on the same side of the peak? A run may
 // NOT straddle the peak: a reload placed before a block's before-peak use would then serve its
 // after-peak uses too, and that reloaded value would span the peak, so the pressure there would never
 // drop. (That is the whole-range-reload failure the file header names, in the small.)
+//
+// The THIRD reason a run breaks — a confining op between two uses — is decided ahead of the mutation
+// by `markRunStarts` and tested beside this, because it is a question about the block's
+// OPS rather than about the use record.
 function useIsInRun(index UseIndex, record UseRecordIndex, blockLocal CfgIndex, afterPeak bool, peakSeq OpSeq) returns bool
 	if index.useBlockAt(record) != blockLocal 'otherBlock'
 		return false
@@ -2367,8 +2545,9 @@ end 'useIsInRun'
 
 // The slot a spill of `valueId` writes into, or reloads out of. A value is stored ONCE, at its def:
 // the def dominates every reload wherever a later peak puts one, so relieving the value AGAIN needs
-// only more loads out of the slot it already has. `nextSlot` — a fresh slot — is for a value that has
-// never been spilled.
+// only more loads out of the slot it already has — and so does relieving a RELOAD of it, which is
+// resident in that same slot without ever having been stored (see `UseIndex.slotResident`).
+// `nextSlot` — a fresh slot — is for a value memory does not hold at all.
 function slotForSpillOf(index UseIndex, valueId ValueId, nextSlot SpillSlot) returns SpillSlot
 	return match index.spillSlotOf(valueId) 'existing'
 		none gives nextSlot
@@ -2529,16 +2708,17 @@ end 'spliceOp'
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
 // exactly when nothing reads it any more.
-function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, edits SplitEdits) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 	// The immediate AND which ISA's const op the original def is, read ONCE: the re-emit at each use
 	// must be the SAME KIND (x64 `mov`, arm64 `movz`/`movk`) so it is byte-identical to what ISel wrote.
 	let (constValue, isArm64Const) = constDefInfo(module, opIdx: defOpIdx)
 	let keepsOriginal = keepsOriginalBeforePeak(scope)
+	var edits = scratch.edits
 
 	var freshId = nextValueId
 	var haveUnrewrittenUse = false
-	var buf = OperandList.create()
+	var buf = scratch.splitOperands
 	let useSites = index.useCount(valueId)
 	if useSites > 0 'hasUses'
 		var record = index.firstUseOf(valueId)
@@ -3017,6 +3197,9 @@ function verifyUseIndex(index UseIndex, fresh UseIndex, name String, iterations 
 		if index.hasSpillStore(v) != fresh.hasSpillStore(v) 'spillStored'
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about already having a spill store")
 		end 'spillStored'
+		if index.isSlotResident(v) != fresh.isSlotResident(v) 'slotResident'
+			panic("verifyIncremental ('{name}', after split {iterations}): value {v} disagrees with a full rebuild about memory already holding it — a spill would emit a second store into a second slot, or skip a store the reloads need")
+		end 'slotResident'
 		if not sameSpillSlot(index.spillSlotOf(v), b: fresh.spillSlotOf(v)) 'spillSlot'
 			panic("verifyIncremental ('{name}', after split {iterations}): value {v}'s spill slot disagrees with a full rebuild's — a later relief would reload out of the wrong slot")
 		end 'spillSlot'
