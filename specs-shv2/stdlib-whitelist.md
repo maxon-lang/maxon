@@ -13,7 +13,7 @@ shv2 does not load all of `stdlib/` the way v1 and the C# bootstrap do. It loads
 WHITELIST — a listed subset of `stdlib/*.maxon` prepended to every compile — so stdlib support can
 grow one module at a time, each module gated on the language features it needs. The list is stated
 in exactly one place, `Compiler/StdlibWhitelist.maxon`'s `whitelistedStdlibRelativePaths()`; at this
-rung its only entry is `stdlib/Clock.maxon`.
+rung it holds `stdlib/Clock.maxon` and `stdlib/Sleep.maxon`, in that order.
 
 A whitelisted module is registered into the query database exactly like a user source, so it flows
 through the same tokenize → signature-index → parse → merge spine. Its declarations therefore
@@ -69,8 +69,21 @@ A whitelisted module must declare no name a user program declares and no builtin
 - TYPE-name-vs-builtin collisions are the maintainer's responsibility. shv2 has no
   builtin-type-redeclaration diagnostic at all — a user `type String` compiles today as a distinct
   nominal — so enforcing one is a general language matter, not a whitelist one. Clock declares
-  `Clock`/`WallClock` and time typealiases, none of them builtin, so it cannot hit this. Do not
-  whitelist a module that redeclares a builtin.
+  `Clock`/`WallClock` and time typealiases and Sleep declares `Milliseconds`, none of them builtin,
+  so neither can hit this. Do not whitelist a module that redeclares a builtin.
+
+- FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, and `stdlib/Sleep.maxon` is standing in one.
+  The parser recognizes a handful of BARE names (`print`, `sleep`, `trunc`, `runProcess`, the math
+  intrinsics) before any registry is consulted, so a CALL to one never reaches a declaration of that
+  name — `sleep(5)` emits the builtin's `__gt_sleep` directly, while `let f = sleep` (not a call
+  site) takes the address of the whitelisted `stdlib.sleep`, whose body reaches the same entry
+  through `__Builtins.sleep`. Both suspend the green thread for the same duration, so a program is
+  correct either way; what is unsound is that one name has two routes. It predates the whitelist —
+  a user file declaring its own `function sleep` already compiled with the declaration silently
+  unlinked — and repairing it means deleting the bare-name builtin, which moves every committed
+  golden that calls `sleep` and hands `E3104` a span inside `stdlib/Sleep.maxon` instead of the
+  user's own call. Until then, do not whitelist a module whose function name a bare builtin already
+  claims unless — as here — the two lower to the same runtime entry.
 
 ## Tests
 
@@ -139,12 +152,36 @@ end 'main'
 4
 ```
 
+<!-- test: stdlib-whitelist.sleep-module-runs -->
+<!-- targets: x64-windows -->
+`stdlib/Sleep.maxon` — whitelist entry #2 — compiles UNMODIFIED as part of this build, and the code
+it contributes RUNS. `sleep` names the whitelisted declaration (a bare `sleep(…)` call site would be
+claimed by the bare-name builtin first — see the collision rule above — so the function VALUE is what
+reaches it), and calling through it suspends the green thread observably: the elapsed time measured
+across it with `Clock` is at least most of the requested duration. Both whitelisted modules are live
+in one program, which is also the proof that two of them coexist.
+```maxon
+function main() returns ExitCode
+	let start = Clock.nowMs()
+	let napper = sleep
+	napper(60)
+	let elapsed = Clock.elapsedMs(start)
+	if elapsed >= 40 'slept'
+		return 7 as ExitCode
+	end 'slept'
+	return 1 as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: stdlib-whitelist.no-clock-is-byte-neutral -->
-A program that never mentions Clock must compile to exactly what it did before Clock was whitelisted:
-the whitelist adds Clock to this compile too, and every one of its functions is pruned back out with
-no runtime floor installed. This case carries NO target restriction, so its byte-neutrality is
-checked on wasm as well — the whitelist must not drag the x64-only clock substrate into a
-non-x64 target for a program that reads no clock.
+A program that never mentions Clock or Sleep must compile to exactly what it did before either was
+whitelisted: the whitelist adds both to this compile too, and every one of their functions is pruned
+back out with no runtime floor installed. This case carries NO target restriction, so its
+byte-neutrality is checked on wasm as well — the whitelist must not drag the x64-only clock and timer
+substrate into a non-x64 target for a program that reads no clock and never sleeps.
 ```maxon
 function main() returns ExitCode
 	let answer = 42

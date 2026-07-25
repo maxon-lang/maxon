@@ -151,3 +151,23 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:3:2: 'sleep' requires a integer, but its argument is float
 ```
+
+<!-- test: async-sleep.rejected-on-wasm -->
+<!-- targets: wasm32-wasi -->
+The timer the park is built on reads `osReadClock` and waits with `osSleepMs`, and neither has an
+arm64 or wasm lowering at this rung. A `sleep` compiled for another target is therefore refused at its
+own call span with `E3104`, naming the runtime entry it lowers to — not a panic three tiers down in
+the backend, which is what it was before this gate:
+
+```text
+panic at StdToWasm.maxon:1108: emitBodyOp: `osReadClock` is x64-windows only
+```
+```maxon
+function main() returns ExitCode
+	sleep(1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:2: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation
+```

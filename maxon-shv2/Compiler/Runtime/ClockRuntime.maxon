@@ -40,25 +40,6 @@ export function isClockRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ClockRuntimeCallPrefix)
 end 'isClockRuntimeCallee'
 
-// ⭐ **THE CLOCK SUBSTRATE — BOTH clocks, whichever band their entry point wears.** The set
-// `SemanticCheck.requireTargetSupportsRuntimeCallee` refuses on a non-x64-windows target (E3104): the two
-// runtime entries a `__Builtins` clock intrinsic lowers to. The monotonic one is `__gt_`-named because the
-// SCHEDULER owns that counter (see the header), so this predicate spans two bands — which is exactly why it
-// is one function rather than a prefix test at the call site.
-//
-// ⚠ **IT IS NOT `isGtRuntimeCallee`, AND THAT WIDER TEST WAS MEASURED WRONG.** The `__gt_` band also holds
-// calls the compiler INSERTS rather than the user writes — `__gt_promise_drop` is emitted at a SCOPE EXIT
-// for an un-awaited promise — and an E3104 against one of those names a runtime entry the user has never
-// heard of, at a span where they wrote nothing, blaming the drop instead of the `async`. Measured on the
-// wasm suite: two `async-linearity.error.*` cases, whose pinned diagnostic is the target-NEUTRAL
-// double-await E3100, additionally reported "'__gt_promise_drop' has no wasm32-wasi implementation" at the
-// closing `end`. The honest gate for `async`/`await` on a non-x64-windows target is on those OP KINDS (whose
-// `__gt_*` calls do not exist until lowering — the same blind spot `scanRuntimeUsage` documents), and it is
-// its own piece of work, not something to bolt onto a callee-name test.
-export function isClockSubstrateCallee(callee ByteArray) returns bool
-	return callee.equals(GtNowNsName) or isClockRuntimeCallee(callee)
-end 'isClockSubstrateCallee'
-
 // The wall clock's one `.data` slot, laid out only when the program reads the calendar (`usesWallClock`), so
 // every other program's `.data` image is unchanged. An ordinary i64 slot in every respect, exactly like
 // MmRuntime's `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.

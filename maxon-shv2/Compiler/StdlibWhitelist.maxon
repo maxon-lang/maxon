@@ -41,10 +41,11 @@
 //      unreachable from `main` — and `scanRuntimeUsage` skips it. ⭐ USER functions are NEVER
 //      skipped (their present-code floor semantics are unchanged), so the existing corpus is
 //      untouched; only the INJECTED whitelist code is reachability-gated. This is sound for
-//      Clock because a Clock function is reached ONLY by direct `call`/`funcAddr` — never by a
-//      witness dispatch or an `.rdata` reloc — so call-graph reachability from `main` is EXACT
-//      for it (a Maxon-tier reachability that missed a witness edge would be unsound in general,
-//      which is why this skip is scoped to the whitelist rather than applied to all functions).
+//      Clock and Sleep because each of their functions is reached ONLY by direct `call`/`funcAddr`
+//      — never by a witness dispatch or an `.rdata` reloc — so call-graph reachability from `main`
+//      is EXACT for them (a Maxon-tier reachability that missed a witness edge would be unsound in
+//      general, which is why this skip is scoped to the whitelist rather than applied to all
+//      functions).
 //
 // ⭐ THE COLLISION RULE. A whitelisted module must declare no name a user program declares and
 // no builtin type/name.
@@ -55,8 +56,24 @@
 //   • TYPE-name-vs-builtin collisions are the maintainer's responsibility. shv2 has no
 //     builtin-type-redeclaration diagnostic at all — a user `type String` compiles today as a
 //     distinct nominal — so enforcing one is a general language matter, not a whitelist one.
-//     Clock declares `Clock`/`WallClock` and time typealiases, none of them builtin, so it
-//     cannot hit this. Do not whitelist a module that redeclares a builtin.
+//     Clock declares `Clock`/`WallClock` and time typealiases and Sleep declares `Milliseconds`,
+//     none of them builtin, so neither can hit this. Do not whitelist a module that redeclares a
+//     builtin.
+//   • ⚠ FUNCTION-name-vs-BARE-BUILTIN collisions are SILENT, and `stdlib/Sleep.maxon` is standing
+//     in one. `Parser.parseCallNamed` recognizes a handful of bare names (`print`, `sleep`,
+//     `trunc`, `runProcess`, the math intrinsics) BEFORE `emitCall` consults any registry, so a
+//     CALL to such a name never reaches the whitelisted declaration of it: `sleep(5)` emits the
+//     builtin's `__gt_sleep` directly, while `let f = sleep` — not a call site — takes the address
+//     of the whitelisted `stdlib.sleep`, whose body calls `__Builtins.sleep` and reaches the same
+//     entry the long way round. Both spellings suspend the green thread for the same duration, so
+//     the program is CORRECT either way; what is unsound is only that one name has two routes.
+//     ⚠ MEASURED, and it predates this whitelist: a user file declaring its own `function sleep`
+//     already compiled with the declaration silently unlinked. The honest repair is to delete the
+//     bare-name builtin once the module that supersedes it is whitelisted — which is a separate
+//     rung, because it moves every committed golden that calls `sleep` and it hands the E3104
+//     target rejection a span inside `stdlib/Sleep.maxon` instead of the user's own call. Until
+//     then: do not whitelist a module whose function name a bare builtin already claims, unless —
+//     as here — the two lower to the same runtime entry.
 
 // The directory name walked for, and a generous bound on how far up the tree to look. A
 // checkout is shallow (`<root>/maxon-shv2/.maxon/maxon-shv2.exe` is three levels under the
@@ -85,6 +102,7 @@ export typealias WhitelistPathArray = Array with FilePath
 function whitelistedStdlibRelativePaths() returns StringArray
 	var paths = StringArray.create()
 	paths.push("stdlib/Clock.maxon")
+	paths.push("stdlib/Sleep.maxon")
 	return paths
 end 'whitelistedStdlibRelativePaths'
 

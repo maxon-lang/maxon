@@ -859,25 +859,49 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 	end 'slot'
 end 'validateCall'
 
-// ⭐ **REFUSE A CLOCK READ THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN.**
+// ⭐ **THE RUNTIME ENTRIES A SOURCE-WRITTEN BUILTIN LOWERS TO THAT ONLY x64-WINDOWS CAN PROVIDE.** The
+// exact set `requireTargetSupportsRuntimeCallee` refuses elsewhere (E3104), and the deliberate counterpart
+// of `targetHasWin32Substrate` below: one says what a CALLEE needs, the other what a TARGET has.
 //
-// The `__Builtins` clock intrinsics read the host clock through Win32 imports — `osReadClock`'s
-// QueryPerformanceCounter/Frequency and `osReadWallClock`'s GetSystemTimeAsFileTime, both of which
-// `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. Each intrinsic lowers to ONE runtime entry
-// (`__gt_now_ns` / `__clock_now_unix_s`), so the CALLEE NAME is the whole test, and this is where a program
-// compiled for another target is refused.
+//   • `__gt_now_ns` — `osReadClock`'s QueryPerformanceCounter/Frequency (`__Builtins.currentTimeNanos`,
+//     `currentTimeMs`, and every `Clock.*` written against them);
+//   • `__clock_*` — `osReadWallClock`'s GetSystemTimeAsFileTime (`__Builtins.currentUnixTimeSeconds`);
+//   • `__gt_sleep` — the green-thread timer park, whose deadline is computed from that same `osReadClock`
+//     reading (`sleep(ms)` and `__Builtins.sleep(ms)`, which `stdlib/Sleep.maxon` is written against).
+//
+// It spans two runtime BANDS — the monotonic clock and the sleep park are `__gt_`-named because the
+// SCHEDULER owns that counter and that timer heap (see `ClockRuntime.maxon`'s header) — which is why it is
+// one named predicate rather than a prefix test at the call site.
+//
+// ⚠ **IT IS NOT `isGtRuntimeCallee`, AND THAT WIDER TEST WAS MEASURED WRONG.** The `__gt_` band also holds
+// calls the compiler INSERTS rather than the user writes — `__gt_promise_drop` is emitted at a SCOPE EXIT
+// for an un-awaited promise — and an E3104 against one of those names a runtime entry the user has never
+// heard of, at a span where they wrote nothing, blaming the drop instead of the `async`. Measured on the
+// wasm suite: two `async-linearity.error.*` cases, whose pinned diagnostic is the target-NEUTRAL
+// double-await E3100, additionally reported "'__gt_promise_drop' has no wasm32-wasi implementation" at the
+// closing `end`. So a name joins this set when SOURCE names it and the parser routes it here, never because
+// it shares a prefix with one that does.
+//
+// ⚠ **STILL OUTSIDE IT: `async`/`await`.** Their `__gt_*` calls do not exist until lowering — the same
+// blind spot `scanRuntimeUsage` documents — so no callee-name test can reach them and gating them honestly
+// means gating the async OP KINDS, which is its own piece of work. `runProcess(cmd)` and the
+// streaming-subprocess builtins are outside it too, for a different reason: their x64-windows-only substrate
+// is the SUBPROCESS one, and nothing this rung makes reachable calls them on another target.
+function calleeNeedsWin32Substrate(callee ByteArray) returns bool
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee)
+end 'calleeNeedsWin32Substrate'
+
+// ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN.**
+//
+// The x64-windows-only ops behind these entries — `osReadClock`, `osReadWallClock`, `osSleepMs` — are ones
+// `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. Each builtin lowers to ONE runtime entry,
+// so the CALLEE NAME is the whole test, and this is where a program compiled for another target is refused.
 //
 // ⚠ It replaces a PANIC, not a diagnostic: before it, such a program crashed the compiler three tiers down
 // (`StdToWasm.maxon: 'osReadClock' is x64-windows only`) with no file and no line. Those panics stay as
 // BACKSTOPS for a compiler bug that gets one past this gate; they are no longer the user-facing rejection.
-//
-// ⚠ **THE SET IS `isClockSubstrateCallee`, NOT THE WHOLE `__gt_` BAND**, and the difference was measured
-// rather than guessed — see that predicate's own note. `sleep(ms)`, `runProcess(cmd)`, the
-// streaming-subprocess builtins and `async`/`await` still panic on a non-x64-windows target; each of them is
-// x64-windows-gated BY SPEC (`<!-- targets: x64-windows -->`), which is why no test reaches those panics,
-// and giving them a diagnostic properly means gating the async OP KINDS too — a separate piece of work.
 function requireTargetSupportsRuntimeCallee(project Project, callee ByteArray, callRange SourceRange, filePath FilePath)
-	if not isClockSubstrateCallee(callee) 'targetNeutralRuntime'
+	if not calleeNeedsWin32Substrate(callee) 'targetNeutralRuntime'
 		return
 	end 'targetNeutralRuntime'
 

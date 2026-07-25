@@ -1466,6 +1466,16 @@ let BuiltinsQualifierPrefix = b"__Builtins."
 let BuiltinsCurrentTimeNanosName = b"__Builtins.currentTimeNanos"
 let BuiltinsCurrentTimeMsName = b"__Builtins.currentTimeMs"
 let BuiltinsCurrentUnixTimeSecondsName = b"__Builtins.currentUnixTimeSeconds"
+let BuiltinsSleepName = b"__Builtins.sleep"
+
+// ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
+// must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
+// STATEMENT door's `builtinsIntrinsicCallsAt` (which decides that `__Builtins.sleep(ms)` on a line of
+// its own is a statement at all). Written once for the reason `isClockRuntimeCallee` is — a band's
+// membership question belongs with the band's names, not restated at each site.
+function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: BuiltinsQualifierPrefix)
+end 'isBuiltinsIntrinsicCallee'
 
 // Every clock intrinsic reads a clock and takes nothing.
 let ClockIntrinsicArity = 0 as ParamCount
@@ -7208,7 +7218,25 @@ export type Parser
 			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
 			// `(args)` goes through `parsePostfix` exactly as the one-hop `methodCallStmt` above.
 			_ = try self.parseFieldChainCall(func, resultUsed: false)
-		end 'fieldChainMethodStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'fieldChainMethodStmt' else if self.builtinsIntrinsicCallsAt(self.pos) 'builtinsIntrinsicStmt'
+			// ⭐ `__Builtins.sleep(ms)` — A VOID COMPILER INTRINSIC CALLED FOR ITS EFFECT, and the reason a
+			// STATIC call is otherwise not a statement does not apply to it. `Point.create()` on a line of
+			// its own is refused because it discards a box nothing would then free (`methodCallsAt`); an
+			// intrinsic allocates nothing, so a value-returning one written here simply has its result
+			// discarded, exactly as every other bare-call statement's is.
+			//
+			// This is the position `stdlib/Sleep.maxon` needs (whitelist entry #2): its whole body is
+			// `__Builtins.sleep(milliseconds)` on a line of its own. Until this arm existed, the three
+			// recognized intrinsics all RETURNED a value, so every one of them arrived in expression
+			// position and the recognizer was never asked from here — a void intrinsic died as
+			// `E2015: Unsupported: identifier statement`, pointing at the `__Builtins` token.
+			//
+			// A member the table does NOT recognize falls through `parseCallNamed` to `emitCall`, whose
+			// reserved-callee rejection reports the positioned E3004 (`requireCalleeIsNotReservedName`) —
+			// so widening the statement door widens no name, it only routes them to the same answer
+			// expression position already gives.
+			_ = try self.parseQualifiedCall(func, resultUsed: false)
+		end 'builtinsIntrinsicStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -19529,7 +19557,7 @@ export type Parser
 		end 'printBuiltin'
 
 		if callee.equals(SleepBuiltinName) 'sleepBuiltin'
-			return try self.emitSleep(args, calleeTok: anchor, resultUsed: resultUsed)
+			return try self.emitSleep(args, name: callee, calleeTok: anchor, resultUsed: resultUsed)
 		end 'sleepBuiltin'
 
 		if callee.equals(RunProcessBuiltinName) 'runProcessBuiltin'
@@ -19602,7 +19630,7 @@ export type Parser
 		// The `__Builtins.*` intrinsic table (see `BuiltinsQualifierPrefix`). Gated behind ONE prefix compare
 		// so a call to anything else pays two bytes and no allocation; an unrecognized member falls through to
 		// `emitCall`'s reserved-callee rejection, which is this table's "unknown intrinsic" arm.
-		if bytesStartWith(callee, prefix: BuiltinsQualifierPrefix) 'builtinsIntrinsic'
+		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			if callee.equals(BuiltinsCurrentTimeNanosName) 'currentTimeNanos'
 				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: GtNowNsName, calleeTok: anchor)
 			end 'currentTimeNanos'
@@ -19614,6 +19642,15 @@ export type Parser
 			if callee.equals(BuiltinsCurrentUnixTimeSecondsName) 'currentUnixTimeSeconds'
 				return try self.emitClockIntrinsicCall(args, name: callee, runtimeName: WallClockNowUnixSecondsName, calleeTok: anchor)
 			end 'currentUnixTimeSeconds'
+
+			// ⭐ THE QUALIFIED SPELLING OF `sleep`, ROUTED THROUGH THE BARE ONE'S EMIT — not a second
+			// mapping from "sleep" to `__gt_sleep`. `stdlib/Sleep.maxon` (whitelist entry #2) is written
+			// against `__Builtins.sleep(ms)`, and the bare-name builtin above is the same suspension with
+			// the same argument rule; one decider means the two spellings cannot come to disagree about
+			// the duration's type, the void result, or which scheduler entry parks the green thread.
+			if callee.equals(BuiltinsSleepName) 'sleep'
+				return try self.emitSleep(args, name: callee, calleeTok: anchor, resultUsed: resultUsed)
+			end 'sleep'
 		end 'builtinsIntrinsic'
 
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
@@ -19762,21 +19799,26 @@ export type Parser
 	// `MaxonOp.call` to a user function — it routes to the `__gt_sleep` scheduler runtime entry (which parks the
 	// running GT on a timer and yields). It requires exactly one INTEGER argument (the duration; a float/String/
 	// bool is refused) and returns VOID, so a call in value position is rejected exactly as a void user-call is.
-	function emitSleep(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+	//
+	// TWO spellings reach it — the bare `sleep(ms)` and the qualified `__Builtins.sleep(ms)` that
+	// `stdlib/Sleep.maxon` is written against — and `name` is the callee's own bytes so each diagnostic
+	// quotes what the user actually wrote, the same way `emitClockIntrinsicCall` and `emitMathIntrinsic`
+	// serve several names from one emit.
+	function emitSleep(args ValueIdArray, name ByteArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
 		if args.count() != SleepArity 'arity'
-			throw ParseError.builtinArity(String.from(SleepBuiltinName), expected: SleepArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinArity(String.from(name), expected: SleepArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
 		end 'arity'
 
 		let arg = try args.get(0) otherwise panic("emitSleep: args.count() == SleepArity just checked but get(0) failed")
 		let argTag = self.tagOf(arg)
 		if not typeClassAdmits(TypeClass.numeric, tag: argTag) or tagIsFloat(argTag) 'notAnInt'
-			throw ParseError.builtinOperandType(String.from(SleepBuiltinName), required: "integer", got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinOperandType(String.from(name), required: "integer", got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notAnInt'
 
 		// `sleep` returns nothing, so using its result is using a value that is not there — the same error a
 		// void user-call gets in value position.
 		if resultUsed 'noValueToUse'
-			throw ParseError.voidCallResultUsed(String.from(SleepBuiltinName), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.voidCallResultUsed(String.from(name), line: calleeTok.line, column: calleeTok.column)
 		end 'noValueToUse'
 
 		var callArgs = ValueIdArray.create()
@@ -20732,6 +20774,27 @@ export type Parser
 		let baseTok = self.tokenAt(index)
 		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
 	end 'methodCallsAt'
+
+	// **The token shape of a `__Builtins` INTRINSIC CALL STATEMENT** — `__Builtins . <member> (`, the one
+	// qualified call shape that IS a statement (see the `builtinsIntrinsicStmt` arm for why the others are not).
+	//
+	// It asks the intrinsic table's OWN question, `isBuiltinsIntrinsicCallee`, of the name `parseQualifiedCall`
+	// is about to mangle out of these same two tokens — rather than comparing the base token against a second
+	// spelling of `__Builtins`. A second spelling is how the statement door and the intrinsic table would come
+	// to disagree about which qualifier belongs to the compiler, and the failure would be silent in the worst
+	// direction: a statement accepted here and then rejected as an unknown intrinsic three functions later.
+	//
+	// The mangling allocates, and it is on a COLD path by construction: the shape is asked only after every
+	// cheaper statement form has declined, and `methodCallsAt` has already claimed every qualified shape whose
+	// base is a value in scope — so what reaches here is a static-call-shaped statement, which is either an
+	// intrinsic or a program that is about to be refused.
+	function builtinsIntrinsicCallsAt(index TokenIndex) returns bool
+		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notAQualifiedCall'
+			return false
+		end 'notAQualifiedCall'
+
+		return isBuiltinsIntrinsicCallee(qualifiedMethodName(self.tokenAt(index).value, methodName: self.tokenAt(index + 2).value))
+	end 'builtinsIntrinsicCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
