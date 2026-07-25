@@ -150,8 +150,7 @@ public sealed class DebugStreamDecoder : IDisposable {
       accessor = mapping.Map.CreateViewAccessor(0, totalSize);
       SeedHeader(accessor);
 
-      var tagNames = ReadNameTableFromExecutable(Path.GetFullPath(exePath), RuntimeEmitter.DsTagTableMagic);
-      var logNames = ReadNameTableFromExecutable(Path.GetFullPath(exePath), RuntimeEmitter.DsStrTableMagic);
+      var (tagNames, logNames) = ReadNameTablesFromExecutable(Path.GetFullPath(exePath));
       return new DebugStreamDecoder(mapping, accessor, familyFilter, tagNames, logNames);
     } catch {
       accessor?.Dispose();
@@ -427,11 +426,19 @@ public sealed class DebugStreamDecoder : IDisposable {
   private const string MachOConstSectionName = "__const";
 
   /// <summary>
-  /// Find the section carrying the compiler's symdata, then scan it for a packed name-table blob
-  /// carrying <paramref name="magic"/>. Two blobs use this: MXDS_TAGS (mm allocation type names)
-  /// and MXDS_STRS (the names `__DebugStream` interned at compile time). ONE entry point and ONE
-  /// <see cref="ScanForNameBlob"/> under both container formats, so neither the two blobs nor the
-  /// two containers can drift apart on the format.
+  /// Find the section carrying the compiler's symdata and decode BOTH packed name-table blobs out of
+  /// it: MXDS_TAGS (mm allocation type names) and MXDS_STRS (the names `__DebugStream` interned at
+  /// compile time). ONE entry point and ONE <see cref="ScanForNameBlob"/> under both container
+  /// formats, so neither the two blobs nor the two containers can drift apart on the format.
+  ///
+  /// Both blobs come out of ONE pass because they live in the SAME section — a fact this method is
+  /// the only place to know, and one the two-calls-two-opens shape used to restate by locating that
+  /// section twice. Locating it once also makes the invariant above structural rather than merely
+  /// documented: there is no longer a way for the two tables to be read out of different sections.
+  /// The section is the compiler's symdata and grows with the debuggee (measured ~128 bytes per
+  /// reachable function: 40 KB at 250 functions, 510 KB at 4000), so the second read was a whole
+  /// extra copy of it per session — linear in the debuggee, and paid by every `maxon debug` session
+  /// since the trace ring became unconditional.
   ///
   /// The container is chosen by the file's MAGIC rather than by the consumer's own OS: the compiler
   /// cross-compiles, so the executable in front of us need not match the machine reading it. This
@@ -440,7 +447,7 @@ public sealed class DebugStreamDecoder : IDisposable {
   /// megabyte of unrelated bytes it then walked, and a blanket catch turned all of it into an empty
   /// table. Every name in the trace quietly became `tag=1`.
   /// </summary>
-  private static string[] ReadNameTableFromExecutable(string exePath, byte[] magic) {
+  private static (string[] TagNames, string[] LogNames) ReadNameTablesFromExecutable(string exePath) {
     using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read);
     using var reader = new BinaryReader(fs);
 
@@ -457,7 +464,11 @@ public sealed class DebugStreamDecoder : IDisposable {
           + $"image (MZ) or a 64-bit Mach-O executable (magic 0x{MachO64Magic:X8}), but the file "
           + $"begins 0x{fileMagic:X8}.");
 
-    return ScanForNameBlob(fs, reader, sectionOffset, sectionSize, magic);
+    fs.Seek(sectionOffset, SeekOrigin.Begin);
+    var sectionData = reader.ReadBytes((int)sectionSize);
+
+    return (ScanForNameBlob(sectionData, RuntimeEmitter.DsTagTableMagic),
+            ScanForNameBlob(sectionData, RuntimeEmitter.DsStrTableMagic));
   }
 
   /// <summary>
@@ -557,13 +568,11 @@ public sealed class DebugStreamDecoder : IDisposable {
   }
 
   /// <summary>
-  /// Scan the .symtab section bytes for the magic prefix and decode the packed name table.
+  /// Scan already-read symdata section bytes for the magic prefix and decode the packed name table.
+  /// Pure over <paramref name="sectionData"/>, so the one caller reads the section once and asks it
+  /// for each blob in turn.
   /// </summary>
-  private static string[] ScanForNameBlob(FileStream fs, BinaryReader reader, uint sectionOffset,
-      uint sectionSize, byte[] magic) {
-    fs.Seek(sectionOffset, SeekOrigin.Begin);
-    var sectionData = reader.ReadBytes((int)sectionSize);
-
+  private static string[] ScanForNameBlob(byte[] sectionData, byte[] magic) {
     // Scan for magic
     for (int pos = 0; pos <= sectionData.Length - magic.Length; pos++) {
       bool match = true;
