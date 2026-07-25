@@ -892,6 +892,19 @@ public static class StdlibLoader {
   private static int _cachedStdlibMaxStdValueId;
   private static readonly Lock _stdlibLock = new();
 
+  /// <summary>
+  /// Guards <see cref="_cachedSources"/> — and it is a SEPARATE lock from <see cref="_stdlibLock"/>
+  /// on purpose, not by oversight.
+  ///
+  /// Reading the stdlib's text takes ~100 ms; PARSING it takes ~1 s. Callers that need only the text —
+  /// the build cache, which fingerprints every stdlib source to decide whether a binary is current —
+  /// vastly outnumber the one caller that needs the parse, and a single lock would queue a
+  /// fingerprint check behind a parse it has no use for. The order is always _stdlibLock →
+  /// _sourcesLock (<see cref="GetStdlibModule"/> holds the first while calling
+  /// <see cref="LoadStdlibModules"/>) and never the reverse, so the pair cannot deadlock.
+  /// </summary>
+  private static readonly Lock _sourcesLock = new();
+
   /// Highest stdlib MaxonValue id (low-bits, without StdlibIdBit) minted during the
   /// cached stdlib parse. User compiles must seed their IrContext past this so
   /// lowering-time stdlib MaxonValues don't alias parser-time ones in valueMap.
@@ -945,44 +958,55 @@ public static class StdlibLoader {
     return null;
   }
 
+  /// <summary>
+  /// The stdlib's source text, read once per process.
+  ///
+  /// The whole body runs under <see cref="_sourcesLock"/> — there is no unlocked fast-path re-check
+  /// ahead of it, deliberately. An uncontended lock is tens of nanoseconds against the ~100 ms of file
+  /// reading it guards, so the double-checked form would buy nothing measurable while owing an
+  /// argument about publication ordering for the array it hands out. This is called a handful of times
+  /// per compile, never in a loop.
+  /// </summary>
   public static SourceFile[] LoadStdlibModules() {
-    if (_cachedSources != null) return _cachedSources;
+    lock (_sourcesLock) {
+      if (_cachedSources != null) return _cachedSources;
 
-    var stdlibPath = FindStdlibPath();
-    if (stdlibPath == null) return [];
+      var stdlibPath = FindStdlibPath();
+      if (stdlibPath == null) return [];
 
-    var allFiles = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
+      var allFiles = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
 
-    // stdlib/Internals.maxon is a self-hosted-only file: it uses the
-    // `__Internals.*` intrinsic namespace (file-path-gated raw Std-op
-    // access) which the C# bootstrap doesn't implement. The bootstrap
-    // never needs to compile it because the self-hosted compiler builds
-    // its own stdlib cache from a curated whitelist (StdlibLoader.maxon)
-    // where Internals.maxon contributes the migrated runtime helpers.
-    var files = allFiles.Where(f => Path.GetFileName(f) != "Internals.maxon").ToArray();
+      // stdlib/Internals.maxon is a self-hosted-only file: it uses the
+      // `__Internals.*` intrinsic namespace (file-path-gated raw Std-op
+      // access) which the C# bootstrap doesn't implement. The bootstrap
+      // never needs to compile it because the self-hosted compiler builds
+      // its own stdlib cache from a curated whitelist (StdlibLoader.maxon)
+      // where Internals.maxon contributes the migrated runtime helpers.
+      var files = allFiles.Where(f => Path.GetFileName(f) != "Internals.maxon").ToArray();
 
-    // Sort: Interfaces.maxon first (foundational shared protocols), then
-    // helper files (in subdirectories), then remaining top-level files,
-    // alphabetically within each group.
-    Array.Sort(files, (a, b) => {
-      var aIsInterfaces = Path.GetFileName(a) == "Interfaces.maxon" && Path.GetDirectoryName(a) == stdlibPath;
-      var bIsInterfaces = Path.GetFileName(b) == "Interfaces.maxon" && Path.GetDirectoryName(b) == stdlibPath;
-      if (aIsInterfaces != bIsInterfaces) return aIsInterfaces ? -1 : 1;
-      var aIsHelper = Path.GetDirectoryName(a) != stdlibPath;
-      var bIsHelper = Path.GetDirectoryName(b) != stdlibPath;
-      if (aIsHelper != bIsHelper) return aIsHelper ? -1 : 1;
-      return string.Compare(a, b, StringComparison.Ordinal);
-    });
+      // Sort: Interfaces.maxon first (foundational shared protocols), then
+      // helper files (in subdirectories), then remaining top-level files,
+      // alphabetically within each group.
+      Array.Sort(files, (a, b) => {
+        var aIsInterfaces = Path.GetFileName(a) == "Interfaces.maxon" && Path.GetDirectoryName(a) == stdlibPath;
+        var bIsInterfaces = Path.GetFileName(b) == "Interfaces.maxon" && Path.GetDirectoryName(b) == stdlibPath;
+        if (aIsInterfaces != bIsInterfaces) return aIsInterfaces ? -1 : 1;
+        var aIsHelper = Path.GetDirectoryName(a) != stdlibPath;
+        var bIsHelper = Path.GetDirectoryName(b) != stdlibPath;
+        if (aIsHelper != bIsHelper) return aIsHelper ? -1 : 1;
+        return string.Compare(a, b, StringComparison.Ordinal);
+      });
 
-    // Per Phase 1 of the directory-as-module redesign, stdlib files anchor
-    // at the parent of the stdlib directory so that rel(file, root) yields
-    // "stdlib/<subdirs>/<name>.maxon" and namespace = "stdlib.<subdirs>".
-    var stdlibRoot = Path.GetDirectoryName(stdlibPath);
-    var sources = new List<SourceFile>();
-    foreach (var filePath in files)
-      sources.Add(new SourceFile(filePath, File.ReadAllText(filePath), stdlibRoot));
-    _cachedSources = [.. sources];
-    return _cachedSources;
+      // Per Phase 1 of the directory-as-module redesign, stdlib files anchor
+      // at the parent of the stdlib directory so that rel(file, root) yields
+      // "stdlib/<subdirs>/<name>.maxon" and namespace = "stdlib.<subdirs>".
+      var stdlibRoot = Path.GetDirectoryName(stdlibPath);
+      var sources = new List<SourceFile>();
+      foreach (var filePath in files)
+        sources.Add(new SourceFile(filePath, File.ReadAllText(filePath), stdlibRoot));
+      _cachedSources = [.. sources];
+      return _cachedSources;
+    }
   }
 
   public static SourceFile[] PrependStdlib(SourceFile[] stdlibSources, SourceFile[] userSources) {

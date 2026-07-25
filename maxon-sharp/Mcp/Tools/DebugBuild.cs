@@ -29,6 +29,30 @@ internal static class DebugBuild {
   private static readonly object BuildGate = new();
 
   /// <summary>
+  /// Parse the stdlib into the compiler's in-process cache, compiling nothing.
+  ///
+  /// EXACTLY ONE compile in a server's life pays for that parse — and by default it is the agent's
+  /// first <c>debug_start</c>, which is the call it is most likely to be sitting and waiting on.
+  /// Measured on this machine: a first <c>debug_start</c> that compiles costs ~1260 ms against ~330 ms
+  /// for every one after it, and a first one that HITS the build cache still costs ~138 ms against
+  /// ~27 ms, because even the cache check reads every stdlib source to fingerprint it.
+  ///
+  /// Called while the server is idle, this spends that second where nobody is waiting.
+  ///
+  /// ⚠ It deliberately does NOT take <see cref="BuildGate"/>, and both halves of that matter.
+  /// It does not NEED it: the gate exists because a compile writes process-global option statics, and
+  /// the one this class touches — <see cref="Compiler.Compiler.DebugInfo"/> — cannot reach a stdlib
+  /// parse, because both sites that read it AND it with `!isStdlib` (`2-Parser.cs` captureSpan,
+  /// `MaxonToStandardConversion` captureDebugLocals). That is also why one cached stdlib module is
+  /// already shared between a `maxon build` and a `debug_start` today.
+  /// And it must NOT take it: holding the gate here would park a cache-HIT `debug_start` behind a
+  /// parse whose result it never uses — measured at 138 ms turning into 1293 ms, a regression this
+  /// warm-up would otherwise have caused rather than cured. Without the gate that call waits only on
+  /// the stdlib SOURCE cache, which is separately locked for exactly this reason.
+  /// </summary>
+  public static void PrewarmStdlib() => StdlibLoader.GetStdlibModule();
+
+  /// <summary>
   /// Compile <paramref name="sourcePath"/> for the host and return the executable's path.
   ///
   /// The `.mxdbg` sidecar is FORCED on: a debug session without one has no line table, so a build that

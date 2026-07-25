@@ -44,6 +44,18 @@ internal sealed class McpSession(string id) : IDisposable {
   public int InFlight { get; set; }
 
   /// <summary>
+  /// True once this session has been taken OUT of the server's table and is waiting only for its last
+  /// in-flight request to finish before it is disposed.
+  ///
+  /// It exists because a DELETE cannot DECLINE the way the idle sweep can. The sweep's answer to "a
+  /// request is running" is to leave the session alone and look again later; a client that has said it
+  /// is done is owed an immediate end, so the session leaves the table at once — nothing new can
+  /// attach — and the last request out performs the disposal. Read and written only under the
+  /// server's session lock, which is what pairs it with the removal it accompanies.
+  /// </summary>
+  public bool Retired { get; set; }
+
+  /// <summary>
   /// This session's live debuggee, or null when it has never started one. It is a NAMED field rather
   /// than a bag of per-family state because there is exactly one family with live state today and a
   /// typed field is what makes <see cref="Dispose"/> obviously complete. A future family that holds

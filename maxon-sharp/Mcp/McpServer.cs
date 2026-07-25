@@ -128,6 +128,10 @@ internal static class McpServer {
     Console.WriteLine($"maxon mcp: loopback only; idle sessions reaped after "
       + $"{idleTimeout.TotalSeconds:0.###}s; at most {maxSessions} concurrent sessions.");
 
+    // AFTER the port is open and announced, not before: the parse is a second of work, and a client
+    // that connects during it must find a listener rather than a refused connection.
+    StartStdlibWarmup();
+
     while (listener.IsListening) {
       HttpListenerContext context;
       try {
@@ -180,6 +184,25 @@ internal static class McpServer {
     return null;
   }
 
+  /// <summary>
+  /// Pay the compiler's one-off stdlib parse here, on a background thread, instead of inside whichever
+  /// tool call happens to compile first — see <see cref="Tools.DebugBuild.PrewarmStdlib"/> for what it
+  /// costs and why the agent should not be the one paying it.
+  /// </summary>
+  private static void StartStdlibWarmup() =>
+    ThreadPool.QueueUserWorkItem(_ => {
+      try {
+        Tools.DebugBuild.PrewarmStdlib();
+      } catch (Exception ex) {
+        // Caught BROADLY, and this is the one place that is right: an escaping exception on a pool
+        // thread takes the whole process down, and a stdlib that will not pre-parse must not stop a
+        // server from serving. The first real compile raises the same failure where a caller can be
+        // told about it, which is where a compile failure belongs.
+        Console.Error.WriteLine($"maxon mcp: could not pre-parse the stdlib ({ex.Message}); the first "
+          + "debug_start will do it instead.");
+      }
+    });
+
   // ---- Shutdown ----
 
   /// <summary>
@@ -219,6 +242,13 @@ internal static class McpServer {
 
   private static PosixSignalRegistration? _sigterm;
 
+  /// <summary>
+  /// Shutdown, and the ONE reap that does not wait for a busy session — deliberately. <see
+  /// cref="EndSession"/> can afford to let a running command finish because the server lives on; here
+  /// the process is going away, so waiting out a stop timeout would only delay the kill that is the
+  /// whole point of the handler. The listener is already stopped, so nothing new can arrive, and an
+  /// in-flight command's <see cref="Detach"/> finds the session un-retired and disposes nothing twice.
+  /// </summary>
   private static void ReapAllSessions() {
     List<McpSession> doomed;
     lock (SessionsGate) {
@@ -414,7 +444,7 @@ internal static class McpServer {
         return;
 
       case "tools/list":
-        RespondJson(context, HttpStatusCode.OK, RpcResult(rawId, ToolsListResult()));
+        RespondJson(context, HttpStatusCode.OK, RpcResult(rawId, ToolsListJson));
         return;
 
       case "tools/call":
@@ -450,7 +480,7 @@ internal static class McpServer {
       Sessions[id] = new McpSession(id);
     }
 
-    RespondJson(context, HttpStatusCode.OK, RpcResult(rawId, InitializeResult()), sessionId: id);
+    RespondJson(context, HttpStatusCode.OK, RpcResult(rawId, InitializeJson), sessionId: id);
   }
 
   /// Long enough that a session id cannot be guessed by a page that got past the Origin check.
@@ -475,31 +505,66 @@ internal static class McpServer {
   }
 
   private static void Detach(McpSession session) {
+    bool disposeNow;
     lock (SessionsGate) {
       session.InFlight--;
       // Touched on the way OUT as well as in, so the idle clock measures silence since the last answer
       // rather than time since a long command started.
       session.Touch();
+
+      // The last request to leave a RETIRED session is what disposes it: a DELETE removed it from the
+      // table but could not free the engine this command was still using.
+      disposeNow = session.Retired && session.InFlight == 0;
     }
+
+    if (disposeNow) session.Dispose();
   }
 
+  /// <summary>
   /// End a session by id, reaping its debuggee. False when no such session exists.
+  ///
+  /// ⚠ IT DOES NOT DISPOSE A SESSION THAT IS BUSY. Disposing one reaps the <see cref="MaxonDebugger"/>
+  /// a running command is in the middle of using, and the command does not fail — it returns whatever
+  /// it had rendered so far, so an agent that DELETEd a connection while a `debug_start` was still
+  /// running got HTTP 200 and an event list containing the armed breakpoint and no stop, with nothing
+  /// in the answer saying it had been cut short. (Measured, not theorised: forced by DELETEing six
+  /// seconds into a nine-second run.) The idle sweep already refuses to reap a busy session for the
+  /// same reason; a DELETE cannot refuse, because the client has asked for the session to END, so it
+  /// retires the session instead — out of the table immediately, so nothing new can attach to it, and
+  /// disposed by <see cref="Detach"/> when the last request leaves.
+  /// </summary>
   private static bool EndSession(string? sessionId) {
     if (string.IsNullOrEmpty(sessionId)) return false;
 
-    McpSession? doomed;
+    McpSession doomed;
+    bool disposeNow;
     lock (SessionsGate) {
-      if (!Sessions.TryGetValue(sessionId, out doomed)) return false;
+      if (!Sessions.TryGetValue(sessionId, out var found)) return false;
+
       Sessions.Remove(sessionId);
+      found.Retired = true;
+      disposeNow = found.InFlight == 0;
+      doomed = found;
     }
 
-    doomed.Dispose();
+    if (disposeNow) doomed.Dispose();
     return true;
   }
 
   // ---- Tools ----
 
-  private static string ToolsListResult() {
+  /// <summary>
+  /// The `tools/list` answer, built ONCE. The registry is static and a schema is not a function of the
+  /// request, so this document is the same bytes on every call — rebuilding it per request was work
+  /// whose result could not differ. (It is ~0.2 ms of a ~0.5 ms call; the point is that a constant is
+  /// now spelled as one, not the milliseconds.)
+  /// </summary>
+  private static readonly string ToolsListJson = BuildToolsListJson();
+
+  /// Likewise: one protocol version, one server name, no negotiation — so one document.
+  private static readonly string InitializeJson = BuildInitializeJson();
+
+  private static string BuildToolsListJson() {
     using var buffer = new MemoryStream();
     using (var w = new Utf8JsonWriter(buffer)) {
       w.WriteStartObject();
@@ -608,7 +673,7 @@ internal static class McpServer {
     return $"{{\"jsonrpc\":\"2.0\",\"id\":{rawId},\"error\":{Encoding.UTF8.GetString(buffer.ToArray())}}}";
   }
 
-  private static string InitializeResult() {
+  private static string BuildInitializeJson() {
     using var buffer = new MemoryStream();
     using (var w = new Utf8JsonWriter(buffer)) {
       w.WriteStartObject();
