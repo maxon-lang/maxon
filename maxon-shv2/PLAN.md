@@ -1937,7 +1937,9 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   `IatSlot.GetSystemTimeAsFileTime`; epoch const `FileTimeTicksFrom1601To1970 = 116444736000000000`, review-verified
   decoding to the exact host `date +%s`). x64-windows only; a clock read on wasm/arm64/x64-linux refuses at its span
   with the NEW **E3104** (`SemanticTargetUnsupportedConstruct`, registry process followed) via a positive-capability
-  `isClockSubstrateCallee` test — NARROWED after the wasm suite showed a whole-`__gt_`-band gate also fired on
+  `isClockSubstrateCallee` test (RENAMED `calleeNeedsWin32Substrate` and moved into `SemanticCheck.maxon` beside
+  `targetHasWin32Substrate` on 2026-07-25, when `__gt_sleep` joined it — it is no longer clock-only) — NARROWED
+  after the wasm suite showed a whole-`__gt_`-band gate also fired on
   `__gt_promise_drop` (a COMPILER-inserted scope-exit call), which would have blamed the drop instead of the `async`.
   ⭐ **FIXED THE REACHABLE PANIC (three panics, one root cause)** the recon flagged: `__Builtins.anything()` /
   `__whatever()` in plain user code died at `resolveCallFixups`/`lowerAsyncCall`/`valueTagToStdType` with NO
@@ -1982,6 +1984,52 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   as part of every build and a driver reads a correct current date (exit=today). ⇒ **the whitelist now widens by
   appending ONE path** (`Sleep.maxon` measured as the next-closest: one `__Builtins.sleep`, and `__gt_sleep` already
   exists). **This CLOSES the user-directed stdlib-whitelist chain (steps 1→2→3).**
+- **◑ WIDENING #2 (`stdlib/Sleep.maxon`) — ATTEMPTED 2026-07-25, ENTRY *HELD*, THREE FIXES MERGED.** The widening
+  was tried and **withdrawn by coordinator ruling**; the branch keeps the try-then-withdraw history because the
+  withdrawn entry's measurement is the evidence the next rung needs. **What it exposed — which is exactly why the
+  cheap module goes before `Map`:**
+  1. **`__Builtins.<member>` only ever worked in EXPRESSION position.** Step 2's recognizer served Clock's three
+     intrinsics and **all three RETURN a value**, so the void case was never exercised; `__Builtins.sleep(ms)` —
+     the entire body of `stdlib/Sleep.maxon` — died `E2015: Unsupported: identifier statement`. FIXED: a
+     `parseStatement` arm gated on `builtinsIntrinsicCallsAt`, widening a *shape* (`ident . ident (`), not a name
+     list; an unknown member still gets the same positioned E3004 expression position gives.
+  2. **A REACHABLE COMPILER PANIC on ordinary code** — `sleep(1)` built for wasm died `panic at
+     StdToWasm.maxon:1108` (arm64 twin `StdToArm64Conversion.maxon:406`), exit 1, no file/line. It survived
+     because every sleep spec is `<!-- targets: x64-windows -->`, so nothing reached it. FIXED: clean **E3104** at
+     the call span on both targets, both spellings. ⚠ SCOPE RULING (coordinator): gate the **sleep callee** only;
+     `async`/`await`, `runProcess` and the streaming-subprocess callees keep their documented panic — this rung did
+     not make them reachable. Review confirmed the scope held and that the previous rung's `__gt_promise_drop`
+     narrowing survives.
+  3. **🔴 THE BLOCKER — a bare-name builtin SILENTLY SHADOWS a declared function of the same name.** Verified on
+     unmodified `main`: `export function sleep(ms)` whose body is `panic(…)` is NEVER called (`sleep(1)` → exit 7),
+     no diagnostic. So a whitelisted `stdlib/Sleep.maxon` is **dead at every ordinary call site** — only
+     `let f = sleep` (a `functionRef`, not a call) reaches it. ⇒ **ENTRY HELD.** It would have cost **+677 allocs /
+     ~30 KB on EVERY compile** (the whitelist's measured per-module price) for zero reachable capability, and put a
+     false claim in this file. **RULE, now written into `StdlibWhitelist.maxon` + `specs-shv2/stdlib-whitelist.md`:
+     do not whitelist a module whose function name a bare builtin already claims — retire the builtin first.**
+  Merged as three fixes only (x64 1581→**1586/0**, wasm 1387→**1390/0**, scale **0 allocs / 0 bytes**, fragments
+  additions-only). Review caught a real duplication (the statement-door predicate derived the callee name
+  *differently* from the parse it predicts — two derivations of one name), an **INCOMPLETE WITHDRAWAL** (three
+  surviving "whitelist entry #2" claims, one directly contradicting the withdrawal doc), and **corrected three
+  false sentences by measuring them** — including one from the coordinator's own brief.
+- **⬜ FUTURE RUNG — RETIRE THE BARE-NAME BUILTINS, and give a whitelisted stdlib body a USER-FACING SPAN.** The
+  blocker above, plus the general gap it uncovered. Two halves, and the second is the real one:
+  - **Retire the bare-name builtin** so the whitelisted stdlib declaration is authoritative. Scoping measured by
+    the review (not estimated): **15 goldens across 7 specs** move, and `async-sleep.float-arg-rejected`'s pinned
+    `maxoncstderr` changes. The oracle agrees with the destination — the bootstrap has **no** bare `sleep`, only
+    `__Builtins.sleep`, and `stdlib/Sleep.maxon` *is* its user-facing API.
+  - ⭐ **DIAGNOSTIC ATTRIBUTION FOR ERRORS RAISED INSIDE WHITELISTED STDLIB SOURCE — GENERAL, NOT SLEEP-SPECIFIC.**
+    A rejection raised in a whitelisted body is positioned at the **stdlib path**, not the user's call. It fires
+    wherever a whitelisted body bottoms out in something target-gated — **which is what a stdlib leaf is FOR**;
+    every module queued behind Clock ends in a `__Builtins.*` intrinsic. Clock is spared only because no test
+    compiles a Clock program for a non-x64 target. ⚠ The reachable repro is **`let f = sleep; f(5)`** →
+    `E3104 at stdlib/Sleep.maxon:6:2` — *not* a bare `sleep(1)`, which the builtin still anchors at the user's
+    span (a coordinator-brief claim the review measured and corrected). **This gap gates every future widening,
+    `Map` included.**
+  ⚠ Load-bearing asymmetry to decide in that rung, pinned by `builtins-sleep.rejected-on-wasm-when-unreached`:
+  `checkCalls` **skips an unreached WHITELISTED body** but not an unreached ordinary call, so a dead `sleep(1)` is
+  refused on wasm today while a dead `Clock.nowMs()` compiles. **The day `sleep` moves into a whitelisted module
+  that program silently starts compiling again** — that flip must be a decision, not a side effect.
 - Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
 lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
 intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
