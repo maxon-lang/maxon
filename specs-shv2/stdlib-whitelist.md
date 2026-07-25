@@ -13,7 +13,7 @@ shv2's stdlib loader enumerates every `.maxon` file under the checkout's `stdlib
 subdirectories alike, exactly as v1 and the C# bootstrap do — and then a TEMPORARY WHITELIST filters
 which of them are actually loaded, so stdlib support can grow one module at a time, each module gated
 on the language features it needs. The filter is stated in exactly one place,
-`Compiler/StdlibWhitelist.maxon`; at this rung its only entry is `stdlib/Clock.maxon`.
+`Compiler/StdlibLoader.maxon`; at this rung its only entry is `stdlib/Clock.maxon`.
 
 The whitelist is scaffolding, not a feature: it is a filter INSIDE the real loader rather than a list
 the loader walks, so removing it is a deletion rather than a rewrite — of ONE file, which owns every

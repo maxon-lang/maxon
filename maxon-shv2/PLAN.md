@@ -1967,9 +1967,9 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   date. **⇒ STEP (3) — the whitelist loader with Clock as entry #1 — IS READY.**
 - **✅ STEP (3) STDLIB WHITELIST LOADER — CLOSED 2026-07-24, COMPLETING THE CHAIN** (feat `95bb62c4b` + perf
   `4fc57f111` + review `17c44abd0`; merged-tree x64 **1552/0**, wasm **1367/0**, no leak, `--workers=1==12`
-  byte-identical). `Compiler/StdlibWhitelist.maxon`: `whitelistedStdlibRelativePaths()` returns
+  byte-identical). `Compiler/StdlibLoader.maxon`: `whitelistedStdlibRelativePaths()` returns
   `["stdlib/Clock.maxon"]`; `locateStdlibDir()` walks up from `Process.executablePath()`'s dir (the bootstrap's
-  exe-dir walk, NOT v1's cwd walk, which fails for a program compiled in a temp dir); `loadStdlibWhitelist(project)`
+  exe-dir walk, NOT v1's cwd walk, which fails for a program compiled in a temp dir); `loadStdlibSources(project)` (renamed, with its file, 2026-07-25)
   prepends each listed path as an ORDINARY source via `loadOneSourceFile`, so Clock rides the normal
   lex→parse→lower→DFE path with no special-casing. **BYTE-NEUTRAL for every program that does not use a whitelisted
   module:** Clock is merged but unreachable-from-`main`, so DFE prunes all 7 of its functions before the backend and
@@ -2011,7 +2011,7 @@ it, correctly, because three measured facts invalidate a naive whitelist:
      no diagnostic. So a whitelisted `stdlib/Sleep.maxon` is **dead at every ordinary call site** — only
      `let f = sleep` (a `functionRef`, not a call) reaches it. ⇒ **ENTRY HELD.** It would have cost **+677 allocs /
      ~30 KB on EVERY compile** (the whitelist's measured per-module price) for zero reachable capability, and put a
-     false claim in this file. **RULE, now written into `StdlibWhitelist.maxon` + `specs-shv2/stdlib-whitelist.md`:
+     false claim in this file. **RULE, now written into `StdlibLoader.maxon` + `specs-shv2/stdlib-whitelist.md`:
      do not whitelist a module whose function name a bare builtin already claims — retire the builtin first.**
   Merged as three fixes only (x64 1581→**1586/0**, wasm 1387→**1390/0**, scale **0 allocs / 0 bytes**, fragments
   additions-only). Review caught a real duplication (the statement-door predicate derived the callee name
@@ -2036,6 +2036,89 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   `checkCalls` **skips an unreached WHITELISTED body** but not an unreached ordinary call, so a dead `sleep(1)` is
   refused on wasm today while a dead `Clock.nowMs()` compiles. **The day `sleep` moves into a whitelisted module
   that program silently starts compiling again** — that flip must be a decision, not a side effect.
+
+### ⭐⭐ THE WHITELIST IS TEMPORARY SCAFFOLDING, NOT A FEATURE (USER RULING, 2026-07-25) — and the loader is now REAL
+**Three user directives, all landed** (`stdlib-diagnostic-attribution`, x64 **1586/0**, wasm **1394/0**, fragments
+zero `M`/zero `A`):
+1. **"The whitelist is temporary — it only limits the blast radius of adding stdlib files one at a time."** The end
+   state is shv2 loading ALL of `stdlib/`, as the bootstrap does, and the whitelist being **DELETED**. Do not grow
+   it as though it were a feature.
+2. **"Any mention of the whitelist belongs in ONE place — where it decides which stdlib files to parse."**
+3. **"The compiler must not depend on file order to work correctly, so it must not SORT — nondeterminism is to be
+   HANDLED, not hidden."**
+
+**⇒ THE LOADER IS NOW THE REAL LOADER.** `Compiler/StdlibLoader.maxon` walks `stdlib/` recursively and loads every
+`.maxon` it finds; the whitelist is a single `if not isWhitelistedStdlibModule(…) continue` inside that loop.
+**Deleting those lines loads all of stdlib** — verified by deleting them (the loader then attempts all 49 files and
+dies on `__ManagedMemory`, which is the scaffolding doing its job). Previously the hardcoded LIST *was* the loader,
+so removing it left no loader at all: the end state was a rewrite, and it is now a **deletion**. `StdlibSource.maxon`
+holds the durable facts (`isStdlibFunction`, reachability, the substrate fixpoint) and never names the scaffolding.
+⚠ **The file was renamed `StdlibWhitelist.maxon` → `StdlibLoader.maxon` (coordinator, at merge):** a permanent
+loader must not be named for the temporary thing inside it, and the old name forced every cross-file reference to
+re-introduce a "whitelist" hit.
+
+⭐ **ATTRIBUTION — a target refusal raised inside STDLIB source now blames the USER's call.** Was:
+`error E3104: C:\…\stdlib\Clock.maxon:19:10: …` — an ABSOLUTE path into the checkout, at a line the user never
+wrote and cannot change, for a program whose own line 2 is `Clock.nowMs()`. Now: `main.maxon:2:10: … 'Clock.nowMs'
+lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation`. Reported at **the first
+crossing from non-stdlib into stdlib** (`main → readIt → Clock.nowMs` blames the line inside `readIt` — user code
+they can change), transitive, and it propagates the **runtime ENTRY NAME, not a bool** (Clock reaches two entries,
+so a bool would name whichever it found first — a wrong answer, not a cosmetic one). **This is GENERAL and gates
+every future widening including `Map`**: every stdlib leaf bottoms out in a `__Builtins.*` intrinsic, so this is
+what a stdlib leaf *is*. Keyed on **stdlib-vs-user**, NOT on whitelist membership — it must survive the deletion.
+
+⭐ **THE SORT WAS DELETED AND IT WAS A MEASURED O(n²)** — ×3.57/×3.76/×3.87/×3.94 per doubling at 12→192 synthetic
+modules, converging on ×4.00: insertion sort, 4 heap allocations per comparison (`pathSortsBefore` did
+`toString().toByteArray()` on BOTH sides). It priced at exactly **zero** at today's one module, which is why it had
+to be measured at the size it was heading for. **Order-independence is now MEASURED, not assumed:** reversed
+walks leave semantics identical and the emitted IR a PURE PERMUTATION. ⚠ **What DOES follow load order is EMISSION
+order**, including which of two same-named file-private globals gets the `$1` suffix — verified both ways, exit 118
+either way. **A reproducibility property, NOT a miscompile** (coordinator ruling) ⇒ its own rung, below.
+
+⭐ **THE REVIEW CAUGHT THAT THE ONE-FILE TEST HAD FAILED WHILE THE GREP PASSED.** The whitelist owned a
+`CompileError` arm (`Diagnostics.maxon`) and its printer (`Main.maxon`), thrown from nowhere else; the grep was
+green only because the WORD had been scrubbed from those two comments — **the concept had been renamed out of the
+search, not moved.** Deleting the filter would have stranded a dead union arm and a dead printer in two other files.
+Fixed (the missing-module case is now ordinary `CompileError.fileNotFound`). **A grep is not the test; "does
+deleting it touch exactly one file?" is.** The review also collapsed **two independent recursive `.maxon` directory
+walks** (`loadSourceDirectory` vs the loader's) which used two constants both spelling `".maxon"` and **already
+disagreed about `build.maxon`** — the next clause added to one and not the other would silently compile a file on
+one side and skip it on the other.
+
+⭐ **It also found and fixed a reachable defect: `maxon-shv2 build stdlib/Clock.maxon`** — the exact command you
+would run to check whether a module is ready to be listed — reported **E3006 duplicate definition** for every
+function in the file. The file was parsed TWICE and collided with itself, because `FilePath.equals` compares path
+TEXT and the relative spelling and the loader's absolute one are two identities to the query database. Pre-existing
+by one rung; fixed with a guard. ⚠ **It implemented the deeper repair (resolve the project root so every registered
+path is absolute), MEASURED it at +824…+5,009 allocations DOUBLING with the corpus — 2.6× the per-file cost the
+optimizer had rejected one commit earlier — and REVERTED it.** Taking it in a review commit would have silently
+overturned a measured decision.
+
+### ⬜ FILED BY THIS RUNG — four items, none of them its to fix
+- **⭐ "One spelling of a path is not one identity in the query database."** Root cause of the E3006 self-collision
+  above, and it governs the USER directory walk equally. The proper repair (resolve every registered path to
+  absolute) is MEASURED superlinear-in-corpus above and moves every relative-invocation diagnostic to absolute —
+  which moves the spec runner's `<fragment>` mapping. **Its own rung.**
+- **⭐ E3006 for a user/stdlib function-name collision is positioned INSIDE `stdlib/Clock.maxon`** — the same
+  "blames a file the user never opened" defect this rung fixed for E3104, in a different diagnostic.
+  `ParseStaging.commitFuncSignatures:533` reports at the LATER declaration and stdlib always merges last, so stdlib
+  is always blamed. Needs the FIRST declaration's span carried in `funcSignatures` (a core registry change) + a
+  message change that moves every pinned E3006. Distinct in kind from E3104: E3104 fires on VALID user code over a
+  target choice; E3006 only on genuinely broken code, and its text still names the culprit. **Its own rung.**
+- **⬜ EMISSION-ORDER CANONICALIZATION.** The emitted byte image is a function of filesystem order (see above).
+  Fix at the EMISSION point from a stable declaration key — **not** by sorting the loader's input, which is
+  explicitly ruled out. Covers `stdlib/` and user directories together. **Its own rung.**
+- **⚠ TWO REACHABILITY WALKS WITH DIFFERENT ROOT SETS.** `StdlibSource.reachableMaxonFunctionNames` roots only at
+  `main`; `DeadFunctionElimination.seedRoots` also roots `__mm_leak_check`, `__gt_enqueue` and every `.rdata` reloc
+  target. If a stdlib function ever lands in an `.rdata` slot (witness table / layout descriptor) the Maxon-tier
+  walk calls it unreachable — so `scanRuntimeUsage` skips its floor and `checkCalls` skips its gate — while DFE
+  KEEPS it. Not reachable today (`stdlib/Clock.maxon` declares no `implements`; descriptor slots name synthesized
+  `__destruct_*`). **The premise is currently guarded by a COMMENT, not a mechanism** — wants a root-set assertion
+  the moment stdlib grows a conforming type. *(This is the project's signature bug shape — one fact derived twice —
+  caught before it could fire.)*
+- ⏭ Also: `spec-test --target=arm64-macos` panics at `SpecTestRunner.maxon:928` before running anything, so even a
+  COMPILE-ONLY test (one that needs no executor) cannot run on a non-arm64 host. The arm64 attribution golden was
+  verified BY HAND and is byte-for-byte what it pins. A runner change would let compile-only tests run anywhere.
 - Clock is the CLOSEST module by a wide margin — measured: it parses, resolves,
 lowers, register-allocates and reaches LINK; stubbing ONLY its three intrinsics makes it compile clean (rc=0), so the
 intrinsics are its sole blocker. Two are nearly free — **`__gt_now_ns()` already exists** (`GtRuntime.maxon:1081`,
