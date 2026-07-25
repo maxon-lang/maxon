@@ -1,0 +1,314 @@
+using System.Text;
+using System.Text.Json;
+
+namespace MaxonSharp.Mcp.Tools;
+
+/// <summary>
+/// The DEBUG family — the first family of `maxon mcp`, and a thin one on purpose.
+///
+/// ⭐ Every tool here does the same three things: compose ONE command line from its arguments, hand it to
+/// <see cref="MaxonDebugRepl.RunCommand"/> — the same dispatcher `maxon debug --batch` uses — and return
+/// the events it emitted. There is no stop renderer in this file, no breakpoint-outcome vocabulary, and
+/// no command classifier: those exist once, in the driver, and this surface is a caller of them. The
+/// command WORDS are read out of the driver's own command table (<see cref="MaxonDebugRepl.CommandWord"/>)
+/// rather than spelled again here, so composing a line and parsing it back cannot drift apart.
+///
+/// What IS here is the part MCP adds: a session that outlives a request.
+/// </summary>
+internal static class DebugTools {
+
+  /// <summary>
+  /// The default bound on a wait for the target's next stop. Measured in SECONDS, deliberately unlike
+  /// the CLI's ten minutes: a human at a REPL who set the wrong breakpoint sees nothing happen and hits
+  /// Ctrl-C, while an agent's tool call has no such observer — it simply blocks the conversation. So the
+  /// default here is short enough that a breakpoint which will never be hit comes back as an honest
+  /// timeout event, and `stopTimeoutSeconds` raises it for a program that genuinely runs long.
+  /// </summary>
+  private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(20);
+
+  private const string SourceKindFile = "file";
+  private const string SourceKindSnippet = "snippet";
+  private static readonly string[] SourceKinds = [SourceKindFile, SourceKindSnippet];
+
+  /// The file name a snippet is written under before it is built. It shows up in every stop event's
+  /// `file` field, so it is a name that reads as what it is.
+  private const string DefaultSnippetName = "snippet.maxon";
+
+  /// The three stepping commands, named by the driver's own table so this list cannot come to offer a
+  /// word the dispatcher does not know.
+  private static readonly string[] StepKinds = [
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.Step),
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.Next),
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.Finish),
+  ];
+
+  /// The four per-green-thread actions, likewise. `debug_gt` is one tool rather than four for the same
+  /// reason `debug_step` is one rather than three: the dispatcher already takes the word.
+  private static readonly string[] GtActions = [
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.GtSelect),
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.GtBacktrace),
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.GtPark),
+    MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.GtResume),
+  ];
+
+  public static IReadOnlyList<McpTool> Tools { get; } = [
+    new("debug_start",
+      "Build a Maxon program, launch it under the debugger stopped at entry, arm the given breakpoints, "
+      + "and run to the first one. Returns the debugger events that produced — the breakpoint outcomes, "
+      + "then either a `stop` (with its source window, backtrace and location) or the program's `exit` if "
+      + "nothing stopped it. THE SESSION STAYS LIVE afterwards: call debug_locals / debug_step / "
+      + "debug_eval / debug_continue against the same Mcp-Session-Id to keep inspecting the same parked "
+      + "process, and debug_stop when done. A compile error comes back as the compiler's own diagnostics.",
+      [
+        new("source", McpSchema.Object(
+          "The program to debug: either a .maxon file that already exists, or a snippet to write and "
+          + "build in a scratch directory that is deleted when the session ends.", [
+            new("kind", McpSchema.StringEnum(
+              $"'{SourceKindFile}' to build `path`; '{SourceKindSnippet}' to build `text`.", SourceKinds),
+              Required: true),
+            new("path", McpSchema.String(
+              "Path to a single .maxon file, relative to the server's working directory or absolute. "
+              + "A DIRECTORY is refused: build a project with `maxon build <dir>` first."), Required: false),
+            new("text", McpSchema.String("The complete Maxon source of a program with a main()."),
+              Required: false),
+            new("name", McpSchema.String(
+              $"File name to give a snippet (default {DefaultSnippetName}); it is what stop events report "
+              + "as `file`."), Required: false),
+          ]), Required: true),
+        new("breakpoints", McpSchema.ArrayOf(
+          "Breakpoints to arm before the program runs. Each is exactly what `break` takes: `<file>:<line>` "
+          + "or a function name (matched exactly, then as Type.method, then as a leaf or prefix — an "
+          + "ambiguous name is REPORTED with its candidates and NOT armed), optionally followed by "
+          + "`if <local> <op> <literal>` for a condition evaluated inside the debuggee.",
+          McpSchema.String("One breakpoint specification.")), Required: false),
+        new("args", McpSchema.ArrayOf("Command-line arguments passed to the debuggee.",
+          McpSchema.String("One argument.")), Required: false),
+        new("env", McpSchema.StringMap(
+          "Environment variables set in the DEBUGGEE. MAXON_MAX_PROCS=1 pins its green-thread scheduler "
+          + "to one processor, which is what makes a concurrent program's run reproducible.",
+          "The variable's value."), Required: false),
+        new("stopTimeoutSeconds", McpSchema.Number(
+          "How long to wait for the program to reach its next stop before reporting an honest timeout "
+          + $"(default {DefaultStopTimeout.TotalSeconds}). Raise it for a program that legitimately runs "
+          + "for a while before the breakpoint."), Required: false),
+        new("stopOthers", McpSchema.Boolean(
+          "What a stop does to the OTHER green threads: false (default) parks only the thread that "
+          + "trapped, true holds every green thread for the duration of the stop. The hold is "
+          + "COOPERATIVE, so a thread already on a processor keeps running until it next reaches the "
+          + "scheduler, which `debug_threads` reports as 'pending' rather than 'held'."), Required: false),
+      ],
+      Start),
+
+    new("debug_break",
+      "Arm a breakpoint on the live session. `target` is `<file>:<line>` or a function name; the outcome "
+      + "is reported honestly and distinctly — set, no-code (that line compiled to nothing), ambiguous "
+      + "(with the candidate list, and NOTHING armed), or no-match (with a spelling suggestion).",
+      [
+        new("target", McpSchema.String("`<file>:<line>` or a function name."), Required: true),
+        new("condition", McpSchema.String(
+          "Optional `<local> <op> <literal>` evaluated INSIDE the debuggee on every hit, so a breakpoint "
+          + "in a hot loop costs microseconds per miss rather than a round trip. Deliberately narrow: a "
+          + "scalar stack local against an int or bool literal. A dotted path, a float, a String, or "
+          + "local-vs-local is REFUSED and left unarmed rather than approximated."), Required: false),
+      ],
+      (session, args) => Run(session, MaxonDebugRepl.DebugCommand.Break,
+        McpArgs.RequireString(args, "target")
+          + MaxonDebugRepl.ConditionSuffix(McpArgs.OptionalString(args, "condition") ?? ""))),
+
+    new("debug_continue",
+      "Resume the debuggee and run to the next stop. Returns a `stop` event, or the program's `exit` / "
+      + "`crash` if it finished — in which case the session is closed and the process reaped in the same "
+      + "call.",
+      [],
+      (session, _) => Run(session, MaxonDebugRepl.DebugCommand.Continue)),
+
+    new("debug_step",
+      "Step one SOURCE LINE. `step` descends into a call; `next` runs a call to completion and stops on "
+      + "the following line; `finish` runs to the caller. All three stop early at an intervening user "
+      + "breakpoint, and report honestly when they cannot be done (a frameless leaf has no caller frame).",
+      [new("kind", McpSchema.StringEnum("Which step.", StepKinds), Required: true)],
+      (session, args) => Run(session, McpArgs.RequireChoice(args, "kind", StepKinds))),
+
+    new("debug_locals",
+      "The named locals of the stopped frame, as type-aware value trees: a String as text plus length, a "
+      + "struct as a named-field subtree, an enum by the case its runtime discriminant actually holds. "
+      + "Refuses honestly when the program is not stopped.",
+      [],
+      (session, _) => Run(session, MaxonDebugRepl.DebugCommand.Locals)),
+
+    new("debug_eval",
+      "Evaluate a value PATH against the stopped frame — `person`, `person.home.name`, `arr[2]` — and "
+      + "return it as the same value tree debug_locals produces. It reads memory; it does not call "
+      + "functions or evaluate arithmetic.",
+      [new("expr", McpSchema.String("A local name, optionally followed by `.field` and `[index]` steps."),
+        Required: true)],
+      (session, args) => Run(session, MaxonDebugRepl.DebugCommand.Print,
+        McpArgs.RequireString(args, "expr"))),
+
+    new("debug_backtrace",
+      "The stopped thread's call stack, each frame symbolized to function and file:line. While a green "
+      + "thread is selected with debug_gt it describes THAT thread instead.",
+      [],
+      (session, _) => Run(session, MaxonDebugRepl.DebugCommand.Backtrace)),
+
+    new("debug_threads",
+      "Every green thread the runtime knows about: its id, entry function, scheduler status, whether it "
+      + "is on a processor, whether the debugger is holding it, and its top frame. Ids are RE-MINTED on "
+      + "every resume, so list again after continuing rather than reusing an id you read earlier.",
+      [],
+      (session, _) => Run(session, MaxonDebugRepl.DebugCommand.Threads)),
+
+    new("debug_gt",
+      "Act on ONE green thread by id (from debug_threads). `gt` selects it, so backtrace/locals/eval "
+      + "describe it until the target resumes; `gt-backtrace` walks its stack without selecting it; "
+      + "`gt-park` stops the scheduler from running it and `gt-resume` releases it. A thread executing on "
+      + "a processor cannot be walked or parked immediately and says so rather than being approximated.",
+      [
+        new("action", McpSchema.StringEnum("What to do with the thread.", GtActions), Required: true),
+        new("id", McpSchema.Integer("The green-thread id from the most recent debug_threads."),
+          Required: true),
+      ],
+      (session, args) => Run(session,
+        $"{McpArgs.RequireChoice(args, "action", GtActions)} {McpArgs.RequireInt(args, "id")}")),
+
+    new("debug_trace",
+      "The DebugStream events the debuggee recorded since the previous stop — allocations, refcounts, "
+      + "frees — which is what correlates a stop with what the program was DOING to get there. Only a "
+      + "binary built with --debugstream emits them; one that was not says so rather than returning an "
+      + "empty list, because 'no hooks' and 'nothing happened' are different answers.",
+      [],
+      (session, _) => Run(session, MaxonDebugRepl.DebugCommand.Trace)),
+
+    new("debug_stop",
+      "Terminate the debuggee and close the session, reporting what became of it. Every session owns a "
+      + "real process, so call this when finished rather than abandoning it — though a session that goes "
+      + "silent is reaped on the server's idle timeout, and every session is reaped on shutdown.",
+      [],
+      (session, _) => {
+        var debug = Live(session);
+        return Result(debug, debug.Stop());
+      }),
+  ];
+
+  // ---- Handlers ----
+
+  private static McpToolResult Start(McpSession session, JsonElement args) {
+    if (session.Debug is { EndedReason: null } live)
+      throw new DebuggerException(
+        $"this session already has a live debuggee ('{live.ExePath}'). Call debug_stop first — a second "
+        + "start would abandon a running process. (A different Mcp-Session-Id gets its own debuggee.)");
+
+    // A session whose program already finished is REPLACED rather than refused: the agent has read its
+    // outcome, and holding the corpse would only make it invent a second connection to get on with.
+    session.Debug?.Dispose();
+    session.Debug = null;
+
+    var debug = McpDebugSession.Start(DebugBuild.Compile(ResolveSource(session, args)),
+      McpArgs.OptionalStringArray(args, "args"),
+      McpArgs.OptionalStringMap(args, "env"),
+      StopTimeoutOf(args),
+      McpArgs.OptionalBool(args, "stopOthers") ?? false);
+    session.Debug = debug;
+
+    // Arm every breakpoint, then run — through the ONE dispatcher, so a breakpoint set here is reported
+    // by exactly the events `maxon debug --batch` would have emitted for the same script.
+    var commands = McpArgs.OptionalStringArray(args, "breakpoints")
+      .Select(spec => $"{MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.Break)} {spec}")
+      .Append(MaxonDebugRepl.CommandWord(MaxonDebugRepl.DebugCommand.Run))
+      .ToArray();
+    return Result(debug, debug.Run(commands));
+  }
+
+  /// Run a command that takes no argument.
+  private static McpToolResult Run(McpSession session, MaxonDebugRepl.DebugCommand command) =>
+    Run(session, MaxonDebugRepl.CommandWord(command));
+
+  /// Run a command with an argument, composed the ONE way: the table's word, then the rest of the line.
+  private static McpToolResult Run(McpSession session, MaxonDebugRepl.DebugCommand command, string rest) =>
+    Run(session, $"{MaxonDebugRepl.CommandWord(command)} {rest}");
+
+  private static McpToolResult Run(McpSession session, string commandLine) {
+    var debug = Live(session);
+    return Result(debug, debug.Run(commandLine));
+  }
+
+  /// <summary>
+  /// This session's live debuggee, or a refusal that says WHICH of the two things is missing. "There is
+  /// no session" and "the session you had has finished, and here is what became of it" send an agent
+  /// somewhere different, so they are never flattened into one message — and neither is ever answered
+  /// with an empty result, which would read as "the program has no locals".
+  /// </summary>
+  private static McpDebugSession Live(McpSession session) {
+    if (session.Debug is not { } debug)
+      throw new DebuggerException(
+        "no debug session on this connection — call debug_start first (and keep sending the same "
+        + "Mcp-Session-Id, which is what the live debuggee hangs on).");
+
+    if (debug.EndedReason is { } ended)
+      throw new DebuggerException($"{ended}; there is nothing left to inspect. Call debug_start again.");
+
+    return debug;
+  }
+
+  /// <summary>
+  /// A tool's answer: the events the command emitted, verbatim, plus anything the debuggee printed.
+  ///
+  /// The events are SPLICED as raw JSON rather than re-rendered — they are already the driver's own
+  /// single-sourced objects, and re-encoding them as strings would hand an agent JSON to parse twice.
+  /// `output` is present only when there is some, so a session whose program prints nothing emits
+  /// exactly the shape it would have without this field.
+  /// </summary>
+  private static McpToolResult Result(McpDebugSession debug, IReadOnlyList<string> events) {
+    using var buffer = new MemoryStream();
+    using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false })) {
+      w.WriteStartObject();
+      w.WriteString("exe", debug.ExePath);
+
+      w.WriteStartArray("events");
+      foreach (var line in events) w.WriteRawValue(line);
+      w.WriteEndArray();
+
+      var output = debug.DrainOutput();
+      if (output.Length > 0) w.WriteString("output", output);
+
+      w.WriteEndObject();
+    }
+    return McpToolResult.Json(Encoding.UTF8.GetString(buffer.ToArray()));
+  }
+
+  private static TimeSpan StopTimeoutOf(JsonElement args) {
+    if (McpArgs.OptionalNumber(args, "stopTimeoutSeconds") is not { } seconds) return DefaultStopTimeout;
+
+    // Refused rather than clamped, exactly as the CLI flag is: a non-positive deadline would time out
+    // every wait before the target could possibly stop — a debugger that never stops anywhere, reported
+    // as if configured. The upper guard is the conversion's own limit, which THROWS rather than
+    // saturating, and a validator whose whole job is to refuse must not throw.
+    if (double.IsNaN(seconds) || seconds <= 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
+      throw new McpInvalidParamsException(
+        $"`stopTimeoutSeconds` must be a positive number of seconds, got {seconds}");
+
+    return TimeSpan.FromSeconds(seconds);
+  }
+
+  /// <summary>
+  /// The `source` argument as a path on disk: the caller's own file, or a snippet written into the
+  /// session's scratch directory — which the SESSION owns and reaps, so a snippet that fails to compile
+  /// (and therefore never produces a debug session) still leaves nothing behind.
+  /// </summary>
+  private static string ResolveSource(McpSession session, JsonElement args) {
+    var source = McpArgs.RequireObject(args, "source");
+    if (McpArgs.RequireChoice(source, "kind", SourceKinds) == SourceKindFile)
+      return McpArgs.RequireString(source, "path");
+
+    var text = McpArgs.RequireString(source, "text");
+    var name = McpArgs.OptionalString(source, "name") ?? DefaultSnippetName;
+    if (name.Length == 0 || Path.GetFileName(name) != name)
+      throw new McpInvalidParamsException(
+        $"`source.name` must be a bare file name, got '{name}' — a snippet is written into a scratch "
+        + "directory this server owns, not to a path of the caller's choosing.");
+
+    var path = Path.Combine(session.Workspace(), name);
+    File.WriteAllText(path, text);
+    return path;
+  }
+}

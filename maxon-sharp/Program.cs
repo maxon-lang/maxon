@@ -29,6 +29,7 @@ class Program {
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
       "lsp-server" => await RunLspAsync(),
+      "mcp" => Mcp.McpServer.Run(args[1..]),
       _ => Fail()
     };
   }
@@ -46,6 +47,7 @@ class Program {
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
+    Console.WriteLine("  mcp [options]            Start the MCP server (HTTP, loopback only); see 'MCP options'");
     Console.WriteLine();
     Console.WriteLine("Build options (build, run):");
     Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x64-windows)");
@@ -87,6 +89,16 @@ class Program {
     Console.WriteLine("                           thread already running keeps running until it next reaches the");
     Console.WriteLine("                           scheduler — 'threads' reports that as 'pending' rather than 'held'");
     Console.WriteLine("  --bp-test <exe> <off>    Set a breakpoint at a code offset, run, observe the stop, continue (P3b)");
+    Console.WriteLine();
+    Console.WriteLine("MCP options (mcp) — an agent-facing front-end over the same debugger engine:");
+    Console.WriteLine($"  {Mcp.McpServer.PortFlag}N               TCP port to serve on. A taken port fails loudly; it is never");
+    Console.WriteLine("                           swapped for another, which would send a configured client elsewhere");
+    Console.WriteLine($"  {Mcp.McpServer.IdleTimeoutFlag}SECS      Reap a session nothing has touched for this long. HTTP gives no");
+    Console.WriteLine("                           EOF, so this is what stops a vanished client's debuggee parking forever");
+    Console.WriteLine($"  {Mcp.McpServer.MaxSessionsFlag}N       How many sessions may exist at once (each can own a live process)");
+    Console.WriteLine("  The listener binds LOOPBACK ONLY and validates the Origin header on every request:");
+    Console.WriteLine("  this server compiles and runs programs, so an exposed port is remote code execution.");
+    Console.WriteLine("  There is deliberately no flag to widen either.");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -210,7 +222,7 @@ class Program {
           Console.Error.WriteLine("maxon debug --dump-info needs a path to an executable or .mxdbg sidecar.");
           return 1;
         }
-        var reader = LoadSidecarOrReport(args[1]);
+        var reader = MaxonDebugRepl.LoadSidecar(args[1]);
         return reader == null ? 1 : DumpDebugInfo(reader, args[1]);
       }
 
@@ -220,7 +232,7 @@ class Program {
           Console.Error.WriteLine("maxon debug --symbolize needs a .mxdbg path and at least one code offset.");
           return 1;
         }
-        var reader = LoadSidecarOrReport(args[1]);
+        var reader = MaxonDebugRepl.LoadSidecar(args[1]);
         if (reader == null) return 1;
         return SymbolizeOffsets(reader, args[2..]);
       }
@@ -401,27 +413,6 @@ class Program {
     return MaxonDebugRepl.RunBatch(exe, targetArgs, commands, stopTimeout, targetEnv, stopOthers);
   }
 
-  /// Load a `.mxdbg` sidecar for the given path (a `.mxdbg` file, or a binary whose sidecar is
-  /// `<binary>.mxdbg`). Reports a clear reason and returns null on any failure.
-  static Debug.MxdbgReader? LoadSidecarOrReport(string path) {
-    var sidecarPath = path.EndsWith(Debug.MxdbgFormat.SidecarExtension)
-      ? path
-      : path + Debug.MxdbgFormat.SidecarExtension;
-
-    if (!File.Exists(sidecarPath)) {
-      Console.Error.WriteLine($"No debug info found: '{sidecarPath}' does not exist "
-        + "(build with --debug-info to produce it).");
-      return null;
-    }
-
-    try {
-      return new Debug.MxdbgReader(File.ReadAllBytes(sidecarPath));
-    } catch (InvalidDataException ex) {
-      Console.Error.WriteLine($"Cannot read '{sidecarPath}': {ex.Message}");
-      return null;
-    }
-  }
-
   static int DumpDebugInfo(Debug.MxdbgReader r, string path) {
     Console.WriteLine($"Debug info: {path}");
     Console.WriteLine($"  target:   {r.Triple}");
@@ -588,7 +579,7 @@ class Program {
     return Compiler.CompileTarget.Default;
   }
 
-  static string GetOutputExtension(Compiler.CompileTarget target) {
+  internal static string GetOutputExtension(Compiler.CompileTarget target) {
     return target.Os.ToLowerInvariant() switch {
       "windows" => ".exe",
       "macos" => "",
@@ -1047,7 +1038,7 @@ class Program {
     return files.Length > 0 ? files[0].Path : originalPath;
   }
 
-  static string ResolveOutputPath(string mainFile, string ext) {
+  internal static string ResolveOutputPath(string mainFile, string ext) {
     return Path.ChangeExtension(mainFile, ext == "" ? null : ext);
   }
 

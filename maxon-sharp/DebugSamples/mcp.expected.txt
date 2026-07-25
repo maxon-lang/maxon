@@ -1,0 +1,78 @@
+P5 `maxon mcp` gate — the compiler's own MCP server, over HTTP, hosting a LIVE debug session.
+
+⭐ WHAT THIS GOLDEN IS FOR. Every other golden here drives ONE `maxon debug` process from a script it was
+given up front. This one proves the thing that made P5 worth doing: an agent that decides what to ask
+NEXT from what it just saw. BLOCK 1's two `debug_locals` calls are separate HTTP requests, minutes apart
+if the agent likes, and THEY RETURN DIFFERENT VALUES — "before" (len=6) then "after" (len=5), with a
+`debug_step` between them. A replayed transcript cannot do that; only a debuggee still parked between two
+requests can.
+
+The `maxon mcp` line below is the SERVER: it runs first, in the background, and the four client commands
+after it each drive one block against it. (The gate discovers all six the same way every other golden's
+commands are discovered — by reading them here, so they exist exactly once.)
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/mcp.maxon
+  maxon mcp --port=47821 --idle-timeout=120
+  S=$(curl -sS -D- -o/dev/null -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}' http://127.0.0.1:47821/mcp | tr -d '\r' | awk '/^Mcp-Session-Id:/{print $2}'); for m in '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"debug_start","arguments":{"source":{"kind":"file","path":"maxon-sharp/DebugSamples/mcp.maxon"},"breakpoints":["mcp.maxon:19"]}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"debug_locals"}}' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"debug_step","arguments":{"kind":"next"}}}' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"debug_locals"}}' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"debug_continue"}}'; do curl -sS -H "Mcp-Session-Id: $S" -H 'Content-Type: application/json' -d "$m" http://127.0.0.1:47821/mcp; echo; done
+  S=$(curl -sS -D- -o/dev/null -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}' http://127.0.0.1:47821/mcp | tr -d '\r' | awk '/^Mcp-Session-Id:/{print $2}'); for m in '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"debug_locals"}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"debug_start","arguments":{"source":{"kind":"file","path":"maxon-sharp/DebugSamples/mcp.maxon"},"breakpoints":["mcp.maxon:19"]}}}' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"debug_start","arguments":{"source":{"kind":"file","path":"maxon-sharp/DebugSamples/mcp.maxon"}}}}' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"debug_break","arguments":{"target":"mcp.maxon:18"}}}' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"debug_stop"}}' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"debug_locals"}}'; do curl -sS -H "Mcp-Session-Id: $S" -H 'Content-Type: application/json' -d "$m" http://127.0.0.1:47821/mcp; echo; done
+  curl -sS -w '\n%{http_code}\n' -H 'Mcp-Session-Id: nosuchsession' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' http://127.0.0.1:47821/mcp; curl -sS -w '\n%{http_code}\n' -H 'Origin: http://evil.example' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}' http://127.0.0.1:47821/mcp
+  ip=$(ipconfig 2>/dev/null | tr -d '\r' | awk '/IPv4/{print $NF}' | grep -v '^127\.' | head -1); [ -n "$ip" ] || ip=$(hostname -I 2>/dev/null | awk '{print $1}'); if [ -z "$ip" ]; then echo "NO NON-LOOPBACK ADDRESS ON THIS HOST — the bind could not be probed"; elif curl -sS --max-time 5 -o/dev/null "http://$ip:47821/mcp" 2>/dev/null; then echo "REACHABLE — THE LISTENER IS NOT LOOPBACK-ONLY"; else echo "refused: a non-loopback address of this host cannot reach the server"; fi
+
+WHAT EACH BLOCK PROVES (asserted by the transcripts below):
+  * BLOCK 1 — THE HEADLINE, and the design doc's own acceptance line: "agent sets bp, gets stop+locals".
+    `debug_start` builds the sample, launches it under the debugger, arms mcp.maxon:19 and runs to it, in
+    ONE call; the events it returns are byte-for-byte the events `maxon debug --batch` emits for the same
+    script, because they come from the same renderers through the same dispatcher. THEN THE SESSION STAYS
+    LIVE: `debug_locals` reads stage="before", `debug_step` runs line 19, and the SECOND `debug_locals` —
+    a fourth separate HTTP request — reads stage="after". The final `debug_continue` runs the program to
+    completion, and its result carries both the `exit` event and the program's own stdout, complete
+    because the session closes (and the process is reaped) inside that same call.
+  * BLOCK 2 — THE HONEST REFUSALS, each of which could have been an empty result and is not. `locals`
+    before any start says there is no session AND says which header carries one; a second `debug_start`
+    on a live session is refused BY NAME rather than silently abandoning a running process; a breakpoint
+    on a comment line is reported `no-code` rather than `set`; `debug_stop` on a live debuggee reports
+    `terminated` rather than an exit code the program never chose; and `locals` afterwards distinguishes
+    "the session you had has finished" from "there is no session", because those send an agent somewhere
+    different.
+  * BLOCK 3 — THE TRANSPORT REFUSALS. An unknown `Mcp-Session-Id` gets 404 and a reason, never a quietly
+    minted fresh session (which would silently discard the caller's breakpoints). A foreign `Origin` gets
+    403 before anything is parsed, dispatched, or compiled: this server builds and RUNS programs, so
+    without that check a web page the user merely visits could drive it.
+  * BLOCK 4 — THE BIND. This host's own non-loopback address cannot reach the server, which is the
+    property that keeps the port off the network. It is a PROBE, not a claim: if this host has no
+    non-loopback IPv4 at all the block fails loudly saying so, because a security gate that silently
+    skips is worse than none.
+
+WHAT IS STABLE vs BUILD-SPECIFIC:
+  * The event shapes, tool answers, refusal wordings, HTTP status codes, values and exit code are the P5
+    subject and are STABLE. `Mcp-Session-Id` is fresh per run and is deliberately NEVER printed — it is
+    captured into a shell variable and echoed back as a header, so nothing in these transcripts pins it.
+  * The `.text` offsets (0xe4 for line 19, 0x121 for line 22, 0x51 the entry-stub return) are
+    build-specific and move only if codegen for `main` moves.
+  * The port is FIXED at 47821 rather than chosen: a server that silently moved to another port would
+    leave a configured client talking to something else, so a taken port is a loud failure instead.
+
+--- EXPECTED BLOCK 1: a live session across five HTTP requests; two `locals` that DISAGREE ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022breakpoint\u0022,\u0022action\u0022:\u0022set\u0022,\u0022file\u0022:\u0022mcp.maxon\u0022,\u0022line\u0022:19,\u0022offset\u0022:\u00220xe4\u0022,\u0022function\u0022:\u0022main\u0022},{\u0022event\u0022:\u0022stop\u0022,\u0022reason\u0022:\u0022breakpoint\u0022,\u0022offset\u0022:\u00220xe4\u0022,\u0022function\u0022:\u0022main\u0022,\u0022file\u0022:\u0022maxon-sharp/DebugSamples/mcp.maxon\u0022,\u0022line\u0022:19,\u0022col\u0022:2,\u0022source\u0022:[{\u0022line\u0022:16,\u0022text\u0022:\u0022\\tvar ascii = stage.isAscii()\u0022,\u0022current\u0022:false},{\u0022line\u0022:17,\u0022text\u0022:\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:18,\u0022text\u0022:\u0022\\t// BREAKPOINT: the stop is BEFORE this line runs, so \\u0060stage\\u0060 still reads \\u0022before\\u0022 here.\u0022,\u0022current\u0022:false},{\u0022line\u0022:19,\u0022text\u0022:\u0022\\tstage = \\u0022after\\u0022\u0022,\u0022current\u0022:true},{\u0022line\u0022:20,\u0022text\u0022:\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:21,\u0022text\u0022:\u0022\\t// One \\u0060step\\u0060 lands here, with the store above completed: \\u0060stage\\u0060 now reads \\u0022after\\u0022.\u0022,\u0022current\u0022:false},{\u0022line\u0022:22,\u0022text\u0022:\u0022\\tascii = stage.isAscii()\u0022,\u0022current\u0022:false}],\u0022backtrace\u0022:[{\u0022frame\u0022:0,\u0022function\u0022:\u0022main\u0022,\u0022file\u0022:\u0022maxon-sharp/DebugSamples/mcp.maxon\u0022,\u0022line\u0022:19,\u0022offset\u0022:\u00220xe4\u0022},{\u0022frame\u0022:1,\u0022offset\u0022:\u00220x51\u0022}]}]}"}]}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022locals\u0022,\u0022values\u0022:[{\u0022name\u0022:\u0022stage\u0022,\u0022type\u0022:\u0022String\u0022,\u0022kind\u0022:\u0022String\u0022,\u0022display\u0022:\u0022\\u0022before\\u0022 (len=6)\u0022}]}]}"}]}}
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022stop\u0022,\u0022reason\u0022:\u0022breakpoint\u0022,\u0022offset\u0022:\u00220x121\u0022,\u0022function\u0022:\u0022main\u0022,\u0022file\u0022:\u0022maxon-sharp/DebugSamples/mcp.maxon\u0022,\u0022line\u0022:22,\u0022col\u0022:2,\u0022source\u0022:[{\u0022line\u0022:19,\u0022text\u0022:\u0022\\tstage = \\u0022after\\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:20,\u0022text\u0022:\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:21,\u0022text\u0022:\u0022\\t// One \\u0060step\\u0060 lands here, with the store above completed: \\u0060stage\\u0060 now reads \\u0022after\\u0022.\u0022,\u0022current\u0022:false},{\u0022line\u0022:22,\u0022text\u0022:\u0022\\tascii = stage.isAscii()\u0022,\u0022current\u0022:true},{\u0022line\u0022:23,\u0022text\u0022:\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:24,\u0022text\u0022:\u0022\\tprint(\\u0022stage={stage} ascii={ascii}\\u0022)\u0022,\u0022current\u0022:false},{\u0022line\u0022:25,\u0022text\u0022:\u0022\\treturn 5\u0022,\u0022current\u0022:false}],\u0022backtrace\u0022:[{\u0022frame\u0022:0,\u0022function\u0022:\u0022main\u0022,\u0022file\u0022:\u0022maxon-sharp/DebugSamples/mcp.maxon\u0022,\u0022line\u0022:22,\u0022offset\u0022:\u00220x121\u0022},{\u0022frame\u0022:1,\u0022offset\u0022:\u00220x51\u0022}]}]}"}]}}
+{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022locals\u0022,\u0022values\u0022:[{\u0022name\u0022:\u0022stage\u0022,\u0022type\u0022:\u0022String\u0022,\u0022kind\u0022:\u0022String\u0022,\u0022display\u0022:\u0022\\u0022after\\u0022 (len=5)\u0022}]}]}"}]}}
+{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022exit\u0022,\u0022code\u0022:5}],\u0022output\u0022:\u0022stage=after ascii=true\\n\u0022}"}]}}
+
+--- EXPECTED BLOCK 2: the honest refusals, none of them an empty result ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"no debug session on this connection \u2014 call debug_start first (and keep sending the same Mcp-Session-Id, which is what the live debuggee hangs on)."}],"isError":true}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022breakpoint\u0022,\u0022action\u0022:\u0022set\u0022,\u0022file\u0022:\u0022mcp.maxon\u0022,\u0022line\u0022:19,\u0022offset\u0022:\u00220xe4\u0022,\u0022function\u0022:\u0022main\u0022},{\u0022event\u0022:\u0022stop\u0022,\u0022reason\u0022:\u0022breakpoint\u0022,\u0022offset\u0022:\u00220xe4\u0022,\u0022function\u0022:\u0022main\u0022,\u0022file\u0022:\u0022maxon-sharp/DebugSamples/mcp.maxon\u0022,\u0022line\u0022:19,\u0022col\u0022:2,\u0022source\u0022:[{\u0022line\u0022:16,\u0022text\u0022:\u0022\\tvar ascii = stage.isAscii()\u0022,\u0022current\u0022:false},{\u0022line\u0022:17,\u0022text\u0022:\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:18,\u0022text\u0022:\u0022\\t// BREAKPOINT: the stop is BEFORE this line runs, so \\u0060stage\\u0060 still reads \\u0022before\\u0022 here.\u0022,\u0022current\u0022:false},{\u0022line\u0022:19,\u0022text\u0022:\u0022\\tstage = \\u0022after\\u0022\u0022,\u0022current\u0022:true},{\u0022line\u0022:20,\u0022text\u0022:\u0022\u0022,\u0022current\u0022:false},{\u0022line\u0022:21,\u0022text\u0022:\u0022\\t// One \\u0060step\\u0060 lands here, with the store above completed: \\u0060stage\\u0060 now reads \\u0022after\\u0022.\u0022,\u0022current\u0022:false},{\u0022line\u0022:22,\u0022text\u0022:\u0022\\tascii = stage.isAscii()\u0022,\u0022current\u0022:false}],\u0022backtrace\u0022:[{\u0022frame\u0022:0,\u0022function\u0022:\u0022main\u0022,\u0022file\u0022:\u0022maxon-sharp/DebugSamples/mcp.maxon\u0022,\u0022line\u0022:19,\u0022offset\u0022:\u00220xe4\u0022},{\u0022frame\u0022:1,\u0022offset\u0022:\u00220x51\u0022}]}]}"}]}}
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"this session already has a live debuggee (\u0027maxon-sharp/DebugSamples/mcp.exe\u0027). Call debug_stop first \u2014 a second start would abandon a running process. (A different Mcp-Session-Id gets its own debuggee.)"}],"isError":true}}
+{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022breakpoint\u0022,\u0022action\u0022:\u0022no-code\u0022,\u0022file\u0022:\u0022mcp.maxon\u0022,\u0022line\u0022:18}]}"}]}}
+{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/mcp.exe\u0022,\u0022events\u0022:[{\u0022event\u0022:\u0022exit\u0022,\u0022terminated\u0022:true}]}"}]}}
+{"jsonrpc":"2.0","id":6,"result":{"content":[{"type":"text","text":"the debuggee has finished with code (terminated by the debugger); there is nothing left to inspect. Call debug_start again."}],"isError":true}}
+
+--- EXPECTED BLOCK 3: an unknown session is 404, a foreign Origin is 403 ---
+{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"unknown or expired session \u0027nosuchsession\u0027; call \u0060initialize\u0060 to start a new one"}}
+404
+maxon mcp serves loopback origins only (this server compiles and runs programs).
+403
+
+--- EXPECTED BLOCK 4: this host's own non-loopback address cannot reach the server ---
+refused: a non-loopback address of this host cannot reach the server

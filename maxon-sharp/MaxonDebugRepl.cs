@@ -517,12 +517,16 @@ internal static class MaxonDebugRepl {
   // ---- Batch / JSON ----
 
   /// <summary>
-  /// The batch session's mutable state, threaded through the command dispatch. It replaces the pair of
-  /// `ref` parameters every batch command used to carry: a THIRD fact — whether a wait TIMED OUT, which
-  /// decides the driver's own exit code — is exactly the addition that made a growing `ref` list the
-  /// wrong shape for it.
+  /// The mutable state <see cref="RunCommand"/> threads through one session's commands. It replaces the
+  /// pair of `ref` parameters every batch command used to carry: a THIRD fact — whether a wait TIMED
+  /// OUT, which decides the driver's own exit code — is exactly the addition that made a growing `ref`
+  /// list the wrong shape for it.
+  ///
+  /// It is not "the batch session" any more: `--batch` runs a whole list of commands against one of
+  /// these, and the MCP server holds one per live debug session and runs a single command per tool
+  /// call. Same state, same dispatcher; only who decides the next command differs.
   /// </summary>
-  private sealed class BatchSession {
+  internal sealed class CommandSession {
     /// True once the session can issue no further commands: the target exited, was quit, or timed out.
     public bool Finished;
 
@@ -549,7 +553,7 @@ internal static class MaxonDebugRepl {
     MaxonDebugger dbg;
     try {
       // Target stdout -> the driver's STDERR so this mode's JSON stream on stdout stays clean.
-      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, targetStdout: Console.Error,
+      dbg = MaxonDebugger.Attach(exePath, targetArgs, sidecar, targetStdout: Console.Error.WriteLine,
         stopTimeout: stopTimeout, targetEnv: targetEnv, stopOthers: stopOthers);
     } catch (DebuggerException ex) {
       EmitError(ex.Message);
@@ -567,10 +571,10 @@ internal static class MaxonDebugRepl {
         return 1;
       }
 
-      var session = new BatchSession();
+      var session = new CommandSession();
       foreach (var command in commands) {
         if (session.Finished) break;
-        RunBatchCommand(dbg, exePath, command, session);
+        RunCommand(dbg, exePath, command, session);
       }
 
       // Drain any parked state so the target is never left spinning in the stop-the-world loop.
@@ -591,8 +595,14 @@ internal static class MaxonDebugRepl {
     }
   }
 
-  private static void RunBatchCommand(MaxonDebugger dbg, string exePath, string commandLine,
-      BatchSession session) {
+  /// <summary>
+  /// THE command dispatcher — the one place a command WORD becomes an action on the engine, shared by
+  /// `--batch` (which feeds it a script) and by the MCP server (which feeds it one line per tool call,
+  /// composed from that tool's arguments). A surface that classified commands for itself would be a
+  /// second grammar for one vocabulary, which is the defect this project has already paid for twice.
+  /// </summary>
+  internal static void RunCommand(MaxonDebugger dbg, string exePath, string commandLine,
+      CommandSession session) {
     var (command, word, rest) = ParseCommand(commandLine);
     switch (command) {
       case DebugCommand.Empty:
@@ -726,7 +736,7 @@ internal static class MaxonDebugRepl {
     }
   });
 
-  private static void BatchContinue(MaxonDebugger dbg, string exePath, BatchSession session) {
+  private static void BatchContinue(MaxonDebugger dbg, string exePath, CommandSession session) {
     if (!dbg.Continue()) { EmitError(ContinueUnackedText); return; }
 
     var wait = dbg.WaitForStop();
@@ -761,13 +771,13 @@ internal static class MaxonDebugRepl {
 
   /// Run a step op that needs the current parked frame (step / next / finish) and emit its outcome.
   private static void BatchStepCommand(MaxonDebugger dbg, string exePath,
-      Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op, BatchSession session) {
+      Func<MaxonDebugger.StopInfo, MaxonDebugger.StepOutcome> op, CommandSession session) {
     if (session.CurrentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
     if (StepRefusedWhileSelectedText(dbg) is { } refusal) { EmitError(refusal); return; }
     ApplyBatchStepOutcome(dbg, exePath, op(stop), session);
   }
 
-  private static void BatchUntil(MaxonDebugger dbg, string exePath, string rest, BatchSession session) {
+  private static void BatchUntil(MaxonDebugger dbg, string exePath, string rest, CommandSession session) {
     if (session.CurrentStop is not { } stop) { EmitError(NotStoppedBatchText); return; }
     if (StepRefusedWhileSelectedText(dbg) is { } refusal) { EmitError(refusal); return; }
     if (!uint.TryParse(rest.Trim(), out var line) || line == 0) { EmitError("until needs a line number"); return; }
@@ -779,7 +789,7 @@ internal static class MaxonDebugRepl {
   /// identically) and becomes the new parked frame; an Exited ends the run; a TimedOut ends it through
   /// the ONE timeout event; anything else is an error event with the shared reason.
   private static void ApplyBatchStepOutcome(MaxonDebugger dbg, string exePath,
-      MaxonDebugger.StepOutcome outcome, BatchSession session) {
+      MaxonDebugger.StepOutcome outcome, CommandSession session) {
     switch (outcome.Kind) {
       case MaxonDebugger.StepOutcomeKind.Stopped:
         session.CurrentStop = outcome.Stop;
@@ -805,7 +815,7 @@ internal static class MaxonDebugRepl {
   /// inspect, no further command can mean anything, and the driver must exit NONZERO. Stated once because
   /// every such ending — a timeout on continue, on a step, or in the drain, an unacked continue, and the
   /// drain cap — owes exactly the same three facts.
-  private static void EndIncompleteSession(BatchSession session) {
+  private static void EndIncompleteSession(CommandSession session) {
     session.CurrentStop = null;
     session.Finished = true;
     session.Incomplete = true;
@@ -916,7 +926,7 @@ internal static class MaxonDebugRepl {
   /// so it runs to completion — bounded so a re-arming breakpoint cannot loop the driver forever, and
   /// reporting every way the drain can END WITHOUT the program finishing, since each of those leaves a
   /// live target the caller must dispose of rather than a clean exit code to print.
-  private static void DrainToExit(MaxonDebugger dbg, BatchSession session) {
+  private static void DrainToExit(MaxonDebugger dbg, CommandSession session) {
     if (session.Finished || dbg.HasExited) return;
 
     bool draining = true;
@@ -1356,7 +1366,7 @@ internal static class MaxonDebugRepl {
   /// listing looks perfectly normal. It is therefore a REFUSAL to start rather than a warning: the whole
   /// point of the flag is that the user is about to trust what they see.
   /// </summary>
-  private static string? StopOthersUnsupportedText(MaxonDebugger dbg) =>
+  internal static string? StopOthersUnsupportedText(MaxonDebugger dbg) =>
     dbg.StopOthersRequested && !dbg.GreenThreadsSupported
       ? $"{StopOthersFlag} needs a rebuilt debug agent — this binary's cannot hold green threads, so the "
         + "rest of the program would keep running while the session reported it stopped"
@@ -1645,7 +1655,7 @@ internal static class MaxonDebugRepl {
   /// as a completed run. The `terminated` arm has said so structurally since P4b; the crash arm is the
   /// same refusal applied to the OTHER way a target ends without answering.
   /// </summary>
-  private static void EmitOutcome(MaxonDebugger dbg) => WriteEvent(w => {
+  internal static void EmitOutcome(MaxonDebugger dbg) => WriteEvent(w => {
     switch (dbg.Outcome) {
       case MaxonDebugger.TargetOutcome.Exited:
         w.WriteString("event", "exit");
@@ -1676,8 +1686,41 @@ internal static class MaxonDebugRepl {
     w.WriteString("message", message);
   });
 
-  /// Write one compact, single-line JSON object to stdout (newline-delimited JSON: one event per line,
-  /// so a consumer parses the stream incrementally).
+  /// <summary>
+  /// The one place a rendered event acquires a DESTINATION, and the only line in this file that has
+  /// one. Every <c>Emit*</c> / <c>Write*</c> renderer above builds its object through
+  /// <see cref="WriteEvent"/> and never learns where it goes, so a new surface costs a sink rather
+  /// than a second copy of the stop renderer.
+  ///
+  /// Null means the CLI's own destination: one compact JSON object per line on stdout
+  /// (newline-delimited JSON, so a consumer parses the stream incrementally). Non-null means a caller
+  /// is COLLECTING — the MCP server returns the same lines inside a tool result instead of printing
+  /// them, which is why its tools do not re-render anything.
+  ///
+  /// THREAD-static rather than plain static because the MCP server serves sessions concurrently on
+  /// thread-pool threads. A collected command runs to completion, synchronously, on the thread that
+  /// installed the collector, so the binding is exact; one plain static would let two sessions
+  /// capture each other's events.
+  /// </summary>
+  [ThreadStatic] private static List<string>? _eventCollector;
+
+  /// <summary>
+  /// Run <paramref name="body"/> with every event it emits COLLECTED rather than printed, and return
+  /// them in order. The prior collector is restored on the way out (rather than cleared) so a nested
+  /// collection cannot silently redirect its caller's events to stdout.
+  /// </summary>
+  internal static IReadOnlyList<string> CollectEvents(Action body) {
+    var outer = _eventCollector;
+    var collected = new List<string>();
+    _eventCollector = collected;
+    try {
+      body();
+    } finally {
+      _eventCollector = outer;
+    }
+    return collected;
+  }
+
   private static void WriteEvent(Action<Utf8JsonWriter> body) {
     using var buffer = new MemoryStream();
     using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false })) {
@@ -1685,7 +1728,10 @@ internal static class MaxonDebugRepl {
       body(w);
       w.WriteEndObject();
     }
-    Console.Out.WriteLine(Encoding.UTF8.GetString(buffer.ToArray()));
+
+    var line = Encoding.UTF8.GetString(buffer.ToArray());
+    if (_eventCollector is { } collected) collected.Add(line);
+    else Console.Out.WriteLine(line);
   }
 
   // ---- Shared renderers: values (P4a; reused by print / locals across both faces) ----
@@ -1761,19 +1807,45 @@ internal static class MaxonDebugRepl {
 
   // ---- Small helpers ----
 
-  private static Debug.MxdbgReader? LoadSidecar(string exePath) {
-    var sidecarPath = exePath + Debug.MxdbgFormat.SidecarExtension;
+  /// <summary>
+  /// Load the `.mxdbg` sidecar for <paramref name="path"/> — either the sidecar itself, or the binary
+  /// whose sidecar sits beside it — or return null with <paramref name="reason"/> set to why not.
+  ///
+  /// ONE loader, and one wording of each refusal, for every surface that needs a sidecar: the REPL,
+  /// `--batch`, `--complete`, `--dump-info`, `--symbolize`, and the MCP server. It was two, and the two
+  /// had already drifted — the sidecar is written BY DEFAULT now, so the copy that told the user to
+  /// "build with --debug-info to produce it" was recommending a flag that changes nothing.
+  ///
+  /// The reason is RETURNED rather than printed because its destination differs by surface: the CLI
+  /// prefixes it and writes stderr, while the MCP server has no console to leak it onto and owes it to
+  /// the caller as the tool's failure text.
+  /// </summary>
+  internal static Debug.MxdbgReader? TryLoadSidecar(string path, out string reason) {
+    var sidecarPath = path.EndsWith(Debug.MxdbgFormat.SidecarExtension, StringComparison.Ordinal)
+      ? path
+      : path + Debug.MxdbgFormat.SidecarExtension;
+
     if (!File.Exists(sidecarPath)) {
-      Console.Error.WriteLine($"maxon debug: no debug info found ('{sidecarPath}' does not exist; "
-        + "build without --no-debug-info to produce it).");
+      reason = $"no debug info found ('{sidecarPath}' does not exist; build without --no-debug-info "
+        + "to produce it)";
       return null;
     }
+
     try {
+      reason = "";
       return new Debug.MxdbgReader(File.ReadAllBytes(sidecarPath));
     } catch (InvalidDataException ex) {
-      Console.Error.WriteLine($"maxon debug: cannot read '{sidecarPath}': {ex.Message}");
+      reason = $"cannot read '{sidecarPath}': {ex.Message}";
       return null;
     }
+  }
+
+  /// <see cref="TryLoadSidecar"/> for a `maxon debug` surface: the same load, with the refusal reported
+  /// on stderr under the command's own name.
+  internal static Debug.MxdbgReader? LoadSidecar(string path) {
+    var sidecar = TryLoadSidecar(path, out var reason);
+    if (sidecar == null) Console.Error.WriteLine($"maxon debug: {reason}.");
+    return sidecar;
   }
 
   /// <summary>
@@ -1861,7 +1933,8 @@ internal static class MaxonDebugRepl {
 
   /// The " if <condition>" tail a "breakpoint set" line carries when the breakpoint is conditional —
   /// one spelling for both text renderers.
-  private static string ConditionSuffix(string condition) => condition.Length > 0 ? $" if {condition}" : "";
+  internal static string ConditionSuffix(string condition) =>
+    condition.Length > 0 ? $" {ConditionKeyword} {condition}" : "";
 
   /// <summary>
   /// Split a `break` argument into its TARGET and its optional `if &lt;condition&gt;` tail, on the FIRST
@@ -1902,7 +1975,7 @@ internal static class MaxonDebugRepl {
   /// The canonical commands both faces dispatch on. `Run` and `Continue` are the same MECHANISM
   /// (continue) but stay distinct here so the interactive prompt can word them differently. `Step`/`Next`/
   /// `Finish`/`Until` are the P4b source-line stepping commands.
-  private enum DebugCommand {
+  internal enum DebugCommand {
     Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace, GtSelect,
     GtPark, GtResume, Print, Locals, Trace, Help, Quit, Unknown,
   }
@@ -1956,6 +2029,18 @@ internal static class MaxonDebugRepl {
   /// mean" pool for an unknown command.
   internal static readonly IReadOnlyList<string> CommandWords =
     [.. CommandTable.Select(s => s.Canonical).OrderBy(w => w, StringComparer.Ordinal)];
+
+  /// <summary>
+  /// The canonical word for a command. It exists for the surface that COMPOSES a command line rather
+  /// than reading one: the MCP tools build `break <target> if <cond>` / `next` / `gt-park <id>` from
+  /// their arguments, and they spell those words from the same table <see cref="ParseCommand"/> reads
+  /// them back with — so there is one vocabulary and not one per direction.
+  /// </summary>
+  internal static string CommandWord(DebugCommand command) {
+    foreach (var spec in CommandTable)
+      if (spec.Command == command) return spec.Canonical;
+    throw new InvalidOperationException($"Command {command} has no row in the command table");
+  }
 
   /// The pool a command's argument completes against, resolved through the ONE classifier so the alias set
   /// is never restated inside the completion engine.

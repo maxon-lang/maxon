@@ -149,8 +149,11 @@ internal sealed class MaxonDebugger : IDisposable {
   /// <summary>
   /// Attach to <paramref name="exePath"/>: validate the sidecar's build-id (when one is supplied),
   /// create and map the control segment, and spawn the target parked at entry with its stdio forwarded.
-  /// The target's stdout goes to <paramref name="targetStdout"/> (default the driver's stdout); batch
-  /// mode passes the driver's stderr so its own JSON stream on stdout stays a clean, parseable channel.
+  /// The target's output goes line-by-line to <paramref name="targetStdout"/> /
+  /// <paramref name="targetStderr"/>, defaulting to the driver's own streams: batch mode sends the
+  /// target's stdout to the driver's STDERR so its own JSON stream on stdout stays a clean, parseable
+  /// channel, and the MCP server — which has no console of its own to leak a debuggee onto — buffers
+  /// BOTH into the session and hands them back as part of a tool result.
   /// Throws <see cref="DebuggerException"/> with a clear reason on a build-id mismatch or a spawn
   /// failure — the caller reports it and exits nonzero, the way the schema-mismatch refusal does.
   /// <paramref name="stopTimeout"/> overrides <see cref="DefaultStopTimeout"/> for this session.
@@ -164,9 +167,11 @@ internal sealed class MaxonDebugger : IDisposable {
   /// from the very session attaching to it.
   /// </summary>
   public static MaxonDebugger Attach(string exePath, IReadOnlyList<string> targetArgs, MxdbgReader? sidecar,
-      TextWriter? targetStdout = null, TimeSpan? stopTimeout = null,
-      IReadOnlyDictionary<string, string>? targetEnv = null, bool stopOthers = false) {
-    var stdoutSink = targetStdout ?? Console.Out;
+      Action<string>? targetStdout = null, TimeSpan? stopTimeout = null,
+      IReadOnlyDictionary<string, string>? targetEnv = null, bool stopOthers = false,
+      Action<string>? targetStderr = null) {
+    var stdoutSink = targetStdout ?? Console.Out.WriteLine;
+    var stderrSink = targetStderr ?? Console.Error.WriteLine;
 
     if (!File.Exists(exePath))
       throw new DebuggerException($"executable not found: {exePath}");
@@ -227,7 +232,7 @@ internal sealed class MaxonDebugger : IDisposable {
       }
       spawned = process;
 
-      var stdio = TargetStdio.Forward(process, stdoutSink.WriteLine, Console.Error.WriteLine);
+      var stdio = TargetStdio.Forward(process, stdoutSink, stderrSink);
 
       // Ownership passes to the instance here: from this point EndSession/Dispose is what ends the target.
       spawned = null;

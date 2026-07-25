@@ -1,0 +1,26 @@
+// P5 `maxon mcp` gate sample. Single-threaded, no green threads, a distinct exit code (5), and one
+// MANAGED local whose value CHANGES across a single source line — which is the whole point of the
+// sample. The MCP golden stops before that line, reads `stage`, steps over it, and reads `stage`
+// again: two different answers from one session is the only evidence that the server held a LIVE
+// debuggee across two HTTP requests rather than replaying a canned transcript.
+//
+// `stage` is a String because a managed local always has a stack home, so it always appears in
+// `locals`; whether a scalar gets one is the register allocator's choice. Each value is READ before
+// it is overwritten (`isAscii()` is a real runtime call), so neither store is dead and no optimizer
+// pass can fold the pair into a single constant.
+
+typealias ExitCode = int(0 to 255)
+
+function main() returns ExitCode
+	var stage = "before"
+	var ascii = stage.isAscii()
+
+	// BREAKPOINT: the stop is BEFORE this line runs, so `stage` still reads "before" here.
+	stage = "after"
+
+	// One `step` lands here, with the store above completed: `stage` now reads "after".
+	ascii = stage.isAscii()
+
+	print("stage={stage} ascii={ascii}")
+	return 5
+end 'main'
