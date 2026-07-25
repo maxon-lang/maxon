@@ -2050,10 +2050,13 @@ export type ProgramSignatures
 	// `int(0 to u64.max)` makes the type UNSIGNED, which changes what every `shr` on it MEANS. Every
 	// file must re-parse on that edit, and this is what makes it happen.
 	function recordAlias(alias RangedTypeAlias)
-		// The displaced same-file declaration is DISCARDED here on purpose: E3061 is raised once, at
+		// The collision outcome is DISCARDED here on purpose: E3061 and E3105 are each raised once, at
 		// the merge (`commitTypeAliases`), which is the whole-program drain that owns
-		// `project.diagnostics`. Reporting it from the pre-parse sweep as well would double every
-		// duplicate — the sweep and the merge both see every declaration.
+		// `project.diagnostics`. Reporting from the pre-parse sweep as well would double every
+		// diagnostic — the sweep and the merge both see every declaration. The sweep still calls
+		// `record` rather than a plain upsert so that THIS registry and the project's are built by one
+		// function: a sweep that filed declarations differently would resolve a contested name
+		// differently from the merge, which is the divergence file scoping exists to remove.
 		_ = self.typeAliases.record(alias)
 
 		// The bounds are SIGNED (`ParsedInt`) and the hash domain is UNSIGNED, so each crosses by an

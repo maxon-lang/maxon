@@ -998,6 +998,22 @@ E3104 SemanticTargetUnsupportedConstruct
 	doc Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
 	doc and no line -- a compiler crash where a diagnostic was owed.
 
+E3105 SemanticTypeAliasUnderlyingConflict
+	shv2 semanticTypeAliasUnderlyingConflict
+	doc Two FILES declare the same ranged typealias name over DIFFERENT underlying primitives -- one
+	doc `int`, the other `float`. Two files declaring one name over two RANGES is legal and stays so
+	doc (a non-exported typealias is file-local: `specs/duplicate-typealias.md`), because the range is
+	doc resolved and enforced per declaring file. The underlying PRIMITIVE is not: the readers that
+	doc have no file to ask from -- type resolution of a struct field, union payload classification
+	doc reached from the emitted runtime, generic type-argument and conformance-signature
+	doc canonicalization -- all read it through one bare-name door, so a name whose declarations
+	doc disagree about int-vs-float has no answer that door can give. It is refused at the SECOND
+	doc file's declaration rather than answered arbitrarily.
+	doc Before it, the parser resolved such a name file-scoped while those readers resolved it
+	doc last-wins, and the disagreement reached the backends: the x64 emitter panicked on an xmm
+	doc value in a gpr slot, wasm emitted a module its own validator rejected, and a struct field
+	doc typed by the alias silently compiled to the wrong width.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

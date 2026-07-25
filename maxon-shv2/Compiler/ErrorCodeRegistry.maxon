@@ -314,6 +314,20 @@ export enum ErrorCode
 	// Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file
 	// and no line -- a compiler crash where a diagnostic was owed.
 	targetUnsupportedConstruct = "E3104"
+	// Two FILES declare the same ranged typealias name over DIFFERENT underlying primitives -- one
+	// `int`, the other `float`. Two files declaring one name over two RANGES is legal and stays so
+	// (a non-exported typealias is file-local: `specs/duplicate-typealias.md`), because the range is
+	// resolved and enforced per declaring file. The underlying PRIMITIVE is not: the readers that
+	// have no file to ask from -- type resolution of a struct field, union payload classification
+	// reached from the emitted runtime, generic type-argument and conformance-signature
+	// canonicalization -- all read it through one bare-name door, so a name whose declarations
+	// disagree about int-vs-float has no answer that door can give. It is refused at the SECOND
+	// file's declaration rather than answered arbitrarily.
+	// Before it, the parser resolved such a name file-scoped while those readers resolved it
+	// last-wins, and the disagreement reached the backends: the x64 emitter panicked on an xmm
+	// value in a gpr slot, wasm emitted a module its own validator rejected, and a struct field
+	// typed by the alias silently compiled to the wrong width.
+	semanticTypeAliasUnderlyingConflict = "E3105"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"

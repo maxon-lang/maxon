@@ -431,16 +431,19 @@ function commitRangeChecks(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitRangeChecks'
 
-// Commit the artifact's ranged-typealias declarations into the project registry, and raise E3061 on
-// a SAME-FILE redeclaration.
+// Commit the artifact's ranged-typealias declarations into the project registry, and raise the
+// diagnostic a collision earns — E3061 for a SAME-FILE redeclaration, E3105 for two FILES that
+// declare one name over two different underlying primitives.
 //
-// ⭐ **SAME-FILE ONLY, and the distinction is the whole point.** A non-exported typealias is
-// FILE-LOCAL, so two FILES may each declare `MyInt` and neither is an error
-// (`specs/duplicate-typealias.md`, and `stdlib/` relies on it — six files privately declare
-// `Byte = int(0 to u8.max)`). Two declarations in ONE file are a genuine duplicate that no
-// qualification could ever disambiguate, which is why the reference compilers reject exactly that
-// (`specs/export-keyword.md`, `error.duplicate-typealias-same-file`). `RangedAliasRegistry.record`
-// answers which case this is, so the two cannot be confused here.
+// ⭐ **NEITHER IS "TWO FILES DECLARED THIS NAME", and the distinction is the whole point.** A
+// non-exported typealias is FILE-LOCAL, so two FILES may each declare `MyInt` over their own RANGE
+// and neither is an error (`specs/duplicate-typealias.md`, and `stdlib/` relies on it — seven files
+// privately declare `Byte = int(0 to u8.max)`). What the two rejected cases have in common is that
+// nothing downstream could pick a winner: two declarations in ONE file no qualification could ever
+// disambiguate (which is why the reference compilers reject exactly that — `specs/export-keyword.md`,
+// `error.duplicate-typealias-same-file`), and two primitives for one name, which the file-less
+// readers resolve through a bare door holding one entry (`RangedAliasRegistry.record`).
+// `record` decides WHICH case a declaration is, so the three cannot be confused here.
 //
 // ⚠ **WHOLE-PROGRAM, NOT PARSE-TIME.** It runs at the merge, where `commitFuncSignatures` raises
 // E3006, and not in the parser — a file-local check cannot see a forward reference or a second file,
@@ -448,12 +451,17 @@ end 'commitRangeChecks'
 // records positions and nothing else.
 function commitTypeAliases(project Project, artifact FileParseArtifact)
 	for alias in artifact.typeAliases 'each'
-		match project.typeAliases.record(alias) 'displaced'
-			// Blamed on the REDECLARATION the user wrote — its own name token, in its own file —
-			// never on the first declaration, which is the one line that was fine.
-			declared(prior) then reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(prior.name)}'", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
-			undeclared then break 'displaced'
-		end 'displaced'
+		// Every arm blames the DECLARATION THE USER JUST WROTE — its own name token, in its own file —
+		// and never the incumbent, which is the line that was fine. `prior` supplies the name only.
+		match project.typeAliases.record(alias) 'collision'
+			redeclaredInSameFile(prior) then reportPositioned(project, code: ErrorCode.semanticDuplicateTypeAlias, message: "Duplicate typealias '{String.from(prior.name)}'", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
+			// ⚠ The other declaration's PATH is deliberately not in the text. A diagnostic names its file
+			// once, in the position the runner rewrites to `<fragment>`; a second path inside the
+			// message would be an absolute temp path in every spec golden, machine-dependent and
+			// unmatchable. The alias name and the two underlying types are what makes it actionable.
+			conflictingUnderlying(prior) then reportPositioned(project, code: ErrorCode.semanticTypeAliasUnderlyingConflict, message: "Typealias '{String.from(prior.name)}' is declared over '{maxonTypeName(alias.underlying, typeNames: project.typeNames)}' here and over '{maxonTypeName(prior.underlying, typeNames: project.typeNames)}' in another file — two files may declare one alias name over different RANGES, but not over different underlying types", line: alias.nameLine, column: alias.nameColumn, filePath: alias.declFilePath)
+			accepted then break 'collision'
+		end 'collision'
 	end 'each'
 end 'commitTypeAliases'
 

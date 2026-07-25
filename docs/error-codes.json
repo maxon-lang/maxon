@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "fb47da57966423f1",
+  "sourceHash": "ec0dd550267e8526",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1119,6 +1119,15 @@
       "stage": "semantic",
       "doc": "A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled\nfor another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are\nx64-windows only at this rung, so `sleep`, `runProcess`, the streaming-subprocess builtins and\nthe `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can\nemit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.\nDistinct from E3074, which is the self-hosted compiler's subprocess-specific wasm rejection:\nthis one is about the target's substrate in general, not about one API.\nBefore it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file\nand no line -- a compiler crash where a diagnostic was owed.",
       "emittedBy": {"shv2": "targetUnsupportedConstruct"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3105,
+      "tag": "E3105",
+      "name": "SemanticTypeAliasUnderlyingConflict",
+      "stage": "semantic",
+      "doc": "Two FILES declare the same ranged typealias name over DIFFERENT underlying primitives -- one\n`int`, the other `float`. Two files declaring one name over two RANGES is legal and stays so\n(a non-exported typealias is file-local: `specs/duplicate-typealias.md`), because the range is\nresolved and enforced per declaring file. The underlying PRIMITIVE is not: the readers that\nhave no file to ask from -- type resolution of a struct field, union payload classification\nreached from the emitted runtime, generic type-argument and conformance-signature\ncanonicalization -- all read it through one bare-name door, so a name whose declarations\ndisagree about int-vs-float has no answer that door can give. It is refused at the SECOND\nfile's declaration rather than answered arbitrarily.\nBefore it, the parser resolved such a name file-scoped while those readers resolved it\nlast-wins, and the disagreement reached the backends: the x64 emitter panicked on an xmm\nvalue in a gpr slot, wasm emitted a module its own validator rejected, and a struct field\ntyped by the alias silently compiled to the wrong width.",
+      "emittedBy": {"shv2": "semanticTypeAliasUnderlyingConflict"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

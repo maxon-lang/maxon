@@ -32,6 +32,26 @@ declaration, so a user's own alias of that name wins for the user's own casts �
 not disturb the stdlib module either. `stdlib/Sleep.maxon` declares `Milliseconds`, which is what
 makes it the case a user actually meets.
 
+## The RANGE is per file. The UNDERLYING PRIMITIVE is not.
+
+File scoping resolves the **range**, because the range is enforced where the declaring file is known
+(`InsertRangeChecks`). The **underlying primitive** — `int` or `float` — is read by a second set of
+readers that have no file to ask from: type resolution of a struct field (a `StructLayout` records no
+declaring file), union payload classification reached from the emitted runtime's walk of the enum
+registry, and generic type-argument and conformance-signature canonicalization. Those all resolve the
+bare name against a registry holding one entry per name.
+
+So a name whose declarations disagree about `int`-vs-`float` has **no answer that door can give**, and
+it is refused at the second file's declaration with **E3105** rather than answered arbitrarily. Two
+files declaring one name over different *ranges* stays legal and is the case above.
+
+This is what makes the bare answer safe rather than lucky: because every declaration of a name shares
+one underlying primitive in any program that compiles, the bare answer *is* the answer a scoped lookup
+would give. Without the rule the parser resolved such a name file-scoped while those readers resolved
+it last-wins, and the disagreement reached the backends — the x64 emitter panicked on an xmm value in
+a gpr slot, wasm emitted a module its own validator rejected, and a struct field typed by the alias
+compiled to the wrong width with no diagnostic at all.
+
 **Out of scope**, and deliberately: `export` visibility as a *key* (an exported alias is still filed
 under its bare name) and **E3063** ambiguity between two exported aliases of one name in different
 files. Both need cross-file name resolution; this rung is the file-scoped half only.
@@ -119,6 +139,69 @@ end 'wideVal'
 // --- file: main.maxon
 function main() returns ExitCode
 	return unitVal() + wideVal()
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: error.crossfile-alias-underlying-conflict -->
+Two files declare `Measure`, one over `int` and one over `float`. Unlike two ranges, this pair has no
+answer the file-less readers can be given, so it is refused at `b.maxon`'s declaration — the second
+one, the newcomer — and never at `a.maxon`, which is the line that was fine.
+
+Before the rule this program reached the x64 emitter, which panicked with
+`xmm0 is in the xmm register file where the gpr file is required`: the parser had resolved `Measure`
+to `int` inside `a.maxon` (file-scoped) while type resolution resolved it to `float` (bare,
+last-wins). Two deciders, and nothing made them agree.
+```maxon
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+export function useInt(x Measure) returns Measure
+	return x + 1
+end 'useInt'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+export function useFloat(x Measure) returns Measure
+	return x
+end 'useFloat'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return useInt(41) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3105: <fragment>:10:11: Typealias 'Measure' is declared over 'float' here and over 'int' in another file — two files may declare one alias name over different RANGES, but not over different underlying types
+```
+
+
+<!-- test: crossfile-alias-same-underlying-different-range-still-legal -->
+The guard the rule must not overreach into: two files, one name, two RANGES, one underlying `int`.
+This is the shape `stdlib/` depends on — seven files privately declare `Byte = int(0 to u8.max)` —
+and it stays legal. Each file's cast is checked against its own range, so both compile.
+```maxon
+// --- file: a.maxon
+typealias Span = int(0 to 20)
+
+export function fromA() returns ExitCode
+	return 20 as Span
+end 'fromA'
+
+// --- file: b.maxon
+typealias Span = int(0 to 4000)
+
+export function fromB() returns ExitCode
+	return 22 as Span
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
 end 'main'
 ```
 ```exitcode

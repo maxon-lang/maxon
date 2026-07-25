@@ -223,6 +223,27 @@ typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 // a program where no name is declared twice, which is nearly every program — see `RangedAliasRegistry`.
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
 
+// What ONE `typealias` declaration collided with when it was filed — `RangedAliasRegistry.record`'s
+// answer, and the ONLY thing that decides which diagnostic a collision earns.
+//
+// It is a separate union from `DeclaredAlias` rather than a case added to it because the two answer
+// different questions: `DeclaredAlias` is what a LOOKUP found, asked once per named type reference,
+// while this is what a WRITE displaced, asked once per declaration. Folding them would put a
+// record-only case in front of every `aliasOf` caller's `match`.
+//
+// Each colliding case carries the declaration it collided WITH, and the reporter blames the NEWCOMER
+// — its own file, its own name token. The incumbent is the line that was fine.
+export union AliasRecordOutcome
+	// Nothing to report: the first declaration of a name, or a legal cross-file one (a non-exported
+	// typealias is FILE-LOCAL, so two files declaring `Limit` over two ranges is the case file scoping
+	// exists to serve — `specs/duplicate-typealias.md`).
+	accepted
+	// Two declarations of one name in ONE file — E3061. No qualification could ever disambiguate them.
+	redeclaredInSameFile(prior RangedTypeAlias)
+	// Two FILES declare one name over DIFFERENT underlying primitives — E3105. See `record`.
+	conflictingUnderlying(prior RangedTypeAlias)
+end 'AliasRecordOutcome'
+
 // ⭐ **THE RANGED-ALIAS REGISTRY — file-scoped resolution, and why a bare map was a wrong ANSWER.**
 //
 // A non-exported `typealias` is FILE-LOCAL (`specs/duplicate-typealias.md`), so two files may each
@@ -287,17 +308,16 @@ export type RangedAliasRegistry
 		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create()}
 	end 'create'
 
-	// File one declaration, and answer what it DISPLACED IN ITS OWN FILE — `declared(prior)` exactly
-	// when this is a same-file redeclaration, which is what `commitTypeAliases` raises E3061 on.
-	// Reporting it from the writer keeps the duplicate test and the insert on one structure and makes
-	// it impossible for them to disagree about which declarations collide.
-	export function record(alias RangedTypeAlias) returns DeclaredAlias
+	// File one declaration, and answer WHAT IT COLLIDED WITH — the one place that decides which of the
+	// two collisions this is, so the duplicate test, the conflict test and the insert sit on one
+	// structure and cannot come to disagree about which declarations collide.
+	export function record(alias RangedTypeAlias) returns AliasRecordOutcome
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
-		// single one of them — displaces nothing and contests nothing. It costs ONE probe and one
+		// single one of them — collides with nothing and contests nothing. It costs ONE probe and one
 		// insert, and never touches `multiplyDeclared` or builds anything at all.
 		let sole = try self.byName.get(alias.name) otherwise 'firstDeclarationOfThisName'
 			self.byName.upsert(alias.name, value: alias)
-			return DeclaredAlias.undeclared
+			return AliasRecordOutcome.accepted
 		end 'firstDeclarationOfThisName'
 
 		let declPath = alias.declFilePath.toString()
@@ -305,25 +325,54 @@ export type RangedAliasRegistry
 		// declarations in every entry that exists — and it doubles as the map to fill if THIS
 		// declaration is the one that makes the name contested.
 		var byFile = try self.multiplyDeclared.get(alias.name) otherwise RangedAliasByDeclaringFile.create()
-		var displaced = DeclaredAlias.undeclared
+		var outcome = AliasRecordOutcome.accepted
+
+		// The two arms below each answer the SAME question — is this newcomer's file already among the
+		// files that declare this name — off two different sources, because "the files that declare
+		// this name" lives in `byFile` once a name is contested and in `sole` alone before that. What
+		// each arm records is that FACT; what the fact MEANS is decided once, after them.
+		var declaredByAnotherFile = false
 
 		if byFile.count() > 0 'alreadyContested'
 			if let prior = try byFile.get(declPath) 'sameFileRedeclaration'
-				displaced = DeclaredAlias.declared(prior)
-			end 'sameFileRedeclaration'
+				outcome = AliasRecordOutcome.redeclaredInSameFile(prior)
+			end 'sameFileRedeclaration' else 'anotherFileDeclaresIt'
+				declaredByAnotherFile = true
+			end 'anotherFileDeclaresIt'
 		end 'alreadyContested' else 'secondDeclarationOfThisName'
 			// `sole` is the ONLY other declaration of this name, so it settles both questions: the
 			// same file again is the duplicate E3061 reports, a different file makes it contested.
 			let solePath = sole.declFilePath.toString()
 			if solePath.equals(declPath) 'sameFileRedeclaration'
-				displaced = DeclaredAlias.declared(sole)
+				outcome = AliasRecordOutcome.redeclaredInSameFile(sole)
 			end 'sameFileRedeclaration' else 'secondFileDeclaresIt'
+				declaredByAnotherFile = true
+
 				// The incumbent goes in WITH the newcomer: the invariant is "every declaration or
 				// none", and an entry holding only the second file's would answer with the WRONG
 				// file's range for the first file's own uses — the defect file scoping exists to fix.
 				byFile.upsert(solePath, value: sole)
 			end 'secondFileDeclaresIt'
 		end 'secondDeclarationOfThisName'
+
+		// ⭐ **WHAT MAKES `underlyingInAnyFile` ANSWERABLE AT ALL — the rule, written once.** A
+		// cross-file pair over two RANGES is legal and stays legal; a pair over two PRIMITIVES is not,
+		// because the range is resolved per declaring file and the primitive is not — the file-less
+		// readers (type resolution of a struct field, union payload classification, generic and
+		// conformance canonicalization) all take it from the bare door, which holds exactly one entry
+		// per name. Refusing the pair turns that door's contract from a bet about today's corpus into a
+		// property of every program that compiles: every declaration of a name shares one underlying
+		// primitive, so the bare answer IS the answer a scoped lookup would give, for every reader,
+		// always.
+		//
+		// ⚠ CROSS-FILE ONLY, and never instead of the same-file test: a file that declares one name
+		// twice is a duplicate (E3061) whichever primitives it picked, and diagnosing that as a
+		// cross-file conflict would blame the wrong thing. `sole` carries the comparison because it is
+		// the last declaration recorded for this name, and by induction every earlier one agrees with
+		// it — the first pair that disagreed stopped the program here.
+		if declaredByAnotherFile and maxonTypeTag(alias.underlying) != maxonTypeTag(sole.underlying) 'underlyingConflict'
+			outcome = AliasRecordOutcome.conflictingUnderlying(sole)
+		end 'underlyingConflict'
 
 		// Non-empty here means the name is contested — either it already was, or the branch above
 		// just made it so by filing the incumbent. A same-file redeclaration of a name only one file
@@ -336,7 +385,7 @@ export type RangedAliasRegistry
 
 		self.byName.upsert(alias.name, value: alias)
 
-		return displaced
+		return outcome
 	end 'record'
 
 	// The alias `name` denotes when read FROM `readerFilePath`.
@@ -376,10 +425,16 @@ export type RangedAliasRegistry
 	// All four readers want the `int`/`float` keyword and none may read the RANGE — the range is
 	// per-file and enforced where the file is known (`InsertRangeChecks`), so a reader with no file
 	// reading it would be reading a stranger's bounds. Each of them used to say so in a comment;
-	// now none of them CAN. The answers differ between two same-named aliases only if one is `int`
-	// and the other `float`, and no such pair exists in `stdlib/` or the corpus today. Giving these
-	// sites a declaring file means putting one on `EnumLayout` and threading it through the runtime
-	// emitters — a change to the union and generics tiers, not to alias resolution.
+	// now none of them CAN.
+	//
+	// ⭐ **AND THE ANSWER IT GIVES IS FILE-INDEPENDENT, BY CONSTRUCTION — see `record`'s E3105.** The
+	// only way two declarations of one name could disagree about the `int`/`float` keyword is a
+	// cross-file `int`/`float` pair, and `record` refuses to accept one. So this door's answer is the
+	// SAME answer a scoped lookup would give, for every reader, in every program that compiles.
+	// It was once merely true of `stdlib/` and the corpus, which is a bet and not a contract: while
+	// it was only that, a user program declaring `Measure` as `int` in one file and `float` in
+	// another made the parser (scoped) and this door (bare) disagree, and the x64 emitter panicked on
+	// an xmm value in a gpr slot rather than diagnosing anything.
 	//
 	// ⚠ It also costs NOTHING, where a `DeclaredAlias` answer cost one allocation per call: a union
 	// with an associated value is HEAP-BOXED, and `resolveNamedType` asks this once per named TYPE
