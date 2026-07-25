@@ -115,6 +115,17 @@ internal static class DebugTools {
         McpArgs.RequireString(args, "target")
           + MaxonDebugRepl.ConditionSuffix(McpArgs.OptionalString(args, "condition") ?? ""))),
 
+    new("debug_clear",
+      "Remove a breakpoint. `target` takes exactly what debug_break takes and resolves it exactly the "
+      + "same way, so `clear` removes what the identical `break` armed. Removing one that was never "
+      + "there is reported `not-set` rather than as a success — an agent that mistyped a target must not "
+      + "be told it removed something.",
+      [new("target", McpSchema.String(
+        "`<file>:<line>` or a function name — the same target you armed. No condition: a breakpoint is "
+        + "removed whole, conditional or not."), Required: true)],
+      (session, args) => Run(session, MaxonDebugRepl.DebugCommand.Clear,
+        McpArgs.RequireString(args, "target"))),
+
     new("debug_continue",
       "Resume the debuggee and run to the next stop. Returns a `stop` event, or the program's `exit` / "
       + "`crash` if it finished — in which case the session is closed and the process reaped in the same "
@@ -128,6 +139,15 @@ internal static class DebugTools {
       + "breakpoint, and report honestly when they cannot be done (a frameless leaf has no caller frame).",
       [new("kind", McpSchema.StringEnum("Which step.", StepKinds), Required: true)],
       (session, args) => Run(session, McpArgs.RequireChoice(args, "kind", StepKinds))),
+
+    new("debug_until",
+      "Run until a given LINE of the current function is reached, or until that function returns — the "
+      + "loop escape: it leaves a loop you are stepping through without stepping every remaining "
+      + "iteration. A line with no code in the current function is refused rather than approximated.",
+      [new("line", McpSchema.Integer("A 1-based source line in the currently stopped function."),
+        Required: true)],
+      (session, args) => Run(session, MaxonDebugRepl.DebugCommand.Until,
+        McpArgs.RequireInt(args, "line").ToString(System.Globalization.CultureInfo.InvariantCulture))),
 
     new("debug_locals",
       "The named locals of the stopped frame, as type-aware value trees: a String as text plus length, a "

@@ -430,13 +430,17 @@ internal sealed class MaxonDebugger : IDisposable {
   /// </summary>
   public bool Continue() => StopOutstanding || PostCommand(RuntimeEmitter.DbgCmdContinue, 0);
 
-  /// The outcome of resolving+arming a breakpoint, so the resolve→arm DECISION lives once here and each
-  /// surface only renders it (a divergent copy of "no code vs set" would be a wrong answer, not a compile
-  /// error). <see cref="Ambiguous"/> / <see cref="NoMatch"/> arise only from a `break &lt;function&gt;`
-  /// resolution (P4c); a `file:line` resolution never produces them. The two Condition* outcomes (P4d-1)
-  /// arise only from a `break … if`, and both mean the breakpoint was NOT armed.
+  /// The outcome of resolving a breakpoint target and ACTING on it — arming or removing — so the
+  /// resolve→act DECISION lives once here and each surface only renders it (a divergent copy of "no code
+  /// vs set" would be a wrong answer, not a compile error). <see cref="Ambiguous"/> /
+  /// <see cref="NoMatch"/> arise only from a &lt;function&gt; resolution (P4c); a `file:line` resolution
+  /// never produces them. The two Condition* outcomes (P4d-1) arise only from a `break … if`, and both
+  /// mean the breakpoint was NOT armed. <see cref="Cleared"/> / <see cref="NotSet"/> arise only from a
+  /// `clear`, and the second is why a clear needs its own word at all: removing a breakpoint that was
+  /// never there is not a failure, but reporting it as `cleared` would tell the user they had one.
   public enum BreakKind {
-    NoCode, Set, Unacknowledged, Ambiguous, NoMatch, ConditionUnsupported, ConditionInvalid,
+    NoCode, Set, Unacknowledged, Ambiguous, NoMatch, ConditionUnsupported, ConditionInvalid, Cleared,
+    NotSet,
   }
 
   /// <summary>
@@ -467,6 +471,15 @@ internal sealed class MaxonDebugger : IDisposable {
     /// and function) share, so an armed-but-unacknowledged breakpoint is worded identically either way.
     public static BreakResult FromAck(bool acked, uint offset, SymLocation location) =>
       new(acked ? BreakKind.Set : BreakKind.Unacknowledged, offset, location, [], "", "");
+
+    public static BreakResult ClearedAt(uint offset, SymLocation location) =>
+      new(BreakKind.Cleared, offset, location, [], "", "");
+
+    /// A target that RESOLVED but carried no breakpoint. It keeps the location, because "there is no
+    /// breakpoint at deeper:10" is more useful than "there is no breakpoint" — the user may have armed
+    /// one somewhere they did not mean.
+    public static BreakResult NotSetAt(uint offset, SymLocation location) =>
+      new(BreakKind.NotSet, offset, location, [], "", "");
   }
 
   /// <summary>
@@ -474,11 +487,29 @@ internal sealed class MaxonDebugger : IDisposable {
   /// conditional. <see cref="BreakKind.NoCode"/> when the line carries no statement ("no code at that
   /// line"), <see cref="BreakKind.Unacknowledged"/> when the agent did not ack. Requires a sidecar.
   /// </summary>
-  public BreakResult SetBreakpoint(string file, uint line, string condition = "") {
+  public BreakResult SetBreakpoint(string file, uint line, string condition = "") =>
+    AtFileLine(file, line, offset => ArmAtOffset(offset, condition));
+
+  /// <summary>
+  /// Remove the breakpoint a `file:line` resolves to. It resolves through the SAME path
+  /// <see cref="SetBreakpoint"/> does — deliberately, because a `clear` that resolved its target even
+  /// slightly differently would remove a breakpoint other than the one the identical `break` armed, and
+  /// the user would be told it worked.
+  /// </summary>
+  public BreakResult ClearBreakpoint(string file, uint line) => AtFileLine(file, line, ClearAtOffset);
+
+  /// <summary>
+  /// What a resolved target is DONE with. It is a parameter rather than two copies of each resolver
+  /// because arming and removing differ ONLY in the action: "no code at that line", an ambiguous function
+  /// name, and a typo's suggestion are one decision each, and `clear` inherits every one of them.
+  /// </summary>
+  private delegate BreakResult ResolvedTargetAction(uint offset);
+
+  private BreakResult AtFileLine(string file, uint line, ResolvedTargetAction act) {
     if (Sidecar is not { } s) throw new DebuggerException("no debug info loaded; cannot resolve file:line");
     if (s.LineToOffset(file, line) is not { } off) return BreakResult.NoCodeAt();
 
-    return ArmAtOffset(off, condition);
+    return act(off);
   }
 
   // ---- Fuzzy function breakpoints (P4c) ----
@@ -494,18 +525,46 @@ internal sealed class MaxonDebugger : IDisposable {
   /// distance is offered as a <see cref="BreakKind.NoMatch"/> suggestion — edit distance NEVER arms a
   /// breakpoint, so a typo suggests rather than silently stopping at the wrong place. Requires a sidecar.
   /// </summary>
-  public BreakResult SetBreakpointAtFunction(string name, string condition = "") {
+  public BreakResult SetBreakpointAtFunction(string name, string condition = "") =>
+    AtFunction(name, offset => ArmAtOffset(offset, condition));
+
+  /// Remove the breakpoint a function name resolves to, through the SAME ranked match
+  /// <see cref="SetBreakpointAtFunction"/> uses — so `clear helper` removes exactly what `break helper`
+  /// armed, and an ambiguous name is refused here for the same reason it is refused there.
+  public BreakResult ClearBreakpointAtFunction(string name) => AtFunction(name, ClearAtOffset);
+
+  private BreakResult AtFunction(string name, ResolvedTargetAction act) {
     if (Sidecar is not { } s)
       throw new DebuggerException("no debug info loaded; cannot resolve a function name");
 
     var matches = ResolveFunctions(s, name);
-    if (matches.Count == 1) return ArmAtOffset(FunctionEntryOffset(s, matches[0]), condition);
+    if (matches.Count == 1) return act(FunctionEntryOffset(s, matches[0]));
 
     if (matches.Count > 1)
       return BreakResult.AmbiguousMatch([.. matches.Select(f => f.Name).OrderBy(n => n, StringComparer.Ordinal)]);
 
     var suggestion = DebugFuzzy.ClosestMatch(name, FunctionNames(s), DebugFuzzy.MaxEditDistance);
     return BreakResult.NoMatchFor(suggestion ?? "");
+  }
+
+  /// <summary>
+  /// Remove the user breakpoint at a resolved offset.
+  /// </summary>
+  ///
+  /// The registry decides whether there was one to remove, and it is the right authority: it mirrors what
+  /// is ARMED IN THE TARGET (see <see cref="SetBreakpointAtOffset"/>), and a transient step temp bp is
+  /// deliberately never in it — so `clear` can never delete the temp breakpoint a `finish` is currently
+  /// relying on, which is the same collision the step runners consult this map to avoid.
+  private BreakResult ClearAtOffset(uint offset) {
+    var location = Symbolize(offset);
+    if (!_userBreakpoints.ContainsKey(offset)) return BreakResult.NotSetAt(offset, location);
+
+    // The same ack question an arm asks. An unacknowledged post leaves the breakpoint's state in the
+    // target UNKNOWN, which is exactly what Unacknowledged means — and what the two faces must not word
+    // as "removed".
+    return ClearBreakpointAtOffset(offset)
+      ? BreakResult.ClearedAt(offset, location)
+      : BreakResult.FromAck(acked: false, offset, location);
   }
 
   /// The named functions matching <paramref name="name"/> at the STRONGEST non-empty resolution tier

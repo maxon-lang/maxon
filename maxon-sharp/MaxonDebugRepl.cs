@@ -85,13 +85,26 @@ internal static class MaxonDebugRepl {
     /// frame (backtrace / print / locals / step / next / finish / until).
     private const string NotStoppedText = "Not stopped — run to a breakpoint first.";
 
-    /// The one wording of a breakpoint the agent did not confirm, shared by the file:line and function
-    /// break renderers so they cannot drift. It names both causes because the driver genuinely cannot
-    /// tell them apart from the outcome word alone — and the load-bearing half of the sentence is that
-    /// the breakpoint is NOT armed, which the agent used to leave the driver to guess wrong.
-    private static readonly string BreakUnacknowledgedText =
-      "The agent did not confirm the breakpoint, so it is NOT set (the target may have exited, or its "
-      + $"{Compiler.Ir.Runtime.RuntimeEmitter.DbgMaxBreakpoints}-breakpoint table is full).";
+    /// <summary>
+    /// The one wording of a post the agent did not confirm, shared by the file:line and function
+    /// renderers so they cannot drift. It names both causes because the driver genuinely cannot tell
+    /// them apart from the outcome word alone.
+    ///
+    /// It depends on the VERB, and must: the load-bearing half of the arm sentence is that the
+    /// breakpoint is NOT set — which the agent used to leave the driver to guess wrong — while for a
+    /// removal the load-bearing half is the opposite, that it may still BE set. Saying "so it is not
+    /// set" after an unacknowledged `clear` would be a wrong answer stated confidently, which is the
+    /// exact defect the arm wording was written to remove.
+    /// </summary>
+    private static string BreakUnacknowledgedText(BreakVerb verb) => verb switch {
+      BreakVerb.Arm =>
+        "The agent did not confirm the breakpoint, so it is NOT set (the target may have exited, or its "
+        + $"{Compiler.Ir.Runtime.RuntimeEmitter.DbgMaxBreakpoints}-breakpoint table is full).",
+      BreakVerb.Clear =>
+        "The agent did not confirm the removal, so the breakpoint may STILL be set (the target may have "
+        + "exited).",
+      _ => throw new InvalidOperationException($"Unhandled break verb {verb}"),
+    };
 
     public int Loop() {
       while (!_finished) {
@@ -128,6 +141,9 @@ internal static class MaxonDebugRepl {
           break;
         case DebugCommand.Break:
           DoBreak(rest);
+          break;
+        case DebugCommand.Clear:
+          DoClear(rest);
           break;
         case DebugCommand.Run:
           DoContinue(isRun: true);
@@ -190,19 +206,35 @@ internal static class MaxonDebugRepl {
 
     private void DoBreak(string arg) {
       if (arg.Length == 0) {
-        Console.Out.WriteLine($"Usage: break <file>:<line>   |   break <function>   [{BreakConditionUsage}]");
+        Console.Out.WriteLine($"Usage: {BreakUsageText(DebugCommand.Break)}");
         return;
       }
       var (target, condition) = SplitBreakCondition(arg);
-      if (TryParseFileLine(target, out var file, out var lineNo)) {
-        RenderFileLineBreak(dbg.SetBreakpoint(file, lineNo, condition), file, lineNo, condition);
-      } else {
-        RenderFunctionBreak(dbg.SetBreakpointAtFunction(target, condition), target, condition);
+      DispatchBreakTarget(target,
+        (file, lineNo) => RenderFileLineBreak(dbg.SetBreakpoint(file, lineNo, condition), file, lineNo,
+          condition, BreakVerb.Arm),
+        fn => RenderFunctionBreak(dbg.SetBreakpointAtFunction(fn, condition), fn, condition, BreakVerb.Arm));
+    }
+
+    private void DoClear(string arg) {
+      if (arg.Length == 0) {
+        Console.Out.WriteLine($"Usage: {BreakUsageText(DebugCommand.Clear)}");
+        return;
       }
+      if (ClearConditionRefusalText(arg) is { } refusal) {
+        Console.Out.WriteLine($"{refusal}.");
+        return;
+      }
+
+      var target = arg.Trim();
+      DispatchBreakTarget(target,
+        (file, lineNo) => RenderFileLineBreak(dbg.ClearBreakpoint(file, lineNo), file, lineNo,
+          condition: "", BreakVerb.Clear),
+        fn => RenderFunctionBreak(dbg.ClearBreakpointAtFunction(fn), fn, condition: "", BreakVerb.Clear));
     }
 
     private static void RenderFileLineBreak(MaxonDebugger.BreakResult r, string file, uint lineNo,
-        string condition) {
+        string condition, BreakVerb verb) {
       // A condition refusal is reported ahead of the outcome switch because its wording is shared by all
       // four break renderers (text/JSON x file:line/function) — the switches below stay about LOCATION.
       if (ConditionRefusalText(r) is { } refusal) {
@@ -215,19 +247,24 @@ internal static class MaxonDebugRepl {
           Console.Out.WriteLine($"No code at {file}:{lineNo} (blank line, or no statement there).");
           break;
         case MaxonDebugger.BreakKind.Unacknowledged:
-          Console.Out.WriteLine(BreakUnacknowledgedText);
+          Console.Out.WriteLine(BreakUnacknowledgedText(verb));
+          break;
+        case MaxonDebugger.BreakKind.NotSet:
+          Console.Out.WriteLine($"No breakpoint at {file}:{lineNo} to clear.");
           break;
         case MaxonDebugger.BreakKind.Set:
+        case MaxonDebugger.BreakKind.Cleared:
           var inFn = r.Location.HasFunction ? $" in {r.Location.Function}" : "";
-          Console.Out.WriteLine(
-            $"Breakpoint set at {file}:{lineNo}{inFn} (0x{r.Offset:x}){ConditionSuffix(condition)}.");
+          Console.Out.WriteLine($"Breakpoint {BreakOutcomeVerbText(r.Kind)} at {file}:{lineNo}{inFn} "
+            + $"(0x{r.Offset:x}){ConditionSuffix(condition)}.");
           break;
         default:
           throw new InvalidOperationException($"Unhandled file:line break outcome {r.Kind}");
       }
     }
 
-    private static void RenderFunctionBreak(MaxonDebugger.BreakResult r, string query, string condition) {
+    private static void RenderFunctionBreak(MaxonDebugger.BreakResult r, string query, string condition,
+        BreakVerb verb) {
       if (ConditionRefusalText(r) is { } refusal) {
         Console.Out.WriteLine($"{refusal} — breakpoint not set.");
         return;
@@ -235,12 +272,18 @@ internal static class MaxonDebugRepl {
 
       switch (r.Kind) {
         case MaxonDebugger.BreakKind.Set:
+        case MaxonDebugger.BreakKind.Cleared:
           var at = r.Location.HasLine ? $" ({r.Location.File}:{r.Location.Line})" : "";
           var fn = r.Location.HasFunction ? r.Location.Function : query;
-          Console.Out.WriteLine($"Breakpoint set at {fn}{at} (0x{r.Offset:x}){ConditionSuffix(condition)}.");
+          Console.Out.WriteLine($"Breakpoint {BreakOutcomeVerbText(r.Kind)} at {fn}{at} "
+            + $"(0x{r.Offset:x}){ConditionSuffix(condition)}.");
+          break;
+        case MaxonDebugger.BreakKind.NotSet:
+          var where = r.Location.HasFunction ? r.Location.Function : query;
+          Console.Out.WriteLine($"No breakpoint at {where} to clear.");
           break;
         case MaxonDebugger.BreakKind.Unacknowledged:
-          Console.Out.WriteLine(BreakUnacknowledgedText);
+          Console.Out.WriteLine(BreakUnacknowledgedText(verb));
           break;
         case MaxonDebugger.BreakKind.Ambiguous:
           Console.Out.WriteLine($"'{query}' is ambiguous — candidates: {string.Join(", ", r.Candidates)}. "
@@ -494,6 +537,8 @@ internal static class MaxonDebugRepl {
       Console.Out.WriteLine("  break <function>            set a breakpoint at a function's entry (fuzzy: leaf/prefix/typo)");
       Console.Out.WriteLine($"  break <target> {BreakConditionUsage}");
       Console.Out.WriteLine("                              stop only when a scalar local compares true (e.g. break f.maxon:9 if i == 3)");
+      Console.Out.WriteLine("  clear <file>:<line>         remove a breakpoint (same targets as break; no condition)");
+      Console.Out.WriteLine("  clear <function>            remove the breakpoint at a function's entry");
       Console.Out.WriteLine("  run                   (r)   start the program (continue from entry)");
       Console.Out.WriteLine("  continue              (c)   resume from a breakpoint");
       Console.Out.WriteLine("  step                  (s)   step into: advance one statement, entering calls");
@@ -610,6 +655,9 @@ internal static class MaxonDebugRepl {
       case DebugCommand.Break:
         BatchBreak(dbg, rest);
         break;
+      case DebugCommand.Clear:
+        BatchClear(dbg, rest);
+        break;
       // Run and Continue are the same mechanism; the interactive prompt distinguishes them, batch has
       // no prompt so both post continue and await the next event.
       case DebugCommand.Run:
@@ -673,13 +721,26 @@ internal static class MaxonDebugRepl {
   }
 
   private static void BatchBreak(MaxonDebugger dbg, string arg) {
-    if (arg.Length == 0) { EmitError("break needs <file>:<line> or a function name"); return; }
+    if (arg.Length == 0) { EmitError($"{BreakUsageText(DebugCommand.Break)}"); return; }
     var (target, condition) = SplitBreakCondition(arg);
-    if (TryParseFileLine(target, out var file, out var lineNo)) {
-      BatchBreakFileLine(dbg.SetBreakpoint(file, lineNo, condition), file, lineNo, condition);
-    } else {
-      BatchBreakFunction(dbg.SetBreakpointAtFunction(target, condition), target, condition);
-    }
+    DispatchBreakTarget(target,
+      (file, lineNo) => BatchBreakFileLine(dbg.SetBreakpoint(file, lineNo, condition), file, lineNo, condition),
+      fn => BatchBreakFunction(dbg.SetBreakpointAtFunction(fn, condition), fn, condition));
+  }
+
+  /// <summary>
+  /// The batch face of `clear`. It emits the SAME `{"event":"breakpoint",…}` shape a `break` does, with
+  /// its own `action` word — so a consumer parses one event kind for both, and the two renderers stay
+  /// the two that already existed rather than becoming four.
+  /// </summary>
+  private static void BatchClear(MaxonDebugger dbg, string arg) {
+    if (arg.Length == 0) { EmitError($"{BreakUsageText(DebugCommand.Clear)}"); return; }
+    if (ClearConditionRefusalText(arg) is { } refusal) { EmitError(refusal); return; }
+
+    var target = arg.Trim();
+    DispatchBreakTarget(target,
+      (file, lineNo) => BatchBreakFileLine(dbg.ClearBreakpoint(file, lineNo), file, lineNo, condition: ""),
+      fn => BatchBreakFunction(dbg.ClearBreakpointAtFunction(fn), fn, condition: ""));
   }
 
   private static void BatchBreakFileLine(MaxonDebugger.BreakResult r, string file, uint lineNo,
@@ -711,8 +772,13 @@ internal static class MaxonDebugRepl {
       return;
     }
     switch (r.Kind) {
+      // Every outcome that RESOLVED to a code offset renders the same way — whether the breakpoint was
+      // armed, removed, found already absent, or left in doubt by an unacknowledged post. What differs
+      // is the `action` word, which is written above from the ONE vocabulary.
       case MaxonDebugger.BreakKind.Set:
       case MaxonDebugger.BreakKind.Unacknowledged:
+      case MaxonDebugger.BreakKind.Cleared:
+      case MaxonDebugger.BreakKind.NotSet:
         if (r.Location.HasFunction) w.WriteString("function", r.Location.Function);
         w.WriteString("offset", HexOffset(r.Offset));
         if (r.Location.HasLine) {
@@ -1927,7 +1993,8 @@ internal static class MaxonDebugRepl {
     MaxonDebugger.BreakKind.ConditionInvalid => $"condition not understood: {r.ConditionError}",
     MaxonDebugger.BreakKind.NoCode or MaxonDebugger.BreakKind.Set
       or MaxonDebugger.BreakKind.Unacknowledged or MaxonDebugger.BreakKind.Ambiguous
-      or MaxonDebugger.BreakKind.NoMatch => null,
+      or MaxonDebugger.BreakKind.NoMatch or MaxonDebugger.BreakKind.Cleared
+      or MaxonDebugger.BreakKind.NotSet => null,
     _ => throw new InvalidOperationException($"Unhandled break kind {r.Kind}"),
   };
 
@@ -1935,6 +2002,54 @@ internal static class MaxonDebugRepl {
   /// one spelling for both text renderers.
   internal static string ConditionSuffix(string condition) =>
     condition.Length > 0 ? $" {ConditionKeyword} {condition}" : "";
+
+  /// <summary>
+  /// What a surface asked a resolved target to DO. `break` and `clear` share every resolution outcome —
+  /// no code at that line, an ambiguous function name, a typo's suggestion — and differ only here, so the
+  /// verb travels as a parameter rather than as a second copy of each renderer.
+  /// </summary>
+  internal enum BreakVerb { Arm, Clear }
+
+  /// <summary>
+  /// The ONE file:line-vs-function decision. It was written twice — the interactive face and the batch
+  /// face — and `clear` would have made it four times; a surface that decided differently would act on a
+  /// different breakpoint than the one it named in its own answer.
+  /// </summary>
+  private static void DispatchBreakTarget(string target, Action<string, uint> fileLine,
+      Action<string> function) {
+    if (TryParseFileLine(target, out var file, out var lineNo)) fileLine(file, lineNo);
+    else function(target);
+  }
+
+  /// The past-tense verb a successful outcome reads with — the JSON action word, which for these two
+  /// kinds IS the English one, rather than a second table that could come to call the same outcome by a
+  /// different name. The guard is what the reuse costs: only a SUCCESSFUL outcome has a verb, so an
+  /// outcome that acquires a prose sentence it should not have throws here instead of printing
+  /// "Breakpoint no-code at …".
+  private static string BreakOutcomeVerbText(MaxonDebugger.BreakKind kind) => kind switch {
+    MaxonDebugger.BreakKind.Set or MaxonDebugger.BreakKind.Cleared => BreakActionName(kind),
+    _ => throw new InvalidOperationException($"{kind} is not a successful break outcome"),
+  };
+
+  /// <summary>
+  /// Why a `clear` carrying an `if` is refused, or null when it carries none. A condition selects WHEN a
+  /// breakpoint fires; removing it removes the whole slot, conditional or not — so `clear f.maxon:9 if
+  /// i == 3` cannot mean anything narrower than `clear f.maxon:9`, and REFUSING is the honest answer.
+  /// Accepting it would silently remove a breakpoint on a condition the user believed they had scoped.
+  /// </summary>
+  private static string? ClearConditionRefusalText(string arg) =>
+    SplitBreakCondition(arg).Condition.Length > 0
+      ? $"'{MaxonDebugRepl.CommandWord(DebugCommand.Clear)}' takes no condition — a breakpoint is removed "
+        + "whole, so name the same target you armed"
+      : null;
+
+  /// The usage line for `break` / `clear`, derived from the command table so a renamed command cannot
+  /// leave a usage line naming the old word.
+  private static string BreakUsageText(DebugCommand command) {
+    var word = CommandWord(command);
+    var usage = $"{word} <file>:<line>   |   {word} <function>";
+    return command == DebugCommand.Break ? $"{usage}   [{BreakConditionUsage}]" : usage;
+  }
 
   /// <summary>
   /// Split a `break` argument into its TARGET and its optional `if &lt;condition&gt;` tail, on the FIRST
@@ -1976,8 +2091,8 @@ internal static class MaxonDebugRepl {
   /// (continue) but stay distinct here so the interactive prompt can word them differently. `Step`/`Next`/
   /// `Finish`/`Until` are the P4b source-line stepping commands.
   internal enum DebugCommand {
-    Empty, Break, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace, GtSelect,
-    GtPark, GtResume, Print, Locals, Trace, Help, Quit, Unknown,
+    Empty, Break, Clear, Run, Continue, Step, Next, Finish, Until, Backtrace, Threads, GtBacktrace,
+    GtSelect, GtPark, GtResume, Print, Locals, Trace, Help, Quit, Unknown,
   }
 
   /// One command's vocabulary AND its completion policy: the canonical word, its aliases, and the pool its
@@ -1992,6 +2107,7 @@ internal static class MaxonDebugRepl {
   /// from this table, so a copy in one place and not another cannot happen.
   private static readonly CommandSpec[] CommandTable = [
     new(DebugCommand.Break,     "break",     ["b"],             CompletionArgTarget.FunctionsAndFiles),
+    new(DebugCommand.Clear,     "clear",     [],                CompletionArgTarget.FunctionsAndFiles),
     new(DebugCommand.Run,       "run",       ["r"],             CompletionArgTarget.None),
     new(DebugCommand.Continue,  "continue",  ["c"],             CompletionArgTarget.None),
     new(DebugCommand.Step,      "step",      ["s"],             CompletionArgTarget.None),
@@ -2066,6 +2182,8 @@ internal static class MaxonDebugRepl {
     MaxonDebugger.BreakKind.Unacknowledged => "unacked",
     MaxonDebugger.BreakKind.Ambiguous => "ambiguous",
     MaxonDebugger.BreakKind.NoMatch => "no-match",
+    MaxonDebugger.BreakKind.Cleared => "cleared",
+    MaxonDebugger.BreakKind.NotSet => "not-set",
     MaxonDebugger.BreakKind.ConditionUnsupported => "condition-unsupported",
     MaxonDebugger.BreakKind.ConditionInvalid => "condition-invalid",
     _ => throw new InvalidOperationException($"Unhandled break kind {kind}"),

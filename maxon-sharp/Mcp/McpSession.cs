@@ -53,25 +53,17 @@ internal sealed class McpSession(string id) : IDisposable {
   public McpDebugSession? Debug { get; set; }
 
   /// <summary>
-  /// Where this session's scratch directory IS — a SNIPPET's source and binary. One statement of the
-  /// path, because the creator and the reaper are different methods and a path spelled twice is a
-  /// directory one of them eventually fails to find.
-  /// </summary>
-  private string WorkspacePath => Path.Combine(Path.GetTempPath(), WorkspaceStem, Id);
-
-  private const string WorkspaceStem = "maxon-mcp";
-
-  /// <summary>
   /// This session's scratch directory, created on first use.
   ///
   /// It belongs to the SESSION rather than to the debug session it is built for, and that is the fix
   /// rather than a tidy-up: a snippet that does not compile produces no debug session at all, so a
   /// workspace owned by one would be written and then owned by nobody. Here it is reaped whenever the
-  /// session is, which is every way a session can end.
+  /// session is, which is every way a session can end — and the one way it CANNOT (a kill this process
+  /// never sees) is what <see cref="McpWorkspace.SweepDeadOwners"/> reclaims for the next server.
   /// </summary>
   public string Workspace() {
-    Directory.CreateDirectory(WorkspacePath);
-    return WorkspacePath;
+    Directory.CreateDirectory(McpWorkspace.ForSession(Id));
+    return McpWorkspace.ForSession(Id);
   }
 
   public void Dispose() {
@@ -80,15 +72,7 @@ internal sealed class McpSession(string id) : IDisposable {
     Debug?.Dispose();
     Debug = null;
 
-    if (!Directory.Exists(WorkspacePath)) return;
-    try {
-      Directory.Delete(WorkspacePath, recursive: true);
-    } catch (IOException) {
-      // Something the debuggee spawned still holds a file; the temp directory is the OS's to clean up
-      // then. Losing a scratch directory must not mask the reap that matters.
-    } catch (UnauthorizedAccessException) {
-      // Same: a read-only or locked artifact left behind by the build.
-    }
+    McpWorkspace.Delete(McpWorkspace.ForSession(Id));
   }
 
   /// Mark the session as used NOW, so the idle sweep measures silence rather than age.

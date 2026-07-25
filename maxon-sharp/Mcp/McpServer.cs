@@ -105,6 +105,10 @@ internal static class McpServer {
 
     _processTreeJob = AssignSelfToJob();
 
+    // Reclaim what a PREVIOUS server could not: a kill it never saw leaves its scratch directories
+    // behind, and startup is the moment to clear them without racing a living server for them.
+    McpWorkspace.SweepDeadOwners();
+
     var listener = new HttpListener();
     foreach (var prefix in LoopbackPrefixes(port)) listener.Prefixes.Add(prefix);
 
@@ -222,6 +226,10 @@ internal static class McpServer {
       Sessions.Clear();
     }
     foreach (var session in doomed) session.Dispose();
+
+    // With every session gone this server's scratch tree is empty, so the ordinary shutdown leaves
+    // nothing at all behind — the sweep exists for the shutdowns that never run.
+    McpWorkspace.DeleteOwn();
   }
 
   // ---- Idle reaping ----
