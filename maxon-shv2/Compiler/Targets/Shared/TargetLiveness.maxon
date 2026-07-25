@@ -1832,6 +1832,23 @@ export type UseIndex
 		return self.useSeqAt(record) / SeqStride
 	end 'useBlockAt'
 
+	// The `collectBlockOps` POSITION a use sits at within its block — derived from its sequence number
+	// exactly as `useBlockAt` is, and by the same identity: a number IS `block × SeqStride + position`,
+	// so this is literally `seqAt` read backwards.
+	//
+	// It is what lets a splitter anchor a reload without SEARCHING its block for the anchor op. That
+	// search was O(block) at every single reload, so a split placing K of them into one block cost
+	// Θ(K × block) — while the answer was sitting in the record that asked for the reload. It is exact
+	// only while nothing has moved, which is precisely the window a split materializes in: the
+	// insertions are held back and every position it computes is stated in the block's PRE-SPLIT
+	// layout (see `SplitEdits`).
+	//
+	// A position EQUAL to the block's `opRefs` count is the block's TERMINATOR — `collectBlockOps`
+	// numbers it one past the body, and every EDGE use is anchored there.
+	export function usePosAt(record UseRecordIndex) returns BlockOpPos
+		return self.useSeqAt(record) - self.useBlockAt(record) * SeqStride
+	end 'usePosAt'
+
 	// The op the use reads through; for an EDGE use, the block's LAST op (its sequence anchor —
 	// the edge is read after every body op).
 	export function useOpAt(record UseRecordIndex) returns OpIndex
@@ -2064,34 +2081,6 @@ export type UseIndex
 
 		try self.useSeq.set(record, value: seq) otherwise panic("UseIndex.setUseSeq: use record {record} out of range")
 	end 'setUseSeq'
-
-	// Shift the sequence numbers of every use record sited in `blockLocal` at or after forward position
-	// `from` — what an op INSERTED there (`up`) or REMOVED from there (not `up`) costs its uses.
-	//
-	// It touches NO OTHER BLOCK, and that is the whole reason sequence numbers are block-relative: an
-	// op spliced into block `b` moves the positions of the ops after it IN `b` and of nothing anywhere
-	// else. The block thread is the index that finds those records without scanning the function's uses.
-	//
-	// It cannot disturb the ascending order the value threads are held in: the shift is uniform over a
-	// SUFFIX of one block's records, and a uniform shift of a suffix reorders nothing.
-	export function shiftBlockSeqs(blockLocal CfgIndex, from BlockOpPos, up bool)
-		let records = self.blockUseCount(blockLocal)
-		if records == 0 'noRecords'
-			return
-		end 'noRecords'
-
-		let threshold = seqAt(blockLocal, pos: from)
-		var record = self.firstUseInBlockOf(blockLocal)
-		for _ in 0 upto records 'each'
-			let seq = self.useSeqAt(record)
-			if seq >= threshold and up 'movedUp'
-				self.setUseSeq(record, seq: seq + 1)
-			end 'movedUp' else if seq >= threshold 'movedDown'
-				self.setUseSeq(record, seq: seq - 1)
-			end 'movedDown'
-			record = self.nextUseInBlockOf(record)
-		end 'each'
-	end 'shiftBlockSeqs'
 
 	// One op LEFT the function — a fully rematerialized constant's def, which nothing reads any more.
 	// The counterpart of `addOps`, and the only thing that ever lowers the count.

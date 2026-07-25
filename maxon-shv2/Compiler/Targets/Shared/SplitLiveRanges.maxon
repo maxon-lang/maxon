@@ -132,12 +132,14 @@
 // specs-shv2 IR goldens do not move. The global peak is found by a TOURNAMENT over the per-block peaks
 // (`PeakTree`), because a per-split fold over every block would merely MOVE the quadratic.
 //
-// HOW THE INDEX STAYS CORRECT WHILE ONE SPLIT IS BEING MATERIALIZED: `spillOneValue` /
-// `rematerializeConstant` read only the two fields that are STABLE under the mutations they make — an
-// op's `module.ops` index (the table is append-only, so an existing index never moves) and a use's
-// owning block (an insertion never moves an op between blocks). Everything positional is re-derived at
-// the point of use. The sequence repair is therefore REPLAYED AFTERWARDS, from the insertion log
-// (`SplitEdits`), and never applied under a mutator that is still partitioning uses around `peakSeq`.
+// HOW THE INDEX STAYS CORRECT WHILE ONE SPLIT IS BEING MATERIALIZED: nothing in the function moves
+// until the split is finished. `spillOneValue` / `rematerializeConstant` LOG their insertions
+// (`SplitEdits`) rather than perform them, so every block's op layout — and therefore every use
+// record's sequence number, which IS `block × SeqStride + position` — stays exactly as the mutator
+// found it. One coordinate system, for the positions it computes and the sequence numbers it reads.
+// The splices and the sequence repair are both REPLAYED AFTERWARDS from that log, and neither is ever
+// applied under a mutator that is still partitioning uses around `peakSeq`. It is also what makes a
+// split cost Θ(block + insertions) rather than Θ(insertions × block).
 //
 // ==========================================================================
 // WHAT THE PER-SPLIT RE-ANALYSIS IS ALLOWED TO COST — `SplitScratch`
@@ -429,65 +431,183 @@ end 'SpillChoice'
 // accident, and any value above the pool size does that.
 let NoStoreAnchorPressure = RegisterFileSize + 1
 
-// The op INSERTIONS and REMOVALS one split made, in the order it made them.
+// The op INSERTIONS and REMOVALS one split made — RECORDED as it makes them, MATERIALIZED in one pass
+// per block when it is done.
 //
 // The sequence repair is REPLAYED FROM THIS AFTERWARDS, rather than applied as the ops go in, and that
-// is load-bearing. `spillOneValue` walks the victim's use thread while it inserts, partitioning those
-// uses around `peakSeq` — and a sequence number bumped underneath it could carry a use ACROSS the peak
-// and flip which side of the split it lands on. Replaying the events in order reaches exactly the same
-// numbers (each event's position is stated in the coordinates the events before it left behind) with
-// none of them visible to the mutator.
+// is load-bearing. `spillOneValue` walks the victim's use thread while it records these edits,
+// partitioning those uses around `peakSeq` — and a sequence number bumped underneath it could carry a
+// use ACROSS the peak and flip which side of the split it lands on.
+//
+// THE SPLICES THEMSELVES ARE HELD BACK TOO, and that is what makes this the whole edit log rather than
+// a repair log. Three separate Θ(block) costs used to be paid on EVERY op a split inserted: the search
+// for its anchor op's position, the suffix shift `Array.insert` does, and the walk of the block's use
+// thread that restates the sequence numbers past it. A split placing K ops into a block of M ops cost
+// Θ(K × M) — invisible to `scale-test`, because none of the three ALLOCATES. Held back, the batch costs
+// Θ(M + K): one backward pass over `opRefs` (`spliceOpRefs`) and one walk of the block's records.
+//
+// It also puts every position in ONE COORDINATE SYSTEM — the block's PRE-SPLIT layout — because nothing
+// moves until `commit`. That is what lets a reload's anchor position come straight out of the use record
+// that asked for it (`UseIndex.usePosAt`) instead of a fresh search for the anchor op.
+//
+// THE INSERTS MUST BE RECORDED IN ASCENDING (block, position) ORDER, and they are, by SSA. A spill
+// anchors its store at the value's DEF, which dominates every use of it and therefore precedes every one
+// of them — in RPO block order, and in position within a block they share. The reloads then follow the
+// value's use thread, which is held ascending by sequence, hence ascending by (block, position). A remat
+// re-emits along that same thread. `recordInsert` refuses a batch that is not ascending, because the
+// backward pass would otherwise place an op silently in the wrong slot.
+//
+// THE REMOVAL is a scalar rather than a list entry: a split removes at most ONE op — a fully
+// rematerialized constant's def, which nothing reads any more — and it is applied AFTER the splices,
+// exactly where it was applied when it was applied by hand.
 type SplitEdits
 	var blocks as CfgIndexArray
 	var positions as BlockOpPosArray
-	var inserted as BoolArray
+	var opIdxs as OpIndexArray
+	var hasRemoval as bool
+	var removalBlock as CfgIndex
+	var removalPos as BlockOpPos
 
 	static function create() returns SplitEdits
-		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), inserted: BoolArray.create()}
+		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), hasRemoval: false, removalBlock: 0, removalPos: 0}
 	end 'create'
 
 	function clear()
 		self.blocks.clear()
 		self.positions.clear()
-		self.inserted.clear()
+		self.opIdxs.clear()
+		self.hasRemoval = false
 	end 'clear'
 
-	// An op was spliced into `blockLocal` at forward position `pos`.
-	export function recordInsert(blockLocal CfgIndex, pos BlockOpPos)
+	// Op `opIdx` is to be spliced into `blockLocal` at PRE-SPLIT forward position `pos`.
+	export function recordInsert(blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex)
+		let recorded = self.blocks.count()
+		if recorded > 0 'notTheFirst'
+			let lastBlock = try self.blocks.get(recorded - 1) otherwise panic("SplitEdits.recordInsert: blocks.get OOB at {recorded - 1}")
+			let lastPos = try self.positions.get(recorded - 1) otherwise panic("SplitEdits.recordInsert: positions.get OOB at {recorded - 1}")
+			if blockLocal < lastBlock or (blockLocal == lastBlock and pos < lastPos) 'outOfOrder'
+				panic("SplitEdits.recordInsert: a splice at block {blockLocal} position {pos} follows one at block {lastBlock} position {lastPos} — one split's insertions must be recorded in ASCENDING (block, position) order, which SSA guarantees (the store anchors at the def, which dominates every use; the reloads follow the use thread, which is ascending by sequence). Materializing them takes one backward pass per block, so an out-of-order entry would land in the wrong slot")
+			end 'outOfOrder'
+		end 'notTheFirst'
+
 		self.blocks.push(blockLocal)
 		self.positions.push(pos)
-		self.inserted.push(true)
+		self.opIdxs.push(opIdx)
 	end 'recordInsert'
 
-	// An op was removed from forward position `pos` of `blockLocal` (a fully rematerialized constant's
-	// def, which nothing reads any more).
+	// The op at PRE-SPLIT forward position `pos` of `blockLocal` is to be removed (a fully
+	// rematerialized constant's def).
 	export function recordRemoval(blockLocal CfgIndex, pos BlockOpPos)
-		self.blocks.push(blockLocal)
-		self.positions.push(pos)
-		self.inserted.push(false)
+		if self.hasRemoval 'alreadyHaveOne'
+			panic("SplitEdits.recordRemoval: a second removal (block {blockLocal}, position {pos}) — a split drops at most ONE op, the def of a constant every use of which it rematerialized, and the removal is a scalar because of it")
+		end 'alreadyHaveOne'
+
+		self.hasRemoval = true
+		self.removalBlock = blockLocal
+		self.removalPos = pos
 	end 'recordRemoval'
 
-	// Repair the index's sequence numbers and op count, and register every block that took an edit as
+	// Materialize every recorded edit: splice the pending ops into their blocks, drop the removed one,
+	// repair the index's sequence numbers and op count, and register every block that took an edit as
 	// DIRTY — those are the only blocks whose op layout can have changed.
-	function apply(index UseIndex, dirty BlockSet)
-		for k in 0 upto self.blocks.count() 'eachEdit'
-			let blockLocal = try self.blocks.get(k) otherwise panic("SplitEdits.apply: blocks.get OOB at {k}")
-			let pos = try self.positions.get(k) otherwise panic("SplitEdits.apply: positions.get OOB at {k}")
-			let isInsert = try self.inserted.get(k) otherwise panic("SplitEdits.apply: inserted.get OOB at {k}")
-			dirty.add(blockLocal)
+	//
+	// ONE PASS PER BLOCK, walking the recorded edits as runs of one block. Blocks are INDEPENDENT — a
+	// splice into one moves nothing in any other, which is the whole reason sequence numbers are
+	// block-relative — so the runs may be taken in any order, and the removal's block is picked up at
+	// the end when it took no splice of its own.
+	function commit(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet)
+		var removalPending = self.hasRemoval
+		var k = 0 as SpliceBatchIndex
+		while k < self.blocks.count() 'eachBlockRun'
+			let blockLocal = try self.blocks.get(k) otherwise panic("SplitEdits.commit: blocks.get OOB at {k}")
+			var runEnd = k + 1
+			while runEnd < self.blocks.count() and (try self.blocks.get(runEnd) otherwise panic("SplitEdits.commit: blocks.get OOB at {runEnd}")) == blockLocal 'sameBlock'
+				runEnd = runEnd + 1
+			end 'sameBlock'
 
-			if isInsert 'spliced'
-				// The op AT `pos` and everything after it moved up one.
-				index.shiftBlockSeqs(blockLocal, from: pos, up: true)
-				index.addOps(1)
-			end 'spliced' else 'removed'
-				// The op at `pos` is gone (it had no virtual USE operand, so no record sat on it);
-				// everything strictly after it moved down one.
-				index.shiftBlockSeqs(blockLocal, from: pos + 1, up: false)
-				index.removeOp()
-			end 'removed'
-		end 'eachEdit'
-	end 'apply'
+			let withRemoval = removalPending and self.removalBlock == blockLocal
+			self.commitBlock(module, topo: topo, index: index, dirty: dirty, blockLocal: blockLocal, from: k, to: runEnd, withRemoval: withRemoval)
+			removalPending = removalPending and not withRemoval
+			k = runEnd
+		end 'eachBlockRun'
+
+		if removalPending 'removalBlockTookNoSplice'
+			self.commitBlock(module, topo: topo, index: index, dirty: dirty, blockLocal: self.removalBlock, from: 0, to: 0, withRemoval: true)
+		end 'removalBlockTookNoSplice'
+	end 'commit'
+
+	// Materialize ONE block's edits: `[from, to)` of the recorded splices, plus the removal when it
+	// belongs to this block.
+	function commitBlock(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet, blockLocal CfgIndex, from SpliceBatchIndex, to SpliceBatchIndex, withRemoval bool)
+		var block = blockAt(module, topo: topo, local: blockLocal)
+		spliceOpRefs(block, positions: self.positions, opIdxs: self.opIdxs, from: from, to: to)
+		index.addOps(to - from)
+
+		if withRemoval 'dropTheDeadDef'
+			// Stated in PRE-SPLIT coordinates like every other position here, so it is carried through the
+			// splices that just went in ahead of it — landing exactly where it landed when the removal was
+			// applied by hand, after the inserts.
+			let at = self.removalPos + self.splicesAtOrBefore(self.removalPos, from: from, to: to)
+			_ = try block.opRefs.remove(at) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
+			index.removeOp()
+		end 'dropTheDeadDef'
+
+		self.resequence(index, blockLocal: blockLocal, from: from, to: to, withRemoval: withRemoval)
+		dirty.add(blockLocal)
+	end 'commitBlock'
+
+	// Restate the sequence number of every use record sited in `blockLocal`.
+	//
+	// A record's number IS `block × SeqStride + position`, so it moves by exactly the net shift its own
+	// PRE-SPLIT position took: up one for every op spliced in at or before it, down one when the removed
+	// op preceded it. It touches NO OTHER BLOCK, and it cannot disturb the ascending order a value's
+	// thread is held in, because the shift is monotone in position — records that were ordered stay
+	// ordered.
+	//
+	// It walks records that are DETACHED from their value too, exactly as the per-insertion shift it
+	// replaces did: the block thread holds every record ever sited here (see `UseIndex`), and there is
+	// no point repairing sequence numbers selectively.
+	//
+	// The block thread is UNORDERED, so each record's shift is LOOKED UP against this block's ascending
+	// splice positions rather than accumulated along the walk.
+	function resequence(index UseIndex, blockLocal CfgIndex, from SpliceBatchIndex, to SpliceBatchIndex, withRemoval bool)
+		let records = index.blockUseCount(blockLocal)
+		if records == 0 'noRecords'
+			return
+		end 'noRecords'
+
+		var record = index.firstUseInBlockOf(blockLocal)
+		for _ in 0 upto records 'eachRecord'
+			let pos = index.usePosAt(record)
+			var moved = pos + self.splicesAtOrBefore(pos, from: from, to: to)
+			if withRemoval and pos > self.removalPos 'afterTheRemovedOp'
+				moved = moved - 1
+			end 'afterTheRemovedOp'
+
+			if moved != pos 'shifted'
+				index.setUseSeq(record, seq: seqAt(blockLocal, pos: moved))
+			end 'shifted'
+			record = index.nextUseInBlockOf(record)
+		end 'eachRecord'
+	end 'resequence'
+
+	// How many of the splices in `[from, to)` — ascending by position — land at or before block position
+	// `pos`, and so shift whatever sat there. Binary search: a block can take as many splices as it has
+	// ops, and a linear count per record would put back the Θ(records × splices) this batching removes.
+	function splicesAtOrBefore(pos BlockOpPos, from SpliceBatchIndex, to SpliceBatchIndex) returns SpliceBatchIndex
+		var lo = from
+		var hi = to
+		while lo < hi 'narrow'
+			let mid = lo + (hi - lo) / 2
+			let at = try self.positions.get(mid) otherwise panic("SplitEdits.splicesAtOrBefore: positions.get OOB at {mid}")
+			if at <= pos 'landsAtOrBefore'
+				lo = mid + 1
+			end 'landsAtOrBefore' else 'landsAfter'
+				hi = mid
+			end 'landsAfter'
+		end 'narrow'
+		return lo - from
+	end 'splicesAtOrBefore'
 end 'SplitEdits'
 
 // The per-block peak ranks, and the TOURNAMENT that turns them into the function's peak.
@@ -960,8 +1080,9 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	var index = liveness.useIndex
 	var dirty = scratch.dirty
 
-	// The sequence repair, the op count, and the blocks that took an edit.
-	scratch.edits.apply(index, dirty: dirty)
+	// The split's op insertions and its one possible removal, spliced into their blocks — plus the
+	// sequence repair, the op count, and the blocks that took an edit.
+	scratch.edits.commit(module, topo: topo, index: index, dirty: dirty)
 
 	// The value space grew by the ids the split minted; every column keyed by it follows.
 	//
@@ -2299,9 +2420,9 @@ end 'markBlocksReachableFromPeak'
 // — hence still live across the peak — so the spill would not lower the pressure and the driver
 // would re-pick the same value forever. Loop-carried accumulators are exactly this shape.
 //
-// The index is read ONLY through fields that survive the insertions below: an op's `module.ops`
-// index (the table is append-only) and a use's owning block. Positions inside a block shift as ops
-// are spliced in, and every insertion re-derives its own (see `positionInBlock`).
+// Nothing below MOVES an op: the insertions are logged and spliced in afterwards (see `SplitEdits`), so
+// every position this reads — including each use record's own, which is half of its sequence number —
+// is stated in the block's pre-split layout throughout.
 function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, liveness LivenessResult, valueId ValueId, peak PressurePeak, scope SplitScope, slot SpillSlot, pool RegMask, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
 	let peakSeq = peak.peakSeq
 	let placement = placementOf(peak)
@@ -2434,9 +2555,10 @@ end 'spillOneValue'
 // cover disjoint stretches and the whole pre-pass is O(the blocks the victim is used in). That cost
 // is already inside the dirty region the split re-derives afterwards.
 //
-// ⚠ IT COMPARES `module.ops` INDICES, NEVER POSITIONS. `spillOneValue` splices ops in as it goes, so
-// every position in the block shifts under it; an op's index never moves (the table is append-only),
-// which is the same field the rest of the mutator restricts itself to.
+// ⚠ IT COMPARES `module.ops` INDICES, NEVER POSITIONS — the same field the rest of the mutator
+// restricts itself to, and the one that is stable however the split is materialized. (Positions happen
+// to be stable too now, since the splices are held back until the split is done, but an op index needs
+// no such argument: the table is append-only, so an existing index never moves at all.)
 function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, ordered OpIndexArray, buf OperandList)
 	let useSites = index.useCount(valueId)
 	runStarts.refill(useSites, value: false)
@@ -2564,17 +2686,23 @@ function insertStore(module TargetModule, cfg FuncCfg, valueId ValueId, defSite 
 	end 'site'
 end 'insertStore'
 
-// Insert the RELOAD serving a block's after-peak uses, anchored on the FIRST of them (use entry
-// `useAt`). An OP use takes the reload immediately before it. An EDGE use means the block has no
-// after-peak op use at all (op uses precede the edge use in the index), so the value is only
-// forwarded to a phi — the reload goes at the END of the block's body, still ahead of the edge
-// that reads it.
+// Insert `loadRegSlot(freshId, slot)` — the RELOAD serving a block's run of uses, anchored on the FIRST
+// of them (use entry `useRecord`). The reload dominates every use in the run (it precedes the first one,
+// and a block's edge arg is read after all its ops), and the caller rewrites those uses.
 function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, useRecord UseRecordIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement, edits SplitEdits)
 	let blockLocal = index.useBlockAt(useRecord)
-	match index.useKindAt(useRecord) 'k'
-		op then insertReloadBefore(module, cfg: cfg, blockLocal: blockLocal, beforeOpIdx: index.useOpAt(useRecord), valueId: valueId, freshId: freshId, slot: slot, placement: placement, edits: edits)
-		edge then insertReloadAtBlockEnd(module, cfg: cfg, blockLocal: blockLocal, valueId: valueId, freshId: freshId, slot: slot, placement: placement, edits: edits)
+	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
+	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	// An OP use takes the reload immediately before it. An EDGE use means the block has no op use in this
+	// run at all (op uses precede the edge use in the index), so the value is only forwarded to a phi and
+	// the reload goes at the END of the block's body — after every op, ahead of the branch, and so ahead
+	// of every branch edge that reads it.
+	let at = match index.useKindAt(useRecord) 'k'
+		op gives bodyPositionOfUse(index, block: block, record: useRecord)
+		edge gives beforeBranchPosition(block)
 	end 'k'
+
+	spliceOp(module, at: at, op: TargetOp.loadRegSlot(TargetVReg.virtual(freshId), slot: slot), blockLocal: blockLocal, edits: edits)
 end 'insertReloadFor'
 
 // Repoint every branch-edge arg of `blockLocal` naming `from` at `to` (the reload that now holds
@@ -2619,7 +2747,7 @@ function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, aft
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
 	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let anchorPos = positionInBlock(block, opIdx: afterOpIdx)
-	spliceOp(block, at: anchorPos + 1, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), module: module, blockLocal: blockLocal, edits: edits)
+	spliceOp(module, at: anchorPos + 1, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), blockLocal: blockLocal, edits: edits)
 end 'insertStoreAfter'
 
 // Insert `storeSlotReg(slot, valueId)` at the very TOP of `blockLocal` — the PHI anchor. A
@@ -2628,40 +2756,36 @@ end 'insertStoreAfter'
 // correctly. Its block dominates every use of it, so this store dominates every reload.
 function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId ValueId, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement, edits SplitEdits)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
-	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	spliceOp(block, at: 0, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), module: module, blockLocal: blockLocal, edits: edits)
+	spliceOp(module, at: 0, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), blockLocal: blockLocal, edits: edits)
 end 'insertStoreAtBlockEntry'
 
-// Insert `loadRegSlot(freshId, slot)` right before `beforeOpIdx` (the first after-peak OP use in
-// `blockLocal`). The reload dominates every after-peak use in the block (it precedes the first
-// one, and the edge arg is read after them all). The caller rewrites those uses.
-function insertReloadBefore(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, beforeOpIdx OpIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement, edits SplitEdits)
-	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
-	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	let pos = positionInBlock(block, opIdx: beforeOpIdx)
-	spliceOp(block, at: pos, op: TargetOp.loadRegSlot(TargetVReg.virtual(freshId), slot: slot), module: module, blockLocal: blockLocal, edits: edits)
-end 'insertReloadBefore'
-
-// Insert `loadRegSlot(freshId, slot)` at the END of `blockLocal`'s body — after every op, ahead of
-// the branch and so ahead of every branch edge that reads the value. Used when a block's only
-// after-peak use is an EDGE arg: the value is not read by any op there, it is merely forwarded to
-// a phi, so the reload exists purely to hand the edge a live register.
+// The `opRefs` position an OP use sits at — read straight out of the use record that names it, because
+// a sequence number IS `block × SeqStride + position` (`UseIndex.usePosAt`) and nothing has moved yet
+// (`SplitEdits`). Searching the block for the anchor op instead was O(block) at EVERY insertion, which
+// is the Θ(insertions × block) a split used to pay.
 //
-// "Ahead of the branch" is NOT the end of `opRefs` when the block branches two ways: a `jcc` is a
-// BODY op paired with a `jmp` terminator, so an op past the end of the body sits BETWEEN them and
-// runs only on the not-taken path — the then-edge would then read an unloaded register. The reload
-// goes immediately BEFORE the conditional branch, which dominates both outgoing edges. A
-// `loadRegSlot` is a plain `mov r, [rsp+disp]` and writes no flags, so it is safe between the
-// compare and the `jcc` that reads that compare's EFLAGS.
-function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal CfgIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement, edits SplitEdits)
-	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
-	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	let pos = beforeBranchPosition(block)
-	spliceOp(block, at: pos, op: TargetOp.loadRegSlot(TargetVReg.virtual(freshId), slot: slot), module: module, blockLocal: blockLocal, edits: edits)
-end 'insertReloadAtBlockEnd'
+// It must name a BODY op. The one position a record can carry that `opRefs` does not hold is the
+// block's TERMINATOR — `collectBlockOps` numbers it one past the body, and every EDGE use is anchored
+// there — so reaching here with one is a caller that should have gone to `beforeBranchPosition`. That
+// is the same bug the search used to report when it ran off the end of the body.
+function bodyPositionOfUse(index UseIndex, block IrBlock, record UseRecordIndex) returns BlockOpPos
+	let pos = index.usePosAt(record)
+	if pos >= block.opRefs.count() 'notABodyOp'
+		panic("bodyPositionOfUse: use record {record} is anchored at position {pos} of block '{String.from(block.label)}', whose body holds {block.opRefs.count()} op(s) — that position is the block's TERMINATOR, and a spill op cannot be spliced after one")
+	end 'notABodyOp'
+
+	return pos
+end 'bodyPositionOfUse'
 
 // The `opRefs` position at which an op runs after the whole body but on EVERY edge out of the
 // block: past the last real body op, but before the conditional branch when the block has one.
+//
+// "Ahead of the branch" is NOT the end of `opRefs` when the block branches two ways: a `jcc` is a BODY
+// op paired with a `jmp` terminator, so an op past the end of the body sits BETWEEN them and runs only
+// on the not-taken path — the then-edge would then read an unloaded register. A reload placed here goes
+// immediately BEFORE the conditional branch, which dominates both outgoing edges. A `loadRegSlot` is a
+// plain `mov r, [rsp+disp]` and writes no flags, so it is safe between the compare and the `jcc` that
+// reads that compare's EFLAGS.
 function beforeBranchPosition(block IrBlock) returns BlockOpPos
 	if block.hasCondBranchOp() 'twoWay'
 		return positionInBlock(block, opIdx: block.condBranchIndex())
@@ -2679,17 +2803,18 @@ function appendOp(module TargetModule, op TargetOp) returns OpIndex
 	return idx
 end 'appendOp'
 
-// Splice a freshly minted op into `block` at forward position `at`, AND LOG IT. Every op the splitter
-// inserts goes through here; none of them may reach `insertOpRef` directly.
+// Mint an op and LOG it for splicing into `blockLocal` at forward position `at`. Every op the splitter
+// inserts goes through here; none of them may reach `insertOpRef` or `spliceOpRefs` directly.
 //
-// The log is what the incremental update replays to repair the sequence numbers of that block's use
-// records, and to register the block as dirty. An UNLOGGED insert would leave every later use in the
-// block carrying the sequence number of the op before it: Belady would rank on stale next-use
-// distances, and the before/after-the-peak partition — which is stated in sequence numbers — would cut
-// in the wrong place. Both are silent.
-function spliceOp(block IrBlock, at BlockOpPos, op TargetOp, module TargetModule, blockLocal CfgIndex, edits SplitEdits)
-	insertOpRef(block, at: at, opIdx: appendOp(module, op: op))
-	edits.recordInsert(blockLocal, pos: at)
+// The log is both the insertion itself and what the incremental update replays to repair the sequence
+// numbers of that block's use records, and to register the block as dirty (see `SplitEdits`). An
+// UNLOGGED insert would leave every later use in the block carrying the sequence number of the op before
+// it: Belady would rank on stale next-use distances, and the before/after-the-peak partition — which is
+// stated in sequence numbers — would cut in the wrong place. Both are silent.
+//
+// `at` is a PRE-SPLIT position, and it stays valid because nothing is spliced until the split is done.
+function spliceOp(module TargetModule, at BlockOpPos, op TargetOp, blockLocal CfgIndex, edits SplitEdits)
+	edits.recordInsert(blockLocal, pos: at, opIdx: appendOp(module, op: op))
 end 'spliceOp'
 
 // ==========================================================================
@@ -2745,12 +2870,12 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 			let useOpIdx = index.useOpAt(record)
 			let useBlockLocal = index.useBlockAt(record)
 			var block = blockAt(module, topo: topo, local: useBlockLocal)
-			let usePos = positionInBlock(block, opIdx: useOpIdx)
+			let usePos = bodyPositionOfUse(index, block: block, record: record)
 			// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
 			// the one it replaces — x64's `constMaterializationOp` (not a second copy of the 32-vs-64-bit
 			// size choice that can drift from it), or arm64's uniform `arm64MovImm` — selected by the
 			// original def's own kind (`freshConstOp`).
-			spliceOp(block, at: usePos, op: freshConstOp(isArm64Const, freshId: freshId, value: constValue), module: module, blockLocal: useBlockLocal, edits: edits)
+			spliceOp(module, at: usePos, op: freshConstOp(isArm64Const, freshId: freshId, value: constValue), blockLocal: useBlockLocal, edits: edits)
 			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
 			// The re-emitted copy derives from the original constant — record it so a
 			// rematerialized id in an E5001 blocking set chases back to the constant's source
@@ -2811,14 +2936,13 @@ function freshConstOp(isArm64 bool, freshId ValueId, value MachineWord) returns 
 	return TargetOp.arm64MovImm(dest, value: value) if isArm64 else constMaterializationOp(dest, value: value)
 end 'freshConstOp'
 
-// Remove the original constant def's op ref from its block (it is now dead — every use was
-// rewritten to a rematerialized copy). The op stays in `module.ops` but unreferenced (harmless,
-// exactly like the reuse-copy/edge-move ops SsaDestruction appends).
+// Log the removal of the original constant def's op ref from its block (it is now dead — every use was
+// rewritten to a rematerialized copy). Applied with the split's splices, after them, exactly where it
+// landed when it was removed by hand (see `SplitEdits`). The op stays in `module.ops` but unreferenced
+// (harmless, exactly like the reuse-copy/edge-move ops SsaDestruction appends).
 function dropOriginalDef(module TargetModule, topo FuncTopology, defOpIdx OpIndex, blockLocal CfgIndex, edits SplitEdits)
 	var block = blockAt(module, topo: topo, local: blockLocal)
-	let pos = positionInBlock(block, opIdx: defOpIdx)
-	_ = try block.opRefs.remove(pos) otherwise panic("dropOriginalDef: opRefs.remove OOB")
-	edits.recordRemoval(blockLocal, pos: pos)
+	edits.recordRemoval(blockLocal, pos: positionInBlock(block, opIdx: defOpIdx))
 end 'dropOriginalDef'
 
 // ==========================================================================
@@ -2995,9 +3119,13 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 	end 'rewrite'
 end 'substituteValueInOp'
 
-// The position of `opIdx` within `block.opRefs` (body ops only — spill/reload/remat are always
-// body ops, never terminators). Re-derived at every insertion because the positions SHIFT as ops
-// are spliced in, which is exactly why the index does not cache them.
+// The position of `opIdx` within `block.opRefs` (body ops only — spill/reload/remat are always body
+// ops, never terminators), by SEARCH.
+//
+// It is O(block), so it is only for the anchors the `UseIndex` cannot answer for: a DEF site, which
+// carries no use record, and a block's conditional branch. Both are asked at most once per split. A
+// reload's anchor is a USE, and a use record already knows its own position — see `bodyPositionOfUse`,
+// which is what a per-insertion search here used to cost.
 function positionInBlock(block IrBlock, opIdx OpIndex) returns BlockOpPos
 	for pos in 0 upto block.opRefs.count() 'each'
 		if (try block.opRefs.get(pos) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'

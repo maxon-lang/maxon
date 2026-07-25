@@ -272,6 +272,68 @@ export function insertOpRef(block IrBlock, at BlockOpPos, opIdx OpIndex)
 	block.opRefs.insert(at, value: opIdx)
 end 'insertOpRef'
 
+// An index into a BATCH of pending splices — a position in the caller's parallel (position, opIndex)
+// arrays. Deliberately not a `BlockOpPos`: it addresses the batch, never the block.
+export typealias SpliceBatchIndex = int(0 to u64.max)
+
+// Insert a whole BATCH of op references in ONE pass — `opIdxs[k]` at position `positions[k]`, for k in
+// `[from, to)`.
+//
+// EVERY POSITION IS STATED IN THE BLOCK'S PRE-BATCH COORDINATES, and they must be ASCENDING. Entry `k`
+// lands immediately before whatever sat at `positions[k]` before any of this batch went in, and after
+// every earlier entry of the batch — which is exactly the layout `to - from` separate `insertOpRef`
+// calls produce when each one re-derives its own position from the anchor op it must follow.
+//
+// WHY IT EXISTS. `insertOpRef` shifts a suffix of `opRefs` on every call, so a caller placing K ops
+// into a block of M paid Θ(K × M) — and the register allocator's splitter is exactly that caller: two
+// f64 locals read after each of N calls put ~2N reloads into one straight-line block of ~10N ops. This
+// pays Θ(M + K) instead, and it allocates nothing beyond the one growth. The insertions being held back
+// until the batch is complete is also what keeps every position in one coordinate system, which is what
+// lets the splitter read a position out of its use index rather than search for it.
+export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from SpliceBatchIndex, to SpliceBatchIndex)
+	let pending = to - from
+	if pending == 0 'nothingToSplice'
+		return
+	end 'nothingToSplice'
+
+	let oldCount = block.opRefs.count()
+	// Grow FIRST and fill BACKWARD: every slot written is either one already copied out or one the
+	// growth just added, so no original op ref is clobbered before it has been moved.
+	//
+	// `growFilled`, not `resize`, and the difference is asymptotic rather than cosmetic: `resize` grows
+	// capacity to EXACTLY the length asked for, so a block spliced into by several splits in turn is
+	// reallocated and copied in full every time — Θ(splits × block) bytes (see `Array.growFilled`, which
+	// documents that trap). Geometric growth makes the same sequence amortized linear. The zeros it
+	// writes into the added tail are all overwritten by the pass below; that fill is the price of using
+	// the one extension operation rather than a second one.
+	block.opRefs.growFilled(oldCount + pending, value: 0)
+
+	var write = oldCount + pending
+	var read = oldCount
+	var k = to
+	while k > from 'eachPendingSplice'
+		let at = try positions.get(k - 1) otherwise panic("spliceOpRefs: positions.get OOB at {k - 1}")
+		if at > oldCount 'pastTheEnd'
+			panic("spliceOpRefs: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={oldCount})")
+		end 'pastTheEnd'
+		if at > read 'outOfOrder'
+			panic("spliceOpRefs: entry {k - 1} of this batch asks for position {at} of block '{String.from(block.label)}', but the entry after it already claimed position {read} or lower — a batch must be ASCENDING by position, because it is materialized in ONE backward pass")
+		end 'outOfOrder'
+
+		while read > at 'shiftTail'
+			write = write - 1
+			read = read - 1
+			let moved = try block.opRefs.get(read) otherwise panic("spliceOpRefs: opRefs.get OOB at {read}")
+			try block.opRefs.set(write, value: moved) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
+		end 'shiftTail'
+
+		let spliced = try opIdxs.get(k - 1) otherwise panic("spliceOpRefs: opIdxs.get OOB at {k - 1}")
+		write = write - 1
+		try block.opRefs.set(write, value: spliced) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
+		k = k - 1
+	end 'eachPendingSplice'
+end 'spliceOpRefs'
+
 // Collect the IrBlocks referenced by a function's blockRefs list.
 // Used by IR printers across all phases to iterate a function's blocks.
 module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) returns IrBlockArray
