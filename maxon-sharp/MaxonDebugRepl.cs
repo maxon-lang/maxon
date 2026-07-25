@@ -1057,12 +1057,7 @@ internal static class MaxonDebugRepl {
 
     RenderBacktraceText(report.Backtrace, w);
 
-    // The trace tail appears on a stop only when it has something to SHOW. A binary without the
-    // `--debugstream` hooks — every binary, by default — would otherwise carry a refusal on every stop
-    // of every session, which is a true sentence nobody asked for. The `trace` command always answers,
-    // refusals included; the stop window is orientation, and orientation stays quiet when it is empty.
-    if (report.Trace is { Status: MaxonDebugger.TraceStatus.Ok, Events.Count: > 0 })
-      RenderTraceText(report.Trace, StopTraceTailLimit, w);
+    if (StopCarriesTrace(report.Trace)) RenderTraceText(report.Trace, StopTraceTailLimit, w);
   }
 
   // ---- Shared renderers: DebugStream correlation (P4e) ----
@@ -1074,6 +1069,25 @@ internal static class MaxonDebugRepl {
   /// header says how many are in it, so the bound can never be mistaken for the whole story.
   /// </summary>
   private const int StopTraceTailLimit = 10;
+
+  /// <summary>
+  /// Does a STOP carry a trace panel at all? Orientation stays quiet when there is nothing to orient
+  /// with: a binary without the `--debugstream` hooks — every binary, by default — would otherwise
+  /// carry a refusal on every stop of every session, which is a true sentence nobody asked for. (The
+  /// `trace` COMMAND always answers, refusals included; that is the difference between a command and
+  /// an orientation panel.)
+  ///
+  /// But it must NOT stay quiet for a window that is empty BECAUSE its contents were lost. "Nothing
+  /// happened" and "everything that happened was thrown away" are different answers, and only the
+  /// second one owes the user a warning — measured: a stop taken while another processor flooded the
+  /// ring reported no trace panel at all while the session had dropped 95,810,410 events.
+  ///
+  /// Stated ONCE because BOTH faces render this panel from the same report, and a predicate written
+  /// twice is two answers to "did this stop show a trace?" waiting to drift apart.
+  /// </summary>
+  private static bool StopCarriesTrace(MaxonDebugger.TraceSliceResult slice) =>
+    slice.Status == MaxonDebugger.TraceStatus.Ok
+    && (slice.Events.Count > 0 || TraceLossText(slice) != null);
 
   /// The message a binary WITHOUT the trace hooks gets. It names the flag, because that is the entire
   /// content of the answer: DebugStream's event emission is opt-in (it costs a load and a branch at
@@ -1130,17 +1144,26 @@ internal static class MaxonDebugRepl {
       w.WriteLine($"  trace: {reason}.");
       return;
     }
+
+    // Read ONCE and rendered on EVERY arm below. The empty arm used to return before it, so a window
+    // whose every event had been dropped or evicted printed "no trace events since the previous stop"
+    // — the JSON face reporting the loss at that same stop, and the two faces disagreeing about what
+    // had happened. Measured: 95,810,410 dropped and 56,122,099 not retained, rendered as "no events".
+    string? loss = TraceLossText(slice);
+
     if (slice.Events.Count == 0) {
-      w.WriteLine("  trace: (no trace events since the previous stop)");
-      return;
+      w.WriteLine(loss is null
+        ? "  trace: (no trace events since the previous stop)"
+        : "  trace: nothing from this window survived to be shown:");
+    } else {
+      int omitted = TraceOmittedCount(slice, limit);
+      var window = omitted > 0 ? $", most recent {slice.Events.Count - omitted}" : "";
+      w.WriteLine($"  trace ({slice.Events.Count} since the previous stop{window}):");
+      for (int i = omitted; i < slice.Events.Count; i++) w.WriteLine($"    {slice.Events[i].Text}");
+      if (omitted > 0) w.WriteLine($"    … {omitted} earlier — 'trace' shows the whole window.");
     }
 
-    int omitted = TraceOmittedCount(slice, limit);
-    var window = omitted > 0 ? $", most recent {slice.Events.Count - omitted}" : "";
-    w.WriteLine($"  trace ({slice.Events.Count} since the previous stop{window}):");
-    for (int i = omitted; i < slice.Events.Count; i++) w.WriteLine($"    {slice.Events[i].Text}");
-    if (omitted > 0) w.WriteLine($"    … {omitted} earlier — 'trace' shows the whole window.");
-    if (TraceLossText(slice) is { } loss) w.WriteLine($"    ⚠ {loss}.");
+    if (loss is { } text) w.WriteLine($"    ⚠ {text}.");
   }
 
   /// <summary>
@@ -1254,11 +1277,9 @@ internal static class MaxonDebugRepl {
 
     WriteBacktraceArray(w, "backtrace", report.Backtrace);
 
-    // Same rule as the text face: the stop event carries a trace array only when there is trace
-    // activity to carry, so a session against an ordinary (non-`--debugstream`) binary emits exactly
-    // the shape it did before this rung, and a consumer that sees the key knows it means something.
-    if (report.Trace is { Status: MaxonDebugger.TraceStatus.Ok, Events.Count: > 0 })
-      WriteTraceArray(w, report.Trace, StopTraceTailLimit);
+    // The SAME predicate the text face applies — see StopCarriesTrace — because "did this stop show a
+    // trace?" must have one answer, whichever face is asking.
+    if (StopCarriesTrace(report.Trace)) WriteTraceArray(w, report.Trace, StopTraceTailLimit);
   });
 
   private static void EmitBacktrace(MaxonDebugger.BacktraceResult bt) => WriteEvent(w => {

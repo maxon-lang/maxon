@@ -1026,7 +1026,7 @@ internal sealed class MaxonDebugger : IDisposable {
         _stopWatermark = seq;
         Thread.MemoryBarrier();
         StopOutstanding = false;
-        AdvanceTraceWindow();
+        ReadStopDsMark();
         return new StopWaitResult(StopWaitStatus.Stopped, new StopInfo(
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopReason),
           _accessor.ReadInt64(RuntimeEmitter.DbgOffStopPc),
@@ -1101,11 +1101,32 @@ internal sealed class MaxonDebugger : IDisposable {
   /// every slice refuses. Empty while the ring is trustworthy.
   private string _traceSchemaMismatch = "";
 
-  /// The window a slice covers: `[_prevStopDsMark, _stopDsMark)`. The lower bound starts at 0 — the
-  /// beginning of the ring — so the FIRST stop's slice is "everything since the program started", which
-  /// is exactly what "since you were last stopped" means when you never were.
-  private long _prevStopDsMark;
+  /// The watermark the CURRENT stop published — updated at EVERY stop the agent takes, including the
+  /// hundreds a source-line step walk takes internally. It is "where the target is now", and it is also
+  /// what carries the <c>DbgStopDsMark*</c> sentinels.
   private long _stopDsMark;
+
+  /// <summary>
+  /// The window a slice reports: `[_windowStart, _windowEnd)`. It starts at 0 — the beginning of the
+  /// ring — so the FIRST stop's slice is "everything since the program started", which is exactly what
+  /// "since you were last stopped" means when you never were.
+  ///
+  /// It is rotated by <see cref="OpenTraceWindow"/> at the stop a FACE asks about, NOT at every stop the
+  /// agent publishes, and the difference is a whole class of lost events rather than a nicety: one
+  /// `next` over a line that allocates is hundreds of agent stops, every one of them published by
+  /// `__dbg_publish_stop` with its own watermark and none of them ever rendered. Rotating there closed
+  /// hundreds of windows nobody read and threw their contents away — measured: a `next` over a line that
+  /// allocated a String reported `trace: []`, and those four events then never appeared in ANY later
+  /// window either. A window boundary belongs where a stop is SEEN.
+  /// </summary>
+  private long _windowStart;
+  private long _windowEnd;
+
+  /// The agent stop sequence <see cref="_windowStart"/>/<see cref="_windowEnd"/> were opened for, so a
+  /// second slice at the same stop answers identically instead of rotating an empty window in behind the
+  /// first. Zero means "no window yet": the agent's first stop bumps the sequence to 1, so no real stop
+  /// can collide with it.
+  private long _traceWindowStopSeq;
 
   /// <summary>
   /// Drain everything the debuggee has committed to the trace ring into the pending window.
@@ -1141,23 +1162,37 @@ internal sealed class MaxonDebugger : IDisposable {
     _traceEvents.Enqueue(e);
   }
 
-  /// <summary>
-  /// Close the window the previous stop opened and open the next one. Called at the instant a new stop
-  /// is observed, NOT when a slice is rendered, so `trace` twice at one stop answers twice the same —
-  /// and so the events the previous window already covered can be released here.
-  /// </summary>
-  private void AdvanceTraceWindow() {
-    long mark = _accessor.ReadInt64(RuntimeEmitter.DbgOffStopDsMark);
+  /// Record the watermark the agent published with this stop. Every stop updates it, because it is
+  /// simply where the target is now; what it does NOT do is move a window boundary — see
+  /// <see cref="OpenTraceWindow"/> for why that has to wait for a face to ask.
+  private void ReadStopDsMark() => _stopDsMark = _accessor.ReadInt64(RuntimeEmitter.DbgOffStopDsMark);
 
-    // A negative mark is a sentinel, not a position (see DbgStopDsMark*), so it cannot move the window's
-    // lower bound; the slice refuses on it instead.
-    if (_stopDsMark >= 0) _prevStopDsMark = _stopDsMark;
-    _stopDsMark = mark;
+  /// <summary>
+  /// Close the window the previous slice reported and open the one ending at the current stop.
+  ///
+  /// Called from <see cref="TraceSlice"/> — that is, at the first slice taken at a stop a FACE is
+  /// showing — and keyed on the agent stop sequence so a second slice at that same stop answers
+  /// identically. Both halves matter, and the first is DERIVED rather than enumerated: the only way this
+  /// runs is a face asking about a stop, so the stops a step walk takes on its own initiative cannot
+  /// rotate the window, without this method knowing anything about stepping and without a list of
+  /// step operations to keep in step with the step operations.
+  ///
+  /// Reached only with a non-negative <see cref="_stopDsMark"/>: every sentinel returns before this
+  /// call, so a window bound is always a real ring position by construction rather than by a guard.
+  /// </summary>
+  private void OpenTraceWindow() {
+    if (_traceWindowStopSeq == _stopWatermark) return;
+    _traceWindowStopSeq = _stopWatermark;
+
+    _windowStart = _windowEnd;
+    _windowEnd = _stopDsMark;
 
     _traceLossAtWindowOpen = _traceLossPending;
     _traceLossPending = new TraceLoss(_trace.DroppedEvents, _traceNotRetained);
 
-    while (_traceEvents.Count > 0 && _traceEvents.Peek().Position < _prevStopDsMark) _traceEvents.Dequeue();
+    // Everything the window just closed already covered is released here — the one point at which some
+    // face has certainly seen it.
+    while (_traceEvents.Count > 0 && _traceEvents.Peek().Position < _windowStart) _traceEvents.Dequeue();
   }
 
   /// Why a trace slice could not be produced. The four refusals stay DISTINCT because each sends the
@@ -1211,12 +1246,14 @@ internal sealed class MaxonDebugger : IDisposable {
       throw new DebuggerException(
         $"the debug agent published an unknown trace watermark {_stopDsMark}");
 
-    bool complete = PumpTraceUntilMark(_stopDsMark);
+    OpenTraceWindow();
+
+    bool complete = PumpTraceUntilMark(_windowEnd);
 
     var events = new List<DsEvent>();
     foreach (var e in _traceEvents) {
-      if (e.Position >= _stopDsMark) break;   // the queue is in ring order, so the window ends here
-      if (e.Position >= _prevStopDsMark) events.Add(e);
+      if (e.Position >= _windowEnd) break;   // the queue is in ring order, so the window ends here
+      if (e.Position >= _windowStart) events.Add(e);
     }
 
     return new TraceSliceResult(TraceStatus.Ok, events,

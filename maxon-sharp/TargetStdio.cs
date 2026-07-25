@@ -72,8 +72,17 @@ internal sealed class TargetStdio {
     return killed;
   }
 
+  /// <summary>
   /// Kill the target and everything it spawned — a debuggee's children are as much this session's
-  /// orphans as the debuggee itself. Tolerates it exiting between the check and the kill (a normal race).
+  /// orphans as the debuggee itself.
+  ///
+  /// Both catches are races rather than defensiveness, and the SECOND arrived with the process-TREE
+  /// kill: <see cref="Process.Kill(bool)"/> reports a descendant it could not reach as an
+  /// <see cref="AggregateException"/>, which the single-process kill this replaced could never throw.
+  /// It must not escape, because this runs from <c>Dispose</c> — where it would MASK the exception that
+  /// ended the session — and because the target itself is dead either way, which is what the caller
+  /// asked for. A descendant that outlived it is the OS's to reap.
+  /// </summary>
   private bool Kill() {
     try {
       if (_process.HasExited) return false;
@@ -82,6 +91,10 @@ internal sealed class TargetStdio {
     } catch (InvalidOperationException) {
       // The process exited between the HasExited check and Kill — already gone, nothing to do.
       return false;
+    } catch (AggregateException) {
+      // Part of the tree could not be killed. The target itself is still gone (it is killed first), so
+      // the session ended; report it as this call's kill.
+      return true;
     }
   }
 
