@@ -3396,9 +3396,10 @@ export type ProgramSignatures
 	// trivial (`Box with SmallInt`). This is the exact gate that tells a crash-prone managed reassignment (the
 	// old value would be leaked and a borrow double-freed by the box's destructor: `0xC0000005` — rejected until
 	// the single-value drop runtime is installable off the array floor) from an all-trivial one (left to the
-	// unchanged plain store). Enumerates the whole instance registry, matching base NAME and reading each
-	// instance's argument at `position` through the SAME `typeArgIsOwned` boundary the box's own per-field drop
-	// gate (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
+	// unchanged plain store). HOW the instances are found is `anyInstanceTypeArgHasKind`'s business and is
+	// described there once; what this gate adds is the KIND — each instance's argument at `position` read
+	// through the SAME `typeArgIsOwned` boundary the box's own per-field drop gate
+	// (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
 	export function genericTypeFieldHasManagedInstantiation(baseName ByteArray, position TypeParamId) returns bool
 		return self.anyInstanceTypeArgHasKind(baseName, position: position, kind: TypeArgInstantiationKind.consumeMoved)
 	end 'genericTypeFieldHasManagedInstantiation'
@@ -3437,8 +3438,9 @@ export type ProgramSignatures
 	// rung cannot deep-clone as a single-function element — a managed-element array (`Array with (Array with
 	// String)`) or a non-Array generic instance (`Box with String`, a later slice) — has no single `copyFunc`,
 	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
-	// with a positioned E2015 at the copy site rather than crash at descriptor emit. Enumerates the whole
-	// instance registry, matching base NAME and reading each instance's argument at `position` through the SAME
+	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
+	// is `anyInstanceTypeArgHasKind`'s business and is described there once; what this gate adds is the KIND —
+	// each instance's argument at `position` read through the SAME
 	// `typeSupportsDeepClone(asElement: true)` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
 	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
 	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
