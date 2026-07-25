@@ -1,9 +1,9 @@
 // P4d-2b green-thread CONTROL gate sample — per-GT park/resume, and `gt <id>` context switch.
 //
-// SINGLE-PROCESSOR by design (the golden pins `--target-env=MAXON_MAX_PROCS=1`): everything this
-// sample asserts is about the debugger OWNING a thread, not about concurrency, and one processor is
-// what makes the transcript byte-stable. The multi-processor half of this rung — a thread found
-// RUNNING on another processor, and `--stop-others` — is DebugSamples/gtmulti.maxon.
+// SINGLE-PROCESSOR by design (`--target-env=MAXON_MAX_PROCS=1`), for TWO reasons and the second is
+// the load-bearing one: one processor makes the transcript byte-stable, AND ⚠ `heldTask` below NESTS
+// `async`, which SEGFAULTS 100% of the time at 3+ processors on the unchanged compiler — a filed
+// pre-existing scheduler defect (`34c3df909`), not this sample's. Multi-processor: gtmulti.maxon.
 //
 // ⭐ THE SHAPE IS WHAT MAKES A PARK PROVABLE WITHOUT WAITING OR POLLING. main awaits the LONG task and
 // parks the SHORT one, so the park's effect is a state at the next breakpoint rather than a duration:

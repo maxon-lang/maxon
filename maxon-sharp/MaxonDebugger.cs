@@ -1229,9 +1229,56 @@ internal sealed class MaxonDebugger : IDisposable {
   /// The frame value inspection reads: the SELECTED green thread's, or the stopped one's when nothing is
   /// selected. Every surface asks this rather than choosing for itself, so `print` cannot read one
   /// thread while `backtrace` shows another.
+  ///
+  /// ⭐ IT RE-LISTS, and NEVER falls back. Both halves are the same defect closed from two directions,
+  /// and the defect is the worst one this rung can produce: `print` answering out of the STOPPED
+  /// thread's frame while the line above it says green thread #5. It happens whenever the selected
+  /// thread's record no longer carries a frame — a `?:` that reaches for the stopped frame cannot tell
+  /// "nothing is selected" from "the selection went stale" — and it happens whenever the record is
+  /// simply OLD, since under the default `--this-gt` every other green thread keeps running through a
+  /// stop. Re-listing is the rule <see cref="ResolveGreenThread"/> already states for every other
+  /// per-thread command and `backtrace` already obeys while a thread is selected; `print` and `locals`
+  /// were the one pair reading whichever listing happened to be last.
+  ///
+  /// A selection that can no longer be honoured THROWS rather than degrading: all four callers already
+  /// report a <see cref="DebuggerException"/>, and a refusal naming the reason is what the user needs —
+  /// the thread they were reading has moved.
   /// </summary>
-  public StopInfo InspectionFrame(StopInfo stopped) =>
-    _selectedGt is { } t && t.InspectionFrame is { } frame ? frame : stopped;
+  public StopInfo InspectionFrame(StopInfo stopped) {
+    if (_selectedGtId is not { } id) return stopped;
+
+    // ResolveGreenThread re-lists; SelectionRefusal then re-asks the very question `gt <id>` asked of
+    // that listing, so a selection that has gone stale is REFUSED rather than quietly becoming the
+    // stopped thread's frame under the selected thread's name.
+    if (ResolveGreenThread(id, out var thread) is null && SelectionRefusal(thread) is null)
+      return thread.InspectionFrame
+        ?? throw new DebuggerException(
+          $"green thread #{id} reports no frame after passing the test that says it has one — the "
+          + "agent's record and this driver's reading of it disagree");
+
+    ClearGreenThreadSelection();
+    throw new DebuggerException(
+      $"green thread #{id} is no longer readable — since it was selected it has resumed onto a "
+      + "processor, completed, or lost its frame. The selection has been dropped; run 'threads' to see "
+      + "which, and 'gt <id>' to select again");
+  }
+
+  /// <summary>
+  /// Why <paramref name="thread"/> cannot BE the inspection surface, or null when it can.
+  ///
+  /// ONE predicate, because THREE places decide it and nothing would make them agree: `gt &lt;id&gt;`
+  /// at selection time, the refresh every later listing performs, and <see cref="InspectionFrame"/>
+  /// itself. They agreed by hand until the refresh was missing the frame clause — and the shape of that
+  /// divergence is not a compile error, it is `backtrace` describing the selected thread one line above
+  /// `print` reading the stopped one's.
+  ///
+  /// The STOPPED thread is deliberately not here: selecting it is not a refusal, it CLEARS the
+  /// selection, because "no selection" already means the stopped thread.
+  /// </summary>
+  private static GtThreadStatus? SelectionRefusal(GreenThread thread) =>
+    thread.OnCpu ? GtThreadStatus.RunningOnCpu
+    : thread.InspectionFrame is null ? GtThreadStatus.NoFrame
+    : null;
 
   /// <summary>
   /// Forget any `gt <id>` selection. Called wherever the target RESUMES, because a selection names a
@@ -1312,7 +1359,7 @@ internal sealed class MaxonDebugger : IDisposable {
     if (_selectedGtId is { } selectedId) {
       GreenThread? refreshed = null;
       foreach (var t in threads) {
-        if (t.Id != selectedId || t.IsStopped || t.OnCpu) continue;
+        if (t.Id != selectedId || t.IsStopped || SelectionRefusal(t) is not null) continue;
         refreshed = t;
         break;
       }
@@ -1466,7 +1513,11 @@ internal sealed class MaxonDebugger : IDisposable {
 
   // ---- Green-thread selection and control (P4d-2b) ----
 
-  public readonly record struct GtSelectResult(GtThreadStatus Status, GreenThread? Thread);
+  /// How a command that named ONE green thread turned out, and which thread it landed on (null when the
+  /// id resolved to none). ONE shape for `gt`, `gt-park` and `gt-resume` alike — they share a status
+  /// vocabulary and a result, so three names for it would be three things to keep in step for no gain.
+  /// <see cref="GtBacktraceResult"/> stays separate because it genuinely carries more: the frames.
+  public readonly record struct GtThreadResult(GtThreadStatus Status, GreenThread? Thread);
 
   /// <summary>
   /// Make <paramref name="id"/> the thread `backtrace`, `print` and `locals` describe.
@@ -1476,23 +1527,20 @@ internal sealed class MaxonDebugger : IDisposable {
   /// spelling of one state — and the two would then have to be kept agreeing about a frame that has
   /// only one source, the stop event itself.
   /// </summary>
-  public GtSelectResult SelectGreenThread(int id) {
+  public GtThreadResult SelectGreenThread(int id) {
     if (ResolveGreenThread(id, out var thread) is { } refusal)
-      return new GtSelectResult(refusal, null);
+      return new GtThreadResult(refusal, null);
 
     if (thread.IsStopped) {
       ClearGreenThreadSelection();
-      return new GtSelectResult(GtThreadStatus.Ok, thread);
+      return new GtThreadResult(GtThreadStatus.Ok, thread);
     }
-    if (thread.OnCpu) return new GtSelectResult(GtThreadStatus.RunningOnCpu, thread);
-    if (thread.InspectionFrame is null) return new GtSelectResult(GtThreadStatus.NoFrame, thread);
+    if (SelectionRefusal(thread) is { } unselectable) return new GtThreadResult(unselectable, thread);
 
     _selectedGtId = id;
     _selectedGt = thread;
-    return new GtSelectResult(GtThreadStatus.Ok, thread);
+    return new GtThreadResult(GtThreadStatus.Ok, thread);
   }
-
-  public readonly record struct GtHoldResult(GtThreadStatus Status, GreenThread? Thread);
 
   /// <summary>
   /// Park one green thread: the scheduler will decline to run it until <see cref="ResumeGreenThread"/>.
@@ -1506,15 +1554,15 @@ internal sealed class MaxonDebugger : IDisposable {
   /// Held for the duration of one stop — and a park that quietly declined to record itself there would
   /// evaporate on the next `continue`, which is the whole thing the user asked for.
   /// </summary>
-  public GtHoldResult ParkGreenThread(int id) {
+  public GtThreadResult ParkGreenThread(int id) {
     if (ResolveGreenThread(id, out var thread) is { } refusal)
-      return new GtHoldResult(refusal, null);
+      return new GtThreadResult(refusal, null);
 
-    if (thread.IsSchedulerThread) return new GtHoldResult(GtThreadStatus.SchedulerThread, thread);
-    if (thread.IsStopped) return new GtHoldResult(GtThreadStatus.StoppedThread, thread);
-    if (thread.OnCpu) return new GtHoldResult(GtThreadStatus.RunningOnCpu, thread);
+    if (thread.IsSchedulerThread) return new GtThreadResult(GtThreadStatus.SchedulerThread, thread);
+    if (thread.IsStopped) return new GtThreadResult(GtThreadStatus.StoppedThread, thread);
+    if (thread.OnCpu) return new GtThreadResult(GtThreadStatus.RunningOnCpu, thread);
 
-    return new GtHoldResult(
+    return new GtThreadResult(
       PostCommand(RuntimeEmitter.DbgCmdGtHold, thread.RecordIndex)
         ? GtThreadStatus.Ok
         : GtThreadStatus.Refused,
@@ -1528,15 +1576,15 @@ internal sealed class MaxonDebugger : IDisposable {
   /// A released thread's selection is dropped: from here it is free to be scheduled, so the frame
   /// `print` would read is no longer one this session can promise is standing still.
   /// </summary>
-  public GtHoldResult ResumeGreenThread(int id) {
+  public GtThreadResult ResumeGreenThread(int id) {
     if (ResolveGreenThread(id, out var thread) is { } refusal)
-      return new GtHoldResult(refusal, null);
+      return new GtThreadResult(refusal, null);
 
     if (!PostCommand(RuntimeEmitter.DbgCmdGtRelease, thread.RecordIndex))
-      return new GtHoldResult(GtThreadStatus.Refused, thread);
+      return new GtThreadResult(GtThreadStatus.Refused, thread);
 
     if (_selectedGtId == id) ClearGreenThreadSelection();
-    return new GtHoldResult(GtThreadStatus.Ok, thread);
+    return new GtThreadResult(GtThreadStatus.Ok, thread);
   }
 
   // ---- Source-line stepping (P4b) ----
