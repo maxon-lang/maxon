@@ -298,6 +298,18 @@ MCP server is a long-lived process, and the dev-MCP is stateless only because it
 whole point of moving it here** — an agent decides what to ask next based on what it just saw, instead of
 having to predict its entire investigation up front.
 
+**Transport is HTTP, not stdio** (user, 2026-07-25) — MCP Streamable HTTP: `POST /mcp`, `application/json`
+or `text/event-stream`, with `initialize` issuing an **`Mcp-Session-Id`** the client echoes thereafter. That
+header is where a live debug session hangs, so session identity comes from the protocol rather than being
+invented. Implemented on `System.Net.HttpListener` (BCL) — **not** ASP.NET Core, which would pull the whole
+web runtime into a compiler binary for a localhost JSON endpoint.
+
+🔴 **Security is a hard requirement here, not a nicety, because this server compiles and runs arbitrary
+programs — an exposed port is remote code execution.** Bind **loopback only**; **validate `Origin`** on every
+request (without it, a page the user merely visits can drive the endpoint); fail loudly on a taken port
+rather than silently choosing another. And note HTTP removes the EOF that stdio gave for free: a client can
+vanish with no signal, so sessions are reaped on shutdown, on `debug_stop`, and on an **idle timeout**.
+
 **It reuses the existing renderers rather than adding a second one.** `MaxonDebugRepl.WriteEvent` already
 builds each event into a buffer and only its final line writes to `Console.Out`; giving it a **sink** makes
 every `Emit*` renderer serve MCP unchanged, and `RunBatchCommand` remains the one command dispatcher. A
