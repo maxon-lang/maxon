@@ -2296,6 +2296,12 @@ end 'CaptureScopeResult'
 //
 // `none` is an ANSWER, not a failure: the name is spelled like a managed binding somewhere in the program
 // but is not visible from THIS file (the file-scoped key), so the shape is not a method call at all.
+//
+// ⚠ **IT IS BUILT ONLY PAST `Parser.managedTopLevelBaseAt`, AND THAT GATE IS A BOOL FOR THIS UNION'S SAKE.**
+// A Maxon union value is a heap object, `none` included, so a version of the gate that answered with this
+// type allocated once per DOTTED CALL in the program instead of once per managed-receiver call site — a
+// measured +3,465 allocations on rung 5 of a corpus that declares no managed binding at all, doubling with
+// the program. The narrow answer is not the cheap one here; the narrow QUESTION is.
 union ManagedReceiverBinding
 	// A managed `let` (P1.7a) — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
 	constant(bytes ByteArray, kind ManagedConstKind)
@@ -16525,9 +16531,35 @@ export type Parser
 		// routes by TAG (String / Array / Set / conformer / struct) and already enforces the one
 		// immutable-receiver rule (`requireMutableReceiver`, E3019). Re-deciding either here would be a
 		// second copy of both.
-		if self.managedTopLevelReceiverAt(self.pos) 'managedTopLevelReceiver'
-			return try self.dispatchManagedTopLevelReceiver(func, baseTok: baseTok, resultUsed: resultUsed)
-		end 'managedTopLevelReceiver'
+		//
+		// ⭐ **THE TWO KINDS ARE TOLD APART BY MATCHING THE RESOLUTION, NOT BY RE-ASKING FOR IT.** Past the
+		// gate this resolves the base ONCE and dispatches on the arms; it used to test a predicate that
+		// resolved it and then resolve it again to build the receiver. The `let` and the `var` differ in
+		// exactly two places — where the value comes from and whether the binding is mutable — and
+		// `mutable` is what makes `Live.push(1)` an E3019 while `Buffer.push(1)` is legal.
+		//
+		// A `none` here is a base spelled like a managed binding but not VISIBLE from this file. It cannot
+		// arrive through `methodCallsAt` (which resolved the same answer and declined the shape), so it
+		// falls through to the capture arm exactly as a non-managed base does — no arm of its own, and no
+		// impossible-state panic asserting a recompute agreed with itself.
+		//
+		// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
+		// receiver-writing method rewrites the RECORD in place and never moves it: `__str_append` grows a
+		// String through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the
+		// element buffer while the 48-byte record stays put (`parseArrayMethodCall` states the same
+		// invariant for a local receiver). So the pointer in the `.data` slot is still the right pointer
+		// after the call, and a store-back would be a second write of a value that did not change. The
+		// loaded pointer is BORROWED — the slot owns it (see `emitGlobalLoad`) — so nothing drops it here
+		// and `__maxon_global_cleanup` releases it at exit.
+		//
+		// A `let`'s literal is re-materialized at the use, exactly as a bare reference to it would be.
+		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
+			match self.managedReceiverBindingOf(baseTok) 'binding'
+				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
+				global(label, valueType) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: true, resultUsed: resultUsed)
+				none then break 'binding'
+			end 'binding'
+		end 'managedTopLevelBase'
 
 		// A CAPTURED enclosing struct is the receiver (P1.5-A2b-2): `b.doubled()` inside a closure that
 		// captures the struct `b`. `methodCallsAt` already gated this — the base is not in the closure's own
@@ -16537,31 +16569,6 @@ export type Parser
 			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a top-level managed binding, nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
 		end 'captured'
 	end 'parseMethodCall'
-
-	// ⭐⭐ **BUILD THE SYNTHETIC BINDING A TOP-LEVEL MANAGED RECEIVER DISPATCHES THROUGH, AND ITS ONE
-	// DIFFERENCE: `mutable`.** The `let` and the `var` arrive at the identical dispatcher with the identical
-	// value shape — a pointer to a managed record — and differ in exactly the question `requireMutableReceiver`
-	// asks, which is what makes `Live.push(1)` an E3019 and `Buffer.push(1)` legal.
-	//
-	// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
-	// receiver-writing method rewrites the RECORD in place and never moves it: `__str_append` grows a String
-	// through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the element
-	// buffer while the 48-byte record stays put (`parseArrayMethodCall` states the same invariant for a local
-	// receiver). So the pointer in the `.data` slot is still the right pointer after the call, and a store-back
-	// would be a second write of a value that did not change.
-	//
-	// The loaded pointer is BORROWED — the slot owns it (see `emitGlobalLoad`) — so it is dropped by nothing
-	// here and by `__maxon_global_cleanup` at exit.
-	function dispatchManagedTopLevelReceiver(func IrFunction, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		match self.managedReceiverBindingOf(baseTok) 'binding'
-			// A `let`: the literal is re-materialized at the use, exactly as a bare reference to it would be,
-			// and the binding is IMMUTABLE — which is what makes `Live.push(1)` E3019.
-			constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
-			// A `var`: the slot's current occupant, loaded, and the binding is MUTABLE.
-			global(label, valueType) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: true, resultUsed: resultUsed)
-			none then panic("dispatchManagedTopLevelReceiver: '{String.from(baseTok.value)}' names no visible managed top-level binding, but `managedTopLevelReceiverAt` gated this call — the two read the same resolution and cannot disagree")
-		end 'binding'
-	end 'dispatchManagedTopLevelReceiver'
 
 	// ⭐ **THE SHAPE OF A SYNTHETIC RECEIVER BINDING, DECIDED ONCE.** A top-level managed receiver is not a
 	// declaration the parser read, so its `VarInfo` is invented here — and every field of it is a claim the
@@ -16619,64 +16626,74 @@ export type Parser
 		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
-	// ⭐ **IS THE `<base> . <member> (` AT `index` A METHOD CALL ON A TOP-LEVEL MANAGED BINDING?** — a
-	// `let` (P1.7a) or a `var` (P1.7 slice 2a). The ONE predicate behind both askers — `methodCallsAt` (is
+	// ⭐ **COULD THE `<base> . <member> (` AT `index` BE A METHOD CALL ON A TOP-LEVEL MANAGED BINDING?** — a
+	// `let` (P1.7a) or a `var` (P1.7 slice 2a). The ONE gate in front of both askers — `methodCallsAt` (is
 	// this token shape a method call at all?) and `parseMethodCall` (build the receiver) — for
 	// `methodCallsAt`'s own stated reason: a receiver test written twice is free to drift, and the drift
 	// is silent.
 	//
+	// **COULD**, not IS: it answers over the whole program's managed NAMES and the competing type-based
+	// readings, and deliberately not over what this FILE can see. Whether the name resolves to a binding
+	// visible here is `managedReceiverBindingOf`'s answer, and both askers go on to ask it — so a `true`
+	// here is permission to resolve, never a claim on the shape.
+	//
 	// ⭐ **BOTH KINDS ANSWER HERE, THROUGH ONE FILTER AND ONE `staticCallClaimsBase`.** They are the same
 	// question — "does this base name a managed record rather than a type?" — and asking it twice would
 	// pay the type-reading probe twice for every managed base and, worse, allow a future rule taught to
-	// one door and not the other. Which KIND it is matters only at the dispatch
-	// (`dispatchManagedTopLevelReceiver`), where it decides `mutable`.
+	// one door and not the other. Which KIND it is matters only to `parseMethodCall`, where it decides
+	// `mutable`, and that comes out of the ONE `managedReceiverBindingOf` below.
+	//
+	// ⚠⚠ **IT RETURNS A BOOL, AND THAT IS A COST DECISION WITH A MEASUREMENT BEHIND IT.** The obvious
+	// tidier shape is to fold this into `managedReceiverBindingOf` and hand every caller the binding — but
+	// a Maxon union VALUE IS A HEAP OBJECT, including the payload-free `none`, so a union-returning gate
+	// allocates once per DOTTED CALL IN THE PROGRAM rather than once per managed-receiver call site.
+	// MEASURED, by building exactly that and running the scale ladder: +441/+873/+1,737/+3,465 allocations
+	// on rungs 2-5 of a corpus that declares no managed binding at all — doubling with the program,
+	// forever. So the gate that decides "may this allocate?" must not itself allocate to say no.
 	//
 	// It takes the base's INDEX rather than its token because the answer needs the MEMBER name too
 	// (`staticCallClaimsBase`), and deriving that from a token would re-assume the cursor is parked on
 	// the base — true at both askers today, and exactly the premise that quietly stops holding.
 	//
-	// ⚠ **THE `namesManagedTopLevel` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
-	// `methodCallsAt` runs at every dotted-call shape in the program, and the file-scoped probes below
-	// BUILD A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). Behind this filter a base
-	// that is not spelled like any managed binding in the program — every static call, `Widget.create(…)`
-	// and `String.from(…)` alike, which is nearly every base that reaches here — costs ONE hash of bytes
-	// it already holds and allocates nothing. `staticCallClaimsBase` sits BEHIND the same filter and
-	// inherits the same model: it runs only for a base actually spelled like a managed binding, so its
-	// mangled-callee probe is off the hot path entirely.
+	// ⚠ **THE `namesManagedTopLevel` FILTER IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
+	// `methodCallsAt` runs at every dotted-call shape in the program, and the file-scoped probes behind
+	// this gate BUILD A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). In front of it a
+	// base that is not spelled like any managed binding in the program — every static call,
+	// `Widget.create(…)` and `String.from(…)` alike, which is nearly every base that reaches here — costs
+	// ONE hash of bytes it already holds and allocates nothing. `staticCallClaimsBase` sits BEHIND the
+	// same filter and inherits the same model: it runs only for a base actually spelled like a managed
+	// binding, so its mangled-callee probe is off the hot path entirely.
 	//
 	// It is a NAME set rather than a whole-program bool for a measured reason: a bool goes permanently
 	// true at the first managed binding, and every static dotted call in the program then pays the full
 	// probe to be told no. See `ProgramSignatures.managedTopLevelNames`.
-	function managedTopLevelReceiverAt(index TokenIndex) returns bool
-		let tok = self.tokenAt(index)
-		if not self.signatures.namesManagedTopLevel(tok.value) 'notAManagedName'
+	function managedTopLevelBaseAt(index TokenIndex) returns bool
+		if not self.signatures.namesManagedTopLevel(self.tokenAt(index).value) 'notAManagedName'
 			return false
 		end 'notAManagedName'
 
-		if self.staticCallClaimsBase(index) 'typeReadingWins'
-			return false
-		end 'typeReadingWins'
+		return not self.staticCallClaimsBase(index)
+	end 'managedTopLevelBaseAt'
 
-		return match self.managedReceiverBindingOf(tok) 'binding'
-			constant to global gives true
-			none gives false
-		end 'binding'
-	end 'managedTopLevelReceiverAt'
-
-	// ⭐ **WHAT A MANAGED TOP-LEVEL NAME DENOTES AT A RECEIVER POSITION — resolved ONCE, read twice.** The
-	// predicate above asks it to decide whether the token shape is a method call at all; the dispatch below
-	// asks it to build the receiver. Two probes with two arm orders would be two encodings of "which door
-	// claims this name", and the failure mode is silent: the predicate claiming the shape for a door the
-	// dispatch then resolves differently ends in the `none` panic at best and a wrong receiver at worst.
+	// ⭐ **WHAT A MANAGED TOP-LEVEL NAME DENOTES AT A RECEIVER POSITION — the ONE resolution**, asked by
+	// both readers past `managedTopLevelBaseAt`: `methodCallsAt` to decide whether the token shape is a
+	// method call at all, `parseMethodCall` to build the receiver. Two probes with two arm orders would be
+	// two encodings of "which door claims this name", and the failure mode is silent — one door claiming
+	// the shape and the other resolving it differently.
 	//
 	// One storage key holds ONE declaration (`recordDecl` is first-wins on it), so the two doors are
 	// disjoint by construction and the order below is a cost preference, not a precedence: the constant is
 	// asked first because a managed `let` is the commoner declaration.
 	//
-	// ⚠ It BOXES a union per call, and that is affordable only because of the caller's name filter: it runs
-	// solely for a base actually spelled like a managed binding, i.e. once per managed-receiver call SITE at
-	// parse time, never per dotted call in the program (see `managedTopLevelReceiverAt`'s cost note). A
-	// program with no managed binding — the whole scale corpus — allocates nothing here.
+	// ⚠ It BOXES a union per call — `none` included, which is why the GATE in front of it is a bool. That
+	// is affordable only because of the gate: it runs solely for a base actually spelled like a managed
+	// binding, i.e. once per managed-receiver call SITE at parse time, never per dotted call in the program.
+	// A program with no managed binding — the whole scale corpus — never reaches it. MEASURED: the box is 1
+	// allocation, and `parseMethodCall` used to pay it twice more, testing this as a predicate and then
+	// re-resolving the identical name to build the receiver. A 16,384-site same-lineage ladder read that
+	// recompute as exactly 12.000 allocations per managed-`var` site and 6.000 per managed-`let` site; it
+	// showed up in the code as an impossible-state `none` panic whose whole justification was "the two read
+	// the same resolution and cannot disagree". Passing the answer along makes that true by construction.
 	function managedReceiverBindingOf(tok Token) returns ManagedReceiverBinding
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			found then break 'constant'
@@ -21636,13 +21653,28 @@ export type Parser
 		// top-level MANAGED BINDING (`Live.count()` — P1.7a; `msg.append("!")` — P1.7 slice 2a). Each is a
 		// VALUE the method dispatches on, which is what separates it from a static call on a TYPE name. The
 		// managed binding is asked LAST because it is the only one of the three that can allocate (see
-		// `managedTopLevelReceiverAt`), and a local or captured base has already answered by then.
+		// `managedTopLevelBaseAt`), and a local or captured base has already answered by then.
 		//
 		// ⚠ The managed binding is ALSO the only one of the three whose name can belong to a declared
 		// TYPE as well — which is why it, alone, has to weigh itself against the type-based readings of
 		// this same shape (`staticCallClaimsBase`) rather than simply claiming it.
 		let baseTok = self.tokenAt(index)
-		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) or self.managedTopLevelReceiverAt(index)
+		if self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) 'localOrCaptured'
+			return true
+		end 'localOrCaptured'
+
+		// The GATE first and the resolution second, in that order and never fused: the gate is a bool and
+		// allocates nothing, and everything past it boxes a union (see `managedTopLevelBaseAt`). A
+		// LOOKAHEAD can only answer yes/no anyway — it runs at token shapes the parser has not committed
+		// to, so there is nowhere to hand a resolution even if it had one.
+		if not self.managedTopLevelBaseAt(index) 'notAManagedBase'
+			return false
+		end 'notAManagedBase'
+
+		return match self.managedReceiverBindingOf(baseTok) 'managed'
+			constant to global gives true
+			none gives false
+		end 'managed'
 	end 'methodCallsAt'
 
 	// **The token shape of a `__Builtins` INTRINSIC CALL STATEMENT** — `__Builtins . <member> (`, the one
