@@ -5,72 +5,102 @@
 typealias VectorIndex = int(0 to 5500)
 typealias Iteration = int(0 to 10)
 typealias VectorComponent = float(0.0 to f64.max)
-typealias Vector = Array with VectorComponent
 
-function evalA(row VectorIndex, col VectorIndex) returns VectorComponent
+// evalA works in floats so that its reciprocal has a float divisor: an int divisor
+// cannot carry the non-zero proof for a float divide. Every value below 2^53 is
+// exact in a double, so this is the same arithmetic the integer form performed.
+typealias MatrixIndex = float(0.0 to 5500.0)
+
+// evalA's divisor, (s(s+1))/2 + row + 1 for s = row + col. It is at least 1 for any
+// non-negative row and col — which is what makes the reciprocal a plain `/` rather
+// than a throwing one — and at most its value at row = col = 5500.
+typealias MatrixDenominator = float(1.0 to 60511001.0)
+
+// Smallest positive normal double: the claim this type makes is "not zero", and
+// nothing stronger.
+typealias RayleighDenominator = float(2.2250738585072014e-308 to f64.max)
+
+// Not `Vector`: stdlib exports a `Vector` type of its own, and shadowing it here
+// makes the whole program's `Vector.*` calls resolve to a stdlib method that was
+// never instantiated.
+typealias ComponentVector = Array with VectorComponent
+
+let problemSize = 5500 as VectorIndex
+let powerIterations = 10 as Iteration
+
+function evalA(row MatrixIndex, col MatrixIndex) returns VectorComponent
 	let indexSum = row + col
-	let denominator = ((indexSum * (indexSum + 1)) / 2) + row + 1
+	let denominator = (((indexSum * (indexSum + 1.0)) / 2.0) + row + 1.0) as MatrixDenominator
+
 	return 1.0 / denominator
 end 'evalA'
 
-function multiplyByMatrix(resultVector Vector, inputVector Vector, dimension VectorIndex)
+function multiplyByMatrix(resultVector ComponentVector, inputVector ComponentVector, dimension VectorIndex)
 	for row in 0 upto dimension 'outer'
 		var accumulator = 0.0
+
 		for col in 0 upto dimension 'inner'
-			let inputComponent = try inputVector.get(col) otherwise 0.0
-			accumulator = accumulator + (inputComponent * evalA(VectorIndex{row}, col: VectorIndex{col}))
+			let inputComponent = try inputVector.get(col) otherwise panic("multiplyByMatrix: col < dimension and inputVector holds dimension components")
+			accumulator = accumulator + (inputComponent * evalA(row, col: col))
 		end 'inner'
-		resultVector.set(row, value: accumulator)
+
+		try resultVector.set(row, value: accumulator) otherwise panic("multiplyByMatrix: row < dimension and resultVector holds dimension components")
 	end 'outer'
 end 'multiplyByMatrix'
 
-function multiplyByTranspose(resultVector Vector, inputVector Vector, dimension VectorIndex)
+function multiplyByTranspose(resultVector ComponentVector, inputVector ComponentVector, dimension VectorIndex)
 	for row in 0 upto dimension 'outer'
 		var accumulator = 0.0
+
 		for col in 0 upto dimension 'inner'
-			let inputComponent = try inputVector.get(col) otherwise 0.0
-			accumulator = accumulator + (inputComponent * evalA(VectorIndex{col}, col: VectorIndex{row}))
+			let inputComponent = try inputVector.get(col) otherwise panic("multiplyByTranspose: col < dimension and inputVector holds dimension components")
+			accumulator = accumulator + (inputComponent * evalA(col, col: row))
 		end 'inner'
-		resultVector.set(row, value: accumulator)
+
+		try resultVector.set(row, value: accumulator) otherwise panic("multiplyByTranspose: row < dimension and resultVector holds dimension components")
 	end 'outer'
 end 'multiplyByTranspose'
 
-function applyAtA(resultVector Vector, inputVector Vector, workspace Vector, dimension VectorIndex)
+function applyAtA(resultVector ComponentVector, inputVector ComponentVector, workspace ComponentVector, dimension VectorIndex)
 	multiplyByMatrix(workspace, inputVector: inputVector, dimension: dimension)
 	multiplyByTranspose(resultVector, inputVector: workspace, dimension: dimension)
 end 'applyAtA'
 
 function main() returns ExitCode
-	let problemSize = VectorIndex{5500}
-
-	var eigenvector = Vector.create()
-	eigenvector.resize(5500)
-	var previousVector = Vector.create()
-	previousVector.resize(5500)
-	var workspace = Vector.create()
-	workspace.resize(5500)
+	var eigenvector = ComponentVector.create()
+	eigenvector.resize(problemSize)
+	var previousVector = ComponentVector.create()
+	previousVector.resize(problemSize)
+	var workspace = ComponentVector.create()
+	workspace.resize(problemSize)
 
 	for index in 0 upto problemSize 'init'
-		eigenvector.set(index, value: 1.0)
+		try eigenvector.set(index, value: 1.0) otherwise panic("main: index < problemSize and eigenvector holds problemSize components")
 	end 'init'
 
-	var iteration = Iteration{0}
-	while iteration < 10 'iterate'
+	var iteration = 0 as Iteration
+	while iteration < powerIterations 'iterate'
 		applyAtA(previousVector, inputVector: eigenvector, workspace: workspace, dimension: problemSize)
 		applyAtA(eigenvector, inputVector: previousVector, workspace: workspace, dimension: problemSize)
-		iteration = Iteration{iteration + 1}
+		iteration = (iteration + 1) as Iteration
 	end 'iterate'
 
 	var numerator = 0.0
 	var denominator = 0.0
+
 	for index in 0 upto problemSize 'rayleigh'
-		let uComponent = try eigenvector.get(index) otherwise 0.0
-		let vComponent = try previousVector.get(index) otherwise 0.0
+		let uComponent = try eigenvector.get(index) otherwise panic("main: index < problemSize and eigenvector holds problemSize components")
+		let vComponent = try previousVector.get(index) otherwise panic("main: index < problemSize and previousVector holds problemSize components")
 		numerator = numerator + (uComponent * vComponent)
 		denominator = denominator + (vComponent * vComponent)
 	end 'rayleigh'
 
-	let spectralNorm = sqrt(numerator / denominator)
+	// Power iteration from an all-ones start leaves `previousVector` a scaled
+	// eigenvector of a matrix with strictly positive entries, so its squared norm
+	// is strictly positive. Stating that in the type is what lets `/` compile
+	// without a `try`; a degenerate run panics rather than dividing to infinity.
+	let squaredNorm = denominator as RayleighDenominator
+	let spectralNorm = sqrt(numerator / squaredNorm)
 
 	return trunc(spectralNorm * 1000000000.0)
 end 'main'

@@ -1,13 +1,26 @@
 // N-Body simulation from Computer Language Benchmarks Game
 // https://benchmarksgame-team.pages.debian.net/benchmarksgame/program/nbody-rust-1.html
 //
-// Expected output (9 decimal places):
+// Reference energies, before and after the 50,000,000 steps, to 9 decimal places:
 // -0.169075164
 // -0.169059907
+// Interpolating a float renders 6 decimal places, so the two lines print as
+// -0.169075 and -0.16906.
 
 typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
 typealias PlanetArray = Array with Planet
+
+// Every divisor below is positive by construction: the solar mass is 4*PI*PI, and a
+// gravitational divisor is a norm of the separation between two DISTINCT bodies. Saying
+// so in the type is what keeps `/` a plain divide; a quantity that ever did reach zero
+// panics at the narrowing instead of silently producing an infinity. The bound is the
+// smallest positive normal double — the claim is "not zero", and nothing stronger.
+typealias PositiveDivisor = float(2.2250738585072014e-308 to f64.max)
+
+let bodyCount = 5
+let solarMass = 39.478417604357432 as PositiveDivisor  // 4.0 * PI * PI
+let daysPerYear = 365.24
 
 type Planet
 	export var x as Real
@@ -24,97 +37,63 @@ type Planet
 end 'Planet'
 
 function initBodies(bodies PlanetArray)
-	// Constants
-	let SOLAR_MASS = 39.478417604357432  // 4.0 * PI * PI
-	let DAYS_PER_YEAR = 365.24
+	// The Sun starts at the origin at rest; offsetMomentum then gives it the velocity
+	// that zeroes the system's total momentum.
+	let sun = Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: solarMass)
 
-	// Sun (at origin with zero velocity initially)
-	bodies.set(0, value: Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: SOLAR_MASS))
+	// One call per line: an argument list does not continue across a newline.
+	let jupiter = Planet.create(4.84143144246472090e+00, y: -1.16032004402742839e+00, z: -1.03622044471123109e-01, vx: 1.66007664274403694e-03 * daysPerYear, vy: 7.69901118419740425e-03 * daysPerYear, vz: -6.90460016972063023e-05 * daysPerYear, mass: 9.54791938424326609e-04 * solarMass)
+	let saturn = Planet.create(8.34336671824457987e+00, y: 4.12479856412430479e+00, z: -4.03523417114321381e-01, vx: -2.76742510726862411e-03 * daysPerYear, vy: 4.99852801234917238e-03 * daysPerYear, vz: 2.30417297573763929e-05 * daysPerYear, mass: 2.85885980666130812e-04 * solarMass)
+	let uranus = Planet.create(1.28943695621391310e+01, y: -1.51111514016986312e+01, z: -2.23307578892655734e-01, vx: 2.96460137564761618e-03 * daysPerYear, vy: 2.37847173959480950e-03 * daysPerYear, vz: -2.96589568540237556e-05 * daysPerYear, mass: 4.36624404335156298e-05 * solarMass)
+	let neptune = Planet.create(1.53796971148509165e+01, y: -2.59193146099879641e+01, z: 1.79258772950371181e-01, vx: 2.68067772490389322e-03 * daysPerYear, vy: 1.62824170038242295e-03 * daysPerYear, vz: -9.51592254519715870e-05 * daysPerYear, mass: 5.15138902046611451e-05 * solarMass)
 
-	// Jupiter
-	bodies.set(1, value: Planet.create(
-	4.84143144246472090e+00,
-	y: -1.16032004402742839e+00,
-	z: -1.03622044471123109e-01,
-	vx: 1.66007664274403694e-03 * DAYS_PER_YEAR,
-	vy: 7.69901118419740425e-03 * DAYS_PER_YEAR,
-	vz: -6.90460016972063023e-05 * DAYS_PER_YEAR,
-	mass: 9.54791938424326609e-04 * SOLAR_MASS
-	))
-
-	// Saturn
-	bodies.set(2, value: Planet.create(
-	8.34336671824457987e+00,
-	y: 4.12479856412430479e+00,
-	z: -4.03523417114321381e-01,
-	vx: -2.76742510726862411e-03 * DAYS_PER_YEAR,
-	vy: 4.99852801234917238e-03 * DAYS_PER_YEAR,
-	vz: 2.30417297573763929e-05 * DAYS_PER_YEAR,
-	mass: 2.85885980666130812e-04 * SOLAR_MASS
-	))
-
-	// Uranus
-	bodies.set(3, value: Planet.create(
-	1.28943695621391310e+01,
-	y: -1.51111514016986312e+01,
-	z: -2.23307578892655734e-01,
-	vx: 2.96460137564761618e-03 * DAYS_PER_YEAR,
-	vy: 2.37847173959480950e-03 * DAYS_PER_YEAR,
-	vz: -2.96589568540237556e-05 * DAYS_PER_YEAR,
-	mass: 4.36624404335156298e-05 * SOLAR_MASS
-	))
-
-	// Neptune
-	bodies.set(4, value: Planet.create(
-	1.53796971148509165e+01,
-	y: -2.59193146099879641e+01,
-	z: 1.79258772950371181e-01,
-	vx: 2.68067772490389322e-03 * DAYS_PER_YEAR,
-	vy: 1.62824170038242295e-03 * DAYS_PER_YEAR,
-	vz: -9.51592254519715870e-05 * DAYS_PER_YEAR,
-	mass: 5.15138902046611451e-05 * SOLAR_MASS
-	))
+	try bodies.set(0, value: sun) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
+	try bodies.set(1, value: jupiter) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
+	try bodies.set(2, value: saturn) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
+	try bodies.set(3, value: uranus) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
+	try bodies.set(4, value: neptune) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
 end 'initBodies'
 
 function offsetMomentum(bodies PlanetArray, n Integer)
-	let SOLAR_MASS = 39.478417604357432  // 4.0 * PI * PI
-
 	var px = 0.0
 	var py = 0.0
 	var pz = 0.0
 
 	for i in 0 upto n 'momentum_loop'
-		var body = try bodies.get(i) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
+		let body = try bodies.get(i) otherwise panic("offsetMomentum: i < n and the array is sized n")
 		px = px + body.vx * body.mass
 		py = py + body.vy * body.mass
 		pz = pz + body.vz * body.mass
 	end 'momentum_loop'
 
-	var sun = try bodies.get(0) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
-	sun.vx = -px / SOLAR_MASS
-	sun.vy = -py / SOLAR_MASS
-	sun.vz = -pz / SOLAR_MASS
-	bodies.set(0, value: sun)
+	// `get` hands back the element itself, not a copy of it, so assigning a field
+	// updates the body in the array; there is no write-back to make.
+	var sun = try bodies.get(0) otherwise panic("offsetMomentum: the array is sized n >= 1")
+	sun.vx = -px / solarMass
+	sun.vy = -py / solarMass
+	sun.vz = -pz / solarMass
 end 'offsetMomentum'
 
 function energy(bodies PlanetArray, n Integer) returns Real
 	var e = 0.0
 
 	for i in 0 upto n 'outer_energy'
-		var bi = try bodies.get(i) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
+		let bi = try bodies.get(i) otherwise panic("energy: i < n and the array is sized n")
+
 		// Kinetic energy: 0.5 * m * v^2
 		e = e + 0.5 * bi.mass * (bi.vx * bi.vx + bi.vy * bi.vy + bi.vz * bi.vz)
 
 		// Potential energy with other bodies
 		var j = i + 1
+
 		while j < n 'inner_energy'
-			var bj = try bodies.get(j) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
+			let bj = try bodies.get(j) otherwise panic("energy: j < n and the array is sized n")
 			let dx = bi.x - bj.x
 			let dy = bi.y - bj.y
 			let dz = bi.z - bj.z
 
-			let distance = sqrt(dx * dx + dy * dy + dz * dz)
-			e = e - (bi.mass * bj.mass) / distance
+			let separation = sqrt(dx * dx + dy * dy + dz * dz) as PositiveDivisor
+			e = e - (bi.mass * bj.mass) / separation
 
 			j = j + 1
 		end 'inner_energy'
@@ -123,70 +102,70 @@ function energy(bodies PlanetArray, n Integer) returns Real
 	return e
 end 'energy'
 
+// `get` hands back the element itself, not a copy of it, so every field assignment
+// below updates the body in the array and no write-back is needed.
 function advance(bodies PlanetArray, n Integer, dt Real)
 	for i in 0 upto n 'outer_advance'
-		var bi = try bodies.get(i) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
+		var bi = try bodies.get(i) otherwise panic("advance: i < n and the array is sized n")
 		var j = i + 1
+
 		while j < n 'inner_advance'
-			var bj = try bodies.get(j) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
+			var bj = try bodies.get(j) otherwise panic("advance: j < n and the array is sized n")
 			let dx = bi.x - bj.x
 			let dy = bi.y - bj.y
 			let dz = bi.z - bj.z
 
-			let dist_sq = dx * dx + dy * dy + dz * dz
-			let distance = sqrt(dist_sq)
-			let mag = dt / (dist_sq * distance)
+			let separationSquared = dx * dx + dy * dy + dz * dz
+			let separationCubed = (separationSquared * sqrt(separationSquared)) as PositiveDivisor
+			let mag = dt / separationCubed
 
-			let bj_mass_mag = bj.mass * mag
-			let bi_mass_mag = bi.mass * mag
+			let bjMassMag = bj.mass * mag
+			let biMassMag = bi.mass * mag
 
-			bi.vx = bi.vx - dx * bj_mass_mag
-			bi.vy = bi.vy - dy * bj_mass_mag
-			bi.vz = bi.vz - dz * bj_mass_mag
+			bi.vx = bi.vx - dx * bjMassMag
+			bi.vy = bi.vy - dy * bjMassMag
+			bi.vz = bi.vz - dz * bjMassMag
 
-			bj.vx = bj.vx + dx * bi_mass_mag
-			bj.vy = bj.vy + dy * bi_mass_mag
-			bj.vz = bj.vz + dz * bi_mass_mag
+			bj.vx = bj.vx + dx * biMassMag
+			bj.vy = bj.vy + dy * biMassMag
+			bj.vz = bj.vz + dz * biMassMag
 
-			bodies.set(j, value: bj)
 			j = j + 1
 		end 'inner_advance'
-		bodies.set(i, value: bi)
 	end 'outer_advance'
 
 	// Update positions
 	for k in 0 upto n 'update_positions'
-		var body = try bodies.get(k) otherwise Planet.create(0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0)
+		var body = try bodies.get(k) otherwise panic("advance: k < n and the array is sized n")
 		body.x = body.x + dt * body.vx
 		body.y = body.y + dt * body.vy
 		body.z = body.z + dt * body.vz
-		bodies.set(k, value: body)
 	end 'update_positions'
 end 'advance'
 
 function main() returns ExitCode
-	let n = 5  // Number of bodies
+	let steps = 50000000
+	let timeStep = 0.01
+
 	var bodies = PlanetArray.create()
-	bodies.resize(5)
+	bodies.resize(bodyCount)
 
 	initBodies(bodies)
-	offsetMomentum(bodies, n: n)
+	offsetMomentum(bodies, n: bodyCount)
 
 	// Print initial energy
-	let e1 = energy(bodies, n: n)
-	print("{e1}")
+	let e1 = energy(bodies, n: bodyCount)
+	print("{e1}\n")
 
-	// Run simulation for 50,000,000 steps
-	let steps = 50000000
 	var step = 0
 	while step < steps 'simulation'
-		advance(bodies, n: n, dt: 0.01)
+		advance(bodies, n: bodyCount, dt: timeStep)
 		step = step + 1
 	end 'simulation'
 
 	// Print final energy
-	let e2 = energy(bodies, n: n)
-	print("{e2}")
+	let e2 = energy(bodies, n: bodyCount)
+	print("{e2}\n")
 
 	return 0
 end 'main'
