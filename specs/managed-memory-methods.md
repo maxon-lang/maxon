@@ -355,7 +355,7 @@ end 'main'
 
 ### Shrinking frees dropped elements
 
-Shrinking a buffer of managed elements (via `setLength`/`Array.resize` to a smaller
+Shrinking a buffer of managed elements (via `setLength`/`Array.truncate` to a smaller
 length) must release the elements leaving the live range, or they leak. Every test
 below runs under the leak gate (no compiler stderr expected → leak-checked), so a
 dropped element that is not freed fails the test.
@@ -370,7 +370,7 @@ function main() returns ExitCode
 	xs.push("first heap string long enough to require an allocation")
 	xs.push("second heap string long enough to require an allocation")
 	xs.push("third heap string long enough to require an allocation")
-	xs.resize(1)
+	xs.truncate(1)
 	return xs.count() as ExitCode
 end 'main'
 ```
@@ -398,7 +398,7 @@ function main() returns ExitCode
 	boxes.push(Box.create("box two with a heap string payload long enough"))
 	boxes.push(Box.create("box three with a heap string payload long enough"))
 	boxes.push(Box.create("box four with a heap string payload long enough"))
-	boxes.resize(2)
+	boxes.truncate(2)
 	return boxes.count() as ExitCode
 end 'main'
 ```
@@ -434,7 +434,7 @@ function main() returns ExitCode
 	var xs = StrArray.create()
 	xs.push("only string payload long enough to need a heap allocation")
 	xs.push("other string payload long enough to need a heap allocation")
-	xs.resize(0)
+	xs.truncate(0)
 	return xs.count() as ExitCode
 end 'main'
 ```
@@ -454,7 +454,7 @@ function main() returns ExitCode
 	xs.push("first string payload long enough to need a heap allocation")
 	xs.push("second string payload long enough to need a heap allocation")
 	xs.push("third string payload long enough to need a heap allocation")
-	xs.resize(1)
+	xs.truncate(1)
 	xs.push("replacement payload long enough to need a heap allocation here")
 	let v = try xs.get(1) otherwise ""
 	return v.count() as ExitCode
@@ -469,9 +469,11 @@ end 'main'
 THE CAPACITY-SLOT INVARIANT: the slots in `[length, capacity)` are always zero. So
 growing the length — `resize`, or `setLength` directly — can only ever expose zeroed
 slots, whether they are fresh capacity or slots the array used before and gave up.
+(A MANAGED element type reaches this only through `setLength`: `Array.resize` on one is
+refused at compile time, E3106, because a zeroed slot there holds no element.)
 
 Every operation that VACATES a slot erases it on the way out: `clear`, `remove`/`pop`,
-and a shrinking `resize`. Without that, growing back over a vacated slot re-exposes
+and a shrinking `setLength` — which is what `resize` and `truncate` both go through. Without that, growing back over a vacated slot re-exposes
 whatever it held — a stale scalar (silent garbage), or, far worse, a pointer the array
 has already released, which its destructor then decrefs a SECOND time (a double free
 reachable from ordinary, non-unsafe API).
@@ -524,10 +526,15 @@ end 'main'
 0
 ```
 
-<!-- test: clear-then-resize-managed-no-double-free -->
-`clear()` RELEASES the elements; `resize()` back over those slots must not restore the
-length over the dead pointers, or the array's destructor decrefs each of them a second
-time. Every regrown slot must read as EMPTY.
+<!-- test: clear-then-regrow-managed-no-double-free -->
+`clear()` RELEASES the elements; restoring the length back over those slots must not restore
+it over the dead pointers, or the array's destructor decrefs each of them a second time.
+Every regrown slot must read as EMPTY.
+
+The regrow goes through `setLength` rather than `Array.resize` because `resize` on a
+managed-element array is refused at compile time (**E3106**) — a grown slot holds no element.
+This buffer is exactly the case that refusal describes, and `__ManagedMemory` is the layer
+that still offers the operation and owns the invariant being tested.
 ```maxon
 typealias StrArray = Array with String
 
@@ -537,7 +544,7 @@ function main() returns ExitCode
 		a.push("value-{i} padded out so this string needs a heap allocation")
 	end 'fill'
 	a.clear()
-	a.resize(4)
+	try a.managed.setLength(4) otherwise panic("setLength: clear() keeps the capacity the four pushes bought")
 
 	var empties = 0
 	for j in 0 upto 4 'read'
@@ -553,10 +560,10 @@ end 'main'
 4
 ```
 
-<!-- test: shrink-then-resize-managed-no-double-free -->
-The same shape through the SHRINK path rather than `clear`: `resize(1)` releases the
-two dropped strings, `resize(3)` grows back over their slots. The dropped pointers must
-not reappear.
+<!-- test: shrink-then-regrow-managed-no-double-free -->
+The same shape through the SHRINK path rather than `clear`: `truncate(1)` releases the
+two dropped strings, and the length then grows back over their slots. The dropped pointers
+must not reappear.
 ```maxon
 typealias StrArray = Array with String
 
@@ -565,8 +572,8 @@ function main() returns ExitCode
 	a.push("alpha payload long enough to need a heap allocation here")
 	a.push("beta payload long enough to need a heap allocation here")
 	a.push("gamma payload long enough to need a heap allocation here")
-	a.resize(1)
-	a.resize(3)
+	a.truncate(1)
+	try a.managed.setLength(3) otherwise panic("setLength: truncate keeps the capacity the three pushes bought")
 
 	var empties = 0
 	for j in 1 upto 3 'read'
@@ -587,7 +594,7 @@ end 'main'
 kept=56 empties=2
 ```
 
-<!-- test: pop-then-resize-managed-no-double-free -->
+<!-- test: pop-then-regrow-managed-no-double-free -->
 `pop()` hands its element to the caller — the array no longer owns it — but the slot
 still holds the pointer. Growing back over that slot must not re-adopt an element the
 caller now owns, or it is freed twice.
@@ -599,7 +606,7 @@ function main() returns ExitCode
 	a.push("one payload long enough to need a heap allocation here")
 	a.push("two payload long enough to need a heap allocation here")
 	let popped = try a.pop() otherwise ""
-	a.resize(2)
+	try a.managed.setLength(2) otherwise panic("setLength: pop leaves the capacity the two pushes bought")
 
 	let regrown = try a.get(1) otherwise ""
 	print("popped={popped.count()} regrown={regrown.count()}\n")

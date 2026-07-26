@@ -2818,7 +2818,7 @@ print("Status: {"on" if flag else "off"}")
 
 ### Array Access
 
-Array elements are accessed using the `.get()` method, which throws `ArrayError.indexOutOfBounds` if the index is out of range, or `ArrayError.emptySlot` if the slot at that index is empty (null pointer, e.g. after `resize()` without filling every slot):
+Array elements are accessed using the `.get()` method, which throws `ArrayError.indexOutOfBounds` if the index is at or past `count()`, or `ArrayError.emptySlot` if the index is INSIDE `count()` and the slot there was never filled (a null pointer — only reachable for a managed element type, and only through the raw `__ManagedMemory.setLength` layer, since `Array.resize` on such a type is refused at compile time):
 ```maxon
 var arr = [1, 2, 3, 4, 5]
 var first = try arr.get(0) otherwise 0
@@ -2854,11 +2854,27 @@ buffer.set(0, value: 42)         // Can set any index 0-99
 
 The zero-initialization holds for slots the array has used *before*, not just for
 freshly allocated ones — growing back over slots given up by `clear()`, `remove()`,
-`pop()`, or a shrinking `resize()` also reads back zeros. Those operations erase each
-slot as they vacate it, so the slots between `count()` and `capacity()` are always
-zero. For an array of a managed element type (e.g. `Array with String`) a regrown slot
-is EMPTY rather than zero-valued, and `get` on it throws instead of handing back an
-element the array no longer owns.
+`pop()`, or a shrinking `resize()`/`truncate()` also reads back zeros. Those operations
+erase each slot as they vacate it, so the slots between `count()` and `capacity()` are
+always zero.
+
+`resize` is available only where a zero IS an element, so only for an element stored
+INLINE (an `int`, a `float`, a `bool`, a `byte`, a ranged typealias over one of those, a
+payload-free enum). A MANAGED element type — a struct, a `String`, a nested container, a
+boxed union — is stored as a pointer, a zeroed slot there is a NULL rather than a value,
+and Maxon has no default constructor to make one; `resize` on such an array is refused at
+compile time (**E3106**), naming the element type. Grow one with `push(value)` or
+`growFilled(newLength, value:)`, which supply the element, and shrink one with
+`truncate(newLength)`, which needs none:
+
+```maxon
+typealias StrArray = Array with String
+
+var names = StrArray.create()
+names.growFilled(3, value: "")   // three real, empty Strings
+names.push("ada")                // append one
+names.truncate(2)                // drop the tail, releasing what leaves
+```
 
 To preallocate capacity without changing length (for performance):
 ```maxon
@@ -3825,7 +3841,7 @@ The standard library provides error types for built-in operations:
 // Array access errors
 enum ArrayError implements Error
 		indexOutOfBounds  // index >= length
-		emptySlot         // slot pointer is null (e.g. after resize() without push())
+		emptySlot         // index < length, but that slot was never filled (a null pointer)
 end 'ArrayError'
 
 // Map operations

@@ -147,7 +147,7 @@ end 'main'
 ```
 
 <!-- test: try-otherwise-error-fallback-outlives-read -->
-The `otherwise` fallback of a `try` over a managed-borrow accessor is a fresh owned box that must live until the merged binding is READ, not be freed on the error edge. Here slot 1 is empty (only slot 0 was pushed), so the error edge runs and the binding is the fallback `Slot.create(-7)`; `result.value` must read `-7`. If the fallback were freed on the error edge before the read, the field read would see a dead box. (See the ⚠ note above: this passes on the shipped allocator regardless — it is a poison-only regression guard.)
+The `otherwise` fallback of a `try` over a managed-borrow accessor is a fresh owned box that must live until the merged binding is READ, not be freed on the error edge. Here index 1 is past the end (only slot 0 was pushed), so the error edge runs and the binding is the fallback `Slot.create(-7)`; `result.value` must read `-7`. If the fallback were freed on the error edge before the read, the field read would see a dead box. What matters is that `get` takes its ERROR edge, not which failure sent it there — the array was formerly widened with `resize(3)` to make slot 1 empty instead, which E3106 now refuses on a struct element. (See the ⚠ note above: this passes on the shipped allocator regardless — it is a poison-only regression guard.)
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -164,7 +164,6 @@ typealias SlotArray = Array with Slot
 function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(10))
-	arr.resize(3)
 	let result = try arr.get(1) otherwise Slot.create(-7)
 	return result.value + 8
 end 'main'

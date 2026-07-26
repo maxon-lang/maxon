@@ -652,6 +652,29 @@ public enum ErrorCode {
   /// bug, rejected at compile time.
   /// </summary>
   SemanticDivisionByZero = 3103,
+  /// <summary>
+  /// `Array.resize` is called on an array whose ELEMENT TYPE IS MANAGED -- a struct, a `String`,
+  /// a nested container, a boxed union. Such an element lives in the buffer as a refcounted
+  /// POINTER, so the zeroed slots `resize` exposes are NULL: an absence, not a value. Maxon has
+  /// no default constructor, so there is nothing correct to put there, and the array it hands
+  /// back is one whose `count()` does not agree with its `get()` -- `count()` says N while
+  /// `get(0)` throws. Refused at the call site, naming the element type.
+  /// The refusal covers the WHOLE call and not only its growing half, because which half a
+  /// `resize(n)` is cannot be known until it runs: `n` is compared against a length, and a
+  /// compiler holds neither. The two halves therefore split by NAME. Growing supplies the element
+  /// the type cannot invent -- `push(value)` appends one, `growFilled(newLength, value:)` grows to
+  /// a length in one call -- and shrinking needs no element at all, so `truncate(newLength)` stays
+  /// available for every element type. (Both of those are bootstrap-only: shv2 synthesizes `Array`
+  /// rather than compiling stdlib/Array.maxon, and its roster has neither, so its message names
+  /// only `push`.)
+  /// It is refused only where the element type is KNOWN. An element that is still an unbound
+  /// type parameter is not: one generic body serves every instantiation, and the deliberately
+  /// sparse slot tables in `stdlib/Map.maxon` and `stdlib/Set.maxon` are built exactly that way
+  /// -- they track occupancy in a parallel `states` column and never read a slot they did not
+  /// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
+  /// and it stays available.
+  /// </summary>
+  SemanticArrayResizeManagedElement = 3106,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.

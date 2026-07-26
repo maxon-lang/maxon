@@ -1814,7 +1814,7 @@ function main() returns ExitCode
 	a.push(Tagged.init(5, tag: 109))
 	var scratch = ScratchArr.create()
 	let cap = 4 as Idx
-	scratch.resize(cap)
+	scratch.growFilled(cap, value: Tagged.init(0, tag: 0))
 	a.mergePartition(0, mid: 10, hi: 20, scratch: scratch, scratchCap: cap, cmp: byKey)
 	// Check stability: within each key, all tag-< 100 elements come first.
 	var stable = true

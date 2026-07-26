@@ -954,7 +954,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:334: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:382: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
 Stack trace:
   in __Array_i64.resize
   in main
@@ -982,7 +982,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:334: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:382: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
 Stack trace:
   in IntArray.resize
   in main

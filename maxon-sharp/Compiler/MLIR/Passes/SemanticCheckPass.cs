@@ -52,6 +52,71 @@ public static class SemanticCheckPass {
 
     // Check for redundant `if x.contains(k) ... try x.get(k) otherwise ...` pattern
     CheckRedundantContainsGet(module);
+
+    // Check that no `Array.resize` would expose slots that hold no element
+    CheckDenseArrayGrowth(module);
+  }
+
+  /// The stdlib method that lengthens an array by publishing a longer length over zeroed slots.
+  private const string ArrayResizeCallee = "stdlib.Array.resize";
+
+  /// <summary>
+  /// E3106: `Array.resize` on an array whose ELEMENT is a heap pointer.
+  ///
+  /// `resize` grows by publishing a longer length over slots the allocator zeroed, and a zero is a
+  /// real element only while the element lives INLINE in the buffer. A managed element — a struct,
+  /// a String, a nested container, a boxed union — lives there as a refcounted POINTER, so those
+  /// slots are NULL: an absence, not a value. Maxon has no default constructor, so `resize` has
+  /// nothing correct to put in them, and what it hands back is an array whose `count()` answers N
+  /// while `get(0)` throws.
+  ///
+  /// This runs BEFORE MonomorphizationPass on purpose, and that ordering IS the rule's scope.
+  /// Here a user's `Array with Pair` is already concrete, while the same call inside a generic body
+  /// still reads `Array with Element` — and only the first is a claim about a known element type.
+  /// One generic body serves every instantiation, and the sparse slot tables in stdlib/Map.maxon
+  /// and stdlib/Set.maxon are built through exactly that path: they track occupancy in a parallel
+  /// `states` column and never read a slot they did not write.
+  /// <see cref="ManagedElementInfo.FromElementType"/> already draws that same line — it answers
+  /// Unresolved for an unbound type parameter — which is why it is the predicate here rather than
+  /// a second one written out again.
+  /// </summary>
+  private static void CheckDenseArrayGrowth(IrModule<MaxonOp> module) {
+    foreach (var func in module.Functions) {
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is not MaxonCallOp call || call.Callee != ArrayResizeCallee) continue;
+          if (call.Args.Count == 0 || call.Args[0] is not MaxonStruct receiver) continue;
+          var element = ResolveArrayElementType(module, receiver.TypeName);
+          if (element == null || !ManagedElementInfo.FromElementType(element).IsStructElement) continue;
+
+          throw new CompileError(ErrorCode.SemanticArrayResizeManagedElement,
+            $"'resize' cannot grow an array of '{element.Name}': a grown slot holds NO element — "
+            + "Maxon has no default constructor — so 'count()' would not agree with 'get()'. "
+            + "Append with 'push(value)', grow with 'growFilled(newLength, value:)', "
+            + "shrink with 'truncate(newLength)'",
+            call.CallLine, call.CallColumn) { FilePath = func.SourceFilePath };
+        }
+      }
+    }
+  }
+
+  /// <summary>
+  /// The type an `Array with X` instantiation binds to its element parameter, or null when
+  /// <paramref name="arrayTypeName"/> is not such an instantiation. Resolved through TypeDefs
+  /// because an alias records the element as it was WRITTEN: a name first met during pre-scanning
+  /// is recorded as a placeholder, and only TypeDefs turns it back into the real definition. Skip
+  /// that step and a ranged primitive registered as a struct reads as managed.
+  /// </summary>
+  private static IrType? ResolveArrayElementType(IrModule<MaxonOp> module, string arrayTypeName) {
+    if (!module.TypeAliasSources.TryGetValue(arrayTypeName, out var alias)) return null;
+    // "Element" is the name stdlib/Array.maxon gives the parameter (`type Array uses Element`).
+    if (alias.TypeParams == null || !alias.TypeParams.TryGetValue("Element", out var element)) return null;
+    // An UNBOUND type parameter is not a type to look up, and must be rejected BEFORE the TypeDefs
+    // resolution below: its name is whatever the generic declared ("Key", "Value", "T"), so a user
+    // type of that name would answer for it and gate an instantiation that never binds it — the
+    // `Array with Key` inside a `Map` would read as managed the moment a program declared `type Key`.
+    if (element is IrTypeParameterType) return null;
+    return module.TypeDefs.TryGetValue(element.Name, out var canonical) ? canonical : element;
   }
 
   private static void CheckDiscardedResults(IrModule<MaxonOp> module) {

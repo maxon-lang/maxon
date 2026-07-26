@@ -4,8 +4,8 @@
 
 // ArrayError - errors for indexed collection operations
 export enum ArrayError implements Error
-	indexOutOfBounds
-	emptySlot
+	indexOutOfBounds  // the index was outside [0, count())
+	emptySlot  // the index was INSIDE [0, count()) and the slot there was never filled
 end 'ArrayError'
 
 typealias ElementCount = int(0 to u64.max)
@@ -163,24 +163,54 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return managed.length() == 0
 	end 'isEmpty'
 
-	/// Get first element, throws if empty
+	/// Get first element. Throws `indexOutOfBounds` when the array is empty, `emptySlot` when slot 0
+	/// is in range but was never filled. Goes through `get` so the two answers stay ONE decision.
 	export function first() returns Element throws ArrayError
-		return try managed.get(0) otherwise throw ArrayError.indexOutOfBounds
+		return try get(0)
 	end 'first'
 
-	/// Get last element, throws if empty
+	/// Get last element, throws if empty. The emptiness test is here rather than left to `get`
+	/// because `ElementIndex` starts at 0: `len - 1` on an empty array is not an index at all.
 	export function last() returns Element throws ArrayError
 		let len = managed.length()
-		return try managed.get(len - 1) otherwise throw ArrayError.indexOutOfBounds
+		if len == 0 'empty'
+			throw ArrayError.indexOutOfBounds
+		end 'empty'
+		return try get(len - 1)
 	end 'last'
 
 	// =========================================================================
 	// Element Access
 	// =========================================================================
 
-	/// Get element at index, throws if out of bounds or slot is empty
+	/// Which of `ArrayError`'s two failures the element access at `index` just had.
+	///
+	/// They are NOT interchangeable, and every read here used to answer `indexOutOfBounds` for both
+	/// — so "you never filled this slot" arrived spelled "you asked past the end", and a caller that
+	/// repeated that sent its reader to check a bound which was never wrong. `emptySlot` sat in the
+	/// enum from the beginning with nothing ever throwing it. (Measured: a column of ints became a
+	/// column of structs and the first read died reporting an index that was perfectly in range.)
+	///
+	/// It is decided from the LIVE RANGE — the same `managed.length()` the builtin decided on, not a
+	/// second copy of its rule — because the two failures are complementary there: `managed.get`
+	/// refuses an index at or past `length`, and reports every index BELOW it that holds nothing as
+	/// an empty slot. So an index inside the live range names a slot, and a failure on it can only
+	/// be that the slot was never filled.
+	///
+	/// The thrown cause is not read back instead because `otherwise (cause)` on a `__ManagedMemory`
+	/// builtin binds the raw wire flag as an `int`: switching on it here would put a third copy of an
+	/// ordinal map into the stdlib.
+	function accessFailure(index ElementIndex) returns ArrayError
+		if index >= managed.length() 'outsideLiveRange'
+			return ArrayError.indexOutOfBounds
+		end 'outsideLiveRange'
+		return ArrayError.emptySlot
+	end 'accessFailure'
+
+	/// Get element at index. Throws `indexOutOfBounds` when `index` is at or past `count()`, and
+	/// `emptySlot` when it is inside and the slot was never filled — see `accessFailure`.
 	export function get(index ElementIndex) returns Element throws ArrayError
-		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
+		return try managed.get(index) otherwise throw accessFailure(index)
 	end 'get'
 
 	/// Set element at index, throws if out of bounds
@@ -318,15 +348,33 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	end 'reserve'
 
 	/// Resize array to newLength elements, allocating if needed.
-	/// 
-	/// Growing exposes ZERO-INITIALIZED elements — `0` for a scalar element type,
-	/// and an EMPTY slot for a managed one (`get` on it throws rather than handing
-	/// back a pointer). That holds whether the new slots are fresh capacity or
-	/// slots this array used before and gave up: the buffer's slots above `length`
-	/// are always zero, because every operation that vacates a slot (`clear`,
-	/// `remove`/`pop`, and a shrinking `resize`) erases it on the way out. See THE
-	/// CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon.
-	/// 
+	///
+	/// Growing exposes ZERO-INITIALIZED elements, and a zero is an ELEMENT only while the element
+	/// lives INLINE in the buffer — an int, a float, a bool, a byte, a ranged typealias over one of
+	/// those, a payload-free enum. That holds whether the new slots are fresh capacity or slots this
+	/// array used before and gave up: the buffer's slots above `length` are always zero, because
+	/// every operation that vacates a slot (`clear`, `remove`/`pop`, and a shrinking `resize`)
+	/// erases it on the way out. See THE CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon.
+	///
+	/// ⚠ A MANAGED element — a struct, a `String`, a nested container, a boxed union — lives in the
+	/// buffer as a refcounted POINTER, so a zeroed slot there is NULL: an absence, not a value. Maxon
+	/// has no default constructor, so there is nothing correct to put in it, and the array that comes
+	/// back answers `count()` = N while `get(0)` throws `emptySlot`. **A managed element type is
+	/// refused at COMPILE TIME (E3106)**, naming the type: grow with `push(value)` or
+	/// `growFilled(newLength, value:)`, which make the caller supply the element the type cannot
+	/// invent, and shrink with `truncate(newLength)`.
+	///
+	/// The refusal covers the whole call and not only the growing half, because which half this is
+	/// cannot be known until it runs: `newLength` is compared against a length, and a compiler holds
+	/// neither. That is exactly why `truncate` is a separate method — a name can say the direction
+	/// where an argument cannot.
+	///
+	/// The refusal reaches only element types the compiler KNOWS. Inside a generic body the element
+	/// is still a parameter, one body serves every instantiation, and `Map`/`Set` build their slot
+	/// tables through exactly that path — they track occupancy in a parallel `states` column and
+	/// never read a slot they did not write. `__ManagedMemory.setLength` is the layer where an
+	/// unwritten slot is a defined state, and it stays available for that.
+	///
 	/// Shrinking releases the elements that leave the live range.
 	export function resize(newLength ElementCount)
 		reserve(newLength)
@@ -335,9 +383,28 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		end 'lenErr'
 	end 'resize'
 
+	/// Shorten the live range to `newLength`, releasing every element that leaves it. A `newLength`
+	/// at or above the current `count()` does nothing — this SHORTENS, and only shortens.
+	///
+	/// It is the half of `resize` that is always well defined. Growing has to put something in the
+	/// slots it exposes and a managed element type gives it nothing to put (see `resize`), but
+	/// SHRINKING only ever destroys, so it needs no element and is available for every element type.
+	/// That split is why this exists separately rather than as a `resize` a caller hopes is going
+	/// down: `resize` cannot know which direction it is being asked for until it runs, and this one
+	/// says so in its name.
+	export function truncate(newLength ElementCount)
+		if newLength >= managed.length() 'nothingToDrop'
+			return
+		end 'nothingToDrop'
+
+		try managed.setLength(newLength) otherwise 'lenErr'
+			panic("Array.truncate: setLength refused a length BELOW the current one, which is always within capacity")
+		end 'lenErr'
+	end 'truncate'
+
 	/// Grow to `newLength`, setting ONLY the entries the growth ADDED to `value`. What is already
 	/// there is untouched, and a `newLength` at or below the current length does nothing — this
-	/// GROWS; `resize` is what shrinks.
+	/// GROWS; `truncate` is what shrinks.
 	///
 	/// THIS IS THE OPERATION FOR A COLUMN THAT IS EXTENDED — an id space that widens as a pass mints
 	/// new ids, a row that follows a growing value count. `resize` is the trap there, and it is a

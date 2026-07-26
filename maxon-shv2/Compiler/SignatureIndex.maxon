@@ -3603,6 +3603,14 @@ export type ProgramSignatures
 		return maxonTypeTag(self.arrayElementType(id)) == ValueTypeTag.typeParameter
 	end 'arrayElementIsOpaque'
 
+	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
+	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
+	// because `typeNames` is this index's own interner and is not the parser's to reach into; the parser holds
+	// a per-FILE interner, and an element type id from `arrayElementType` belongs to this one.
+	export function arrayElementDisplayName(id GenericInstanceId) returns String
+		return maxonTypeName(self.arrayElementType(id), typeNames: self.typeNames)
+	end 'arrayElementDisplayName'
+
 	// The byte size of one element of `Array with T` — the value `element_size@24` is stamped with and every
 	// array helper strides by. A MANAGED element (String / struct / union / instance / nested Array) is a heap
 	// box stored as an 8-byte POINTER (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the

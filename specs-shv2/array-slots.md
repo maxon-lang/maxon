@@ -8,15 +8,33 @@ category: memory-safety
 
 ## Documentation
 
-When an array of structs is resized beyond its populated elements, the new slots contain null (zero) pointers. Accessing these empty slots via `managed.get()` now throws `ArrayError.emptySlot` instead of dereferencing a null pointer.
+An `Array` is DENSE: every index in `[0, count())` holds an element. `resize` grows the live
+range by exposing zero-initialized slots, and a zero is a real element only when the element is
+stored INLINE — an `int`, a `float`, a `bool`, a `byte`, a ranged typealias over one of those, a
+payload-free enum. A MANAGED element (a struct, a `String`, a nested container, a boxed union) is
+stored as a POINTER, so a zeroed slot is a NULL: an absence, not a value. Maxon has no default
+constructor, so there is nothing correct for `resize` to put there.
 
-This only applies to struct-element arrays. Primitive arrays (int, float, byte, bool) store values inline, so a zero value is a valid element, not an empty slot.
+`resize` on an array whose element type is managed is therefore **refused at compile time**
+(**E3106**), naming the element type. Append with `push(value)`, or grow to a length in one call
+with `growFilled(newLength, value:)` — both supply the element the type cannot invent.
+
+The refusal covers the whole call, not only the growing half: which half a `resize(n)` is cannot
+be known until it runs. Shrinking needs no element and stays available for every element type,
+under a name that says the direction — `truncate(newLength)`.
+
+Empty slots still exist one layer down. `__ManagedMemory` is the raw buffer, and its `setLength`
+publishes a length over slots nothing has written; that is how a slot table whose occupancy is
+tracked separately (`Map`, `Set`) is built. Reading such a slot back through `Array.get` reports
+**`ArrayError.emptySlot`** — a DIFFERENT error from `ArrayError.indexOutOfBounds`, because the
+index is in range and it is the slot that is empty. Conflating the two turns "you never filled
+this" into "you asked past the end", which sends the reader looking at the wrong thing.
 
 ## Tests
 
-<!-- test: get-empty-slot-basic -->
-### Get on empty slot uses otherwise path
-Create an array, push one item, resize to 3, then `try arr.get(1) otherwise` should use the otherwise path since slot 1 is empty.
+<!-- test: error.resize-struct-element -->
+### resize on a struct-element array is refused
+A grown slot would hold NULL rather than a `Slot`, so `count()` would not agree with `get()`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -34,12 +52,58 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(10))
 	arr.resize(3)
-	let result = try arr.get(1) otherwise Slot.create(-1)
-	return result.value + 1
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:17:6: 'resize' cannot grow an array of 'Slot': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'
+```
+
+<!-- test: error.resize-string-element -->
+### resize on a String-element array is refused
+A `String` element is a pointer too — the refusal is about the element being MANAGED, not about
+it being a struct.
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray.create()
+	arr.resize(3)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:6:6: 'resize' cannot grow an array of 'String': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'
+```
+
+<!-- disabled-test: grow-filled-managed-element -->
+<!-- P1.7 growFilled — shv2 SYNTHESIZES `Array` rather than compiling stdlib/Array.maxon, and its roster (create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/remove/clear/insert/slice/clone/append) has no `growFilled` runtime entry -->
+### growFilled is the grow that supplies the element
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.growFilled(3, value: Slot.create(14))
+	var total = 0
+	for s in arr 'sum'
+		total = total + s.value
+	end 'sum'
+	return total
 end 'main'
 ```
 ```exitcode
-0
+42
 ```
 
 <!-- test: get-valid-slot-not-empty -->
@@ -71,7 +135,8 @@ end 'main'
 
 <!-- test: int-array-zero-not-empty -->
 ### Int array containing zero does NOT throw emptySlot
-Primitive arrays store values inline. A zero value is a valid element, not an empty slot.
+Primitive arrays store values inline. A zero value is a valid element, not an empty slot, so
+`resize` stays available for them.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -90,95 +155,12 @@ end 'main'
 0
 ```
 
-<!-- test: get-empty-slot-try-otherwise-value -->
-### Try/otherwise returns default struct value when slot is empty
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Slot
-	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Slot'
-
-typealias SlotArray = Array with Slot
-
-function main() returns ExitCode
-	var arr = SlotArray.create()
-	arr.resize(3)
-	let result = try arr.get(0) otherwise Slot.create(99)
-	return result.value
-end 'main'
-```
-```exitcode
-99
-```
-
-<!-- test: first-empty-slot -->
-### first() on array where slot 0 is empty
-Resize to 3 without pushing any elements. `first()` should use the otherwise path.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Slot
-	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Slot'
-
-typealias SlotArray = Array with Slot
-
-function main() returns ExitCode
-	var arr = SlotArray.create()
-	arr.push(Slot.create(1))
-	arr.resize(3)
-	try arr.remove(0) otherwise ignore
-	let result = try arr.first() otherwise Slot.create(77)
-	return result.value
-end 'main'
-```
-```exitcode
-77
-```
-
-<!-- test: last-empty-slot -->
-### last() on array where last slot is empty
-Resize to 3, only push 1 item. `last()` should use the otherwise path since slot 2 is empty.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Slot
-	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Slot'
-
-typealias SlotArray = Array with Slot
-
-function main() returns ExitCode
-	var arr = SlotArray.create()
-	arr.push(Slot.create(1))
-	arr.resize(3)
-	let result = try arr.last() otherwise Slot.create(55)
-	return result.value
-end 'main'
-```
-```exitcode
-55
-```
-
-<!-- disabled-test: try-otherwise-error-binding -->
-<!-- P1.7 enum-case match pattern (match on the caught error binds an enum case) — a pre-existing match-pattern feature (enum-case patterns), orthogonal to arrays -->
-### Try/otherwise with error binding and match on ArrayError.indexOutOfBounds
-Calling get(0) on a resized-but-unfilled struct array throws ArrayError.indexOutOfBounds —
-the resize zeros every slot, and a null slot is reported as out-of-bounds by the array
-wrapper.
+<!-- disabled-test: raw-open-slot-reports-empty-slot -->
+<!-- P1.7 the Array record's raw buffer + enum-case match pattern — shv2's synthesized `Array` exposes no `managed` field (its 48-byte record is the runtime's, not a declared struct), so there is no way to open an unwritten slot; and its error channel is a single i64 flag with no `ArrayError` enum to bind and match -->
+### An empty slot opened through the raw buffer reports emptySlot
+`__ManagedMemory.setLength` is the layer where an unwritten slot is a defined state. Read back
+through `Array.get` it is `emptySlot` — NOT `indexOutOfBounds`, which would blame an index that
+is perfectly in range.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -190,7 +172,8 @@ typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
 	var arr = SlotArray.create()
-	arr.resize(2)
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
 	try arr.get(0) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
@@ -201,5 +184,92 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
+42
+```
+
+<!-- disabled-test: past-the-end-reports-index-out-of-bounds -->
+<!-- P1.7 the Array record's raw buffer + enum-case match pattern — same two gaps as its emptySlot twin above -->
+### An index past the end still reports indexOutOfBounds
+The other half of the same distinction: this one really IS out of bounds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	try arr.get(5) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+```
+```exitcode
 99
+```
+
+<!-- disabled-test: first-empty-slot -->
+<!-- P1.7 the Array record's raw buffer — shv2's synthesized `Array` exposes no `managed` field, so an unwritten slot inside the live range cannot be opened -->
+### first() on an array whose slot 0 is empty
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.reserve(3)
+	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
+	let result = try arr.first() otherwise Slot.create(77)
+	return result.value
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- disabled-test: last-empty-slot -->
+<!-- P1.7 the Array record's raw buffer — same gap as its first() twin above -->
+### last() on an array whose last slot is empty
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(1))
+	arr.reserve(3)
+	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
+	let result = try arr.last() otherwise Slot.create(55)
+	return result.value
+end 'main'
+```
+```exitcode
+55
 ```

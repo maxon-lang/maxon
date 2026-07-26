@@ -556,6 +556,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// prefix the user is forbidden to declare (E2051) and a "did you mean to define it?" reading would
 		// send them at a wall.
 		unknownCompilerIntrinsic(callee, line, column) then reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists", line: line, column: column, filePath: path)
+		// ⭐ The words are the BOOTSTRAP's, verbatim (SemanticCheckPass.CheckDenseArrayGrowth), minus the
+		// `growFilled`/`truncate` suggestions — shv2 synthesizes neither method, so naming them would
+		// send the reader to something that is not there.
+		arrayResizeManagedElement(elementType, line, column) then reportPositioned(project, code: ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'
 

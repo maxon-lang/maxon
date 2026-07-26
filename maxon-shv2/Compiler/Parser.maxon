@@ -664,6 +664,14 @@ export union ParseError implements Error
 	// tell those two apart, which is precisely why its `isCompilerInternalCallee` early return let this class
 	// of program through to the backend (see `requireCalleeIsNotReservedName`).
 	unknownCompilerIntrinsic(callee String, line LineNumber, column ColumnNumber)
+	// ⭐ `resize` on an array whose element is MANAGED. Renders as **E3106**, positioned at the method
+	// name. `__arr_resize` grows by publishing a longer length over slots `__arr_grow` left zeroed, and
+	// a zero is an ELEMENT only while the element lives inline in the buffer; a managed element lives
+	// there as a POINTER, so those slots are NULL. Maxon has no default constructor, so there is nothing
+	// correct to put in them — the array that comes back answers `count()` = N while `get(0)` reports
+	// the slot empty. `elementType` names the element, which is the whole point of refusing HERE: the
+	// runtime cannot name it and the caller cannot see it.
+	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
@@ -18261,6 +18269,7 @@ export type Parser
 			return self.emitArrayVoidCall(ArrReserveName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'reserve'
 		if methodTok.value.equals(ArrayResizeMethod) 'resize'
+			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)
 			let n = try self.parseArrayOneArg(func)
 			return self.emitArrayVoidCall(ArrResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
@@ -18389,6 +18398,27 @@ export type Parser
 
 		return withMutatedParam(NoMutatedParams, param: binding.boundValue)
 	end 'receiverOwnerMask'
+
+	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__arr_resize` lengthens by publishing a longer
+	// `length@8` over slots `__arr_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
+	// INLINE in the buffer. A MANAGED element lives there as an 8-byte POINTER (`ManagedArrayElementBytes`),
+	// so a zeroed slot is NULL — an absence, not a value — and Maxon has no default constructor to make one.
+	// The array that comes back answers `count()` = N while `get(0)` takes the empty-slot branch of
+	// `emitLoadElemAndOkReturn`: a `count()` that does not agree with `get()`, which is a silent wrong answer
+	// rather than a missing feature. `push(value)` is the growth that supplies the element.
+	//
+	// An OPAQUE-`T` element is NOT gated, and that is the rule's scope rather than a gap in it: one shared
+	// generic body serves every instantiation, so there is no element type to name and no single answer to
+	// give — and a deliberately SPARSE slot table (a hash map's key column, which tracks occupancy in a
+	// parallel state column and never reads a slot it did not write) is built through exactly that path.
+	// `arrayElementIsManaged` already answers false for a type parameter, so the carve-out needs no second
+	// test written here.
+	function requireArrayResizeHasZeroElement(giid GenericInstanceId, methodTok Token) throws ParseError
+		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+			return
+		end 'trivial'
+		throw ParseError.arrayResizeManagedElement(self.signatures.arrayElementDisplayName(giid), line: methodTok.line, column: methodTok.column)
+	end 'requireArrayResizeHasZeroElement'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`
