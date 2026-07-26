@@ -1,0 +1,30 @@
+// Test: error.nested-pair-arg-wrong-instance
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+type Pair uses A, B
+	export var first as A
+	export var second as B
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+typealias LeafBox = Box with Leaf
+typealias WrongPair = Pair with (Box with Leaf, Leaf)
+typealias Deep = Box with (Pair with (Box with Leaf, Box with (Box with Leaf)))
+function main() returns ExitCode
+	let d = Deep.create(WrongPair.create(LeafBox.create(Leaf.make("q")), second: Leaf.make("r")))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:10: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'Pair_Box_Leaf_Leaf'

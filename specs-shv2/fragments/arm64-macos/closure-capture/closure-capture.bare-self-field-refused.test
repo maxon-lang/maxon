@@ -1,0 +1,27 @@
+// Test: closure-capture.bare-self-field-refused
+
+typealias Fn1 = function(int) returns int
+
+function apply(f Fn1, x int) returns int
+	return f(x)
+end 'apply'
+
+type Counter
+	export var n as int
+
+	static function create() returns Counter
+		return Self{n: 3}
+	end 'create'
+
+	export function via() returns int
+		return apply(function(k int) gives k + n, x: 1)
+	end 'via'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	return c.via() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:17:42: Unsupported: a closure that captures `self` (P1.5-A2b: capturing closures + env block)

@@ -1,0 +1,122 @@
+// Test: first-class-function.float-then-int-params-indirect
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias Count = int(0 to 1000)
+typealias MixFn = function(Ratio, Count) returns Ratio
+
+function combine(x Ratio, n Count) returns Ratio
+	if n > 1 'pos'
+		return x * 4.0
+	end 'pos'
+	return x
+end 'combine'
+
+function apply(f MixFn, x Ratio, n Count) returns Ratio
+	return f(x, n)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = combine
+	let r = apply(fn, x: 2.5, n: 5)
+	return trunc(r) as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+func @combine {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 1
+    arm64.cset x0, gt
+    arm64.cbnz x0, pos
+    arm64.b ifcont
+  pos:
+    arm64.fpLoadRdata d1, [rdata + __fconst_3]
+    arm64.fmul d0, d0, d1
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fcmp d0, d1
+    arm64.cset x0, mi
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.fpLoadRdata d1, [rdata + __fconst_5]
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fcmp d0, d1
+    arm64.cset x0, mi
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.fpLoadRdata d1, [rdata + __fconst_5]
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.epilogue 16
+    arm64.ret
+  __rc_ok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.blr x19
+    arm64.fpLoadRdata d1, [rdata + __fconst_4]
+    arm64.fcmp d0, d1
+    arm64.cset x0, mi
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_chk
+  __rc_chk:
+    arm64.fpLoadRdata d1, [rdata + __fconst_5]
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, __rc_panic
+    arm64.b __rc_ok
+  __rc_panic:
+    arm64.movImm x0, 1
+    arm64.importCall 0
+    arm64.fpLoadRdata d0, [rdata + __fconst_4]
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  __rc_ok:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_combine
+    arm64.fpLoadRdata d0, [rdata + __fconst_6]
+    arm64.movImm x1, 5
+    arm64.movImm x2, 0
+    arm64.bl apply
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,51 @@
+// Test: first-class-function.typealias-single-param
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(double, x: 21)
+end 'main'
+---
+ExitCode: 42
+---
+func @double {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_double
+    arm64.movImm x1, 21
+    arm64.movImm x2, 0
+    arm64.bl apply
+    arm64.epilogue 16
+    arm64.ret
+}

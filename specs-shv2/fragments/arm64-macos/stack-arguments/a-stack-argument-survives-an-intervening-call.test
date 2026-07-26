@@ -1,0 +1,66 @@
+// Test: a-stack-argument-survives-an-intervening-call
+typealias Integer = int(i64.min to i64.max)
+
+function noise(x Integer) returns Integer
+	return x + 1
+end 'noise'
+
+function tail(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer) returns Integer
+	let churn = noise(noise(noise(a + b + c + d + e + f)))
+	return g + churn
+end 'tail'
+
+function main() returns ExitCode
+	return tail(1, b: 1, c: 1, d: 1, e: 1, f: 1, g: 60)
+end 'main'
+---
+ExitCode: 69
+---
+func @noise {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @tail {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x7, x3
+    arm64.movRegReg x8, x4
+    arm64.movRegReg x9, x5
+    arm64.movRegReg x19, x6
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x7
+    arm64.add x0, x0, x8
+    arm64.add x0, x0, x9
+    arm64.bl noise
+    arm64.bl noise
+    arm64.bl noise
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 1
+    arm64.movImm x2, 1
+    arm64.movImm x6, 1
+    arm64.movImm x7, 1
+    arm64.movImm x8, 1
+    arm64.movImm x9, 60
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.movRegReg x5, x8
+    arm64.movRegReg x6, x9
+    arm64.bl tail
+    arm64.epilogue 16
+    arm64.ret
+}

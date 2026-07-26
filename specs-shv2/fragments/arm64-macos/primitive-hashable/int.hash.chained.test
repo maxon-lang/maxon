@@ -1,0 +1,146 @@
+// Test: int.hash.chained
+function main() returns ExitCode
+	let i = 42
+	let once = i.hash()
+	let twice = i.hash().hash()
+	if once != twice 'chainDiffers'
+		return 1
+	end 'chainDiffers'
+	if not once.equals(42) 'hashValueEquals'
+		return 2
+	end 'hashValueEquals'
+	match once.compare(41) 'cmp'
+		lessThan then return 3
+		equalTo then return 4
+		greaterThan then return 0
+	end 'cmp'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 42
+    arm64.movRegReg x0, x19
+    arm64.bl int.hash
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl int.hash
+    arm64.bl int.hash
+    arm64.cmp x20, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, chainDiffers
+    arm64.b ifcont
+  chainDiffers:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x1, 42
+    arm64.movRegReg x0, x20
+    arm64.bl int.equals
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, hashValueEquals
+    arm64.b ifcont
+  hashValueEquals:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x1, 41
+    arm64.movRegReg x0, x20
+    arm64.bl int.compare
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 4
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  matchcont:
+}
+
+func @int.hash {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @int.equals {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, equal
+    arm64.b notEqual
+  equal:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  notEqual:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @int.compare {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cbnz x2, less
+    arm64.b notLess
+  less:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  notLess:
+    arm64.cmp x0, x1
+    arm64.cset x0, gt
+    arm64.cbnz x0, greater
+    arm64.b equal
+  greater:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  equal:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

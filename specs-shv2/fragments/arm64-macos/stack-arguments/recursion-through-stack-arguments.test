@@ -1,0 +1,60 @@
+// Test: recursion-through-stack-arguments
+typealias Integer = int(i64.min to i64.max)
+
+function countdown(n Integer, b Integer, c Integer, d Integer, e Integer, f Integer, acc Integer) returns Integer
+	if n == 0 'done'
+		return acc
+	end 'done'
+	return countdown(n - 1, b: b, c: c, d: d, e: e, f: f, acc: acc + n)
+end 'countdown'
+
+function main() returns ExitCode
+	return countdown(10, b: 0, c: 0, d: 0, e: 0, f: 0, acc: 0)
+end 'main'
+---
+ExitCode: 55
+---
+func @countdown {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x7, x3
+    arm64.movRegReg x8, x4
+    arm64.movRegReg x9, x5
+    arm64.cmp x0, 0
+    arm64.cset x10, eq
+    arm64.cbnz x10, done
+    arm64.b ifcont
+  done:
+    arm64.movRegReg x0, x6
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.sub x10, x0, 1
+    arm64.add x6, x6, x0
+    arm64.movRegReg x0, x10
+    arm64.movRegReg x3, x7
+    arm64.movRegReg x4, x8
+    arm64.movRegReg x5, x9
+    arm64.bl countdown
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.movImm x6, 0
+    arm64.movImm x7, 0
+    arm64.movImm x8, 0
+    arm64.movImm x9, 0
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.movRegReg x5, x8
+    arm64.movRegReg x6, x9
+    arm64.bl countdown
+    arm64.epilogue 16
+    arm64.ret
+}

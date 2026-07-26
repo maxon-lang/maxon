@@ -1,0 +1,62 @@
+// Test: closure-capture.top-level-binding-after-a-closure
+
+typealias Integer = int(i64.min to i64.max)
+
+function bumped(n Integer) returns Integer
+	let step = function(k Integer) gives k + 1
+	return step(n)
+end 'bumped'
+
+let Base = 20
+var offset = 21
+
+function main() returns ExitCode
+	offset = offset + 1
+	return Base + offset + bumped(-1)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_offset@0 = i64 21
+}
+
+func @bumped {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaFuncAddr x19, bumped$closure_0
+    arm64.movImm x1, 0
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @bumped$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_offset
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x19, x0, 20
+    arm64.movImm x0, -1
+    arm64.bl bumped
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,19 @@
+// Test: top-level-float-cast-in-range
+typealias Pct = float(0.0 to 100.0)
+
+let GOOD = 50.0 as Pct
+
+function main() returns ExitCode
+	return trunc(GOOD)
+end 'main'
+---
+ExitCode: 50
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}

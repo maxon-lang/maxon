@@ -1,0 +1,16 @@
+// Test: labelled-arg-to-mutating-param-error
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(n Integer, dest IntArray)
+	dest.push(n)
+end 'grow'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	grow(1, dest: a)
+	return a.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:11:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)

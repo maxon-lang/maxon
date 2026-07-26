@@ -1,0 +1,33 @@
+// Test: top-level-let-falls-back-when-type-has-no-such-static
+typealias Integer = int(i64.min to i64.max)
+
+let Widget = "abcdefghij"
+
+type Widget
+	export var v as Integer
+
+	export static function create() returns Widget
+		return Self{v: 7}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	return Widget.byteLength() as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.epilogue 16
+    arm64.ret
+}

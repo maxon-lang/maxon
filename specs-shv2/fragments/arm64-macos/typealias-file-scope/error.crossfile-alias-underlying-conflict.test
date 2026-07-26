@@ -1,0 +1,22 @@
+// Test: error.crossfile-alias-underlying-conflict
+// --- file: a.maxon
+typealias Measure = int(0 to 100)
+
+export function useInt(x Measure) returns Measure
+	return x + 1
+end 'useInt'
+
+// --- file: b.maxon
+typealias Measure = float(0.0 to 1.0)
+
+export function useFloat(x Measure) returns Measure
+	return x
+end 'useFloat'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return useInt(41) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3105: <fragment>:10:11: Typealias 'Measure' is declared over 'float' here and over 'int' in another file — two files may declare one alias name over different RANGES, but not over different underlying types

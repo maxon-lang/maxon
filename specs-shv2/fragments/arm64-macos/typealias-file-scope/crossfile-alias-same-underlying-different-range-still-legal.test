@@ -1,0 +1,50 @@
+// Test: crossfile-alias-same-underlying-different-range-still-legal
+// --- file: a.maxon
+typealias Span = int(0 to 20)
+
+export function fromA() returns ExitCode
+	return 20 as Span
+end 'fromA'
+
+// --- file: b.maxon
+typealias Span = int(0 to 4000)
+
+export function fromB() returns ExitCode
+	return 22 as Span
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return fromA() + fromB()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl fromA
+    arm64.movRegReg x19, x0
+    arm64.bl fromB
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @fromA {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 20
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @fromB {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 22
+    arm64.epilogue 16
+    arm64.ret
+}

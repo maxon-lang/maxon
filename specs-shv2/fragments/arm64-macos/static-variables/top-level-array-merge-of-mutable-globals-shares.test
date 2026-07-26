@@ -1,0 +1,62 @@
+// Test: top-level-array-merge-of-mutable-globals-shares
+var P = [1, 2]
+var Q = [5, 5]
+
+function main() returns ExitCode
+	var pick = P if Q.count() == 2 else Q
+	pick.push(9)
+	return P.count() + Q.count()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __data_P@0 = i64 0
+  __data_Q@8 = i64 0
+  __slab_cursor@16 = i64 0
+  __slab_end@24 = i64 0
+  __mm_alloc_count@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_Q
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.leaGlobal x0, __data_P
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.leaGlobal x0, __data_Q
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.b matchcont
+  matchcont:
+    arm64.bl __mm_retain
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 9
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.leaGlobal x0, __data_P
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.movRegReg x20, x0
+    arm64.leaGlobal x0, __data_Q
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.add x20, x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

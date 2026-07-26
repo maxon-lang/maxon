@@ -1,0 +1,30 @@
+// Test: error.instance-arg-wrong-instance
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+function takes(b LeafBox) returns ExitCode
+	return 0
+end 'takes'
+function main() returns ExitCode
+	return takes(OtherBox.create(Other.make("x")))
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:26:9: argument type mismatch for 'b': expected 'Box_Leaf', got 'Box_Other'

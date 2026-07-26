@@ -1,0 +1,26 @@
+// Test: comparable.error.instantiate-nonconforming
+typealias Coord = int(0 to 1000)
+
+type Plain
+	export var v as Coord
+	export static function create(v Coord) returns Self
+		return Self{ v: v }
+	end 'create'
+end 'Plain'
+
+type Pair uses T where T is Comparable
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+end 'Pair'
+
+typealias PlainPair = Pair with Plain
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:19:11: type 'Plain' does not implement 'Comparable', which the `where` clause on generic type 'Pair' requires of its type parameter

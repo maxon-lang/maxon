@@ -1,0 +1,28 @@
+// Test: write-only-var-kept
+var writeOnly = 0
+var verifier = 17
+
+function main() returns ExitCode
+	writeOnly = 99
+	return verifier - 17
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_writeOnly@0 = i64 0
+  __data_verifier@8 = i64 17
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 99
+    arm64.leaGlobal x1, __data_writeOnly
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_verifier
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.sub x0, x0, 17
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,248 @@
+// Test: clone-managed-three-level-cascade
+typealias Integer = int(i64.min to i64.max)
+
+type Leaf
+		export var label as String
+		export var value as Integer
+
+		static function create(label String, value Integer) returns Self
+			return Self{label: label, value: value}
+		end 'create'
+end 'Leaf'
+
+type Mid
+		export var leaf as Leaf
+
+		static function create(leaf Leaf) returns Self
+			return Self{leaf: leaf}
+		end 'create'
+end 'Mid'
+
+type Outer
+		export var mid as Mid
+
+		static function create(mid Mid) returns Self
+			return Self{mid: mid}
+		end 'create'
+end 'Outer'
+
+typealias OuterArray = Array with Outer
+
+function makeClone() returns OuterArray
+		var src = OuterArray.create()
+		src.push(Outer.create(Mid.create(Leaf.create("a nested label long enough to reach the heap", value: 7))))
+		return src.clone()
+		// src and its whole three-level element graph are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+		let cloned = makeClone()
+
+		if cloned.count() != 1 'badCount'
+				return 99
+		end 'badCount'
+
+		let outer = try cloned.get(0) otherwise Outer.create(Mid.create(Leaf.create("", value: 0)))
+		return outer.mid.leaf.value
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Leaf.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Mid.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Outer.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @makeClone {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __destruct_Outer
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x20, 7
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 48
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.bl Leaf.create
+    arm64.bl Mid.create
+    arm64.bl Outer.create
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.leaFuncAddr x1, __clone_Outer
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_clone_managed
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl makeClone
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_count
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, badCount
+    arm64.b ifcont
+  badCount:
+    arm64.movImm x20, 99
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+  ifcont:
+    arm64.movImm x1, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_get
+    arm64.movRegReg x20, x0
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.leaRdata x0, __str_rec_3
+    arm64.movImm x20, 0
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.add x0, x22, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x23, x0
+    arm64.add x24, x23, 48
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x0, x24, x22
+    arm64.storeBaseDispReg.word64 [x23 + 0], x24
+    arm64.storeBaseDispReg.word64 [x23 + 8], x22
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x23 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x23 + 24], x0
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x20
+    arm64.bl Leaf.create
+    arm64.bl Mid.create
+    arm64.bl Outer.create
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mm_incref
+    arm64.movRegReg x0, x20
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x1 + 8]
+    arm64.bl __destruct_Outer
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}

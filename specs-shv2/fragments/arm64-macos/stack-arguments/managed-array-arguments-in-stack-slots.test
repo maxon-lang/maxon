@@ -1,0 +1,123 @@
+// Test: managed-array-arguments-in-stack-slots
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function totalCount(a Integer, b Integer, c Integer, d Integer, e Integer, f IntArray, g IntArray, h IntArray) returns Integer
+	return a + b + c + d + e + f.count() + g.count() + h.count()
+end 'totalCount'
+
+function main() returns ExitCode
+	var first = IntArray.create()
+	first.push(1)
+	first.push(2)
+	var second = IntArray.create()
+	second.push(3)
+	second.push(4)
+	second.push(5)
+	var third = IntArray.create()
+	third.push(6)
+	return totalCount(10, b: 20, c: 30, d: 40, e: 50, f: first, g: second, h: third)
+end 'main'
+---
+ExitCode: 156
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @totalCount {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x8, x3
+    arm64.movRegReg x9, x4
+    arm64.movRegReg x10, x5
+    arm64.movRegReg x19, x6
+    arm64.movRegReg x20, x7
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x8
+    arm64.add x21, x0, x9
+    arm64.movRegReg x0, x10
+    arm64.bl __arr_count
+    arm64.add x21, x21, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_count
+    arm64.add x19, x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_count
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x20, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_push
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_push
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x21, x0
+    arm64.movImm x1, 6
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_push
+    arm64.movImm x0, 10
+    arm64.movImm x1, 20
+    arm64.movImm x2, 30
+    arm64.movImm x6, 40
+    arm64.movImm x7, 50
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.movRegReg x5, x19
+    arm64.movRegReg x6, x20
+    arm64.movRegReg x7, x21
+    arm64.bl totalCount
+    arm64.movRegReg x22, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movRegReg x0, x22
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}

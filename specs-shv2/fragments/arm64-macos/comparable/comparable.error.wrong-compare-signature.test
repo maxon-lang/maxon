@@ -1,0 +1,21 @@
+// Test: comparable.error.wrong-compare-signature
+typealias Coord = int(0 to 1000)
+typealias Integer = int(0 to u32.max)
+
+type WrongPoint implements Comparable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function compare(other WrongPoint) returns Integer
+		return self.x
+	end 'compare'
+end 'WrongPoint'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:5:6: Partial interface implementation: type 'WrongPoint' has 1 method(s) with wrong signature:
+  - compare(other WrongPoint) returns Integer (expected compare(other Self) returns Ordering)
