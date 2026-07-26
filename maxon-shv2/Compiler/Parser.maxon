@@ -16572,15 +16572,20 @@ export type Parser
 	// receiver) — for `methodCallsAt`'s own stated reason: a receiver test written twice is free to
 	// drift, and the drift is silent.
 	//
-	// ⚠ **THE `hasManagedConstant` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
+	// ⚠ **THE `namesManagedConstant` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
 	// `methodCallsAt` runs at every dotted-call shape in the program, and `constantValueOf`'s
 	// file-scoped probe BUILDS A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). Behind
-	// this bool a program with no managed constant — which is the whole scale corpus and nearly the
-	// whole suite — pays one bool read and allocates nothing.
+	// this filter a base that is not spelled like any managed constant in the program — every static
+	// call, `Widget.create(…)` and `String.from(…)` alike, which is nearly every base that reaches here
+	// — costs ONE hash of bytes it already holds and allocates nothing.
+	//
+	// It is a NAME set rather than a whole-program bool for a measured reason: a bool goes permanently
+	// true at the first managed constant, and every static dotted call in the program then pays the full
+	// probe to be told no. See `ProgramSignatures.managedConstantNames`.
 	function managedConstantReceiverAt(tok Token) returns bool
-		if not self.signatures.hasManagedConstant() 'noneInProgram'
+		if not self.signatures.namesManagedConstant(tok.value) 'notAManagedConstantName'
 			return false
-		end 'noneInProgram'
+		end 'notAManagedConstantName'
 
 		return match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			foundManaged gives true

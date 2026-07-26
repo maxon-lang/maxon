@@ -1345,6 +1345,11 @@ export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArr
 // no-ops that assigned nothing), leaving the emitted gids byte-identical while the interning is O(types).
 typealias ArrayLiteralElementNameSet = Set with ByteArray
 
+// The NAMES every top-level managed constant in the program is declared under (P1.7a) — the filter
+// `Parser.managedConstantReceiverAt` asks before it will build a file-scoped key. See
+// `ProgramSignatures.managedConstantNames` for why the answer has to be a name and not a bool.
+typealias ManagedConstantNameSet = Set with ByteArray
+
 // ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
 // recursively aggregate — E4014). Two instances with the same base and structurally equal args share
@@ -1774,23 +1779,39 @@ export type ProgramSignatures
 	// declaration probe pointed at a constant, a 7 → 8 edit re-parses every file in the project; the
 	// gate's `invalidation` property is what keeps it that way.
 	export var hash as ContentHash
-	// ⭐ **DOES THIS PROGRAM DECLARE ANY MANAGED TOP-LEVEL CONSTANT?** (P1.7a) — a WHOLE-PROGRAM bool,
-	// set by `settleManagedValue`, read by `Parser.managedConstantReceiverAt`.
+	// ⭐ **THE NAMES OF EVERY MANAGED TOP-LEVEL CONSTANT IN THE PROGRAM** (P1.7a) — written once per
+	// managed constant by `settleManagedValue`, read once per probe by
+	// `Parser.managedConstantReceiverAt`.
 	//
 	// It exists because the reader is on a HOT path: `methodCallsAt` runs at every dotted-call shape in
-	// the program, and the probe behind this bool builds a file-scoped STRING key (~4 allocations —
-	// `fileScopedDeclKey`). A program with no managed constant must not pay that per method call, and
-	// nearly every program has none. One bool, written once per managed constant, read once per probe.
-	var anyManagedConstant as bool
+	// the program, and the probe behind it builds a file-scoped STRING key (~4 allocations —
+	// `fileScopedDeclKey`) before it knows whether the name is a constant at all.
+	//
+	// ⚠ **A BOOL IS NOT ENOUGH, AND THE DIFFERENCE IS A WHOLE-PROGRAM CLIFF.** This was first written as
+	// `anyManagedConstant as bool`, which spares a program that declares NO managed constant — but the
+	// moment ONE exists anywhere, a bool is permanently true and every *static* dotted call in the whole
+	// program (`Widget.create(…)`, `String.from(…)` — a base that is neither a local nor a capture) pays
+	// the full scoped probe to be told "not a constant". **MEASURED at ~5 allocations per static
+	// dotted-call site, linear in call sites** (+390/+710/+1,350/+2,630/+5,190 over a 64→1,024 ladder).
+	// A NAME set answers the same question for the same one bool's worth of work in the empty case, and
+	// keeps answering it cheaply once the set is non-empty: a base whose spelling matches no managed
+	// constant costs ONE hash of bytes it already holds and allocates nothing.
+	//
+	// It is a FILTER, never the answer: a hit still goes through `constantValueOf`, which is what applies
+	// file-private scoping and `let`-vs-`var`. So a false positive (this file cannot see that other
+	// file's constant) costs one wasted probe and resolves correctly, and there is no second copy of the
+	// resolution rule to drift.
+	var managedConstantNames as ManagedConstantNameSet
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), anyManagedConstant: false}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedConstantNames: ManagedConstantNameSet.create()}
 	end 'create'
 
-	// Does any declaration in the program hold a MANAGED constant? See `anyManagedConstant`.
-	export function hasManagedConstant() returns bool
-		return self.anyManagedConstant
-	end 'hasManagedConstant'
+	// Could `name` denote a top-level MANAGED constant anywhere in this program? A `false` is final; a
+	// `true` still has to be resolved by `constantValueOf`. See `managedConstantNames`.
+	export function namesManagedConstant(name ByteArray) returns bool
+		return self.managedConstantNames.contains(name)
+	end 'namesManagedConstant'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
 	// index — and its hash — are a deterministic function of the program, not of the order the
@@ -2411,7 +2432,7 @@ export type ProgramSignatures
 	// itself carries the bytes every USE site re-materializes (`resolvedValueOf`).
 	function settleManagedValue(decl TopLevelDecl, bytes ByteArray, kind ManagedConstKind) returns ConstEvalOutcome
 		decl.outcome = TopLevelConstant.managedValue(bytes, kind: kind)
-		self.anyManagedConstant = true
+		self.managedConstantNames.insert(decl.name)
 		return ConstEvalOutcome.notFound
 	end 'settleManagedValue'
 
