@@ -96,9 +96,9 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
 end 'buildModuleInit'
 
-// The OWNED record a managed global's slot starts life holding. The two kinds differ in exactly one thing
-// — whether the literal's own materialization is already owned — and that difference is a fact about the
-// two record formats, not a choice made here:
+// The OWNED record a managed global's slot starts life holding. The three kinds differ in exactly one thing
+// — how much of the record the literal's own materialization already is — and that difference is a fact
+// about the record formats, not a choice made here:
 //
 //   • a **String** literal is a WHOLLY immortal `.rdata` record (`lowerStringLiteral`), shared by every
 //     read of that literal in the program, so it is CLONED into a fresh owned heap String. `__str_clone`
@@ -108,28 +108,83 @@ end 'buildModuleInit'
 //     immortal `.rdata` blob (`lowerByteStringLiteral`), which is precisely what the slot must hold — so
 //     there is nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
 //     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE byte-string global work.
+//   • an **array** literal has no literal record at all (P1.7 slice 2b): the record is BUILT here, exactly
+//     as `Parser.parseArrayLiteral` builds one in a function body — `__arr_create` with this instance's
+//     stamps, then one `__arr_push` per folded element.
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
-	return match global.kind 'kind'
-		string gives clonedStringRecord(fn, global: global)
-		byteArray gives ownedByteStringRecord(fn, global: global)
-	end 'kind'
+	return match global.initializer 'initializer'
+		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: global.valueType, range: global.range)
+		byteStringRecord(bytes) gives ownedByteStringRecord(fn, bytes: bytes, valueType: global.valueType, range: global.range)
+		arrayRecord(elements, elementSize, elementDestroy) gives builtArrayRecord(fn, global: global, elements: elements, elementSize: elementSize, elementDestroy: elementDestroy)
+	end 'initializer'
 end 'initialRecordOf'
 
 // The String arm: materialize the immortal `.rdata` literal, then CLONE it into a fresh owned heap
-// String the slot can own, mutate and eventually free.
-function clonedStringRecord(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
-	let literal = fn.mintOfType(global.valueType)
-	fn.emit(MaxonOp.stringLiteral(literal, bytes: global.bytes), range: global.range)
-	return fn.emitRuntimeCall(StrCloneName, arg: literal, resultTag: maxonTypeTag(global.valueType), resultNameId: typeNameIdOf(global.valueType), range: global.range)
+// String the slot can own, mutate and eventually free. Shared with the array build, whose STRING ELEMENTS
+// need the identical promotion for the identical reason — the array's `element_destroy@40` walk drops every
+// live slot, so an element must be a record its owner may free — which is why it takes the type and bytes
+// rather than reading them off a global.
+function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
+	let literal = fn.mintOfType(valueType)
+	fn.emit(MaxonOp.stringLiteral(literal, bytes: bytes), range: range)
+	return fn.emitRuntimeCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 end 'clonedStringRecord'
 
 // The byte-string arm: ONE op, because the literal's own materialization is already the owned heap
 // record the slot must hold.
-function ownedByteStringRecord(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
-	let record = fn.mintOfType(global.valueType)
-	fn.emit(MaxonOp.byteStringLiteral(record, bytes: global.bytes), range: global.range)
+function ownedByteStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
+	let record = fn.mintOfType(valueType)
+	fn.emit(MaxonOp.byteStringLiteral(record, bytes: bytes), range: range)
 	return record
 end 'ownedByteStringRecord'
+
+// ⭐ **AN ARRAY GLOBAL'S RECORD IS BUILT, ELEMENT BY ELEMENT, AT RUN TIME** (P1.7 slice 2b) — the ops
+// `Parser.parseArrayLiteral` emits for `[10, 20, 30]` in a function body, emitted here for the same literal
+// written at file scope. Deliberately NOT v1's `ConstantArrayLiteralRdata` (`Compiler/Passes/`), which moves
+// an all-constant-integer element BUFFER into `.rdata` while still heap-allocating the header: that is an
+// OPTIMIZATION over this, it is the optimizer's call to make, and building it now would fork a second
+// element-emission path before the first one is proven.
+//
+// ⚠ **THE STAMPS ARE THE INSTANCE'S, NOT THIS FUNCTION'S.** `elementSize` and `elementDestroy` were resolved
+// where the instance registry lives (`ProgramSignatures.arrayRecordInitializer`), off the very instance the
+// global's slot is typed by — so the strides this record is born with and the type every use loads through
+// cannot disagree, and the element destructor equals the one a body's literal of the same elements stamps.
+function builtArrayRecord(fn SynthesizedFunction, global ManagedGlobal, elements ConstArrayElementArray, elementSize ByteOffset, elementDestroy ArrayElementDestroy) returns ValueId
+	var args = ValueIdArray.create()
+	args.push(fn.emitIntegerLiteral(elementSize as ParsedInt, range: global.range))
+	args.push(elementDestroyValue(fn, destroy: elementDestroy, range: global.range))
+	let record = fn.emitRuntimeCall(ArrCreateName, args: args, resultTag: maxonTypeTag(global.valueType), resultNameId: typeNameIdOf(global.valueType), range: global.range)
+
+	for element in elements 'eachElement'
+		_ = fn.emitRuntimeCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: global.range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
+	end 'eachElement'
+
+	return record
+end 'builtArrayRecord'
+
+// The `element_destroy@40` argument `__arr_create` stamps: the drop callee's raw `.text` ADDRESS for a
+// managed element, 0 for a trivial one. The emitting twin of `Parser.arrayElementDestroyValue`, over the ONE
+// decision both read (`ProgramSignatures.arrayElementDestroy`). The address rides a `functionRef`, which
+// `LowerMaxonToStd.lowerFunctionRef` materializes BARE for a `__`-prefixed callee (not the `__fnref_` env
+// thunk — the drop walk invokes it through a plain `callIndirect(ptr)`) and `scanRuntimeUsage` records, so
+// naming it here is what installs the destructor.
+function elementDestroyValue(fn SynthesizedFunction, destroy ArrayElementDestroy, range SourceRange) returns ValueId
+	return match destroy 'destroy'
+		trivial gives fn.emitIntegerLiteral(TrivialDestructor, range: range)
+		drop(callee) gives fn.emitRuntimeFuncAddr(callee, range: range)
+	end 'destroy'
+end 'elementDestroyValue'
+
+// ONE element's value, ready to be pushed. An integer element is its number; a String element is the
+// immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__arr_decref`'s
+// walk `__str_decref`s every live slot — the same promotion `Parser.moveElementIntoArray` applies to a
+// borrowed String literal at a body's `push`, reached through the same `__str_clone`.
+function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, range SourceRange) returns ValueId
+	return match element 'element'
+		integer(payload) gives fn.emitIntegerLiteral(payload, range: range)
+		string(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.string, range: range)
+	end 'element'
+end 'elementRecordOf'
 
 // `__maxon_global_cleanup(exitCode) returns exitCode` — one decref per managed global, after `main`.
 //
@@ -155,7 +210,7 @@ function buildGlobalCleanup(module MaxonModule, project Project, globals Managed
 		let addr = fn.emitSlotAddr(global)
 		let record = fn.mintOfType(global.valueType)
 		fn.emit(MaxonOp.loadIndirect(record, addr: addr, offset: GlobalSlotOffset, valueType: global.valueType), range: global.range)
-		_ = fn.emitRuntimeCall(global.dropCallee, arg: record, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
+		_ = fn.emitRuntimeCall(global.dropCallee, args: singletonArgs(record), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
 	end 'eachGlobal'
 
 	fn.terminate(MaxonOp.ret(ExitCodeParam), range: anchorRange(globals))
@@ -275,11 +330,35 @@ type SynthesizedFunction
 		end 'result'
 	end 'recordOpTables'
 
-	// Call an emitted runtime entry point with ONE argument — `__str_clone`, `__str_decref`,
-	// `__arr_decref`. `Parser.emitRuntimeCall`'s twin, and positional for its reason: the runtime has no
+	// ⭐ **AN INTEGER `literal`** — an element's number, an `element_size` stride, a null `element_destroy`
+	// (P1.7 slice 2b). `MaxonType.integer` for all three because the Maxon tier has no pointer or size type:
+	// a machine word is an integer here, the same reading `emitSlotAddr` above gives an ADDRESS.
+	//
+	// It does NOT record the value in a constant column, and `Parser.emitLiteralIn` does: that column is the
+	// PARSER's constant view, feeding the shift-count rule and `foldConstOperands` over source the user
+	// wrote. Nothing here is folded against anything, so there is no view to keep.
+	function emitIntegerLiteral(value ParsedInt, range SourceRange) returns ValueId
+		let result = self.mintOfType(MaxonType.integer)
+		self.emit(MaxonOp.literal(result, value: value, valueType: MaxonType.integer), range: range)
+		return result
+	end 'emitIntegerLiteral'
+
+	// The raw `.text` ADDRESS of a compiler-internal runtime function, as a value — `Parser.emitRuntimeFuncAddr`'s
+	// twin on this carrier, for the array element destructor `__arr_create` stamps into `element_destroy@40`.
+	//
+	// The value is typed `integer` for `emitSlotAddr`'s reason (an address is a machine word, and the Maxon
+	// tier has no pointer type) rather than the parser's `function` tag: the parser's result may be BOUND by
+	// user code, whose type then has to name the function, while this one is an argument and nothing else.
+	function emitRuntimeFuncAddr(callee ByteArray, range SourceRange) returns ValueId
+		let result = self.mintOfType(MaxonType.integer)
+		self.emit(MaxonOp.functionRef(result, funcName: callee), range: range)
+		return result
+	end 'emitRuntimeFuncAddr'
+
+	// Call an emitted runtime entry point — `__str_clone`, `__str_decref`, `__arr_decref`, `__arr_create`,
+	// `__arr_push`. `Parser.emitRuntimeCall`'s twin, and positional for its reason: the runtime has no
 	// parameter names for a label to match, so the arguments pass through `lowerRuntimeCall` verbatim.
-	function emitRuntimeCall(callee ByteArray, arg ValueId, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
-		let args = singletonArgs(arg)
+	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		let result = self.mint(resultTag, nameId: resultNameId)
 		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range)), range: range)
 		return result

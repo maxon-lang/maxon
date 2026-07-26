@@ -60,7 +60,9 @@ allocator under it:
   constant-only initializers (no calls), evaluated once by the declaration sweep. EITHER may be
   MANAGED — a `String` or a `b"…"` byte-string literal: a `let` borrows the literal's own record, and a
   `var` gets an 8-byte POINTER slot filled by `__module_init` before `main` and released by
-  `__maxon_global_cleanup` after it. See *Top-level managed `let`* / *Top-level managed `var`* below.
+  `__maxon_global_cleanup` after it. An `[…]` ARRAY literal takes that slot whichever keyword declared it —
+  its record is BUILT, so no read can re-materialize one — and `let` then differs only in refusing the write.
+  See *Top-level managed `let`* / *Top-level managed `var`* / *Top-level ARRAY globals* below.
 - **Arithmetic** — `+ - * / mod` with Pratt precedence, prefix `-`.
 - **Comparisons** — `== != < > <= >=`, valid *only* as the sole top-level operator
   of an `if`/`while` condition (there is no `setcc`/bool materialization yet, so a
@@ -1031,6 +1033,64 @@ inserts index `i` on iteration `i`, so the map's height must be `i + 1`), and it
 global (`evaluateDecl` answers `notFound` for one, so `let A = "x"` / `let B = A` is E2004 in both
 declaration orders — measured against the oracle), so there is no initialization order to get wrong. The
 arena order the init emits in is fixed only so the emitted code is a function of the program.
+
+### Top-level ARRAY globals — a heap record for `let` AND `var` alike (P1.7 slice 2b)
+
+A module-scope binding may hold an `[…]` array literal whose elements are **integer constant expressions or
+String literals**. It is the managed-`var` mechanism above with one thing changed, and one premise broken.
+
+**The thing changed: the value is BUILT, not materialized.** A String literal is an immortal `.rdata` record
+and a `b"…"` is an owned record over an immortal blob, so both slots are filled from a literal the lowering
+already knows how to emit. An array has no literal record at all, so `__module_init` emits the ops
+`Parser.parseArrayLiteral` emits in a function body — `__arr_create(elementSize, elementDestroy)` then one
+`__arr_push` per element, with a String element **cloned** because the array becomes its sole owner and
+`__arr_decref`'s walk drops every live slot. The element values are folded by the SAME scalar constant
+evaluator every other initializer uses (`evalConstArrayLiteral` → `evalConstArrayElement`), so
+`[BASE, BASE + 2]` is as much a literal as `[1, 2]`; a String element is the one-token managed test applied
+between two separators, so an interpolation and every trailing form fall to the scalar walk and are rejected.
+
+> ⚠ **v1's `ConstantArrayLiteralRdata` is deliberately NOT ported.** It moves an all-constant-integer element
+> BUFFER into `.rdata` while still heap-allocating the header. That is an OPTIMIZATION over this, it is the
+> optimizer's call, and building it now would fork a second element-emission path before the first is proven.
+
+**The premise broken: `mutable` no longer decides which door a use goes through.** An array's record cannot
+be re-materialized by a READ — a `let` String's read borrows the ONE immortal record, but an array's record
+is mutable by nature, so a per-read copy would be a different array every time — so an array binding gets a
+`.data` slot **whichever keyword declared it**, and `let` differs in exactly one thing: it refuses the WRITE.
+`TopLevelDecl.hasStorage` is that criterion, written where the outcome is written and read by all four
+askers (the two use-doors, the layout, the label minter); `DeclKind` is `inlined | stored`, not `let | var`.
+
+⚠ **This is a DELIBERATE DIVERGENCE from the oracle**, which makes a never-mutated `let` array an immortal
+shared static record (`MaxonToStandardConversion.cs:1039-1077`). shv2 cannot: immortality needs enforcement
+that such a value is never mutated (only half-built — the E3019 receiver rule) and a real COPY promotion for
+`var b = <borrowed array>`, and it has neither. Heap for both is what it can state truthfully.
+
+| the refusal | code | where |
+|---|---|---|
+| `Live.push(9)` — a receiver-writing method on an immutable receiver | `E3019` | `requireMutableReceiver`, via the `mutable` bit on the synthetic receiver binding |
+| `Live = […]` — assigning a binding that has a slot and still refuses writes | `E2013` | `storeToGlobal`, off `TopLevelGlobalLookup.found`'s `mutable` |
+| `var b = Live` / `b = Live` — a mutable ALIAS of an immutable record | `E2015` | `promoteBorrowedToOwned`'s aggregate arm |
+
+> ⭐ **THE THIRD ROW IS THE ONE THIS SLICE HAD TO FIND, and it is what "an immutable binding with a SHARED
+> mutable record" costs.** A borrowed managed aggregate bound to a `var` is promoted to owned by an INCREF of
+> the same box — reference semantics, deliberately, because the alias is observable — so `var b = A` then
+> `b.push(9)` grew `A` with E2013 and E3019 both intact and nothing to report it. MEASURED at 3 where 2 is
+> correct. It is reachable only through this slice: a `let` String's promotion COPIES (`var b = <String let>`
+> stays legal and correct, and the oracle *leaks* on that same program), and a `let` byte-string
+> re-materializes a fresh record per read. Widening the incref into a copy is not the fix — a borrowed array
+> bound to a `var` SHARES in both reference compilers when the source is mutable (measured: the oracle
+> returns 3 for a `var` global and for a parameter, exactly as shv2 does), so copying would break an
+> agreement rather than fix a disagreement. **Immutability of the SOURCE is the whole discriminator**, and
+> the mark rides the VALUE (`Parser.immutableGlobalReads`) rather than being re-derived from the initializer's
+> tokens — which would be a FOURTH encoding of the local→capture→top-level order this file already carries
+> three copies of, and whose drift is silent.
+
+**Nothing depends on file order, still.** A managed initializer may not name another managed global, so
+`let A = [1,2]` / `let B = A` is **E2004 in both declaration orders** — reached through the settled
+`arrayValue` arm one way and through `hasStorage`'s "not yet evaluated ⇒ not stored" answer the other, which
+is what also keeps the forward reference `let TOTAL = FIRST + SECOND` working. An **empty** `[]` is refused
+(E2015): it has no element to infer from, and unlike a function body it cannot be told to use
+`Array with T` + `.create()`, because a call is not a constant.
 
 ## Register allocator (Std `ValueId`s → physical GPRs)
 

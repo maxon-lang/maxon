@@ -784,6 +784,13 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
+// The module-level shared EMPTY immutable-global-read list (P1.7 slice 2b), held as the initial value of
+// `immutableGlobalReads` AND as the COW anchor its reset points at — `sharedEmptyInstanceAliasMap`'s pattern,
+// for its reason and with its invariant. A program that declares no immutable top-level global with STORAGE
+// (which is every program with no array `let`) never writes it, so it stays empty, is safe to share across
+// the per-file parse fan-out, and costs ONE allocation for the whole compile rather than one per function.
+let sharedEmptyImmutableGlobalReads = ValueIdArray.create()
+
 // The NAME-keyed twin delivered to SemanticCheck for a function that has range checks but constructs no
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
@@ -1075,7 +1082,24 @@ end 'isQualifiedUnderTypeName'
 // address and CALLS one through a register has no consumer while this is 0, so it arrives at P1.2
 // with `__destruct_String` — a caller that is a real reason to be right, because a String that
 // does not free its buffer leaks and the leak gate says so. See `MmRuntime.buildMmFree`.
-let TrivialDestructor = 0 as ParsedInt
+//
+// EXPORTED because a top-level array global's record is stamped by `ModuleInit` (P1.7 slice 2b) rather than
+// by this file, and "no destructor" must be the same number in both — a second spelling of 0 is a second
+// thing to get wrong on the day it stops being 0.
+export let TrivialDestructor = 0 as ParsedInt
+
+// An array literal's elements must all have the FIRST element's type — one rule, so one wording, read by
+// the two walks over that grammar: the emitting one in a function body (`requireArrayLiteralElementMatches`)
+// and the folding one at top level (`evalConstArrayLiteral`, P1.7 slice 2b). Two copies would let the same
+// mistake be described two ways depending on where it was written.
+let MixedArrayLiteralElementsMessage = "an array literal with mixed element types — every element must have the same type as the first"
+
+// ⚠ **THE EMPTY LITERAL IS REFUSED IN BOTH POSITIONS AND THE ADVICE DIFFERS, so this text is deliberately
+// NOT shared with `parseArrayLiteral`'s.** The defect is identical — `[]` carries no element to infer a
+// type from — but a function body's remedy is `Array with T` + `.create()`, and a top-level initializer must
+// be a CONSTANT, so a `create()` call is not available to it (E2018 in a constant). Pointing a user at a
+// remedy their position forbids is worse than saying less. The runnable oracle refuses it here too.
+let EmptyConstArrayLiteralMessage = "an empty array literal `[]` as a top-level initializer — its element type cannot be inferred, and there is no empty-array form a constant initializer can name (a `.create()` call is not a constant)"
 
 // The result of resolving a `<sized>.min` / `<sized>.max` bound. A union, so the
 // caller can tell the two REJECTIONS apart and name the actual gap in its diagnostic
@@ -1628,7 +1652,7 @@ export function singletonArgs(value ValueId) returns ValueIdArray
 end 'singletonArgs'
 
 // A two-element call argument list — `__str_append(self, other)`'s pair. `singletonArgs`' sibling.
-function pairArgs(first ValueId, second ValueId) returns ValueIdArray
+export function pairArgs(first ValueId, second ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
 	args.push(second)
@@ -2305,8 +2329,12 @@ end 'CaptureScopeResult'
 union ManagedReceiverBinding
 	// A managed `let` (P1.7a) — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
 	constant(bytes ByteArray, kind ManagedConstKind)
-	// A managed `var` (P1.7 slice 2a) — `label`/`valueType` are what `emitGlobalLoad` reads the slot with.
-	global(label ByteArray, valueType MaxonType)
+	// A STORED managed binding (a `var`, P1.7 slice 2a; or an array `let`, P1.7 slice 2b) —
+	// `label`/`valueType` are what `emitGlobalLoad` reads the slot with, and `mutable` is what decides
+	// whether a receiver-writing method on it is legal. It carries that bit rather than assuming `true`
+	// because an array `let` is stored AND immutable: `Live.push(1)` must be E3019 where `Buffer.push(1)`
+	// is legal, and the synthetic `VarInfo` the dispatch wears is the only thing that can say so.
+	global(label ByteArray, valueType MaxonType, mutable bool)
 	none
 end 'ManagedReceiverBinding'
 
@@ -2832,6 +2860,30 @@ export type Parser
 	// fresh SSA space), exactly like the sibling value columns. A Map rather than a dense column because only
 	// the few generic-instance values a program constructs ever get an entry.
 	var valueInstanceAlias as ValueInstanceAliasMap
+	// ⭐⭐ **WHICH VALUES WERE READ OUT OF AN IMMUTABLE TOP-LEVEL GLOBAL (P1.7 slice 2b)** — the fact that
+	// stops a `let`-declared array's record from being written through a mutable ALIAS.
+	//
+	// A top-level array binding is a heap record with a `.data` slot whichever keyword declared it, and a
+	// `let` refuses the direct write (E2013 at an assignment, E3019 at a receiver-writing method). But a
+	// borrowed managed AGGREGATE bound to a `var` is promoted to owned by an INCREF of the SAME box
+	// (`retainBorrowedAggregate` — reference semantics, deliberately: the alias is observable), so `var b = A`
+	// followed by `b.push(9)` would write the immutable global's record with every direct guard intact. That
+	// is a silent wrong answer, not a crash — MEASURED at 3 where 2 is correct — and it is reachable only
+	// because this slice gave an IMMUTABLE binding a shared mutable record for the first time (a `let`
+	// String's read is COPIED on promotion, and a `let` byte string re-materializes a fresh record per read).
+	//
+	// ⚠ **THE MARK KEYS ON THE VALUE, and that is the point.** The alternative — testing the initializer's
+	// TOKENS for a bare name and re-resolving it — would be a FOURTH encoding of the local→capture→top-level
+	// resolution order, which this file already carries three copies of and has already been bitten by
+	// (slice 2a's receiver read the capture and the global for one name in one expression). A value carries
+	// where it came from with no order to re-derive and no shadow to mistake.
+	//
+	// A SPARSE list, not a dense per-value column like `valueOwnsHeap`: the population is the immutable-global
+	// reads of ONE function, which is zero in every program that declares no array `let`. It is scanned only
+	// at the one promotion gate, which a borrowed managed aggregate is the only thing to reach. Reset per
+	// function and SWAPPED across a closure body, exactly like the sibling value columns — a closure's value
+	// ids are its own SSA space, so a mark that leaked across would name an unrelated value.
+	var immutableGlobalReads as ValueIdArray
 	// ⭐ **THE CAPTURE SET OF THE CLOSURE CURRENTLY BEING PARSED (P1.5-A2b).** Populated by `captureEnclosing`
 	// as the body reads enclosing names (first-seen order = env slot order), read by `parseClosureExpression`
 	// after the body parse to build the env block (one `storeIndirect` per capture, by VALUE). SWAPPED across
@@ -3067,6 +3119,7 @@ export type Parser
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
+			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
@@ -5236,7 +5289,7 @@ export type Parser
 			// the same enumeration and is now the only one.
 			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			poisoned to managedValue then break 'outcome'
+			poisoned to arrayValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
@@ -6558,6 +6611,9 @@ export type Parser
 		// in THIS function's SSA space (P1.6-C). Points at the SHARED empty until the function constructs an
 		// instance (`recordValueInstanceAlias` copy-on-writes), so a generics-free function allocates nothing.
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
+		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
+		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias
 		// name is fixed by the DECLARED return type and known here, before the body is parsed; the two
 		// site lists fill as the body emits casts / returns.
@@ -7515,7 +7571,7 @@ export type Parser
 		var boundValue = value
 		var boundBareLocal = rhsWasBareLocal
 		if mutable and self.valueIsManagedHeap(value) and not self.valueIsOwnedHeap(value) 'promoteBorrowedBinding'
-			boundValue = self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
+			boundValue = try self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
 			boundBareLocal = false
 		end 'promoteBorrowedBinding'
 
@@ -7896,7 +7952,7 @@ export type Parser
 		var newValue = value
 		var newIsOwned = self.valueIsOwnedHeap(value)
 		if inOwnedSet and not newIsOwned 'promoteBorrowed'
-			newValue = self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
+			newValue = try self.promoteBorrowedToOwned(value, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
 		end 'promoteBorrowed'
 
@@ -7945,12 +8001,36 @@ export type Parser
 	// `typesAgree`/`assignTypeMismatch` pair — a global is no less able to be handed a bool where it
 	// declared an int, and a laundered value in a `.data` slot is exactly as wrong as one in a
 	// register. The check happens BEFORE the store is emitted, so a rejected program emits no op.
+	//
+	// ⚠ **HAVING A SLOT IS NOT PERMISSION TO WRITE ONE** (P1.7 slice 2b). `globalDeclFor` answers "which slot
+	// does this name denote?", and an array `let` has an answer to that — its value is a heap record, so it
+	// is STORED like a `var` and read like one. Whether it may be WRITTEN is the separate question this
+	// statement is the only asker of, so the `mutable` bit rides the lookup and the refusal happens here.
+	// Without it `let xs = [1, 2]` would silently accept `xs = [3, 4]` — an accepted write that should have
+	// been refused, which is a wrong answer rather than a compile error.
 	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token) throws ParseError
 		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath) 'global'
-			found(label, valueType) then try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
+			found(label, valueType, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, label: label, valueType: valueType, mutable: mutable)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
 		end 'global'
 	end 'parseTopLevelAssignment'
+
+	// Write a top-level global, or refuse because it is immutable — an array `let`, the one binding that has
+	// a slot and still refuses the write (P1.7 slice 2b).
+	//
+	// It raises E2013 HERE rather than through `rejectNonGlobalAssignment` below, because the two know
+	// different things and the difference is the whole diagnostic: that one is reached having established
+	// the name is NOT a stored global, so it must go and ask whether the name exists at all before it can
+	// choose between E2013 and E2004. This one is holding the resolution that proves the name is declared,
+	// so the question is already answered and re-asking it through a kind-filtered door would report a
+	// declared name as undefined.
+	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, mutable bool) throws ParseError
+		if not mutable 'immutableGlobal'
+			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'immutableGlobal'
+
+		try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
+	end 'storeToGlobal'
 
 	// Parse the right-hand side, check it against the global's declared type, and store it.
 	//
@@ -8296,7 +8376,13 @@ export type Parser
 		return self.builtinConformerOfValue(value) == conformer
 	end 'valueIsConformer'
 
-	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
+	// The name is not a local and not a top-level binding WITH STORAGE. Say which of the two remaining things
+	// it is: an INLINED top-level constant (E2013) or nothing at all (E2004).
+	//
+	// A stored-but-immutable binding — an array `let` (P1.7 slice 2b) — never reaches here: it resolves
+	// through `globalDeclFor` like any other global, and `storeToGlobal` refuses it there, holding the
+	// resolution that proves the name is declared. So the constant probe below is the whole remaining
+	// question, exactly as it was before that binding existed.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
 		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
 			// Either kind of constant is immutable — assigning to a managed `let` is the same mistake as
@@ -10196,12 +10282,33 @@ export type Parser
 	// blit of the struct's fields as a fused String record, a SILENT miscompile the type checker waves
 	// through (both sides are the same aggregate type) and the suite was green over. Routing both sites
 	// here makes a future divergence a compile error rather than a wrong answer.
-	function promoteBorrowedToOwned(value ValueId, range SourceRange) returns ValueId
+	//
+	// ⚠⚠ **AN AGGREGATE READ OUT OF AN IMMUTABLE GLOBAL IS REFUSED HERE (P1.7 slice 2b), and this is the ONE
+	// place that can refuse it.** The aggregate arm promotes by INCREF — the binding becomes a second owner of
+	// the SAME box, deliberately, because the alias is observable — so a mutable binding of a value read from
+	// a `let`-declared global would be a writable alias of a record the language says is immutable:
+	// `var b = A` then `b.push(9)` grows A, with E2013 and E3019 both intact and nothing to say so (MEASURED
+	// at 3 where 2 is correct, through BOTH callers: the declaration `var b = A` and the reassignment
+	// `b = A`). A String source never reaches it — the text arm COPIES, which is why `var b = <a String let>`
+	// stays legal and correct.
+	//
+	// The refusal is E2015 and names the missing mechanism, because that is exactly what this is: a real COPY
+	// promotion for a borrowed array would make the program work, and shv2 has none (an `Array` has no clone;
+	// `retainBorrowedAggregate` is all there is). Widening the incref into a copy is not an option here — a
+	// borrowed array bound to a `var` SHARES in both reference compilers when the source is mutable
+	// (measured: the oracle returns 3 for a `var` global and for a parameter, exactly as shv2 does), so
+	// copying would break an agreement rather than fix a disagreement. Immutability of the SOURCE is the
+	// whole discriminator.
+	function promoteBorrowedToOwned(value ValueId, range SourceRange) returns ValueId throws ParseError
 		if tagIsText(self.tagOf(value)) 'text'
 			return self.promoteToOwnedString(value, range: range)
 		end 'text'
 
 		if self.valueIsNonTextAggregate(value) 'aggregate'
+			if self.valueIsImmutableGlobalRead(value) 'immutableSource'
+				throw ParseError.unsupported("binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`", line: range.line, column: range.column)
+			end 'immutableSource'
+
 			return self.retainBorrowedAggregate(value, range: range)
 		end 'aggregate'
 
@@ -16578,7 +16685,7 @@ export type Parser
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
 				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
-				global(label, valueType) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: true, resultUsed: resultUsed)
+				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
 				none then break 'binding'
 			end 'binding'
 		end 'managedTopLevelBase'
@@ -16718,7 +16825,7 @@ export type Parser
 		end 'constant'
 
 		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
-			found(label, valueType) gives ManagedReceiverBinding.global(label, valueType: valueType)
+			found(label, valueType, mutable) gives ManagedReceiverBinding.global(label, valueType: valueType, mutable: mutable)
 			notFound gives ManagedReceiverBinding.none
 		end 'global'
 	end 'managedReceiverBindingOf'
@@ -17178,7 +17285,7 @@ export type Parser
 	// first's. A mismatch is an array literal with mixed element types (E2015).
 	function requireArrayLiteralElementMatches(elem ValueId, giid GenericInstanceId, elemTok Token) throws ParseError
 		if (try self.arrayLiteralInstanceFor(elem, elemTok: elemTok)) != giid 'mismatch'
-			throw ParseError.unsupported("an array literal with mixed element types — every element must have the same type as the first", line: elemTok.line, column: elemTok.column)
+			throw ParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column)
 		end 'mismatch'
 	end 'requireArrayLiteralElementMatches'
 
@@ -17219,10 +17326,20 @@ export type Parser
 	// for a trivial element it is 0 (an inline element owns nothing, so the walk is skipped). A CONCRETE site
 	// knows the element type, so the address is the existing P1.5-A1 `funcAddr` code→register path — no rdata
 	// reloc, no descriptor `destroyFunc@40` (those are the opaque-`T`-in-a-generic-body case, slice 3b).
+	//
+	// ⚠ **IT ASKS THE TWO `ProgramSignatures` ACCESSORS RATHER THAN A UNION DESCRIBING THE ANSWER, and that
+	// is a measured cost decision** (P1.7 slice 2b). A top-level array global's record is stamped from the
+	// same pair (`ProgramSignatures.arrayRecordInitializer`), and folding the two into one union-returning
+	// door was tidier — but a Maxon union value is a HEAP OBJECT, and this runs at every array creation SITE
+	// in the program: MEASURED at exactly +1 allocation per site (32 sites → +32, 64 → +64, and +32 at scale
+	// rung 0 doubling to +1,024 at rung 5). The DECISION is single-homed regardless — `arrayElementIsManaged`
+	// is the one place "does this element own anything?" is answered, and both sites ask it — so what is
+	// written twice is a three-line composition, not a rule.
 	function arrayElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
 		if self.signatures.arrayElementIsManaged(giid) 'managed'
 			return self.emitRuntimeFuncAddr(self.signatures.arrayElementDropCallee(giid), range: range)
 		end 'managed'
+
 		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
 	end 'arrayElementDestroyValue'
 
@@ -19297,10 +19414,43 @@ export type Parser
 	// this emits perfectly correct IR that a later pass silently breaks.
 	function topLevelGlobalRead(tok Token) returns ValueId throws ParseError
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
-			found(label, valueType) then return self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok))
+			// A read itself does not care whether the slot may be WRITTEN — it borrows the occupant either
+			// way. What the MUTABILITY decides is whether the borrowed value may later become a mutable
+			// ALIAS, which is `markImmutableGlobalRead`'s business (P1.7 slice 2b).
+			found(label, valueType, mutable) then return self.recordGlobalReadValue(self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok)), mutable: mutable)
 			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
 	end 'topLevelGlobalRead'
+
+	// Mark a global read that came out of an IMMUTABLE slot, and hand the value straight back (P1.7 slice 2b).
+	// It is only the READ path that marks: a receiver load (`parseMethodCall`'s stored-binding arm) is
+	// consumed by the dispatch on the spot, where `requireMutableReceiver` already refuses a write through
+	// an immutable binding, and it can never reach a `var`'s initializer.
+	function recordGlobalReadValue(value ValueId, mutable bool) returns ValueId
+		if mutable 'writableSlot'
+			return value
+		end 'writableSlot'
+
+		if self.immutableGlobalReads is sharedEmptyImmutableGlobalReads 'stillShared'
+			self.immutableGlobalReads = ValueIdArray.create()
+		end 'stillShared'
+		self.immutableGlobalReads.push(value)
+		return value
+	end 'recordGlobalReadValue'
+
+	// Was `value` read out of an IMMUTABLE top-level global's slot? A linear scan of a list holding one entry
+	// per such read IN THIS FUNCTION — which is zero in every program that declares no array `let`, and a
+	// handful in one that does. It is asked only where a borrowed managed AGGREGATE is about to be promoted
+	// to an owned mutable binding, which is the one place the answer changes anything.
+	function valueIsImmutableGlobalRead(value ValueId) returns bool
+		for marked in self.immutableGlobalReads 'each'
+			if marked == value 'hit'
+				return true
+			end 'hit'
+		end 'each'
+
+		return false
+	end 'valueIsImmutableGlobalRead'
 
 	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
 	// falls to after it is not a local, a self-field, a top-level constant or a `var`. It is what makes
@@ -19415,6 +19565,7 @@ export type Parser
 		let savedValueIsCapturingClosure = self.valueIsCapturingClosure
 		let savedValueClosureEnv = self.valueClosureEnv
 		let savedValueInstanceAlias = self.valueInstanceAlias
+		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
@@ -19453,6 +19604,7 @@ export type Parser
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
@@ -19567,6 +19719,7 @@ export type Parser
 		self.valueIsCapturingClosure = savedValueIsCapturingClosure
 		self.valueClosureEnv = savedValueClosureEnv
 		self.valueInstanceAlias = savedValueInstanceAlias
+		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
@@ -19720,11 +19873,94 @@ export type Parser
 			end 'byteStringLiteral'
 		end 'singleTokenInitializer'
 
+		// ⭐ **AN ARRAY LITERAL IS THE THIRD ANSWER, AND IT IS DECIDED ON THE OPENING TOKEN** (P1.7 slice
+		// 2b). It cannot ride the single-token test above — `[1, 2]` is five tokens — and it must not fall
+		// to the scalar walk, whose `evalConstPrimary` has no `[` and would report `Expected expression but
+		// got '['` (which is what it did before this slice, in every position). Unlike the two literal arms,
+		// it is followed by `requireInitializerConsumed`: the walk stops at the closing `]`, so a trailing
+		// `var xs = [1, 2] junk` would otherwise be silently truncated to `[1, 2]`.
+		if self.at(TokenKind.leftBracket) 'arrayLiteralInitializer'
+			let array = try self.evalConstArrayLiteral(stack)
+			try self.requireInitializerConsumed(decl)
+
+			return array
+		end 'arrayLiteralInitializer'
+
 		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
 		try self.requireInitializerConsumed(decl)
 
 		return ConstInitializerValue.scalar(value)
 	end 'evalConstInitializer'
+
+	// ⭐ **`[e0, e1, …]` AT TOP LEVEL — the constant twin of `parseArrayLiteral`**, and the same three rules
+	// read off the same grammar: an EMPTY literal has no element type to infer, the FIRST element fixes the
+	// element type, and every later element must match it. What differs is only what the walk produces —
+	// folded VALUES here, ops there — which is the fork `evalConstInitializer`'s header states for the whole
+	// evaluator. The two REJECTIONS are worded once and shared (`MixedArrayLiteralElementsMessage`) or
+	// deliberately not (`EmptyConstArrayLiteralMessage` — see there).
+	//
+	// ⚠ **NO OWNERSHIP BOOKKEEPING, and that is a property of the position rather than an omission.** A
+	// literal in a function body must move each element into the array (poisoning a bare local, de-listing an
+	// owned temp) because its elements can be values something else already owns. A top-level initializer's
+	// elements are CONSTANTS — there is no binding to poison and no temp to de-list — so the only thing that
+	// carries over is that a String element must reach the array OWNED, which `ModuleInit` does by cloning
+	// the literal exactly as `moveElementIntoArray` promotes a borrowed one.
+	function evalConstArrayLiteral(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
+		let openTok = try self.consumeConst(TokenKind.leftBracket)
+		if self.at(TokenKind.rightBracket) 'empty'
+			throw ConstEvalError.defective(ParseError.unsupported(EmptyConstArrayLiteralMessage, line: openTok.line, column: openTok.column))
+		end 'empty'
+
+		var elements = ConstArrayElementArray.create()
+		let first = try self.evalConstArrayElement(stack)
+		let element = constArrayElementKindOf(first)
+		elements.push(first)
+
+		while self.at(TokenKind.comma) 'moreElements'
+			try self.consumeConst(TokenKind.comma)
+			let elemTok = self.current()
+			let elem = try self.evalConstArrayElement(stack)
+			if constArrayElementKindOf(elem) != element 'mixed'
+				throw ConstEvalError.defective(ParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column))
+			end 'mixed'
+			elements.push(elem)
+		end 'moreElements'
+		try self.consumeConst(TokenKind.rightBracket)
+
+		return ConstInitializerValue.arrayLiteral(elements, element: element)
+	end 'evalConstArrayLiteral'
+
+	// ONE element of a top-level array literal: a STRING literal, or anything the scalar evaluator folds to
+	// an integer. The managed/scalar split is `evalConstInitializer`'s, applied between two separators —
+	// a String element is exactly one token, so `["a{x}b"]` (several tokens) and `["a" as T]` fall to the
+	// scalar walk and are rejected there, which is what they are.
+	//
+	// A non-integer SCALAR is refused here rather than silently stored: `[true, false]` folds perfectly well
+	// and would then be built as an `Array with Integer` of 1s and 0s, which is not the type the program
+	// wrote. shv2 rejects a bool element in a function body too (`arrayLiteralInstanceFor`), so this is the
+	// same boundary at the same width — a top-level literal must never accept more than a body does.
+	function evalConstArrayElement(stack TopLevelDeclIndexArray) returns ConstArrayElement throws ConstEvalError
+		if self.at(TokenKind.stringLiteral) and self.constArrayElementIsSingleToken(self.pos) 'stringElement'
+			return ConstArrayElement.string(try self.decodeConstStringLiteral(self.consumeManagedLiteral()))
+		end 'stringElement'
+
+		let tok = self.current()
+		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
+		if value.tag != ValueTypeTag.integer 'notAnInteger'
+			throw ConstEvalError.defective(ParseError.unsupported("a top-level array literal element of type '{typeTagName(value.tag)}' — a constant array's elements are integers or String literals", line: tok.line, column: tok.column))
+		end 'notAnInteger'
+
+		return ConstArrayElement.integer(value.payload)
+	end 'evalConstArrayElement'
+
+	// Is the element STARTING at `index` exactly one token — i.e. is the next token the `,` or `]` that ends
+	// it? The element-level twin of `evalConstInitializer`'s `initEnd == initStart + 1`, and it is there for
+	// the identical reason: one token is the whole managed test, so an interpolation (several tokens) and
+	// every trailing form stay out of the String arm and reach the walk that rejects them.
+	function constArrayElementIsSingleToken(index TokenIndex) returns bool
+		let after = self.kindAt(index + 1)
+		return after == TokenKind.comma or after == TokenKind.rightBracket
+	end 'constArrayElementIsSingleToken'
 
 	// Take the managed-literal token the caller has just recognized and step past it. It cannot be
 	// `consumeConst(kind)`: the caller has already matched the kind, and this is used in ARGUMENT

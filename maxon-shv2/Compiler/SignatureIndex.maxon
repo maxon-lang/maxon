@@ -152,6 +152,18 @@ let ConstShapeManagedValue = 45 as ContentHash
 let ManagedShapeString = 46 as ContentHash
 let ManagedShapeByteArray = 47 as ContentHash
 
+// The FOURTH shape a top-level binding's answer hashes under (P1.7 slice 2b): it folded to an ARRAY
+// LITERAL. Its own discriminator for `ConstShapeManagedValue`'s reason — `let X = "ab"` becoming
+// `let X = [1, 2]` turns every reader's materialized literal into a `.data` load, and nothing else on
+// the hash says so.
+let ConstShapeArrayValue = 48 as ContentHash
+
+// Which ELEMENT type an array literal folded to, mixed beside its label (P1.7 slice 2b). Two constants
+// for `ManagedShapeString`/`ManagedShapeByteArray`'s reason: `Array with Integer` and `Array with String`
+// are different types, and a reader types its load from the instance this picks.
+let ArrayElementShapeInteger = 49 as ContentHash
+let ArrayElementShapeString = 50 as ContentHash
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -375,7 +387,56 @@ export union TopLevelConstant
 	// beside `value` would have let `value to poisoned` swallow it silently. Same rule, same reason, as
 	// `StdOp`'s bands.
 	managedValue(bytes ByteArray, kind ManagedConstKind)
+	// ⭐ **IT EVALUATED TO AN ARRAY LITERAL** (P1.7 slice 2b) — its already-folded `elements` and the one
+	// `element` kind they all share. Its own arm rather than a widened `managedValue` because an array's
+	// value is neither a number nor bytes: it is a LIST, and the record built from it is a HEAP record
+	// with a `.data` slot — so a binding that folds to one is STORED whichever keyword declared it (see
+	// `TopLevelDecl.hasStorage`), where a `managedValue` `let` is inlined at every read.
+	//
+	// ⚠ APPENDED AT THE END, for `managedValue`'s reason and now with one more range arm reading this
+	// union. Appending leaves `value to poisoned`, `failed to poisoned`, `pending to evaluating` and
+	// `value to managedValue` all EXCLUDING this case, so each site fails to compile until it has been
+	// visited and decided.
+	arrayValue(elements ConstArrayElementArray, element ConstArrayElementKind)
 end 'TopLevelConstant'
+
+// ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
+// pushes. Deliberately NOT `ConstInitializerValue` (which would make it recursive): a NESTED array literal
+// is not an element an array literal accepts, in a function body or here, so the type says so rather than
+// leaving a case for a walk to reject.
+export union ConstArrayElement
+	// An integer element: the folded number, materialized as an ordinary `literal` op. The whole scalar
+	// evaluator stands behind it, so `[BASE, BASE + 2]` is as much an element as `[1, 2]` is.
+	integer(payload ParsedInt)
+	// A String element: the literal's decoded bytes, materialized as the immortal `.rdata` record and then
+	// CLONED — the array's `element_destroy@40` walk drops every live slot, so each element must be a record
+	// the array may own (exactly what `Parser.moveElementIntoArray` promotes a borrowed String literal to).
+	string(bytes ByteArray)
+end 'ConstArrayElement'
+
+export typealias ConstArrayElementArray = Array with ConstArrayElement
+
+// WHICH element type a top-level array literal settled on — the ONE fact its `Array with T` instance, its
+// element size and its element destructor all follow from, decided from the FIRST element and enforced on
+// every later one (`ProgramSignatures` reads it and never re-inspects the elements).
+//
+// It mirrors `ConstArrayElement`'s arms because it IS their classification, and `constArrayElementKindOf`
+// is the one function that connects the two — so the kind a global is typed by and the elements the init
+// emits cannot come to disagree.
+export enum ConstArrayElementKind
+	integer
+	string
+end 'ConstArrayElementKind'
+
+// The classification of one folded element — the single bridge between `ConstArrayElement` (what an element
+// IS) and `ConstArrayElementKind` (what the ARRAY is). Both the first element's settling and every later
+// element's homogeneity check read it, so a literal cannot be typed by one reading and checked by another.
+export function constArrayElementKindOf(element ConstArrayElement) returns ConstArrayElementKind
+	return match element 'e'
+		integer gives ConstArrayElementKind.integer
+		string gives ConstArrayElementKind.string
+	end 'e'
+end 'constArrayElementKindOf'
 
 // WHICH managed literal a top-level `let` folded to — the ONE fact a use site needs beyond the bytes,
 // because the two kinds materialize through different record shapes: a String literal is a wholly
@@ -396,8 +457,11 @@ end 'ManagedConstKind'
 // declaration the user wrote — the ops exist because of that line and nothing else.
 export type ManagedGlobal
 	export let label as ByteArray
-	export let bytes as ByteArray
-	export let kind as ManagedConstKind
+	// ⭐ **THE RECORD `__module_init` BUILDS, AS A DESCRIPTION** — a union rather than a `kind` beside a
+	// `bytes` that only two of the three kinds have anything to put in (P1.7 slice 2b). Each arm carries
+	// exactly what its own construction needs and nothing else, so an array's elements cannot be read off a
+	// String global and a String's bytes cannot be read off an array's.
+	export let initializer as ManagedGlobalInitializer
 	export let valueType as MaxonType
 	// ⭐ THE RUNTIME ENTRY `__maxon_global_cleanup` DROPS THIS SLOT'S OCCUPANT THROUGH — decided HERE, in
 	// the arena walk, because the routing (`managedFieldDropCallee`) has to resolve the type's ids against
@@ -406,12 +470,51 @@ export type ManagedGlobal
 	export let dropCallee as ByteArray
 	export let range as SourceRange
 
-	export static function create(label ByteArray, bytes ByteArray, kind ManagedConstKind, valueType MaxonType, dropCallee ByteArray, range SourceRange) returns ManagedGlobal
-		return Self{label: label, bytes: bytes, kind: kind, valueType: valueType, dropCallee: dropCallee, range: range}
+	export static function create(label ByteArray, initializer ManagedGlobalInitializer, valueType MaxonType, dropCallee ByteArray, range SourceRange) returns ManagedGlobal
+		return Self{label: label, initializer: initializer, valueType: valueType, dropCallee: dropCallee, range: range}
 	end 'create'
 end 'ManagedGlobal'
 
 export typealias ManagedGlobalArray = Array with ManagedGlobal
+
+// ⭐ **HOW ONE MANAGED GLOBAL'S INITIAL OWNED RECORD IS BUILT** — three arms because there are three record
+// constructions, and each differs in whether the literal's own materialization is ALREADY the owned record
+// the slot must hold. That is a fact about the record formats, not a choice `ModuleInit` makes.
+export union ManagedGlobalInitializer
+	// A `String` literal is a WHOLLY immortal `.rdata` record shared by every read of those bytes, so the
+	// slot's occupant is a CLONE of it — the `(box) -> newBox` dual of the `__str_decref` the cleanup drops
+	// it with, so the pair balances by construction.
+	stringRecord(bytes ByteArray)
+	// A `b"…"` literal ALREADY materializes as an owned heap 48-byte `Array` record over an immortal `.rdata`
+	// blob, which is precisely what the slot must hold — so there is nothing to clone.
+	byteStringRecord(bytes ByteArray)
+	// An ARRAY literal (P1.7 slice 2b) has no literal record at all: it is BUILT, `__arr_create` then one
+	// `__arr_push` per element. `elementSize` and `elementDestroy` are what `__arr_create` stamps into
+	// `element_size@24` / `element_destroy@40`, resolved HERE (where the instance registry is) rather than
+	// re-derived by the synthesis — the same discipline `dropCallee` above follows.
+	arrayRecord(elements ConstArrayElementArray, elementSize ByteOffset, elementDestroy ArrayElementDestroy)
+end 'ManagedGlobalInitializer'
+
+// ⭐ **THE `element_destroy@40` STAMP AN ARRAY RECORD IS BORN WITH** — the ADDRESS of the element's drop
+// callee for a MANAGED element, which `__arr_decref`'s last-owner walk calls through a `callIndirect` on
+// each live slot, and NOTHING for a trivial one (an inline element owns nothing, so the walk is skipped).
+//
+// A union rather than a callee name whose emptiness means "trivial": the two are different instructions to
+// the emitter (a `functionRef` op versus a `literal 0`), and a sentinel would let a genuinely missing name
+// read as a deliberate absence.
+export union ArrayElementDestroy
+	trivial
+	drop(callee ByteArray)
+end 'ArrayElementDestroy'
+
+// WHICH record a managed LITERAL global's bytes build — the `ManagedConstKind` → `ManagedGlobalInitializer`
+// map, in one place so the kind a constant folded to and the construction its slot gets cannot drift apart.
+function managedLiteralInitializer(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalInitializer
+	return match kind 'k'
+		string gives ManagedGlobalInitializer.stringRecord(bytes)
+		byteArray gives ManagedGlobalInitializer.byteStringRecord(bytes)
+	end 'k'
+end 'managedLiteralInitializer'
 
 // The value a managed global's `.data` slot holds BEFORE `__module_init` runs: a null pointer. Named
 // rather than a bare 0 because it is a CLAIM — "no record exists yet" — and it is the one state the
@@ -461,10 +564,36 @@ export type TopLevelDecl
 	// path-qualified key the compiler files it under. (v1 needs a `displayTopLevelKey` to strip that
 	// prefix back off at E2012 time; carrying the bare name costs one pointer and needs no stripping.)
 	export var name as ByteArray
-	// `var` (mutable, a real `.data` slot) or `let` (immutable, inlined at every read). The one bit
-	// that decides which of the two doors a USE goes through — `constantValueOf` for a constant,
-	// `globalDeclFor` for a var — and the reason they are separate doors at all.
+	// `var` or `let` — WHETHER THIS NAME MAY BE WRITTEN, and nothing else. It used to double as "does it
+	// have a slot?", and P1.7 slice 2b separated the two: an array `let` is immutable AND stored, so which
+	// door a USE goes through is `hasStorage` below and this bit is only what the two WRITE sites ask.
 	export var mutable as bool
+	// ⭐⭐ **DOES THIS DECLARATION HAVE A `.data` SLOT?** — the ONE criterion deciding which of the two doors
+	// a USE goes through (`constantValueOf` materializes a value, `globalDeclFor` loads a slot), which decls
+	// the layout reserves storage for, and which ones `assignDataLabels` labels. Read from all four, so it is
+	// ONE fact rather than four re-derivations that could give a binding a slot the layout never laid down.
+	//
+	// ⚠ **A `var` IS NOT THE WHOLE ANSWER** (P1.7 slice 2b). Every `var` is stored — that is what a `var` IS,
+	// so this starts life equal to `mutable`. But so is an immutable ARRAY: its value is a heap record built
+	// by `__module_init`, and no READ can re-materialize one (a `let` String's read borrows the ONE immortal
+	// `.rdata` record; an array's record is mutable by nature and per-program, so a per-read copy would be a
+	// different array every time). `settleArrayValue` is the ONLY writer that flips it, which is the same
+	// place `outcome` becomes `arrayValue` — so the two cannot disagree, and an array binding gets a slot
+	// while `let` keeps refusing the write (E2013 at an assignment, E3019 at a receiver-writing method).
+	//
+	// ⚠ **A FIELD RATHER THAN A FUNCTION THAT RE-READS `outcome`.** The obvious spelling is
+	// `mutable or outcome is arrayValue`, asked afresh at each of the four readers. A bool written where the
+	// outcome is written says the same thing once, is O(1) at every ask, and — the part that matters — makes
+	// the answer available in the window where the outcome is not yet settled, which the four readers
+	// straddle (see below). MEASURED: it costs no allocations and about 24 bytes per top-level declaration.
+	//
+	// ⚠ It is FALSE for an unevaluated decl, and that is the right answer rather than a placeholder: the
+	// only reader in that window is the evaluator's own name resolution (`evalConstNamed` → `constantDeclFor`),
+	// mid-DFS, and answering "inlined" merely lets the reference through to `evaluateDecl` — which settles the
+	// decl and then answers `notFound` for an array exactly as it does for a managed literal. That is what
+	// makes `let A = [1, 2]` / `let B = A` E2004 in BOTH declaration orders (measured against the oracle),
+	// and it is what keeps the forward reference `let TOTAL = FIRST + SECOND` above `let FIRST = 30` working.
+	export var hasStorage as bool
 	export var declFilePath as FilePath
 	export var tokens as TokenArray
 	export var initStart as TokenIndex
@@ -492,6 +621,7 @@ export type TopLevelDecl
 			storageKey: topLevelStorageKey(name, visibility: visibility, declFilePath: declFilePath),
 			name: name,
 			mutable: mutable,
+			hasStorage: mutable,
 			declFilePath: declFilePath,
 			tokens: tokens,
 			initStart: initStart,
@@ -553,6 +683,10 @@ end 'ConstValue'
 export union ConstInitializerValue
 	scalar(value ConstValue)
 	managed(bytes ByteArray, kind ManagedConstKind)
+	// An ARRAY LITERAL (P1.7 slice 2b) — its folded elements and the kind they share. It is a THIRD answer
+	// rather than a `managed` with a different payload for `TopLevelConstant.arrayValue`'s reason: the
+	// binding it settles has STORAGE, where a `managed` `let` has none.
+	arrayLiteral(elements ConstArrayElementArray, element ConstArrayElementKind)
 end 'ConstInitializerValue'
 
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
@@ -597,20 +731,33 @@ end 'TopLevelConstantLookup'
 // CONCRETE `Array with Byte` instance, and an instance is its gid — a tag alone cannot say which one, and
 // a use site that re-derived it would be a second answer to "what type is this global?" free to name a
 // different instance than the slot was laid out for.
+//
+// ⚠ **AND THE MUTABILITY, because a STORED binding is no longer necessarily a `var`** (P1.7 slice 2b). An
+// array `let` has a slot — its value is a heap record no read can re-materialize — so "which slot does this
+// name denote?" and "may it be written?" came apart, and this door answers the first. The second is asked by
+// the two sites that WRITE (`Parser.parseTopLevelAssignment`, and the synthetic receiver binding a method
+// call is dispatched on), off this bit; without it an array `let` would silently accept both.
 export union TopLevelGlobalLookup
-	found(label ByteArray, valueType MaxonType)
+	found(label ByteArray, valueType MaxonType, mutable bool)
 	notFound
 end 'TopLevelGlobalLookup'
 
 // Which kind of top-level declaration a lookup is asking for. The two are resolved by ONE probe
-// (`declFor`) and are never interchangeable at a use site: a constant inlines, a var loads.
+// (`declFor`) and are never interchangeable at a use site: an inlined binding materializes its value, a
+// stored one loads from a slot.
 //
-// An enum, not the bare `mutable bool` the decl carries: at a CALL SITE `wanted: DeclKind.constant`
-// says what is being asked for, where `wanted: false` would be a magic value the reader has to
-// decode against the field's polarity.
+// ⚠ **IT IS `inlined` vs `stored`, NOT `let` vs `var`** (P1.7 slice 2b). Those two questions were the same
+// question until an array literal reached the top level: an array binding's value is a HEAP RECORD, which
+// no read can re-materialize, so it gets a `.data` slot whichever keyword declared it — and a `let` differs
+// from a `var` only in refusing the WRITE. `TopLevelDecl.hasStorage` is the one criterion, and naming this enum
+// after the storage rather than the keyword is what stops a reader assuming they still coincide.
+//
+// An enum, not the bare `mutable bool` the decl carries: at a CALL SITE `wanted: DeclKind.inlined` says
+// what is being asked for, where `wanted: false` would be a magic value the reader has to decode against
+// the field's polarity.
 enum DeclKind
-	constant
-	mutable
+	inlined
+	stored
 end 'DeclKind'
 
 // The per-argument classification the three "does any interned instance of `baseName` classify its type
@@ -2360,7 +2507,7 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
-				managedValue then break 'state'
+				managedValue to arrayValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -2393,13 +2540,17 @@ export type ProgramSignatures
 	// Walked in ARENA ORDER, which is source-path order then in-file order — so which of two colliding
 	// decls gets the bare name is a deterministic function of the program, not of a hash iteration.
 	// That is the same property `decls` is an array for.
+	//
+	// ⚠ **IT RUNS AFTER THE EVALUATION LOOP, AND THAT ORDER IS NOW LOAD-BEARING** (P1.7 slice 2b): which
+	// decls have a slot is `TopLevelDecl.hasStorage`, and `settleArrayValue` is what sets it for an immutable
+	// ARRAY binding. Hoisted above the loop it would label the `var`s and silently skip every array `let`.
 	function assignDataLabels()
 		var minted = DataLabelCountMap.create()
 		for i in 0 upto self.decls.count() 'each'
 			var decl = self.declAt(i)
-			if not decl.mutable 'constantHasNoSlot'
+			if not decl.hasStorage 'inlinedHasNoSlot'
 				continue
-			end 'constantHasNoSlot'
+			end 'inlinedHasNoSlot'
 			decl.dataLabel = uniqueDataLabel(decl.name, minted: minted)
 		end 'each'
 	end 'assignDataLabels'
@@ -2432,7 +2583,11 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			value(payload, tag) then return ConstEvalOutcome.value(payload, tag: tag)
 			failed to poisoned then return ConstEvalOutcome.failed
-			managedValue then return ConstEvalOutcome.notFound
+			// An ARRAY binding answers `notFound` for a managed literal's reason (P1.7 slice 2b): the only
+			// caller reading this for a NAME is a reference from inside another initializer, and there is
+			// nothing an arithmetic fold could do with a heap record. MEASURED against the runnable oracle —
+			// `let A = [1, 2]` / `let B = A` is E2004 `Undefined constant 'A'` in BOTH declaration orders.
+			managedValue to arrayValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -2467,6 +2622,7 @@ export type ProgramSignatures
 		match folded 'kind'
 			scalar(value) then return self.settleScalarValue(decl, value: value)
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
+			arrayLiteral(elements, element) then return self.settleArrayValue(decl, elements: elements, element: element)
 		end 'kind'
 	end 'walkConstInitializer'
 
@@ -2484,6 +2640,19 @@ export type ProgramSignatures
 		self.managedTopLevelNames.insert(decl.name)
 		return ConstEvalOutcome.notFound
 	end 'settleManagedValue'
+
+	// Settle a decl whose initializer folded to an ARRAY LITERAL (P1.7 slice 2b). It joins
+	// `managedTopLevelNames` for `settleManagedValue`'s reason — the name is a METHOD RECEIVER
+	// (`counters.get(0)`), and that set is the allocation-free filter in front of every receiver probe — and
+	// answers `notFound` for the same reason a managed literal does.
+	function settleArrayValue(decl TopLevelDecl, elements ConstArrayElementArray, element ConstArrayElementKind) returns ConstEvalOutcome
+		decl.outcome = TopLevelConstant.arrayValue(elements, element: element)
+		// An array binding is STORED whichever keyword declared it — written HERE, beside the outcome it is
+		// derived from, so the two are one decision (see `TopLevelDecl.hasStorage`).
+		decl.hasStorage = true
+		self.managedTopLevelNames.insert(decl.name)
+		return ConstEvalOutcome.notFound
+	end 'settleArrayValue'
 
 	// Settle a decl that produced no value: it either OWNS the defect or merely inherited one.
 	function recordFailure(decl TopLevelDecl, error ConstEvalError) returns ConstEvalOutcome
@@ -2505,7 +2674,7 @@ export type ProgramSignatures
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
-			managedValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			managedValue to arrayValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -2611,16 +2780,17 @@ export type ProgramSignatures
 		end 'lookup'
 	end 'constantValueOf'
 
-	// ⭐ **THE `var` DOOR** — what `name` denotes as a top-level MUTABLE global, read from
-	// `readerFilePath`. The twin of `constantValueOf`, and the reason the two are separate: a
-	// constant's use INLINES a number and a var's use LOADS from a slot, so a caller that could not
-	// tell them apart would have to guess which code to emit.
+	// ⭐ **THE STORED-BINDING DOOR** — what `name` denotes as a top-level global with a `.data` slot, read
+	// from `readerFilePath`. The twin of `constantValueOf`, and the reason the two are separate: an inlined
+	// binding's use MATERIALIZES its value and a stored one's LOADS from a slot, so a caller that could not
+	// tell them apart would have to guess which code to emit. It is every `var` plus an array `let`
+	// (P1.7 slice 2b) — see `TopLevelDecl.hasStorage` — and the answer carries which of those it found.
 	//
 	// It resolves through the IDENTICAL scoped-then-bare probe (`declFor`), which is the whole point
 	// of extending the storage key to vars: this is what makes featA's `counter` and featB's
 	// `counter` two slots instead of one.
 	export function globalDeclFor(name ByteArray, readerFilePath FilePath) returns TopLevelGlobalLookup
-		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.mutable) 'lookup'
+		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'lookup'
 			found(index) then return self.resolvedGlobalOf(index)
 			notFound then return TopLevelGlobalLookup.notFound
 		end 'lookup'
@@ -2633,12 +2803,16 @@ export type ProgramSignatures
 	function resolvedGlobalOf(index TopLevelDeclIndex) returns TopLevelGlobalLookup
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
-			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: constantValueType(tag))
+			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: constantValueType(tag), mutable: decl.mutable)
 			failed to poisoned then return TopLevelGlobalLookup.notFound
 			// ⭐ A MANAGED `var` (P1.7 slice 2a) reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
 			// and a use of the literal it was initialized from are the same type by construction.
-			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: self.managedConstValueType(kind))
+			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: self.managedConstValueType(kind), mutable: decl.mutable)
+			// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reads as a managed `var` does — a POINTER slot holding the
+			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
+			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
+			arrayValue(_, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: self.constArrayValueType(element), mutable: decl.mutable)
 			pending to evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
@@ -2658,15 +2832,32 @@ export type ProgramSignatures
 		end 'k'
 	end 'managedConstValueType'
 
-	// The `.data` label of the MUTABLE decl at `index`. Mutability is a precondition, not a case: a
-	// constant has no slot, and every caller reached this through a `mutable`-filtered lookup.
+	// ⭐ **THE `Array with T` INSTANCE A TOP-LEVEL ARRAY LITERAL DENOTES** (P1.7 slice 2b) — the
+	// `managedConstValueType` twin, and a METHOD for its reason: an instance is a gid only the interner can
+	// mint, and these are the VERY instances a `[…]` literal in a function body resolves to
+	// (`Parser.arrayLiteralInstanceFor`), so a global's slot and a body's literal of the same elements are
+	// the same type by construction.
+	//
+	// Both are a pure LOOKUP here: the declaration sweep interns them whenever a file's tokens contain a `[`
+	// (plus a following string literal for the String one), which every array initializer does by definition
+	// — the same sweep-writes/parser-reads discipline `internBuiltinIntegerInstance` states.
+	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
+		return match element 'e'
+			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(ArrayBuiltinBaseName))
+			string gives MaxonType.genericInstance(self.arrayInstanceForString())
+		end 'e'
+	end 'constArrayValueType'
+
+	// The `.data` label of the STORED decl at `index`. Having storage is a precondition, not a case: an
+	// inlined binding has no slot, and every caller reached this through a `stored`-filtered lookup or the
+	// same `hasStorage` filter the arena walks use.
 	function dataLabelOf(index TopLevelDeclIndex) returns ByteArray
 		let decl = self.declAt(index)
-		if not decl.mutable 'constant'
-			panic("ProgramSignatures.dataLabelOf: '{String.from(decl.name)}' is an immutable top-level constant and has no .data slot — a constant inlines at every read")
-		end 'constant'
+		if not decl.hasStorage 'inlined'
+			panic("ProgramSignatures.dataLabelOf: '{String.from(decl.name)}' is an inlined top-level constant and has no .data slot — a constant materializes its value at every read")
+		end 'inlined'
 		if decl.dataLabel.count() == 0 'unlabelled'
-			panic("ProgramSignatures.dataLabelOf: top-level var '{String.from(decl.name)}' has no .data label — `assignDataLabels` labels every mutable decl in the arena, and it runs inside `evaluateInitializers`")
+			panic("ProgramSignatures.dataLabelOf: top-level '{String.from(decl.name)}' has no .data label — `assignDataLabels` labels every STORED decl in the arena, and it runs inside `evaluateInitializers`")
 		end 'unlabelled'
 		return decl.dataLabel
 	end 'dataLabelOf'
@@ -2684,9 +2875,9 @@ export type ProgramSignatures
 		var entries = DataSectionEntryArray.create()
 		for i in 0 upto self.decls.count() 'each'
 			let decl = self.declAt(i)
-			if not decl.mutable 'constantHasNoSlot'
+			if not decl.hasStorage 'inlinedHasNoSlot'
 				continue
-			end 'constantHasNoSlot'
+			end 'inlinedHasNoSlot'
 			match decl.outcome 'state'
 				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(tag, name: decl.name), value: payload))
 				failed to poisoned then continue
@@ -2695,6 +2886,9 @@ export type ProgramSignatures
 				// under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero here and
 				// `__module_init` writes the address before `main` runs.
 				managedValue(_, kind) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(maxonTypeTag(self.managedConstValueType(kind)), name: decl.name), value: ManagedGlobalInitialSlot))
+				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reserves the SAME null POINTER slot, for the same reason
+				// and now for a `let` too — its record is built, so there is even less to bake than a String's.
+				arrayValue(_, element) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(maxonTypeTag(self.constArrayValueType(element)), name: decl.name), value: ManagedGlobalInitialSlot))
 				pending to evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -2718,25 +2912,36 @@ export type ProgramSignatures
 		var entries = ManagedGlobalArray.create()
 		for i in 0 upto self.decls.count() 'each'
 			let decl = self.declAt(i)
-			if not decl.mutable 'constantHasNoSlot'
+			if not decl.hasStorage 'inlinedHasNoSlot'
 				continue
-			end 'constantHasNoSlot'
+			end 'inlinedHasNoSlot'
 			match decl.outcome 'state'
 				value to poisoned then continue
-				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(i, decl: decl, bytes: bytes, kind: kind))
+				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(i, decl: decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind)))
+				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) is a managed global whichever keyword declared it — its
+				// record is built before `main` and released after, and `let` refuses only the WRITE.
+				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(i, decl: decl, initializer: self.arrayRecordInitializer(elements, element: element), valueType: self.constArrayValueType(element)))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
 		return entries
 	end 'managedGlobals'
 
-	// One managed global's full description. Split out so the `match` arm above stays one line and the
-	// type is built ONCE — `managedConstValueType` interns the `Array with Byte` instance, and the drop
-	// callee is routed off that same type rather than off a second derivation of it.
-	function managedGlobalEntry(index TopLevelDeclIndex, decl TopLevelDecl, bytes ByteArray, kind ManagedConstKind) returns ManagedGlobal
-		let valueType = self.managedConstValueType(kind)
-		return ManagedGlobal.create(self.dataLabelOf(index), bytes: bytes, kind: kind, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
+	// One managed global's full description. Split out so each `match` arm above stays one line, and it takes
+	// the TYPE its arm already built rather than re-deriving one: the drop callee is routed off that same
+	// type, so the record the init builds and the drop the cleanup emits cannot name two different types.
+	function managedGlobalEntry(index TopLevelDeclIndex, decl TopLevelDecl, initializer ManagedGlobalInitializer, valueType MaxonType) returns ManagedGlobal
+		return ManagedGlobal.create(self.dataLabelOf(index), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
 	end 'managedGlobalEntry'
+
+	// The record construction an ARRAY literal global asks for: `__arr_create` with the stamps this instance
+	// fixes, then one push per element. Both stamps come from the SAME instance the global is typed by
+	// (`constArrayValueType`), so the strides the record is born with and the type every use loads through
+	// are one answer rather than two.
+	function arrayRecordInitializer(elements ConstArrayElementArray, element ConstArrayElementKind) returns ManagedGlobalInitializer
+		let giid = typeNameIdOf(self.constArrayValueType(element))
+		return ManagedGlobalInitializer.arrayRecord(elements, elementSize: self.arrayElementSize(giid), elementDestroy: self.arrayElementDestroy(giid))
+	end 'arrayRecordInitializer'
 
 	// The recorded arena entry a top-level `decl` resolves to, keyed on the decl's OWN storage key
 	// rather than on a bare name (a declaration resolves to ITSELF, never through the scoped-then-bare
@@ -2797,6 +3002,11 @@ export type ProgramSignatures
 			value(payload, tag) then return TopLevelConstantLookup.found(payload, tag: tag)
 			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
 			failed to poisoned then return TopLevelConstantLookup.notFound
+			// ⭐ **AN ARRAY BINDING IS NOT A CONSTANT A USE CAN INLINE** (P1.7 slice 2b): its value is a heap
+			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
+			// is the one that answers. That makes `notFound` the right answer here rather than merely a
+			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
+			arrayValue then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -2841,18 +3051,18 @@ export type ProgramSignatures
 	// constant initializer would silently reach PAST this file's own declaration of the name to
 	// somebody else's, and inline a number the author never wrote.
 	function lookupIfKind(index TopLevelDeclIndex, wanted DeclKind) returns TopLevelDeclLookup
-		let decl = self.declAt(index)
+		let hasStorage = self.declAt(index).hasStorage
 		let isWanted = match wanted 'k'
-			constant gives not decl.mutable
-			mutable gives decl.mutable
+			inlined gives not hasStorage
+			stored gives hasStorage
 		end 'k'
 		return TopLevelDeclLookup.found(index) if isWanted else TopLevelDeclLookup.notFound
 	end 'lookupIfKind'
 
-	// `declFor` restricted to CONSTANTS — the probe both constant doors share, named once so the two
+	// `declFor` restricted to the INLINED kind — the probe both constant doors share, named once so the two
 	// cannot drift on which kind they meant.
 	function constantDeclFor(name ByteArray, readerFilePath FilePath) returns TopLevelDeclLookup
-		return self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.constant)
+		return self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.inlined)
 	end 'constantDeclFor'
 
 	function declAt(index TopLevelDeclIndex) returns TopLevelDecl
@@ -2878,6 +3088,16 @@ export type ProgramSignatures
 			// what every OTHER file compiles to while their own bytes never move. The KIND rides too: the
 			// same bytes as a `String` and as a `b"…"` produce different records and different types.
 			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(mix(keyed, value: ConstShapeManagedValue), kind: kind), bytes: bytes)
+			// ⭐ **AN ARRAY BINDING MIXES ITS ELEMENT KIND AND ITS LABEL, AND NOT ITS ELEMENTS** (P1.7 slice
+			// 2b) — `mixDeclAnswer`'s `var` branch, for the identical reason and now for a `let` too. An array
+			// binding is STORED whichever keyword declared it, so every reader emits `globalAddr <label>` +
+			// `loadIndirect` and that is byte-identical whether the literal said `[1, 2]` or `[9, 9, 9]`: the
+			// elements reach only `__module_init`, which is rebuilt from this arena whenever this query
+			// misses. What a reader DOES depend on is the element KIND — it fixes the `Array with T` instance
+			// the load is typed with, and `[1]` becoming `["a"]` retypes every use — and the LABEL, which is
+			// the slot the emitted `globalAddr` names. Mixing the elements too would be SOUND and WRONG: the
+			// "sound, and useless" key that re-parses the program on every keystroke in any initializer.
+			arrayValue(_, element) then return mixBytes(self.mixArrayElementKind(mix(keyed, value: ConstShapeArrayValue), element: element), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
@@ -2908,6 +3128,16 @@ export type ProgramSignatures
 			byteArray gives mix(state, value: ManagedShapeByteArray)
 		end 'k'
 	end 'mixManagedKind'
+
+	// Mix an array binding's ELEMENT kind (P1.7 slice 2b) — `mixManagedKind`'s twin, and its own
+	// discriminator per kind for the same reason: `Array with Integer` and `Array with String` are different
+	// types, so every reader's load is typed differently and a memo that did not move would keep the old one.
+	function mixArrayElementKind(state ContentHash, element ConstArrayElementKind) returns ContentHash
+		return match element 'e'
+			integer gives mix(state, value: ArrayElementShapeInteger)
+			string gives mix(state, value: ArrayElementShapeString)
+		end 'e'
+	end 'mixArrayElementKind'
 
 	// ⭐⭐ **MIX WHAT A READER COPIES — AND A `var` DOES NOT COPY ITS VALUE.**
 	//
@@ -3342,6 +3572,20 @@ export type ProgramSignatures
 	export function arrayElementDropCallee(id GenericInstanceId) returns ByteArray
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
 	end 'arrayElementDropCallee'
+
+	// ⭐ **WHAT `element_destroy@40` IS STAMPED WITH for `Array with T`, as a DESCRIPTION** — what a top-level
+	// array global's record carries to `ModuleInit`, which has no `ProgramSignatures` to ask (P1.7 slice 2b).
+	// It composes the same two accessors `Parser.arrayElementDestroyValue` does, off the same
+	// `arrayElementIsManaged` decision, so the destructor a global's record is stamped with equals the one a
+	// body's literal of the same instance gets. It is asked ONCE PER MANAGED GLOBAL, which is why it may box
+	// a union where the parser's per-SITE emitter deliberately does not.
+	function arrayElementDestroy(id GenericInstanceId) returns ArrayElementDestroy
+		if self.arrayElementIsManaged(id) 'managed'
+			return ArrayElementDestroy.drop(self.arrayElementDropCallee(id))
+		end 'managed'
+
+		return ArrayElementDestroy.trivial
+	end 'arrayElementDestroy'
 
 	// The element CLONE strategy for a managed-element `Array with T` (P1.7 slice 3b-vi-b) — the DUAL of
 	// `arrayElementDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`

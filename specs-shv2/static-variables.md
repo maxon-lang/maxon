@@ -30,6 +30,7 @@ export var globalState = false
 
 Top-level `var` initializers must be constant expressions (same rules as `let`):
 - Literals: integers, floats, booleans, strings, bytes, characters
+- Array literals whose elements are integer constant expressions or String literals
 - Arithmetic and logical operations on constants
 - References to other top-level constants
 - Enum member access
@@ -358,8 +359,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: top-level-var-array-literal -->
-<!-- P1.7 slice 2b array-literal globals: the managed-`var` STORAGE is built (slice 2a — an 8-byte pointer slot filled by `__module_init`, released by `__maxon_global_cleanup`), and a String or `b"…"` global works. What is missing is the ARRAY LITERAL itself: `[1, 2, 3]` is E2004 `Expected expression but got '['` in the PARSER, in every position, so this never reaches a global at all. -->
+<!-- test: top-level-var-array-literal -->
 ```maxon
 var items = [10, 20, 30]
 
@@ -375,8 +375,7 @@ end 'main'
 52
 ```
 
-<!-- disabled-test: top-level-var-array-cross-function -->
-<!-- P1.7 slice 2b array-literal globals: the managed-`var` STORAGE is built (slice 2a — an 8-byte pointer slot filled by `__module_init`, released by `__maxon_global_cleanup`), and a String or `b"…"` global works. What is missing is the ARRAY LITERAL itself: `[1, 2, 3]` is E2004 `Expected expression but got '['` in the PARSER, in every position, so this never reaches a global at all. -->
+<!-- test: top-level-var-array-cross-function -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -403,8 +402,7 @@ end 'main'
 52
 ```
 
-<!-- disabled-test: top-level-var-array-mutate-cross-function -->
-<!-- P1.7 slice 2b array-literal globals: the managed-`var` STORAGE is built (slice 2a — an 8-byte pointer slot filled by `__module_init`, released by `__maxon_global_cleanup`), and a String or `b"…"` global works. What is missing is the ARRAY LITERAL itself: `[1, 2, 3]` is E2004 `Expected expression but got '['` in the PARSER, in every position, so this never reaches a global at all. -->
+<!-- test: top-level-var-array-mutate-cross-function -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -435,6 +433,273 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+### An array binding has STORAGE whichever keyword declared it
+
+A top-level array is a HEAP record with a `.data` pointer slot, built by `__module_init` before `main`
+and released by `__maxon_global_cleanup` after it — for a `let` exactly as for a `var`. A `let` differs
+in one thing only: it refuses the write, both at an assignment (E2013) and at a receiver-writing method
+(E3019).
+
+That is a deliberate divergence from the reference compiler, which makes a never-mutated `let` array an
+immortal shared static record. shv2 cannot yet: an `Array`'s own methods rewrite its record (a `push`
+detaches the buffer by writing `buffer@0`/`capacity@16`/`length@8`), and a `.rdata` record cannot be
+written — so immortality needs an enforced never-mutated guarantee and a real COPY promotion for
+`var b = <borrowed array>`, neither of which exists. Heap for both is what shv2 can state truthfully.
+
+<!-- test: top-level-let-array-literal -->
+```maxon
+let NUMS = [10, 20, 30]
+
+function main() returns ExitCode
+	let a = try NUMS.get(0) otherwise 0
+	let b = try NUMS.get(2) otherwise 0
+	return a + b
+end 'main'
+```
+```exitcode
+40
+```
+
+<!-- test: top-level-array-const-element -->
+An array literal's elements go through the same scalar constant evaluator every other initializer does,
+so a reference to another top-level *scalar* constant — and arithmetic on it — is an element.
+```maxon
+let BASE = 20
+var xs = [BASE, BASE + 2]
+
+function main() returns ExitCode
+	let a = try xs.get(0) otherwise 0
+	let b = try xs.get(1) otherwise 0
+	return a + b
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: top-level-var-array-string-elements -->
+A String-element array global owns its elements: each literal is CLONED into the record, and
+`__arr_decref`'s walk `__str_decref`s every live slot at exit. Leak-gated — a missed clone double-frees
+the immortal `.rdata` record and a missed stamp leaks all of them.
+```maxon
+var names = ["ab", "cde"]
+
+function main() returns ExitCode
+	let a = try names.get(0) otherwise ""
+	let b = try names.get(1) otherwise ""
+	print("{a}{b}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abcde
+```
+
+<!-- test: top-level-array-grow-reassign-untouched -->
+Three array globals in one program: one grown past its initial capacity in a loop and then REASSIGNED to
+a fresh literal (the old record must be released, not leaked), one never touched at all, and an
+immutable one only read. `3 + 4 + 6 + 2`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var grow = [1]
+var untouched = [7, 7, 7]
+let fixed = [4, 5, 6]
+
+function main() returns ExitCode
+	var i = 0
+	while i < 200 'fill'
+		grow.push(i)
+		i = i + 1
+	end 'fill'
+	grow = [3, 4]
+	let a = try grow.get(0) otherwise 0
+	let b = try grow.get(1) otherwise 0
+	let c = try fixed.get(2) otherwise 0
+	return a + b + c + grow.count()
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: error.top-level-let-array-mutate -->
+A receiver-writing method on a `let`-bound array is E3019 — the SAME rule a `let`-bound String or Set
+receiver gets, through the one `requireMutableReceiver`. Without it a `let` array would be writable, since
+it has a real slot.
+```maxon
+let fixed = [4, 5, 6]
+
+function main() returns ExitCode
+	fixed.push(9)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:5:8: cannot pass 'fixed' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.top-level-let-array-reassign -->
+Reassigning a `let` array is E2013, not "undefined variable": having a `.data` slot is not permission to
+write one, and the name is very much defined.
+```maxon
+let xs = [1, 2]
+
+function main() returns ExitCode
+	xs = [3, 4]
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:5:2: cannot assign to immutable variable: 'xs'
+```
+
+<!-- test: error.top-level-array-names-another-global -->
+A managed initializer may not name another managed global, in EITHER declaration order — which is what
+keeps initialization order a non-problem: there is no managed-to-managed dependency to order and no
+managed cycle to detect. Measured against the reference compiler, which reports the same code at the same
+position.
+```maxon
+let A = [1, 2]
+let B = A
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:3:9: Undefined constant 'A'
+```
+
+<!-- test: error.top-level-array-names-another-global-forward -->
+The same, written the other way round.
+```maxon
+let B = A
+let A = [1, 2]
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:2:9: Undefined constant 'A'
+```
+
+<!-- test: error.top-level-let-array-var-alias -->
+A `let` array's record cannot be laundered into a mutable ALIAS. A borrowed managed aggregate bound to a
+`var` is promoted to owned by an INCREF of the same box — reference semantics, deliberately, because the
+alias is observable — so without this refusal `var b = A` then `b.push(9)` would grow `A` with E2013 and
+E3019 both intact and nothing to report it. Refused where the SOURCE is immutable, and only there: the
+same binding off a `var` global shares, exactly as it does in the reference compiler.
+```maxon
+let A = [1, 2]
+
+function main() returns ExitCode
+	var b = A
+	b.push(9)
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```
+
+<!-- test: error.top-level-let-array-var-reassign-alias -->
+The same refusal through the other door — a REASSIGNMENT of an already-owned `var`, which promotes a
+borrowed value through the identical single-sourced path.
+```maxon
+let A = [1, 2]
+
+function main() returns ExitCode
+	var b = [0]
+	b = A
+	b.push(9)
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:2: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```
+
+<!-- test: top-level-let-array-let-alias -->
+A `let` binding of a `let` array is fine and stays fine: it can only read, so there is nothing to
+launder. This is the remedy the refusal above names, so it has to work.
+```maxon
+let A = [1, 2]
+
+function main() returns ExitCode
+	let b = A
+	return b.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: top-level-var-array-var-alias-shares -->
+Off a MUTABLE global the same binding is legal and SHARES the record — reference semantics, and measured
+to be what the reference compiler does (it returns 3 here too). The refusal above keys on the source's
+immutability, not on aliasing itself.
+```maxon
+var A = [1, 2]
+
+function main() returns ExitCode
+	var b = A
+	b.push(9)
+	return A.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: error.top-level-array-empty -->
+An empty array literal has no element to infer a type from, and — unlike a function body's `[]` — a
+top-level initializer cannot fall back on `Array with T` + `.create()` either, because a call is not a
+constant. So it is refused, with advice that does not point at a remedy this position forbids.
+```maxon
+var items = []
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:13: Unsupported: an empty array literal `[]` as a top-level initializer — its element type cannot be inferred, and there is no empty-array form a constant initializer can name (a `.create()` call is not a constant)
+```
+
+<!-- test: error.top-level-array-mixed-elements -->
+Every element must have the first element's type — the same rule, in the same words, a literal in a
+function body gets.
+```maxon
+var xs = [1, "a"]
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:14: Unsupported: an array literal with mixed element types — every element must have the same type as the first
+```
+
+<!-- test: error.top-level-array-bool-element -->
+A bool element folds perfectly well and is still refused: stored, it would build an `Array with Integer`
+of 1s and 0s, which is not the type the program wrote. A literal in a function body refuses a bool
+element too, so the top level accepts no more than a body does.
+```maxon
+var flags = [true, false]
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:14: Unsupported: a top-level array literal element of type 'bool' — a constant array's elements are integers or String literals
 ```
 
 <!-- test: top-level-var-string-literal -->
