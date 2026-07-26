@@ -2763,6 +2763,41 @@ each named RE-MEASURE TRIGGER can now be **pulled on the ladder** instead of wai
 that only bend under a specific future change. Each is filed with its measurement and its re-measure
 trigger, not chased (a superlinearity you can *trigger* today is fixed, not filed):
 
+- **#122 — `phase:parse` IS Θ(MUTABLE BINDINGS × CONSTRUCTS) ON THE REAL CORPUS, AND IT IS A RUNG RATHER THAN AN EDIT.**
+  ⭐ **This is the corpus's parse superlinearity — NOT nesting depth**, and the distinction was measured, not reasoned.
+  `parseWhileStatement` (`Parser.maxon:10925`) and `assignedBindingsIn` (`:11463`) each loop
+  `for k in 0 upto self.mutableVars.count()` per construct, asking one membership question per binding.
+  The corpus's `d_blocks.maxon` is ONE function with **518 mutable vars in scope**, so that is **414,400 tests at
+  rung 2 and 26.5 MILLION at rung 5**. **Measured:** halving the O(depth × tokens) term (`4110c7d00`) left the corpus
+  parse ratios UNCHANGED — ×1.91 ×2.14 ×2.39 ×2.75 ×3.03 against a baseline ×1.94 ×2.16 ×2.43 ×2.74 ×2.99 — which is
+  what proves the depth term is not what this corpus spends its parse time on. ⚠ **AN ATTEMPTED FIX WAS A ×3.45
+  REGRESSION AND WAS BACKED OUT:** a per-file `name → assignment-sites` index with binary search went flat on the
+  depth ladder, passed every gate, and then measured ×3.45 at rung 5 — because it replaced a small per-construct set
+  (one hash, one probe per test) with a structure whose per-test cost MULTIPLIED this same Θ(V×C). **A ladder-flat,
+  corpus-worse change is a regression, and only running BOTH caught it.** The cure for this and for the remaining
+  depth term is the same one thing: **carried sets computed BOTTOM-UP over the construct tree** — each construct's set
+  is its own direct sites ∪ its children's memoized sets — making both the scan and the per-binding loop O(Σ|set|).
+  **It is a RUNG because it changes the ORDER a phi set is built in, and the goldens pin that order** (`LoopPhiVar`'s
+  header calls the ordering load-bearing). `matchingEndOf` from `4110c7d00` is the piece it builds on.
+  **Re-measure trigger:** any corpus knob that raises mutable-vars-in-scope, or an inliner that fuses functions.
+
+- **#123 — THE `Map` PROBE TRAP IS A CLASS, NOT AN INSTANCE: identity hash + linear probing is QUADRATIC for any
+  interleaved union of contiguous int runs.** `stdlib` `Map` is open-addressed with linear probing and `int.hash()` is
+  the **identity** (`stdlib/PrimitiveExtensions.maxon:3-5`), so a key's home slot is `id and (capacity-1)`. Insert two
+  contiguous id runs *interleaved* and the high run wraps onto the low run's slots, fusing them into one cluster every
+  insert walks. **Measured** on the encoder's per-function block-offset map before `a78d17c35` fixed it: probes per
+  insert were **exactly `capacity/4 + 2/3`** (3.33 at cap 16 … 512.67 at cap 2048), collapsing to **1.00** the instant
+  capacity first exceeded the id range — 171.44 probes/insert against 1.00 for the same keys sorted. That instance is
+  fixed (the key WAS the index, so it became two pre-sized arrays). **STILL LIVE:** `SemanticCheck.buildBlockByIdMap`
+  (`SemanticCheck.maxon:796`) is the IDENTICAL pattern — walks `func.blockRefs`, upserts `block.id` — and is cold today
+  only because it runs on await-bearing functions and Maxon-tier ids have no split run. Also
+  `StdToWasm.BlockDispatchMap` / `DependentLhsMap`, `StdToX64Conversion.CmpPredMap`, `Parser.ValueInstanceAliasMap`.
+  ⚠ **A hash mixer in `stdlib/Map.maxon` would kill the whole class in three lines and was DELIBERATELY NOT DONE:** it
+  changes every `Map`'s ITERATION ORDER, so any pass that emits in `Map` order could move bytes — putting the C# 3103
+  suite and every golden at risk for a "clever O(n)" where a "tidy O(n)" was available per site.
+  **Re-measure trigger:** an inliner (which would give Maxon-tier ids a second run and make `buildBlockByIdMap` hot),
+  or any new `Map` keyed by an id drawn from two allocation phases.
+
 - **#106 — the COW detach is an unconditional call on the ARRAY HOT PATH (a constant factor, deliberately taken).**
   Every `push`/`reserve`/`resize`/`insert`/`append` now pays a `__arr_cow_detach` call that no-ops for an ordinary
   owned array, and `set`/`clear`/`remove`/`pop` pay it directly; a `push` onto a literal allocates and copies TWICE
