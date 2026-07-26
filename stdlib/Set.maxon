@@ -84,10 +84,11 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		let hash = element.hash()
 		// capacity is always a power of two (starts at 16, only ever doubled), so
-		// `hash and (capacity - 1)` selects the low bits — identical to
-		// `hash mod capacity` for the non-negative HashValue range, but cheaper.
+		// `and (capacity - 1)` selects the low bits — identical to `mod capacity` for the
+		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
+		// never the raw one: see `spreadHash` for the measured quadratic that costs.
 		let mask = capacity - 1
-		var index = hash and mask
+		var index = spreadHash(hash) and mask
 
 		var firstDeleted = -1
 		var probes = 0
@@ -164,9 +165,10 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'empty_check'
 
 		let hash = element.hash()
-		// capacity is always a power of two, so masking selects the low bits.
+		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
 		let mask = capacity - 1
-		var index = hash and mask
+		var index = spreadHash(hash) and mask
 
 		var probes = 0
 		while probes < capacity 'probe'
@@ -213,9 +215,10 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'empty_check'
 
 		let hash = element.hash()
-		// capacity is always a power of two, so masking selects the low bits.
+		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
 		let mask = capacity - 1
-		var index = hash and mask
+		var index = spreadHash(hash) and mask
 
 		var probes = 0
 		while probes < capacity 'probe'
@@ -301,7 +304,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		capacity = newCapacity
 		count = 0
 
-		// newCapacity is a power of two, so masking selects the low bits.
+		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
 		let mask = newCapacity - 1
 
 		// Rehash all occupied entries from old arrays, reusing the cached hash
@@ -318,7 +322,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				// Re-insert into new arrays using insert logic
 				if let element = try oldElements.get(i) 'get_elem'
 					let hash = try oldHashes.get(i) otherwise element.hash()
-					var index = hash and mask
+					var index = spreadHash(hash) and mask
 
 					// Find empty slot (no deleted slots in fresh array)
 					var currentState = try states.get(index) otherwise SetSlotState.Empty

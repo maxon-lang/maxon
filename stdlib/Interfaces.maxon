@@ -42,6 +42,56 @@ export interface Hashable
 	function hash() returns HashValue
 end 'Hashable'
 
+// The working width `spreadHash` mixes in: a `HashValue` is 32 bits, and each of the two
+// multiplies below produces up to 64 before it is folded back, so the intermediate cannot be
+// a `HashValue` (it would trip that type's own range check on the first multiply).
+typealias HashMixWord = int(0 to u64.max)
+
+// The two 32-bit odd multipliers and the fold-back mask of MurmurHash3's `fmix32` finalizer,
+// which is where these exact constants come from. They are named rather than inlined because
+// each appears once and a bare 0x85EBCA6B says nothing about what it is for.
+let HashMixMultiplierA = 0x85EBCA6B as HashMixWord
+let HashMixMultiplierB = 0xC2B2AE35 as HashMixWord
+let HashMixWidthMask = 0xFFFFFFFF as HashMixWord
+
+// ⭐ **THE SLOT A HASH SEEDS ITS PROBE AT — the ONE derivation `Map` and `Set` share**, and the
+// reason neither of them may write `hash and mask` directly.
+//
+// Both containers are power-of-two open-addressed tables with LINEAR probing, so the slot is the
+// hash's LOW bits. And `int.hash()` is the IDENTITY (`self and 0xFFFFFFFF`) — so without a mix,
+// structure in the keys is structure in the slot indices, and linear probing turns that into one
+// primary cluster that every later insert has to walk.
+//
+// ⚠ **THAT IS NOT A THEORETICAL HAZARD; IT WAS MEASURED, AND THE KEYS THAT TRIGGERED IT WERE
+// PERFECTLY DENSE.** The victim was shv2's per-function block-offset table, keyed by `BlockId`.
+// The ids of one function are a dense run 0..N-1 — the ideal case for an identity hash — but they
+// arrive in LAYOUT order, which interleaves the parser's blocks with the ones minted later
+// (critical-edge splits), so ids far apart in value arrive adjacent in time. At every capacity
+// SMALLER than the largest id, the two runs alias onto the same slots and interleaved insertion
+// grows a single cluster; each capacity doubling rehashes and rebuilds it. Same key set, same
+// count, same density — only the ORDER differs, and inserting 24,576 ids cost **346.6 ms in
+// arrival order against 2.3 ms in increasing order, a 150x gap that grows with N** (it is a
+// quadratic: the ladder read x3.8 x3.9 x3.7 x4.0 per doubling). It reached `scale-test` as
+// `phase:encode` climbing x2.0 -> x3.0 across the ladder while its ALLOCATIONS stayed at x1.96 —
+// the exact time-only shape the memory columns cannot see.
+//
+// The fix is the standard one: avalanche the hash before it picks a slot, so that any structure
+// the keys have is not structure the table sees. `fmix32` is used because it is the cheapest
+// finalizer with full avalanche (two multiplies and three shifts, no data-dependent branches).
+//
+// ⚠ It deliberately does NOT change `hash()` itself, and it is NOT what the containers cache in
+// their `hashes` arrays. Those hold the key's true `hash()`, which is what the probe's
+// skip-the-full-`equals()` guard compares; spreading is purely how a hash becomes an INDEX.
+export function spreadHash(hash HashValue) returns HashValue
+	var h = hash as HashMixWord
+	h = h xor (h shr 16)
+	h = (h * HashMixMultiplierA) and HashMixWidthMask
+	h = h xor (h shr 13)
+	h = (h * HashMixMultiplierB) and HashMixWidthMask
+	h = h xor (h shr 16)
+	return h as HashValue
+end 'spreadHash'
+
 // Equatable - types that can be compared for equality
 export interface Equatable
 	function equals(other Self) returns bool

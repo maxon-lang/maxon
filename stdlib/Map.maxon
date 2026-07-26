@@ -192,10 +192,11 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'empty'
 
 		// capacity is always a power of two (starts at 16, only ever doubled), so
-		// `hash and (capacity - 1)` selects the low bits — identical to
-		// `hash mod capacity` for the non-negative HashValue range, but cheaper.
+		// `and (capacity - 1)` selects the low bits — identical to `mod capacity` for the
+		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
+		// never the raw one: see `spreadHash` for the measured quadratic that costs.
 		let mask = capacity - 1
-		var index = hash and mask
+		var index = spreadHash(hash) and mask
 
 		var firstDeleted = -1
 		var probes = 0
@@ -286,7 +287,8 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		capacity = newCapacity
 		count = 0
 
-		// newCapacity is a power of two, so masking selects the low bits.
+		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
+		// (see `spreadHash`).
 		let mask = newCapacity - 1
 
 		// Rehash all occupied entries from old arrays. The new table is fresh
@@ -311,7 +313,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 					continue
 				end 'skip_hash'
 
-				var index = hash and mask
+				var index = spreadHash(hash) and mask
 				var currentState = try states.get(index) otherwise SlotState.Empty
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false

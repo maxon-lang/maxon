@@ -13,8 +13,9 @@ tell, because there was nothing to re-run. **A headline nobody can re-run is not
 
 ## The generators
 
-Each writes one self-contained `.maxon` program to `<outfile>`. All four call an opaque
-`scaleOpaque(a int)` the optimizer cannot see through, so the call is a real clobber point.
+Each writes one self-contained `.maxon` program to `<outfile>`. All but `genclosure.sh` call an
+opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a real clobber point;
+`genclosure.sh` gets the same opacity from the closure call itself.
 
 | script | shape | the question it answers |
 |---|---|---|
@@ -24,6 +25,25 @@ Each writes one self-contained `.maxon` program to `<outfile>`. All four call an
 | `genloop.sh <loops> <floatsPer> <out>` | the exact shape `ScaleCorpus.floatSpillSource` generates | ties a hand-ladder reading back to the corpus's own shape — the check that a pathological ladder is not being mistaken for the realistic case. |
 | `genmutchain.sh <chains> <depth> <params> <out>` | `chains` chains of `depth` functions passing `params` arrays along; the last link writes them all | the parameter-mutation fixpoint (`SemanticCheck.buildParamMutationSummary`) and the label→position slotting. **Its three knobs are INDEPENDENT**, which is its whole point — see below. |
 | `genemit.sh <funcs> <stmts> <ifs> <out>` | `funcs` functions of `stmts` straight-line statements and `ifs` two-way branches each | the ENCODE phase's shape. **Its three knobs are INDEPENDENT**: function COUNT, ops per function, and BLOCKS per function. This is the ladder that found the `chunkLabelOffsets` quadratic — funcs-doubling and stmts-doubling both read a flat ×2.00 while ifs-doubling read ×3.17, which located the term in blocks-per-function and nowhere else. |
+| `genblocks.sh <n> <blocks\|funcs\|straight> <out>` | the same block count as ONE big function, as `n` small ones, or as one straight-line block | separates **blocks per FUNCTION** from **functions per module** — two axes `ScaleCorpus` doubles together and so cannot tell apart. It reached the SAME `phase:encode` quadratic as `genemit.sh` from the other side (×3.21 ×3.37 ×3.69 on `blocks`, ×2.0 flat on both controls), which is why both survive: one varies the branch count that mints blocks, the other holds a block count fixed and RESHAPES where those blocks live. |
+| `genclosure.sh <closures> <captures> <reads> <ranged\|plain> <out>` | `closures` functions, each with one closure capturing `captures` bindings read `reads` times each | **the only way to measure the capture path at all** — `ScaleCorpus` states outright that it generates no closures, so every `scale-test` column reads Δ0 for a change to it. Its three knobs are independent for `genmutchain.sh`'s reason; see below. |
+
+### `genclosure.sh` — why the capture path needs its own ladder
+
+`ScaleCorpus`'s manifest lists closures under **NOT GENERATED**, so a Δ0 from `scale-test` on a
+capture-path change is the instrument's blind spot and not a result. The three knobs separate the
+three costs that live there, which a single doubling ladder would sum into one column:
+
+- `<closures>` alone is program size — `genclosure.sh 128…1024 4 4 ranged` reads **×1.98 ×1.99
+  ×1.99** in parse allocations, which is what "the capture path is linear" means.
+- `<captures>` at **constant read sites** (`64 <c> $((4096/(64*c))) ranged`) isolates
+  `Parser.captureSlotFor`, which scans `captureNames` linearly on every read, so its work is
+  `sites × captures/2` while the program size stays put.
+- `<reads>` at fixed `<captures>` moves the number of `emitCaptureRead` sites, i.e. how often
+  `fieldStorageType` resolves a slot's width through the whole-program alias registry.
+
+⚠ `<captures>` is bounded by the language, not by taste: a function may declare at most **64
+argument slots** (E2015), so a ladder past `genclosure.sh 1 64 …` does not compile.
 
 ### `genmutchain.sh` — why three knobs and not one
 
