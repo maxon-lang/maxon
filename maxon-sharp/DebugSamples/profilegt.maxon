@@ -1,0 +1,83 @@
+// P7 PROFILING gate sample — the GREEN-THREAD half, and the rung's central claim.
+//
+// ⭐ WHAT THIS PROVES. A sampling profiler that only saw OS threads would be useless for a Maxon
+// program, and the fear is reasonable: the scheduler runs green threads on a pool of OS workers, so a
+// naive profile could report the scheduler as every program's hotspot. It does not, and the reason is
+// structural rather than lucky — `__gt_context_switch` saves and restores RSP *and* RBP, so an OS
+// thread executing a green thread has that thread's OWN stack in its registers. Sampling the OS thread
+// IS sampling the green thread it is running. Three things are visible in the profile of this program:
+//
+//   1. `spinA` and `spinB` appear as THEMSELVES, with their own frames, under the spawn trampoline that
+//      started them. `__sched_worker_loop` appears nowhere at all.
+//   2. They appear as TWO SEPARATE STACKS. Each green thread's stack is its own allocation and the
+//      profiler keys a stack on that, so nothing had to enumerate them — the addresses did.
+//   3. The worker that has no work, and `idleTask` which only sleeps, contribute ESSENTIALLY NOTHING
+//      (measured: ~1% in ntdll, the real park/wake traffic). A profiler that counted parked threads
+//      would drown this program's actual work in its scheduler, which is the failure mode the
+//      cycle-time gate in ProfileSampler exists to prevent — and did not, until it was fixed.
+//
+// ⚠ TWO processors and not more, for gtmulti.maxon's reason: at 3+ a nested `async` segfaults
+// deterministically on the unchanged compiler (a filed pre-existing scheduler defect, `34c3df909`).
+// The second processor is here to be IDLE — it is what makes claim 3 a measurement rather than an
+// assumption. Deliberately NOT gtmulti's steal-forcing shape: this file is the subject of a golden, and
+// a work-steal is a timing race, whereas the three claims above hold however the work is distributed.
+//
+// ⚠ Each task's `sleep` is at the END. `async` on a body that never yields is refused outright (E3073),
+// but a yield at the START would park the task the instant a worker picked it up.
+
+typealias ExitCode = int(0 to 255)
+typealias Integer = int(i64.min to i64.max)
+
+// Two entry points, `spinA` doing TWICE the work of `spinB`. Separate FUNCTIONS rather than one called
+// twice, because the point being demonstrated is that the profiler tells the two green threads apart.
+//
+// ⚠ The 2:1 ratio is deliberate and was found the hard way. With equal work the two rows are within
+// noise of each other, so their ORDER in every table is a coin flip and a golden over it fails about
+// half the time — measured, three runs, two orderings. Making one genuinely hotter turns the ordering
+// from something the golden must tolerate into something it can ASSERT: the profiler ranks the busier
+// green thread first, which is a claim worth pinning.
+function spinA(rounds Integer) returns Integer
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'spin_a'
+		acc = acc + i
+		i = i + 1
+	end 'spin_a'
+
+	sleep(1)
+	return acc / 1000000000
+end 'spinA'
+
+function spinB(rounds Integer) returns Integer
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'spin_b'
+		acc = acc + i
+		i = i + 1
+	end 'spin_b'
+
+	sleep(1)
+	return acc / 1000000000
+end 'spinB'
+
+// A green thread that only ever waits. It must contribute nothing to a CPU profile — it consumes no
+// CPU — and a profiler that sampled every thread rather than every RUNNING thread would give it a share.
+function idleTask() returns Integer
+	sleep(1)
+	return 0
+end 'idleTask'
+
+function main() returns ExitCode
+	let a = async spinA(800000000)
+	let b = async spinB(400000000)
+	let c = async idleTask()
+
+	let ra = await a
+	let rb = await b
+	let rc = await c
+
+	print("done {ra} {rb} {rc}\n")
+	return 0
+end 'main'

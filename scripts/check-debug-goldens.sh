@@ -34,6 +34,22 @@ cd "$ROOT" || { echo "bad repoRoot: $ROOT"; exit 2; }
 MAXON="$ROOT/bin/maxon.exe"
 [ -x "$MAXON" ] || MAXON="$ROOT/bin/maxon"
 [ -x "$MAXON" ] || { echo "no compiler at $ROOT/bin — build csharp first"; exit 2; }
+
+# A golden writes `maxon …` for readability; every command below runs THIS tree's compiler instead.
+#
+# Stated ONCE, because three places need it — the build loop, the MCP server line, and every block's
+# client command — and they had three copies of it.
+#
+# Substituted at every COMMAND POSITION: the start of the line, and after `&&` or `;`. The anchored form
+# this replaced could only rewrite a leading `maxon`, so a block that has to set up its own fixture
+# before invoking the compiler (P7's build-id mismatch copies a foreign sidecar next to a binary) ran
+# whatever `maxon` happened to be on PATH — silently, since nothing checks a golden's command for
+# plausibility.
+#
+# ⚠ Deliberately NOT a blind global replace, which was measured to corrupt an existing golden: the
+# coverage goldens write `maxon build …/coverage.maxon --coverage`, and the `.maxon ` in the middle of
+# THAT is a match for a global `maxon ` — rewriting a source file's extension into a compiler path.
+compiler_cmd() { printf '%s' "$1" | sed -E "s#(^|&& |; )maxon #\\1$MAXON #g"; }
 G="maxon-sharp/DebugSamples"
 WORK="$(mktemp -d)"
 FAIL=0; CHECKS=0
@@ -71,8 +87,7 @@ for src in "$G"/*.maxon; do
 	[ -e "$src" ] || continue
 	cmd="$(build_line "$src")"
 	[ -n "$cmd" ] || cmd="maxon build $src"
-	# The golden writes `maxon …` for readability; run THIS tree's compiler.
-	if ! eval "${cmd/#maxon /$MAXON }" > "$WORK/build.log" 2>&1; then
+	if ! eval "$(compiler_cmd "$cmd")" > "$WORK/build.log" 2>&1; then
 		echo "  BUILD FAILED: $cmd"; tail -5 "$WORK/build.log"; FAIL=1
 	fi
 done
@@ -129,7 +144,7 @@ start_mcp() {
 	# `exec` so the recorded pid IS the server rather than a subshell that happens to have spawned it.
 	# Without it $! named a shell that had already gone, `kill` hit nothing, and the server the gate
 	# started outlived the gate — measured, and exactly the leak this whole rung is about.
-	eval "exec ${1/#maxon /$MAXON }" > "$WORK/mcp.log" 2>&1 &
+	eval "exec $(compiler_cmd "$1")" > "$WORK/mcp.log" 2>&1 &
 	MCP_PID=$!
 	for _ in $(seq 1 100); do
 		grep -q 'listening on' "$WORK/mcp.log" && return 0
@@ -189,8 +204,7 @@ for golden in "$G"/*.expected.txt; do
 					   [ -n "$exe" ] && cmd="$cmd $exe" ;;
 				esac ;;
 		esac
-		# The golden writes `maxon …` for readability; run THIS tree's compiler.
-		run="${cmd/#maxon /$MAXON }"
+		run="$(compiler_cmd "$cmd")"
 		block_body "$golden" "$i" > "$WORK/exp.txt"
 		eval "$run" > "$WORK/act.txt" 2>"$WORK/err.txt"
 		CHECKS=$((CHECKS + 1))

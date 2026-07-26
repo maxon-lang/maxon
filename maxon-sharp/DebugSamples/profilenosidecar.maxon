@@ -1,0 +1,19 @@
+// P7 refusal fixture — a binary built WITHOUT the debug-info sidecar, so `maxon profile` has nothing to
+// symbolize with and must say so by name.
+//
+// ⭐ IT NEEDS ITS OWN SOURCE FILE, and that is not tidiness. `--no-debug-info` does not change a single
+// byte of the executable (the sidecar is a separate file), so the build cache treats a `--no-debug-info`
+// build of an already-built source as CURRENT and hands back the cached binary — leaving the earlier
+// `.mxdbg` sitting next to it, still matching, still usable. Pointing this block at a source some other
+// golden builds normally would therefore have profiled it SUCCESSFULLY and asserted a refusal that never
+// happened. Nothing else builds this file, so it has never had a sidecar to leave behind.
+//
+// The program itself is deliberately trivial: the refusal happens before it is ever launched.
+
+typealias ExitCode = int(0 to 255)
+
+function main() returns ExitCode
+	print("unreachable by profile: this binary has no sidecar\n")
+
+	return 0
+end 'main'

@@ -289,6 +289,20 @@ public sealed class MxdbgReader {
     return cut < 0 ? path : path[(cut + 1)..];
   }
 
+  /// <summary>
+  /// The offset to LOOK UP for a code offset that is a RETURN ADDRESS.
+  ///
+  /// A return address is the instruction AFTER the call, so resolving it unbiased names the next line —
+  /// and when the call is a function's final instruction, the next FUNCTION. Biasing by one lands
+  /// inside the call itself, which is the frame the caller is actually executing.
+  ///
+  /// Stated here, beside the tables it indexes, because three walks need it and they must agree: the
+  /// debugger's <c>Symbolize</c>, the per-green-thread backtrace, and the profiler's out-of-process
+  /// stack walk. Two of those resolve frames from the SAME chain, so a copy that drifted would name
+  /// one frame differently depending on which walker found it.
+  /// </summary>
+  public static uint CallSiteLookup(uint codeOffset) => codeOffset > 0 ? codeOffset - 1 : codeOffset;
+
   /// Map a `.text` code offset to its source position: the greatest line row at or before the offset
   /// within the enclosing function. Null when no function/line covers it.
   public LineInfo? PcToLine(uint codeOffset) {

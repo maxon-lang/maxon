@@ -1,0 +1,74 @@
+P7 SAMPLING-PROFILER gate — the GREEN-THREAD half, and the claim the whole rung turns on.
+
+⭐ THE CLAIM. A profiler that could only see OS threads would be nearly useless for a Maxon program: the
+scheduler multiplexes green threads onto a small pool of workers, so the fear is that every program
+would be reported as spending its life in the scheduler. This golden is the measurement that settles it,
+and the answer is structural rather than lucky. `__gt_context_switch` saves and restores BOTH RSP AND
+RBP, so an OS thread executing a green thread has that green thread's own stack in its registers —
+sampling the OS thread IS sampling the green thread. Three consequences are asserted below:
+
+  1. `spinA` and `spinB` appear AS THEMSELVES, with their own frames, under the spawn trampoline that
+     started them. `__sched_worker_loop` appears NOWHERE in this report, at any reporting floor.
+  2. They appear as TWO SEPARATE STACKS. Each green thread's stack is its own allocation and a stack is
+     keyed on that allocation base paired with its entry function, so nothing had to enumerate green
+     threads — the addresses did. This matters beyond tidiness: the only mechanism that CAN enumerate
+     them is the debug agent's `DbgCmdGtList`, which is answered exclusively by a PARKED target, and
+     parking a program once per sample is exactly the design P4d refused.
+  3. `spinA` outranks `spinB` in every table, because it is given twice the work. That is the ordering
+     assertion, and it is only meaningful because the two are deliberately unequal — see profilegt.maxon
+     for what happened when they were not.
+
+⭐ AND WHAT IS *NOT* IN THE REPORT, which is the other half of the same claim. This program runs with a
+SECOND processor that has nothing to do, plus an `idleTask` green thread that only sleeps. Neither
+consumes CPU, and neither appears: the sampler skips a thread whose cycle counter has not moved, so a
+parked worker is never even suspended. A wall-clock sampler would have given both a share and buried the
+program's real work underneath its own scheduler.
+
+⚠ MAXON_MAX_PROCS is PINNED at 2 through `--target-env`, the same knob and the same reason `maxon debug`
+has it: the scheduler decides its worker count at startup, so an unpinned green-thread transcript
+measures the machine as much as the program. Two and not more — at 3+ a nested `async` segfaults
+deterministically on the unchanged compiler (a filed pre-existing scheduler defect, `34c3df909`).
+
+Numbers are masked exactly as in profile.expected.txt, and for the same reason: a sampling profiler is
+nondeterministic, so this golden pins structure and never a measurement. Both blocks were run four times
+while it was written and produced byte-identical masked output every time.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/profilegt.maxon
+
+RED (the same command lines against a pre-P7 binary): `maxon profile` was not a command at all — it fell
+through to the usage banner and exit 1.
+
+WHAT EACH BLOCK PROVES (asserted by the output below):
+  * BLOCK 1 — the two green threads as two named stacks, ranked, with the idle worker and the sleeping
+    task contributing nothing above the floor. The tree root is the unnamed spawn trampoline: both green
+    threads hang off it, which is what a green thread's stack genuinely looks like from the outside.
+  * BLOCK 2 — the same two stacks in the collapsed-stack machine format, derived from the same tree.
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profilegt.exe --target-env=MAXON_MAX_PROCS=2 --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
+profile: maxon-sharp/DebugSamples/profilegt.exe
+target exit code: 0
+samples: N at 1000 Hz over Ts
+unsymbolized: N samples (P%)
+stacks: N truncated, N unreadable
+
+=== hot functions (self time) ===
+  P%      N  spinA
+  P%      N  spinB
+  (N functions below 5% not shown)
+
+=== call tree ===
+  P%      N  [unnamed .text]
+  P%      N    spinA
+  P%      N    spinB
+  (N nodes below 5% not shown)
+
+=== stacks ===
+  one row per stack that ran — an OS thread's or a green thread's — named by its outermost frame
+  P%      N  spinA
+  P%      N  spinB
+  (N stacks below 5% not shown)
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profilegt.exe --target-env=MAXON_MAX_PROCS=2 --folded 2>/dev/null | sed -E 's/ [0-9]+$/ N/' | grep -E 'spin' ---
+[unnamed .text];spinA N
+[unnamed .text];spinB N

@@ -29,6 +29,7 @@ class Program {
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
       "coverage" => CoverageCommand.Run(args[1..]),
+      "profile" => ProfileCommand.Run(args[1..]),
       "lsp-server" => await RunLspAsync(),
       "mcp" => Mcp.McpServer.Run(args[1..]),
       _ => Fail()
@@ -46,6 +47,8 @@ class Program {
     Console.WriteLine("  debug [options] <target> Inspect debug info (--debug-info sidecar); see 'Debugger options'");
     Console.WriteLine("  coverage <run|report> <exe>");
     Console.WriteLine($"                           Run a {CoverageFlag} binary and report line + branch coverage");
+    Console.WriteLine("  profile run <exe>        Sample a running program and report where its CPU time went.");
+    Console.WriteLine("                           Needs no instrumentation and no rebuild — only the .mxdbg sidecar");
     Console.WriteLine("  spec-test [options]      Run spec tests");
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
@@ -305,11 +308,15 @@ class Program {
     return true;
   }
 
-  /// The flag that sets a variable in the DEBUGGEE's environment (gdb's `set environment`). Its headline
-  /// use is pinning a runtime knob the target reads before `main`: `MAXON_MAX_PROCS` fixes how many
-  /// worker processors the scheduler spawns, which is what makes a green-thread transcript reproducible
-  /// instead of machine-dependent.
-  const string TargetEnvFlag = "--target-env=";
+  /// The flag that sets a variable in a SPAWNED TARGET's environment (gdb's `set environment`). Its
+  /// headline use is pinning a runtime knob the target reads before `main`: `MAXON_MAX_PROCS` fixes how
+  /// many worker processors the scheduler spawns, which is what makes a green-thread transcript
+  /// reproducible instead of machine-dependent.
+  ///
+  /// Internal rather than private because `maxon profile` spawns a target for exactly the same reason
+  /// and needs the same knob for the same green-thread runs; a second spelling of one flag is how the
+  /// two would come to disagree about what it is called.
+  internal const string TargetEnvFlag = "--target-env=";
 
   /// <summary>
   /// Parse a <see cref="TargetEnvFlag"/> value as `NAME=VALUE`. The NAME must be non-empty and must not
@@ -318,7 +325,7 @@ class Program {
   /// caller rather than ignored: a silently dropped variable would leave the target running under an
   /// environment the user believes they configured.
   /// </summary>
-  static bool TryParseTargetEnv(string text, out string name, out string value) {
+  internal static bool TryParseTargetEnv(string text, out string name, out string value) {
     name = "";
     value = "";
     int eq = text.IndexOf('=');

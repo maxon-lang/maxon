@@ -1349,8 +1349,7 @@ internal sealed class MaxonDebugger : IDisposable {
   public SymLocation Symbolize(long codeOffset, bool returnAddressBias = false) {
     if (Sidecar is not { } s) throw new DebuggerException("no debug info loaded; cannot symbolize");
 
-    uint lookup = (uint)codeOffset;
-    if (returnAddressBias && lookup > 0) lookup -= 1;
+    uint lookup = returnAddressBias ? MxdbgReader.CallSiteLookup((uint)codeOffset) : (uint)codeOffset;
 
     var fn = s.FunctionAt(lookup);
     var line = s.PcToLine(lookup);

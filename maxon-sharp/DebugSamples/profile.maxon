@@ -1,0 +1,64 @@
+// P7 PROFILING gate sample — a program whose hot function is known before it is measured.
+//
+// The shape is the whole point. A sampling profiler is NONDETERMINISTIC, so a golden over one cannot
+// pin numbers; what it CAN pin is structure, and structure only exists if the program has some:
+//
+//   * `hot` dominates by design (a long arithmetic loop), so "which function is at the top of the
+//     self-time table" is a fact about the program rather than about the run that happened to be
+//     sampled. Anything else appearing there would be a real defect in the walker or the symbolizer.
+//   * `warm` is deliberately an order of magnitude cheaper — present, clearly second, and nowhere near
+//     `hot`. Two rows that could swap places would make the golden a coin flip.
+//   * `work` calls both and does nothing itself, so the call tree has a REAL interior node: main →
+//     work → {hot, warm}. A tree that nests wrongly, or one flattened by inlining, shows up here as a
+//     missing level rather than as a plausible-looking table.
+//
+// The counts are tuned so the whole run is a second or so at the default 1 kHz — thousands of samples,
+// which is far past ProfileReport.MinimumTrustworthySamples and makes the shares stable to well under
+// the golden's reporting floor.
+
+typealias ExitCode = int(0 to 255)
+typealias Integer = int(i64.min to i64.max)
+
+// The intended hotspot. The accumulation is plain addition on purpose: `mod` is FALLIBLE in Maxon
+// (integer division by zero is an error, not a silent zero), so a remainder here would need a `try` in
+// the innermost loop and would be measuring the error path as much as the arithmetic.
+function hot(rounds Integer) returns Integer
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'hot_loop'
+		acc = acc + i
+		i = i + 1
+	end 'hot_loop'
+
+	return acc / 1000000
+end 'hot'
+
+// Same shape, ~1/10 the work, so it is unmistakably second rather than in contention.
+function warm(rounds Integer) returns Integer
+	var acc = 0
+	var i = 0
+
+	while i < rounds 'warm_loop'
+		acc = acc + i
+		i = i + 1
+	end 'warm_loop'
+
+	return acc / 1000000
+end 'warm'
+
+// An interior frame that costs nothing itself: every sample under it belongs to one of its callees, so
+// the tree must show it with essentially no self time and two children.
+function work() returns Integer
+	let h = hot(1200000000)
+	let w = warm(120000000)
+
+	return (h + w) / 1000
+end 'work'
+
+function main() returns ExitCode
+	let result = work()
+	print("done {result}\n")
+
+	return 0
+end 'main'

@@ -1,0 +1,143 @@
+P7 SAMPLING-PROFILER gate — `maxon profile` runs a PRISTINE binary and says where its CPU time went.
+
+⭐ WHAT THIS GOLDEN IS FOR, AND WHY IT LOOKS LIKE THIS. A sampling profiler is nondeterministic by
+construction: it reports what a thread happened to be doing at a few thousand arbitrary instants, and
+two runs of one program never agree to the sample. So this golden PINS NO NUMBER. Every count and every
+percentage below is masked to `N` / `P%` by the `sed` in each block's own command line, and what is left
+is the thing a profiler can be held to:
+
+  * the SHAPE of the report — which sections exist and in what order;
+  * that the sample COUNT and the RATE are reported at all, next to each other, so a reader can tell 3
+    samples from 30,000 (as percentages those are identical, and mean opposite things);
+  * that UNSYMBOLIZED samples are counted on their own line rather than dropped or folded into the
+    nearest known function;
+  * that the known-hot function is the top row of the self-time table;
+  * that the call tree NESTS — `main` → `work` → `{hot, warm}`, four levels — which is the assertion
+    that would break if the walker lost a frame, if the symbolizer named the wrong function, or if the
+    tree were built from the leaf end.
+
+The masking is the whole method, so it is worth being precise about what survives it: the sed rewrites
+only the two NUMERIC COLUMNS of a row and leaves the indentation and the name, so the tree's structure
+is asserted exactly while its measurements are not.
+
+⭐ NO INSTRUMENTATION, NO REBUILD, NO FLAG. Unlike `--coverage`, nothing is emitted into the program to
+make this work: `profile.exe` here is built by a plain `maxon build`, and the only thing read besides
+the running process is the `.mxdbg` sidecar that build already writes and that leaves the executable
+byte-identical. The binary measured is the binary that ships.
+
+HOW IT WORKS, in one line, because the mechanism is the rung: the driver suspends a target thread, reads
+its registers, copies a window of its stack, RESUMES it, and walks the copy — three syscalls, no lock,
+no allocation in the target, and no call into it at all. See ProfileSampler for why that is allowed
+where P4d's park-for-inspection was refused.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/profile.maxon
+  maxon build maxon-sharp/DebugSamples/profilenosidecar.maxon --no-debug-info
+
+RED (the same command lines against a pre-P7 binary): `maxon profile` was not a command at all — it fell
+through to the usage banner and exit 1.
+
+WHAT EACH BLOCK PROVES (asserted by the output below):
+  * BLOCK 1 — THE HEADLINE. `hot` is the top of the self-time table and `warm` is second, which is a
+    fact about the program (see profile.maxon) rather than about the run. The call tree has four levels
+    and `work` appears with both children under it. The `stacks` row is named `main`, not
+    `[unnamed .text]`: a stack is named by its outermost NAMED frame, because every stack bottoms out in
+    runtime code the sidecar does not name and naming them by their true root would label every stack in
+    every program identically.
+  * BLOCK 2 — THE MACHINE FORMAT. Collapsed stacks, `root;child;leaf <count>`, which flamegraph.pl,
+    inferno and speedscope all read. It is derived from the same tree block 1 prints — a node's SELF
+    count is exactly the number of samples whose leaf was that path — so the two cannot disagree.
+  * BLOCK 3 — TOO FEW SAMPLES IS ITS OWN ANSWER. At 10 Hz this ~1 s program yields single-digit
+    samples, and the report says so instead of presenting a confident breakdown of nine readings. Only
+    the header is compared: the tables below it are exactly what a handful of samples cannot be trusted
+    to reproduce, which is the point being made.
+  * BLOCK 4 — A RUN THAT WAS STOPPED. `--timeout` kills the program partway and the profile is marked
+    PARTIAL; the samples in it are real, so they are reported rather than discarded. `target exit code`
+    is ABSENT here — the program was killed, so its status is the OS's answer and not the program's.
+    Note `warm` is missing: at 0.2 s the program has not reached it, which is a true statement about a
+    prefix of the run. The command exits 1 because the MEASUREMENT did not complete.
+  * BLOCK 5 — NO SIDECAR, REFUSED BY NAME. `--no-debug-info` writes no `.mxdbg`, so there is nothing to
+    name the code samples land in. The refusal happens BEFORE the program is launched — burning a user's
+    runtime to arrive at a refusal that was knowable up front would be its own defect — and it names the
+    flag that caused it. See profilenosidecar.maxon for why this needs a source file of its own.
+  * BLOCK 6 — A SIDECAR FOR A DIFFERENT BUILD. The block copies one sample's binary and ANOTHER
+    sample's sidecar together and profiles the pair. A `.mxdbg` is a table of code offsets: joining it
+    to different code would name real samples with confidently wrong functions, which is the "an
+    instrument that lies is worse than none" rule this workstream keeps applying. Refused on the
+    build-id, exactly as `maxon coverage` and `maxon debug` refuse it.
+
+WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
+  * Every structural element above is STABLE and is asserted.
+  * Every count, percentage and duration is ENVIRONMENT-SPECIFIC and is masked to `N` / `P%` / `Ts` by
+    each block's own command. The sampling RATE is not masked: it is what the caller asked for.
+  * The program's own stdout goes to STDERR (so stdout is only ever the report), which is why the
+    blocks that assert a report discard stderr and the blocks that assert a REFUSAL fold it in with
+    `2>&1` — a refusal is not a report and does not belong on the report's channel.
+  * Blocks 1-4 were each run four or more times while this golden was written, and produced
+    byte-identical masked output every time.
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
+profile: maxon-sharp/DebugSamples/profile.exe
+target exit code: 0
+samples: N at 1000 Hz over Ts
+unsymbolized: N samples (P%)
+stacks: N truncated, N unreadable
+
+=== hot functions (self time) ===
+  P%      N  hot
+  P%      N  warm
+  (N functions below 5% not shown)
+
+=== call tree ===
+  P%      N  [unnamed .text]
+  P%      N    main
+  P%      N      work
+  P%      N        hot
+  P%      N        warm
+  (N nodes below 5% not shown)
+
+=== stacks ===
+  one row per stack that ran — an OS thread's or a green thread's — named by its outermost frame
+  P%      N  main
+  (N stacks below 5% not shown)
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --folded 2>/dev/null | sed -E 's/ [0-9]+$/ N/' | grep ';' ---
+[unnamed .text];main;work;hot N
+[unnamed .text];main;work;warm N
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --rate=10 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/' | head -6 ---
+profile: maxon-sharp/DebugSamples/profile.exe
+target exit code: 0
+samples: N at 10 Hz over Ts
+TOO FEW SAMPLES: under 100, so the shares below are arithmetic on a handful of readings rather than a measurement. Profile a longer run, or raise the rate
+unsymbolized: N samples (P%)
+stacks: N truncated, N unreadable
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --timeout=0.2 --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
+profile: maxon-sharp/DebugSamples/profile.exe
+samples: N at 1000 Hz over Ts
+PARTIAL: the program was still running when sampling stopped — this profile describes the part that ran
+unsymbolized: N samples (P%)
+stacks: N truncated, N unreadable
+
+=== hot functions (self time) ===
+  P%      N  hot
+  (N functions below 5% not shown)
+
+=== call tree ===
+  P%      N  [unnamed .text]
+  P%      N    main
+  P%      N      work
+  P%      N        hot
+  (N nodes below 5% not shown)
+
+=== stacks ===
+  one row per stack that ran — an OS thread's or a green thread's — named by its outermost frame
+  P%      N  main
+  (N stacks below 5% not shown)
+
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profilenosidecar.exe 2>&1 ---
+profile: no debug-info sidecar at maxon-sharp/DebugSamples/profilenosidecar.exe.mxdbg — a profile needs it to name the code its samples land in. The sidecar is written by default and leaves the executable byte-identical, so a binary that has none was built --no-debug-info: rebuild it without that flag.
+
+--- EXPECTED: cp maxon-sharp/DebugSamples/profilegt.exe maxon-sharp/DebugSamples/mismatch.exe && cp maxon-sharp/DebugSamples/profile.exe.mxdbg maxon-sharp/DebugSamples/mismatch.exe.mxdbg && maxon profile run maxon-sharp/DebugSamples/mismatch.exe 2>&1; rm -f maxon-sharp/DebugSamples/mismatch.exe maxon-sharp/DebugSamples/mismatch.exe.mxdbg ---
+profile: the .mxdbg sidecar describes a different build of this binary — rebuild it

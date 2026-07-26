@@ -190,25 +190,9 @@ public static class CoverageRender {
   /// as this one was, until the gate caught it.
   private const string SectionRule = "===";
 
-  /// <summary>
-  /// The path a report shows: relative to the working directory when the file is under it, so a
-  /// transcript is the same on every machine, and absolute when it is not (which is honest — a file
-  /// outside the tree has no shorter true name).
-  /// </summary>
-  public static string DisplayPath(string path) {
-    try {
-      var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), path);
-      return relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative)
-        ? path.Replace('\\', '/')
-        : relative.Replace('\\', '/');
-    } catch (ArgumentException) {
-      return path.Replace('\\', '/');
-    }
-  }
-
   public static string Text(CoverageReport report) {
     var sb = new StringBuilder();
-    sb.Append("coverage: ").Append(DisplayPath(report.ExePath)).Append('\n');
+    sb.Append("coverage: ").Append(ReportPath.Display(report.ExePath)).Append('\n');
     // The measured program's own status, reported because the tool knows it. ABSENT — not zero — when
     // the report was built from an earlier run's data, because then nobody here watched it exit.
     if (report.TargetExitCode is { } exitCode)
@@ -223,7 +207,7 @@ public static class CoverageRender {
       .Append($"{EliminatedMarker} = no code emitted (optimized away), blank = no coverage point\n");
 
     foreach (var file in report.Files) {
-      sb.Append('\n').Append(SectionRule).Append(' ').Append(DisplayPath(file.Path))
+      sb.Append('\n').Append(SectionRule).Append(' ').Append(ReportPath.Display(file.Path))
         .Append(' ').Append(SectionRule).Append('\n');
       AppendListing(sb, file);
     }
@@ -231,7 +215,7 @@ public static class CoverageRender {
     if (report.Branches.Count > 0) {
       sb.Append('\n').Append(SectionRule).Append(" branches ").Append(SectionRule).Append('\n');
       foreach (var b in report.Branches) {
-        sb.Append("  ").Append(DisplayPath(b.File)).Append(':').Append(b.Line).Append(':').Append(b.Col);
+        sb.Append("  ").Append(ReportPath.Display(b.File)).Append(':').Append(b.Line).Append(':').Append(b.Col);
         foreach (var arm in b.Arms) sb.Append("  ").Append(ArmText(arm));
         sb.Append('\n');
       }
@@ -260,7 +244,7 @@ public static class CoverageRender {
     string[]? source = TryReadLines(file.Path);
 
     if (source == null) {
-      sb.Append("  (source not available: ").Append(DisplayPath(file.Path)).Append(")\n");
+      sb.Append("  (source not available: ").Append(ReportPath.Display(file.Path)).Append(")\n");
       foreach (var line in file.Lines)
         sb.Append(Marker(line).PadLeft(CountColumnWidth)).Append(" |").Append(line.Line).Append('\n');
       return;
@@ -294,7 +278,7 @@ public static class CoverageRender {
     using var buffer = new MemoryStream();
     using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false })) {
       w.WriteStartObject();
-      w.WriteString("exe", DisplayPath(report.ExePath));
+      w.WriteString("exe", ReportPath.Display(report.ExePath));
       w.WriteBoolean("runCompleted", report.RunCompleted);
       if (report.TargetExitCode is { } exitCode) w.WriteNumber("targetExitCode", exitCode);
       w.WriteNumber("linesCovered", report.LinesCovered);
@@ -306,7 +290,7 @@ public static class CoverageRender {
       w.WriteStartArray("files");
       foreach (var file in report.Files) {
         w.WriteStartObject();
-        w.WriteString("path", DisplayPath(file.Path));
+        w.WriteString("path", ReportPath.Display(file.Path));
         w.WriteStartArray("lines");
         foreach (var line in file.Lines) {
           w.WriteStartObject();
@@ -323,7 +307,7 @@ public static class CoverageRender {
       w.WriteStartArray("branches");
       foreach (var b in report.Branches) {
         w.WriteStartObject();
-        w.WriteString("file", DisplayPath(b.File));
+        w.WriteString("file", ReportPath.Display(b.File));
         w.WriteNumber("line", b.Line);
         w.WriteNumber("col", b.Col);
         w.WriteStartArray("arms");

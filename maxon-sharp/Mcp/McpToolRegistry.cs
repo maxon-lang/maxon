@@ -17,7 +17,8 @@ internal static class McpToolRegistry {
   /// tree — `Lsp/RenameHandler`, `PrepareRenameHandler` and `CodeActionHandler` are front-ends over the
   /// same compiler — so when it lands it is another surface over one brain, appended here.
   /// </summary>
-  private static IReadOnlyList<IReadOnlyList<McpTool>> Families => [DebugTools.Tools, CoverageTools.Tools];
+  private static IReadOnlyList<IReadOnlyList<McpTool>> Families =>
+    [DebugTools.Tools, CoverageTools.Tools, ProfileTools.Tools];
 
   public static IReadOnlyList<McpTool> All { get; } = [.. Families.SelectMany(family => family)];
 

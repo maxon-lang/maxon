@@ -27,6 +27,7 @@ public static class BinaryBuildId {
   private const int PeCoffHeaderSize = 24;           // signature(4) + COFF header(20)
   private const int PeSectionHeaderSize = 40;
   private const int PeSectionVirtualSizeOffset = 8;
+  private const int PeSectionVirtualAddressOffset = 12;
   private const int PeSectionRawPtrOffset = 20;
   private const string PeTextSectionName = ".text";
 
@@ -39,10 +40,23 @@ public static class BinaryBuildId {
   private const int MachoSegNameOffset = 8;
   private const int MachoSegNSectsOffset = 64;
   private const int MachoSection64Size = 80;
+  private const int MachoSectAddrOffset = 32;      // after 2x name(16)
   private const int MachoSectSizeOffset = 40;      // addr(8) precedes size(8), both after 2x name(16)
   private const int MachoSectOffsetOffset = 48;
+  private const int MachoSegVmAddrOffset = 24;     // LC_SEGMENT_64: cmd(4) cmdsize(4) segname(16), then vmaddr
   private const string MachoTextSegName = "__TEXT";
   private const string MachoTextSectName = "__text";
+
+  /// <summary>
+  /// Where the code section sits in the FILE, and where it will sit once the image is MAPPED.
+  ///
+  /// The two live in one record because they come from one section header, and reading that header
+  /// twice is what this type exists to prevent — see <see cref="TryLocateTextSection"/>.
+  /// <see cref="ImageOffset"/> is relative to the loaded image's base: a PE section's RVA already is
+  /// that, and a Mach-O section's address is made so by subtracting __TEXT's vmaddr, since the
+  /// __TEXT segment is what the slide is applied to.
+  /// </summary>
+  private readonly record struct TextSection(int FileOffset, uint ImageOffset, uint Size);
 
   /// <summary>
   /// Compute the build-id of <paramref name="binaryPath"/> from its code section. Returns false with a
@@ -64,8 +78,8 @@ public static class BinaryBuildId {
     // walks are individually bounds-checked, but a crafted binary must convert ANY residual parse fault
     // into an honest refusal, never a stack trace out of ValidateBuildId → Attach.
     try {
-      if (TryExtractTextSection(bytes, out var text, out error)) {
-        buildId = MxdbgFormat.ComputeBuildId(text);
+      if (TryLocate(bytes, out var text, out error)) {
+        buildId = MxdbgFormat.ComputeBuildId(bytes.AsSpan(text.FileOffset, (int)text.Size));
         return true;
       }
     } catch (Exception ex) {
@@ -74,8 +88,42 @@ public static class BinaryBuildId {
     return false;
   }
 
-  /// <summary>The code-section bytes the compiler hashed, dispatched on the file's magic.</summary>
-  private static bool TryExtractTextSection(byte[] b, out ReadOnlySpan<byte> text, out string error) {
+  /// <summary>
+  /// Where <paramref name="binaryPath"/>'s code section will be found in the RUNNING image:
+  /// <paramref name="imageOffset"/> past the module's base address, <paramref name="size"/> bytes long.
+  ///
+  /// This is what turns a sampled instruction pointer into the `.text` code offset the sidecar resolves
+  /// — the out-of-process equivalent of the agent's own <c>__dbg_text_offset</c>, which subtracts
+  /// <c>&amp;mrt_start</c> in-process. It lives HERE, next to the build-id, because it reads the same
+  /// section header from the same PE/Mach-O walk: a profiler that parsed the binary itself would be a
+  /// second parser of a format this tree already parses, and the two would agree only by luck.
+  /// </summary>
+  public static bool TryLocateTextSection(string binaryPath, out uint imageOffset, out uint size,
+      out string error) {
+    imageOffset = 0;
+    size = 0;
+
+    byte[] bytes;
+    try {
+      bytes = File.ReadAllBytes(binaryPath);
+    } catch (Exception ex) {
+      error = $"cannot read '{binaryPath}': {ex.Message}";
+      return false;
+    }
+
+    try {
+      if (!TryLocate(bytes, out var text, out error)) return false;
+      imageOffset = text.ImageOffset;
+      size = text.Size;
+      return true;
+    } catch (Exception ex) {
+      error = $"cannot parse '{binaryPath}': {ex.Message}";
+      return false;
+    }
+  }
+
+  /// <summary>The code section's file and image placement, dispatched on the file's magic.</summary>
+  private static bool TryLocate(byte[] b, out TextSection text, out string error) {
     text = default;
 
     if (b.Length >= 2 && b[0] == (byte)'M' && b[1] == (byte)'Z')
@@ -88,7 +136,7 @@ public static class BinaryBuildId {
     return false;
   }
 
-  private static bool TryExtractPeText(byte[] b, out ReadOnlySpan<byte> text, out string error) {
+  private static bool TryExtractPeText(byte[] b, out TextSection text, out string error) {
     text = default;
     error = "";
 
@@ -108,9 +156,10 @@ public static class BinaryBuildId {
       if (SectionName(b, (int)rec, 8) != PeTextSectionName) continue;
 
       uint size = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan((int)rec + PeSectionVirtualSizeOffset));
+      uint rva = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan((int)rec + PeSectionVirtualAddressOffset));
       uint rawPtr = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan((int)rec + PeSectionRawPtrOffset));
       if ((long)rawPtr + size > b.Length) { error = "PE .text extends past end of file"; return false; }
-      text = b.AsSpan((int)rawPtr, (int)size);
+      text = new TextSection((int)rawPtr, rva, size);
       return true;
     }
 
@@ -118,7 +167,7 @@ public static class BinaryBuildId {
     return false;
   }
 
-  private static bool TryExtractMachoText(byte[] b, out ReadOnlySpan<byte> text, out string error) {
+  private static bool TryExtractMachoText(byte[] b, out TextSection text, out string error) {
     text = default;
     error = "";
 
@@ -137,15 +186,18 @@ public static class BinaryBuildId {
         // the file) — bound the nsects read explicitly, since cmd + lcSize <= len does not cover it.
         if (cmd + MachoSegNSectsOffset + 4 > b.Length) { error = "truncated Mach-O __TEXT segment command"; return false; }
         uint nsects = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan((int)cmd + MachoSegNSectsOffset));
+        ulong segmentVmAddr = BinaryPrimitives.ReadUInt64LittleEndian(b.AsSpan((int)cmd + MachoSegVmAddrOffset));
         for (uint s = 0; s < nsects; s++) {
           long sec = cmd + MachoSegCmdHeaderSize + (long)s * MachoSection64Size;
           if (sec + MachoSection64Size > b.Length) { error = "truncated Mach-O section table"; return false; }
           if (SectionName(b, (int)sec, 16) != MachoTextSectName) continue;
 
           ulong size = BinaryPrimitives.ReadUInt64LittleEndian(b.AsSpan((int)sec + MachoSectSizeOffset));
+          ulong address = BinaryPrimitives.ReadUInt64LittleEndian(b.AsSpan((int)sec + MachoSectAddrOffset));
           uint offset = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan((int)sec + MachoSectOffsetOffset));
           if (offset + size > (ulong)b.Length) { error = "Mach-O __text extends past end of file"; return false; }
-          text = b.AsSpan((int)offset, (int)size);
+          if (address < segmentVmAddr) { error = "Mach-O __text lies outside its own __TEXT segment"; return false; }
+          text = new TextSection((int)offset, (uint)(address - segmentVmAddr), (uint)size);
           return true;
         }
       }

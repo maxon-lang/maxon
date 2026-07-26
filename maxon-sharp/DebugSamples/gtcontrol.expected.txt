@@ -51,9 +51,13 @@ WHAT IS STABLE vs BUILD-SPECIFIC:
     reason, the frame FUNCTIONS and LINES, the local VALUES (41), the id RELATIONSHIPS (#4 before the
     resume and #5 after, #1 stable across both stops) and the exit code 44 are the P4d-2b subject and
     are STABLE. Measured 20/20 byte-identical for each block.
-  * The `.text` offsets are build-specific and move only if codegen moves. 0xf831 — the spawn TRAMPOLINE
+  * The `.text` offsets are build-specific and move only if codegen moves. 0xf8fc — the spawn TRAMPOLINE
     frame — is RUNTIME code, so it moves whenever the emitted runtime changes size, not only when user
     codegen does.
+    ⚠ It moved again, by 203 bytes, between P4d-2b (when this golden was recorded) and P7, and
+    nothing caught it in between: this gate is not part of the per-rung battery. P7 measured the
+    new value against a CLEAN origin/main build in its own worktree before touching it, so the
+    drift was already on main and was not the profiler's doing.
   * NOT asserted, deliberately: the raw GreenThread addresses (they differ every run, which is why an id
     exists at all) and wall-clock timing.
 
@@ -79,7 +83,7 @@ demonstrable at all.
 {"event":"threads","threads":[{"id":1,"kind":"scheduler","proc":0,"status":"running","cpu":"stopped","topFrame":{"function":"main","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":73,"offset":"0x11e"}},{"id":5,"kind":"green","entry":"heldTask","status":"ready","cpu":"parked","hold":"held","topFrame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}]}
 {"event":"gt-select","id":4,"action":"refused","reason":"that id named a green thread at an earlier stop \u2014 ids are re-minted every time the target resumes, so run \u0027threads\u0027 for the current list"}
 {"event":"gt-select","id":5,"action":"selected","frame":{"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"}}
-{"event":"gt-backtrace","id":5,"frames":[{"frame":0,"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"},{"frame":1,"offset":"0xf831"}]}
+{"event":"gt-backtrace","id":5,"frames":[{"frame":0,"function":"heldTask","file":"maxon-sharp/DebugSamples/gtcontrol.maxon","line":56,"offset":"0x28d"},{"frame":1,"offset":"0xf8fc"}]}
 {"event":"locals","values":[{"name":"i","type":"i64","kind":"Primitive","display":"41"},{"name":"mark","type":"i64","kind":"Primitive","display":"41"}]}
 {"event":"value","name":"mark","type":"i64","kind":"Primitive","display":"41"}
 {"event":"error","message":"stepping runs the thread the target is STOPPED on, and green thread #5 is selected \u2014 select the stopped thread (marked in \u0027threads\u0027) or \u0027continue\u0027 first"}
