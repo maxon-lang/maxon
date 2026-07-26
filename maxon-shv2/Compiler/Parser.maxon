@@ -68,6 +68,14 @@ let EnvSlotBytes = 8 as ByteOffset
 // The index of a capture within a closure's environment — a slot number, and a count of slots.
 typealias EnvSlotIndex = int(0 to u64.max)
 
+// Where slot `slot` starts. The OFFSET half of the pair a capture's store (`buildClosureEnv`) and its
+// read (`emitCaptureRead`) must derive identically — `fieldStorageType` is the WIDTH half — written
+// once for the reason `emitFieldStore`'s header gives about a struct box: a slot filled at one offset
+// and read at another corrupts the environment silently, with no diagnostic anywhere.
+function envSlotOffset(slot EnvSlotIndex) returns ByteOffset
+	return (slot * EnvSlotBytes) as ByteOffset
+end 'envSlotOffset'
+
 // The shared tail of every E3099 (capturing-closure-escapes) message: WHY the closure may not escape. The
 // route-specific prefix ("cannot return …", "cannot store … in field …") is built at each site; this is the
 // ONE copy of the reason. ⚠ The wording ("by reference") follows the ported golden and the reference
@@ -14755,10 +14763,21 @@ export type Parser
 	//   • same representation (int→int, float→float) — the value flows on UNCHANGED, keeping its own tag,
 	//     exactly as the old no-op `as` left it (so a `X as ExitCode` that already compiled keeps its
 	//     codegen byte-for-byte). It is deliberately NOT retagged to the target alias: a `named` value
-	//     TYPE reaches `lowerMaxonToStd` unresolved through a closure capture or an op's stored type
-	//     (`maxonTypeToStdType` panics on it — `resolveTypes` rewrites signatures, not per-value types),
-	//     and the alias name a narrowing check needs rides the recorded site, not the value tag. When the
-	//     target is a ranged INT alias, that site is recorded so `InsertRangeChecks` guards / E3005s it.
+	//     TYPE reaches `lowerMaxonToStd` unresolved through an op's stored type (`maxonTypeToStdType`
+	//     panics on it — `resolveTypes` rewrites signatures, not per-value types), and the alias name a
+	//     narrowing check needs rides the recorded site, not the value tag. When the target is a ranged
+	//     INT alias, that site is recorded so `InsertRangeChecks` guards / E3005s it.
+	//
+	//     ⚠ **THAT JUSTIFICATION USED TO NAME A CLOSURE CAPTURE AS ITS SECOND ROUTE, AND NO LONGER
+	//     CAN**: the env slot's ops now take their width from `fieldStorageType`, exactly as a struct
+	//     field's do, so a capture cannot drive a `named` into `maxonTypeToStdType` any more.
+	//     ⚠ And the surviving reason does not cover what the tag is ALSO read for. `valueIsUnsigned`
+	//     asks the TAG, so dropping the alias drops the SIGNEDNESS: MEASURED against the bootstrap
+	//     oracle, `let w = x as Word` (`Word = int(0 to u64.max)`) then `w shr 62` of
+	//     `0xC000000000000000` answers **-1 here and 3 there** — a silent wrong answer, in the one
+	//     direction (`shr` filling with the sign) that no diagnostic can catch. Retagging is not a
+	//     one-line change — a value's tag also picks its drop (`decrefCalleeFor`), its conformance
+	//     dispatch and its float class — so it is stated here rather than done in passing.
 	function applyCast(value ValueId, targetType MaxonType, asTok Token) returns ValueId throws ParseError
 		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
 		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
@@ -19535,11 +19554,12 @@ export type Parser
 		return result
 	end 'emitFieldLoad'
 
-	// ⭐ **THE ONE `loadIndirect` EMIT.** A field read (`p.x`), a union tag load and a union payload
-	// read all reach here — one op shape, so the value's SOURCE type (`declared`, minted onto the
-	// tag column so a nested `match` or the shift rule reads what the source said) and its STORAGE
-	// type (the concrete primitive the op carries, because `maxonTypeToStdType` panics on a `named`)
-	// are split in exactly one place. See `emitFieldLoad`'s header for why the two differ.
+	// ⭐ **THE ONE `loadIndirect` EMIT.** A field read (`p.x`), a union tag load, a union payload read
+	// and a capturing closure's env-slot read (`emitCaptureRead`) all reach here — one op shape, so
+	// the value's SOURCE type (`declared`, minted onto the tag column so a nested `match` or the shift
+	// rule reads what the source said) and its STORAGE type (the concrete primitive the op carries,
+	// because `maxonTypeToStdType` panics on a `named`) are split in exactly one place. See
+	// `emitFieldLoad`'s header for why the two differ.
 	function emitIndirectLoad(declared MaxonType, box ValueId, offset ByteOffset, storageType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintValueOfType(declared)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: offset, valueType: storageType), range: range)
@@ -19560,17 +19580,23 @@ export type Parser
 		self.emitIndirectStore(box, offset: layout.offsetOfField(index), value: value, storageType: self.fieldStorageType(declared), range: range)
 	end 'emitFieldStore'
 
-	// ⭐ **THE ONE `storeIndirect` EMIT.** A field write, a union tag store, a union payload store and
-	// a union's unused-slot zero-fill all reach here — one op shape, so the offset-and-width
-	// derivation a box's stores must agree on lives in one place (a literal storing `y` at one width
-	// and an assignment storing it at another would corrupt the box silently — see `emitFieldStore`).
+	// ⭐ **THE ONE `storeIndirect` EMIT.** A field write, a union tag store, a union payload store, a
+	// union's unused-slot zero-fill and a capturing closure's env-slot fill (`buildClosureEnv`) all
+	// reach here — one op shape, so the offset-and-width derivation a box's stores must agree on lives
+	// in one place (a literal storing `y` at one width and an assignment storing it at another would
+	// corrupt the box silently — see `emitFieldStore`).
 	function emitIndirectStore(box ValueId, offset ByteOffset, value ValueId, storageType MaxonType, range SourceRange)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: offset, value: value, valueType: storageType), range: range)
 	end 'emitIndirectStore'
 
-	// The CONCRETE `MaxonType` a field of declared type `declared` occupies its slot as — what the
+	// The CONCRETE `MaxonType` a SLOT holding a `declared`-typed value is accessed as — what the
 	// `loadIndirect`/`storeIndirect` carries, and the only type in the compiler that says how wide
 	// the access is.
+	//
+	// TWO kinds of slot ask it, and they are the same question: a struct/union FIELD, whose declared
+	// type comes from the layout, and a capturing closure's ENV SLOT, whose declared type comes from
+	// the captured binding. The name predates the second caller; it is left alone because four files
+	// outside the parser cite it by name (`Project`, `TypeResolution`, `SignatureIndex`, `PLAN.md`).
 	//
 	// It resolves a `named` alias through `signatures.aliasOf`, the SAME whole-program door THE
 	// SHIFT RULE already asks (`valueIsUnsigned`), for the same reason: an alias declared in another
@@ -19581,7 +19607,7 @@ export type Parser
 	// resolveNamedType` IS THE FIRST.** That is not a duplication this rung introduced — it is the
 	// standing shape of the two registries (see `ProgramSignatures.structTypes`): the sweep answers
 	// the PARSER, the project registry answers the AUTHORITY, and the alias half has been written in
-	// both places since ranged typealiases landed. What is new is that a field's type has to be
+	// both places since ranged typealiases landed. What is new is that a slot's type has to be
 	// resolved at PARSE time at all, and that is forced by the op: `resolveTypes` never rewrites an
 	// op's type, so the parser is the last tier that can make it concrete.
 	function fieldStorageType(declared MaxonType) returns MaxonType
@@ -19591,7 +19617,7 @@ export type Parser
 			boolean to float then return declared
 			exitCode then return declared
 			structRef then return declared
-			unresolved then panic("fieldStorageType: a field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no field declaration can carry one")
+			unresolved then panic("fieldStorageType: a slot is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, and the one other producer of the sentinel is a VOID callee's result type, which `voidCallResultUsed` refuses to bind; so neither a field declaration nor a captured binding can carry one")
 			// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
 			// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
 			// self-field READ loads through this same width.
@@ -19608,7 +19634,7 @@ export type Parser
 			named then break 'kind'
 		end 'kind'
 
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("fieldStorageType: a field's named type has an id that is not in this file's interner — the layout's types are adopted through `fieldTypeOf`, which re-interns into exactly this table")
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("fieldStorageType: a slot's named type has an id that is not in this file's interner — a field's type is adopted through `fieldTypeOf`, which re-interns into exactly this table, and a captured binding's was interned by this file's own `parseTypeReference`")
 		match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'alias'
 			declared(alias) then return alias.underlying
 			undeclared then break 'alias'
@@ -19848,11 +19874,18 @@ export type Parser
 			try self.requireNotInSelfCapture(tok)
 		end 'capturedSelfField'
 
+		// ⭐ **DECLARED vs STORAGE, at an env slot.** `captureType` is what the SOURCE said, and it is
+		// what the read's value is minted as — a ranged INT alias stays `named` on purpose, because its
+		// NAME is what carries the signedness `valueIsUnsigned` reads (a captured `int(0 to u64.max)`
+		// must still `shr` zero-filling), and `resolveFloatAliasType` has already collapsed the one
+		// alias whose VALUE is a different machine class. The OP, though, carries a WIDTH, and a `named`
+		// reaches `maxonTypeToStdType` unresolved — so the slot's type goes through `fieldStorageType`,
+		// the same door a struct field's width comes from and the same one `buildClosureEnv`'s store
+		// asks. That the two ask ONE routine is the invariant, not a tidiness: a slot filled at one
+		// width and read at another corrupts the environment silently.
 		let captureType = self.resolveFloatAliasType(binding.varType)
 		let slot = self.captureSlotFor(tok.value, enclosingValue: binding.boundValue, captureType: captureType)
-		let result = self.mintValueOfType(captureType)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: self.closureEnvParamId, offset: (slot * EnvSlotBytes) as ByteOffset, valueType: captureType), range: SourceRange.ofToken(tok))
-		return result
+		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.fieldStorageType(captureType), range: SourceRange.ofToken(tok))
 	end 'emitCaptureRead'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
@@ -20340,7 +20373,11 @@ export type Parser
 		for i in 0 upto captureCount 'storeEach'
 			let capValue = try capturedValues.get(i) otherwise panic("buildClosureEnv: capturedValues.get OOB at {i} — filled in lockstep with captureNames")
 			let capType = try capturedTypes.get(i) otherwise panic("buildClosureEnv: capturedTypes.get OOB at {i} — filled in lockstep with captureNames")
-			self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(env, offset: (i * EnvSlotBytes) as ByteOffset, value: capValue, valueType: capType), range: range)
+
+			// The WIDTH comes from `fieldStorageType` and the OFFSET from `envSlotOffset`, because
+			// `emitCaptureRead` reads the slot back through those same two — and `capType` is the
+			// SOURCE type it recorded, which for a ranged alias is `named` and has no width of its own.
+			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.fieldStorageType(capType), range: range)
 		end 'storeEach'
 
 		self.markValueOwnsHeap(env)

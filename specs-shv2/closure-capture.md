@@ -592,3 +592,29 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:17:42: Unsupported: a closure that captures `self` (P1.5-A2b: capturing closures + env block)
 ```
+
+<!-- test: closure-capture.captured-ranged-alias-binding -->
+A capture whose declared type is a ranged typealias — where what the slot is ACCESSED as and what the
+value IS are not the same type. The env slot's `storeIndirect`/`loadIndirect` pair carries a WIDTH, so
+the op's type must be the concrete primitive the alias stands for: a `named` type reaches lowering
+unresolved, because nothing after the parser rewrites an op's type. The value the read mints keeps the
+DECLARED type instead, and `high shr 62` is the witness — `Word`'s low bound is 0, so the shift
+zero-fills and yields 3. Minted at the storage type it would be a bare `int`, sign-fill, and yield
+0 - 1.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Word = int(0 to u64.max)
+
+function usesClosure(bump Integer, high Word) returns Integer
+	let op = function(n Integer) gives n + bump + (high shr 62)
+	return op(1)
+end 'usesClosure'
+
+function main() returns ExitCode
+	return usesClosure(38, high: 0xC000000000000000) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```

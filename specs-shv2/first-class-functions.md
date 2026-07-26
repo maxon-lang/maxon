@@ -1786,8 +1786,7 @@ end 'main'
 105
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-name-not-leaked -->
-<!-- blocked by a PRE-EXISTING borrowed-struct-copy-return limit, unrelated to closures: `storeIt` does `var hh = h; hh.op = op; return hh`, and returning a re-borrowed struct param is refused E2015 ("returning a borrowed struct value … arrives at P1.4b") — shv2 has no struct copy/clone. The test's OWN property (the escape check keys on the VALUE, so an unrelated param named `op` is NOT falsely flagged) IS verified: `hh.op = op` compiles PAST the field-store escape check (op is a plain param, not marked) and reaches the E2015 at the return — a false-flag would have thrown E3099 at the store instead. Unblocks with struct-copy-return (P1.7-adjacent). -->
+<!-- test: first-class-function.capturing-closure-name-not-leaked -->
 The check keys on the VALUE, not the name. A variable name means nothing outside the
 function that declared it, so a capturing `op` in one function must not make an unrelated
 parameter `op` in another look like it carries an environment — that would be a FALSE
