@@ -45,6 +45,12 @@ WHAT EACH BLOCK PROVES (asserted by the output below):
     no row behind while its coverage point still counts the line's executions.
   * An arm renders as `<kind>@<line>=<count>`, one shape for `then`, `else` and `case` alike, each
     naming the line to look at — which for an `else` is not the `if`'s.
+  * `target exit code:` is the MEASURED PROGRAM's status, reported as DATA. `maxon coverage` still
+    exits 0 here: its own exit code answers "did the measurement complete", and one integer cannot
+    answer two questions. The debug face settles the policy — `maxon debug --batch` emits
+    `{"event":"exit","code":N}` and itself exits 0 for exactly the same reason. Block 3 is the case
+    where this tool's own exit DOES go non-zero, and it is not the program's status that makes it:
+    the run never finished, so there is no completed measurement to report.
   * BLOCK 2 — THE SAME REPORT AS JSON, from the same model through the second renderer. The two faces
     are a text renderer and a JSON renderer over ONE report; there is no second aggregation.
   * BLOCK 3 — PARTIAL. covpartial panics halfway, so the dump runs from the panic path and marks the
@@ -68,6 +74,7 @@ WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
 
 --- EXPECTED `maxon coverage run` STDOUT, BLOCK 1: the annotated listing ---
 coverage: maxon-sharp/DebugSamples/coverage.exe
+target exit code: 17
 lines: 15/17 covered  branches: 5/7 arms taken  eliminated: 2 lines
 legend: a count = executed, ##### = never executed, ----- = no code emitted (optimized away), blank = no coverage point
 
@@ -147,10 +154,11 @@ legend: a count = executed, ##### = never executed, ----- = no code emitted (opt
   maxon-sharp/DebugSamples/coverage.maxon:62:2  then@62=0  else(implicit)@62=1
 
 --- EXPECTED `maxon coverage run --json` STDOUT, BLOCK 2: the same report as JSON ---
-{"exe":"maxon-sharp/DebugSamples/coverage.exe","runCompleted":true,"linesCovered":15,"linesInstrumented":17,"linesEliminated":2,"armsTaken":5,"armsInstrumented":7,"files":[{"path":"maxon-sharp/DebugSamples/coverage.maxon","lines":[{"line":30,"state":"eliminated"},{"line":31,"state":"eliminated"},{"line":35,"state":"covered","count":3},{"line":36,"state":"covered","count":1},{"line":39,"state":"covered","count":2},{"line":43,"state":"covered","count":2},{"line":44,"state":"covered","count":1},{"line":45,"state":"covered","count":1},{"line":46,"state":"notCovered","count":0},{"line":51,"state":"covered","count":1},{"line":52,"state":"covered","count":1},{"line":54,"state":"covered","count":1},{"line":55,"state":"covered","count":3},{"line":56,"state":"covered","count":3},{"line":59,"state":"covered","count":1},{"line":60,"state":"covered","count":1},{"line":62,"state":"covered","count":1},{"line":63,"state":"notCovered","count":0},{"line":66,"state":"covered","count":1}]}],"branches":[{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":35,"col":2,"arms":[{"kind":"then","line":35,"col":2,"count":1},{"kind":"else","line":35,"col":2,"implicit":true,"count":2}]},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":43,"col":9,"arms":[{"kind":"case","line":44,"col":3,"count":1},{"kind":"case","line":45,"col":3,"count":1},{"kind":"case","line":46,"col":3,"count":0}]},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":62,"col":2,"arms":[{"kind":"then","line":62,"col":2,"count":0},{"kind":"else","line":62,"col":2,"implicit":true,"count":1}]}]}
+{"exe":"maxon-sharp/DebugSamples/coverage.exe","runCompleted":true,"targetExitCode":17,"linesCovered":15,"linesInstrumented":17,"linesEliminated":2,"armsTaken":5,"armsInstrumented":7,"files":[{"path":"maxon-sharp/DebugSamples/coverage.maxon","lines":[{"line":30,"state":"eliminated"},{"line":31,"state":"eliminated"},{"line":35,"state":"covered","count":3},{"line":36,"state":"covered","count":1},{"line":39,"state":"covered","count":2},{"line":43,"state":"covered","count":2},{"line":44,"state":"covered","count":1},{"line":45,"state":"covered","count":1},{"line":46,"state":"notCovered","count":0},{"line":51,"state":"covered","count":1},{"line":52,"state":"covered","count":1},{"line":54,"state":"covered","count":1},{"line":55,"state":"covered","count":3},{"line":56,"state":"covered","count":3},{"line":59,"state":"covered","count":1},{"line":60,"state":"covered","count":1},{"line":62,"state":"covered","count":1},{"line":63,"state":"notCovered","count":0},{"line":66,"state":"covered","count":1}]}],"branches":[{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":35,"col":2,"arms":[{"kind":"then","line":35,"col":2,"count":1},{"kind":"else","line":35,"col":2,"implicit":true,"count":2}]},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":43,"col":9,"arms":[{"kind":"case","line":44,"col":3,"count":1},{"kind":"case","line":45,"col":3,"count":1},{"kind":"case","line":46,"col":3,"count":0}]},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":62,"col":2,"arms":[{"kind":"then","line":62,"col":2,"count":0},{"kind":"else","line":62,"col":2,"implicit":true,"count":1}]}]}
 
 --- EXPECTED `maxon coverage run` STDOUT, BLOCK 3: a run that did not complete ---
 coverage: maxon-sharp/DebugSamples/covpartial.exe
+target exit code: 1
 PARTIAL: the run did not complete — these counts stop where the program died
 lines: 4/4 covered  branches: 0/0 arms taken  eliminated: 1 lines
 legend: a count = executed, ##### = never executed, ----- = no code emitted (optimized away), blank = no coverage point

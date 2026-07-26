@@ -11,10 +11,41 @@ namespace MaxonSharp.Debug;
 /// either built from a binary, a sidecar and a data file that all agree about which build they
 /// describe, or it is not built at all.
 /// </summary>
+/// <summary>
+/// What became of a launched target. <see cref="ExitCode"/> is null when it did not finish, and
+/// <see cref="TimedOut"/> says whether the DEADLINE is what stopped it — which matters because that
+/// is the one failure here a caller can act on, and only then should either face offer to raise it.
+/// Telling someone whose executable does not exist to lengthen a timeout is a refusal that cannot be
+/// acted on.
+/// </summary>
+public readonly record struct TargetRun(int? ExitCode, bool TimedOut, string Error);
+
 public static class CoverageRunner {
   /// The data file a binary writes on exit, and therefore where a report reads it from. Stated once,
   /// because the emitted runtime derives the same name from the same extension constant.
   public static string DataPathFor(string exePath) => exePath + MxcovFormat.DataExtension;
+
+  /// <summary>
+  /// The default bound on a coverage run. Ten minutes, the same shape and the same reason as the
+  /// debugger's stop deadline: it exists only so a target that never finishes cannot hang the tool
+  /// that launched it — CI, or an MCP host with no observer — and <see cref="TimeoutFlag"/> raises it
+  /// for a program that legitimately runs long. Instrumentation itself costs a measured 1.18x on a
+  /// realistic workload, so it is not what makes a run approach this.
+  /// </summary>
+  public static readonly TimeSpan DefaultRunTimeout = TimeSpan.FromMinutes(10);
+
+  /// The CLI flag that overrides <see cref="DefaultRunTimeout"/>, spelled HERE beside the deadline it
+  /// sets so the parser that reads it and the usage text that names it cannot drift apart.
+  public const string TimeoutFlag = "--timeout=";
+
+  /// The recourse offered to a human whose deadline was too short, worded ONCE beside the flag it
+  /// names. It belongs to the CLI face and not to <see cref="Launch"/>, because the other face has a
+  /// different one: telling an MCP caller to pass a command-line flag names a control it does not
+  /// have, which is a refusal that cannot be acted on.
+  public const string RaiseTimeoutText = "Raise the deadline with " + TimeoutFlag + "<seconds> and run again.";
+
+  /// <see cref="DefaultRunTimeout"/> as the usage banner prints it, through the one seconds rule.
+  public static string DefaultRunTimeoutText => PositiveSeconds.Text(DefaultRunTimeout);
 
   /// <summary>
   /// Run the instrumented program to completion, first removing any stale data file so a run whose
@@ -33,18 +64,15 @@ public static class CoverageRunner {
   /// happens to be a synchronized writer; safety that depends on which sink a caller picked is not
   /// safety.
   /// </summary>
-  public static bool Launch(string exePath, IReadOnlyList<string> targetArgs, string dataPath,
-      Action<string> onOutput, out string error) {
-    if (!File.Exists(exePath)) {
-      error = $"no such executable: {CoverageRender.DisplayPath(exePath)}";
-      return false;
-    }
+  public static TargetRun Launch(string exePath, IReadOnlyList<string> targetArgs, string dataPath,
+      TimeSpan timeout, Action<string> onOutput) {
+    if (!File.Exists(exePath))
+      return Failed($"no such executable: {CoverageRender.DisplayPath(exePath)}");
 
     try {
       if (File.Exists(dataPath)) File.Delete(dataPath);
     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-      error = $"cannot remove the previous {CoverageRender.DisplayPath(dataPath)}: {ex.Message}";
-      return false;
+      return Failed($"cannot remove the previous {CoverageRender.DisplayPath(dataPath)}: {ex.Message}");
     }
 
     // Rooted: Process.Start resolves a relative program name against PATH rather than the working
@@ -59,30 +87,37 @@ public static class CoverageRunner {
     try {
       using var process = Process.Start(info) ?? throw new IOException("the process did not start");
       var outputGate = new object();
-      void Deliver(string? line) {
-        if (line == null) return;
+      void Deliver(string line) {
         lock (outputGate) onOutput(line);
       }
 
-      process.OutputDataReceived += (_, e) => Deliver(e.Data);
-      process.ErrorDataReceived += (_, e) => Deliver(e.Data);
-      process.BeginOutputReadLine();
-      process.BeginErrorReadLine();
-      process.WaitForExit();
-      error = "";
-      return true;
+      // TargetStdio owns the ONE statement of how a session with a spawned target ends: wait out the
+      // grace period, kill what is left — the whole process TREE, since a target's children are as
+      // much this run's orphans as the target — wait for the kill to settle so the exit status is
+      // readable, and only THEN join the forwarding tasks. Joining before the kill blocks forever on
+      // a pipe that never closes, which is the other half of the same defect.
+      var stdio = TargetStdio.Forward(process, Deliver, Deliver);
+      if (stdio.EndAndJoin(PositiveSeconds.ToWaitMilliseconds(timeout))) {
+        // The FACT only — each face appends the recourse its own caller can act on.
+        return new TargetRun(null, TimedOut: true,
+          $"{CoverageRender.DisplayPath(exePath)} did not finish within {PositiveSeconds.Text(timeout)}s"
+          + " and was killed, so it wrote no counters.");
+      }
+
+      return new TargetRun(process.ExitCode, TimedOut: false, "");
     } catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception) {
-      error = $"could not run {CoverageRender.DisplayPath(exePath)}: {ex.Message}";
-      return false;
+      return Failed($"could not run {CoverageRender.DisplayPath(exePath)}: {ex.Message}");
     }
   }
+
+  private static TargetRun Failed(string error) => new(null, TimedOut: false, error);
 
   /// <summary>
   /// Join the binary's own `.text` hash, its `.mxdbg` coverage-point table, and a run's `.mxcov`
   /// counters into a report — or refuse, saying which of the three is missing or describes a
   /// different build.
   /// </summary>
-  public static CoverageReport? Load(string exePath, string dataPath, out string error) {
+  public static CoverageReport? Load(string exePath, string dataPath, int? targetExitCode, out string error) {
     if (!BinaryBuildId.TryCompute(exePath, out var binaryBuildId, out error)) return null;
 
     var sidecarPath = exePath + MxdbgFormat.SidecarExtension;
@@ -123,6 +158,6 @@ public static class CoverageRunner {
       return null;
     }
 
-    return CoverageJoin.TryBuild(exePath, sidecar, binaryBuildId, data, out error);
+    return CoverageJoin.TryBuild(exePath, sidecar, binaryBuildId, data, targetExitCode, out error);
   }
 }

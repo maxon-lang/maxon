@@ -190,6 +190,26 @@ internal static class McpArgs {
     return number;
   }
 
+  /// <summary>
+  /// An optional deadline a caller spelled in SECONDS, or <paramref name="fallback"/>.
+  ///
+  /// Refused rather than clamped, through the SAME <see cref="PositiveSeconds"/> rule every CLI flag
+  /// is refused by: a deadline that is non-positive — or that merely ROUNDS to zero, which is how the
+  /// copies used to disagree — expires before the target could possibly finish, and would be reported
+  /// as a configured setting rather than as the broken one it is.
+  ///
+  /// Here rather than in one family because two now take one, and the previous single copy of this
+  /// validation is exactly the shape that had already drifted three ways once.
+  /// </summary>
+  public static TimeSpan OptionalTimeoutSeconds(JsonElement args, string name, TimeSpan fallback) {
+    if (OptionalNumber(args, name) is not { } seconds) return fallback;
+
+    if (!PositiveSeconds.TryFrom(seconds, out var timeout))
+      throw new McpInvalidParamsException($"`{name}` {PositiveSeconds.RequirementText}, got {seconds}");
+
+    return timeout;
+  }
+
   public static JsonElement RequireObject(JsonElement args, string name) {
     if (!TryProperty(args, name, out var value))
       throw new McpInvalidParamsException($"`{name}` is required");

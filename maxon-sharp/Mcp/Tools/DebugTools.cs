@@ -213,7 +213,7 @@ internal static class DebugTools {
         McpArgs.OptionalBool(args, "debugStream") ?? false, coverage: false),
       McpArgs.OptionalStringArray(args, "args"),
       McpArgs.OptionalStringMap(args, "env"),
-      StopTimeoutOf(args),
+      McpArgs.OptionalTimeoutSeconds(args, "stopTimeoutSeconds", DefaultStopTimeout),
       McpArgs.OptionalBool(args, "stopOthers") ?? false);
     session.Debug = debug;
 
@@ -281,20 +281,6 @@ internal static class DebugTools {
       w.WriteEndObject();
     }
     return McpToolResult.Json(Encoding.UTF8.GetString(buffer.ToArray()));
-  }
-
-  private static TimeSpan StopTimeoutOf(JsonElement args) {
-    if (McpArgs.OptionalNumber(args, "stopTimeoutSeconds") is not { } seconds) return DefaultStopTimeout;
-
-    // Refused rather than clamped, through the SAME rule `--stop-timeout=` is refused by: a deadline
-    // that is non-positive — or that merely ROUNDS to zero, which is how the two used to disagree —
-    // times out every wait before the target could possibly stop, and would be reported as a setting
-    // rather than as the broken one it is.
-    if (!PositiveSeconds.TryFrom(seconds, out var stopTimeout))
-      throw new McpInvalidParamsException(
-        $"`stopTimeoutSeconds` {PositiveSeconds.RequirementText}, got {seconds}");
-
-    return stopTimeout;
   }
 
 }

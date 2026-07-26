@@ -39,6 +39,28 @@ internal static class PositiveSeconds {
   }
 
   /// <summary>
+  /// A deadline as the SHORTEST ROUND-TRIP decimal form — exactly what `Utf8JsonWriter.WriteNumber`
+  /// emits for the same double, so a prose face and a JSON face cannot print different numbers for one
+  /// deadline. A fixed "0.###" would have: TimeSpan keeps 100ns ticks, not whole milliseconds, so
+  /// `0.0004` reads 0.0004 in JSON and would have rendered as "0s" in prose — a driver claiming a
+  /// deadline it was not given.
+  ///
+  /// Here rather than on one driver because two now report a deadline they were spelled in seconds,
+  /// and this is the same rule that validated it.
+  /// </summary>
+  public static string Text(TimeSpan span) =>
+    span.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+  /// <summary>
+  /// A deadline as a `WaitForExit` argument, SATURATING rather than overflowing the cast: a deadline
+  /// beyond ~24 days is still a deadline, and wrapping it would produce a NEGATIVE wait — which
+  /// `WaitForExit` reads as "already expired", turning the longest deadline a caller can ask for into
+  /// the shortest.
+  /// </summary>
+  public static int ToWaitMilliseconds(TimeSpan span) =>
+    span.TotalMilliseconds >= int.MaxValue ? int.MaxValue : (int)span.TotalMilliseconds;
+
+  /// <summary>
   /// The rule itself: a finite, positive number of seconds that survives conversion as a positive
   /// duration. A value that rounds away to zero is REFUSED rather than clamped — a zero deadline is a
   /// timer that has already expired, which every caller here would report as a configured setting

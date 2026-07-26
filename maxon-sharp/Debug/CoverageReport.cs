@@ -39,9 +39,19 @@ public sealed record CoverageBranch(string File, uint Line, uint Col, IReadOnlyL
 /// here is real, but the run stopped early, so the report says PARTIAL rather than presenting it as
 /// a finished measurement.
 /// </summary>
+/// <param name="TargetExitCode">
+/// The status the measured program returned, or null when this report was built from data an earlier
+/// run wrote and there is no run of our own to report on.
+///
+/// It is DATA, never this tool's own exit code, and the debug face settles that: `maxon debug --batch`
+/// emits `{"event":"exit","code":7}` and itself exits 0, because its own status answers "did the
+/// session work". One integer cannot answer two questions — which is the defect `StopWaitStatus` was
+/// created to remove, a bool that could not say "I gave up".
+/// </param>
 public sealed record CoverageReport(
   string ExePath,
   bool RunCompleted,
+  int? TargetExitCode,
   IReadOnlyList<CoverageFile> Files,
   IReadOnlyList<CoverageBranch> Branches) {
 
@@ -64,7 +74,7 @@ public sealed record CoverageReport(
 /// </summary>
 public static class CoverageJoin {
   public static CoverageReport? TryBuild(string exePath, MxdbgReader sidecar, ulong binaryBuildId,
-      MxcovReader data, out string error) {
+      MxcovReader data, int? targetExitCode, out string error) {
     // The refusals deliberately name the FACT and not the two build-ids. The ids are a build-machine
     // detail a reader can do nothing with, and printing them would make every refusal transcript
     // machine-specific — an instrument whose own output cannot be compared across runs.
@@ -83,7 +93,7 @@ public static class CoverageJoin {
     }
 
     error = "";
-    return new CoverageReport(exePath, data.RunCompleted,
+    return new CoverageReport(exePath, data.RunCompleted, targetExitCode,
       BuildFiles(sidecar, data), BuildBranches(sidecar, data));
   }
 
@@ -199,6 +209,10 @@ public static class CoverageRender {
   public static string Text(CoverageReport report) {
     var sb = new StringBuilder();
     sb.Append("coverage: ").Append(DisplayPath(report.ExePath)).Append('\n');
+    // The measured program's own status, reported because the tool knows it. ABSENT — not zero — when
+    // the report was built from an earlier run's data, because then nobody here watched it exit.
+    if (report.TargetExitCode is { } exitCode)
+      sb.Append("target exit code: ").Append(exitCode).Append('\n');
     if (!report.RunCompleted) {
       sb.Append("PARTIAL: the run did not complete — these counts stop where the program died\n");
     }
@@ -282,6 +296,7 @@ public static class CoverageRender {
       w.WriteStartObject();
       w.WriteString("exe", DisplayPath(report.ExePath));
       w.WriteBoolean("runCompleted", report.RunCompleted);
+      if (report.TargetExitCode is { } exitCode) w.WriteNumber("targetExitCode", exitCode);
       w.WriteNumber("linesCovered", report.LinesCovered);
       w.WriteNumber("linesInstrumented", report.LinesInstrumented);
       w.WriteNumber("linesEliminated", report.LinesEliminated);

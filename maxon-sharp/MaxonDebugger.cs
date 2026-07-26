@@ -60,7 +60,7 @@ internal sealed class MaxonDebugger : IDisposable {
 
   /// <see cref="DefaultStopTimeout"/> as the usage banner prints it, so the help text cannot claim a
   /// default the driver does not use.
-  public static string DefaultStopTimeoutText => SecondsText(DefaultStopTimeout);
+  public static string DefaultStopTimeoutText => PositiveSeconds.Text(DefaultStopTimeout);
 
   /// This session's bound on a wait for the next stop (see <see cref="DefaultStopTimeout"/>).
   public TimeSpan StopTimeout { get; }
@@ -69,20 +69,11 @@ internal sealed class MaxonDebugger : IDisposable {
   /// or as prose.
   public double StopTimeoutSeconds => StopTimeout.TotalSeconds;
 
-  /// <see cref="StopTimeoutSeconds"/> as text. Deliberately the SHORTEST ROUND-TRIP form, which is exactly
-  /// what <c>Utf8JsonWriter.WriteNumber</c> emits for the same double — so the prose face and the JSON
-  /// face cannot print different numbers for one deadline. A fixed "0.###" here would have: TimeSpan keeps
-  /// 100ns ticks, not whole milliseconds, so `--stop-timeout=0.0004` reads 0.0004 in JSON and would have
-  /// rendered as "0s" in prose — the driver claiming a deadline it was not given.
-  public string StopTimeoutText => SecondsText(StopTimeout);
+  /// <see cref="StopTimeoutSeconds"/> as text, through the one seconds rule that also validated it.
+  public string StopTimeoutText => PositiveSeconds.Text(StopTimeout);
 
-  private static string SecondsText(TimeSpan span) =>
-    span.TotalSeconds.ToString(CultureInfo.InvariantCulture);
-
-  /// <see cref="StopTimeout"/> as a <c>WaitForExit</c> argument, saturating rather than overflowing the
-  /// cast: a deadline beyond ~24 days is still a deadline, and wrapping it would produce a NEGATIVE wait.
-  private int StopTimeoutMilliseconds =>
-    StopTimeout.TotalMilliseconds >= int.MaxValue ? int.MaxValue : (int)StopTimeout.TotalMilliseconds;
+  /// <see cref="StopTimeout"/> as a <c>WaitForExit</c> argument.
+  private int StopTimeoutMilliseconds => PositiveSeconds.ToWaitMilliseconds(StopTimeout);
 
   private readonly SharedMapping _mapping;
   private readonly MemoryMappedViewAccessor _accessor;
