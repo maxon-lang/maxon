@@ -884,6 +884,9 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		x64JumpTable to arm64JumpTable then break 'hint'
 		// The witness call's base register is a plain use (a call, like `callReg`), no copy hint.
 		callMem then break 'hint'
+		// Neither stack-argument op is a MOVE: the outgoing store has a use and no def, the incoming load a
+		// def and no use, so no two of their operands could want the same register. No copy hint.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1637,6 +1640,9 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(colorVRegWith(indexReg, alloc: alloc), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		// The witness call colors its witness-table base register, exactly as `callReg` colors its callee.
 		callMem(baseReg, disp) then return TargetOp.callMem(colorVRegWith(baseReg, alloc: alloc), disp: disp)
+		// The stack-argument pair colors its ONE register operand each; the slot is a frame index, not a register.
+		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
+		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(colorVRegWith(dest, alloc: alloc), slot: slot)
 	end 'rewrite'
 end 'colorTargetOp'
 

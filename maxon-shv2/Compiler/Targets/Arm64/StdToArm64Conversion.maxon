@@ -33,9 +33,9 @@
 // refcounting and the whole String runtime are Std-tier and target-neutral, inherited unchanged.
 
 // The AAPCS64 integer ARGUMENT / return registers: argument `k` arrives in (and is passed in)
-// `arm64ArgRegisters[k]` = x0..x7, and an integer value returns in x0. The array LENGTH caps the
-// register-argument count; a further argument would need a stack slot (a later milestone), which the
-// parser rejects up front (`MaxRegisterParams`).
+// `arm64ArgRegisters[k]` = x0..x7, and an integer value returns in x0. The array LENGTH is this file's
+// REGISTER capacity (`arm64RegisterArgCapacity`); an argument past it travels in an outgoing STACK slot at
+// `[SP + k*8]`, the AAPCS64 layout.
 let arm64ArgRegisters = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7]
 
 // The AAPCS64 FLOAT argument registers, in slot order: a FLOAT parameter/argument travels in
@@ -126,19 +126,30 @@ function arm64PhysReg(reg Arm64Register) returns TargetVReg
 	return TargetVReg.physical(n)
 end 'arm64PhysReg'
 
-// The physical register argument `index` occupies. An index past the register file is a parser-cap
-// violation (the parser rejects >`MaxRegisterParams` parameters), so it is a compiler-invariant break
-// here, not a user error.
+// How many arguments of ONE file AAPCS64 passes in registers — the capacity the shared placement rule
+// (`abiArgIsOnStack`) is asked against, read off the array itself so adding a register moves it with no
+// second number to update. The arm64 twin of `x64RegisterArgCapacity`, including its precondition: the rule
+// asks ONE capacity of whichever file an argument belongs to, so two depths would send floats to stack slots
+// the callee still expected in `d` registers.
+function arm64RegisterArgCapacity() returns RegisterArgCapacity
+	if arm64ArgRegisters.count() != arm64FpArgRegisters.count() 'filesDiffer'
+		panic("arm64RegisterArgCapacity: the integer file holds {arm64ArgRegisters.count()} argument registers and the SIMD file {arm64FpArgRegisters.count()} — the shared placement rule asks ONE capacity of both files, so they must be the same depth")
+	end 'filesDiffer'
+	return arm64ArgRegisters.count() as RegisterArgCapacity
+end 'arm64RegisterArgCapacity'
+
+// The physical register integer argument slot `index` occupies. A slot past the file means the placement
+// rule said "register" where the file has none, so it is a compiler-invariant break here, not a user error:
+// every caller tests `abiArgIsOnStack` first.
 function arm64ArgRegisterAt(index ParamCount) returns Arm64Register
-	return try arm64ArgRegisters.get(index) otherwise panic("arm64ArgRegisterAt: argument index {index} exceeds the {arm64ArgRegisters.count()} register-argument slots — the parser caps parameters at that count until stack arguments land")
+	return try arm64ArgRegisters.get(index) otherwise panic("arm64ArgRegisterAt: argument index {index} exceeds the {arm64ArgRegisters.count()} register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'arm64ArgRegisterAt'
 
 // The physical SIMD register FP argument slot `index` occupies — the float twin of
-// `arm64ArgRegisterAt`. A slot past the file is a compiler-invariant break (the parser caps
-// parameters, and a float overflow arg would need a stack slot, a later milestone), so it rejects
+// `arm64ArgRegisterAt`, a compiler-invariant break past the file for the same reason. It must reject
 // cleanly here rather than mis-storing from the wrong file.
 function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
-	return try arm64FpArgRegisters.get(index) otherwise panic("arm64FpArgRegisterAt: float argument slot {index} exceeds the {arm64FpArgRegisters.count()} SIMD register-argument slots — the parser caps parameters at that count until stack arguments land")
+	return try arm64FpArgRegisters.get(index) otherwise panic("arm64FpArgRegisterAt: float argument slot {index} exceeds the {arm64FpArgRegisters.count()} SIMD register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'arm64FpArgRegisterAt'
 
 // The physical register a callIndirect captures its result from — **d0** for a float-returning function
@@ -295,31 +306,96 @@ type StdToArm64Lowering
 	// ==========================================================================
 
 	function lowerFunction(funcIdx FuncIndex)
+		// Every read of the source function happens HERE, before the walk, so the walk holds no borrow of it
+		// while `applyOutgoingArgSize` writes to the TARGET function of the same index (E3019).
+		let outgoingArgBytes = self.lowerFunctionBlocks(funcIdx)
+		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
+	end 'lowerFunction'
+
+	// Walk the function's blocks, and return the OUTGOING stack-argument bytes its largest call needs — a
+	// running MAX, not a sum, because the region is REUSED by every call site. Only shv2-to-shv2 calls
+	// contribute on arm64: its OS primitives (`write`, `mmap`, `exit`) are all ≤6-argument, register-only,
+	// which is why there is no `stdOpOutgoingArgBytes` table here to mirror x64's.
+	function lowerFunctionBlocks(funcIdx FuncIndex) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		let returnType = srcFunc.returnType
+		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
+		// re-walking the parameter types, which is what the per-parameter `computeParamSlotIndex` did.
+		let paramFloatMask = floatParamMaskOf(srcFunc.paramTypes)
+		var outgoingArgBytes = 0 as StackSize
 		// A 1:1 lowering: every op of a Std block lowers into the SAME Target block, and no pass in this
 		// file mints new blocks during the walk (the divide-by-zero split that once did is gone — `a / 0`
 		// is a bare `sdiv` now). So `blockRefs` is fixed across the walk and iterating it directly is safe.
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			self.lowerOneBlock(blockRef, returnType: returnType, paramTypes: srcFunc.paramTypes)
+			let blockOutgoing = self.lowerOneBlock(blockRef, returnType: returnType, paramFloatMask: paramFloatMask)
+			if blockOutgoing > outgoingArgBytes 'largerArgRegion'
+				outgoingArgBytes = blockOutgoing
+			end 'largerArgRegion'
 		end 'eachBlock'
-	end 'lowerFunction'
+		return outgoingArgBytes
+	end 'lowerFunctionBlocks'
 
-	// Lower ONE Std block's ops and terminator, both into `blockRef`'s Target block. The terminator's
-	// phi edges were copied onto that block by `prepareSkeleton` and stay there — nothing splits the
-	// block, so there is no continuation to move them to.
-	function lowerOneBlock(blockRef BlockRef, returnType StdReturnType, paramTypes StdTypeArray)
+	// Record the function's outgoing stack-argument reservation on the TARGET function — the arm64 twin of
+	// x64's `applyOutgoingArgSize`, in a scope holding no `srcFunc` borrow of the same object. Skips the
+	// assignment when zero, so a function whose calls all fit the register files is untouched.
+	function applyOutgoingArgSize(funcIdx FuncIndex, bytes StackSize)
+		if bytes == 0 'none'
+			return
+		end 'none'
+		var func = self.targetModule.getFunc(funcIdx)
+		func.outgoingArgSize = bytes
+	end 'applyOutgoingArgSize'
+
+	// Lower ONE Std block's ops and terminator, both into `blockRef`'s Target block, and return the largest
+	// outgoing stack-argument region any of its calls needs. The terminator's phi edges were copied onto
+	// that block by `prepareSkeleton` and stay there — nothing splits the block, so there is no
+	// continuation to move them to.
+	function lowerOneBlock(blockRef BlockRef, returnType StdReturnType, paramFloatMask ArgFloatMask) returns StackSize
 		let opCount = self.stdBlockOpCount(blockRef)
+		var outgoingArgBytes = 0 as StackSize
 		for i in 0 upto opCount 'eachOp'
 			let stdOp = self.stdBlockOpAt(blockRef, index: i)
-			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType, paramTypes: paramTypes)
+			let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
+			if opOutgoing > outgoingArgBytes 'largerArgRegion'
+				outgoingArgBytes = opOutgoing
+			end 'largerArgRegion'
+			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType, paramFloatMask: paramFloatMask)
 		end 'eachOp'
 
 		if self.stdBlockHasTerminator(blockRef) 'hasTerm'
 			let termOp = self.stdBlockTerminator(blockRef)
 			self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
 		end 'hasTerm'
+		return outgoingArgBytes
 	end 'lowerOneBlock'
+
+	// The OUTGOING stack-argument bytes an `StdOp`'s arm64 lowering needs: the arguments a call passes past
+	// the eight register slots of their file, and zero for everything else. The arm64 counterpart of x64's
+	// same-named method — SHORTER, because AAPCS64 has no shadow space and arm64's OS primitives are all
+	// register-only, so the only contributors are the four call ops. Deliberately NOT exhaustive over
+	// `StdOp` by hand: the four call variants are named and every other op gives 0 through one range arm
+	// pair, which cannot silently swallow a band-appended op the way an over-wide range would, because a new
+	// op appended at the END of its band lands past `osReadWallClock` and fails to compile here.
+	function stdOpOutgoingArgBytes(op StdOp) returns StackSize
+		return match op 'o'
+			const to param gives 0
+			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			retVoid to rdataAddr gives 0
+			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			errorReturn to funcAddr gives 0
+			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			osRangePanic to switch gives 0
+			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			osPipeCreate to osReadWallClock gives 0
+		end 'o'
+	end 'stdOpOutgoingArgBytes'
+
+	// The frame bytes ONE call needs for the arguments that overflow the register files — `abiStackSlotsBefore`
+	// over the whole argument list is how many landed on the stack, one `SpillSlotBytes` slot each. AAPCS64
+	// puts them at `[SP + 0 ..)`, with no shadow space, so the region IS the slot count times the stride.
+	function callOutgoingArgBytes(argFloatMask ArgFloatMask, argCount ParamCount) returns StackSize
+		return abiStackSlotsBefore(argFloatMask, index: argCount, capacity: arm64RegisterArgCapacity()) * SpillSlotBytes
+	end 'callOutgoingArgBytes'
 
 	// Scoped reads of a Std block: each returns a scalar or a COPIED op, never a borrowed block, so the
 	// walk never holds a `stdModule.blocks` borrow across an `emit` into `targetModule` (E3019).
@@ -363,7 +439,7 @@ type StdToArm64Lowering
 
 	// Lower a regular (non-terminator) Std op into the block named by `dstRef`. Every op lowers into the
 	// SAME block — nothing splits the walk (div/mod is a bare `sdiv`/`msub`, not a guarded block).
-	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType, paramTypes StdTypeArray)
+	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType, paramFloatMask ArgFloatMask)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstRef: dstRef)
@@ -373,7 +449,7 @@ type StdToArm64Lowering
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstRef: dstRef)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, dstRef: dstRef)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, dstRef: dstRef)
-			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramTypes: paramTypes, dstRef: dstRef)
+			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstRef: dstRef)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstRef: dstRef)
 			ret(retValId) then self.lowerReturn(retValId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			retVoid then self.lowerVoidReturn(dstRef, returnType: returnType, asTerminator: false)
@@ -756,12 +832,23 @@ type StdToArm64Lowering
 	// then self-elides when free).
 	//
 	// ⭐ A FLOAT parameter captures from a SIMD arg register (d0..d7) chosen by a SEPARATE FP counter —
-	// the slot is the count of preceding SAME-FILE parameters (`computeParamSlotIndex`, the cross-target
+	// the slot is the count of preceding SAME-FILE parameters (`abiFileSlotIndex`, the cross-target
 	// ABI contract), NOT the source `index`. The parameter value is XMM-classed by the value-class column
 	// (from its f64 Std type), so `movRegReg` sees two FP ends (`fmov`); an integer parameter captures from
 	// x0..x7 exactly as before.
-	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramTypes StdTypeArray, dstRef BlockRef)
-		let slot = computeParamSlotIndex(index, paramTypes: paramTypes)
+	//
+	// ⭐⭐ A STACK PARAMETER IS LOADED, NOT CAPTURED, exactly as on x64 — but arm64 cannot yet say from
+	// WHERE. Its incoming arguments sit at `[x29 + frameSize - outgoingArgSize + slot*8]`, and neither term
+	// is known until the allocator has finished. So the isel names the SLOT and `Arm64PrologueEpilogue` —
+	// the one pass that knows both — resolves `arm64LoadIncomingArg` into a concrete `[x29 + disp]` load.
+	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstRef BlockRef)
+		let capacity = arm64RegisterArgCapacity()
+		if abiArgIsOnStack(paramFloatMask, index: index, capacity: capacity) 'stackParam'
+			self.emit(dstRef, op: TargetOp.arm64LoadIncomingArg(TargetVReg.virtual(resultId), slot: abiStackSlotsBefore(paramFloatMask, index: index, capacity: capacity)))
+			return
+		end 'stackParam'
+
+		let slot = abiFileSlotIndex(paramFloatMask, index: index)
 		let argReg = arm64FpArgRegisterAt(slot) if stdTypeIsFloat(paramType) else arm64ArgRegisterAt(slot)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(argReg)))
 	end 'lowerParam'
@@ -810,28 +897,46 @@ type StdToArm64Lowering
 		end 'r'
 	end 'lowerCallIndirect'
 
-	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a
-	// float) — the arm64 twin of x64's `emitArgMovesByFloatMask` — a FLOAT argument to a SIMD arg register
-	// (d0..d7) on a SEPARATE FP counter, everything else to a GPR arg register (x0..x7) on the GPR counter.
-	// The two counters run independently (the running twin of `computeParamSlotIndex`). The ONE slotting+emit
-	// path both a DIRECT call (`emitCallArgMoves`, mask from the callee's declared param files) and an
-	// INDIRECT call (`lowerCallIndirect`, mask carried on the op) route through, so the two differ ONLY in
-	// where the mask comes from and can never drift in how an argument is slotted or emitted.
-	// Forward-order emission is sound (each physical arg-register def liveness forbids to values live across
-	// it, keyed on `RegNum` and class-agnostic), now covering the SIMD arg registers too.
+	// Place each argument given a per-argument float mask (bit k set iff argument k is a float) — the arm64
+	// twin of x64's `emitArgMovesByFloatMask` — into its file's ABI register (d0..d7 for a float, x0..x7
+	// otherwise) while that file has one, else into this frame's outgoing STACK region at `[SP + slot*8]`,
+	// the AAPCS64 layout. Every placement decision comes from the shared rule, the SAME calls the callee's
+	// `lowerParam` makes; this routine used to run its own gpr/fp counters, a second spelling of it.
+	// The ONE slotting+emit path a DIRECT call (`emitCallArgMoves`, mask from the callee's declared param
+	// files), an INDIRECT call (`lowerCallIndirect`) and a witness call all route through.
+	//
+	// ⛔⛔ **EVERY STACK STORE IS EMITTED BEFORE EVERY REGISTER MOVE**, for the reason x64's twin states in
+	// full and which the corpus proved there: materializing a stack argument's SOURCE takes a register the
+	// allocator may pick, and nothing marks an already-established ARGUMENT register live from its move to
+	// the call, so a store emitted after one can silently overwrite it. Both reference compilers order it
+	// this way on both of their targets. Once no argument register has been established while the stores
+	// run, the hazard is gone rather than narrowed.
+	//
+	// Forward-order emission within the register phase is then sound (each physical arg-register def
+	// liveness forbids to values live across it, keyed on `RegNum` and class-agnostic), now covering the
+	// SIMD arg registers too.
 	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
-		var gprSlot = 0 as ParamCount
-		var fpSlot = 0 as ParamCount
-		for k in 0 upto args.count() 'eachArg'
+		let capacity = arm64RegisterArgCapacity()
+		for k in 0 upto args.count() 'eachStackArg'
+			if not abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'inRegister'
+				continue
+			end 'inRegister'
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
+			self.emit(dstRef, op: TargetOp.arm64StoreOutgoingArg(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity), srcReg: TargetVReg.virtual(argId)))
+		end 'eachStackArg'
+
+		for k in 0 upto args.count() 'eachRegisterArg'
+			if abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'onStack'
+				continue
+			end 'onStack'
+			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
+			let slot = abiFileSlotIndex(argFloatMask, index: k)
 			if argIsFloat(argFloatMask, argIndex: k) 'floatArg'
-				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
-				fpSlot = fpSlot + 1
+				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'floatArg' else 'intArg'
-				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
-				gprSlot = gprSlot + 1
+				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'intArg'
-		end 'eachArg'
+		end 'eachRegisterArg'
 	end 'emitArgMovesByFloatMask'
 
 	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return

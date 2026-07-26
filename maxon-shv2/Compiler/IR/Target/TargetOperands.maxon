@@ -402,6 +402,12 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The memory-indirect witness call names ONE explicit operand: the witness-table base register (a use);
 		// `disp` is a constant, and the caller-saved clobber rides `implicitDefs`, exactly like `callReg`.
 		callMem(baseReg, _) then pushUse(buf, vreg: baseReg)
+		// The arm64 stack-argument pair. An outgoing store names its value as a USE (nothing else — SP is not a
+		// `TargetVReg`); an incoming load names its destination as a plain DEF (its address is a frame fact, not
+		// a register). Declaring them here is what keeps a stack argument's source live to the store and the
+		// loaded parameter colourable like any other value.
+		arm64StoreOutgoingArg(_, srcReg) then pushUse(buf, vreg: srcReg)
+		arm64LoadIncomingArg(dest, _) then pushDef(buf, vreg: dest)
 	end 'operands'
 end 'targetOpOperands'
 

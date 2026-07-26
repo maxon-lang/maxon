@@ -268,7 +268,7 @@ end 'main'
 ```
 
 <!-- disabled-test: large-returned-struct-many-arrays -->
-<!-- P1.7 >6 parameters (M5 register-only ABI, stack args a later milestone) — pre-existing, orthogonal to arrays -->
+<!-- P1.7 move-only sharing — the SAME reason its sibling `shared-nested-struct-in-literal` is disabled, and NOT the >6-parameter cap this case used to name (stack arguments landed; its 11-parameter `create`s now compile). `createProject` passes ONE `emptyModuleMemo` to TWO consuming parameters (`allModuleCache:` and `allMidCache:`); shv2 is move-only with no incref, so the second use is E3102. Reproduces with a TWO-parameter function, so it is independent of argument count -->
 Large returned struct with many array fields and nested structs with enum fields.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

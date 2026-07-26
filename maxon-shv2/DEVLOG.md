@@ -731,3 +731,91 @@ uses) and applying all substitutions in one walk through a dense column (`remapS
 
 **The emitted IR is byte-identical** (`specs-shv2` 126/0, zero fragment drift). The pass produced
 the right answer all along; it just paid quadratically for it.
+
+## Stack arguments — >6 parameters (2026-07-26)
+
+**The six-parameter cap is REMOVED, not raised.** It was never a limit of the machine — only of a
+milestone that had not been built — and it refused **34 of shv2's own functions**, so shv2 could not
+have compiled itself while it stood. The compiler had been promising the milestone in its own
+diagnostic (*"stack arguments are a later milestone"*) against a `PLAN.md` that recorded no such
+milestone anywhere; `grep "stack argument"` returned nothing.
+
+x64 and arm64 gained real outgoing/incoming stack-argument paths. **wasm needed none and that is not
+an omission**: its parameters ARE locals, so its only cap was the parser's, shared, and removing it
+was the whole of the wasm change. The design lives in `ARCHITECTURE.md` → *Stack arguments*; what
+follows is what happened and what it cost.
+
+### The thesis: one placement rule, and the moment two spellings stopped being safe
+
+The rule that decides where argument `k` goes was stated **twice** — a recomputing
+`computeParamSlotIndex` on the callee side, and a running-counter twin inside each backend's argument
+loop, held together by a comment that said *"the running twin of `computeParamSlotIndex`"*. Two
+monotone counters over one list cannot disagree, so that was survivable while every argument fit a
+register. It stops being survivable the instant an argument can OVERFLOW, because *"which slot"* then
+means two different things — an index within one register FILE, and an index into the single merged
+outgoing STACK area. Both ends now call `abiFileSlotIndex` / `abiArgIsOnStack` / `abiStackSlotsBefore`,
+over an `ArgFloatMask` both already hold. The Targets-tier `ParamFloatMask` — a second typealias for
+the identical bitmask — is gone with them.
+
+The parser had the same shape at a smaller scale: **two cap checks with two different counts**
+(`parseFunctionParameters` tested the parameters the source WRITES, `parseFunction` tested the ABI
+count including the hidden ones), both against one constant, neither aware of the other, and whichever
+fired first decided the message. There is now one, `requireAbiParamCount`, asked of the ABI count.
+
+### What the corpus caught that the reasoning missed
+
+The first implementation emitted the stack stores in source order, interleaved with the register
+moves, under a comment arguing at length that this was safe. `specs-shv2/x64-stack-arg-disp32.md`
+returned **400 instead of 200**: `movRegImm32 rax, 0` established argument slot 2, and the 22nd
+argument's constant was then rematerialized into rax — `movRegImm32 rax, 200`, three instructions
+before the `call`. The protection that makes the register moves safe among themselves does not reach
+it: `forbiddenPhys` stops a value LIVE ACROSS a physical def from being coloured onto it, and an
+argument register **is not a value** — nothing marks it live from its move to the call.
+
+Both reference compilers order the stack stores FIRST and say why (v1's `sequentializeCallArgSetup`
+"Phase 0", the bootstrap's *"CRITICAL ORDERING: compute the stack args FIRST … then load the arg
+registers last"*). Reading them was not enough; the ported spec is what turned a plausible argument
+into a measured wrong answer. **This is the case for porting the corpus rather than authoring
+coverage: the spec that caught it is 65 lines the project already had, and the extra coverage this
+rung authored was written by the same reasoning that got it wrong.**
+
+### Two reachable defects fixed, both of which a green suite could not see
+
+1. **`async f(…)` with 7 arguments was a compiler PANIC** — `emitAsyncSpawn` guarded the GT struct's
+   inline argument region against an inequality its own comment said "cannot fire today", *because*
+   `MaxAsyncArgs` equalled the parser's six-register cap. Removing the cap made it reachable from
+   ordinary source. A spawn genuinely cannot take a stack argument (its arguments ride the inline
+   region, which the hand-assembled trampoline reads back into registers one slot at a time), so this
+   is a real, LOWER ceiling — now a positioned diagnostic in `Parser.emitAsyncCall`, beside the two
+   async refusals that were already there, with the panic kept as the structural backstop it claimed
+   to be.
+
+2. **A `try` call placed inside the closure parser's context-save window made every closure program
+   die compiling** with `mm_decref: refcount underflow` inside `__destruct_Parser` — 43 suite
+   failures, on programs with SIX parameters, from a check about sixty-five. Between
+   `let savedScope = self.scope` and the reassignment that follows it, ~25 `savedX` locals ALIAS the
+   fields they were read from: one object, two names, no incref. A call that can throw inside that
+   window gives the frame a failure edge through it, and the drop the edge owes for each alias
+   releases an object the field still holds. **Nothing may throw between the saves and the restore** —
+   the check moved above them, and the reason is written at the site.
+
+### Verified where it could be verified, and stated where it could not
+
+x64 is proven by execution (1735/0, leak gate clean). wasm is proven by execution under wasmtime
+(1536/0). **arm64 compiles here and cannot run here**, so its half was verified by DISASSEMBLING the
+emitted Mach-O with `llvm-objdump`: `sub sp, sp, #0xb0` / `stp x29, x30, [sp, #0x70]` /
+`add x29, sp, #0x70`, the epilogue mirroring it, `str x11, [sp]` … `str x24, [sp, #0x68]` for the
+fourteen outgoing arguments, and callee-saved slots still at `[x29 + 0x10 …]`. That is a real
+disassembler's reading of real bytes, and it is not the same thing as a run.
+
+⭐ **Zero committed goldens moved** — the fragment status is additions only. That is the stronger
+outcome and it is structural rather than lucky: for any signature that already fitted,
+`abiFileSlotIndex` returns exactly what `computeParamSlotIndex` did, the stack phase emits nothing,
+`outgoingArgSize` stays 0, and arm64's `recordOffset` stays 0. The calling convention only GREW.
+
+**Cost, measured against a base binary built from `ca5954754` in its own worktree:** zero additional
+allocations at every rung, and **+612 bytes CONSTANT across the ladder's 32× span** (+408
+`phase:load`, +24 `phase:parse`, +180 unattributed) — a fixed per-process cost, most likely the
+compiler's own longer diagnostic strings landing in larger slab size classes. The previous log row's
+path-length phantom was **tested and refuted** rather than assumed: the identical binary run through a
+junction with an equal-length worktree name reproduced the same offset exactly.

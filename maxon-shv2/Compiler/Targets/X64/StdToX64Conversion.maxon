@@ -74,16 +74,18 @@ end 'constMaterializationOp'
 // rbx is CALLEE-saved in shv2, so it must never carry an argument. All six are
 // caller-saved and in the allocatable pool. The RETURN value uses R8, which is not an
 // argument register, so there is no return/argument register conflict. The array LENGTH
-// is the register-argument cap: a 7th argument would need a stack slot (a later
-// milestone), which the parser rejects up front (see `MaxRegisterParams`).
+// is this file's REGISTER capacity (`x64RegisterArgCapacity`): an argument past it
+// travels in an outgoing STACK slot (`win64OutgoingArgDisp`).
 let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi]
 
 // The custom-ABI FLOAT argument registers, in slot order: a FLOAT parameter/argument travels in
 // `argFpRegisters[fpSlot]` = xmm0..xmm5, where `fpSlot` is counted by a SEPARATE FP counter from the
-// integer `argRegisters` (v1's internal convention — see `computeParamSlotIndex`). The two files
-// count independently, so a program may spend all its parameters on floats; the array therefore
-// holds as many slots as the parser's parameter cap (`MaxRegisterParams` = 6), and its length is the
-// register-argument cap the same way `argRegisters`' is. xmm0 doubles as the float RETURN register
+// integer `argRegisters` (v1's internal convention — see `abiFileSlotIndex`). The two files
+// count independently, so a program may spend all its arguments on floats; the array therefore
+// holds exactly as many slots as `argRegisters` does, which `x64RegisterArgCapacity` asserts —
+// the shared placement rule asks ONE capacity of whichever file an argument belongs to, so two
+// depths would overflow floats onto the stack while the callee still read a register.
+// xmm0 doubles as the float RETURN register
 // (`callResultRegister`), exactly as an integer first-arg register never conflicts with R8: an
 // argument is consumed by the callee before the call, and the return value overwrites xmm0 after it.
 // All six are CALLER-saved (`callerSavedMask`) — the whole caller-saved XMM half since Wave 2 made
@@ -221,16 +223,53 @@ export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
 // CreateFileW's 3), so its single GT-frame region holds either call's stack args at `[rsp + shadow + k*8]`.
 let PipeCreateOutgoingSlots = CreateNamedPipeStackArgWords
 
-// The `[rsp + disp]` displacement of a Win64 OUTGOING stack-argument slot — past the 32-byte shadow space,
+// The `[rsp + disp]` displacement of an OUTGOING stack-argument slot — past the 32-byte shadow space,
 // one `SpillSlotBytes`-sized slot per index. The Win64 ABI fact shared by EVERY >4-argument import call the
 // isel lowers (WriteFile's 2 stack slots, CreateProcessA's 6): the 5th-and-later arguments land at
 // `[rsp + shadow + slot*8]`. `spillSlotBaseDisp` places every spill slot ABOVE `ShadowSpaceBytes +
 // outgoingArgSize`, so these never overlap a spill. Computed here (not a top-level const) so the two
 // cross-file frame constants are read at runtime — the same reads `computeFrameBytes` makes — rather than
 // folded, which a cross-file constant initializer cannot do.
+//
+// ⭐ **shv2's OWN calls use this SAME region and this SAME formula.** An internal 7th-and-later argument is
+// an outgoing stack argument exactly as an import's 5th is, so there is ONE outgoing area per frame and one
+// displacement rule for it — not an internal layout beside the Win64 one. v1 instead gave its internal ABI
+// a shadow-space-free area at `[rsp + 0]`; shv2 does not, and the reason is that shv2 reserves
+// `ShadowSpaceBytes` for EVERY caller unconditionally (`computeFrameBytes`) whether or not it calls an
+// import. Starting internal args at `[rsp + 0]` would therefore lay them INSIDE a region whose whole
+// definition is "scratch a callee may clobber", and `outgoingArgSize` would have to mean two different
+// things depending on which kind of call needed it. Skipping the 32 bytes costs a frame that is already
+// reserving them nothing at all.
 function win64OutgoingArgDisp(slot MachineWord) returns Imm32
 	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
 end 'win64OutgoingArgDisp'
+
+// The two words a `call` and the prologue's `push rbp` put between the CALLER's rsp-at-the-call and the
+// callee's own rbp: the return address the `call` pushed, then the saved rbp. Named because the incoming
+// displacement below is a CLAIM about the prologue's shape, not arithmetic.
+let SavedRbpAndReturnAddressBytes = 16 as Imm32
+
+// The `[rbp + disp]` displacement of an INCOMING stack-argument slot — the exact mirror of the caller's
+// `[rsp + win64OutgoingArgDisp(slot)]`, shifted by the two words pushed between the two moments. ONE
+// derivation from the outgoing rule, so the two ends of a stack argument cannot come to disagree about
+// where it is; a hand-written `+48` here would be that disagreement waiting to happen.
+//
+// ⭐⭐ **IT IS FRAME-SIZE- AND PUSH-COUNT-INDEPENDENT, AND THAT IS WHY `lowerParam` MAY COMPUTE IT.** The
+// isel runs long before the allocator decides how many callee-saved registers this function pushes or how
+// large its frame is. Reading an incoming argument off RSP would need both. Reading it off RBP needs
+// neither — but only because `X64PrologueEpilogue.insertPrologueAtEntry` establishes the frame pointer
+// FIRST, before any callee-saved push (it does that for the saved-rbp CHAIN, so the chain has no hole; the
+// stack-argument displacement is a second thing that ordering buys). Push the callee-saved registers ahead
+// of `mov rbp, rsp` and every displacement here silently gains `8 * pushCount`.
+//
+// ⭐ **AND IT IS WHY A FRAMELESS LEAF CANNOT MISREAD ITS ARGUMENTS HERE.** Both reference compilers had to
+// add a guard forcing a frame onto a leaf that has stack parameters but no locals, spills or calls — v1's
+// `FrameScanState.needsFrame`, the bootstrap's `hasStackParams` — because without a prologue `[rbp + 16]`
+// reads through the CALLER's frame pointer. shv2 frames EVERY function unconditionally, so there is no such
+// leaf and no guard to forget.
+function win64IncomingArgDisp(slot MachineWord) returns Imm32
+	return SavedRbpAndReturnAddressBytes + win64OutgoingArgDisp(slot)
+end 'win64IncomingArgDisp'
 
 // The frame region an import call reserves for its `slotCount` outgoing stack args — the single source of
 // BOTH the frame reservation (via `stdOpOutgoingArgBytes`, applied to the function by `lowerFunctionBlocks`)
@@ -242,72 +281,46 @@ function win64OutgoingArgBytes(slotCount MachineWord) returns StackSize
 	return (slotCount * SpillSlotBytes) as StackSize
 end 'win64OutgoingArgBytes'
 
-// The OUTGOING stack-argument bytes an `StdOp`'s x64 lowering needs. Only `osWriteStdout` needs any: its
-// `WriteFile` lowering passes the 5th argument (`lpOverlapped`) and a scratch pointer for the
-// bytes-written out-param ON THE STACK. Every other op lowers register-only or in-frame → 0. This is an
-// x64 ABI fact — arm64's `write` is all-register and reserves nothing — so it lives in the x64 isel, and
-// `lowerFunctionBlocks` folds it to a per-function max. EXHAUSTIVE over `StdOp` (`const to osAllocPages`
-// then the two tail ops), so a band-appended op cannot slip in unclassified.
-function stdOpOutgoingArgBytes(op StdOp) returns StackSize
-	return match op 'o'
-		osWriteStdout gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
-		// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
-		// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
-		osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
-		const to osAllocPages gives 0
-		rdataAddr gives 0
-		// A `tryCall` passes its args in registers (≤6, like `call`); `errorReturn`/`osExit` have no
-		// outgoing args. None reserves stack argument space at this rung.
-		// A `funcAddr` is a register-only `lea`; a `callIndirect` passes its args in registers exactly
-		// like `call`. Neither reserves outgoing stack-argument space at this rung.
-		tryCall to osSleepMs gives 0
-		// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
-		// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
-		osProcessExitCode to osFreePages gives 0
-		// The jump table makes no call — it reserves no outgoing argument stack.
-		switch gives 0
-		// A witness call passes its arguments (receiver + user args, ≤ 6) in registers — no outgoing stack.
-		witnessCall gives 0
-		// P1.5 dogfood slice 1a: the three >4-argument IOCP calls reserve their stack-arg region (osPipeCreate the
-		// max across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
-		// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument (register
-		// only): osIocpCreate/osEventCreate/osLockInit/osLockEnter/osLockLeave/osLastError reserve none.
-		osPipeCreate gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
-		osThreadCreate gives win64OutgoingArgBytes(CreateThreadStackArgWords)
-		osReadOverlapped gives win64OutgoingArgBytes(ReadFileStackArgWords)
-		osProcessSpawnInherit gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
-		osIocpCreate to osEventCreate gives 0
-		osLockInit to osLockLeave gives 0
-		osLastError gives 0
-		// CancelIoEx (2 args) and GetCurrentProcessId (0 args) are register-only — no outgoing stack space.
-		osCancelIo to osGetPid gives 0
-		// P1.5 dogfood slice 1b: the stdin pipe reserves the same CreateNamedPipeW/CreateFileW region as
-		// `osPipeCreate`; `osWriteFile` reserves ONE word for WriteFile's `lpOverlapped` (its bytes-written
-		// out-param is a caller-supplied pointer passed in r9, not a stack scratch like `osWriteStdout`'s).
-		osPipeCreateOutbound gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
-		osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
-		// GetSystemTimeAsFileTime takes ONE argument, in rcx — register-only, no outgoing stack space.
-		osReadWallClock gives 0
-	end 'o'
-end 'stdOpOutgoingArgBytes'
+// The frame bytes ONE shv2-to-shv2 call needs for the arguments that overflow the register files — the
+// merged stack slots the shared placement rule assigns, sized by the same `win64OutgoingArgBytes` an import
+// call's reservation uses. Given the argument COUNT, `abiStackSlotsBefore` answers "how many of them landed
+// on the stack", which is the one number the reservation and the per-argument displacements both derive
+// from.
+function callOutgoingArgBytes(argFloatMask ArgFloatMask, argCount ParamCount) returns StackSize
+	return win64OutgoingArgBytes(abiStackSlotsBefore(argFloatMask, index: argCount, capacity: x64RegisterArgCapacity()))
+end 'callOutgoingArgBytes'
 
-// The physical register argument `index` occupies. An index past the register file is
-// a parser-cap violation (parseFunctionParameters rejects >6 parameters), so it is a
-// compiler-invariant break here, not a user error.
+
+// How many arguments of ONE file this ABI passes in registers — the capacity the shared placement rule
+// (`abiArgIsOnStack`) is asked against. Read off the array itself, so adding a register to the file moves it
+// with no second number to update.
+//
+// ⚠ THE TWO FILES MUST BE THE SAME DEPTH, and this is where that precondition is checked rather than
+// assumed: the rule takes ONE capacity and applies it to whichever file an argument belongs to, so a
+// shallower float file would send floats to stack slots the callee still expected in xmm registers — a
+// silent wrong answer, and one no existing test could see while every program's arguments fit.
+function x64RegisterArgCapacity() returns RegisterArgCapacity
+	if argRegisters.count() != argFpRegisters.count() 'filesDiffer'
+		panic("x64RegisterArgCapacity: the integer file holds {argRegisters.count()} argument registers and the float file {argFpRegisters.count()} — the shared placement rule asks ONE capacity of both files, so they must be the same depth")
+	end 'filesDiffer'
+	return argRegisters.count() as RegisterArgCapacity
+end 'x64RegisterArgCapacity'
+
+// The physical register integer argument slot `index` occupies. A slot past the file means the placement
+// rule said "register" where the file has none, so it is a compiler-invariant break here, not a user error:
+// every caller tests `abiArgIsOnStack` first.
 // Exported so the GT trampoline (X64GtRuntime) loads its arguments in the SAME register order the ABI
 // passes them — the trampoline's arg-load order IS the arg-register order, and a second copy of the
 // `[rcx, rdx, rax, r9, rsi, rdi]` list would be the one-fact-written-twice bug this file's header warns of.
 export function argRegisterAt(index ParamCount) returns X64Register
-	return try argRegisters.get(index) otherwise panic("argRegisterAt: argument index {index} exceeds the {argRegisters.count()} register-argument slots — the parser caps parameters at that count until stack arguments land")
+	return try argRegisters.get(index) otherwise panic("argRegisterAt: argument index {index} exceeds the {argRegisters.count()} register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'argRegisterAt'
 
-// The physical XMM register FP argument slot `index` occupies — the float twin of `argRegisterAt`.
-// The parser caps total parameters at `MaxRegisterParams`, which equals the array length, so a slot
-// past the file is a compiler-invariant break (a float overflow arg would need a stack slot, a later
-// milestone), not a user error — and it must reject cleanly here rather than mis-storing from the
-// wrong file, which is the latent v1 caller bug this deliberately does not port.
+// The physical XMM register FP argument slot `index` occupies — the float twin of `argRegisterAt`, and a
+// compiler-invariant break past the file for the same reason. It must reject cleanly rather than
+// mis-storing from the wrong file, which is the latent v1 caller bug this deliberately does not port.
 function argFpRegisterAt(index ParamCount) returns X64Register
-	return try argFpRegisters.get(index) otherwise panic("argFpRegisterAt: float argument slot {index} exceeds the {argFpRegisters.count()} XMM register-argument slots — the parser caps parameters at that count until stack arguments land")
+	return try argFpRegisters.get(index) otherwise panic("argFpRegisterAt: float argument slot {index} exceeds the {argFpRegisters.count()} XMM register-argument slots — a slot past the file must have been routed to an outgoing stack slot by `abiArgIsOnStack`")
 end 'argFpRegisterAt'
 
 // The physical register a callIndirect captures its result from — **XMM0** for a float-returning
@@ -710,6 +723,65 @@ type StdToX64Lowering
 		end 'transferFuncs'
 	end 'prepareSkeleton'
 
+	// The OUTGOING stack-argument bytes an `StdOp`'s x64 lowering needs — for an IMPORT call, the Win64
+	// arguments past the fourth (`osWriteStdout`'s `lpOverlapped` + its bytes-written scratch,
+	// `osProcessSpawn`'s six); for a shv2-to-shv2 CALL, the arguments past the six register slots of their file.
+	// Every other op lowers register-only or in-frame → 0. This is an x64 ABI fact — arm64's `write` is
+	// all-register, and its files are eight deep — so it lives in the x64 isel, and `lowerFunctionBlocks` folds
+	// it to a per-function max. EXHAUSTIVE over `StdOp`, so a band-appended op cannot slip in unclassified.
+	//
+	// A METHOD rather than a free function because the four CALL arms need a mask: an indirect or witness call
+	// carries its own on the op, and a DIRECT call's comes from the callee's declared parameter files, which is
+	// `self.calleeParamClasses`.
+	function stdOpOutgoingArgBytes(op StdOp) returns StackSize
+		return match op 'o'
+			osWriteStdout gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
+			// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
+			// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
+			osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
+			const to param gives 0
+			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
+			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
+			// same mask through the same `calleeArgFloatMask`).
+			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			retVoid to osAllocPages gives 0
+			rdataAddr gives 0
+			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			// `errorReturn`/`osExit` have no outgoing args; a `funcAddr` is a register-only `lea`.
+			errorReturn to funcAddr gives 0
+			// The two VALUE-callee calls carry their own per-argument mask (there is no callee name to look one
+			// up by), and overflow through the identical shared rule.
+			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			osRangePanic to osSleepMs gives 0
+			// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
+			// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
+			osProcessExitCode to osFreePages gives 0
+			// The jump table makes no call — it reserves no outgoing argument stack.
+			switch gives 0
+			witnessCall(_, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			// P1.5 dogfood slice 1a: the three >4-argument IOCP calls reserve their stack-arg region (osPipeCreate the
+			// max across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
+			// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument (register
+			// only): osIocpCreate/osEventCreate/osLockInit/osLockEnter/osLockLeave/osLastError reserve none.
+			osPipeCreate gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
+			osThreadCreate gives win64OutgoingArgBytes(CreateThreadStackArgWords)
+			osReadOverlapped gives win64OutgoingArgBytes(ReadFileStackArgWords)
+			osProcessSpawnInherit gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
+			osIocpCreate to osEventCreate gives 0
+			osLockInit to osLockLeave gives 0
+			osLastError gives 0
+			// CancelIoEx (2 args) and GetCurrentProcessId (0 args) are register-only — no outgoing stack space.
+			osCancelIo to osGetPid gives 0
+			// P1.5 dogfood slice 1b: the stdin pipe reserves the same CreateNamedPipeW/CreateFileW region as
+			// `osPipeCreate`; `osWriteFile` reserves ONE word for WriteFile's `lpOverlapped` (its bytes-written
+			// out-param is a caller-supplied pointer passed in r9, not a stack scratch like `osWriteStdout`'s).
+			osPipeCreateOutbound gives win64OutgoingArgBytes(PipeCreateOutgoingSlots)
+			osWriteFile gives win64OutgoingArgBytes(WriteFileStackArgWords)
+			// GetSystemTimeAsFileTime takes ONE argument, in rcx — register-only, no outgoing stack space.
+			osReadWallClock gives 0
+		end 'o'
+	end 'stdOpOutgoingArgBytes'
+
 	// Per-function lowering: walk the function's blocks and lower each op into the
 	// matching target block (indexed by the same blockRef the function carries).
 	// The function's StdReturnType drives whether the return materializes an R8 move.
@@ -771,10 +843,14 @@ type StdToX64Lowering
 	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES the
-		// region, so it is the largest single call's need, not their sum). Only `osWriteStdout` contributes
-		// on x64; everything else lowers register-only. Accumulated from the op already in hand, so no
+		// region, so it is the largest single call's need, not their sum). An import call past four arguments
+		// and a shv2 call past six of one file both contribute. Accumulated from the op already in hand, so no
 		// extra pass, and returned for `lowerFunction` to record once the walk's borrow is released.
 		var outgoingArgBytes = 0 as StackSize
+		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
+		// re-walking the parameter types, which is what the per-parameter `computeParamSlotIndex` did (Θ(params²)
+		// per function, for an answer that never changes within one).
+		let paramFloatMask = floatParamMaskOf(srcFunc.paramTypes)
 		for i in 0 upto originalBlockCount 'eachBlock'
 			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("lowerStdToX64: blockRefs.get OOB at {i} despite the captured bound")
 			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
@@ -782,11 +858,11 @@ type StdToX64Lowering
 
 			for opIdx in srcBlock.opRefs 'eachOp'
 				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("lowerStdToX64: opIdx from srcBlock.opRefs not in stdModule.ops")
-				let opOutgoing = stdOpOutgoingArgBytes(stdOp)
+				let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
 				if opOutgoing > outgoingArgBytes 'largerArgRegion'
 					outgoingArgBytes = opOutgoing
 				end 'largerArgRegion'
-				self.lowerBodyOp(stdOp, dstBlock: dstBlock, returnType: srcFunc.returnType, paramTypes: srcFunc.paramTypes)
+				self.lowerBodyOp(stdOp, dstBlock: dstBlock, returnType: srcFunc.returnType, paramFloatMask: paramFloatMask)
 			end 'eachOp'
 
 			if srcBlock.hasTerminatorOp() 'hasTerm'
@@ -1002,7 +1078,7 @@ type StdToX64Lowering
 	// Lower a regular (non-terminator) Std op. `ret` reaching here is the rare
 	// mid-block form (LowerMaxonToStd emits it as a body op for a partially-
 	// terminated block); it lowers the same as the terminator form, just appended.
-	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType, paramTypes StdTypeArray)
+	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType, paramFloatMask ArgFloatMask)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
@@ -1012,7 +1088,7 @@ type StdToX64Lowering
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rdx, dstBlock: dstBlock)
-			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramTypes: paramTypes, dstBlock: dstBlock)
+			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramFloatMask: paramFloatMask, dstBlock: dstBlock)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: false)
@@ -1410,12 +1486,35 @@ type StdToX64Lowering
 	// ⭐ A FLOAT PARAMETER CAPTURES FROM AN XMM ARGUMENT REGISTER, chosen by a SEPARATE FP
 	// counter — the integer and float ABI registers are two independent files, so the slot is
 	// NOT the source `index` but the count of preceding SAME-FILE parameters
-	// (`computeParamSlotIndex`, the cross-target ABI contract). The parameter value is
+	// (`abiFileSlotIndex`, the cross-target ABI contract). The parameter value is
 	// XMM-classed by the value-class column (from its f64 Std type), so `movRegReg` sees two XMM
 	// ends and emits `movsd`; before this, a float parameter captured from a GPR arg register and
 	// the coloring crossed register files (a `mov rcx, xmm0` the emitter rejects).
-	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramTypes StdTypeArray, dstBlock IrBlock)
-		let slot = computeParamSlotIndex(index, paramTypes: paramTypes)
+	//
+	// ⭐⭐ A STACK PARAMETER IS NOT CAPTURED AT ALL — IT IS LOADED. It arrives in the CALLER's frame, so
+	// there is no incoming register to race and nothing to preserve: the value simply lives in memory
+	// until this load reads it, at a displacement off rbp that no later pass can move
+	// (`win64IncomingArgDisp`). Three consequences worth stating, because each is a guard the reference
+	// compilers needed and shv2 does not:
+	//   • `ParamCrossForbid` never sees it. It collects `movRegReg(virtual, physical)` captures in the
+	//     entry block and forbids each parameter its SIBLINGS' incoming registers; a stack parameter has
+	//     no incoming register, so its absence from that set is CORRECT and not an omission.
+	//   • The GT stack guard and `__gt_morestack` cannot destroy it. Morestack COPIES the whole GT stack
+	//     and rebases the saved-rbp chain, and this argument lives in the caller's frame ON that stack —
+	//     so it moves with the copy and the rebased rbp still names it. (The register arguments are what
+	//     had to be saved by hand; see `morestackSavedGprOrder`.)
+	//   • The float case needs no separate path: the load is `word64`, and `emitWord64Load` picks `movsd`
+	//     from the DESTINATION's class, which the value-class column set from the f64 Std type. Both
+	//     reference compilers panic on an FP overflow argument instead.
+	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramFloatMask ArgFloatMask, dstBlock IrBlock)
+		let capacity = x64RegisterArgCapacity()
+		if abiArgIsOnStack(paramFloatMask, index: index, capacity: capacity) 'stackParam'
+			let stackSlot = abiStackSlotsBefore(paramFloatMask, index: index, capacity: capacity)
+			self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: x64PhysReg(X64Register.rbp), disp: win64IncomingArgDisp(stackSlot), width: X64AccessWidth.word64))
+			return
+		end 'stackParam'
+
+		let slot = abiFileSlotIndex(paramFloatMask, index: index)
 		let argReg = argFpRegisterAt(slot) if stdTypeIsFloat(paramType) else argRegisterAt(slot)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(argReg)))
 	end 'lowerParam'
@@ -1489,14 +1588,36 @@ type StdToX64Lowering
 		self.captureIndirectResult(resultId, resultType: resultType, dstBlock: dstBlock)
 	end 'lowerWitnessCall'
 
-	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a
-	// float): a FLOAT argument to an XMM arg register on a SEPARATE FP counter, everything else to a GPR arg
-	// register on the GPR counter. The two counters run independently (the running twin of
-	// `computeParamSlotIndex`), which is what puts a float arg in FP slot 0 whether or not an integer arg
-	// precedes it. The ONE slotting+emit path both a DIRECT call (`emitCallArgMoves`, mask from the callee's
-	// declared param files) and an INDIRECT call (`lowerCallIndirect`, mask carried on the op) route through,
-	// so the two differ ONLY in where the mask comes from and can never drift in how an argument is slotted
-	// or emitted.
+	// Place each argument given a per-argument float mask (bit k set iff argument k is a float): into its
+	// file's ABI register while that file has one, otherwise into this frame's outgoing STACK slot. Every
+	// placement decision comes from the shared rule (`abiArgIsOnStack` / `abiFileSlotIndex` /
+	// `abiStackSlotsBefore`) — the SAME calls the callee's `lowerParam` makes — so a caller and a callee
+	// cannot disagree about where an argument is. This routine used to run its own gpr/fp counters, a second
+	// spelling of that rule; see the rule's header for why an overflowing argument makes that unsafe.
+	//
+	// The ONE slotting+emit path a DIRECT call (`emitCallArgMoves`, mask from the callee's declared param
+	// files), an INDIRECT call (`lowerCallIndirect`) and a WITNESS call all route through, so the three
+	// differ ONLY in where the mask comes from.
+	//
+	// ⛔⛔ **EVERY STACK STORE IS EMITTED BEFORE EVERY REGISTER MOVE, AND THAT ORDER IS A CORRECTNESS
+	// REQUIREMENT, NOT A STYLE.** Both reference compilers say so in their own words — v1's
+	// `sequentializeCallArgSetup` runs a "Phase 0: emit all stack-writes first", and the bootstrap's caller
+	// carries "CRITICAL ORDERING: compute the stack args FIRST (which may clobber RCX/RDX/R8/R9 …), then
+	// load the arg registers last" — and the corpus proves it: `specs-shv2/x64-stack-arg-disp32.md` returned
+	// 400 instead of 200 with source-order emission.
+	//
+	// The reason is that a stack store's SOURCE may still need materializing, and materializing it takes a
+	// register the allocator is free to choose — including an ARGUMENT register that an earlier move has
+	// already loaded. The protection that makes the register moves safe among themselves does not reach
+	// this: `forbiddenPhys` stops a value LIVE ACROSS a physical def from being coloured onto it, but an
+	// argument register is not a *value*, so nothing marks it live from its move to the call. In the failing
+	// program `movRegImm32 rax, 0` established argument slot 2, and the 22nd argument's constant was then
+	// rematerialized into rax — `movRegImm32 rax, 200` — three instructions before the `call`.
+	//
+	// Ordering the stores first closes it completely rather than narrowing it: while they run, NO argument
+	// register has been established, so nothing they use can destroy one. The register moves then sit
+	// consecutively at the end with only the call after them, which is exactly the shape the parallel-copy
+	// argument below was written for.
 	//
 	// SOUND without an explicit parallel-copy sequencer, for BOTH files: each `mov argReg, arg_k` is a
 	// physical def that the liveness pass adds to `forbiddenPhys` for every value LIVE ACROSS it — the
@@ -1505,20 +1626,31 @@ type StdToX64Lowering
 	// reads each argument's register before any later move overwrites it (the read-after-clobber class
 	// `project_call_arg_parallel_copy_fix` names, now covering the XMM arg registers too). The `callDirect` /
 	// `callReg` carries no explicit operands, so its caller-saved `implicitDefs` clobber is applied ONLY to
-	// values live across the call (never to the just-established argument registers).
+	// values live across the call (never to the just-established argument registers). A REGISTER argument
+	// whose value is still live at a later STACK store is protected by that same rule, which is what makes
+	// the two-phase order safe in the other direction too.
 	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstBlock IrBlock)
-		var gprSlot = 0 as ParamCount
-		var fpSlot = 0 as ParamCount
-		for k in 0 upto args.count() 'eachArg'
+		let capacity = x64RegisterArgCapacity()
+		for k in 0 upto args.count() 'eachStackArg'
+			if not abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'inRegister'
+				continue
+			end 'inRegister'
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
+			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity)), src: TargetVReg.virtual(argId), width: X64AccessWidth.word64))
+		end 'eachStackArg'
+
+		for k in 0 upto args.count() 'eachRegisterArg'
+			if abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'onStack'
+				continue
+			end 'onStack'
+			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
+			let slot = abiFileSlotIndex(argFloatMask, index: k)
 			if argIsFloat(argFloatMask, argIndex: k) 'floatArg'
-				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
-				fpSlot = fpSlot + 1
+				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'floatArg' else 'intArg'
-				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
-				gprSlot = gprSlot + 1
+				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'intArg'
-		end 'eachArg'
+		end 'eachRegisterArg'
 	end 'emitArgMovesByFloatMask'
 
 	// Lower a throwing `tryCall`: the arguments and `callDirect` exactly as `lowerCall` (via the shared

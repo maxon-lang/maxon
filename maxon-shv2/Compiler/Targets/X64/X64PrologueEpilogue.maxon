@@ -83,9 +83,16 @@
 // The runtime entry stub `mrt_start` builds its own frame directly in
 // `augmentWithRuntime` (which runs AFTER this pass), so this pass never sees it — it
 // sets up the same `push rbp` / `mov rbp, rsp` by hand, because the chain has to start
-// somewhere and a trace that cannot name `mrt_start` stops one frame short. Stack
-// arguments (a 7th+ parameter) and real spill slots grow the frame further at their
-// milestones; today `outgoingArgSize` is 0 and `stackSize` is 0 for every function.
+// somewhere and a trace that cannot name `mrt_start` stops one frame short.
+//
+// ⭐ THE FRAME-POINTER-FIRST ORDERING ALSO FIXES WHERE INCOMING STACK ARGUMENTS ARE. `mov rbp, rsp`
+// runs BEFORE any callee-saved push, so `[rbp + 16]` is the caller's rsp-at-the-call whatever this
+// function's frame size or push count turns out to be — which is what lets the ISEL compute an
+// incoming stack argument's displacement (`win64IncomingArgDisp`) long before the allocator decides
+// either. Push the callee-saved registers ahead of the frame pointer and every one of those
+// displacements silently gains `8 * pushCount`. And because EVERY function is framed, shv2 needs
+// neither reference compiler's guard for a frameless leaf that has stack parameters
+// (v1's `FrameScanState.needsFrame`, the bootstrap's `hasStackParams`) — there is no such leaf.
 
 // x64 frames keep rsp 16-byte aligned at each call site. Exported because the panic
 // runtime lays its own frames by hand (X64Runtime) and must land on the SAME residue: a
@@ -207,8 +214,10 @@ end 'computeGuardFrameBytes'
 //     the `sub` must land it on ≡ 0. The pushes are `push rbp` PLUS the `pushCount`
 //     callee-saved ones, which is the whole reason the frame pointer appears in this
 //     arithmetic: it is one more push, so it INVERTS the parity the reservation must
-//     correct for. It must also cover shadow space + locals + any stack-passed args (0 at
-//     M5). `mrt_start`'s hand-built frame IS this formula with pushCount 0, stackSize 0.
+//     correct for. It must also cover shadow space + locals + this function's OUTGOING
+//     stack arguments (`func.outgoingArgSize`, the max over its call sites — 0 for a function
+//     whose every call fits the six register slots of each file).
+//     `mrt_start`'s hand-built frame IS this formula with pushCount 0, stackSize 0.
 //   • A LEAF has no call, so alignment is irrelevant; it reserves just its (16-rounded)
 //     locals — 0 for the leaves that have none. push/pop alone balance rsp.
 //
@@ -401,6 +410,9 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// The witness call's base-register USE can be colored into a callee-saved register, so it MUST be
 		// counted — the same trap `callReg` documents.
 		callMem(baseReg, _) gives physRegBit(baseReg)
+		// arm64-only ops (its own prologue pass counts them); they never reach an x64 program, and an empty
+		// mask is both unreachable and correct. `gives` cannot host a `panic`.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -543,5 +555,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		x64JumpTable to arm64JumpTable gives false
 		// The witness call is a body op, never a `ret`.
 		callMem gives false
+		// Both stack-argument ops are body ops, never a `ret`.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 	end 'check'
 end 'blockEndsWithReturn'

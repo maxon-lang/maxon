@@ -62,13 +62,7 @@ end 'memoryDisplacement'
 // once per lowering.
 export typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
 
-// A per-parameter GPR/XMM bitmask: bit k set iff parameter k is a FLOAT (an f64, which travels in
-// an XMM/SIMD argument register rather than a GPR). Only the low parameter-count bits are
-// meaningful, but the storage is a full machine word, mirroring `RegMask`'s bitmask idiom — a
-// parameter list is capped at the parser's register-argument limit, well under 64.
-export typealias ParamFloatMask = int(0 to u64.max)
-
-// Callee name -> its `ParamFloatMask`. Built once per module beside `CalleeResultClassMap` so a
+// Callee name -> its `ArgFloatMask`. Built once per module beside `CalleeResultClassMap` so a
 // call site's per-argument register-FILE decision is an O(1) lookup rather than a Θ(calls ×
 // functions) scan of `stdModule.functions` for the callee's parameter types.
 //
@@ -78,7 +72,7 @@ export typealias ParamFloatMask = int(0 to u64.max)
 // of a float-argument call. The scalar mask keeps this index as allocation-flat as
 // `CalleeResultClassMap` (a scalar per entry). The bit is read back as a `RegClass` by
 // `calleeParamClass`, the one door the caller-side argument routing consults.
-export typealias CalleeParamClassMap = Map with (ByteArray, ParamFloatMask)
+export typealias CalleeParamClassMap = Map with (ByteArray, ArgFloatMask)
 
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
 // nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in
@@ -182,7 +176,7 @@ export function buildCalleeResultClasses(stdModule StdModule) returns CalleeResu
 	return calleeResultClasses
 end 'buildCalleeResultClasses'
 
-// Build the callee name → `ParamFloatMask` index, once per module — the argument-side twin of
+// Build the callee name → `ArgFloatMask` index, once per module — the argument-side twin of
 // `buildCalleeResultClasses`. Each backend builds it in its `create` and threads the one instance
 // into the argument-move emission (`lowerCall`/`lowerTryCall`), so a float argument's XMM
 // destination and the callee's declared parameter type are the ONE fact, never two that could
@@ -195,9 +189,12 @@ export function buildCalleeParamClasses(stdModule StdModule) returns CalleeParam
 	return calleeParamClasses
 end 'buildCalleeParamClasses'
 
-// The `ParamFloatMask` for one parameter list: bit k set iff parameter k is an f64.
-function floatParamMaskOf(paramTypes StdTypeArray) returns ParamFloatMask
-	var mask = 0 as ParamFloatMask
+// The `ArgFloatMask` for one parameter list: bit k set iff parameter k is an f64. EXPORTED because each
+// backend folds its OWN function's parameter types through it once per function and hands that single mask
+// to the placement rule for every `param` op — the callee-side mirror of `calleeArgFloatMask`, and the
+// reason the callee no longer re-walks its parameter types once per parameter.
+export function floatParamMaskOf(paramTypes StdTypeArray) returns ArgFloatMask
+	var mask = 0 as ArgFloatMask
 	for i in 0 upto paramTypes.count() 'eachParam'
 		let paramType = try paramTypes.get(i) otherwise panic("floatParamMaskOf: paramTypes.get OOB at {i}")
 		if stdTypeIsFloat(paramType) 'float'
@@ -216,7 +213,7 @@ export function calleeParamClass(calleeParamClasses CalleeParamClassMap, callee 
 	let mask = try calleeParamClasses.get(callee) otherwise 'runtimeChunk'
 		return runtimeChunkFallbackClass(callee, context: "calleeParamClass")
 	end 'runtimeChunk'
-	return RegClass.xmm if ((mask shr paramIndex) and 1) != 0 else RegClass.gpr
+	return RegClass.xmm if argIsFloat(mask, argIndex: paramIndex) else RegClass.gpr
 end 'calleeParamClass'
 
 // The per-ARGUMENT float mask for a DIRECT call to `callee`: bit k set iff parameter k is XMM-classed in
@@ -251,29 +248,94 @@ function runtimeChunkFallbackClass(callee ByteArray, context String) returns Reg
 	return RegClass.gpr
 end 'runtimeChunkFallbackClass'
 
-// The calling-convention SLOT index of parameter/argument `paramIndex`: the count of PRECEDING
-// parameters that share its register FILE. The integer and float ABI registers are counted by
-// SEPARATE counters (v1's internal convention), so a float parameter at source-index 1 that follows
-// an integer parameter is FP-slot 0, not slot 1.
+// ==========================================================================
+// ARGUMENT PLACEMENT — the whole cross-target calling-convention contract
+// ==========================================================================
 //
-// This is the WHOLE cross-target ABI contract, and the reason it lives here: the callee-side
-// `lowerParam` (which lowers each `param` op independently and so recomputes the slot per parameter)
-// and the caller-side argument routing (which walks the arguments once with running counters) MUST
-// assign the same slot to the same parameter, or a float argument written to xmm0 is read back from
-// xmm1. Deriving both from Std types alone, in one place, is what makes them agree by construction.
-// Ported from v1's `StdOpHelpers.computeParamSlotIndex`.
-export function computeParamSlotIndex(paramIndex ParamCount, paramTypes StdTypeArray) returns ParamCount
-	let targetType = try paramTypes.get(paramIndex) otherwise panic("computeParamSlotIndex: paramIndex {paramIndex} out of range for a {paramTypes.count()}-parameter list")
-	let targetIsFloat = stdTypeIsFloat(targetType)
+// ⭐⭐ **ONE RULE, ONE SPELLING, BOTH ENDS OF EVERY CALL.** The callee's `param` lowering and the caller's
+// argument moves must place argument `k` identically, or a value is written where nothing reads it — a
+// silent wrong answer, never a compile error. So the rule is stated here exactly once and both ends
+// consult it.
+//
+// ⚠ IT USED TO BE STATED TWICE: a recomputing `computeParamSlotIndex` on the callee side, and a
+// running-counter twin of it inside each backend's argument loop, held together by a comment that said
+// "the running twin of `computeParamSlotIndex`". That was survivable while every argument fit a register,
+// because two monotone counters over the same list cannot disagree. It stops being survivable the moment
+// an argument can OVERFLOW, because "which slot" then means two different things — an index within one
+// register FILE, and an index into the single merged outgoing STACK area — and a hand-written counter that
+// gets either one wrong is exactly the class of bug the corpus already pins twice (see
+// `specs-shv2/x64-stack-arg-disp32.md`).
+//
+// Every answer comes from the same two inputs: the per-argument `ArgFloatMask` (which BOTH ends already
+// hold — see its header) and the target's per-file register capacity. So neither side walks Std types here,
+// and neither can be holding a different one.
+
+// How many arguments of ONE register file a target passes in registers. TARGET-SPECIFIC — x64's custom ABI
+// has six GPR and six XMM slots, AAPCS64 has eight X and eight D — so it travels as an argument rather than
+// living here as a constant: this file owns the RULE and never any one ISA's register count. Each backend
+// reads its own off the argument-register array itself (`x64RegisterArgCapacity` /
+// `arm64RegisterArgCapacity`), so adding a register to a file moves the capacity by construction.
+//
+// ⚠ ONE capacity, not one per file, and that is a real precondition rather than a simplification: the rule
+// below asks it of whichever file the argument belongs to. Both backends assert their two files are the
+// same depth where they compute it — a shallower float file would silently overflow floats into stack slots
+// the callee expects integers in.
+// The upper bound is the size of an ISA REGISTER FILE, not the argument ceiling: no architecture shv2
+// targets has more than 32 registers in one file (x86-64 has 16 GPRs and 16 XMMs, AArch64 32 and 32), so a
+// capacity past that is a mis-derived count rather than a real ABI. It is deliberately NOT `MaxAbiArgs` —
+// the two answer different questions and their agreeing at some number would be a coincidence — and a
+// range bound must be a literal in any case (`MaxAbiArgs` cannot appear here).
+export typealias RegisterArgCapacity = int(1 to 32)
+
+// The index of argument `index` WITHIN ITS OWN REGISTER FILE — the count of preceding arguments that share
+// its file. The integer and float files are counted INDEPENDENTLY (v1's internal convention), so a float at
+// source position 1 following an integer is float-slot 0, not slot 1.
+export function abiFileSlotIndex(mask ArgFloatMask, index ParamCount) returns ParamCount
+	let isFloat = argIsFloat(mask, argIndex: index)
 	var slotIndex = 0 as ParamCount
-	for i in 0 upto paramIndex 'countPreceding'
-		let precedingType = try paramTypes.get(i) otherwise panic("computeParamSlotIndex: preceding paramIndex {i} out of range for a {paramTypes.count()}-parameter list")
-		if stdTypeIsFloat(precedingType) == targetIsFloat 'sameFile'
+	for i in 0 upto index 'countPreceding'
+		if argIsFloat(mask, argIndex: i) == isFloat 'sameFile'
 			slotIndex = slotIndex + 1
 		end 'sameFile'
 	end 'countPreceding'
 	return slotIndex
-end 'computeParamSlotIndex'
+end 'abiFileSlotIndex'
+
+// Whether argument `index` travels on the STACK: the arguments before it have spoken for every register in
+// its file. THE predicate — no site re-derives "past the end of the register file", so the callee's decision
+// to READ from memory and the caller's decision to WRITE to memory are the same decision.
+export function abiArgIsOnStack(mask ArgFloatMask, index ParamCount, capacity RegisterArgCapacity) returns bool
+	return abiFileSlotIndex(mask, index: index) >= capacity
+end 'abiArgIsOnStack'
+
+// How many of the arguments BEFORE `index` travel on the stack. Two readers, one walk:
+//   • given an argument's own index, it IS that argument's outgoing stack slot;
+//   • given the whole argument count, it is how many stack slots the call needs.
+//
+// ⭐ THE STACK AREA IS ONE MERGED RUN OF 8-BYTE SLOTS SHARED BY BOTH FILES, which is where it stops
+// mirroring the registers. A float that overflows the last XMM slot takes the next stack slot after an
+// integer that overflowed the last GPR slot: there is one outgoing region and one stride, so the merged
+// count — not either file's own — is what indexes it. (v1's `computeOverflowArgIndex`, restated over the
+// mask.)
+export function abiStackSlotsBefore(mask ArgFloatMask, index ParamCount, capacity RegisterArgCapacity) returns ParamCount
+	var fileSlots = 0 as ParamCount
+	var floatFileSlots = 0 as ParamCount
+	var stackSlots = 0 as ParamCount
+	for i in 0 upto index 'eachPreceding'
+		if argIsFloat(mask, argIndex: i) 'floatArg'
+			if floatFileSlots >= capacity 'floatOverflows'
+				stackSlots = stackSlots + 1
+			end 'floatOverflows'
+			floatFileSlots = floatFileSlots + 1
+		end 'floatArg' else 'intArg'
+			if fileSlots >= capacity 'intOverflows'
+				stackSlots = stackSlots + 1
+			end 'intOverflows'
+			fileSlots = fileSlots + 1
+		end 'intArg'
+	end 'eachPreceding'
+	return stackSlots
+end 'abiStackSlotsBefore'
 
 // One function's column. Pre-sized to `scanFunctionValueCount` (a LOWER bound — operand-used values)
 // and EXTENDED by `setValueClass` for the walk-defined values beyond it. `gpr` is the FILL for ids no

@@ -1310,6 +1310,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		x64JumpTable to arm64JumpTable gives false
 		// The witness call is a body op, not a conditional branch.
 		callMem gives false
+		// Both stack-argument ops are body ops, not branches.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1340,6 +1342,8 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		x64JumpTable to arm64JumpTable gives false
 		// The witness call is a body op, not an unconditional branch.
 		callMem gives false
+		// Both stack-argument ops are body ops, not branches.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1387,6 +1391,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
 			leaRegFunc to x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			callMem then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
+			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
@@ -2846,6 +2851,11 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			x64JumpTable to arm64JumpTable then break 'capture'
 			// The witness call is a call, never an entry param-capture `movRegReg`.
 			callMem then break 'capture'
+			// ⭐ An incoming STACK parameter is materialized by `arm64LoadIncomingArg`, not by a `movRegReg` from a
+			// physical source — so it is deliberately NOT a capture. That is CORRECT and not an omission: this set
+			// exists to stop one parameter's capture DESTINATION from clobbering a sibling's incoming REGISTER, and
+			// a parameter that arrives in the caller's frame has no incoming register to clobber.
+			arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3158,6 +3168,11 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		x64JumpTable to arm64JumpTable gives ValueSpillSlot.none
 		// The witness call writes no stack slot — a call is not a spill store.
 		callMem gives ValueSpillSlot.none
+		// ⚠ `arm64StoreOutgoingArg` writes a frame slot but is NOT a SPILL store, exactly as `storeBaseDispReg`
+		// is not: this predicate asks "did this op save a VALUE to its spill slot?", and the argument region is a
+		// different area with a different index space. Answering `slot(k)` would let the splitter treat an
+		// argument store as a spill and elide a real one.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 
@@ -3178,6 +3193,9 @@ export function slotResidencyOf(op TargetOp) returns ValueSpillSlot
 		leaRegFunc to x64Syscall then break 'reload'
 		x64JumpTable to arm64JumpTable then break 'reload'
 		callMem then break 'reload'
+		// An incoming-argument load reads the CALLER's frame, not a spill slot — not a reload (see the
+		// spill-store twin above for why conflating the two areas would elide real spill code).
+		arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'reload'
 	end 'reload'
 	return spillStoreSlotOf(op)
 end 'slotResidencyOf'

@@ -13,13 +13,26 @@
 // one; each such register must be preserved. This pass reserves a dedicated frame SLOT per used
 // callee-saved register — ABOVE the allocator's spill slots — and preserves it with the SAME
 // `storeSlotReg`/`loadRegSlot` ops (and the same `[x29 + 16 + slot*8]` addressing) the spiller uses.
-// Reusing the slot ops rather than minting an `stp`-pair op is what keeps the frozen `TargetOp`
-// contract intact: `arm64Prologue`/`arm64Epilogue` carry ONLY the frame size (they cannot carry the
-// callee-saved set), and this is what fills that gap without one.
+// Reusing the slot ops rather than minting an `stp`-pair op is what keeps the `TargetOp` contract
+// small: `arm64Prologue`/`arm64Epilogue` cannot carry the callee-saved set, and this fills that gap
+// without an op for it.
 //
-// The frame ops are neutral — `arm64Prologue(N)`/`arm64Epilogue(N)` — and the encoder expands each to
-// the real frame sequence (`Arm64Backend.arm64EmitPrologue`/`arm64EmitEpilogue`), with the large-frame
-// SUB-sp split for a frame past the STP pre-index reach.
+// The frame ops are neutral — `arm64Prologue(N, recordOffset)` / `arm64Epilogue(N, recordOffset)` —
+// and the encoder expands each to the real frame sequence
+// (`Arm64Backend.arm64EmitPrologue`/`arm64EmitEpilogue`), with the SUB-sp form for a frame past the
+// STP pre-index reach.
+//
+// ⭐ STACK ARGUMENTS MOVE THE FRAME RECORD, AND NOTHING ELSE. AAPCS64 fixes where a callee finds its
+// first stack argument — at its OWN entry SP — so this frame's outgoing region must occupy
+// `[SP + 0 .. outgoingArgSize)`, which is where the record used to sit. `recordOffset` is therefore
+// `func.outgoingArgSize`, the record moves up by exactly that, and `add x29, sp, #recordOffset` keeps
+// x29 pointing AT the record — so `[x29 + 16 + slot*8]` slot addressing is identical either way, and a
+// function whose calls all fit the eight register slots of each file (recordOffset 0) emits the
+// byte-identical prologue it always did.
+//
+// This pass also RESOLVES the isel's `arm64LoadIncomingArg`s (`resolveArm64IncomingArgs`): an incoming
+// stack argument is at `[x29 + frameSize - outgoingArgSize + slot*8]`, and this is the only pass that
+// knows both terms.
 
 typealias Arm64RegNumArray = Array with RegNum
 
@@ -45,55 +58,82 @@ end 'insertArm64PrologueEpilogue'
 // `usedCallee` is read BEFORE anything is inserted, so it reports the COLORING's registers and never
 // this pass's own frame ops.
 function insertArm64FrameForFunction(module TargetModule, func IrFunction)
-	if func.outgoingArgSize != 0 'hasOutgoing'
-		// A frame with outgoing (>8th) stack args needs the record placed ABOVE the outgoing block —
-		// a layout the encoder cannot derive from `arm64Prologue`'s frame size alone (the op does not
-		// carry the outgoing size). The scalar core passes ≤8 int / ≤8 fp args, so this is 0; a >8-arg
-		// call is a later milestone.
-		panic("insertArm64FrameForFunction: '{String.from(func.name)}' has outgoingArgSize {func.outgoingArgSize} — >8-argument calls need the outgoing-arg frame layout, a later arm64 milestone")
-	end 'hasOutgoing'
-
 	let usedCallee = arm64UsedCalleeSaved(module, func: func)
 	let spillSlotCount = func.stackSize / SpillSlotBytes
 	let calleeBytes = usedCallee.count() * SpillSlotBytes
-	let frameSize = alignUp(Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
+	// ⭐ **THE OUTGOING STACK-ARGUMENT REGION SITS AT THE VERY BOTTOM OF THE FRAME**, below the frame
+	// record, because AAPCS64 fixes where it must be: a callee reads its first stack argument at its OWN
+	// entry SP, which is this frame's SP. So the record moves UP by exactly `outgoingArgSize` and x29
+	// follows it, which leaves `arm64SlotDisplacement`'s `[x29 + 16 + slot*8]` spill addressing untouched.
+	// `outgoingArgSize` is already 16-aligned (a whole number of 8-byte slots, and `alignUp` below covers
+	// the frame as a whole), and it is 0 for every function whose calls fit the eight register slots of
+	// each file — for which the encoder emits exactly the frame it always did.
+	let recordOffset = func.outgoingArgSize
+	let frameSize = alignUp(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
+
+	// Resolve the isel's slot-only `arm64LoadIncomingArg`s now that BOTH terms of their displacement are
+	// known — this is the pass that knows them, and the reason the op exists at all.
+	resolveArm64IncomingArgs(module, func: func, frameSize: frameSize, outgoingArgSize: func.outgoingArgSize)
 
 	var isFirstBlock = true
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64PrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
-			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize)
+			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize, recordOffset: recordOffset)
 		end 'entry'
 		isFirstBlock = false
 
 		if blockEndsWithArm64Return(module, block: block) 'returnBlock'
-			appendArm64EpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize)
+			appendArm64EpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize, recordOffset: recordOffset)
 		end 'returnBlock'
 	end 'eachBlock'
 end 'insertArm64FrameForFunction'
+
+// Rewrite every `arm64LoadIncomingArg(dest, slot)` in `func` into the concrete `[x29 + disp]` load it
+// always meant. The displacement is `frameSize - outgoingArgSize + slot*8`: x29 points at the frame
+// record, which sits `outgoingArgSize` above SP, and this frame's own SP is `frameSize` below the caller's
+// SP-at-the-call — where slot 0 lives. Both terms are decided by THIS pass, which is why the isel could
+// only name the slot.
+//
+// ⚠ REWRITES IN PLACE, at the SAME `module.ops` index. `block.opRefs` entries are indices into that array,
+// so appending a replacement instead would leave every reference naming the unrewritten op.
+function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSize StackSize, outgoingArgSize StackSize)
+	let incomingBase = (frameSize - outgoingArgSize) as Imm32
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("resolveArm64IncomingArgs: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("resolveArm64IncomingArgs: opIdx {opIdx} not in module.ops")
+			match op 'o'
+				arm64LoadIncomingArg(dest, slot) then try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(Arm64FramePointerRegNum), disp: incomingBase + ((slot * SpillSlotBytes) as Imm32), width: X64AccessWidth.word64)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
+				prologue to callMem then break 'o'
+				arm64StoreOutgoingArg then break 'o'
+			end 'o'
+		end 'eachOp'
+	end 'eachBlock'
+end 'resolveArm64IncomingArgs'
 
 // Prepend, to the entry block: the frame-open `arm64Prologue`, then a `storeSlotReg` saving each used
 // callee-saved register to its dedicated slot. Built by prepending each save and the prologue LAST
 // (so the prologue lands at index 0 and every save runs after it — the saves need x29, which the
 // prologue's `mov x29, sp` establishes). The order among the independent saves does not matter.
-function insertArm64PrologueAtEntry(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize)
+function insertArm64PrologueAtEntry(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize, recordOffset StackSize)
 	for i in 0 upto usedCallee.count() 'eachSave'
 		let reg = try usedCallee.get(i) otherwise panic("insertArm64PrologueAtEntry: usedCallee.get OOB")
 		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + i, srcReg: arm64PhysVReg(reg)))
 	end 'eachSave'
-	arm64PrependOp(module, block: block, op: TargetOp.arm64Prologue(frameSize))
+	arm64PrependOp(module, block: block, op: TargetOp.arm64Prologue(frameSize, recordOffset: recordOffset))
 end 'insertArm64PrologueAtEntry'
 
 // Append, before the `arm64Ret` terminator: a `loadRegSlot` restoring each used callee-saved register
 // from its slot, then the frame-close `arm64Epilogue`. The restores run while x29 is still valid; the
 // epilogue then tears the frame down and the `arm64Ret` terminator returns.
-function appendArm64EpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize)
+function appendArm64EpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize, recordOffset StackSize)
 	for i in 0 upto usedCallee.count() 'eachRestore'
 		let reg = try usedCallee.get(i) otherwise panic("appendArm64EpilogueBeforeReturn: usedCallee.get OOB")
 		module.appendOp(block, op: TargetOp.loadRegSlot(arm64PhysVReg(reg), slot: spillSlotCount + i))
 	end 'eachRestore'
-	module.appendOp(block, op: TargetOp.arm64Epilogue(frameSize))
+	module.appendOp(block, op: TargetOp.arm64Epilogue(frameSize, recordOffset: recordOffset))
 end 'appendArm64EpilogueBeforeReturn'
 
 // The callee-saved registers a function's colored body references, in a fixed order (x19..x28, then
@@ -160,6 +200,10 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		x64JumpTable to arm64JumpTable gives arm64MaskFromOperands(op, buf: buf)
 		// The x64-only `callMem` never runs the arm64 prologue pass; the arm keeps the match exhaustive.
 		callMem gives arm64MaskFromOperands(op, buf: buf)
+		// The stack-argument pair is read through the shared operand model like every other op — an outgoing
+		// store's source and an incoming load's destination can both be coloured into a callee-saved register,
+		// so both MUST be counted here or the prologue would not preserve it.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -220,5 +264,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		x64JumpTable to arm64JumpTable gives false
 		// The x64-only `callMem` is a body op, never an `arm64Ret`.
 		callMem gives false
+		// Both stack-argument ops are body ops, never an `arm64Ret`.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

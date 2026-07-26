@@ -35,7 +35,11 @@ let Arm64Rt2Shift = 10
 // in a data-processing op — context, not the number, tells them apart; see the MOV-involving-SP note
 // on `arm64Prologue`). x29/x30 are the frame-record pair.
 let Arm64SpBaseField = 31
+// EXPORTED as a `RegNum` twin (`Arm64FramePointerRegNum`) because the prologue pass builds a real
+// `[x29 + disp]` load when it resolves an incoming stack argument, and a second literal 29 over there
+// would be this fact written down twice.
 let Arm64Fp = 29
+export let Arm64FramePointerRegNum = Arm64Fp as RegNum
 let Arm64Lr = 30
 
 // The IP scratch registers (x16/x17) — never in the allocatable pool, so the encoder clobbers them
@@ -927,8 +931,8 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64Cbz(reg, targetBlockId) then arm64EmitCbz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
 		arm64Cbnz(reg, targetBlockId) then arm64EmitCbnz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
 		arm64MovImm(dest, value) then arm64EmitMovImm(code, rd: arm64GprField(dest), value: value)
-		arm64Prologue(stackSize) then arm64EmitPrologue(code, frameSize: stackSize)
-		arm64Epilogue(stackSize) then arm64EmitEpilogue(code, frameSize: stackSize)
+		arm64Prologue(stackSize, recordOffset) then arm64EmitPrologue(code, frameSize: stackSize, recordOffset: recordOffset)
+		arm64Epilogue(stackSize, recordOffset) then arm64EmitEpilogue(code, frameSize: stackSize, recordOffset: recordOffset)
 		arm64Add(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpAdd, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Sub(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSub, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Mul(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpMul, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
@@ -991,6 +995,11 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// in `jumpTables`. The x64 jump table never reaches the arm64 encoder.
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then arm64EmitJumpTable(code, rdataRelocs: rdataRelocs, branchFixups: branchFixups, jumpTables: jumpTables, indexReg: arm64GprField(indexReg), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		x64JumpTable then panic("emitArm64TargetOp: an x64 jump table reached the arm64 encoder — the x64 backend encodes `x64JumpTable`")
+		arm64StoreOutgoingArg(slot, srcReg) then arm64EmitStoreOutgoingArg(code, slot: slot, srcReg: srcReg)
+		// `Arm64PrologueEpilogue.resolveArm64IncomingArgs` rewrites every one of these into a concrete
+		// `[x29 + disp]` load, because only that pass knows the final frame size. One reaching here means the
+		// pass did not run or missed a block — a guess at the displacement would be a silent wrong read.
+		arm64LoadIncomingArg(_, slot) then panic("emitArm64TargetOp: an unresolved `arm64LoadIncomingArg` (slot {slot}) reached the encoder — Arm64PrologueEpilogue must rewrite each into `[x29 + frameSize - outgoingArgSize + slot*8]` before emission")
 	end 'emit'
 end 'emitArm64TargetOp'
 
@@ -1125,28 +1134,45 @@ export let Arm64FrameRecordBytes = 16
 // a SUB-sp split (the imm7 field cannot encode a large frame) with the record stored at the new sp.
 // The `mov x29, sp` is ADD x29, sp, #0 — a MOV involving SP MUST be the ADD alias, never the ORR/XZR
 // form (register 31 is SP here, not XZR — M1 trap).
-function arm64EmitPrologue(code ByteArray, frameSize StackSize)
-	if frameSize <= Arm64FramePairIndexMax 'compact'
+//
+// ⭐ `recordOffset` is where the x29/x30 record sits within the frame — 0 unless this function makes a call
+// with OUTGOING STACK ARGUMENTS, which must occupy `[SP + 0 .. outgoing)` because that is where the callee's
+// entry SP finds them. A nonzero offset forces the SUB-sp form whatever the frame size: the pre-indexed STP
+// allocates and stores in one instruction and so can only put the record AT the new SP. `add x29, sp,
+// #recordOffset` then keeps x29 pointing at the record, which is what leaves `[x29 + 16 + slot*8]` spill
+// addressing identical in both shapes.
+function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOffset StackSize)
+	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
 		arm64EmitStpPreIndex(code, frameSize: frameSize)
-		arm64EmitMovFpFromSp(code)
-	end 'compact' else 'large'
+		arm64EmitAddFpFromSp(code, offset: recordOffset)
+	end 'compact' else 'explicitAlloc'
 		arm64EmitStackAlloc(code, amount: frameSize)
-		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: 0)
-		arm64EmitMovFpFromSp(code)
-	end 'large'
+		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: recordOffset)
+		arm64EmitAddFpFromSp(code, offset: recordOffset)
+	end 'explicitAlloc'
 end 'arm64EmitPrologue'
 
 // Close the frame: LDP x29, x30, [sp], #N for a compact frame, else reload the record and free the
 // frame with an ADD-sp split. The `ret` is the separate `arm64Ret` terminator, exactly as x64's
-// `epilogue` releases the frame and leaves the `ret` to the terminator.
-function arm64EmitEpilogue(code ByteArray, frameSize StackSize)
-	if frameSize <= Arm64FramePairIndexMax 'compact'
+// `epilogue` releases the frame and leaves the `ret` to the terminator. A nonzero `recordOffset` takes the
+// explicit form for the mirror of the prologue's reason: the post-indexed LDP reloads from the OLD SP,
+// which is the outgoing-argument region rather than the record.
+function arm64EmitEpilogue(code ByteArray, frameSize StackSize, recordOffset StackSize)
+	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
 		arm64EmitLdpPostIndex(code, frameSize: frameSize)
-	end 'compact' else 'large'
-		arm64EmitFrameRecordPair(code, opcode: Arm64OpLdpOffX, offset: 0)
+	end 'compact' else 'explicitFree'
+		arm64EmitFrameRecordPair(code, opcode: Arm64OpLdpOffX, offset: recordOffset)
 		arm64EmitStackFree(code, amount: frameSize)
-	end 'large'
+	end 'explicitFree'
 end 'arm64EmitEpilogue'
+
+// `str <Xt|Dt>, [SP, #slot*8]` — one OUTGOING stack argument into the region at the bottom of this frame.
+// SP is base field 31 here (not XZR — the M1 trap this file's header names), which is exactly why the op
+// exists rather than reusing `storeBaseDispReg`: SP has no `RegNum` and so cannot be a `TargetVReg`.
+// Class-dispatched on the SOURCE like every other 64-bit store, so a float argument stores through `STR Dt`.
+function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg TargetVReg)
+	arm64EmitWord64Store(code, base: Arm64SpBaseField, disp: (slot * SpillSlotBytes) as Imm32, src: srcReg)
+end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
 function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
@@ -1166,10 +1192,13 @@ function arm64EmitFrameRecordPair(code ByteArray, opcode MachineWord, offset Mac
 	emitArm64Insn(code, insn: opcode or (((offset / 8) and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
 end 'arm64EmitFrameRecordPair'
 
-// MOV x29, sp = ADD x29, sp, #0 (NOT the ORR/XZR MOV alias — see the SP-vs-XZR note).
-function arm64EmitMovFpFromSp(code ByteArray)
-	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64Fp, rn: Arm64SpBaseField, imm12: 0, shiftHi: false)
-end 'arm64EmitMovFpFromSp'
+// ADD x29, sp, #offset — point the frame pointer at the frame record, wherever in the frame it was put.
+// At offset 0 this IS `mov x29, sp`, and it must be the ADD alias rather than the ORR/XZR MOV (register 31
+// is SP here, not XZR — see the SP-vs-XZR note); a nonzero offset is the same instruction with the same
+// alias, so the two frame shapes share one encoder.
+function arm64EmitAddFpFromSp(code ByteArray, offset StackSize)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64Fp, rn: Arm64SpBaseField, imm12: offset, shiftHi: false)
+end 'arm64EmitAddFpFromSp'
 
 // SUB sp, sp, #amount — reserve a large frame, splitting across the imm12 limit (a frame past 4 KiB
 // needs the hi/lo pair; the pre-index STP could not encode it at all). SP cannot be a shifted-register

@@ -46,11 +46,10 @@ export typealias TokenIndex = int(0 to u64.max)
 // range: nesting is unbounded.
 typealias BlockDepth = int(0 to u64.max)
 
-// The custom ABI passes arguments in six registers (StdToX64Conversion.argRegisters), so
-// M5 caps a function at six parameters. A seventh would need a stack argument slot — a
-// later milestone — so the parser rejects it up front with a positioned `unsupported`
-// rather than letting it reach the backend as a crash.
-let MaxRegisterParams = 6 as ParamCount
+// (The six-register parameter cap that used to live here is GONE. It was never a limit of the machine —
+// only of a milestone that had not been built — and it refused 34 of shv2's own functions. Its
+// replacement is the ceiling the representation genuinely has, `StdDialect.MaxAbiArgs`, enforced by
+// `requireAbiParamCount` below.)
 
 // The displacement from a top-level `var`'s `globalAddr` to the value itself: ZERO, because every
 // global is its OWN labelled `.data` slot and the label already names the exact address.
@@ -1614,6 +1613,30 @@ function requireCalleeIsNotReservedName(callee ByteArray, anchor Token) throws P
 
 	throw ParseError.unknownCompilerIntrinsic(String.from(callee), line: anchor.line, column: anchor.column)
 end 'requireCalleeIsNotReservedName'
+
+// ⭐⭐ **THE ONE PLACE A SIGNATURE'S ARGUMENT COUNT IS JUDGED**, asked of the ABI count and of nothing
+// else. `paramCount` is what the calling convention actually passes: the parameters the source writes,
+// PLUS a companion environment per function-typed parameter (the uniform closure ABI), PLUS the layout
+// descriptor a generic method that reads `sizeof(T)` carries, PLUS one witness per `where` constraint on
+// an instance method. Every one of those occupies an argument slot and a mask bit, so every one counts.
+//
+// ⚠ **THE PREDECESSOR WAS TWO CHECKS WITH TWO DIFFERENT COUNTS**, and it is exactly the shape this
+// project keeps paying for: `parseFunctionParameters` tested the SOURCE parameter count while
+// `parseFunction` tested the ABI count, both against one constant, neither aware of the other. Whichever
+// fired first decided the message a user saw. There is now one test, and the routines that used to hold
+// the weak copy call this instead.
+//
+// The ceiling itself is `MaxAbiArgs` — the width of the per-argument float mask both ends of every call
+// route through (`StdDialect.ArgFloatMask`), which is where the reason lives. It is NOT a register count:
+// arguments past the register files travel in stack slots, and a target's register depth is a property of
+// that target's ABI (six per file on x64, eight on arm64), not of the language.
+function requireAbiParamCount(paramCount ParamCount, anchor Token) throws ParseError
+	if paramCount <= MaxAbiArgs 'withinCeiling'
+		return
+	end 'withinCeiling'
+
+	throw ParseError.unsupported("a function with {paramCount} argument slots — more than the {MaxAbiArgs} a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a companion environment per function-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file", line: anchor.line, column: anchor.column)
+end 'requireAbiParamCount'
 
 // **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
 // its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
@@ -6610,9 +6633,7 @@ export type Parser
 		// whole-program without a per-function field.
 		let witnessParamCount = self.witnessParamCountFor(takesReceiver)
 		let paramCount = userParamCount + self.countFunctionParams(paramTypes) + layoutParamCount + witnessParamCount
-		if paramCount > MaxRegisterParams 'tooManyAbiParams'
-			throw ParseError.unsupported("a function whose parameters plus their companion environment parameters exceed {MaxRegisterParams} (a function-typed parameter carries a hidden environment argument under the uniform closure ABI; M5 passes arguments in registers only, so the total must fit the register-argument slots — stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
-		end 'tooManyAbiParams'
+		try requireAbiParamCount(paramCount, anchor: nameTok)
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
 		self.mutableVars = VarInfoArray.create()
@@ -6891,10 +6912,13 @@ export type Parser
 			paramTypes.push(paramType)
 			paramRanges.push(SourceRange.ofToken(nameTok))
 
-			if paramNames.count() > MaxRegisterParams 'tooMany'
-				throw ParseError.unsupported("more than {MaxRegisterParams} parameters (M5 passes arguments in registers only; stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
-			end 'tooMany'
-
+			// ⚠ NO COUNT CHECK HERE. There used to be one, testing `paramNames.count()` against the old
+			// register cap — a SECOND, and WEAKER, spelling of the ceiling: it counted only the parameters the
+			// source writes, while the ABI also passes a companion environment per function-typed parameter,
+			// a layout descriptor and one witness per constraint. Two sites, two different counts, one
+			// notional rule — the shape this project keeps getting bitten by. The ceiling is now asked exactly
+			// once, of the ABI count, by `requireAbiParamCount`; both callers of this routine
+			// (`parseFunction`, `parseClosureExpression`) ask it after they know their own full count.
 			if not self.at(TokenKind.comma) 'endParams'
 				break
 			end 'endParams'
@@ -19593,6 +19617,20 @@ export type Parser
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
 		paramTypes = self.resolveNamedStructAll(paramTypes)
+		// The lifted closure's ABI count is its own parameters PLUS the trailing `__env` slot reserved below —
+		// so the ceiling is asked of `+ 1`. Asked HERE rather than in the shared `parseFunctionParameters` for
+		// the reason `requireAbiParamCount`'s header gives: only the caller knows how many hidden slots its own
+		// ABI adds, and a check that did not would be the weak second count all over again.
+		//
+		// ⚠⚠ AND IT IS ASKED **BEFORE** THE CONTEXT SAVE BELOW, WHICH IS A HARD REQUIREMENT, NOT AN ORDERING
+		// PREFERENCE. Between `let savedScope = self.scope` and the reassignment that follows it, every one of
+		// ~25 `savedX` locals ALIASES the field it was read from — one object, two names, no incref. A call
+		// that can THROW inside that window gives the enclosing frame a failure edge through it, and the drop
+		// the throw edge owes for each alias releases an object the field still holds. Placed there, this check
+		// made every closure program die compiling with `mm_decref: refcount underflow` inside
+		// `__destruct_Parser` — a compiler crash, on programs with SIX parameters, from a check about
+		// sixty-five. Nothing may throw between the saves and the restore.
+		try requireAbiParamCount(paramNames.count() + 1, anchor: functionTok)
 		let givesTok = try self.consume(TokenKind.gives)
 
 		// The lifted name — `<enclosing>$closure_<k>`. `$` is unwritable in a Maxon identifier, so the name
@@ -21301,6 +21339,23 @@ export type Parser
 				throw ParseError.unsupported("an `async` call argument must be a scalar (int/bool) — a managed (String/struct) or float argument travels in a register file the green-thread trampoline cannot fill at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
 			end 'managedArg'
 		end 'eachArg'
+
+		// ⛔ **AN `async` CALL HAS ITS OWN, LOWER ARGUMENT CEILING, AND IT IS A DIFFERENT MECHANISM'S LIMIT.**
+		// An ordinary call gained stack arguments; a SPAWN did not, and cannot here: the arguments do not travel
+		// in a calling convention at all but through the GT struct's INLINE argument region (`GtOffArgInline`,
+		// `MaxAsyncArgs` slots), which the HAND-ASSEMBLED trampoline reads back into the ABI argument registers
+		// one slot at a time (`X64GtRuntime.buildGtTrampolineChunk`). Passing a seventh would mean teaching that
+		// hand-written chunk to build a callee's outgoing stack-argument region on the green thread's stack —
+		// the async ABI, not the compiled one.
+		//
+		// ⚠ It used to be a compiler PANIC in `LowerMaxonToStd.emitAsyncSpawn`, guarding an inequality that
+		// "cannot fire today" because `MaxAsyncArgs` equalled the parser's six-register parameter cap. Removing
+		// that cap made it reachable from ordinary source, so it is a positioned diagnostic here — where the
+		// other two async refusals (a managed argument, a non-scalar result) already are, and for the same
+		// reason. The panic stays as the structural backstop it always claimed to be.
+		if args.count() > MaxAsyncArgs 'tooManyAsyncArgs'
+			throw ParseError.unsupported("`async {String.from(callee)}(…)` passes {args.count()} arguments — more than the {MaxAsyncArgs} a spawn can carry. A spawned call's arguments ride the green thread's inline argument region, which the hand-assembled trampoline reads back into the argument registers, so a spawn has no stack-argument path even though an ordinary call does. Call it directly, or pass fewer arguments", line: anchor.line, column: anchor.column)
+		end 'tooManyAsyncArgs'
 
 		try self.requireAsyncResult(callee, anchor: anchor)
 		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)

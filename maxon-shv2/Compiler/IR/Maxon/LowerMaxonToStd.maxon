@@ -1370,11 +1370,17 @@ type MaxonToStdLowering
 	// should have gated), the same shape `lowerCall` uses.
 	function emitAsyncSpawn(result ValueId, callee ByteArray, argIds ValueIdArray, dstBlock IrBlock)
 		// The inline region is a FIXED MaxAsyncArgs slots; one store per argument at `GtOffArgInline + k *
-		// GtArgSlotBytes`. A callee with more parameters than that would store PAST the region (MaxAsyncArgs
-		// currently equals the parser's MaxRegisterParams cap, so this cannot fire today) — guard it so a future
-		// cap divergence is a compile panic here, not a silent struct overrun the trampoline then mis-loads.
+		// GtArgSlotBytes`. A callee with more arguments than that would store PAST the region — a silent struct
+		// overrun the trampoline then mis-loads — so this stays as the STRUCTURAL BACKSTOP.
+		//
+		// ⚠ It is a backstop and no longer the only guard: `Parser.emitAsyncCall` refuses the same program with
+		// a positioned diagnostic naming `MaxAsyncArgs`. It used to be the only one, under a comment claiming it
+		// "cannot fire today" because MaxAsyncArgs equalled the parser's six-register parameter cap — which
+		// stopped being true the moment ordinary calls gained stack arguments and the cap went. Reaching here
+		// now means the parser's gate was bypassed (a synthesized spawn, a new async lowering path), which is a
+		// compiler bug and belongs in a panic.
 		if argIds.count() > MaxAsyncArgs 'overflow'
-			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the inline arg region holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — the parser's parameter cap and MaxAsyncArgs have diverged")
+			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the inline arg region holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — `Parser.emitAsyncCall` refuses a source-level spawn past that, so this spawn reached lowering without passing it")
 		end 'overflow'
 
 		// funcPtr = &callee ; result = __gt_spawn(funcPtr) — the Promise handle (the GT struct pointer). The arg

@@ -1,0 +1,75 @@
+// Test: managed-string-arguments-in-stack-slots
+typealias ByteTotal = int(0 to 100000)
+
+function joinLengths(a String, b String, c String, d String, e String, f String, g String, h String) returns ByteTotal
+	return a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength() + e.byteLength() + f.byteLength() + g.byteLength() + h.byteLength()
+end 'joinLengths'
+
+function main() returns ExitCode
+	return joinLengths("a string long enough to be heap allocated, one", b: "bb", c: "ccc", d: "dddd", e: "eeeee", f: "ffffff", g: "another heap allocated string, seven", h: "hhhhhhhhhhhhhhhhhhhhhhhhh")
+end 'main'
+---
+ExitCode: 127
+---
+func @joinLengths {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 r8, [rbp + 48]
+    x64.loadRegBaseDisp.word64 r10, [rbp + 56]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 8]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.leaRegRegReg rax, rcx, rax
+    x64.loadRegBaseDisp.word64 rcx, [r9 + 8]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rsi + 8]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rdi + 8]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r10 + 8]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 100000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.leaRegRdata r9, [rip + __str_rec_7]
+    x64.leaRegRdata rsi, [rip + __str_rec_9]
+    x64.leaRegRdata rdi, [rip + __str_rec_11]
+    x64.leaRegRdata r8, [rip + __str_rec_13]
+    x64.leaRegRdata r10, [rip + __str_rec_15]
+    x64.storeBaseDispReg.word64 [rsp + 32], r8
+    x64.storeBaseDispReg.word64 [rsp + 40], r10
+    x64.callDirect joinLengths
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

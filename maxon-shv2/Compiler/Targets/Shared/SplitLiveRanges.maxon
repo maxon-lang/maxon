@@ -2227,6 +2227,9 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		x64JumpTable to arm64JumpTable gives false
 		// The witness call is a call, not a constant materialization — not rematerializable (like `callReg`).
 		callMem gives false
+		// A stack-argument store defines nothing; an incoming load's def is a MEMORY read whose address is a
+		// frame fact, not a constant this pass could re-materialize. Neither is rematerializable.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2988,6 +2991,8 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		// `constDefInfo` is never called on one — named rather than swallowed by a range arm.
 		x64JumpTable to arm64JumpTable panic("constDefInfo: def is not a constant materialization")
 		callMem panic("constDefInfo: a `callMem` def is not a constant materialization")
+		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -3179,6 +3184,9 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) then return TargetOp.arm64JumpTable(substituteVReg(indexReg, from: from, to: to), defaultTarget: defaultTarget, caseTargets: caseTargets, tableLabel: tableLabel)
 		// The witness call substitutes its witness-table base register, exactly as `callReg` does its callee.
 		callMem(baseReg, disp) then return TargetOp.callMem(substituteVReg(baseReg, from: from, to: to), disp: disp)
+		// The stack-argument pair substitutes its ONE register operand each; the slot is a frame index.
+		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: substituteVReg(srcReg, from: from, to: to))
+		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(substituteVReg(dest, from: from, to: to), slot: slot)
 	end 'rewrite'
 end 'substituteValueInOp'
 

@@ -50,8 +50,11 @@ gates (`allocatablePool`, `augmentWithRuntime`, `writeExecutable`).
 **The language the compiler accepts today** — a scalar core with a real register
 allocator under it:
 
-- `function name(p1 T, p2 T) returns T … end` — **≤6 parameters** (the register-arg
-  ABI cap), no defaults. Parameters are immutable value bindings.
+- `function name(p1 T, p2 T) returns T … end` — **any number of parameters up to
+  `MaxAbiArgs` = 64**, no defaults. Parameters are immutable value bindings. The first six of
+  each register FILE travel in registers (eight on arm64); the rest travel in STACK SLOTS.
+  See *Stack arguments* below. The ceiling is the width of the per-argument float mask both
+  ends of a call route through, and it is DIAGNOSED — it is not a register count.
 - **Calls** — first argument positional, every later argument labelled
   (`f(a, b: x)`); call expressions and bare-call statements; recursion.
 - `let` / `var` bindings, `var` reassignment, integer literals, identifiers.
@@ -824,6 +827,77 @@ strings or floats yet. When it fills, the rule is: the backend captures rdata co
 chunk-locally and merges them into the shared table **single-threaded in function order**
 (idempotent-by-label dedup), with content-derived keys for all other shared appends. That is
 what keeps a parallel backend byte-deterministic.
+
+### Stack arguments — the arguments past the register files
+
+A calling convention passes the first few arguments in registers and the rest on the stack. shv2's
+custom x64 ABI has **six** integer argument registers and **six** float ones, counted independently;
+AAPCS64 has **eight** of each; wasm has no such thing at all, because its parameters ARE locals.
+
+**⭐ ONE PLACEMENT RULE, CONSULTED BY BOTH ENDS OF EVERY CALL** — `abiFileSlotIndex` /
+`abiArgIsOnStack` / `abiStackSlotsBefore` in `Targets/Shared/StdLoweringShared.maxon`. It reads a
+per-argument `ArgFloatMask` and the target's per-file register capacity, and nothing else. Both
+sides already hold a mask: a callee folds its declared parameter types once per function
+(`floatParamMaskOf`), a caller looks the callee's up by name (`calleeArgFloatMask`) or reads an
+indirect call's off the op.
+
+*Rationale:* the rule used to be stated TWICE — a recomputing `computeParamSlotIndex` on the callee
+side and a running-counter twin inside each backend's argument loop, held together by a comment
+saying so. Two monotone counters over one list cannot disagree, so that was survivable while every
+argument fit a register. It stops being survivable the moment an argument can OVERFLOW, because
+"which slot" then means two different things — an index within one register FILE, and an index into
+the single merged outgoing STACK area — and a caller and callee that disagree about one argument do
+not fail to compile, they compute a different answer.
+
+**The registers are two files; the stack is ONE area.** A float that overflows the last XMM slot
+takes the next stack slot after an integer that overflowed the last GPR slot: there is one outgoing
+region and one 8-byte stride, so the MERGED count indexes it, not either file's own.
+
+**The frame.** `IrFunction.outgoingArgSize` is the per-function MAX over its call sites (the region
+is reused, so the largest call's need, not the sum), folded during the isel walk. On x64 it sits
+above the shadow space at `[rsp + win64OutgoingArgDisp(slot)]` — the SAME formula and the SAME region
+the >4-argument import calls already used, so a frame has one outgoing area rather than an internal
+layout beside the Win64 one. `spillSlotBaseDisp` already places every spill above it. arm64 has no
+shadow space: its region is at `[SP + slot*8]`, at the very bottom of the frame, which pushes the
+x29/x30 frame record up by `outgoingArgSize` (`arm64Prologue`'s `recordOffset`). x29 still points AT
+the record, so `[x29 + 16 + slot*8]` spill addressing is untouched, and a frame with no outgoing
+arguments emits the byte-identical prologue it always did.
+
+**⭐ THE CALLEE READS OFF THE FRAME POINTER, WHICH IS WHY IT CAN BE COMPUTED IN THE ISEL.** On x64 an
+incoming stack argument is at `[rbp + 16 + shadow + slot*8]` — frame-size- and push-count-INDEPENDENT,
+because `insertPrologueAtEntry` establishes the frame pointer BEFORE any callee-saved push. (It does
+that for the saved-rbp chain; the stack-argument displacement is a second thing that ordering buys.)
+arm64 cannot: its incoming displacement is `frameSize - outgoingArgSize + slot*8`, neither term known
+until the allocator has finished, so the isel emits `arm64LoadIncomingArg(dest, slot)` and
+`Arm64PrologueEpilogue` — the one pass that knows both — rewrites each in place.
+
+**Two consequences worth stating, because each is a guard the reference compilers needed and shv2
+does not:**
+- **No frameless-leaf hazard.** v1 (`FrameScanState.needsFrame`) and the bootstrap (`hasStackParams`)
+  each had to force a frame onto a leaf with stack parameters but no locals, spills or calls, or
+  `[rbp + 16]` reads through the CALLER's frame pointer. shv2 frames EVERY function unconditionally.
+- **No FP-overflow gap.** Both references PANIC on a float argument past the float file. Here the
+  store/load is `word64` and the encoder picks `movsd`/`STR Dt` from the register's CLASS, so the
+  float path needed no code of its own.
+
+**⛔ THE STACK STORES ARE EMITTED BEFORE THE REGISTER MOVES, and that is a correctness requirement.**
+Materializing a stack argument's source takes a register the allocator picks; an argument register an
+earlier move already loaded is not a *value*, so nothing marks it live from that move to the call, and
+a store emitted after one can silently overwrite it. `specs-shv2/x64-stack-arg-disp32.md` returned
+**400 instead of 200** in exactly that shape (`movRegImm32 rax, 200` three instructions before the
+`call`, where rax was argument slot 2). Ordering the stores first closes it rather than narrowing it:
+while they run, no argument register has been established. Both reference compilers order it this way
+— v1's `sequentializeCallArgSetup` "Phase 0", the bootstrap's "compute the stack args FIRST".
+
+**The ceilings that remain are STATED, and there are two.** `MaxAbiArgs` = **64** is the width of the
+per-argument float mask (`StdDialect.ArgFloatMask`): bit 64 does not exist, and an argument past it
+would be classed GPR whatever its type. `Parser.requireAbiParamCount` refuses a signature past it —
+ONE test, of the ABI count (declared parameters plus the companion environment per function-typed
+parameter, the layout descriptor, and one witness per `where` constraint), replacing two checks that
+tested two different counts against one constant. `MaxAsyncArgs` = **6** is the green thread's inline
+argument region, which the hand-assembled trampoline reads back into the argument registers one slot
+at a time; a spawn therefore has no stack-argument path even though an ordinary call does, and
+`Parser.emitAsyncCall` says so where a compiler panic used to fire.
 
 ### `.data` — the top-level `var` slots (P1.0d.5b)
 

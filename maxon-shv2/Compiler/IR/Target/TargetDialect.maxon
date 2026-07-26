@@ -873,8 +873,18 @@ export union TargetOp
 	arm64MovImm(dest TargetVReg, value MachineWord) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// Frame setup / teardown — the encoder expands each to the arm64 frame (stp x29/x30, mov x29,
 	// sp, sub sp / the mirror). Carries its own `stackSize`, like the x64 pair.
-	arm64Prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-	arm64Epilogue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	//
+	// ⭐ `recordOffset` is WHERE IN THE FRAME THE x29/x30 RECORD SITS, and it is the whole of the
+	// stack-argument frame change. It is 0 for every frame that makes no >8-argument call — the record is
+	// then at the bottom and the encoder emits the byte-identical `stp x29,x30,[sp,#-N]!` it always has.
+	// A frame WITH outgoing stack arguments must instead leave `[SP + 0 .. outgoing)` free for them, since
+	// the callee's entry SP is where slot 0 must be found, so the record moves up by exactly the outgoing
+	// size and x29 follows it (`add x29, sp, #recordOffset`). x29 still points AT the record, so
+	// `arm64SlotDisplacement`'s `[x29 + 16 + slot*8]` spill addressing is untouched either way — which is
+	// why this is a field on the existing op rather than a second frame op that would be its duplicate at
+	// `recordOffset == 0`.
+	arm64Prologue(stackSize StackSize, recordOffset StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64Epilogue(stackSize StackSize, recordOffset StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// 3-address integer ALU — `dest`, `lhs`, `rhs` are three INDEPENDENT operands (arm64 has no
 	// two-address form), so `dest` is a PLAIN def and no reuse copy is ever needed.
 	arm64Add(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -1105,6 +1115,41 @@ export union TargetOp
 	// the custom ABI's caller-saved mask `0x003F0FC7` — held equal to `callerSavedMask()` by
 	// `assertX64CallClobbers` alongside `callDirect`/`callReg`/`iatCall`/`x64Syscall`.
 	callMem(baseReg TargetVReg, disp Imm32) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x003F0FC7}
+	// --- STACK ARGUMENTS, the arm64 half (the x64 half needs no op of its own) ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `callMem`, per the band-append invariant.
+	//
+	// ⭐⭐ **WHY arm64 NEEDS TWO OPS HERE AND x64 NEEDS NONE.** Both targets place an overflowing argument by
+	// the same shared rule (`abiStackSlotsBefore`); they differ only in whether the resulting ADDRESS can be
+	// written down during instruction selection.
+	//   • x64 can. An outgoing slot is `[rsp + shadow + k*8]` and an incoming one `[rbp + 16 + shadow + k*8]`
+	//     — both constants, both expressible as the existing `storeBaseDispReg` / `loadRegBaseDisp` with a
+	//     physical rsp/rbp base, because the frame pointer is established before any callee-saved push and
+	//     therefore fixes the incoming displacement regardless of frame size.
+	//   • arm64 cannot, twice over. Its outgoing area is at `[SP + k*8]`, and **SP has no `RegNum`**: the
+	//     arm64 register numbering is x0..x30 then d0.. (`Arm64FirstVectorRegister` = 31), so there is no
+	//     `TargetVReg` that names it and an op whose base is SP must SAY so. And its incoming args are at
+	//     `[x29 + frameSize - outgoing + k*8]`, a displacement that depends on the frame the ALLOCATOR has
+	//     not yet decided — so the isel can only name the SLOT and let the frame pass resolve it.
+	// That is the same division of labour `storeSlotReg`/`loadRegSlot` already make (an op names a slot; the
+	// per-target frame decides its address), which is why these two carry a `SpillSlot` and no displacement.
+	// v1 made exactly this split too (`Arm64Op.strToSpOffset` / `Arm64Op.loadIncomingArg`).
+
+	// `str <Xt|Dt>, [SP, #slot*8]` — write one OUTGOING stack argument into this frame's pre-reserved
+	// outgoing-argument region, which `Arm64PrologueEpilogue` places at the very bottom of the frame
+	// (`[SP + 0 .. outgoingArgSize)`) precisely so a callee's entry SP lands on slot 0. ONE value USE, no
+	// def. `isStore: true` — the scheduler must not move it across another memory op.
+	arm64StoreOutgoingArg(slot SpillSlot, srcReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// Read one INCOMING stack argument out of the CALLER's frame. ONE plain def, no use — the address is a
+	// frame fact, not a register.
+	//
+	// ⚠ **IT NEVER REACHES THE ENCODER.** `Arm64PrologueEpilogue`, the one pass that knows both the final
+	// frame size and the outgoing region, REWRITES each of these in place into a concrete
+	// `loadRegBaseDisp(dest, x29, frameSize - outgoing + slot*8)`. It therefore never appears in a committed
+	// fragment either (goldens are printed after that pass), and the arm64 encoder's arm for it panics
+	// rather than guessing — the same "must have been rewritten by the pass that owns this fact" contract
+	// `assertNoSugarOps` states for the Std sugar band.
+	arm64LoadIncomingArg(dest TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

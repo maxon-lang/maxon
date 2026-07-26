@@ -1533,6 +1533,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// P1.7a slice 2a: the fused witness call's memory-indirect `call qword [baseReg + disp]` — the callee
 		// pointer read from the witness table by the call itself, never virtualized.
 		callMem(baseReg, disp) then encodeCallMem(code, base: resolveGpr(baseReg), disp: disp)
+		// x64 places its own stack arguments through `storeBaseDispReg`/`loadRegBaseDisp` with an rsp/rbp base
+		// (see the dialect header for why arm64 cannot), so neither arm64 stack-argument op is ever produced
+		// for an x64 program and reaching this encoder is a lowering bug, not a missing encoding.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("emitX64TargetOp: an arm64 stack-argument op reached the x64 encoder — x64 places stack arguments with `storeBaseDispReg`/`loadRegBaseDisp` off rsp/rbp")
 	end 'emit'
 end 'emitTargetOp'
 

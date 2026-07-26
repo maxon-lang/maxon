@@ -196,6 +196,8 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64JumpTable gives true
 		// The memory-indirect witness call is an x64 op (P1.7a slice 2a).
 		callMem gives false
+		// The stack-argument pair IS arm64-specific (see their dialect header for why x64 needs no op).
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -278,8 +280,13 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
 		arm64Cbnz(reg, targetBlockId) gives "cbnz {arm64VregName(reg)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
 		arm64MovImm(dest, value) gives "movImm {arm64VregName(dest)}, {value}"
-		arm64Prologue(stackSize) gives "prologue {stackSize}"
-		arm64Epilogue(stackSize) gives "epilogue {stackSize}"
+		// The frame-record offset is rendered ONLY when the frame has an outgoing stack-argument region to push
+		// it past — which is what having one MEANS, and which no function in the corpus does. Rendering an
+		// unconditional `+0` would be a golden's worth of noise about a region that does not exist, on every
+		// arm64 function there is. The rendering stays injective: a frame with a region reads differently from
+		// one without.
+		arm64Prologue(stackSize, recordOffset) gives "prologue {stackSize}" if recordOffset == 0 else "prologue {stackSize} record@{recordOffset}"
+		arm64Epilogue(stackSize, recordOffset) gives "epilogue {stackSize}" if recordOffset == 0 else "epilogue {stackSize} record@{recordOffset}"
 		arm64Add(dest, lhs, rhs) gives "add {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Sub(dest, lhs, rhs) gives "sub {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Mul(dest, lhs, rhs) gives "mul {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
@@ -334,6 +341,10 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
 		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
 		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
+		// The arm64 stack-argument pair renders the SLOT, not an address, because a slot is all either op
+		// carries — the address is a frame fact the encoder (outgoing) or the prologue pass (incoming) adds.
+		arm64StoreOutgoingArg(slot, srcReg) gives "storeOutgoingArg [sp + arg{slot}], {arm64VregName(srcReg)}"
+		arm64LoadIncomingArg(dest, slot) gives "loadIncomingArg {arm64VregName(dest)}, [arg{slot}]"
 	end 'op'
 end 'formatTargetOp'
 

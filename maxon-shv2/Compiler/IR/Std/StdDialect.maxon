@@ -86,15 +86,31 @@ end 'stdTypeIsFloat'
 
 // A per-ARGUMENT float bitmask carried by `callIndirect` — bit k set iff argument k is a float (an f64,
 // which a backend routes to a float argument register / declares as an f64 wasm valtype rather than a GPR
-// i64). Only the low arg-count bits are meaningful; the storage is a full machine word, and `1 shl k` can
-// never overflow it because the parser caps a call's arguments (user params + the companion env) at
-// `MaxRegisterParams` = 6, far below 64. A SCALAR, so the op stays at one managed field (P1.5 #78 — see
-// `callIndirect`). It is the Std-tier, call-SITE twin of the Targets-tier, callee-side `ParamFloatMask`:
-// the two answer the identical float-vs-GPR question on opposite sides of a call. The boundary is one-way —
-// a Targets-tier lowering may name this Std typealias (the backends carry it, and `calleeArgFloatMask`
-// produces it for a direct call), but the Std tier must not name the Targets-tier `ParamFloatMask`, so the
-// two stay separate rather than one being reused across the Std→Target boundary.
+// i64). Only the low arg-count bits are meaningful; the storage is a full machine word. A SCALAR, so the op
+// stays at one managed field (P1.5 #78 — see `callIndirect`).
+//
+// ⭐ **IT IS THE ONE FLOAT-VS-GPR MASK, both ends of every call.** A callee folds its declared parameter
+// types into one (`floatParamMaskOf`); a caller looks the callee's up by name (`calleeArgFloatMask`) or
+// reads an indirect call's off the op. Both then hand it to the SAME placement rule
+// (`abiFileSlotIndex`/`abiArgIsOnStack`/`abiStackSlotsBefore`, StdLoweringShared), which is what makes
+// "where does argument k go?" one answer rather than two that could disagree. It used to have a
+// Targets-tier twin, `ParamFloatMask`, spelling the identical bitmask for the callee side; the twin is
+// gone. The tier boundary it was protecting is one-way and already permits this direction — a Targets-tier
+// lowering may name a Std typealias, and every one of them now does.
 export typealias ArgFloatMask = int(0 to u64.max)
+
+// ⛔ **THE STATED CEILING ON A SIGNATURE'S ARGUMENTS — and it is THIS MASK'S OWN WIDTH.** `1 shl k` must
+// land inside the machine word the mask is, so a call cannot carry more than 64 arguments: bit 64 does not
+// exist, and an argument past it would be classed GPR whatever its type, silently routing an f64 through
+// an integer register.
+//
+// It is therefore DIAGNOSED rather than assumed — `Parser.requireAbiParamCount` refuses a signature past it
+// with a positioned error that names this number and this reason. That is the whole difference from the cap
+// it replaced: `MaxRegisterParams = 6` was not a limit of anything, only of a milestone that had not been
+// built, and it refused programs the machine can run perfectly well. This one is a limit of a
+// representation, and the day a program needs a 65th argument the fix is to widen the representation, which
+// the diagnostic says.
+export let MaxAbiArgs = 64 as ParamCount
 
 // Bit k of an `ArgFloatMask` — true iff argument k travels in a float register / is an f64 valtype. The one
 // door the three backends read a `callIndirect`'s per-argument register file through.
