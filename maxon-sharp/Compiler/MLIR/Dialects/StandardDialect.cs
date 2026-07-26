@@ -1073,7 +1073,7 @@ public sealed class StdCondBrOp(StdBool condition, string thenBlock, string else
   public override int PureResultId => -1;
 }
 
-/// One `__cov_counters[PointId]` increment (`--coverage` only) — see
+/// One increment of counter `PointId` in `__cov_image` (`--coverage` only) — see
 /// <see cref="MaxonCovPointOp"/>. `PureResultId = -1` is what keeps the dead-value sweep off it:
 /// its effect is a memory write the IR's value graph cannot see.
 public sealed class StdCovPointOp(int pointId) : StandardOp {

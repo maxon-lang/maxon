@@ -42,7 +42,10 @@ public sealed class DebugInfoBuilder {
   /// line row at its source position, and if it IS a coverage point's increment, record where that
   /// point's code landed. One home for the emit-side capture, shared by both code emitters.
   public void NoteOp<TOp>(int codeOffset, IrFunction<TOp> func, TOp op) where TOp : IPrintableOp {
-    bool isCoveragePoint = op is ICoveragePointOp cov && NoteCoveragePoint(cov.PointId, codeOffset);
+    // TryAdd, not an assignment: a monomorphized generic body is emitted once per specialization and
+    // every copy increments the ONE counter the source text owns, so the FIRST offset is the point's.
+    bool isCoveragePoint =
+      op is ICoveragePointOp cov && _covPointOffsets.TryAdd(cov.PointId, (uint)codeOffset);
 
     if (func.TryGetDebugSpan(op, out var span)) {
       // A row at a coverage point's own offset is flagged as one, so `maxon debug --dump-info` shows
@@ -57,12 +60,6 @@ public sealed class DebugInfoBuilder {
   // function that dead-function elimination dropped). That is a fourth state, distinct from "never
   // executed", and reporting the two as one is the conflation this table exists to prevent.
   private readonly Dictionary<int, uint> _covPointOffsets = [];
-
-  /// Record a coverage point's emitted offset. Returns false — and keeps the FIRST offset — if the
-  /// point was already seen: a monomorphized generic body is emitted once per specialization, and
-  /// they all increment the one counter the source text owns.
-  private bool NoteCoveragePoint(int pointId, int codeOffset) =>
-    _covPointOffsets.TryAdd(pointId, (uint)codeOffset);
 
   /// Register a function's `.text` range and its real emitted frame size (bytes the prologue reserves
   /// below the frame pointer), returning its function id (index into the function table). frame-relative

@@ -900,8 +900,8 @@ public sealed class MaxonCondBrOp(MaxonValue condition, string thenBlock, string
 }
 
 /// <summary>
-/// "Execution reached coverage point N" — one increment of `__cov_counters[N]`, emitted only under
-/// `--coverage`. Minted by the parser at each user statement and each `if` arm (see
+/// "Execution reached coverage point N" — one increment of counter N in `__cov_image`, emitted only
+/// under `--coverage`. Minted by the parser at each user statement and each `if` arm (see
 /// <see cref="MaxonSharp.Compiler.Ir.Core.CoveragePointTable"/>), and carried unchanged through both
 /// lowerings so the emitter can record where each point's code actually landed.
 ///

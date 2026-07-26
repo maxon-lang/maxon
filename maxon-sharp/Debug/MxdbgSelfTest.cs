@@ -139,13 +139,15 @@ public static class MxdbgSelfTest {
     Check(cp3 is { Line: 13, Col: 3, BranchLine: 12, BranchCol: 2 } && cp3.IsCaseArm && cp3.IsBranchArm,
       "coverage point 3: a match arm, counted at its OWN line and grouped at its construct's");
 
-    // The `.mxcov` header the compiler stamps into a binary, read back through the same constants.
-    var covImage = new byte[MxcovFormat.HeaderSize + 4 * MxcovFormat.CounterSize];
+    // The `.mxcov` header the compiler stamps into a binary, read back through the same constants —
+    // and through the same geometry the two emitters address counters with, so this exercises the
+    // arithmetic that binds a point's index to its byte offset rather than restating it.
+    var covImage = new byte[MxcovFormat.ImageSize(4)];
     MxcovFormat.BuildHeader(id1, 4).CopyTo(covImage, 0);
     System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
       covImage.AsSpan(MxcovFormat.OffStatus), (ulong)MxcovFormat.StatusCompleted);
     System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
-      covImage.AsSpan(MxcovFormat.HeaderSize), 7);
+      covImage.AsSpan(MxcovFormat.CounterOffset(0)), 7);
     var cov = MxcovReader.TryParse(covImage, out var covError);
     Check(cov != null, $"mxcov parses ({covError})");
     Check(cov!.BuildId == id1, "mxcov build-id round-trips");

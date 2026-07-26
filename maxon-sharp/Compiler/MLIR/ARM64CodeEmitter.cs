@@ -910,7 +910,7 @@ public partial class ARM64CodeEmitter() {
   /// backend targets.
   private void EmitCoverageIncrement(int pointId) {
     EmitAdrpAddGlobalFixup(ARM64Register.X17, Runtime.RuntimeEmitter.CoverageImageGlobal,
-      Debug.MxcovFormat.HeaderSize + pointId * Debug.MxcovFormat.CounterSize);
+      Debug.MxcovFormat.CounterOffset(pointId));
     EmitMovRegImm(ARM64Register.X16, 1);
     // STADD X16, [X17]: LDADD (64-bit, no acquire/release) with Rt = XZR.
     EmitWord(0xF8200000u | (Reg(ARM64Register.X16) << 16) | (Reg(ARM64Register.X17) << 5) | 31u);

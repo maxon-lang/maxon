@@ -46,6 +46,34 @@ public static class MxcovFormat {
   /// One counter. u64 because a hot line in a long run must not wrap into a smaller, believable number.
   public const int CounterSize = 8;
 
+  /// <summary>
+  /// Where counter <paramref name="index"/> sits in the image — the ONE place a coverage point's
+  /// index becomes a byte address.
+  ///
+  /// Three parties compute this and they must agree exactly or the report names the wrong lines: the
+  /// x64 emitter's `lock inc` displacement, the arm64 emitter's `adrp/add` addend, and
+  /// <see cref="MxcovReader"/> reading the file back — one WRITER per target and one READER, across a
+  /// build boundary, with nothing between them that could notice a disagreement. Each spelling the
+  /// arithmetic itself is the project's signature bug: a header that grew, or a counter array that
+  /// gained alignment padding, would have to be found in three places, and the two that were found
+  /// would go on agreeing with each other while the third quietly attributed every count to its
+  /// neighbour — a report full of real numbers on the wrong lines.
+  /// </summary>
+  public static int CounterOffset(int index) => HeaderSize + index * CounterSize;
+
+  /// The whole image's byte length: the block the compiler RESERVES and the block the program WRITES.
+  /// Stated once so a reservation and a write cannot come to disagree about how long the file is —
+  /// as the offset one past the last counter, so it cannot drift from <see cref="CounterOffset"/>
+  /// either. The count is the compiler's own, so it is small and an `int` cannot overflow.
+  public static int ImageSize(int pointCount) => CounterOffset(pointCount);
+
+  /// The length a FILE CLAIMS to be, from the count in its own header — what a truncation check
+  /// compares against. Widened deliberately: a hostile or corrupt `pointCount` near u32.max overflows
+  /// an `int` length into a small positive number, and a check against that would pass a file holding
+  /// almost no counters. It lives here, beside <see cref="ImageSize"/>, so the layout is still stated
+  /// exactly once.
+  public static long DeclaredImageSize(uint pointCount) => HeaderSize + (long)pointCount * CounterSize;
+
   /// Whether the run that produced the file reached its own exit. An ABORTED file holds every count
   /// up to the panic and is reported as PARTIAL — never presented as a finished measurement, because
   /// the lines after the fault never got their chance to run.
@@ -106,7 +134,7 @@ public sealed class MxcovReader {
     ulong status = BinaryPrimitives.ReadUInt64LittleEndian(bytes[MxcovFormat.OffStatus..]);
     uint pointCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes[MxcovFormat.OffPointCount..]);
 
-    long need = MxcovFormat.HeaderSize + (long)pointCount * MxcovFormat.CounterSize;
+    long need = MxcovFormat.DeclaredImageSize(pointCount);
     if (bytes.Length < need) {
       error = $".mxcov is truncated: {pointCount} counters need {need} bytes, file has {bytes.Length}";
       return null;
@@ -114,8 +142,7 @@ public sealed class MxcovReader {
 
     var counters = new ulong[pointCount];
     for (int i = 0; i < counters.Length; i++) {
-      counters[i] = BinaryPrimitives.ReadUInt64LittleEndian(
-        bytes[(MxcovFormat.HeaderSize + i * MxcovFormat.CounterSize)..]);
+      counters[i] = BinaryPrimitives.ReadUInt64LittleEndian(bytes[MxcovFormat.CounterOffset(i)..]);
     }
 
     error = "";

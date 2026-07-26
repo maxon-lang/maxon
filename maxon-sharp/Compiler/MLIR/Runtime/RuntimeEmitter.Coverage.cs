@@ -52,8 +52,7 @@ public partial class RuntimeEmitter {
   /// Reserve the counter image and bake in the output path. Sized here, once, from the parser's
   /// point count.
   private void EmitCoverageGlobals(int pointCount, string dataPath) {
-    _b.DefineGlobal(CoverageImageGlobal,
-      MxcovFormat.HeaderSize + pointCount * MxcovFormat.CounterSize, 0);
+    _b.DefineGlobal(CoverageImageGlobal, MxcovFormat.ImageSize(pointCount), 0);
     _b.DefineSymdata(CoveragePathSymdata, System.Text.Encoding.UTF8.GetBytes(dataPath + "\0"));
   }
 
@@ -79,7 +78,7 @@ public partial class RuntimeEmitter {
 
     _b.LeaSymdata(VReg.Arg0, CoveragePathSymdata);
     _b.LeaGlobal(VReg.Arg1, CoverageImageGlobal);
-    _b.MovRegImm(VReg.Arg2, MxcovFormat.HeaderSize + pointCount * MxcovFormat.CounterSize);
+    _b.MovRegImm(VReg.Arg2, MxcovFormat.ImageSize(pointCount));
     _b.Call(CoverageWriteFileLabel);
 
     _b.FunctionEnd();

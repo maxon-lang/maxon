@@ -816,7 +816,12 @@ public sealed class ARM64AdrpAddGlobalOp(ARM64Register dest, string globalName) 
 public sealed class ARM64CovIncOp(int pointId) : ARM64Op, ICoveragePointOp {
   public override ARM64OpKind Kind => ARM64OpKind.CovInc;
   public int PointId { get; } = pointId;
-  public override string Mnemonic => $"arm64.cov_inc __cov_counters+{PointId * 8}";
+
+  // Named and offset through the same two facts the emitter uses — see the x64 twin for why an IR
+  // dump must not invent a symbol of its own.
+  public override string Mnemonic =>
+    $"arm64.cov_inc {Runtime.RuntimeEmitter.CoverageImageGlobal}"
+    + $"+{MaxonSharp.Debug.MxcovFormat.CounterOffset(PointId)}";
 }
 
 public sealed class ARM64AdrpAddSymdataOp(ARM64Register dest, string symdataLabel) : ARM64Op {

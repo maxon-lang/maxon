@@ -22,6 +22,16 @@ public static class CoverageRunner {
   ///
   /// The target's own stdout and stderr both go to <paramref name="onOutput"/> — the sink each face
   /// supplies — so neither face has to guess where a chatty program's output belongs.
+  ///
+  /// ⚠ <paramref name="onOutput"/> is called SERIALLY, and that is this method's promise rather than
+  /// each caller's problem. `BeginOutputReadLine` and `BeginErrorReadLine` start two INDEPENDENT
+  /// async readers, so the two handlers below run on different thread-pool threads at the same time
+  /// whenever a program writes to both streams. Without the lock, the MCP face's `StringBuilder`
+  /// would be appended to concurrently — a data structure with no thread safety at all, whose failure
+  /// is a garbled or truncated `output` field, or an exception on a thread-pool thread, which in .NET
+  /// takes the whole server down. The CLI face was safe only by accident, because `Console.Error`
+  /// happens to be a synchronized writer; safety that depends on which sink a caller picked is not
+  /// safety.
   /// </summary>
   public static bool Launch(string exePath, IReadOnlyList<string> targetArgs, string dataPath,
       Action<string> onOutput, out string error) {
@@ -48,8 +58,14 @@ public static class CoverageRunner {
 
     try {
       using var process = Process.Start(info) ?? throw new IOException("the process did not start");
-      process.OutputDataReceived += (_, e) => { if (e.Data != null) onOutput(e.Data); };
-      process.ErrorDataReceived += (_, e) => { if (e.Data != null) onOutput(e.Data); };
+      var outputGate = new object();
+      void Deliver(string? line) {
+        if (line == null) return;
+        lock (outputGate) onOutput(line);
+      }
+
+      process.OutputDataReceived += (_, e) => Deliver(e.Data);
+      process.ErrorDataReceived += (_, e) => Deliver(e.Data);
       process.BeginOutputReadLine();
       process.BeginErrorReadLine();
       process.WaitForExit();

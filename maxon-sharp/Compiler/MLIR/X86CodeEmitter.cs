@@ -2247,7 +2247,7 @@ public partial class X86CodeEmitter() {
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
-  /// One `--coverage` counter increment: `lock inc qword [rip + __cov_counters + 8*pointId]`.
+  /// One `--coverage` counter increment: `lock inc qword [rip + __cov_image + CounterOffset(pointId)]`.
   /// F0 (LOCK) REX.W FF /0 with mod=00, r/m=101 — 8 bytes, NO register operand, so instrumentation
   /// costs no register pressure and can sit at any statement or arm boundary.
   private void EmitCoverageIncrement(int pointId) {
@@ -2256,7 +2256,7 @@ public partial class X86CodeEmitter() {
     EmitByte(0xFF);                 // INC r/m64 (/0)
     EmitByte(0x05);                 // mod=00, reg=000 (/0), r/m=101 (RIP-relative)
     _globalFixups.Add((_code.Count, Runtime.RuntimeEmitter.CoverageImageGlobal,
-      Debug.MxcovFormat.HeaderSize + pointId * Debug.MxcovFormat.CounterSize));
+      Debug.MxcovFormat.CounterOffset(pointId)));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 

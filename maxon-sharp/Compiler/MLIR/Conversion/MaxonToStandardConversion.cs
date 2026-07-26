@@ -2730,7 +2730,7 @@ public static partial class MaxonToStandardConversion {
     EmitDebugStreamNameTable(result);
 
     // The coverage points the parser minted travel with the module: the emitter sizes
-    // `__cov_counters` from their count and the sidecar's coverage table is written from them.
+    // `__cov_image` from their count and the sidecar's coverage table is written from them.
     result.CoveragePoints = module.CoveragePoints;
     result.CoverageDataPath = module.CoverageDataPath;
 

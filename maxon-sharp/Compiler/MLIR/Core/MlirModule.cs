@@ -456,7 +456,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
 
   // The `--coverage` instrumentation's minted points, in counter order. Populated by the parser
   // (the one place the user's own control flow is still distinguishable from the branches lowering
-  // synthesizes) and read by the emitter, which sizes `__cov_counters` from it and hands it to the
+  // synthesizes) and read by the emitter, which sizes `__cov_image` from it and hands it to the
   // debug-info builder for the sidecar's coverage table. Empty on every other build.
   public CoveragePointTable CoveragePoints { get; set; } = new();
 
