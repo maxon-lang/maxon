@@ -1,0 +1,128 @@
+// DeadGlobalElimination — WHICH TOP-LEVEL GLOBALS THE PROGRAM CAN STILL NAME (P1.7 slice 3).
+//
+// A top-level binding with storage costs three separate things, and a binding nothing reads or writes
+// pays all three for nothing: an 8-byte `.data` slot, the ops in `__module_init` that build its record
+// and store it, and the drop in `__maxon_global_cleanup` that releases it. MEASURED on the base of this
+// slice: `var UNUSED = [1, 2, 3]` in a program that never mentions it emitted **3,676 bytes** of code
+// against **1,512** for the same program with no global at all — the array runtime, the two synthesized
+// functions and the entry stub's two calls, all of it reachable by nothing.
+//
+// ⭐ **IT DECIDES WHAT TO BUILD. IT DOES NOT REMOVE WHAT WAS BUILT — and that is why it is a MAXON-tier
+// derivation rather than a pass beside `DeadFunctionElimination` at the Std tier**, which is where both
+// references do the equivalent job. In shv2 all three pieces are produced BEFORE the pipeline runs:
+// `ProgramSignatures.declaredGlobals` reserves the slots and `ModuleInit.installManagedGlobalInit`
+// synthesizes the two functions, both from the SAME arena, both in `Compiler.compileToCodeResult`. So a
+// filter applied to that arena drops all three atomically **by construction** — there is no init run to
+// splice out of a lowered body, no `.data` table to re-lay-out, and no ordering between three edits to
+// get right. The references have to remove because their `.data` layout is already fixed by the time
+// they know; shv2 knows first.
+//
+// ⭐⭐ **THE EVIDENCE IS THE EMITTED `globalAddr` LABEL — NOT A PREDICATE OVER NAMES.** A use of a global
+// resolves local → capture → top-level, and that order has now produced a silent wrong answer in three
+// consecutive slices every time something re-derived it. So nothing here re-derives it: liveness is read
+// off the ops the resolution ALREADY PRODUCED. `Parser.emitGlobalAddr` is the only emitter of a
+// `globalAddr` in user code, and it is reached only from `emitGlobalLoad`/`emitGlobalStore` — so the set
+// below is built from the very ops that would reference the slot, and the dangerous direction ("an op
+// names a slot the layout dropped") is not merely unlikely, it is unrepresentable. A binding that is
+// resolved but never emitted merely fails to keep a slot nothing asks for.
+//
+// ⭐ **BIDIRECTIONALITY IS FREE HERE, AND IT IS THE THREE-OP SPLIT THAT MAKES IT SO.** The spec requires
+// that a var only ever STORED to survives — "stores are observable through `globalLoad` or a debugger"
+// (`specs/dead-top-level-var-elim.md:32`) — and states liveness as "a `globalLoad` OR a `globalStore`
+// … keeps the var alive". shv2 has neither fused op: a read is `globalAddr` + `loadIndirect` and a write
+// is `globalAddr` + `storeIndirect`, so both open with the SAME op and there is no second question to
+// ask. A rule that had to name both forms could be half-written; this one cannot.
+//
+// ⚠ **THE ORACLE'S NAMING HEURISTIC IS DELIBERATELY NOT PORTED, and it is a MEASURED bug rather than a
+// difference of taste.** `maxon-sharp`'s `DeadFunctionElimination.cs:181-183` decides whether an
+// initializer's side effects may be removed with `callee.EndsWith(".create") || callee.EndsWith(".from")`,
+// so `let UNUSED = Counter.build()` keeps its `print` when dead while the IDENTICAL body renamed
+// `Counter.create()` silently loses it — both compiling clean, with no warning. **Renaming a method must
+// not change whether its side effects run.** The conservative behaviour is what the spec actually asks
+// for: "the call still runs even when the slot is dead … keeps the call but drops the slot" (:31).
+//
+// Today shv2 cannot even reach that case — a top-level initializer is a CONSTANT (a call in one is
+// E2045), so every op `__module_init` emits for a global is compiler-synthesized allocation with no
+// user-visible effect, and dropping the whole run is exactly dropping the slot. The obligation lands the
+// day an initializer may call: the call belongs to `ModuleInit.initialRecordOf`, which is where "what
+// does this global's record cost to build?" is answered, and it must keep emitting the call while this
+// file goes on dropping the slot.
+//
+// ⚠ **NO REACHABILITY TERM, ON PURPOSE.** The spec says "never read or written by any REACHABLE
+// function"; this says "by any function", which keeps strictly MORE globals and is therefore only ever a
+// missed prune. Reachability is `DeadFunctionElimination`'s fact, settled at the Std tier after `.data`
+// is laid out — too late to decide what to build — and the only reachability available this early is
+// `StdlibSource.reachableMaxonFunctionNames`, whose own header records why it may not be widened: it
+// walks `call`/`tryCall`/`functionRef`/`asyncCall` edges only, so a function reached through a witness
+// table or an `.rdata` slot looks unreachable, and it is "scoped to stdlib source rather than applied to
+// every function" for exactly that reason. Letting it decide a `.data` slot would be a SECOND decider of
+// reachability, disagreeing with the first in the direction that drops a live global. The refinement is
+// worth having when it can be had exactly, and it is unreachable today in any case: no stdlib module
+// shv2 loads declares a top-level binding, and the stdlib case the spec exists for
+// (`var captured = TraceKeyArray.create()` in `stdlib/Log.maxon`) is a CALL, which shv2 rejects.
+
+// The `.data` labels live code can still name. Keyed by `ByteArray` because that is what both sides
+// already hold — the `globalAddr` op's `label` and `TopLevelDecl.dataLabel` are the same bytes, minted
+// once by `assignDataLabels` — so asking the question renders nothing and allocates nothing.
+export typealias LiveGlobalLabelSet = Set with ByteArray
+
+// ⭐ **EVERY `.data` LABEL SOME FUNCTION IN THE PROGRAM NAMES.** Called once per compile, on the merged
+// Maxon module, BEFORE `installManagedGlobalInit` — and that position is load-bearing twice over. It is
+// what lets the answer decide whether the two synthesized functions are built at all, and it is what
+// keeps them OUT of the walk: `__module_init` opens every managed global with a `globalAddr` of its own
+// slot, so a scan run afterwards would find every global keeping itself alive. Both reference compilers
+// meet the same shape in their init store and answer it with a runtime `func.Name == "__module_init"`
+// compare; here the fact is expressed by WHICH CODE HAS RUN, which is the same argument `ModuleInit`'s
+// header makes about the store's missing decref.
+//
+// COST: ONE O(ops) walk, allocation-free but for the labels it keeps — and SKIPPED ENTIRELY for a
+// program that declares no stored global, which is the whole existing corpus and the entire scale
+// ladder. That guard is not a micro-optimization: an unconditional second full-module walk is a
+// per-compile TIME cost that allocates nothing, and a cost that allocates nothing is one `scale-test`
+// is structurally blind to.
+export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalCount) returns LiveGlobalLabelSet
+	var live = LiveGlobalLabelSet.create()
+
+	// Not a shortcut past the answer — it IS the answer. With no slot in the program no `globalAddr` can
+	// name one, so the walk could only ever build this same empty set.
+	if storedGlobals == 0 'noStoredGlobals'
+		return live
+	end 'noStoredGlobals'
+
+	for func in module.functions 'eachFunc'
+		// Walk `block.opRefs` DIRECTLY rather than `IrModule.liveOpIndices`, which allocates a fresh
+		// op-index array per function: this runs at the Maxon tier BEFORE any block-rebuilding pass, so
+		// `opRefs` holds no orphan ops — the same reason `StdlibSource.markMaxonCallees` and
+		// `scanRuntimeUsage` walk it this way. A TERMINATOR can never carry a label (`globalAddr` defines
+		// a value and terminators are the returns and branches), so the body ops are the whole of it.
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("liveGlobalLabels: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("liveGlobalLabels: opRef {opIdx} not in module.ops")
+				noteGlobalLabel(op, live: live)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return live
+end 'liveGlobalLabels'
+
+// The `.data` label one `MaxonOp` names, if any. ONE variant carries one — `globalAddr` — and it carries
+// it for a read and a write alike, which is the whole of this pass's bidirectionality.
+//
+// The arms RANGE over the whole union in declaration order, ending at the current last variant, so a
+// variant appended past it FAILS TO COMPILE here rather than being silently swallowed — the band-append
+// invariant working in the reviewer's favour (MaxonDialect's header), exactly as
+// `StdlibSource.markMaxonCalleeEdge` and `DeadFunctionElimination.markCalleeOf` rely on it. A new
+// variant that names a `.data` label must be added as its own arm.
+function noteGlobalLabel(op MaxonOp, live LiveGlobalLabelSet)
+	match op 'op'
+		// `call` … `branch`: calls, literals, arithmetic, comparisons, branches and returns.
+		call to branch then break 'op'
+		globalAddr(_, label) then live.insert(label)
+		// `loadIndirect` … `witnessDispatch`: the load and the store that FOLLOW a `globalAddr` take the
+		// address as a VALUE — the label is on the op above and nowhere else — and no later variant names
+		// a data label at all.
+		loadIndirect to witnessDispatch then break 'op'
+	end 'op'
+end 'noteGlobalLabel'

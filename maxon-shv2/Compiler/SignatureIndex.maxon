@@ -235,6 +235,10 @@ export typealias TopLevelDeclIndex = int(0 to u64.max)
 export typealias TopLevelDeclIndexArray = Array with TopLevelDeclIndex
 typealias TopLevelDeclIndexMap = Map with (ByteArray, TopLevelDeclIndex)
 
+// How many of those declarations have a `.data` slot — a SUBSET of the arena, so the same wide range.
+// See `ProgramSignatures.storedGlobalCount`.
+export typealias StoredGlobalCount = int(0 to u64.max)
+
 // WHERE a top-level constant is filed, and the ONE place a constant's visibility becomes a fact
 // about its NAME.
 //
@@ -1997,9 +2001,19 @@ export type ProgramSignatures
 	// file's constant) costs one wasted probe and resolves correctly, and there is no second copy of the
 	// resolution rule to drift.
 	var managedTopLevelNames as ManagedTopLevelNameSet
+	// ⭐ **HOW MANY DECLARATIONS HAVE A `.data` SLOT** (P1.7 slice 3) — written by `assignDataLabels`,
+	// which is already the one walk that visits exactly them, and read once per compile by
+	// `DeadGlobalElimination.liveGlobalLabels` to decide whether its module walk has anything to look
+	// for. Zero for the whole existing corpus and for every rung of the scale ladder, which is what
+	// keeps a dead-global pass free for a program that has no global.
+	//
+	// A COUNT rather than a bool because it is what the walk that produces it naturally has, and
+	// because "how many slots does this program declare?" is the honest fact; the caller's question
+	// ("any at all?") is one comparison away and does not need its own field.
+	export var storedGlobalCount as StoredGlobalCount
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
@@ -2544,15 +2558,28 @@ export type ProgramSignatures
 	// ⚠ **IT RUNS AFTER THE EVALUATION LOOP, AND THAT ORDER IS NOW LOAD-BEARING** (P1.7 slice 2b): which
 	// decls have a slot is `TopLevelDecl.hasStorage`, and `settleArrayValue` is what sets it for an immutable
 	// ARRAY binding. Hoisted above the loop it would label the `var`s and silently skip every array `let`.
+	//
+	// ⚠ **A LABEL IS MINTED FOR EVERY STORED DECL, LIVE OR NOT, AND THAT ORDER IS LOAD-BEARING TOO**
+	// (P1.7 slice 3). Dead-global elimination reads liveness off the `globalAddr` ops the parser emitted,
+	// which CARRY these labels — so labelling has to precede it, and a dead global keeps its claim on the
+	// bare name it took here. That is the correct outcome rather than a leftover: renumbering the `$1`
+	// disambiguator once a neighbour is dropped would rename a SURVIVING global whose ops already spell
+	// the old label.
+	//
+	// It also counts them, into `storedGlobalCount` — this walk visits exactly the decls that have a slot,
+	// so the count is a by-product of the labelling rather than a second arena pass to keep in step.
 	function assignDataLabels()
 		var minted = DataLabelCountMap.create()
+		var stored = 0 as StoredGlobalCount
 		for i in 0 upto self.decls.count() 'each'
 			var decl = self.declAt(i)
 			if not decl.hasStorage 'inlinedHasNoSlot'
 				continue
 			end 'inlinedHasNoSlot'
 			decl.dataLabel = uniqueDataLabel(decl.name, minted: minted)
+			stored = stored + 1
 		end 'each'
+		self.storedGlobalCount = stored
 	end 'assignDataLabels'
 
 	// Open a fresh DFS at arena index `index`. The stack is per-ROOT rather than shared across the
@@ -2862,7 +2889,27 @@ export type ProgramSignatures
 		return decl.dataLabel
 	end 'dataLabelOf'
 
-	// EVERY top-level `var` in the program, in ARENA (declaration) order, with the label and value
+	// ⭐⭐ **DOES THE DECLARATION AT `index` STILL CONTRIBUTE STORAGE?** — the ONE filter both arena walks
+	// below apply, and the whole of what makes a dead global's THREE PIECES drop TOGETHER (P1.7 slice 3).
+	// The `.data` slot `declaredGlobals` reserves, the `__module_init` store `managedGlobals` causes and
+	// the `__maxon_global_cleanup` drop it causes are all downstream of this single answer, so they cannot
+	// disagree — and every way they COULD disagree is broken: a slot with no initializer holds null where
+	// a record must be, an initializer with no slot stores into an address the image never laid down, and
+	// a cleanup drop with no slot decrefs one.
+	//
+	// TWO independent reasons a declaration contributes nothing, in the order that makes the second one
+	// askable: an INLINED binding has no slot at all (a `let` scalar materializes its value at every read,
+	// and `dataLabelOf` panics rather than inventing a label for one), and a STORED binding whose label no
+	// `globalAddr` in the program names is dead.
+	function contributesStorage(index TopLevelDeclIndex, decl TopLevelDecl, live LiveGlobalLabelSet) returns bool
+		if not decl.hasStorage 'inlinedHasNoSlot'
+			return false
+		end 'inlinedHasNoSlot'
+
+		return live.contains(self.dataLabelOf(index))
+	end 'contributesStorage'
+
+	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
 	// its `.data` slot carries — the door the backend's data-section layout asks through.
 	//
 	// It is asked ONCE per compile (`Compiler.declaredGlobals`), never per file: it is O(globals),
@@ -2871,13 +2918,13 @@ export type ProgramSignatures
 	//
 	// A var whose initializer FAILED contributes no slot: the build has already failed on its
 	// diagnostic, and there is no value to lay down.
-	export function declaredGlobals() returns DataSectionEntryArray
+	export function declaredGlobals(live LiveGlobalLabelSet) returns DataSectionEntryArray
 		var entries = DataSectionEntryArray.create()
 		for i in 0 upto self.decls.count() 'each'
 			let decl = self.declAt(i)
-			if not decl.hasStorage 'inlinedHasNoSlot'
+			if not self.contributesStorage(i, decl: decl, live: live) 'noReachableSlot'
 				continue
-			end 'inlinedHasNoSlot'
+			end 'noReachableSlot'
 			match decl.outcome 'state'
 				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(tag, name: decl.name), value: payload))
 				failed to poisoned then continue
@@ -2895,7 +2942,7 @@ export type ProgramSignatures
 		return entries
 	end 'declaredGlobals'
 
-	// ⭐ **EVERY MANAGED TOP-LEVEL `var` IN THE PROGRAM, in ARENA (declaration) order** — the door
+	// ⭐ **EVERY LIVE MANAGED TOP-LEVEL GLOBAL IN THE PROGRAM, in ARENA (declaration) order** — the door
 	// `installManagedGlobalInit` asks through, and the ONLY enumeration of them.
 	//
 	// It is the `declaredGlobals` twin and deliberately a SECOND walk rather than a widened first: that one
@@ -2908,13 +2955,13 @@ export type ProgramSignatures
 	// quadratic (see the ARCHITECTURE's warning on this query).
 	//
 	// A var whose initializer FAILED contributes nothing: the build has already failed on its diagnostic.
-	export function managedGlobals() returns ManagedGlobalArray
+	export function managedGlobals(live LiveGlobalLabelSet) returns ManagedGlobalArray
 		var entries = ManagedGlobalArray.create()
 		for i in 0 upto self.decls.count() 'each'
 			let decl = self.declAt(i)
-			if not decl.hasStorage 'inlinedHasNoSlot'
+			if not self.contributesStorage(i, decl: decl, live: live) 'noReachableSlot'
 				continue
-			end 'inlinedHasNoSlot'
+			end 'noReachableSlot'
 			match decl.outcome 'state'
 				value to poisoned then continue
 				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(i, decl: decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind)))

@@ -504,6 +504,13 @@ abcde
 Three array globals in one program: one grown past its initial capacity in a loop and then REASSIGNED to
 a fresh literal (the old record must be released, not leaked), one never touched at all, and an
 immutable one only read. `3 + 4 + 6 + 2`.
+
+⚠ **`untouched` NO LONGER REACHES THE BINARY** (P1.7 slice 3): nothing names it, so dead-global
+elimination drops its slot, the `__arr_create`/`__arr_push` run that built it and the `__arr_decref` that
+freed it — which is why the golden's `.data` holds `grow` and `fixed` alone. The answer is unmoved (the
+declaration never contributed to it), and what the case still pins is the pair that matters here: `grow`
+and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune is per-global rather
+than per-init.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

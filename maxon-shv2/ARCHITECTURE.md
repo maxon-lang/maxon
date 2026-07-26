@@ -62,7 +62,10 @@ allocator under it:
   `var` gets an 8-byte POINTER slot filled by `__module_init` before `main` and released by
   `__maxon_global_cleanup` after it. An `[…]` ARRAY literal takes that slot whichever keyword declared it —
   its record is BUILT, so no read can re-materialize one — and `let` then differs only in refusing the write.
-  See *Top-level managed `let`* / *Top-level managed `var`* / *Top-level ARRAY globals* below.
+  A binding no code NAMES is dropped entirely — slot, init and cleanup together — while one that is only
+  WRITTEN survives, since a write is the same evidence a read is.
+  See *Top-level managed `let`* / *Top-level managed `var`* / *Top-level ARRAY globals* /
+  *Dead-global elimination* below.
 - **Arithmetic** — `+ - * / mod` with Pratt precedence, prefix `-`.
 - **Comparisons** — `== != < > <= >=`, valid *only* as the sole top-level operator
   of an `if`/`while` condition (there is no `setcc`/bool materialization yet, so a
@@ -1091,6 +1094,72 @@ that such a value is never mutated (only half-built — the E3019 receiver rule)
 is what also keeps the forward reference `let TOTAL = FIRST + SECOND` working. An **empty** `[]` is refused
 (E2015): it has no element to infer from, and unlike a function body it cannot be told to use
 `Array with T` + `.create()`, because a call is not a constant.
+
+### Dead-global elimination — a global no code NAMES is never built (P1.7 slice 3)
+
+A stored top-level binding costs three things: an 8-byte `.data` slot, the `__module_init` ops that build
+its record and store it, and the `__maxon_global_cleanup` drop that releases it. A binding nothing reads or
+writes pays all three for nothing — **MEASURED at +2,164 emitted code bytes** for a lone `var UNUSED =
+[1,2,3]` (3,676 against a 1,512-byte floor), because the dead array also drags in the array runtime, both
+synthesized functions and the entry stub's two calls.
+
+**`DeadGlobalElimination.liveGlobalLabels` decides what to BUILD; it removes nothing.** Both reference
+compilers do the equivalent job at the Std tier, *after* their `.data` layout is fixed, so they must splice
+ops back out. shv2 knows first: the slots (`declaredGlobals`) and the two functions (`installManagedGlobalInit`)
+are produced from the SAME arena, in `compileToCodeResult`, before the pipeline — so **one filter on that
+arena (`ProgramSignatures.contributesStorage`) drops all three atomically**, with no init run to splice, no
+table to re-lay-out, and no ordering between three edits to get right.
+
+| the piece | who would have built it | what the filter does |
+|---|---|---|
+| the `.data` slot | `declaredGlobals` | no `DataSectionEntry` |
+| the record build + store | `managedGlobals` → `__module_init` | no ops, and with no managed global left, no function at all |
+| the cleanup drop | `managedGlobals` → `__maxon_global_cleanup` | likewise |
+
+> ⭐ **THE EVIDENCE IS THE EMITTED `globalAddr` LABEL, NOT A PREDICATE OVER NAMES.** A use resolves
+> local → capture → top-level, and *every* slice that re-derived that order produced a silent wrong answer.
+> So liveness re-derives nothing: it is read off the ops resolution ALREADY PRODUCED. `Parser.emitGlobalAddr`
+> is the only emitter in user code and is reached only from `emitGlobalLoad`/`emitGlobalStore`, so the live
+> set is built from the very ops that would reference the slot — making "an op names a slot the layout
+> dropped" **unrepresentable** rather than merely unlikely.
+>
+> ⭐ **BIDIRECTIONALITY IS FREE, and the three-op split is why.** The spec states liveness as "a `globalLoad`
+> OR a `globalStore`"; shv2 has neither fused op — a read is `globalAddr`+`loadIndirect`, a write is
+> `globalAddr`+`storeIndirect` — so both open with the SAME op and there is no second question to ask. A
+> write-only global survives because a write IS the evidence. A rule naming two forms could be half-written;
+> this one cannot.
+>
+> ⚠ **IT RUNS BEFORE `installManagedGlobalInit`, and that is correctness, not tidiness.** `__module_init`
+> opens every managed global with a `globalAddr` of that global's own slot, so a scan run afterwards would
+> find every global keeping itself alive — always, silently. Both references meet the same shape and answer
+> it with a runtime `func.Name == "__module_init"` compare; here the fact is expressed by WHICH CODE HAS RUN.
+>
+> ⚠ **LABELS ARE MINTED BEFORE LIVENESS, so a dead global keeps its claim on the bare name.** With two
+> file-private `counter`s, dropping the one holding `__data_counter` leaves the survivor as
+> `__data_counter$1` — correct, because its `globalAddr` ops already spell that label. Renumbering the
+> disambiguator afterwards would rename a *surviving* global out from under its own ops. Verified both ways.
+
+**Two deliberate narrowings, both strictly conservative:**
+
+- **No reachability term.** The spec says "never read or written by any *reachable* function"; this says "by
+  any function", which only ever keeps MORE. Reachability is `DeadFunctionElimination`'s fact, settled at the
+  Std tier after `.data` is laid out — too late to decide what to build — and the only early answer,
+  `StdlibSource.reachableMaxonFunctionNames`, is scoped to stdlib source precisely because it misses witness
+  and `.rdata` edges. Widening it would be a second decider of reachability, disagreeing in the direction
+  that drops a LIVE global.
+- **No side-effect heuristic.** The bootstrap decides removability by `callee.EndsWith(".create") || ".from"`
+  (`DeadFunctionElimination.cs:181-183`), so `Counter.build()` keeps its `print` while the identical body
+  renamed `Counter.create()` silently loses it. **Renaming a method must not change whether its side effects
+  run.** shv2 cannot reach the case at all today (a call in a top-level initializer is E2045, so every init
+  op is compiler-synthesized allocation); when initializers may call, the obligation lands in
+  `ModuleInit.initialRecordOf` — keep the call, drop the slot.
+
+**Cost: ONE O(ops) walk that allocates nothing per op, SKIPPED entirely when the program declares no stored
+global** (`ProgramSignatures.storedGlobalCount`, counted by `assignDataLabels`, which already visits exactly
+those decls). The whole spec corpus and every scale rung's per-phase allocation counts are bit-identical to
+before; the only cost is the label set itself, linear in globals declared. An unconditional second
+full-module walk would have been a per-compile TIME cost allocating nothing — the shape `scale-test` is
+structurally blind to.
 
 ## Register allocator (Std `ValueId`s → physical GPRs)
 

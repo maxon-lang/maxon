@@ -224,9 +224,20 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `byteStringLiteral` into an owned `Array`. Appending them after any of those would need a second copy
 	// of whichever one it skipped.
 	//
+	// ⭐ **WHICH GLOBALS CAN THE PROGRAM STILL NAME — ASKED BEFORE ANYTHING IS BUILT FROM THEM** (P1.7
+	// slice 3, see `DeadGlobalElimination`). A binding nothing reads or writes costs an 8-byte slot, an
+	// init run and a cleanup drop, and the three are dropped TOGETHER because all three are produced from
+	// this one filtered arena — `managedGlobals` below and `declaredGlobals` further down apply the SAME
+	// test, so there is nothing to remove afterwards and no ordering between three edits to get right.
+	//
+	// ⚠ **IT MUST PRECEDE `installManagedGlobalInit`, and not merely for the filtering.** `__module_init`
+	// opens every managed global with a `globalAddr` of that global's own slot, so a liveness scan run
+	// after the synthesis would find every global keeping itself alive — the answer would be "everything
+	// is live", silently and always.
+	let liveGlobals = liveGlobalLabels(module, storedGlobals: signatures.storedGlobalCount)
 	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
 	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
-	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals())
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals(liveGlobals))
 
 	project.stdlibFacts = try deriveStdlibFacts(project, module: module)
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
@@ -253,7 +264,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// lowers it — and the thunks are installed already-lowered AFTER the pipeline, like the destructor cascades
 	// (P1.5-A2b-2).
 	let fnRefThunkTargets = collectFnRefThunkTargets(module)
-	var declaredGlobals = signatures.declaredGlobals()
+	var declaredGlobals = signatures.declaredGlobals(liveGlobals)
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals() 'each'
 			declaredGlobals.push(entry)
