@@ -39,7 +39,8 @@ public sealed class MxdbgWriter {
     uint NameOff, uint NameLen, uint LocKind, uint LocValue, uint TypeId, uint ScopeStart, uint ScopeEnd);
 
   private readonly record struct CovRec(
-    uint CodeOffset, uint FileId, uint Line, uint Col, uint FuncNameOff, uint FuncNameLen, uint Flags);
+    uint CodeOffset, uint FileId, uint Line, uint Col, uint BranchLine, uint BranchCol,
+    uint FuncNameOff, uint FuncNameLen, uint Flags);
 
   /// Intern a string into the shared pool, returning its `(offset,len)`. The empty string interns to
   /// `(0,0)` and writes nothing.
@@ -115,9 +116,10 @@ public sealed class MxdbgWriter {
   /// code (<see cref="MxdbgFormat.CovFlagEliminated"/>, <paramref name="codeOffset"/> 0). Skipping
   /// one would slide every later record against the counter array it describes.
   /// </summary>
-  public void AddCoveragePoint(uint codeOffset, uint fileId, uint line, uint col, string funcName, uint flags) {
+  public void AddCoveragePoint(uint codeOffset, uint fileId, uint line, uint col,
+      uint branchLine, uint branchCol, string funcName, uint flags) {
     var (nameOff, nameLen) = Intern(funcName);
-    _covPoints.Add(new CovRec(codeOffset, fileId, line, col, nameOff, nameLen, flags));
+    _covPoints.Add(new CovRec(codeOffset, fileId, line, col, branchLine, branchCol, nameOff, nameLen, flags));
   }
 
   /// Serialize the accumulated tables into a `.mxdbg` image bound to <paramref name="buildId"/>.
@@ -222,6 +224,8 @@ public sealed class MxdbgWriter {
       MxdbgFormat.Put(buf, cp.FileId);
       MxdbgFormat.Put(buf, cp.Line);
       MxdbgFormat.Put(buf, cp.Col);
+      MxdbgFormat.Put(buf, cp.BranchLine);
+      MxdbgFormat.Put(buf, cp.BranchCol);
       MxdbgFormat.Put(buf, cp.FuncNameOff);
       MxdbgFormat.Put(buf, cp.FuncNameLen);
       MxdbgFormat.Put(buf, cp.Flags);

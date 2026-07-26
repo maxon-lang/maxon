@@ -360,7 +360,7 @@ public sealed class DebugInfoBuilder {
       bool emitted = _covPointOffsets.TryGetValue(i, out var codeOffset);
       uint flags = p.Flags | (emitted ? 0 : MxdbgFormat.CovFlagEliminated);
       _writer.AddCoveragePoint(emitted ? codeOffset : 0, fileId, (uint)p.Line, (uint)p.Col,
-        p.FunctionName, flags);
+        (uint)p.BranchPos.Line, (uint)p.BranchPos.Col, p.FunctionName, flags);
     }
   }
 

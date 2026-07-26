@@ -2266,9 +2266,9 @@ public partial class RuntimeEmitter {
     // Runs here so it lands on the normal process-exit path alongside the leak gate.
     EmitSlabStatsDump();
 
-    // The `--coverage` dump, for the same reason and BEFORE the counters below are read: it borrows
-    // the executable-path buffer through mm_raw_alloc and gives it back, so reading the leak
-    // counters first would see a transient allocation and turn a clean run into exit 101.
+    // The `--coverage` dump, on the same normal-exit path. It allocates nothing — its output path is
+    // baked into the binary as symdata — so it cannot disturb the leak counters read below, and the
+    // ordering here is only "before the process is judged", not a constraint the dump imposes.
     if (Compiler.Coverage) {
       _b.MovRegImm(VReg.Arg0, MxcovFormat.StatusCompleted);
       _b.Call(CoverageDumpLabel);

@@ -19,11 +19,19 @@ public sealed record CoverageLine(uint Line, CoverageLineState State, ulong Coun
 
 public sealed record CoverageFile(string Path, IReadOnlyList<CoverageLine> Lines);
 
-/// One user `if`, with the count of each arm. <see cref="ElseImplicit"/> marks the arm the source
-/// never wrote — the one no line table can describe, because it has no source text to hold a row.
-public sealed record CoverageBranch(
-  string File, uint Line, uint Col, ulong ThenCount, ulong ElseCount, bool ElseImplicit,
-  bool ThenEliminated, bool ElseEliminated);
+/// <summary>
+/// One arm of one branch. <see cref="Implicit"/> marks an arm the source never wrote — the `else` of
+/// an `if` that has none, which no line table can describe because it has no source text to hold a
+/// row. <see cref="Line"/> is the ARM's own position, so the branch summary says where to look.
+/// </summary>
+public sealed record CoverageArm(string Kind, uint Line, uint Col, ulong Count, bool Eliminated, bool Implicit);
+
+/// <summary>
+/// One user branch and every arm of it. N arms, not two: an `if` has then/else, a `match` has one per
+/// case, and a summary that could only hold a pair would have to report every `match` as having no
+/// branches at all — which it did, as "0/0 arms taken" on a two-way dispatch.
+/// </summary>
+public sealed record CoverageBranch(string File, uint Line, uint Col, IReadOnlyList<CoverageArm> Arms);
 
 /// <summary>
 /// The joined result of a coverage-point table and a run's counters — the ONE model both faces
@@ -42,9 +50,8 @@ public sealed record CoverageReport(
     Files.Sum(f => f.Lines.Count(l => l.State != CoverageLineState.Eliminated));
   public int LinesEliminated =>
     Files.Sum(f => f.Lines.Count(l => l.State == CoverageLineState.Eliminated));
-  public int ArmsTaken => Branches.Sum(b => (b.ThenCount > 0 ? 1 : 0) + (b.ElseCount > 0 ? 1 : 0));
-  public int ArmsInstrumented =>
-    Branches.Sum(b => (b.ThenEliminated ? 0 : 1) + (b.ElseEliminated ? 0 : 1));
+  public int ArmsTaken => Branches.Sum(b => b.Arms.Count(a => a.Count > 0));
+  public int ArmsInstrumented => Branches.Sum(b => b.Arms.Count(a => !a.Eliminated));
 }
 
 /// <summary>
@@ -114,32 +121,42 @@ public static class CoverageJoin {
   }
 
   /// <summary>
-  /// Pair up each `if`'s arms. Both arms of one branch were minted at the `if` keyword's own
-  /// position, so (file, line, col) identifies the branch exactly — two `if`s cannot share one — and
-  /// no relationship field has to be carried in the record to say which arms belong together.
+  /// Group each branch's arms. Every arm point carries its CONSTRUCT's position as well as its own,
+  /// so (file, branchLine, branchCol) identifies the branch exactly — two `if`s or two `match`es
+  /// cannot share one token position — and no relationship field has to be carried to say which arms
+  /// belong together.
+  ///
+  /// Arms stay in MINT ORDER within a branch, which is source order: then before else, and case
+  /// before case. That is a total order even when two arms share a line (an `if` and its implicit
+  /// `else` both sit at the `if`), which a sort by position would not be.
   /// </summary>
   private static List<CoverageBranch> BuildBranches(MxdbgReader sidecar, MxcovReader data) {
-    var byBranch = new Dictionary<(string File, uint Line, uint Col), CoverageBranch>();
+    var byBranch = new Dictionary<(string File, uint Line, uint Col), List<CoverageArm>>();
+    var order = new List<(string File, uint Line, uint Col)>();
 
     for (uint i = 0; i < sidecar.CoveragePointCount; i++) {
       var point = sidecar.CoveragePoint(i);
-      if (!point.IsThenArm && !point.IsElseArm) continue;
+      if (!point.IsBranchArm) continue;
 
-      var key = (point.File, point.Line, point.Col);
-      var branch = byBranch.TryGetValue(key, out var existing)
-        ? existing
-        : new CoverageBranch(point.File, point.Line, point.Col, 0, 0, false, false, false);
-
-      ulong count = point.Eliminated ? 0 : data.Counters[(int)i];
-      byBranch[key] = point.IsThenArm
-        ? branch with { ThenCount = count, ThenEliminated = point.Eliminated }
-        : branch with {
-            ElseCount = count, ElseEliminated = point.Eliminated, ElseImplicit = point.IsImplicitArm
-          };
+      var key = (point.File, point.BranchLine, point.BranchCol);
+      if (!byBranch.TryGetValue(key, out var arms)) {
+        byBranch[key] = arms = [];
+        order.Add(key);
+      }
+      arms.Add(new CoverageArm(ArmKind(point), point.Line, point.Col,
+        point.Eliminated ? 0 : data.Counters[(int)i], point.Eliminated, point.IsImplicitArm));
     }
 
-    return [.. byBranch.Values
-      .OrderBy(b => b.File, StringComparer.Ordinal).ThenBy(b => b.Line).ThenBy(b => b.Col)];
+    return [.. order
+      .OrderBy(k => k.File, StringComparer.Ordinal).ThenBy(k => k.Line).ThenBy(k => k.Col)
+      .Select(k => new CoverageBranch(k.File, k.Line, k.Col, byBranch[k]))];
+  }
+
+  private static string ArmKind(MxdbgReader.CovPointInfo point) {
+    if (point.IsThenArm) return "then";
+    if (point.IsElseArm) return "else";
+    if (point.IsCaseArm) return "case";
+    throw new InvalidOperationException($"coverage point at {point.File}:{point.Line} is a branch arm with no kind");
   }
 }
 
@@ -200,17 +217,24 @@ public static class CoverageRender {
     if (report.Branches.Count > 0) {
       sb.Append('\n').Append(SectionRule).Append(" branches ").Append(SectionRule).Append('\n');
       foreach (var b in report.Branches) {
-        sb.Append("  ").Append(DisplayPath(b.File)).Append(':').Append(b.Line).Append(':').Append(b.Col)
-          .Append("  then=").Append(ArmText(b.ThenCount, b.ThenEliminated))
-          .Append("  else=").Append(ArmText(b.ElseCount, b.ElseEliminated))
-          .Append(b.ElseImplicit ? " (else is implicit)" : "")
-          .Append('\n');
+        sb.Append("  ").Append(DisplayPath(b.File)).Append(':').Append(b.Line).Append(':').Append(b.Col);
+        foreach (var arm in b.Arms) sb.Append("  ").Append(ArmText(arm));
+        sb.Append('\n');
       }
     }
     return sb.ToString();
   }
 
-  private static string ArmText(ulong count, bool eliminated) => eliminated ? EliminatedMarker : count.ToString();
+  /// One arm as `<kind>@<line>=<count>`. Every arm renders the same way, whether it is one of an
+  /// `if`'s two or one of a `match`'s many, and each names the line to look at — which for an `else`
+  /// is not the `if`'s line.
+  private static string ArmText(CoverageArm arm) =>
+    $"{arm.Kind}{(arm.Implicit ? ImplicitSuffix : "")}@{arm.Line}="
+    + (arm.Eliminated ? EliminatedMarker : arm.Count.ToString());
+
+  /// Marks the arm the source never wrote. Present only where it is true, so it states a fact rather
+  /// than being a column that always reads the same.
+  private const string ImplicitSuffix = "(implicit)";
 
   /// <summary>
   /// The gcov-style annotated listing. Reading the source is best-effort: a file that has moved
@@ -287,22 +311,28 @@ public static class CoverageRender {
         w.WriteString("file", DisplayPath(b.File));
         w.WriteNumber("line", b.Line);
         w.WriteNumber("col", b.Col);
-        WriteArm(w, "then", b.ThenCount, b.ThenEliminated);
-        WriteArm(w, "else", b.ElseCount, b.ElseEliminated);
-        w.WriteBoolean("elseImplicit", b.ElseImplicit);
+        w.WriteStartArray("arms");
+        foreach (var arm in b.Arms) {
+          w.WriteStartObject();
+          w.WriteString("kind", arm.Kind);
+          w.WriteNumber("line", arm.Line);
+          w.WriteNumber("col", arm.Col);
+          // Written only where it is TRUE: an arm the source did write has nothing to say here, and a
+          // field that reads false on every `case` and every `then` is a column of one value.
+          if (arm.Implicit) w.WriteBoolean("implicit", true);
+          // An eliminated arm reports no count at all rather than a zero a consumer would read as
+          // "never taken" — the same distinction the text listing draws with its own marker.
+          if (arm.Eliminated) w.WriteString("state", "eliminated");
+          else w.WriteNumber("count", arm.Count);
+          w.WriteEndObject();
+        }
+        w.WriteEndArray();
         w.WriteEndObject();
       }
       w.WriteEndArray();
       w.WriteEndObject();
     }
     return Encoding.UTF8.GetString(buffer.ToArray());
-  }
-
-  /// An eliminated arm reports no count at all rather than a zero a consumer would read as "never
-  /// taken" — the same distinction the text listing draws with its own marker.
-  private static void WriteArm(Utf8JsonWriter w, string name, ulong count, bool eliminated) {
-    if (eliminated) w.WriteString(name, "eliminated");
-    else w.WriteNumber(name, count);
   }
 
   private static string StateName(CoverageLineState state) => state switch {

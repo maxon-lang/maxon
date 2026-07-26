@@ -5,8 +5,16 @@ completes) and DebugSamples/covpartial.maxon (a run that does not).
 ⭐ WHAT THIS GOLDEN IS FOR — THE THING NO LINE TABLE CAN DO. The `.mxdbg` line table holds
 `(codeOffset, file, line, col, flags)`: no successor, no edge, no condition identity. An `if` with no
 `else` therefore has NO ROW for the arm it does not take, and cannot have one — that arm has no source
-text. Both branches below are exactly that shape, and block 1 reports `then=1 else=2` and
-`then=0 else=1` for them. Instrumentation is the only place those numbers can come from.
+text. Both `if`s below are exactly that shape, and block 1 reports `then@35=1 else(implicit)@35=2` and
+`then@62=0 else(implicit)@62=1` for them. Instrumentation is the only place those numbers can come from.
+
+⭐⭐ AND `match`, WHICH IS WHY THIS GOLDEN GREW. Arms are minted for `match` too — `weigh` has three,
+one of them never taken — and they are reported as BRANCH ARMS, in `=== branches ===` and in the
+`branches: n/m arms taken` summary, exactly like `then`/`else`. Before they were, this program reported
+`lines: 2/2 covered`, `branches: 0/0 arms taken`, and BLANK next to every arm: three falsehoods at
+once, the worst being a green 100% on code with an untested arm, because a green number gets trusted.
+An arm's point carries TWO positions — its own, so `large gives 9` shows `#####` on ITS line, and its
+construct's, so the three group into one branch.
 
 It also puts all FOUR line states side by side, because three of them are easy to conflate:
   * a real COUNT (line 24 ran 3 times, line 25 once) — what the run did
@@ -28,12 +36,15 @@ above were rejected as unknown options. There were no counters, no `.mxcov`, and
 coverage-point slots were written as zero with the comment "Coverage section slots stay 0 until P6".
 
 WHAT EACH BLOCK PROVES (asserted by the output below):
-  * BLOCK 1 — THE HEADLINE. The annotated listing, with all four states and both branches. Note
-    `classify`'s line 24 at 3 and line 28 at 2: the `if` header runs three times, and the fall-through
-    below it twice, which is the implicit else arm counted from the other direction. Note also that
-    every executable line carries its OWN count — the line table for this same program has rows for
-    only some of them, because a statement whose code is folded away leaves no row behind while its
-    coverage point still counts the line's executions.
+  * BLOCK 1 — THE HEADLINE. The annotated listing, with all four states and all three branches. Note
+    `classify`'s line 35 at 3 and line 39 at 2: the `if` header runs three times, and the fall-through
+    below it twice, which is the implicit else arm counted from the other direction. Note `weigh`'s
+    line 43 at 2 while its arms read 1, 1 and `#####` — the dispatch ran twice and reached two of its
+    three cases. Note also that every executable line carries its OWN count: the line table for this
+    same program has rows for only some of them, because a statement whose code is folded away leaves
+    no row behind while its coverage point still counts the line's executions.
+  * An arm renders as `<kind>@<line>=<count>`, one shape for `then`, `else` and `case` alike, each
+    naming the line to look at — which for an `else` is not the `if`'s.
   * BLOCK 2 — THE SAME REPORT AS JSON, from the same model through the second renderer. The two faces
     are a text renderer and a JSON renderer over ONE report; there is no second aggregation.
   * BLOCK 3 — PARTIAL. covpartial panics halfway, so the dump runs from the panic path and marks the
@@ -57,12 +68,12 @@ WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
 
 --- EXPECTED `maxon coverage run` STDOUT, BLOCK 1: the annotated listing ---
 coverage: maxon-sharp/DebugSamples/coverage.exe
-lines: 10/11 covered  branches: 3/4 arms taken  eliminated: 2 lines
+lines: 15/17 covered  branches: 5/7 arms taken  eliminated: 2 lines
 legend: a count = executed, ##### = never executed, ----- = no code emitted (optimized away), blank = no coverage point
 
 === maxon-sharp/DebugSamples/coverage.maxon ===
         |   1| // P6 coverage gate sample. Deterministic by construction: pure integer arithmetic, no stdlib calls,
-        |   2| // no green threads, and a distinct exit code (12 = 1 + 1 + 10).
+        |   2| // no green threads, and a distinct exit code (17 = 1 + 1 + 10 + 1 + 4).
         |   3| //
         |   4| // It exists to put all FOUR line states in one listing, because three of them are easy to confuse:
         |   5| //   - `classify`'s header runs 3 times and its `return 10` once — real counts
@@ -71,49 +82,72 @@ legend: a count = executed, ##### = never executed, ----- = no code emitted (opt
         |   8| //     different fact from "untested" and must not be reported as if it were
         |   9| //   - this comment, the blank lines and every `end` carry no coverage point at all
         |  10| //
-        |  11| // It also puts both arms of two `if`s on the record, INCLUDING the `else` neither one writes. That
-        |  12| // arm has no source text, so no line table can ever hold a row for it; instrumentation is the only
-        |  13| // place it can be counted, which is the whole reason this rung mints a point per branch arm.
-        |  14| 
-        |  15| typealias ExitCode = int(0 to 255)
-        |  16| typealias Small = int(0 to 1000000)
-        |  17| 
-        |  18| function neverCalled(n Small) returns Small
-  ----- |  19| 	let doubled = n + n
-  ----- |  20| 	return doubled
-        |  21| end 'neverCalled'
+        |  11| // It also puts every BRANCH ARM of two constructs on the record:
+        |  12| //   - both arms of two `if`s, INCLUDING the `else` neither one writes. That arm has no source text,
+        |  13| //     so no line table can ever hold a row for it; instrumentation is the only place it can be
+        |  14| //     counted, which is the whole reason this rung mints a point per branch arm.
+        |  15| //   - all three arms of a `match`, one of which is never taken. `match` is Maxon's primary dispatch
+        |  16| //     construct, and before its arms were instrumented a program like this one reported as 100%
+        |  17| //     covered with "0/0 arms taken" — the worst answer a coverage tool can give, because a green
+        |  18| //     number gets trusted.
+        |  19| 
+        |  20| typealias ExitCode = int(0 to 255)
+        |  21| typealias Small = int(0 to 1000000)
         |  22| 
-        |  23| function classify(n Small) returns Small
-      3 |  24| 	if n > 1 'big'
-      1 |  25| 		return 10
-        |  26| 	end 'big'
-        |  27| 
-      2 |  28| 	return 1
-        |  29| end 'classify'
-        |  30| 
-        |  31| function main() returns ExitCode
-      1 |  32| 	var total = 0
-      1 |  33| 	var i = 0
-        |  34| 
-      1 |  35| 	while i < 3 'loop'
-      3 |  36| 		total = total + classify(i)
-      3 |  37| 		i = i + 1
-        |  38| 	end 'loop'
-        |  39| 
-      1 |  40| 	if total > 1000 'never'
-  ##### |  41| 		total = 0
-        |  42| 	end 'never'
-        |  43| 
-      1 |  44| 	return total
-        |  45| end 'main'
-        |  46| 
+        |  23| enum Size
+        |  24| 	small
+        |  25| 	medium
+        |  26| 	large
+        |  27| end 'Size'
+        |  28| 
+        |  29| function neverCalled(n Small) returns Small
+  ----- |  30| 	let doubled = n + n
+  ----- |  31| 	return doubled
+        |  32| end 'neverCalled'
+        |  33| 
+        |  34| function classify(n Small) returns Small
+      3 |  35| 	if n > 1 'big'
+      1 |  36| 		return 10
+        |  37| 	end 'big'
+        |  38| 
+      2 |  39| 	return 1
+        |  40| end 'classify'
+        |  41| 
+        |  42| function weigh(s Size) returns Small
+      2 |  43| 	return match s 'weigh'
+      1 |  44| 		small gives 1
+      1 |  45| 		medium gives 4
+  ##### |  46| 		large gives 9
+        |  47| 	end 'weigh'
+        |  48| end 'weigh'
+        |  49| 
+        |  50| function main() returns ExitCode
+      1 |  51| 	var total = 0
+      1 |  52| 	var i = 0
+        |  53| 
+      1 |  54| 	while i < 3 'loop'
+      3 |  55| 		total = total + classify(i)
+      3 |  56| 		i = i + 1
+        |  57| 	end 'loop'
+        |  58| 
+      1 |  59| 	total = total + weigh(Size.small)
+      1 |  60| 	total = total + weigh(Size.medium)
+        |  61| 
+      1 |  62| 	if total > 1000 'never'
+  ##### |  63| 		total = 0
+        |  64| 	end 'never'
+        |  65| 
+      1 |  66| 	return total
+        |  67| end 'main'
+        |  68| 
 
 === branches ===
-  maxon-sharp/DebugSamples/coverage.maxon:24:2  then=1  else=2 (else is implicit)
-  maxon-sharp/DebugSamples/coverage.maxon:40:2  then=0  else=1 (else is implicit)
+  maxon-sharp/DebugSamples/coverage.maxon:35:2  then@35=1  else(implicit)@35=2
+  maxon-sharp/DebugSamples/coverage.maxon:43:9  case@44=1  case@45=1  case@46=0
+  maxon-sharp/DebugSamples/coverage.maxon:62:2  then@62=0  else(implicit)@62=1
 
 --- EXPECTED `maxon coverage run --json` STDOUT, BLOCK 2: the same report as JSON ---
-{"exe":"maxon-sharp/DebugSamples/coverage.exe","runCompleted":true,"linesCovered":10,"linesInstrumented":11,"linesEliminated":2,"armsTaken":3,"armsInstrumented":4,"files":[{"path":"maxon-sharp/DebugSamples/coverage.maxon","lines":[{"line":19,"state":"eliminated"},{"line":20,"state":"eliminated"},{"line":24,"state":"covered","count":3},{"line":25,"state":"covered","count":1},{"line":28,"state":"covered","count":2},{"line":32,"state":"covered","count":1},{"line":33,"state":"covered","count":1},{"line":35,"state":"covered","count":1},{"line":36,"state":"covered","count":3},{"line":37,"state":"covered","count":3},{"line":40,"state":"covered","count":1},{"line":41,"state":"notCovered","count":0},{"line":44,"state":"covered","count":1}]}],"branches":[{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":24,"col":2,"then":1,"else":2,"elseImplicit":true},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":40,"col":2,"then":0,"else":1,"elseImplicit":true}]}
+{"exe":"maxon-sharp/DebugSamples/coverage.exe","runCompleted":true,"linesCovered":15,"linesInstrumented":17,"linesEliminated":2,"armsTaken":5,"armsInstrumented":7,"files":[{"path":"maxon-sharp/DebugSamples/coverage.maxon","lines":[{"line":30,"state":"eliminated"},{"line":31,"state":"eliminated"},{"line":35,"state":"covered","count":3},{"line":36,"state":"covered","count":1},{"line":39,"state":"covered","count":2},{"line":43,"state":"covered","count":2},{"line":44,"state":"covered","count":1},{"line":45,"state":"covered","count":1},{"line":46,"state":"notCovered","count":0},{"line":51,"state":"covered","count":1},{"line":52,"state":"covered","count":1},{"line":54,"state":"covered","count":1},{"line":55,"state":"covered","count":3},{"line":56,"state":"covered","count":3},{"line":59,"state":"covered","count":1},{"line":60,"state":"covered","count":1},{"line":62,"state":"covered","count":1},{"line":63,"state":"notCovered","count":0},{"line":66,"state":"covered","count":1}]}],"branches":[{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":35,"col":2,"arms":[{"kind":"then","line":35,"col":2,"count":1},{"kind":"else","line":35,"col":2,"implicit":true,"count":2}]},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":43,"col":9,"arms":[{"kind":"case","line":44,"col":3,"count":1},{"kind":"case","line":45,"col":3,"count":1},{"kind":"case","line":46,"col":3,"count":0}]},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":62,"col":2,"arms":[{"kind":"then","line":62,"col":2,"count":0},{"kind":"else","line":62,"col":2,"implicit":true,"count":1}]}]}
 
 --- EXPECTED `maxon coverage run` STDOUT, BLOCK 3: a run that did not complete ---
 coverage: maxon-sharp/DebugSamples/covpartial.exe

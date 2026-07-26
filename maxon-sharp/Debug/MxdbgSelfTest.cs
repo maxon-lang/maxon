@@ -57,11 +57,13 @@ public static class MxdbgSelfTest {
     w.AddLine(100, fileB, 5, 1, MxdbgFormat.LineFlagStatement);
 
     // Coverage points, in counter order, including one the optimizer eliminated (no code offset).
-    w.AddCoveragePoint(20, fileA, 11, 5, "withdraw", MxdbgFormat.CovFlagStatement);
-    w.AddCoveragePoint(30, fileA, 11, 5, "withdraw",
-      MxdbgFormat.CovFlagArmThen);
-    w.AddCoveragePoint(0, fileA, 11, 5, "withdraw",
+    w.AddCoveragePoint(20, fileA, 11, 5, 0, 0, "withdraw", MxdbgFormat.CovFlagStatement);
+    w.AddCoveragePoint(30, fileA, 11, 5, 11, 5, "withdraw", MxdbgFormat.CovFlagArmThen);
+    w.AddCoveragePoint(0, fileA, 11, 5, 11, 5, "withdraw",
       MxdbgFormat.CovFlagArmElse | MxdbgFormat.CovFlagArmImplicit | MxdbgFormat.CovFlagEliminated);
+    // A `match` arm: its own line differs from its construct's, which is what lets the line listing
+    // count the arm and the branch summary still group it with its siblings.
+    w.AddCoveragePoint(40, fileA, 13, 3, 12, 2, "withdraw", MxdbgFormat.CovFlagArmCase);
 
     var image = w.Build(id1, "x64-windows");
     var r = new MxdbgReader(image);
@@ -125,18 +127,21 @@ public static class MxdbgSelfTest {
 
     // Coverage-point table round-trip. The counter index IS the record index, which is what binds
     // this table to a .mxcov's counter array — so the order they came out in is the assertion.
-    Check(r.CoveragePointCount == 3, "coverage point count");
+    Check(r.CoveragePointCount == 4, "coverage point count");
     var cp0 = r.CoveragePoint(0);
     Check(cp0 is { CodeOffset: 20, Line: 11, Col: 5, FunctionName: "withdraw", File: "account.maxon" }
-      && cp0.IsStatement && !cp0.Eliminated, "coverage point 0: a statement with code");
+      && cp0.IsStatement && !cp0.Eliminated && !cp0.IsBranchArm, "coverage point 0: a statement with code");
     Check(r.CoveragePoint(1).IsThenArm, "coverage point 1: the true arm");
     var cp2 = r.CoveragePoint(2);
     Check(cp2.IsElseArm && cp2.IsImplicitArm && cp2.Eliminated,
       "coverage point 2: an implicit else arm the optimizer eliminated");
+    var cp3 = r.CoveragePoint(3);
+    Check(cp3 is { Line: 13, Col: 3, BranchLine: 12, BranchCol: 2 } && cp3.IsCaseArm && cp3.IsBranchArm,
+      "coverage point 3: a match arm, counted at its OWN line and grouped at its construct's");
 
     // The `.mxcov` header the compiler stamps into a binary, read back through the same constants.
-    var covImage = new byte[MxcovFormat.HeaderSize + 3 * MxcovFormat.CounterSize];
-    MxcovFormat.BuildHeader(id1, 3).CopyTo(covImage, 0);
+    var covImage = new byte[MxcovFormat.HeaderSize + 4 * MxcovFormat.CounterSize];
+    MxcovFormat.BuildHeader(id1, 4).CopyTo(covImage, 0);
     System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
       covImage.AsSpan(MxcovFormat.OffStatus), (ulong)MxcovFormat.StatusCompleted);
     System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
@@ -146,7 +151,7 @@ public static class MxdbgSelfTest {
     Check(cov!.BuildId == id1, "mxcov build-id round-trips");
     // The status store is a WHOLE WORD and must not reach the build-id beside it — the defect this
     // layout was changed to make unrepresentable.
-    Check(cov.RunCompleted && cov.Counters.Count == 3 && cov.Counters[0] == 7,
+    Check(cov.RunCompleted && cov.Counters.Count == 4 && cov.Counters[0] == 7,
       "mxcov status + counters, with the build-id intact beside the status");
 
     // A mismatched build-id is the driver's refusal signal; here just prove the reader surfaces it.

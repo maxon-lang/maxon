@@ -92,14 +92,22 @@ public static class MxdbgFormat {
   // nameOff nameLen locKind locValue typeId scopeStart scopeEnd. locValue is a SIGNED rbp-relative
   // offset for a stack slot (stored as its two's-complement u32); read it back through a cast.
   public const int LocalEntrySize = 28;
-  // codeOffset fileId line col funcNameOff funcNameLen flags. A point's COUNTER INDEX is its record
-  // index, which is what binds this table to the `.mxcov` counter array position-for-position.
+  // codeOffset fileId line col branchLine branchCol funcNameOff funcNameLen flags. A point's COUNTER
+  // INDEX is its record index, which is what binds this table to the `.mxcov` counter array
+  // position-for-position.
+  //
+  // TWO positions, because a branch arm needs both and they are genuinely different. `line`/`col` is
+  // the ARM's own source position — what LINE coverage counts, so `green gives 2` shows its own count
+  // rather than reporting blank. `branchLine`/`branchCol` is the CONSTRUCT's, which is what groups
+  // the arms of one `if` or one `match` into a single branch. Collapsing them (arms recorded at the
+  // construct's position) is what made every `match` arm invisible to the line listing.
+  // Zero for a point that is not an arm.
   //
   // The owning function is named by STRING, not by a funcId into the function table, because an
   // ELIMINATED point's function is not in that table at all (dead-function elimination removed it),
   // and a funcId would then have to be a sentinel that points at some unrelated function. Naming it
   // costs one interned string per function and can never mislabel.
-  public const int CovEntrySize = 28;
+  public const int CovEntrySize = 36;
 
   // Line-entry flag bits.
   public const uint LineFlagStatement = 1 << 0; // a statement boundary (a valid step/breakpoint stop)
@@ -114,6 +122,12 @@ public static class MxdbgFormat {
   // it is the whole reason a coverage report can say "the false arm ran 4 times": the line table has
   // no row for an arm that has no source text, and never can.
   public const uint CovFlagArmImplicit = 1 << 3;
+  // One arm of a user `match`. There is deliberately NO implicit counterpart: an `if` with no `else`
+  // still takes a false edge, so that arm exists and is instrumented, whereas Maxon's `match` is
+  // exhaustive and the fall-through past its last arm is unreachable. Instrumenting that would report
+  // a permanently-untaken arm — a different lie. A flag that would always read the same value is not
+  // a fact, it is the same fact written twice.
+  public const uint CovFlagArmCase = 1 << 5;
   // No code was emitted for this point — the optimizer removed the code it anchored (today: a whole
   // function dead-function elimination dropped). Distinct from a zero counter, which means real code
   // that never ran. Set at emit time by observing which points reached `.text`.

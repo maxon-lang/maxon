@@ -16,7 +16,13 @@ namespace MaxonSharp.Compiler.Ir.Core;
 /// have no code" — which it cannot do if the only route to their file is through a function that is
 /// no longer in the module.
 /// </summary>
-public readonly record struct CoveragePoint(string FunctionName, string FilePath, int Line, int Col, uint Flags);
+/// <param name="Line">The point's OWN source position — the line whose executions it counts.</param>
+/// <param name="BranchPos">
+/// The enclosing branch CONSTRUCT's position for an arm point (the `if` or `match` keyword), which is
+/// what groups the arms of one branch together. Default for a point that is not an arm.
+/// </param>
+public readonly record struct CoveragePoint(
+  string FunctionName, string FilePath, int Line, int Col, SourceSpan BranchPos, uint Flags);
 
 /// <summary>
 /// An emitted machine op that IS a coverage point's counter increment. Both targets implement it, so
@@ -41,8 +47,8 @@ public sealed class CoveragePointTable {
 
   /// Allocate the next counter slot for a source position, returning its index — which the caller
   /// puts into the op that increments it.
-  public int Mint(string functionName, string filePath, int line, int col, uint flags) {
-    _points.Add(new CoveragePoint(functionName, filePath, line, col, flags));
+  public int Mint(string functionName, string filePath, int line, int col, SourceSpan branchPos, uint flags) {
+    _points.Add(new CoveragePoint(functionName, filePath, line, col, branchPos, flags));
     return _points.Count - 1;
   }
 }

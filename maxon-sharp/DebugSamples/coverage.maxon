@@ -1,5 +1,5 @@
 // P6 coverage gate sample. Deterministic by construction: pure integer arithmetic, no stdlib calls,
-// no green threads, and a distinct exit code (12 = 1 + 1 + 10).
+// no green threads, and a distinct exit code (17 = 1 + 1 + 10 + 1 + 4).
 //
 // It exists to put all FOUR line states in one listing, because three of them are easy to confuse:
 //   - `classify`'s header runs 3 times and its `return 10` once — real counts
@@ -8,12 +8,23 @@
 //     different fact from "untested" and must not be reported as if it were
 //   - this comment, the blank lines and every `end` carry no coverage point at all
 //
-// It also puts both arms of two `if`s on the record, INCLUDING the `else` neither one writes. That
-// arm has no source text, so no line table can ever hold a row for it; instrumentation is the only
-// place it can be counted, which is the whole reason this rung mints a point per branch arm.
+// It also puts every BRANCH ARM of two constructs on the record:
+//   - both arms of two `if`s, INCLUDING the `else` neither one writes. That arm has no source text,
+//     so no line table can ever hold a row for it; instrumentation is the only place it can be
+//     counted, which is the whole reason this rung mints a point per branch arm.
+//   - all three arms of a `match`, one of which is never taken. `match` is Maxon's primary dispatch
+//     construct, and before its arms were instrumented a program like this one reported as 100%
+//     covered with "0/0 arms taken" — the worst answer a coverage tool can give, because a green
+//     number gets trusted.
 
 typealias ExitCode = int(0 to 255)
 typealias Small = int(0 to 1000000)
+
+enum Size
+	small
+	medium
+	large
+end 'Size'
 
 function neverCalled(n Small) returns Small
 	let doubled = n + n
@@ -28,6 +39,14 @@ function classify(n Small) returns Small
 	return 1
 end 'classify'
 
+function weigh(s Size) returns Small
+	return match s 'weigh'
+		small gives 1
+		medium gives 4
+		large gives 9
+	end 'weigh'
+end 'weigh'
+
 function main() returns ExitCode
 	var total = 0
 	var i = 0
@@ -36,6 +55,9 @@ function main() returns ExitCode
 		total = total + classify(i)
 		i = i + 1
 	end 'loop'
+
+	total = total + weigh(Size.small)
+	total = total + weigh(Size.medium)
 
 	if total > 1000 'never'
 		total = 0

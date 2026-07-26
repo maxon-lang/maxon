@@ -48,7 +48,8 @@ public sealed class MxdbgReader {
   /// One coverage point. Its COUNTER INDEX is its index in this table — the same number the emitted
   /// increment carries and the same slot of the `.mxcov` counter array.
   public readonly record struct CovPointInfo(
-    uint CodeOffset, string File, uint Line, uint Col, string FunctionName, uint Flags) {
+    uint CodeOffset, string File, uint Line, uint Col, uint BranchLine, uint BranchCol,
+    string FunctionName, uint Flags) {
     /// No code was emitted for this point: the optimizer removed what it anchored. Distinct from a
     /// zero COUNT, which means real code that never ran.
     public bool Eliminated => (Flags & MxdbgFormat.CovFlagEliminated) != 0;
@@ -57,6 +58,10 @@ public sealed class MxdbgReader {
     public bool IsElseArm => (Flags & MxdbgFormat.CovFlagArmElse) != 0;
     /// The `else` the source never wrote — instrumented anyway, which is the whole point.
     public bool IsImplicitArm => (Flags & MxdbgFormat.CovFlagArmImplicit) != 0;
+    /// One arm of a user `match`.
+    public bool IsCaseArm => (Flags & MxdbgFormat.CovFlagArmCase) != 0;
+    /// Any branch arm at all — the points a branch summary is built from.
+    public bool IsBranchArm => IsThenArm || IsElseArm || IsCaseArm;
   }
 
   public MxdbgReader(byte[] bytes) {
@@ -179,8 +184,10 @@ public sealed class MxdbgReader {
       FileName(MxdbgFormat.U32(_b, rec + 4)),
       MxdbgFormat.U32(_b, rec + 8),
       MxdbgFormat.U32(_b, rec + 12),
-      Str(MxdbgFormat.U32(_b, rec + 16), MxdbgFormat.U32(_b, rec + 20)),
-      MxdbgFormat.U32(_b, rec + 24));
+      MxdbgFormat.U32(_b, rec + 16),
+      MxdbgFormat.U32(_b, rec + 20),
+      Str(MxdbgFormat.U32(_b, rec + 24), MxdbgFormat.U32(_b, rec + 28)),
+      MxdbgFormat.U32(_b, rec + 32));
   }
 
   /// The name of the type at <paramref name="typeId"/>, or "" when the id is out of range. Used to

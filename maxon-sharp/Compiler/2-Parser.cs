@@ -7736,14 +7736,58 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// afterwards, so a per-file table would hand out the same indices to different files). Files are
   /// parsed sequentially in source order, so the numbering is deterministic.
   /// </summary>
-  private void MintCoveragePoint(IrBlock<MaxonOp> block, int at, uint flags, int line, int col) {
+  private void MintCoveragePoint(IrBlock<MaxonOp> block, int at, uint flags, int line, int col,
+      SourceSpan branchPos = default) {
     // A point OUTLIVES its function (dead-function elimination can remove the function while the
     // report must still name its file), so the file is required here rather than resolved later —
     // and a missing one is a loud failure, not an empty string that becomes a wrong file id.
     var filePath = _sourceFilePath
       ?? throw new InvalidOperationException("coverage point minted for a parse with no source file");
-    var id = seedModule!.CoveragePoints.Mint(_currentFunction!.Name, filePath, line, col, flags);
+    var id = seedModule!.CoveragePoints.Mint(_currentFunction!.Name, filePath, line, col, branchPos, flags);
     block.Operations.Insert(at, new MaxonCovPointOp(id));
+  }
+
+  /// <summary>
+  /// The `match` constructs currently being parsed, innermost last.
+  ///
+  /// An arm's coverage point needs TWO positions — its own, so the line listing counts the arm's own
+  /// line, and its construct's, so the arms of one `match` group into one branch. The six places an
+  /// arm body becomes current are spread across three parsers (statement match, union match, match
+  /// expression) and the two `default throws`/`default panic` helpers, several of which already take
+  /// eight parameters. A stack carries the construct's position to all of them without a ninth, and
+  /// nests correctly for a `match` inside a `match` arm.
+  /// </summary>
+  private readonly List<SourceSpan> _matchPositions = [];
+
+  /// Make <paramref name="matchPos"/> the enclosing construct for the rest of the calling method.
+  /// A `using` rather than a bare push/pop pair so a parse error inside an arm cannot leave the stack
+  /// describing a construct nobody is parsing any more.
+  private MatchScope EnterMatch(SourceSpan matchPos) {
+    _matchPositions.Add(matchPos);
+    return new MatchScope(this);
+  }
+
+  private readonly struct MatchScope(Parser parser) : IDisposable {
+    public void Dispose() => parser._matchPositions.RemoveAt(parser._matchPositions.Count - 1);
+  }
+
+  /// <summary>
+  /// Mint the coverage point for one `match` arm, at the head of the block its body is about to be
+  /// parsed into. Called from every site that makes an arm body current — including `default throws`
+  /// and `default panic`, whose arms the user wrote too and whose counts answer "was the default ever
+  /// reached".
+  ///
+  /// A `match` arm is a BRANCH ARM, not a plain statement: it appears in the branch summary beside
+  /// `then`/`else`. Reporting arms as ordinary lines would leave a two-way `match` summarised as
+  /// "0/0 arms taken", which is the same falsehood in a quieter voice.
+  /// </summary>
+  private void MintMatchArmPoint(IrBlock<MaxonOp> armBody, int armLine, int armCol) {
+    if (!CoverageActive) return;
+    if (_matchPositions.Count == 0)
+      throw new InvalidOperationException("match arm coverage point minted outside any match construct");
+
+    MintCoveragePoint(armBody, 0, Debug.MxdbgFormat.CovFlagArmCase, armLine, armCol,
+      _matchPositions[^1]);
   }
 
   private void ParseStatement() {
@@ -12075,8 +12119,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // one to decref an error payload even when the program wrote no `else`, and coverage must not
     // report that arm as text the author chose (see InstrumentIfArms).
     bool elseWrittenInSource = false;
+    // The false arm's OWN position, for the line the report counts it on. An `else` sits on the same
+    // line as the `end` that closes the then-arm, so this is a line the listing would otherwise show
+    // as carrying no code at all.
+    var elsePos = ifPos;
     if (Check(TokenType.Else)) {
       elseWrittenInSource = true;
+      elsePos = new SourceSpan(Current().Line, Current().Column);
       Advance(); // consume 'else'
       if (Check(TokenType.If)) {
         // else-if chain: create a synthetic block and parse the nested if into it
@@ -12106,7 +12155,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, thenInnerScope, elseLabel, elseBlock, elseEndBlock, elseInnerScope, ifPos, elseWrittenInSource);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, thenInnerScope, elseLabel, elseBlock, elseEndBlock, elseInnerScope, ifPos, elseWrittenInSource, elsePos);
   }
 
   /// <summary>
@@ -12115,7 +12164,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// thenEndBlock/elseEndBlock are the final blocks after parsing each branch body
   /// (may differ from initial blocks due to nested if/else creating merge blocks).
   /// </summary>
-  private void EmitConditionalBranch(IrBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, IrBlock<MaxonOp>? elseBlock, IrBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope, SourceSpan ifPos, bool elseWrittenInSource) {
+  private void EmitConditionalBranch(IrBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, IrBlock<MaxonOp>? elseBlock, IrBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope, SourceSpan ifPos, bool elseWrittenInSource, SourceSpan elsePos) {
     // Use the end blocks for merge decisions — the end block is where control flow
     // actually is after parsing each branch (may be a merge block from nested if/else)
     bool thenTerminated = thenEndBlock == null || BlockEndsWithTerminator(thenEndBlock);
@@ -12140,17 +12189,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel,
-        InstrumentIfArms(thenLabel, thenBlock, elseBlock, elseLabel ?? mergeLabel, ifPos, elseWrittenInSource)));
+        InstrumentIfArms(thenLabel, thenBlock, elseBlock, elseLabel ?? mergeLabel, ifPos, elseWrittenInSource, elsePos)));
       _currentBlock = mergeBlock;
     } else if (elseLabel != null) {
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel,
-        InstrumentIfArms(thenLabel, thenBlock, elseBlock, elseLabel, ifPos, elseWrittenInSource)));
+        InstrumentIfArms(thenLabel, thenBlock, elseBlock, elseLabel, ifPos, elseWrittenInSource, elsePos)));
       _currentBlock = null;
     } else {
       var afterLabel = $"{thenLabel}.after";
       var afterBlock = _currentFunction!.Body.AddBlock(afterLabel);
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel,
-        InstrumentIfArms(thenLabel, thenBlock, elseBlock, afterLabel, ifPos, elseWrittenInSource)));
+        InstrumentIfArms(thenLabel, thenBlock, elseBlock, afterLabel, ifPos, elseWrittenInSource, elsePos)));
       _currentBlock = afterBlock;
     }
   }
@@ -12172,10 +12221,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// be instrumented in one form and silently not in another.
   /// </summary>
   private string InstrumentIfArms(string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? elseBlock,
-      string elseTarget, SourceSpan ifPos, bool elseWrittenInSource) {
+      string elseTarget, SourceSpan ifPos, bool elseWrittenInSource, SourceSpan elsePos) {
     if (!CoverageActive) return elseTarget;
 
-    MintCoveragePoint(thenBlock, 0, Debug.MxdbgFormat.CovFlagArmThen, ifPos.Line, ifPos.Col);
+    // Maxon writes no `then` keyword, so the true arm begins at the `if` itself and shares its line.
+    MintCoveragePoint(thenBlock, 0, Debug.MxdbgFormat.CovFlagArmThen, ifPos.Line, ifPos.Col, ifPos);
 
     // IMPLICIT means "the source did not write this arm", not "no block exists for it". `if try`
     // mints a cleanup block for the error path even when the program wrote no `else`, and reporting
@@ -12184,13 +12234,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       | (elseWrittenInSource ? 0 : Debug.MxdbgFormat.CovFlagArmImplicit);
 
     if (elseBlock != null) {
-      MintCoveragePoint(elseBlock, 0, elseFlags, ifPos.Line, ifPos.Col);
+      MintCoveragePoint(elseBlock, 0, elseFlags, elsePos.Line, elsePos.Col, ifPos);
       return elseTarget;
     }
 
     var covElseLabel = $"{thenLabel}.covelse";
     var covElseBlock = _currentFunction!.Body.AddBlock(covElseLabel);
-    MintCoveragePoint(covElseBlock, 0, elseFlags, ifPos.Line, ifPos.Col);
+    MintCoveragePoint(covElseBlock, 0, elseFlags, elsePos.Line, elsePos.Col, ifPos);
     covElseBlock.AddOp(new MaxonBrOp(elseTarget));
     return covElseLabel;
   }
@@ -12291,8 +12341,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // See ParseIf: the error-cleanup block below is NOT an authored `else`, and coverage must not
     // report it as one.
     bool ifTryElseWrittenInSource = false;
+    var ifTryElsePos = ifPos;
     if (Check(TokenType.Else)) {
       ifTryElseWrittenInSource = true;
+      ifTryElsePos = new SourceSpan(Current().Line, Current().Column);
       Advance(); // consume 'else'
 
       if (Check(TokenType.If)) {
@@ -12354,7 +12406,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       elseEndBlock = _currentBlock;
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, ifTryThenInnerScope, elseLabel, elseBlock, elseEndBlock, ifTryElseInnerScope, ifPos, ifTryElseWrittenInSource);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, ifTryThenInnerScope, elseLabel, elseBlock, elseEndBlock, ifTryElseInnerScope, ifPos, ifTryElseWrittenInSource, ifTryElsePos);
   }
 
   private void ParseWhile() {
@@ -14302,6 +14354,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     cmpBlocks.Add(null);
     var throwBlock = _currentFunction!.Body.AddBlock(throwLabel);
     _currentBlock = throwBlock;
+    MintMatchArmPoint(throwBlock, defaultToken.Line, defaultToken.Column);
     EmitThrowsArmBody(defaultToken);
     caseBlocks.Add(throwBlock);
     caseIsDefault.Add(true);
@@ -14342,6 +14395,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     cmpBlocks.Add(null);
     var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
     _currentBlock = panicBlock;
+    MintMatchArmPoint(panicBlock, defaultToken.Line, defaultToken.Column);
     EmitPanicArmBody(defaultToken);
     caseBlocks.Add(panicBlock);
     caseIsDefault.Add(true);
@@ -14620,6 +14674,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private void ParseMatch() {
+    // Every arm of this match is reported against the `match` keyword's own position, so the arms of
+    // one construct group into one branch. ParseUnionMatch, reached below, deliberately does not push
+    // its own: it parses the arms of THIS match.
+    var matchToken = Current();
+    using var matchScope = EnterMatch(new SourceSpan(matchToken.Line, matchToken.Column));
     Advance(); // consume 'match'
 
     var scrutineeExpr = ParseExpression();
@@ -14767,6 +14826,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       _currentBlock = caseBodyBlock;
+      MintMatchArmPoint(caseBodyBlock, caseLine, caseCol);
       var caseOuterScope = _variables.SnapshotKeys();
       PushScope();
 
@@ -15122,6 +15182,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       _currentBlock = caseBodyBlock;
+      MintMatchArmPoint(caseBodyBlock, caseLine, caseCol);
       var caseOuterScope = _variables.SnapshotKeys();
       PushScope();
 
@@ -15394,6 +15455,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   private ExprResult.Direct ParseMatchExpression() {
     var matchToken = Advance(); // consume 'match'; anchors the arm-type-agreement diagnostic (E3005)
+    using var matchScope = EnterMatch(new SourceSpan(matchToken.Line, matchToken.Column));
 
     var scrutineeExpr = ParseExpression();
 
@@ -15532,6 +15594,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         armPatterns[caseIndex] = patterns;
 
         _currentBlock = armBodyBlock;
+        MintMatchArmPoint(armBodyBlock, caseLine, caseCol);
         if (armPanics) {
           EmitPanicArmBody(armToken);
         } else {
@@ -15573,6 +15636,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       _currentBlock = caseBodyBlock;
+      MintMatchArmPoint(caseBodyBlock, caseLine, caseCol);
 
       // Per-arm scope so payload bindings don't persist across arms. Without
       // this, two arms that bind the same name to different-kinded payloads
