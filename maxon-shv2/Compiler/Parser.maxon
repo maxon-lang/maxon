@@ -6945,13 +6945,25 @@ export type Parser
 		end 'r'
 	end 'rangedReturnAliasName'
 
-	// The ranged-alias name a `named` type denotes, else EMPTY. Shared by the return path above
-	// and the `as`-cast path so both read a name's alias-ness through one door.
-	function rangedAliasNameOfType(t MaxonType) returns ByteArray
+	// ⭐ **THE ONE PLACE A `MaxonType` IS ASKED WHETHER IT DENOTES A RANGED ALIAS.** Every reader of that
+	// question goes through here — the return path above, and the `as`-cast path's TWO readers (which
+	// alias a narrowing check names, and what that alias's range says about the shift fill).
+	//
+	// It hands back the ALIAS rather than its name so a caller that needs both answers pays for one
+	// lookup: `signatures.aliasOf` is a whole-program registry probe that CONSTRUCTS its `DeclaredAlias`,
+	// so a second call is a second allocation and not a second field read. `applyCast` is that caller.
+	function declaredAliasOfType(t MaxonType) returns DeclaredAlias
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
-			return EmptySourceText
+			return DeclaredAlias.undeclared
 		end 'notNamed'
-		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(t)), readerFilePath: self.filePath) 'a'
+
+		return self.signatures.aliasOf(self.internedName(typeNameIdOf(t)), readerFilePath: self.filePath)
+	end 'declaredAliasOfType'
+
+	// The ranged-alias name a `named` type denotes, else EMPTY — the RETURN path's spelling of the
+	// question above, which stores a name rather than an alias (`commitRangeChecks`).
+	function rangedAliasNameOfType(t MaxonType) returns ByteArray
+		return match self.declaredAliasOfType(t) 'a'
 			declared(alias) gives alias.name
 			undeclared gives EmptySourceText
 		end 'a'
@@ -13587,7 +13599,7 @@ export type Parser
 	// forming a difference that would overflow `i64` — see `spanExceedsCap`.
 	function planDispatchTable(from ElementCount, to ElementCount, intervals DispatchIntervalArray) returns DispatchTablePlan
 		let bias = (try intervals.get(from) otherwise panic("planDispatchTable: intervals.get OOB at from {from}")).lo
-		let maxHi = (try intervals.get(to - 1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
+		let maxHi = (try intervals.get(to -1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
 
 		// Reject on the covered WIDTH exceeding the cap WITHOUT forming `maxHi - bias`, which overflows i64
 		// when the span crosses far into both halves (e.g. `i64.min`..`i64.max`). `maxHi >= bias` always
@@ -13603,7 +13615,7 @@ export type Parser
 		// The table must earn its slots against the compares it removes, not merely against the values it
 		// covers (`MaxTableSlotsPerInterval`). `to - from` is the interval count; the product fits i64
 		// (span <= 4096, the count is bounded by the arm count).
-		if span > ((to - from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
+		if span > ((to -from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
 			return DispatchTablePlan.notTable()
 		end 'sparse'
 
@@ -14802,13 +14814,30 @@ export type Parser
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
-			self.recordCastSite(narrowed, targetType: targetType, asTok: asTok)
+			self.recordCastSite(narrowed, targetAlias: self.declaredAliasOfType(targetType), asTok: asTok)
 			return narrowed
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
 			return self.promoteToFloat(value, opTok: asTok)
 		end 'intToFloat'
+
+		// The target's ranged-alias declaration, resolved ONCE. Both questions below need it — WHICH
+		// alias a narrowing check names, and WHAT ITS RANGE says about the shift fill — and each used to
+		// re-ask `signatures.aliasOf` for itself.
+		let targetAlias = self.declaredAliasOfType(targetType)
+
+		// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE MINTED RESULT, AND THAT IS A CORRECTNESS
+		// REQUIREMENT** — which is why it is recorded HERE, once, above a branch whose two arms both
+		// anchor on the same value. The source and the mint hold the same number by construction, so
+		// either would guard correctly at RUN time; but `InsertRangeChecks` decides COMPILE-TIME E3005
+		// versus a runtime guard by looking the site's value up in a map built from Std `const` ops (plus
+		// `neg` of one). A constant that arrived through the mint's `add` is in neither, so anchoring on
+		// the result would silently downgrade `3 as Big` from a diagnostic to a guard that fires at run
+		// time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is the case that says
+		// so. The float→int cast above anchors on its RESULT for the opposite reason, stated there:
+		// `trunc` changes the number, so the source is not the value being checked.
+		self.recordCastSite(value, targetAlias: targetAlias, asTok: asTok)
 
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
@@ -14817,11 +14846,10 @@ export type Parser
 		// say, and each has its own predicate rather than one blurred test — a nominal IDENTITY (P1.6-C)
 		// and a SHIFT FILL — because they are answered from different registries and neither implies the
 		// other. Everything else is the representational no-op below, with no new value and no new op.
-		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetType: targetType) 'retaggingCast'
+		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) 'retaggingCast'
 			return self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok)
 		end 'retaggingCast'
 
-		self.recordCastSite(value, targetType: targetType, asTok: asTok)
 		return value
 	end 'applyCast'
 
@@ -14918,20 +14946,20 @@ export type Parser
 	// `recordCastSite` records, so the premise is enforced rather than hoped for. That is what keeps
 	// `x as Byte`, `x as Age` and `x as U32` the byte-for-byte no-ops they have always been while
 	// `x as Word` is not.
-	function castChangesTheShiftFill(value ValueId, targetType MaxonType) returns bool
-		if maxonTypeTag(targetType) != ValueTypeTag.named 'notNamed'
-			return false
-		end 'notNamed'
-
-		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(targetType)), readerFilePath: self.filePath) 'a'
+	//
+	// It is handed the ALREADY-RESOLVED alias (`declaredAliasOfType`) rather than the target type: the
+	// narrowing-check site needs the identical resolution, and `applyCast` is where the two meet.
+	function castChangesTheShiftFill(value ValueId, targetAlias DeclaredAlias) returns bool
+		return match targetAlias 'a'
 			declared(alias) gives self.aliasChangesTheShiftFill(value, alias: alias)
+			// Not a declared ranged alias — `ExitCode`, a bare primitive, a struct, a name nothing
+			// declares. Nothing the tag column would read differently, so the cast stays the no-op.
 			undeclared gives false
 		end 'a'
 	end 'castChangesTheShiftFill'
 
-	// The half of the question above that is about the ALIAS. Split out so the registry lookup and the
-	// range reasoning are not one expression, and because the two arms below read as the two sentences
-	// they are.
+	// The half of the question above that is about the ALIAS. Split out because the two arms below read
+	// as the two sentences they are.
 	function aliasChangesTheShiftFill(value ValueId, alias RangedTypeAlias) returns bool
 		if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
 			return false
@@ -14960,14 +14988,9 @@ export type Parser
 	// plain target, so a per-instance Idx decays to the numeric it is). `foldConstOperands` folds the op
 	// to a single `binOpImm add 0`.
 	//
-	// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE RESULT, AND THAT IS A CORRECTNESS REQUIREMENT.**
-	// The two hold the same number by construction, so either would guard correctly at run time — but
-	// `InsertRangeChecks` decides COMPILE-TIME E3005 versus a runtime guard by looking the site's value up
-	// in a map built from Std `const` ops (plus `neg` of one). A constant that arrived through an `add`
-	// is in neither, so anchoring on the result would silently downgrade `3 as Big` from a diagnostic to a
-	// guard that fires at run time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is
-	// the case that says so. The float→int cast anchors on its RESULT for the opposite reason, stated
-	// there: `trunc` changes the number, so the source is not the value being checked.
+	// ⚠ **IT RECORDS NO RANGE-CHECK SITE, AND THAT IS DELIBERATE.** The site is the SOURCE, not this
+	// mint, so `applyCast` records it above the branch — see the ⚠ there for why anchoring on the result
+	// would downgrade `3 as Big` from an E3005 to a runtime guard.
 	//
 	// ⚠ **THE PARSER'S CONSTANT VIEW CROSSES THE MINT**, and that is not an optimization either. `x + 0`
 	// is `x`, so a constant source names a constant result — and the parser's const table is what turns a
@@ -14980,7 +15003,6 @@ export type Parser
 	// low/high) is inert at this rung — every inner alias is `int(0 to u64.max)` — and its diagnostic form is
 	// deferred with the first narrower inner range.
 	function emitRetaggedCastValue(value ValueId, targetType MaxonType, asTok Token) returns ValueId
-		self.recordCastSite(value, targetType: targetType, asTok: asTok)
 		let result = self.mintValueOfType(targetType)
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(asTok))
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: SourceRange.ofToken(asTok))
@@ -14992,16 +15014,20 @@ export type Parser
 		return result
 	end 'emitRetaggedCastValue'
 
-	// Record a narrowing-check site for `value` when `targetType` is a ranged alias, integer or float
-	// (P1.9, and #19 for the float half). `block` is the CAST'S evaluation block (`self.currentBlock`),
-	// so the guard runs on the path the cast is on — an unselected ternary arm / if-branch does not fire
-	// it. A non-ranged target (`ExitCode`, a bare primitive) records nothing.
-	function recordCastSite(value ValueId, targetType MaxonType, asTok Token)
-		let aliasName = self.rangedAliasNameOfType(targetType)
-		if aliasName.isEmpty() 'notRanged'
-			return
-		end 'notRanged'
-		self.rangeCheckCastSites.push(RangeCheckCastSite.create(value, aliasName: aliasName, block: self.currentBlock.id, line: asTok.line, column: asTok.column))
+	// Record a narrowing-check site for `value` when the cast's target is a ranged alias, integer or
+	// float (P1.9, and #19 for the float half). `block` is the CAST'S evaluation block
+	// (`self.currentBlock`), so the guard runs on the path the cast is on — an unselected ternary arm /
+	// if-branch does not fire it.
+	//
+	// It takes the RESOLVED alias rather than the target type because every caller already holds one:
+	// `applyCast`'s shift-fill predicate asks the identical question of the identical type, and
+	// `signatures.aliasOf` allocates per call. `undeclared` — `ExitCode`, a bare primitive, a name
+	// nothing declares — records nothing.
+	function recordCastSite(value ValueId, targetAlias DeclaredAlias, asTok Token)
+		match targetAlias 'a'
+			declared(alias) then self.rangeCheckCastSites.push(RangeCheckCastSite.create(value, aliasName: alias.name, block: self.currentBlock.id, line: asTok.line, column: asTok.column))
+			undeclared then break 'a'
+		end 'a'
 	end 'recordCastSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
@@ -15992,17 +16018,20 @@ export type Parser
 
 	// Load an 8-byte field of a String record — `buffer@0`, `length@8`. Integer-tagged: the values are a raw
 	// pointer and a byte count. The `rec` addr is a String pointer, read by the Std tier as an i64.
+	//
+	// It routes through `emitIndirectLoad` rather than emitting the op itself, exactly as `emitFieldLoad`
+	// does: a String record is a BOX like any other, and its declared type and its storage type coincide
+	// at `integer` only because a raw pointer and a byte count are both machine words. That is a fact
+	// about this box, and it belongs here — not a reason to own a second copy of the emit.
 	function emitLoadStringField(rec ValueId, offset ByteOffset, range SourceRange) returns ValueId
-		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: rec, offset: offset, valueType: MaxonType.integer), range: range)
-		return result
+		return self.emitIndirectLoad(MaxonType.integer, box: rec, offset: offset, storageType: MaxonType.integer, range: range)
 	end 'emitLoadStringField'
 
 	// Store an 8-byte field of a String record — the mirror of `emitLoadStringField`, the one place
 	// `emitStringInterp` writes the fused record's six fields (five explicitly; `isAscii@40` rides the
 	// slab's zeroing).
 	function emitStoreStringField(rec ValueId, offset ByteOffset, value ValueId, range SourceRange)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(rec, offset: offset, value: value, valueType: MaxonType.integer), range: range)
+		self.emitIndirectStore(rec, offset: offset, value: value, storageType: MaxonType.integer, range: range)
 	end 'emitStoreStringField'
 
 	// `true` / `false`. A bool is an i1 carrying 1 or 0 — the same `literal` op an
@@ -19645,12 +19674,19 @@ export type Parser
 		return result
 	end 'emitFieldLoad'
 
-	// ⭐ **THE ONE `loadIndirect` EMIT.** A field read (`p.x`), a union tag load, a union payload read
-	// and a capturing closure's env-slot read (`emitCaptureRead`) all reach here — one op shape, so
-	// the value's SOURCE type (`declared`, minted onto the tag column so a nested `match` or the shift
-	// rule reads what the source said) and its STORAGE type (the concrete primitive the op carries,
-	// because `maxonTypeToStdType` panics on a `named`) are split in exactly one place. See
-	// `emitFieldLoad`'s header for why the two differ.
+	// ⭐ **THE ONE `loadIndirect` EMIT** — and it now IS the one, which it was not when it first claimed
+	// to be. A field read (`p.x`), a union tag load, a union payload read, a capturing closure's
+	// env-slot read (`emitCaptureRead`), a String record's field (`emitLoadStringField`) and a global's
+	// slot (`emitGlobalLoad`) all reach here. One op shape, so the value's SOURCE type (`declared`,
+	// minted onto the tag column so a nested `match` or the shift rule reads what the source said) and
+	// its STORAGE type (the concrete primitive the op carries, because `maxonTypeToStdType` panics on a
+	// `named`) are split in exactly one place. See `emitFieldLoad`'s header for why the two differ.
+	//
+	// ⚠ **A CALLER THAT PASSES THE SAME TYPE TWICE IS STILL A CALLER, NOT AN EXCEPTION.** The String
+	// record and the global do exactly that, each for its own stated reason — and each used to own a
+	// raw `artifact.emitOp` instead, which is what made the claim above false. The hazard is not the
+	// duplicated line; it is that the split between declared and storage would then have had two more
+	// homes free to disagree with this one, with no compile error to say so.
 	function emitIndirectLoad(declared MaxonType, box ValueId, offset ByteOffset, storageType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintValueOfType(declared)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: offset, valueType: storageType), range: range)
@@ -19671,11 +19707,13 @@ export type Parser
 		self.emitIndirectStore(box, offset: layout.offsetOfField(index), value: value, storageType: self.fieldStorageType(declared), range: range)
 	end 'emitFieldStore'
 
-	// ⭐ **THE ONE `storeIndirect` EMIT.** A field write, a union tag store, a union payload store, a
-	// union's unused-slot zero-fill and a capturing closure's env-slot fill (`buildClosureEnv`) all
-	// reach here — one op shape, so the offset-and-width derivation a box's stores must agree on lives
-	// in one place (a literal storing `y` at one width and an assignment storing it at another would
-	// corrupt the box silently — see `emitFieldStore`).
+	// ⭐ **THE ONE `storeIndirect` EMIT**, the mirror of `emitIndirectLoad` above and true on the same
+	// terms. A field write, a union tag store, a union payload store, a union's unused-slot zero-fill, a
+	// capturing closure's env-slot fill (`buildClosureEnv`), a String record's field
+	// (`emitStoreStringField`) and a global's slot (`emitGlobalStore`) all reach here — one op shape, so
+	// the offset-and-width derivation a box's stores must agree on lives in one place (a literal storing
+	// `y` at one width and an assignment storing it at another would corrupt the box silently — see
+	// `emitFieldStore`).
 	function emitIndirectStore(box ValueId, offset ByteOffset, value ValueId, storageType MaxonType, range SourceRange)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: offset, value: value, valueType: storageType), range: range)
 	end 'emitIndirectStore'
@@ -20486,18 +20524,23 @@ export type Parser
 	// the `.data` slot keeps owning it, so the value is minted WITHOUT `markValueOwnsHeap` and nothing
 	// drops it. That is not an omission — a scope-exit drop of a borrowed global would free the program's
 	// only copy while the slot still points at it, and the cleanup after `main` would then double-free.
+	//
+	// ⚠ **THE SLOT'S DECLARED AND STORAGE TYPES COINCIDE, AND THAT IS A PROPERTY OF A GLOBAL, NOT A
+	// SHORTCUT.** Elsewhere the two differ and `fieldStorageType` bridges them (a `named` ranged alias
+	// has no width of its own); a global's type is INFERRED FROM ITS INITIALIZER and so is never `named`
+	// — `ProgramSignatures.mixValueTag` panics on a `named`-tagged top-level binding for exactly this
+	// reason, and `var g = 5 as Word` collapses to `integer` before it gets here. So `valueType` is
+	// already concrete and is passed as both.
 	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 		let addr = self.emitGlobalAddr(label, range: range)
-		let result = self.mintValueOfType(valueType)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: addr, offset: GlobalSlotOffset, valueType: valueType), range: range)
-		return result
+		return self.emitIndirectLoad(valueType, box: addr, offset: GlobalSlotOffset, storageType: valueType, range: range)
 	end 'emitGlobalLoad'
 
 	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
 	// `emitGlobalLoad`. It defines no value: a store is a statement.
 	function emitGlobalStore(label ByteArray, valueType MaxonType, value ValueId, range SourceRange)
 		let addr = self.emitGlobalAddr(label, range: range)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(addr, offset: GlobalSlotOffset, value: value, valueType: valueType), range: range)
+		self.emitIndirectStore(addr, offset: GlobalSlotOffset, value: value, storageType: valueType, range: range)
 	end 'emitGlobalStore'
 
 	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed
