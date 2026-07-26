@@ -133,7 +133,11 @@ end 'loadProject'
 // under the C# runtime's refcount path (a NULL incref on the rethrow), whereas the
 // pipeline's own fresh throw of the same arm propagates cleanly.
 export function compileToCodeResult(project Project) returns CodeResult throws CompileError
-	let module = try queryAllModule(project)
+	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module (P1.7 slice 2a). It is the
+	// memoized `queryAllModule` result and mutating it in place is the established discipline here —
+	// `resolveTypes` already rewrites its signatures — which is exactly why `verifyWarmRebuild` compiles
+	// each of its probes into its OWN fresh `Project` (see that file's mutate-the-memo header).
+	var module = try queryAllModule(project)
 
 	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81) — HERE, before the pipeline.** Every
 	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
@@ -211,12 +215,26 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// identical derivation. USER functions are never in it, so nothing about a stdlib-free program
 	// changes. See StdlibSource for why the reachability is exact here (a stdlib function is reached
 	// only by a direct call or a taken address, never by a witness or `.rdata` edge).
+	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
+	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
+	// module, so everything below this line treats them as ordinary program code: `scanRuntimeUsage` sees
+	// their `__str_clone`/`__str_decref`/`__arr_decref` calls and installs the runtime floor they need,
+	// `declaredGlobals` (below) reserves the pointer slots they write, and the pipeline lowers them through
+	// the SAME `lowerMaxonToStd` that turns a `stringLiteral` op into an rdata record and a
+	// `byteStringLiteral` into an owned `Array`. Appending them after any of those would need a second copy
+	// of whichever one it skipped.
+	//
+	// It answers whether the program has any managed global at all, which is the single bit the entry stubs
+	// gate their two calls on. A program with none builds nothing and is byte-identical to before this rung.
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: signatures.managedGlobals())
+
 	project.stdlibFacts = try deriveStdlibFacts(project, module: module)
 	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
 	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
 	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable)
+	usage.usesManagedGlobals = usesManagedGlobals
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that

@@ -347,6 +347,16 @@ export type RuntimeUsage
 	// build `__mm_retain`; a program that never co-owns a borrowed aggregate keeps it out. Set alongside
 	// `usesHeap` (a retain is on a `__mm_alloc`'d box).
 	export var usesRetain as bool
+	// ⭐ The program declares at least one MANAGED top-level `var` (P1.7 slice 2a), so it carries
+	// `__module_init` + `__maxon_global_cleanup` and every entry stub calls them around `main`. Set NOT by
+	// this Maxon-module scan but by `installManagedGlobalInit`, which is where the decision is made — the
+	// same discipline the leak/GT gates follow (see `BackendDispatch.buildBackend`'s header): an entry stub
+	// asking the module "is `__module_init` still there?" would be asking a question dead-function
+	// elimination can change the answer to, where "was it installed?" is fixed. The RUNTIME floor those two
+	// functions need (`__mm_alloc`, `__str_clone`, `__str_decref`, `__arr_decref`) rides the ordinary bits:
+	// they are appended to the Maxon module BEFORE `scanRuntimeUsage` walks it, so their calls are seen
+	// exactly as user code's are.
+	export var usesManagedGlobals as bool
 	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
 	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
@@ -383,7 +393,7 @@ export type RuntimeUsage
 	export var usesWallClock as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false}
 	end 'create'
 end 'RuntimeUsage'
 

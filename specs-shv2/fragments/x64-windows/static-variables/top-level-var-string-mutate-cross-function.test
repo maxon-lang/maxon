@@ -1,0 +1,52 @@
+// Test: top-level-var-string-mutate-cross-function
+var msg = "hi"
+
+function bump()
+	msg.append("!")
+end 'bump'
+
+function main() returns ExitCode
+	bump()
+	bump()
+	print(msg)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_msg@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_msg
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.callDirect __str_append
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect bump
+    x64.callDirect bump
+    x64.leaRegGlobal rax, __data_msg
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __print_string
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

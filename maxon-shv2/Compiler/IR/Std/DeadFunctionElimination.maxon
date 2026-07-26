@@ -98,10 +98,14 @@ end 'indexFunctionsByName'
 //    `prependLinuxEntryStub`, arm64's hand-assembled chunk, wasm's synthesized `$run`) is built AFTER
 //    this pass, at the Target tier, so its call is invisible here.
 //
-// 2. **The two functions a hand-assembled Target-tier CHUNK calls by name.** Chunks are raw bytes with
-//    `CallFixup`s resolved at concat, built in the encode phase — after this pass — so their edges
-//    likewise cannot be walked. There are exactly two, and they were found by enumerating every
-//    `targetName:` in the chunk builders:
+// 2. **The functions an ENTRY STUB or a hand-assembled Target-tier CHUNK calls by name.** Both are built
+//    after this pass — the stubs in `augmentWithRuntime`/`buildWasmCoreModule`, the chunks as raw bytes
+//    with `CallFixup`s resolved at concat — so their edges likewise cannot be walked. They were found by
+//    enumerating every `targetName:`/`callDirect` in the stub and chunk builders:
+//      * `__module_init` and `__maxon_global_cleanup` — the managed-global initialization and release the
+//        entry stub brackets `main` with (P1.7 slice 2a, see `ModuleInit`). Nothing in the module calls
+//        either, and they are what makes a managed global's `.data` slot non-null and its record freed —
+//        so pruning one would turn a leak-gated spec into a null-pointer store or an exit-101 leak.
 //      * `__mm_leak_check` — both entry stubs' leak gate (`appendLeakGate`, `Arm64Runtime:103`). Nothing
 //        in the module CALLS it, so it survives only by being rooted here. ⭐ Its absence is LOUD on
 //        every backend, and that is a property worth keeping deliberately: each gate emits its call from
@@ -126,6 +130,8 @@ end 'indexFunctionsByName'
 //    the only correct answer: the slot survives, so its target must be there to fill it.
 function seedRoots(globalData GlobalDataTable, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray)
 	markLiveFunction(UserEntryName.toByteArray(), byName: byName, reached: reached, worklist: worklist)
+	markLiveFunction(ModuleInitName, byName: byName, reached: reached, worklist: worklist)
+	markLiveFunction(GlobalCleanupName, byName: byName, reached: reached, worklist: worklist)
 	markLiveFunction(MmLeakCheckName, byName: byName, reached: reached, worklist: worklist)
 	markLiveFunction(GtEnqueueName, byName: byName, reached: reached, worklist: worklist)
 

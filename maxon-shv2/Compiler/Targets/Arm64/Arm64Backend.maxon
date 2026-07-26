@@ -1244,11 +1244,13 @@ end 'emitArm64FunctionChunk'
 // so it LEADS `.text` and `LC_MAIN.entryoff = 0` — the opposite placement from x64's
 // `appendX64RuntimeChunks`, whose appended runtime is the TRAILING panic handler (x64's `mrt_start` is
 // a module function already laid out first). The panic/software runtime GROWS back here at its
-// milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core), and
+// milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core),
+// `initGlobals` its managed-global init/release bracket (P1.7 slice 2a — false for a program with no
+// managed top-level `var`), and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, os Os)
-	chunks.push(buildArm64EntryStubChunk(leakCheck, os: os))
+export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, os Os)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, os: os))
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -1473,7 +1475,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// is 0, exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime`
 	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
 	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
-	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, os: target.os)
+	appendArm64RuntimeChunks(chunks, leakCheck: usage.usesHeap, initGlobals: usage.usesManagedGlobals, os: target.os)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
 	end 'eachFunc'

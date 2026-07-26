@@ -115,7 +115,7 @@ end 'buildBackend'
 // from the module — see `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -149,7 +149,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap)
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -198,10 +198,14 @@ end 'buildX64Backend'
 //
 // `checkLeaks` is `RuntimeUsage.usesHeap` — whether the MM runtime (and with it `__mm_leak_check`) was
 // installed. A program with no allocator cannot leak, so it carries no gate.
-export function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool)
+//
+// `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
+// `var`, and so carries `__module_init`/`__maxon_global_cleanup` (P1.7 slice 2a). A program with none
+// carries neither call and its emitted stub is byte-identical to before that rung.
+export function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool)
 	match target.os 'os'
-		windows then prependEntryStub(module, checkLeaks: checkLeaks)
-		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks)
+		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals)
+		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
@@ -214,7 +218,9 @@ end 'augmentWithRuntime'
 //   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
 //   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
 //   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
+//   [call __module_init]    fill every managed global's .data slot (P1.7 slice 2a)
 //   call main          main returns its ExitCode in R8 (custom ABI)
+//   [global cleanup]   mov rcx, r8 ; call __maxon_global_cleanup  -> the same code back in R8
 //   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
 //   call [ExitProcess] terminate the process with that code
 //   add rsp, 0x20      release the frame — dead, but the mirror must be total
@@ -228,7 +234,7 @@ end 'augmentWithRuntime'
 // at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
 // one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
 // saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
-function prependEntryStub(module TargetModule, checkLeaks bool)
+function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -236,7 +242,9 @@ function prependEntryStub(module TargetModule, checkLeaks bool)
 	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 
 	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
 	// reason to be right at all. `main` has returned its ExitCode in R8; `__mm_leak_check` takes
@@ -270,10 +278,42 @@ end 'prependEntryStub'
 // the heap therefore checks itself, and a missing decref is a FAILING TEST rather than an invisible one.
 function appendLeakGate(module TargetModule, block IrBlock, checkLeaks bool)
 	if checkLeaks 'leakGate'
-		module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
-		module.appendOp(block, op: TargetOp.callDirect(MmLeakCheckName))
+		appendExitCodePassThroughCall(module, block: block, callee: MmLeakCheckName)
 	end 'leakGate'
 end 'appendLeakGate'
+
+// ⭐ **FILL EVERY MANAGED GLOBAL'S `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — shared by both entry
+// stubs, and the FIRST thing after the runtime init so a global is live for the whole of user code.
+// `__module_init` takes no argument and returns nothing; there is no live value to preserve across it
+// (`main` has not run), so it is a bare call. Emitted only for a program that has one (`initGlobals`).
+function appendModuleInitCall(module TargetModule, block IrBlock, initGlobals bool)
+	if initGlobals 'moduleInit'
+		module.appendOp(block, op: TargetOp.callDirect(ModuleInitName))
+	end 'moduleInit'
+end 'appendModuleInitCall'
+
+// ⭐ **RELEASE EVERY MANAGED GLOBAL AFTER `main`, BEFORE THE LEAK GATE** (P1.7 slice 2a) — shared by both
+// entry stubs. The ORDER is the whole point: `__mm_leak_check` counts what is still allocated, so a global
+// released after it would read as a leak (exit 101) and one never released would read as one too. That is
+// exactly the property `static-variables.md`'s `top-level-var-string-mutate-cross-function` gates.
+//
+// It rides `appendExitCodePassThroughCall` because `__maxon_global_cleanup` is shaped like
+// `__mm_leak_check` deliberately: `main`'s ExitCode is the one live value on this path, and a void callee
+// would clobber it in R8 (see `ModuleInit.buildGlobalCleanup`).
+function appendGlobalCleanupGate(module TargetModule, block IrBlock, initGlobals bool)
+	if initGlobals 'globalCleanup'
+		appendExitCodePassThroughCall(module, block: block, callee: GlobalCleanupName)
+	end 'globalCleanup'
+end 'appendGlobalCleanupGate'
+
+// Route `main`'s ExitCode (R8, the custom Maxon ABI's primary return) through `callee` and back into R8:
+// `mov rcx, r8` puts it in argument register 0, and the callee's own primary return lands where the next
+// stage of the exit path expects it. The ONE spelling of that value flow, shared by the leak gate and the
+// global-cleanup gate — two copies would be two chances to drop the exit code on the floor, silently.
+function appendExitCodePassThroughCall(module TargetModule, block IrBlock, callee ByteArray)
+	module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.callDirect(callee))
+end 'appendExitCodePassThroughCall'
 
 // Build the x64-LINUX entry stub `mrt_start` as a module function and lay it out FIRST — its `.text`
 // offset is the ELF entry point (`writeElf`'s `entryPoint = textVAddr + mainCallFixupOffset`, and concat
@@ -281,7 +321,9 @@ end 'appendLeakGate'
 // reasons that all point the same way:
 //
 //   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
+//   [call __module_init]  fill every managed global's .data slot (P1.7 slice 2a)
 //   call main            main returns its ExitCode in R8 (custom ABI)
+//   [global cleanup]     mov rcx, r8 ; call __maxon_global_cleanup  ->  the same code back in R8
 //   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8
 //   mov edi, r8d         hand R8's low 32 bits to exit_group's rdi (Linux syscall arg 0)
 //   x64Syscall(exit_group)   mov eax, 231 ; syscall  — terminates the process
@@ -298,7 +340,7 @@ end 'appendLeakGate'
 // shadow space to reserve (raw syscalls carry no imports, and shv2 functions spill to their OWN frames),
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
-function prependLinuxEntryStub(module TargetModule, checkLeaks bool)
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -307,7 +349,9 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool)
 	// `appendX64LinuxRuntimeChunks` appended; it runs from the kernel's 16-aligned entry and returns with
 	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 
 	// ExitCode (R8, custom ABI) -> EDI (Linux syscall arg 0). A 32-bit move, exactly as the Windows stub

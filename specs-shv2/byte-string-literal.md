@@ -220,8 +220,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: byte-string-literal.top-level-var -->
-<!-- top-level managed `var`: the immutable `let` half is built; a MUTABLE managed global is not, and is refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 deliberately has none of — and a reassignment would then have to drop the old value. Its own sub-rung. -->
+<!-- test: byte-string-literal.top-level-var -->
 
 A module-scope `var` holds a byte string literal and can be reassigned to another one.
 ```maxon

@@ -359,7 +359,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-array-literal -->
-<!-- top-level managed `var`: this is a MUTABLE managed global, refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 has none of. The immutable `let` half is built; this is its own sub-rung. -->
+<!-- P1.7 slice 2b array-literal globals: the managed-`var` STORAGE is built (slice 2a — an 8-byte pointer slot filled by `__module_init`, released by `__maxon_global_cleanup`), and a String or `b"…"` global works. What is missing is the ARRAY LITERAL itself: `[1, 2, 3]` is E2004 `Expected expression but got '['` in the PARSER, in every position, so this never reaches a global at all. -->
 ```maxon
 var items = [10, 20, 30]
 
@@ -376,7 +376,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-array-cross-function -->
-<!-- top-level managed `var`: this is a MUTABLE managed global, refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 has none of. The immutable `let` half is built; this is its own sub-rung. -->
+<!-- P1.7 slice 2b array-literal globals: the managed-`var` STORAGE is built (slice 2a — an 8-byte pointer slot filled by `__module_init`, released by `__maxon_global_cleanup`), and a String or `b"…"` global works. What is missing is the ARRAY LITERAL itself: `[1, 2, 3]` is E2004 `Expected expression but got '['` in the PARSER, in every position, so this never reaches a global at all. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -404,7 +404,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-array-mutate-cross-function -->
-<!-- top-level managed `var`: this is a MUTABLE managed global, refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 has none of. The immutable `let` half is built; this is its own sub-rung. -->
+<!-- P1.7 slice 2b array-literal globals: the managed-`var` STORAGE is built (slice 2a — an 8-byte pointer slot filled by `__module_init`, released by `__maxon_global_cleanup`), and a String or `b"…"` global works. What is missing is the ARRAY LITERAL itself: `[1, 2, 3]` is E2004 `Expected expression but got '['` in the PARSER, in every position, so this never reaches a global at all. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -435,6 +435,50 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: top-level-var-string-literal -->
+A top-level `var` string is valid and reassignable — it materializes once at startup, like an
+array-literal global.
+```maxon
+var greeting = "hello"
+
+function main() returns ExitCode
+	print("{greeting} ")
+	greeting = "world"
+	print(greeting)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: top-level-var-string-mutate-cross-function -->
+A `var` string global mutated in place across a function boundary must NOT be shared as an
+immortal static record: it mutates correctly and frees cleanly (no leaked copy-on-write buffer).
+```maxon
+var msg = "hi"
+
+function bump()
+	msg.append("!")
+end 'bump'
+
+function main() returns ExitCode
+	bump()
+	bump()
+	print(msg)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi!!
 ```
 
 <!-- test: top-level-let-string-literal -->

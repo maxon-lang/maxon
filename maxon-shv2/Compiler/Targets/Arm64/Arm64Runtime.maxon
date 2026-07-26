@@ -63,7 +63,9 @@ export let LinuxSyscallExitGroup = 94
 // value flows through with no move on either OS:
 //
 //   macOS:                                   Linux:
+//     [bl __module_init]                       [bl __module_init]
 //     bl   main                                bl   main
+//     [bl __maxon_global_cleanup]              [bl __maxon_global_cleanup]
 //     adrp x16, _exit@GOTPAGE                  movz x8, #94        ; __NR_exit_group
 //     ldr  x16, [x16, _exit@GOTOFF]            svc  #0
 //     blr  x16
@@ -85,16 +87,32 @@ export let LinuxSyscallExitGroup = 94
 // Linux, not the registers, and must do so BEFORE anything perturbs sp.
 //
 // `leakCheck` gates the future MM leak bridge exactly as the x64 stub does; it is `false` for the
-// scalar core, which has no allocator and cannot leak.
-export function buildArm64EntryStubChunk(leakCheck bool, os Os) returns FunctionCodeChunk
+// scalar core, which has no allocator and cannot leak. `initGlobals` gates the managed-global
+// initialization and release the same way (P1.7 slice 2a) — `false` for a program with no managed
+// top-level `var`, which is every program in the scalar corpus.
+export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, os Os) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
+
+	// Fill every managed global's `.data` slot BEFORE user code (P1.7 slice 2a). `__module_init` takes
+	// no argument and returns nothing, so there is nothing to move around it.
+	if initGlobals 'moduleInit'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)
+	end 'moduleInit'
 
 	// bl main — filed as a CallFixup; concat resolves it to main's `.text` offset (mirrors x64's
 	// `callDirect(UserEntryName)`). `UserEntryName` is the canonical `String` spelling; the fixup
 	// matches against the function's `ByteArray` name, so it is rendered to bytes here.
 	arm64EmitBranchLink(code, callFixups: callFixups, targetName: UserEntryName.toByteArray())
+
+	// Release every managed global AFTER `main` and BEFORE the leak gate — a global released after the
+	// gate would count as a leak (exit 101). `__maxon_global_cleanup` takes the ExitCode in x0 and hands
+	// it back in x0, the same pass-through shape `__mm_leak_check` has, so on AAPCS64 the value flows
+	// through both with no move at all.
+	if initGlobals 'globalCleanup'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: GlobalCleanupName)
+	end 'globalCleanup'
 
 	// The leak gate (future MM milestone). `__mm_leak_check` is an ordinary AAPCS64 function — it
 	// takes the ExitCode in x0 and returns the adjusted code (or 101) in x0 — so the value flows

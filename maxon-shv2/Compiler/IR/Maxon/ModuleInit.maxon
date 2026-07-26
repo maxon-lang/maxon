@@ -1,0 +1,277 @@
+// ModuleInit — the two synthesized functions a program with MANAGED top-level `var`s carries, and
+// nothing else does: `__module_init`, which fills every managed global's `.data` pointer slot BEFORE
+// `main`, and `__maxon_global_cleanup`, which releases each of them AFTER `main` returns.
+//
+// ⭐ **A MANAGED GLOBAL'S SLOT IS AN 8-BYTE POINTER, AND ITS VALUE IS A REAL OWNED HEAP RECORD.** Both
+// halves are load-bearing and neither is negotiable:
+//
+//   • **A pointer, because a record cannot be baked.** A `.data` slot holding the ADDRESS of another
+//     section's bytes would need a compile-time VA, and there is none under ASLR
+//     (`specs/static-variables.md:729-730`). So the image holds zero and this function writes the address.
+//   • **OWNED, not the immortal `.rdata` record a `let` shares.** A `var` is MUTATED — `msg.append("!")`
+//     rewrites `buffer@0`/`length@8` in place — and mutating the one shared record would make every `let`
+//     of the same literal observe the change, while dropping it would free read-only data. The spec
+//     leak-gates exactly this (`static-variables.md`'s `top-level-var-string-mutate-cross-function`: "must
+//     NOT be shared as an immortal static record: it mutates correctly and frees cleanly"), and the
+//     runnable oracle enforces the same boundary from the other side — its static-literal path EXCLUDES a
+//     mutable global (`MaxonToStandardConversion.cs:1045-1049`, "a mutable global array stays heap and COWs
+//     on first write").
+//
+// ⭐⭐ **THEY ARE BUILT AT THE MAXON TIER, NOT THE STD TIER — the one design choice worth stating.** Every
+// other compiler-synthesized function in shv2 (`installMmRuntime`, `installStringRuntime`, the destructor
+// cascades) is built as already-lowered `StdOp`s and appended AFTER the pipeline. These two are not,
+// because what they have to build is a LITERAL'S RECORD, and `LowerMaxonToStd` already knows how to build
+// one from a single op: `stringLiteral` becomes the rdata blob + record + fixup, and `byteStringLiteral`
+// becomes the ten-op owned-`Array`-over-immortal-blob sequence. Emitting Maxon ops costs six op
+// constructions and reuses both; emitting Std ops would be a SECOND copy of `lowerByteStringLiteral`,
+// which is the duplication this compiler pays for hardest. So the price is the one thing a Maxon-tier
+// function has to carry that a Std-tier one does not — its dense per-value type columns — and
+// `SynthesizedFunction` below is that price, paid once.
+//
+// ⚠ **THE ENTRY STUB CALLS THEM, AND THE ENTRY STUB IS BUILT AFTER DEAD-FUNCTION ELIMINATION.** So they
+// are ROOTED unconditionally in `DeadFunctionElimination.seedRoots` — the same treatment, for the same
+// reason, as `__mm_leak_check`: nothing in the module calls them, and a pruned root leaves the stub's
+// `call`/`bl`/`call $n` fixup with no target (loud on every backend, never silent).
+
+// The two synthesized names. `__`-prefixed, so `isCompilerInternalCallee` treats them as the compiler's
+// own (no E3004, no signature slotting) and `TargetPrinter.isRuntimeFunction` keeps them out of every
+// golden fragment — a program with no managed global emits neither, so the corpus is unmoved.
+//
+// The spellings are BOTH reference compilers': the bootstrap emits `__module_init` (2-Parser.cs:2436) and
+// `__maxon_global_cleanup` (MaxonToStandardConversion.cs:2739), and v1 emits `__module_init_<n>` per file.
+// Keeping the names identical costs nothing and makes a dump of one compiler's output readable against
+// the other's.
+export let ModuleInitName = b"__module_init"
+export let GlobalCleanupName = b"__maxon_global_cleanup"
+
+// `__maxon_global_cleanup`'s single parameter — `main`'s ExitCode — occupying the ValueId the parameter
+// numbering reserves for argument 0. See `buildGlobalCleanup` for why the function takes and returns it.
+let ExitCodeParam = 0 as ValueId
+
+// ⭐ **BUILD BOTH FUNCTIONS INTO `module`, AND ANSWER WHETHER THE PROGRAM HAS ANY.** The single bit every
+// entry stub reads (`RuntimeUsage.usesManagedGlobals`), decided HERE — where the arena is walked — rather
+// than re-derived downstream by probing the module for a function name. That is the same discipline
+// `BackendDispatch`'s header states for the GT/leak gates, and for the reason it states: dead-function
+// elimination can take an installed function back out, so "is it still there?" is not the same question as
+// "was it installed?".
+//
+// A program with no managed global builds NOTHING — no functions, no ops, no `.data` — which is what keeps
+// this rung byte-neutral for the entire existing corpus.
+export function installManagedGlobalInit(module MaxonModule, project Project, globals ManagedGlobalArray) returns bool
+	if globals.count() == 0 'noManagedGlobals'
+		return false
+	end 'noManagedGlobals'
+
+	buildModuleInit(module, project: project, globals: globals)
+	buildGlobalCleanup(module, project: project, globals: globals)
+	return true
+end 'installManagedGlobalInit'
+
+// `__module_init()` — for each managed global, in ARENA order: build its initial owned record and store
+// the record's address into its `.data` slot.
+//
+// ⚠ **THE STORE IS BARE — NO LOAD OF THE OLD VALUE AND NO DECREF.** The slot is guaranteed zero here (the
+// `.data` image put it there and nothing has run yet), so a decref would be reading a null pointer. Both
+// reference compilers reach the same place by a different road: their initializing store is on the SAME
+// path as an ordinary assignment, so they emit the load-and-decref and then suppress it by matching the
+// enclosing FUNCTION'S NAME (`isModuleInit = func.Name == "__module_init"`,
+// MaxonToStandardConversion.cs:2327). shv2 has no such match because it has no such shared path: the
+// user-visible re-assignment lives in `Parser.emitCheckedGlobalStore` and this initialization lives here,
+// so the fact ("this store is the first one") is expressed by WHICH CODE EMITS IT rather than by a string
+// compare in the middle of a lowering.
+//
+// ⚠ **ARENA ORDER IS DETERMINISTIC AND CORRECTNESS DOES NOT DEPEND ON IT.** A managed initializer may not
+// reference another global — `evaluateDecl` answers `notFound` for a managed decl, so `let A = "x"` /
+// `let B = A` is E2004 in BOTH declaration orders (see `ProgramSignatures.evaluateDecl`, and the oracle
+// measured to agree) — so there is no initialization order to get wrong. The order here is fixed only so
+// the emitted code is a function of the program: the arena is source-path order, then in-file order.
+function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray)
+	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create())
+
+	for global in globals 'eachGlobal'
+		let record = initialRecordOf(fn, global: global)
+		let addr = fn.mintOfType(MaxonType.integer)
+		fn.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
+		fn.emit(MaxonOp.storeIndirect(addr, offset: GlobalSlotOffset, value: record, valueType: global.valueType), range: global.range)
+	end 'eachGlobal'
+
+	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
+end 'buildModuleInit'
+
+// The OWNED record a managed global's slot starts life holding. The two kinds differ in exactly one thing
+// — whether the literal's own materialization is already owned — and that difference is a fact about the
+// two record formats, not a choice made here:
+//
+//   • a **String** literal is a WHOLLY immortal `.rdata` record (`lowerStringLiteral`), shared by every
+//     read of that literal in the program, so it is CLONED into a fresh owned heap String. `__str_clone`
+//     is the `(box) -> newBox` dual of the `__str_decref` the cleanup drops it with, so the pair balances
+//     by construction.
+//   • a **byte string** literal ALREADY materializes as an owned heap 48-byte `Array` record over an
+//     immortal `.rdata` blob (`lowerByteStringLiteral`), which is precisely what the slot must hold — so
+//     there is nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
+//     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE byte-string global work.
+function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
+	return match global.kind 'kind'
+		string gives clonedStringRecord(fn, global: global)
+		byteArray gives ownedByteStringRecord(fn, global: global)
+	end 'kind'
+end 'initialRecordOf'
+
+// The String arm: materialize the immortal `.rdata` literal, then CLONE it into a fresh owned heap
+// String the slot can own, mutate and eventually free.
+function clonedStringRecord(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
+	let literal = fn.mintOfType(global.valueType)
+	fn.emit(MaxonOp.stringLiteral(literal, bytes: global.bytes), range: global.range)
+	return fn.emitRuntimeCall(StrCloneName, arg: literal, resultTag: maxonTypeTag(global.valueType), resultNameId: typeNameIdOf(global.valueType), range: global.range)
+end 'clonedStringRecord'
+
+// The byte-string arm: ONE op, because the literal's own materialization is already the owned heap
+// record the slot must hold.
+function ownedByteStringRecord(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
+	let record = fn.mintOfType(global.valueType)
+	fn.emit(MaxonOp.byteStringLiteral(record, bytes: global.bytes), range: global.range)
+	return record
+end 'ownedByteStringRecord'
+
+// `__maxon_global_cleanup(exitCode) returns exitCode` — one decref per managed global, after `main`.
+//
+// ⭐ **IT TAKES AND RETURNS `main`'s EXIT CODE, AND THAT IS WHY IT IS SHAPED LIKE `__mm_leak_check`.** The
+// call sits on the entry stub's exit path, between `main` and the leak gate, where the ONE live value is
+// the exit code — in R8 on x64, x0 on arm64, on the operand stack on wasm. A void function would clobber
+// it on x64 (a Maxon function returns in R8) and force each stub to invent a save/restore; a pass-through
+// is what `__mm_leak_check` already does, so the stubs gain one call in an existing shape rather than a
+// new one. The code is not read here — it flows through untouched.
+//
+// ⚠ **THE DECREF IS UNCONDITIONAL — NO NULL GUARD.** Both reference compilers guard it
+// (`EmitDecrefValueIfNonnull`; v1's `__mm_decref_maybenull_helper`), because in their designs a global
+// whose initializer is LAZY, or whose file never ran an init, can still be null at exit. shv2 has neither
+// case: `__module_init` runs unconditionally before `main` and fills EVERY entry of this same list, so a
+// slot reaching here is non-null by construction. The guard would be a runtime branch per global testing a
+// condition the program cannot be in.
+function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray)
+	var paramTypes = MaxonTypeArray.create()
+	paramTypes.push(MaxonType.integer)
+	var fn = SynthesizedFunction.open(module, project: project, name: GlobalCleanupName, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
+
+	for global in globals 'eachGlobal'
+		let addr = fn.mintOfType(MaxonType.integer)
+		fn.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
+		let record = fn.mintOfType(global.valueType)
+		fn.emit(MaxonOp.loadIndirect(record, addr: addr, offset: GlobalSlotOffset, valueType: global.valueType), range: global.range)
+		_ = fn.emitRuntimeCall(global.dropCallee, arg: record, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
+	end 'eachGlobal'
+
+	fn.terminate(MaxonOp.ret(ExitCodeParam), range: anchorRange(globals))
+end 'buildGlobalCleanup'
+
+// The span a synthesized function's TERMINATOR carries. No source token spawns a `return` that the user
+// did not write, so it rides the FIRST global's initializer — the declaration that caused the whole
+// function to exist. The caller has already established the list is non-empty (`installManagedGlobalInit`
+// builds nothing for an empty one), so the miss is an invariant break rather than a case.
+function anchorRange(globals ManagedGlobalArray) returns SourceRange
+	return (try globals.get(0) otherwise panic("anchorRange: the managed-global list is empty — `installManagedGlobalInit` returns before building a function when it is")).range
+end 'anchorRange'
+
+// ⭐ **A MAXON FUNCTION BUILT BY THE COMPILER RATHER THAN PARSED** — the emit + value-minting discipline
+// `FileParseArtifact` gives the parser, for the one caller that has no artifact.
+//
+// **IT EXISTS FOR THE DENSE TYPE COLUMNS.** `LowerMaxonToStd` reads a value's tag out of
+// `IrFunction.valueTags` for every op it lowers (`valueTagOf` PANICS on a value with no entry) and its
+// name id out of `valueNameIds`, and it seeds `nextValueId` from `valueTags.count()` — so a ValueId
+// allocated without an entry in all four columns would shift every later value's type by one. Minting
+// through one door is what makes that impossible, exactly as `Parser.mintValue` does for parsed code.
+//
+// It records into `project.opRanges` and `project.valueOrigins` in the same lockstep
+// `FileParseArtifact.emitOp` uses — the span table is keyed by op index and asserts it is appended in
+// step, so a synthesized op that skipped it would misattribute every later span by one.
+type SynthesizedFunction
+	var module as MaxonModule
+	var project as Project
+	// This function's position in `module.functions` — the key `ValueOriginTable` files an origin under.
+	var funcIndex as FuncIndex
+	var block as IrBlock
+	var valueTags as ValueTypeTagArray
+	var valueNameIds as TypeNameIdArray
+	var valueClosureEnv as ValueIdArray
+	var valueIsCapturingClosure as BoolArray
+
+	// Create the function, register it and its single `entry` block on `module`, and seed the value
+	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
+	// mints, exactly as `Parser.recordValueType` does for a parsed function's parameters.
+	static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray) returns SynthesizedFunction
+		var valueTags = ValueTypeTagArray.create()
+		var valueNameIds = TypeNameIdArray.create()
+		var valueClosureEnv = ValueIdArray.create()
+		var valueIsCapturingClosure = BoolArray.create()
+		for paramType in paramTypes 'eachParam'
+			valueTags.push(maxonTypeTag(paramType))
+			valueNameIds.push(typeNameIdOf(paramType))
+			valueClosureEnv.push(0)
+			valueIsCapturingClosure.push(false)
+		end 'eachParam'
+
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count(), maxonParamTypes: paramTypes, valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure, returnLine: 0)
+		let funcIndex = module.funcCount()
+		module.pushFunc(func)
+
+		return Self{module: module, project: project, funcIndex: funcIndex, block: module.addBlock(func, label: b"entry"), valueTags: valueTags, valueNameIds: valueNameIds, valueClosureEnv: valueClosureEnv, valueIsCapturingClosure: valueIsCapturingClosure}
+	end 'open'
+
+	// Allocate a fresh ValueId AND record its type, in lockstep — `Parser.mintValue`'s twin over the
+	// columns this function owns. The id IS the column height before the push, which is the same dense
+	// numbering `LowerMaxonToStd` resumes from.
+	//
+	// It takes a TAG rather than a `MaxonType` for `Parser.mintValue`'s reason and one of its own: a
+	// runtime drop's result is `void`, which is a `ValueTypeTag` and deliberately NOT a `MaxonType` (see
+	// MaxonDialect — void names no value).
+	function mint(tag ValueTypeTag, nameId TypeNameId) returns ValueId
+		let id = self.valueTags.count()
+		self.valueTags.push(tag)
+		self.valueNameIds.push(nameId)
+		self.valueClosureEnv.push(0)
+		self.valueIsCapturingClosure.push(false)
+		return id
+	end 'mint'
+
+	// Mint a value whose type is already in hand — decomposing the union rather than constructing one,
+	// exactly as `Parser.mintValueOfType` does.
+	function mintOfType(valueType MaxonType) returns ValueId
+		return self.mint(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
+	end 'mintOfType'
+
+	// Append a body op, recording its span and the origin of the value it defines — the choke point
+	// `FileParseArtifact.emitOp` is for parsed code, and it keeps the identical two invariants.
+	function emit(op MaxonOp, range SourceRange)
+		let opIndex = self.module.opCount()
+		self.module.appendOp(self.block, op: op)
+		self.recordOpTables(op, opIndex: opIndex, range: range)
+	end 'emit'
+
+	// Append the block's TERMINATOR. Separate from `emit` only because a terminator is stored on the block
+	// rather than appended to its op list — the same split `emitTerminator` makes.
+	function terminate(op MaxonOp, range SourceRange)
+		let opIndex = self.module.opCount()
+		self.module.setTerminator(self.block, op: op)
+		self.recordOpTables(op, opIndex: opIndex, range: range)
+	end 'terminate'
+
+	// The span + value-origin recording both emitters share, so a body op and a terminator cannot come to
+	// disagree about which tables an op joins.
+	function recordOpTables(op MaxonOp, opIndex OpIndex, range SourceRange)
+		self.project.opRanges.record(opIndex, range: range)
+		match maxonOpResultValue(op) 'result'
+			none then break 'result'
+			value(id) then self.project.valueOrigins.record(self.funcIndex, valueId: id, opIndex: opIndex)
+		end 'result'
+	end 'recordOpTables'
+
+	// Call an emitted runtime entry point with ONE argument — `__str_clone`, `__str_decref`,
+	// `__arr_decref`. `Parser.emitRuntimeCall`'s twin, and positional for its reason: the runtime has no
+	// parameter names for a label to match, so the arguments pass through `lowerRuntimeCall` verbatim.
+	function emitRuntimeCall(callee ByteArray, arg ValueId, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+		let args = singletonArgs(arg)
+		let result = self.mint(resultTag, nameId: resultNameId)
+		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range)), range: range)
+		return result
+	end 'emitRuntimeCall'
+end 'SynthesizedFunction'

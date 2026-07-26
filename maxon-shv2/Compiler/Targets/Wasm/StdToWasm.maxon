@@ -183,7 +183,7 @@ let WasmRdataAlignment = 8 as ByteCount
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool) returns ByteArray
 	// A managed-opaque-`T` `Array` descriptor's `destroyFunc@40` reloc is wired for x64 only (P1.7 slice
 	// 3b-ii); the wasm backend has no `.text` VA to bake, and wasm managed-opaque arrays are deferred. The
 	// target boundary keeps such programs off wasm, so a non-empty list here is a boundary bug — refuse loudly
@@ -242,7 +242,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
 	end 'eachFunc'
 
-	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks)
+	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks, initGlobals: initGlobals)
 
 	// The memory must cover BOTH images; `.rdata` sits above `.data`, so `rdataBase + rdataSize`
 	// is the high-water mark (and `rdataBase >= WasmDataBaseOffset` even with no globals, so the
@@ -304,19 +304,24 @@ end 'wasmRdataBase'
 // Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
 // entry's wasm function index (for the export).
-function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool) returns Wasm32Index
+function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool, initGlobals bool) returns Wasm32Index
 	let mainFuncIdx = try calleeFuncIdx.get(WasmMainFunctionName) otherwise panic("buildWasmCoreModule: no `main` function in the module — the wasm `run` entry has nothing to call")
 	let mainReturnValType = mainReturnValueType(module)
 
 	var runBody = WasmBody.create()
+
+	appendModuleInitCall(runBody, calleeFuncIdx: calleeFuncIdx, initGlobals: initGlobals)
+
 	runBody.call(mainFuncIdx)
+
+	let afterCleanupVt = appendGlobalCleanupGate(runBody, exitCodeValType: mainReturnValType, calleeFuncIdx: calleeFuncIdx, initGlobals: initGlobals)
 
 	// THE LEAK GATE — the sibling of the native backends' entry-stub gate
 	// (BackendDispatch.prependEntryStub). When the MM runtime installed `__mm_leak_check`, main's
 	// exit code is routed through it before exit; a leaked program comes back as 101. `exit-with-code`
 	// takes an i32, so the resulting code — i64 after the gate, else main's own return width — is
 	// wrapped last. `main` returns `ExitCode` (i64 in the corpus); a narrower ExitCode is already i32.
-	let exitCodeVt = appendLeakGate(runBody, mainReturnValType: mainReturnValType, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks)
+	let exitCodeVt = appendLeakGate(runBody, exitCodeValType: afterCleanupVt, calleeFuncIdx: calleeFuncIdx, checkLeaks: checkLeaks)
 	if exitCodeVt == WasmValType.i64 'wrap'
 		runBody.i32WrapI64()
 	end 'wrap'
@@ -327,8 +332,47 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncI
 	return builder.addFunction(runTypeIdx, localTypes: WasmValTypeArray.create(), body: runBody.bytes())
 end 'appendRunEntry'
 
+// ⭐ **FILL EVERY MANAGED GLOBAL'S `.data` SLOT BEFORE `main` (P1.7 slice 2a)** — the sibling of the
+// native stubs' `appendModuleInitCall`. `__module_init` takes no argument and returns nothing, so it
+// leaves the operand stack exactly as it found it (empty). `initGlobals` is
+// `RuntimeUsage.usesManagedGlobals`, read for `appendLeakGate`'s stated reason: installation is decided in
+// one place, and a missing function under that bit is an impossible state that PANICS rather than silently
+// leaving every slot null.
+function appendModuleInitCall(runBody WasmBody, calleeFuncIdx CalleeFuncIdxMap, initGlobals bool)
+	if not initGlobals 'noManagedGlobals'
+		return
+	end 'noManagedGlobals'
+
+	runBody.call(try calleeFuncIdx.get(ModuleInitName) otherwise panic("appendModuleInitCall: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__module_init` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leave every managed global's slot null"))
+end 'appendModuleInitCall'
+
+// ⭐ **THE GLOBAL-CLEANUP GATE on the wasm exit path (P1.7 slice 2a)** — the sibling of the native stubs'
+// `appendGlobalCleanupGate`, and the leak gate's exact twin one step earlier on the same path.
+//
+// It runs AFTER `main` and BEFORE the leak gate, and the order is the property, not a preference: the leak
+// gate counts what is still allocated, so a global released after it reads as a leak (exit 101) — which is
+// what `static-variables.md`'s `top-level-var-string-mutate-cross-function` gates.
+//
+// `__maxon_global_cleanup` is an ordinary i64→i64 Std function that hands `main`'s exit code straight
+// back, so a narrower ExitCode is widened first and the stack holds an i64 afterwards. `initGlobals` is
+// `RuntimeUsage.usesManagedGlobals`, read for `appendLeakGate`'s stated reason: installation is decided in
+// one place, and a missing function under that bit is an impossible state that PANICS rather than silently
+// emitting no gate.
+//
+// Returns the valtype now on the stack: i64 after the gate, else the code's own valtype.
+function appendGlobalCleanupGate(runBody WasmBody, exitCodeValType WasmValType, calleeFuncIdx CalleeFuncIdxMap, initGlobals bool) returns WasmValType
+	if not initGlobals 'noManagedGlobals'
+		return exitCodeValType
+	end 'noManagedGlobals'
+
+	let cleanupIdx = try calleeFuncIdx.get(GlobalCleanupName) otherwise panic("appendGlobalCleanupGate: `RuntimeUsage.usesManagedGlobals` says this program declares a managed top-level `var`, so `__maxon_global_cleanup` must be in this module — its absence means the ROOT was pruned (see DeadFunctionElimination's root set), which would leak every managed global")
+	coerceOnStack(runBody, from: exitCodeValType, to: WasmValType.i64)
+	runBody.call(cleanupIdx)
+	return WasmValType.i64
+end 'appendGlobalCleanupGate'
+
 // THE LEAK GATE on the wasm exit path (P1.0r), ported from the native `prependEntryStub`
-// (BackendDispatch:205). When the MM runtime installed `__mm_leak_check`, main's exit code (on the
+// (BackendDispatch:205). When the MM runtime installed `__mm_leak_check`, the exit code (on the
 // stack) is routed through it: it returns the code UNCHANGED, or LeakExitCode (101) when any
 // allocation outlived the program — so a leaking heap program FAILS with 101 rather than passing
 // invisibly. `__mm_leak_check` is an ordinary i64→i64 Std function, so a narrower ExitCode is widened
@@ -345,14 +389,17 @@ end 'appendRunEntry'
 // test green on this target only. So installation is read from the one place it is decided, and a
 // missing function under `usesHeap` is an impossible state that PANICS.
 //
-// Returns the valtype now on the stack: i64 after the gate, else main's own return valtype.
-function appendLeakGate(runBody WasmBody, mainReturnValType WasmValType, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool) returns WasmValType
+// ⚠ The code it is handed is `main`'s only when the program has no managed global: the global-cleanup
+// gate runs FIRST and passes the code through (P1.7 slice 2a), so this reads whatever that left.
+//
+// Returns the valtype now on the stack: i64 after the gate, else the code's own valtype.
+function appendLeakGate(runBody WasmBody, exitCodeValType WasmValType, calleeFuncIdx CalleeFuncIdxMap, checkLeaks bool) returns WasmValType
 	if not checkLeaks 'noHeap'
-		return mainReturnValType
+		return exitCodeValType
 	end 'noHeap'
 
 	let leakCheckIdx = try calleeFuncIdx.get(MmLeakCheckName) otherwise panic("appendLeakGate: `RuntimeUsage.usesHeap` says the MM runtime was installed, so `__mm_leak_check` must be in this module — its absence means the leak-gate ROOT was pruned (see DeadFunctionElimination's root set), which would silently disable the 101 leak gate on wasm")
-	coerceOnStack(runBody, from: mainReturnValType, to: WasmValType.i64)
+	coerceOnStack(runBody, from: exitCodeValType, to: WasmValType.i64)
 	runBody.call(leakCheckIdx)
 	return WasmValType.i64
 end 'appendLeakGate'

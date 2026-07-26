@@ -57,9 +57,10 @@ allocator under it:
 - `let` / `var` bindings, `var` reassignment, integer literals, identifiers.
 - **Top-level `let` and `var`** — a module-scope `let` is a compile-time constant that INLINES
   at every use; a module-scope `var` is a real `.data` slot that loads and stores. Both take
-  constant-only initializers (no calls), evaluated once by the declaration sweep. A `let` may be
-  MANAGED — a `String` or a `b"…"` byte-string literal; a `var` is scalar only (`int`/`bool`/`float`).
-  See *Top-level managed `let`* below.
+  constant-only initializers (no calls), evaluated once by the declaration sweep. EITHER may be
+  MANAGED — a `String` or a `b"…"` byte-string literal: a `let` borrows the literal's own record, and a
+  `var` gets an 8-byte POINTER slot filled by `__module_init` before `main` and released by
+  `__maxon_global_cleanup` after it. See *Top-level managed `let`* / *Top-level managed `var`* below.
 - **Arithmetic** — `+ - * / mod` with Pratt precedence, prefix `-`.
 - **Comparisons** — `== != < > <= >=`, valid *only* as the sole top-level operator
   of an `if`/`while` condition (there is no `setcc`/bool materialization yet, so a
@@ -721,6 +722,7 @@ their `OpCategory.ownership` band, and the lifetime ids — not a dialect in the
 
 ```
 assertNoSugarOps(stdModule)
+eliminateDeadFunctions(stdModule) → prune what no root reaches
 lowerStdToX64(stdModule)          → TargetModule (virtual registers)
 allocateRegisters(module, target)                 → physical registers
 insertPrologueEpilogue(module, target)            → frames
@@ -830,7 +832,9 @@ so laying the widest out first makes each slot naturally aligned as it is reache
 The sort is STABLE because equal-sized slots are pinned in declaration order
 (`specs/static-variables.md`'s `data-section-multiple-bools`). An entry carries its `(value, type)`
 and NOT its bytes: the image is rendered from that pair by `dataSectionImage`, once, so a value and
-a serialization of it cannot disagree.
+a serialization of it cannot disagree. A MANAGED global's entry is that pair too — an 8-byte slot whose
+value is the NULL pointer `__module_init` overwrites before `main` (see *Top-level managed `var`*), so the
+image has no case for it and `globalStdType` is still the single home of "which globals have storage".
 
 ⭐ **A global's IDENTITY and its LABEL are two facts, and that is what makes file-private globals
 work.** The storage KEY is file-scoped (`SignatureIndex.topLevelStorageKey`), so two files may each
@@ -935,9 +939,81 @@ again (`let a = p` is still a `let`; E3019, measured).
 > method table — while the binding's writability and the diagnostic are shared, so a fourth container
 > cannot invent a fourth answer.
 
-**A managed `var` stays refused** (`Parser.requireStorableGlobal`, E2015): its `.data` slot would have
-to hold a POINTER to a record built before `main` runs, which is module initialization, and shv2
-deliberately has none. That guard was written for this exact day and had fired on nothing until now.
+### Top-level managed `var` — a POINTER slot, filled before `main` and released after it
+
+A module-scope `var` may hold a `String` or a `b"…"` byte string. Its `.data` slot is **eight bytes of
+zero**, and two synthesized functions bracket `main`:
+
+```
+mrt_start:  … call __module_init ; call main ; [__maxon_global_cleanup] ; [__mm_leak_check] ; exit
+```
+
+Everything about it follows from one sentence: **a `var` is MUTATED, so its record may be neither baked
+nor shared.**
+
+- **Not baked.** A `.data` slot holding another section's address needs a compile-time VA, and there is
+  none under ASLR (`specs/static-variables.md:729-730`). So the image holds a NULL pointer and
+  `__module_init` writes the address — which is exactly what the `let` half does *not* need, and the
+  whole reason a managed `var` waited for its own rung.
+- **Not shared.** A `let`'s String is the ONE immortal `.rdata` record every read of that literal borrows;
+  a `var` gets a **real owned heap record** (`__str_clone` of the literal), because `msg.append("!")`
+  rewrites `buffer@0`/`length@8` in place. Sharing it would make a `let` of the same bytes observe the
+  change and dropping it would free read-only data. **MEASURED**: with `let SHARED = "hi"` beside
+  `var one = "hi"` and `var two = "hi"`, mutating `one` prints `hi hi! hi`. The oracle draws the same
+  boundary from the other side — its static-literal path EXCLUDES a mutable global
+  (`MaxonToStandardConversion.cs:1045-1049`, *"a mutable global array stays heap and COWs on first
+  write"*) — and `static-variables.md`'s `top-level-var-string-mutate-cross-function` leak-gates it.
+  A `b"…"` needs no clone: `lowerByteStringLiteral` already produces an owned record over an immortal
+  blob, which is precisely what the slot must hold.
+
+**The two functions are MAXON-tier, not Std-tier, and that is the rung's one design choice.** Every other
+compiler-synthesized function (`installMmRuntime`, the destructor cascades) is built as already-lowered
+`StdOp`s after the pipeline. These are built as `MaxonOp`s and appended to the merged module *before* it —
+because what they must build is a LITERAL'S RECORD, and `lowerMaxonToStd` already turns one
+`stringLiteral`/`byteStringLiteral` op into exactly that. Six op constructions instead of a second copy of
+`lowerByteStringLiteral`. The price is the dense per-value type columns a Maxon function carries, paid
+once by `ModuleInit.SynthesizedFunction`. Appending before the pipeline is also what makes
+`scanRuntimeUsage` see their `__str_clone`/`__str_decref`/`__arr_decref` calls and install the floor.
+
+| | `__module_init()` | `__maxon_global_cleanup(code) → code` |
+|---|---|---|
+| per global | build the owned record, `storeIndirect` it into the slot | `loadIndirect` the slot, drop it through `managedFieldDropCallee` |
+| old value | **not loaded, not decref'd** — the slot is zero | — |
+| null guard | — | **none** |
+
+> ⭐ **BOTH REFERENCE COMPILERS CARRY A GUARD HERE AND shv2 CARRIES NEITHER, because a fact replaces
+> each.** Their initializing store is on the SAME path as an ordinary assignment, so they emit the
+> load-and-decref and then suppress it by matching the enclosing FUNCTION'S NAME
+> (`isModuleInit = func.Name == "__module_init"`, `MaxonToStandardConversion.cs:2327`); shv2's
+> initializing store is emitted by different CODE, so which store it is needs no runtime name. And their
+> cleanup decref is null-guarded (`EmitDecrefValueIfNonnull`, v1's `__mm_decref_maybenull_helper`)
+> because a lazy or never-run initializer can leave a slot zero; shv2's `__module_init` runs
+> unconditionally and fills every entry of the same list, so a slot reaching the cleanup is non-null by
+> construction. **The user-visible re-assignment therefore also decrefs unconditionally** — one branch
+> per write, deleted, on the strength of one invariant.
+
+**A re-assignment is: settle the new owner, release the old, store** (`Parser.emitCheckedGlobalStore`).
+The new value goes through `moveManagedValueInto`, the SAME door a struct field and a union payload use —
+a borrowed String is COPIED, an owned one is MOVED (its source poisoned or its statement-end drop
+cancelled), a borrowed non-String aggregate is refused. So `g = g`, `g = other` and `g = <owned temp>` all
+work, and none of them aliases.
+
+**A `var` is also a method RECEIVER, and it is the first MUTABLE one that is not a binding.** The base is
+loaded and dispatched through the same `dispatchMethodOnBinding` a local goes through, wearing a synthetic
+**mutable** `VarInfo` — which is the whole of what makes `Buffer.push(1)` legal where `Live.push(1)` is
+E3019. The loaded pointer is BORROWED (the slot owns it) and there is no store-back: every
+receiver-writing method rewrites the record in place and never moves it. `managedReceiverBindingOf` is the
+ONE resolution both the token-shape predicate and the dispatch read, so they cannot claim the shape for
+one door and resolve it through the other.
+
+**Both functions are unconditional DFE roots**, beside `__mm_leak_check`, for its reason: the entry stub
+that calls them is built after the prune, so a pruned root leaves a call with no callee — loud on every
+backend, never silent.
+
+**Nothing about a managed `var` depends on file order.** A managed initializer may not reference another
+global (`evaluateDecl` answers `notFound` for one, so `let A = "x"` / `let B = A` is E2004 in both
+declaration orders — measured against the oracle), so there is no initialization order to get wrong. The
+arena order the init emits in is fixed only so the emitted code is a function of the program.
 
 ## Register allocator (Std `ValueId`s → physical GPRs)
 

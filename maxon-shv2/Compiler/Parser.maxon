@@ -59,7 +59,7 @@ let MaxRegisterParams = 6 as ParamCount
 // names this value, with nothing in front of it") and not an arithmetic accident — P1.1's `point.x`
 // goes through the very same `loadIndirect`/`storeIndirect` ops with a real field offset, and at
 // that point the two must be told apart by a reader.
-let GlobalSlotOffset = 0 as ByteOffset
+export let GlobalSlotOffset = 0 as ByteOffset
 
 // One capture occupies one 8-byte slot in a closure's environment block — a scalar VALUE stored by-value
 // for A2b-1 (a pointer, in a later slice). The env block is `__mm_alloc(captureCount * EnvSlotBytes)`, and
@@ -1325,7 +1325,7 @@ end 'shortCircuitOperator'
 // f64 and re-encode the bits) — and the `MaxonType.float` this hands back is what tells `lowerLiteral`
 // to lay those 8 bytes down as an f64 rather than an i64. That is the whole of `let PI = 3.14`,
 // `var ratio = 2.5`, and now `let X = 1.0 + 2.0` too.
-function constantValueType(tag ValueTypeTag) returns MaxonType
+export function constantValueType(tag ValueTypeTag) returns MaxonType
 	if tag == ValueTypeTag.boolean 'bool'
 		return MaxonType.boolean
 	end 'bool'
@@ -1621,7 +1621,7 @@ end 'shortCircuitLabel'
 
 // A one-element branch-edge argument list — the shape every short-circuit edge has (its
 // merge block carries exactly one phi: the expression's value).
-function singletonArgs(value ValueId) returns ValueIdArray
+export function singletonArgs(value ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(value)
 	return args
@@ -1729,7 +1729,7 @@ end 'pushCallArg'
 //
 // The empty string is an unambiguous "no label" and not a value-masking sentinel, for the reason
 // MaxonOp's `call` header gives: a parameter name can never be empty.
-function emptyArgLabels(args ValueIdArray) returns ByteArrayArray
+export function emptyArgLabels(args ValueIdArray) returns ByteArrayArray
 	var labels = ByteArrayArray.create()
 	for _ in 0 upto args.count() 'each'
 		labels.push(EmptySourceText)
@@ -1744,7 +1744,7 @@ end 'emptyArgLabels'
 // (`SemanticCheck.reportArgError`), and a compiler-emitted call has no argument a user could have
 // got wrong. Giving them all the call's own span is honest — that IS where each came from — and it
 // keeps the column parallel, which `emitOp` requires.
-function uniformArgRanges(args ValueIdArray, range SourceRange) returns SourceRangeArray
+export function uniformArgRanges(args ValueIdArray, range SourceRange) returns SourceRangeArray
 	var ranges = SourceRangeArray.create()
 	for _ in 0 upto args.count() 'each'
 		ranges.push(range)
@@ -2287,6 +2287,22 @@ union CaptureScopeResult
 	found(scope Scope)
 	notCaptured
 end 'CaptureScopeResult'
+
+// ⭐ **WHAT A TOP-LEVEL MANAGED NAME DENOTES AT A METHOD-RECEIVER POSITION** — `managedReceiverBindingOf`'s
+// answer, and the reason it is a union rather than two booleans: the two kinds of managed binding need
+// DIFFERENT payloads to build a receiver from (a `let` needs the bytes it re-materializes; a `var` needs
+// the slot's label and type to load from), and the predicate and the dispatch must read ONE resolution or
+// they can claim a shape for a door the other resolves differently.
+//
+// `none` is an ANSWER, not a failure: the name is spelled like a managed binding somewhere in the program
+// but is not visible from THIS file (the file-scoped key), so the shape is not a method call at all.
+union ManagedReceiverBinding
+	// A managed `let` (P1.7a) — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
+	constant(bytes ByteArray, kind ManagedConstKind)
+	// A managed `var` (P1.7 slice 2a) — `label`/`valueType` are what `emitGlobalLoad` reads the slot with.
+	global(label ByteArray, valueType MaxonType)
+	none
+end 'ManagedReceiverBinding'
 
 // One incoming edge at a control-flow join, for the move reconciliation: the predecessor block a drop is
 // emitted INTO when this edge kept a binding live, paired with the move state that edge carries. An
@@ -5206,49 +5222,18 @@ export type Parser
 		// null-pointer panic. Recorded for OPEN.md.
 		let outcome = self.signatures.declaredOutcome(decl)
 		match outcome 'outcome'
-			value(_, tag) then try self.requireStorableGlobal(decl, tag: tag)
-			// A MANAGED constant (P1.7a). A `let` needs no storage and passes; a `var` is refused by the
-			// SAME guard a scalar one goes through, handed the tag its literal would have — so "which
-			// globals have `.data` storage?" stays one rule with one message.
-			managedValue(_, kind) then try self.requireStorableGlobal(decl, tag: managedConstValueTag(kind))
-			poisoned then break 'outcome'
+			// ⭐ **NOTHING A TOP-LEVEL BINDING CAN FOLD TO IS UNSTORABLE ANY MORE** (P1.7 slice 2a). A
+			// scalar occupies its `.data` slot as a value; a MANAGED one occupies it as a POINTER that
+			// `__module_init` fills before `main` (see `ModuleInit`). The `requireStorableGlobal` guard
+			// that used to stand here — the E2015 refusing `var s = "hi"` — is gone with the reason for
+			// it, and its remaining half lives in `globalStdType`, which was already the other copy of
+			// the same enumeration and is now the only one.
+			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
+			poisoned to managedValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
-
-	// ⚠ **A TOP-LEVEL `var` MUST BE A SCALAR — a `.data` slot holds a scalar IMAGE, not a pointer.**
-	// Rejected AT THE DECLARATION, which is the line the user wrote and the only place the diagnostic
-	// can name it; a use site would report against code that is merely reading a name.
-	//
-	// ⭐ **IT IS LIVE AS OF P1.7a, and it is the guard it was written to be.** It used to fire on
-	// nothing — the evaluator folded integers and bools only, so a `var s = "hi"` was already rejected
-	// upstream as a non-constant initializer — and was kept "for the day the evaluator LEARNS a type
-	// before the backend can store one". That day is this rung: the evaluator now folds a managed
-	// LITERAL (`raiseBindingFailure` hands its tag straight here), so `var s = "hi"` and
-	// `var b = b"ab"` are refused HERE, by this one rule, while their `let` twins pass. P1.0d.4's
-	// float went the other way and simply passed, exactly as predicted: a double is a scalar.
-	//
-	// A MANAGED `var` is the genuinely harder feature and not merely an unwritten arm: its slot would
-	// hold a POINTER to a record built before `main` runs, which is module initialization, and shv2
-	// deliberately has none (see `emitManagedConstant` for what a `let` does instead).
-	//
-	// `globalStdType` is the same decision's other half, and it panics where this reports: a decl that
-	// reached the backend unstorable is an invariant break, a decl the USER wrote unstorable is a
-	// diagnostic.
-	function requireStorableGlobal(decl TopLevelDecl, tag ValueTypeTag) throws ParseError
-		if not decl.mutable 'constantNeedsNoStorage'
-			return
-		end 'constantNeedsNoStorage'
-		// A float is a SCALAR — 8 bytes of `.data`, exactly as an `int` is, and `globalStdType` gets
-		// the width from the same table the lowering uses. What the rule is really asking is
-		// "does this type need the HEAP?", and a double no more needs one than an i64 does.
-		if tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.float 'scalar'
-			return
-		end 'scalar'
-
-		throw ParseError.unsupported("a top-level `var` of type '{typeTagName(tag)}' (a `.data` slot holds a scalar image, so a managed global's slot would have to hold a pointer to a record built before `main` runs — module initialization, which shv2 has none of; only `int`/`bool`/`float` globals have storage today, and an immutable `let` needs none)", line: decl.nameLine, column: decl.nameColumn)
-	end 'requireStorableGlobal'
 
 	// Re-raise a diagnostic the constant evaluator recorded earlier, on another file's behalf. It
 	// exists only to give the borrowed payload a scope of its own — see `raiseConstantFailure`.
@@ -7956,18 +7941,48 @@ export type Parser
 	// register. The check happens BEFORE the store is emitted, so a rejected program emits no op.
 	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token) throws ParseError
 		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath) 'global'
-			found(label, tag) then try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, tag: tag)
+			found(label, valueType) then try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
 		end 'global'
 	end 'parseTopLevelAssignment'
 
 	// Parse the right-hand side, check it against the global's declared type, and store it.
-	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, tag ValueTypeTag) throws ParseError
+	//
+	// ⭐⭐ **A MANAGED GLOBAL'S WRITE IS THREE THINGS, NOT ONE** (P1.7 slice 2a): take ownership of the new
+	// value, RELEASE the record the slot was holding, then store. The order matters in both directions —
+	// the release must come after the new value is settled (it may be built from the old one) and before
+	// the store overwrites the only pointer to it.
+	//
+	// ⚠ **THE OLD-VALUE DECREF IS UNCONDITIONAL, WITH NO NULL TEST, AND THAT RESTS ON `__module_init`.**
+	// Both reference compilers guard it (`EmitDecrefValueIfNonnull`, `__mm_decref_maybenull_helper`) and
+	// then have to special-case the initializer function BY NAME to suppress it, because in their design a
+	// global's first store IS an ordinary store into a slot that is still zero. shv2's initializing store
+	// is not on this path at all — it is `ModuleInit`'s own emission, in a function that runs before
+	// `main` — so every store reaching HERE is a re-assignment of a slot `__module_init` already filled.
+	// One fact ("the slot is non-null throughout `main`") replaces a runtime branch on every write and a
+	// name match in the middle of the lowering.
+	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType) throws ParseError
+		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
 
-		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: tag, noun: "global")
+		let declared = maxonTypeTag(valueType)
+		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: declared, noun: "global")
 
-		self.emitGlobalStore(label, tag: tag, value: value, range: SourceRange.ofToken(nameTok))
+		let range = SourceRange.ofToken(nameTok)
+		if not self.signatures.typeIsManaged(valueType) 'scalarGlobal'
+			self.emitGlobalStore(label, valueType: valueType, value: value, range: range)
+			return
+		end 'scalarGlobal'
+
+		// The slot is DURABLE STORAGE, exactly as a struct field or a union payload is, so the new value
+		// arrives through the one door that decides copy-vs-move for all of them: a borrowed String is
+		// COPIED into a fresh owned record, an already-owned value is MOVED (its source binding poisoned,
+		// or its pending statement-end drop cancelled). A second spelling here would be free to leak the
+		// temporary or double-free the source.
+		let owned = try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsText(declared), anchor: nameTok, range: range)
+
+		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
+		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
 	end 'emitCheckedGlobalStore'
 
 	// **THE MUTABILITY RULE FOR A LOCAL BINDING — asked by both statements that write one**: the
@@ -16500,28 +16515,64 @@ export type Parser
 			return try self.dispatchMethodOnBinding(func, binding: self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok, resultUsed: resultUsed)
 		end 'localReceiver'
 
-		// ⭐ **A TOP-LEVEL MANAGED CONSTANT IS A RECEIVER (P1.7a)** — `Live.count()`, `name.byteLength()`.
-		// It is not a binding and not a capture, so without this arm the base reads as a TYPE NAME and the
-		// call is mangled to a callee `Live.count` no file declares (E3004, measured).
+		// ⭐ **A TOP-LEVEL MANAGED BINDING IS A RECEIVER** — a `let` (`Live.count()`, `name.byteLength()`,
+		// P1.7a) or a `var` (`msg.append("!")`, `Buffer.count()`, P1.7 slice 2a). Neither is a binding in
+		// scope and neither is a capture, so without this arm the base reads as a TYPE NAME and the call is
+		// mangled to a callee `Live.count` no file declares (E3004, measured).
 		//
-		// It materializes the literal and then hands the value to the SAME `dispatchMethodOnBinding` a
-		// local receiver goes through, wearing a synthetic IMMUTABLE binding. That is not a shortcut: the
-		// dispatch already routes by TAG (String / Array / Set / conformer / struct) and already enforces
-		// the immutability rule a `let` receiver owes (`parseStringAppend`'s E3019). Re-deciding either
-		// here would be a second copy of both.
-		if self.managedConstantReceiverAt(self.pos) 'managedConstantReceiver'
-			let value = try self.topLevelBindingReference(baseTok)
-			return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: self.typeOf(value), mutable: false, boundValue: value), baseTok: baseTok, resultUsed: resultUsed)
-		end 'managedConstantReceiver'
+		// It materializes the receiver and then hands it to the SAME `dispatchMethodOnBinding` a local
+		// receiver goes through, wearing a SYNTHETIC binding. That is not a shortcut: the dispatch already
+		// routes by TAG (String / Array / Set / conformer / struct) and already enforces the one
+		// immutable-receiver rule (`requireMutableReceiver`, E3019). Re-deciding either here would be a
+		// second copy of both.
+		if self.managedTopLevelReceiverAt(self.pos) 'managedTopLevelReceiver'
+			return try self.dispatchManagedTopLevelReceiver(func, baseTok: baseTok, resultUsed: resultUsed)
+		end 'managedTopLevelReceiver'
 
 		// A CAPTURED enclosing struct is the receiver (P1.5-A2b-2): `b.doubled()` inside a closure that
 		// captures the struct `b`. `methodCallsAt` already gated this — the base is not in the closure's own
 		// scope but resolves into a capture scope — so a `notCaptured` here is a driver invariant violation.
 		match try self.captureScopeOf(baseTok) 'captured'
 			found(enclosing) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, resultUsed: resultUsed)
-			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a top-level managed constant, nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
+			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a top-level managed binding, nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
 		end 'captured'
 	end 'parseMethodCall'
+
+	// ⭐⭐ **BUILD THE SYNTHETIC BINDING A TOP-LEVEL MANAGED RECEIVER DISPATCHES THROUGH, AND ITS ONE
+	// DIFFERENCE: `mutable`.** The `let` and the `var` arrive at the identical dispatcher with the identical
+	// value shape — a pointer to a managed record — and differ in exactly the question `requireMutableReceiver`
+	// asks, which is what makes `Live.push(1)` an E3019 and `Buffer.push(1)` legal.
+	//
+	// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
+	// receiver-writing method rewrites the RECORD in place and never moves it: `__str_append` grows a String
+	// through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the element
+	// buffer while the 48-byte record stays put (`parseArrayMethodCall` states the same invariant for a local
+	// receiver). So the pointer in the `.data` slot is still the right pointer after the call, and a store-back
+	// would be a second write of a value that did not change.
+	//
+	// The loaded pointer is BORROWED — the slot owns it (see `emitGlobalLoad`) — so it is dropped by nothing
+	// here and by `__maxon_global_cleanup` at exit.
+	function dispatchManagedTopLevelReceiver(func IrFunction, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		match self.managedReceiverBindingOf(baseTok) 'binding'
+			// A `let`: the literal is re-materialized at the use, exactly as a bare reference to it would be,
+			// and the binding is IMMUTABLE — which is what makes `Live.push(1)` E3019.
+			constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
+			// A `var`: the slot's current occupant, loaded, and the binding is MUTABLE.
+			global(label, valueType) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: true, resultUsed: resultUsed)
+			none then panic("dispatchManagedTopLevelReceiver: '{String.from(baseTok.value)}' names no visible managed top-level binding, but `managedTopLevelReceiverAt` gated this call — the two read the same resolution and cannot disagree")
+		end 'binding'
+	end 'dispatchManagedTopLevelReceiver'
+
+	// ⭐ **THE SHAPE OF A SYNTHETIC RECEIVER BINDING, DECIDED ONCE.** A top-level managed receiver is not a
+	// declaration the parser read, so its `VarInfo` is invented here — and every field of it is a claim the
+	// dispatcher acts on: the NAME an E3019 would blame, the TYPE the tag-routing reads, `mutable`, and
+	// (by omission) `isParameter: false`, which is what keeps `immutableReceiverNameOf`'s parameter
+	// exemption from silently admitting a write to a `let`-bound constant. Two arms building their own
+	// would be two chances for one of those to drift.
+
+	function dispatchOnManagedReceiver(func IrFunction, baseTok Token, value ValueId, varType MaxonType, mutable bool, resultUsed bool) returns ValueId throws ParseError
+		return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: varType, mutable: mutable, boundValue: value), baseTok: baseTok, resultUsed: resultUsed)
+	end 'dispatchOnManagedReceiver'
 
 	// ⭐ **ROUTE A METHOD CALL BY ITS RECEIVER'S TYPE.** The cursor sits ON the base token; every arm
 	// consumes it and the `.` itself. Shared by a LOCAL receiver and a top-level MANAGED CONSTANT one,
@@ -16568,43 +16619,76 @@ export type Parser
 		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
-	// ⭐ **IS THE `<base> . <member> (` AT `index` A METHOD CALL ON A TOP-LEVEL MANAGED CONSTANT?** (P1.7a)
-	// The ONE predicate behind both askers — `methodCallsAt` (is this token shape a method call at all?)
-	// and `parseMethodCall` (build the receiver) — for `methodCallsAt`'s own stated reason: a receiver
-	// test written twice is free to drift, and the drift is silent.
+	// ⭐ **IS THE `<base> . <member> (` AT `index` A METHOD CALL ON A TOP-LEVEL MANAGED BINDING?** — a
+	// `let` (P1.7a) or a `var` (P1.7 slice 2a). The ONE predicate behind both askers — `methodCallsAt` (is
+	// this token shape a method call at all?) and `parseMethodCall` (build the receiver) — for
+	// `methodCallsAt`'s own stated reason: a receiver test written twice is free to drift, and the drift
+	// is silent.
+	//
+	// ⭐ **BOTH KINDS ANSWER HERE, THROUGH ONE FILTER AND ONE `staticCallClaimsBase`.** They are the same
+	// question — "does this base name a managed record rather than a type?" — and asking it twice would
+	// pay the type-reading probe twice for every managed base and, worse, allow a future rule taught to
+	// one door and not the other. Which KIND it is matters only at the dispatch
+	// (`dispatchManagedTopLevelReceiver`), where it decides `mutable`.
 	//
 	// It takes the base's INDEX rather than its token because the answer needs the MEMBER name too
 	// (`staticCallClaimsBase`), and deriving that from a token would re-assume the cursor is parked on
 	// the base — true at both askers today, and exactly the premise that quietly stops holding.
 	//
-	// ⚠ **THE `namesManagedConstant` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
-	// `methodCallsAt` runs at every dotted-call shape in the program, and `constantValueOf`'s
-	// file-scoped probe BUILDS A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). Behind
-	// this filter a base that is not spelled like any managed constant in the program — every static
-	// call, `Widget.create(…)` and `String.from(…)` alike, which is nearly every base that reaches here
-	// — costs ONE hash of bytes it already holds and allocates nothing. `staticCallClaimsBase` sits
-	// BEHIND the same filter and inherits the same model: it runs only for a base actually spelled like
-	// a managed constant, so its mangled-callee probe is off the hot path entirely.
+	// ⚠ **THE `namesManagedTopLevel` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
+	// `methodCallsAt` runs at every dotted-call shape in the program, and the file-scoped probes below
+	// BUILD A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). Behind this filter a base
+	// that is not spelled like any managed binding in the program — every static call, `Widget.create(…)`
+	// and `String.from(…)` alike, which is nearly every base that reaches here — costs ONE hash of bytes
+	// it already holds and allocates nothing. `staticCallClaimsBase` sits BEHIND the same filter and
+	// inherits the same model: it runs only for a base actually spelled like a managed binding, so its
+	// mangled-callee probe is off the hot path entirely.
 	//
 	// It is a NAME set rather than a whole-program bool for a measured reason: a bool goes permanently
-	// true at the first managed constant, and every static dotted call in the program then pays the full
-	// probe to be told no. See `ProgramSignatures.managedConstantNames`.
-	function managedConstantReceiverAt(index TokenIndex) returns bool
+	// true at the first managed binding, and every static dotted call in the program then pays the full
+	// probe to be told no. See `ProgramSignatures.managedTopLevelNames`.
+	function managedTopLevelReceiverAt(index TokenIndex) returns bool
 		let tok = self.tokenAt(index)
-		if not self.signatures.namesManagedConstant(tok.value) 'notAManagedConstantName'
+		if not self.signatures.namesManagedTopLevel(tok.value) 'notAManagedName'
 			return false
-		end 'notAManagedConstantName'
+		end 'notAManagedName'
 
 		if self.staticCallClaimsBase(index) 'typeReadingWins'
 			return false
 		end 'typeReadingWins'
 
-		return match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
-			foundManaged gives true
-			found gives false
-			notFound gives false
+		return match self.managedReceiverBindingOf(tok) 'binding'
+			constant to global gives true
+			none gives false
+		end 'binding'
+	end 'managedTopLevelReceiverAt'
+
+	// ⭐ **WHAT A MANAGED TOP-LEVEL NAME DENOTES AT A RECEIVER POSITION — resolved ONCE, read twice.** The
+	// predicate above asks it to decide whether the token shape is a method call at all; the dispatch below
+	// asks it to build the receiver. Two probes with two arm orders would be two encodings of "which door
+	// claims this name", and the failure mode is silent: the predicate claiming the shape for a door the
+	// dispatch then resolves differently ends in the `none` panic at best and a wrong receiver at worst.
+	//
+	// One storage key holds ONE declaration (`recordDecl` is first-wins on it), so the two doors are
+	// disjoint by construction and the order below is a cost preference, not a precedence: the constant is
+	// asked first because a managed `let` is the commoner declaration.
+	//
+	// ⚠ It BOXES a union per call, and that is affordable only because of the caller's name filter: it runs
+	// solely for a base actually spelled like a managed binding, i.e. once per managed-receiver call SITE at
+	// parse time, never per dotted call in the program (see `managedTopLevelReceiverAt`'s cost note). A
+	// program with no managed binding — the whole scale corpus — allocates nothing here.
+	function managedReceiverBindingOf(tok Token) returns ManagedReceiverBinding
+		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
+			found then break 'constant'
+			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
+			notFound then break 'constant'
 		end 'constant'
-	end 'managedConstantReceiverAt'
+
+		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
+			found(label, valueType) gives ManagedReceiverBinding.global(label, valueType: valueType)
+			notFound gives ManagedReceiverBinding.none
+		end 'global'
+	end 'managedReceiverBindingOf'
 
 	// ⭐⭐ **DOES A TYPE-BASED READING ALREADY CLAIM THIS `<base> . <member> (`?** A managed constant is the
 	// WEAKEST claim on that shape, and this is what says so.
@@ -19174,7 +19258,7 @@ export type Parser
 	// this emits perfectly correct IR that a later pass silently breaks.
 	function topLevelGlobalRead(tok Token) returns ValueId throws ParseError
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
-			found(label, tag) then return self.emitGlobalLoad(label, tag: tag, range: SourceRange.ofToken(tok))
+			found(label, valueType) then return self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok))
 			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
 	end 'topLevelGlobalRead'
@@ -19500,8 +19584,12 @@ export type Parser
 	// OFFSET 0, ALWAYS: each global is its OWN labelled slot, so the label already names the exact
 	// address and there is nothing to add to it. The offset field is not dead weight — it is what
 	// P1.1's `point.x` will carry, through this same op.
-	function emitGlobalLoad(label ByteArray, tag ValueTypeTag, range SourceRange) returns ValueId
-		let valueType = constantValueType(tag)
+	//
+	// ⭐ **A MANAGED GLOBAL'S LOAD IS A BORROW** (P1.7 slice 2a): the result is the record's ADDRESS, and
+	// the `.data` slot keeps owning it, so the value is minted WITHOUT `markValueOwnsHeap` and nothing
+	// drops it. That is not an omission — a scope-exit drop of a borrowed global would free the program's
+	// only copy while the slot still points at it, and the cleanup after `main` would then double-free.
+	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 		let addr = self.emitGlobalAddr(label, range: range)
 		let result = self.mintValueOfType(valueType)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: addr, offset: GlobalSlotOffset, valueType: valueType), range: range)
@@ -19510,9 +19598,9 @@ export type Parser
 
 	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
 	// `emitGlobalLoad`. It defines no value: a store is a statement.
-	function emitGlobalStore(label ByteArray, tag ValueTypeTag, value ValueId, range SourceRange)
+	function emitGlobalStore(label ByteArray, valueType MaxonType, value ValueId, range SourceRange)
 		let addr = self.emitGlobalAddr(label, range: range)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(addr, offset: GlobalSlotOffset, value: value, valueType: constantValueType(tag)), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(addr, offset: GlobalSlotOffset, value: value, valueType: valueType), range: range)
 	end 'emitGlobalStore'
 
 	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed
@@ -21545,16 +21633,16 @@ export type Parser
 			return false
 		end 'notADottedCall'
 		// A LOCAL receiver, a CAPTURED enclosing one (`b.doubled()` inside a closure — P1.5-A2b-2), or a
-		// top-level MANAGED CONSTANT (`Live.count()` — P1.7a). Each is a VALUE the method dispatches on,
-		// which is what separates it from a static call on a TYPE name. The managed constant is asked LAST
-		// because it is the only one of the three that can allocate (see `managedConstantReceiverAt`), and
-		// a local or captured base has already answered by then.
+		// top-level MANAGED BINDING (`Live.count()` — P1.7a; `msg.append("!")` — P1.7 slice 2a). Each is a
+		// VALUE the method dispatches on, which is what separates it from a static call on a TYPE name. The
+		// managed binding is asked LAST because it is the only one of the three that can allocate (see
+		// `managedTopLevelReceiverAt`), and a local or captured base has already answered by then.
 		//
-		// ⚠ The managed constant is ALSO the only one of the three whose name can belong to a declared
+		// ⚠ The managed binding is ALSO the only one of the three whose name can belong to a declared
 		// TYPE as well — which is why it, alone, has to weigh itself against the type-based readings of
 		// this same shape (`staticCallClaimsBase`) rather than simply claiming it.
 		let baseTok = self.tokenAt(index)
-		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) or self.managedConstantReceiverAt(index)
+		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) or self.managedTopLevelReceiverAt(index)
 	end 'methodCallsAt'
 
 	// **The token shape of a `__Builtins` INTRINSIC CALL STATEMENT** — `__Builtins . <member> (`, the one
