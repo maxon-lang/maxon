@@ -47,11 +47,15 @@ function initBodies(bodies PlanetArray)
 	let uranus = Planet.create(1.28943695621391310e+01, y: -1.51111514016986312e+01, z: -2.23307578892655734e-01, vx: 2.96460137564761618e-03 * daysPerYear, vy: 2.37847173959480950e-03 * daysPerYear, vz: -2.96589568540237556e-05 * daysPerYear, mass: 4.36624404335156298e-05 * solarMass)
 	let neptune = Planet.create(1.53796971148509165e+01, y: -2.59193146099879641e+01, z: 1.79258772950371181e-01, vx: 2.68067772490389322e-03 * daysPerYear, vy: 1.62824170038242295e-03 * daysPerYear, vz: -9.51592254519715870e-05 * daysPerYear, mass: 5.15138902046611451e-05 * solarMass)
 
-	try bodies.set(0, value: sun) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
-	try bodies.set(1, value: jupiter) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
-	try bodies.set(2, value: saturn) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
-	try bodies.set(3, value: uranus) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
-	try bodies.set(4, value: neptune) otherwise panic("initBodies: the array is sized bodyCount, and this program has five bodies")
+	// Appended rather than written into pre-sized slots: `resize` cannot grow an array of structs
+	// (E3106 — a grown slot would hold no element, since Maxon has no default constructor), and
+	// pre-sizing bought nothing here because every slot is filled immediately anyway. Push order
+	// IS the body order the rest of the program indexes by.
+	bodies.push(sun)
+	bodies.push(jupiter)
+	bodies.push(saturn)
+	bodies.push(uranus)
+	bodies.push(neptune)
 end 'initBodies'
 
 function offsetMomentum(bodies PlanetArray, n Integer)
@@ -148,7 +152,7 @@ function main() returns ExitCode
 	let timeStep = 0.01
 
 	var bodies = PlanetArray.create()
-	bodies.resize(bodyCount)
+	// initBodies pushes all bodyCount bodies; the array starts empty.
 
 	initBodies(bodies)
 	offsetMomentum(bodies, n: bodyCount)
