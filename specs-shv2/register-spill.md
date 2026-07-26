@@ -1181,3 +1181,50 @@ end 'main'
 ```exitcode
 56
 ```
+
+<!-- test: callee-saved-double-survives-a-callee -->
+A caller holding an f64 **across a call** is confined to the callee-saved half of the float file
+(xmm6–15 on x64, d8–d15 on arm64), and the callee it calls preserves exactly the ones its own
+colouring used. This case pins the FULL 64 BITS of that preserve, which nothing else did.
+
+The nesting is the test: `outer` keeps `42.5` live across its call to `inner`, and `inner` — which
+keeps `2.0` live across its own call to `leaf` — therefore colours into, and must save and restore,
+the very register `outer` left its double in. No register PRESSURE is involved anywhere: three
+functions, one float each.
+
+⚠ Its sibling `a-reload-inherits-its-victims-register-file` pins the SPILL SLOT and this one pins the
+CALLEE-SAVE SLOT, and a preserve that moves only half a double passes that one while failing this
+one — the spilled value there is reloaded by the same function that stored it, so a symmetric
+half-width store/reload still round-trips whatever it truncated. Here the store and the reload are in
+`inner` while the VALUE belongs to `outer`, so a half-width preserve destroys a double the callee
+never touched. arm64 emitted `stur s8` for `stur d8` (the size field in bits 31:30 reading `10`, the
+32-bit S form, where 64-bit D is `11`) and the two spellings differ in one hex digit; `42.5` came back
+as its low word — zero — and this returned 3.
+
+`leaf(0)` = 1, plus `trunc(2.0)` = 2, plus `trunc(42.5)` = 42, so 45.
+```maxon
+function leaf(x int) returns int
+	return x + 1
+end 'leaf'
+
+function inner(k int) returns int
+	let p = 2.0
+	var acc = k
+	acc = leaf(acc)
+	return acc + trunc(p)
+end 'inner'
+
+function outer(k int) returns int
+	let a = 42.5
+	var acc = k
+	acc = inner(acc)
+	return acc + trunc(a)
+end 'outer'
+
+function main() returns ExitCode
+	return outer(0) as ExitCode
+end 'main'
+```
+```exitcode
+45
+```

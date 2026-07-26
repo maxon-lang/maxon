@@ -204,10 +204,22 @@ let Arm64LoadStoreImm12Mask = 0xFFF
 // Unscaled signed-offset forms (STUR/LDUR, simm9 at bit 12, ±256). Below the 256-byte threshold a
 // spill/reload uses these; at or above it the scaled form is MANDATORY — STUR's 9-bit field silently
 // truncates any offset ≥ 256 and would spill to the wrong slot (M1 trap).
+//
+// ⚠ BITS 31:30 ARE THE SIZE FIELD, AND FOR THE FP PAIR THEY MUST BE `11` (64-bit D), NOT `10` (32-bit
+// S). The two spellings differ in ONE HEX DIGIT and BOTH ASSEMBLE, so the wrong one is not a crash —
+// it is a `stur s0` where a `stur d0` was meant, which writes the low HALF of the double and leaves
+// the reload to invent the rest. A spilled `9.0` (0x4022000000000000) round-trips as its low word,
+// which is 0x00000000, i.e. **0.0** — a silently wrong ANSWER with no fault to find it by. It hid
+// because the SCALED forms below (`Arm64OpStrD`/`Arm64OpLdrD`, size=11) were always correct and the
+// unscaled pair is chosen only under the 256-byte threshold, which is where nearly every frame lives.
+// The same truncation hits the callee-saved d8–d15 preserve/restore, so a callee destroys the top
+// half of a double its CALLER left there and never touched itself. The spill half is pinned by
+// `register-spill/a-reload-inherits-its-victims-register-file`; the callee-save half was pinned by
+// NOTHING and is now `register-spill/callee-saved-double-survives-a-callee`.
 let Arm64OpSturX = 0xF8000000
 let Arm64OpLdurX = 0xF8400000
-let Arm64OpSturD = 0xBC000000
-let Arm64OpLdurD = 0xBC400000
+let Arm64OpSturD = 0xFC000000
+let Arm64OpLdurD = 0xFC400000
 let Arm64UnscaledImm9Shift = 12
 let Arm64UnscaledImm9Mask = 0x1FF
 let Arm64UnscaledSpillThreshold = 256

@@ -1,0 +1,63 @@
+// Test: float-locals-read-after-each-of-four-calls
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	var acc = 0
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	acc = work(acc)
+	acc = acc + trunc(a) + trunc(b)
+	return acc
+end 'main'
+---
+ExitCode: 16
+---
+func @work {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, d9
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.fpLoadRdata d9, [rdata + __fconst_1]
+    arm64.movImm x0, 0
+    arm64.bl work
+    arm64.fcvtzs x1, d8
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d9
+    arm64.add x0, x0, x1
+    arm64.bl work
+    arm64.fcvtzs x1, d8
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d9
+    arm64.add x0, x0, x1
+    arm64.bl work
+    arm64.fcvtzs x1, d8
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d9
+    arm64.add x0, x0, x1
+    arm64.bl work
+    arm64.fcvtzs x1, d8
+    arm64.add x0, x0, x1
+    arm64.fcvtzs x1, d9
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
