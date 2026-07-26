@@ -1,0 +1,45 @@
+// P6 coverage gate sample. Deterministic by construction: pure integer arithmetic, no stdlib calls,
+// no green threads, and a distinct exit code (12 = 1 + 1 + 10).
+//
+// It exists to put all FOUR line states in one listing, because three of them are easy to confuse:
+//   - `classify`'s header runs 3 times and its `return 10` once — real counts
+//   - `total = 0` inside `if total > 1000` is real code the run never reaches — never executed
+//   - `neverCalled` is removed whole by dead-function elimination — NO CODE WAS EMITTED, which is a
+//     different fact from "untested" and must not be reported as if it were
+//   - this comment, the blank lines and every `end` carry no coverage point at all
+//
+// It also puts both arms of two `if`s on the record, INCLUDING the `else` neither one writes. That
+// arm has no source text, so no line table can ever hold a row for it; instrumentation is the only
+// place it can be counted, which is the whole reason this rung mints a point per branch arm.
+
+typealias ExitCode = int(0 to 255)
+typealias Small = int(0 to 1000000)
+
+function neverCalled(n Small) returns Small
+	let doubled = n + n
+	return doubled
+end 'neverCalled'
+
+function classify(n Small) returns Small
+	if n > 1 'big'
+		return 10
+	end 'big'
+
+	return 1
+end 'classify'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+
+	while i < 3 'loop'
+		total = total + classify(i)
+		i = i + 1
+	end 'loop'
+
+	if total > 1000 'never'
+		total = 0
+	end 'never'
+
+	return total
+end 'main'

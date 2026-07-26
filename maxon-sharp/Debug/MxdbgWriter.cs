@@ -23,6 +23,7 @@ public sealed class MxdbgWriter {
   private readonly List<LineRec> _lines = [];
   private readonly List<TypeRec> _types = [];
   private readonly List<FieldRec> _fields = [];
+  private readonly List<CovRec> _covPoints = [];
 
   private readonly record struct FuncRec(
     uint NameOff, uint NameLen, uint CodeStart, uint CodeEnd, uint FrameSize, uint ParamCount);
@@ -36,6 +37,9 @@ public sealed class MxdbgWriter {
 
   private readonly record struct LocalRec(
     uint NameOff, uint NameLen, uint LocKind, uint LocValue, uint TypeId, uint ScopeStart, uint ScopeEnd);
+
+  private readonly record struct CovRec(
+    uint CodeOffset, uint FileId, uint Line, uint Col, uint FuncNameOff, uint FuncNameLen, uint Flags);
 
   /// Intern a string into the shared pool, returning its `(offset,len)`. The empty string interns to
   /// `(0,0)` and writes nothing.
@@ -105,6 +109,17 @@ public sealed class MxdbgWriter {
       new LocalRec(off, len, (uint)locKind, unchecked((uint)locValue), typeId, scopeStart, scopeEnd));
   }
 
+  /// <summary>
+  /// Append one coverage point. Its COUNTER INDEX is its position in this table, so points must be
+  /// added in counter order and every point must be added — including one the optimizer left with no
+  /// code (<see cref="MxdbgFormat.CovFlagEliminated"/>, <paramref name="codeOffset"/> 0). Skipping
+  /// one would slide every later record against the counter array it describes.
+  /// </summary>
+  public void AddCoveragePoint(uint codeOffset, uint fileId, uint line, uint col, string funcName, uint flags) {
+    var (nameOff, nameLen) = Intern(funcName);
+    _covPoints.Add(new CovRec(codeOffset, fileId, line, col, nameOff, nameLen, flags));
+  }
+
   /// Serialize the accumulated tables into a `.mxdbg` image bound to <paramref name="buildId"/>.
   public byte[] Build(ulong buildId, string targetTriple) {
     var (tripleOff, tripleLen) = Intern(targetTriple);
@@ -138,13 +153,14 @@ public sealed class MxdbgWriter {
     uint typeTableOff = lineTableOff + (uint)(lines.Count * MxdbgFormat.LineEntrySize);
     uint fieldTableOff = typeTableOff + (uint)(_types.Count * MxdbgFormat.TypeEntrySize);
     uint localTableOff = fieldTableOff + (uint)(_fields.Count * MxdbgFormat.FieldEntrySize);
-    uint stringPoolOff = localTableOff + (uint)(locals.Count * MxdbgFormat.LocalEntrySize);
+    uint covTableOff = localTableOff + (uint)(locals.Count * MxdbgFormat.LocalEntrySize);
+    uint stringPoolOff = covTableOff + (uint)(_covPoints.Count * MxdbgFormat.CovEntrySize);
 
     var buf = new List<byte>((int)stringPoolOff + _stringPool.Count);
 
     WriteHeader(buf, buildId, tripleOff, tripleLen, stringPoolOff,
       fileTableOff, funcTableOff, lineTableOff, (uint)lines.Count,
-      typeTableOff, fieldTableOff, localTableOff, (uint)locals.Count);
+      typeTableOff, fieldTableOff, localTableOff, (uint)locals.Count, covTableOff);
 
     foreach (var (pathOff, pathLen) in _files) {
       MxdbgFormat.Put(buf, pathOff);
@@ -201,6 +217,16 @@ public sealed class MxdbgWriter {
       MxdbgFormat.Put(buf, lc.ScopeEnd);
     }
 
+    foreach (var cp in _covPoints) {
+      MxdbgFormat.Put(buf, cp.CodeOffset);
+      MxdbgFormat.Put(buf, cp.FileId);
+      MxdbgFormat.Put(buf, cp.Line);
+      MxdbgFormat.Put(buf, cp.Col);
+      MxdbgFormat.Put(buf, cp.FuncNameOff);
+      MxdbgFormat.Put(buf, cp.FuncNameLen);
+      MxdbgFormat.Put(buf, cp.Flags);
+    }
+
     buf.AddRange(_stringPool);
     return [.. buf];
   }
@@ -219,7 +245,7 @@ public sealed class MxdbgWriter {
 
   private void WriteHeader(List<byte> buf, ulong buildId, uint tripleOff, uint tripleLen,
       uint stringPoolOff, uint fileTableOff, uint funcTableOff, uint lineTableOff, uint lineCount,
-      uint typeTableOff, uint fieldTableOff, uint localTableOff, uint localCount) {
+      uint typeTableOff, uint fieldTableOff, uint localTableOff, uint localCount, uint covTableOff) {
     // The header is fixed-size and written positionally; grow the buffer, then patch fields by offset.
     // Each field is one FieldSize-byte little-endian word, written through the shared primitive so the
     // stride is stated once (matching how the reader consumes them).
@@ -245,7 +271,8 @@ public sealed class MxdbgWriter {
     Hdr(span, MxdbgFormat.OffTypeCount, (uint)_types.Count);
     Hdr(span, MxdbgFormat.OffFieldTableOff, fieldTableOff);
     Hdr(span, MxdbgFormat.OffFieldCount, (uint)_fields.Count);
-    // Coverage section slots stay 0 until P6.
+    Hdr(span, MxdbgFormat.OffCovTableOff, covTableOff);
+    Hdr(span, MxdbgFormat.OffCovCount, (uint)_covPoints.Count);
   }
 
   private static void Hdr(Span<byte> span, int at, uint value) =>

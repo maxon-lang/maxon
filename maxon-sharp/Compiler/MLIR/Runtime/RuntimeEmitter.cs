@@ -18,8 +18,12 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   /// Consolidates the identical runtime emission sequence used by both platforms.
   /// </summary>
   public void EmitAllMemoryManagerFunctions(bool mmTrace, bool mmDebug, List<string?>? tagTable,
-      List<string?>? tagNames, List<string?>? logNames) {
+      List<string?>? tagNames, List<string?>? logNames, int coveragePointCount, string coverageDataPath) {
     var tags = tagTable ?? [];
+    // Ahead of everything else: the counter image must exist as a global before any instrumented
+    // user function's increment resolves against it, and before the leak check (which calls the
+    // dump) is emitted.
+    if (Compiler.Coverage) EmitCoverageGlobals(coveragePointCount, coverageDataPath);
     EmitMmGlobals(mmTrace, mmDebug, tags);
     EmitMmTraceFunctions(mmTrace, tags);
     EmitMmAlloc(mmTrace, mmDebug);
@@ -43,6 +47,7 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
     if (!Compiler.NoDebugAgent) {
       EmitDebugAgentFunctions();
     }
+    if (Compiler.Coverage) EmitCoverageDump(coveragePointCount);
   }
 
   // GreenThread (gt) and ProcContext (P) struct layouts live in GtLayout.cs.

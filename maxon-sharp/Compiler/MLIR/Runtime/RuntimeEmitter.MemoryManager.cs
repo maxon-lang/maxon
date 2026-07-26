@@ -1,3 +1,5 @@
+using MaxonSharp.Debug;
+
 namespace MaxonSharp.Compiler.Ir.Runtime;
 
 /// <summary>
@@ -2263,6 +2265,14 @@ public partial class RuntimeEmitter {
     // MAXON_SLAB_STATS exit dump (PLAN 1a.2): stderr-only, no-op unless enabled.
     // Runs here so it lands on the normal process-exit path alongside the leak gate.
     EmitSlabStatsDump();
+
+    // The `--coverage` dump, for the same reason and BEFORE the counters below are read: it borrows
+    // the executable-path buffer through mm_raw_alloc and gives it back, so reading the leak
+    // counters first would see a transient allocation and turn a clean run into exit 101.
+    if (Compiler.Coverage) {
+      _b.MovRegImm(VReg.Arg0, MxcovFormat.StatusCompleted);
+      _b.Call(CoverageDumpLabel);
+    }
 
     EmitLeakCheckForCounter("__mm_alloc_count", "__mm_leak_prefix", "tracked");
 

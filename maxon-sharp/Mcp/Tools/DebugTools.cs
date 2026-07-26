@@ -26,14 +26,6 @@ internal static class DebugTools {
   /// </summary>
   private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(20);
 
-  private const string SourceKindFile = "file";
-  private const string SourceKindSnippet = "snippet";
-  private static readonly string[] SourceKinds = [SourceKindFile, SourceKindSnippet];
-
-  /// The file name a snippet is written under before it is built. It shows up in every stop event's
-  /// `file` field, so it is a name that reads as what it is.
-  private const string DefaultSnippetName = "snippet.maxon";
-
   /// The three stepping commands, named by the driver's own table so this list cannot come to offer a
   /// word the dispatcher does not know.
   private static readonly string[] StepKinds = [
@@ -60,21 +52,7 @@ internal static class DebugTools {
       + "debug_eval / debug_continue against the same Mcp-Session-Id to keep inspecting the same parked "
       + "process, and debug_stop when done. A compile error comes back as the compiler's own diagnostics.",
       [
-        new("source", McpSchema.Object(
-          "The program to debug: either a .maxon file that already exists, or a snippet to write and "
-          + "build in a scratch directory that is deleted when the session ends.", [
-            new("kind", McpSchema.StringEnum(
-              $"'{SourceKindFile}' to build `path`; '{SourceKindSnippet}' to build `text`.", SourceKinds),
-              Required: true),
-            new("path", McpSchema.String(
-              "Path to a single .maxon file, relative to the server's working directory or absolute. "
-              + "A DIRECTORY is refused: build a project with `maxon build <dir>` first."), Required: false),
-            new("text", McpSchema.String("The complete Maxon source of a program with a main()."),
-              Required: false),
-            new("name", McpSchema.String(
-              $"File name to give a snippet (default {DefaultSnippetName}); it is what stop events report "
-              + "as `file`."), Required: false),
-          ]), Required: true),
+        McpSource.Arg("debug"),
         new("breakpoints", McpSchema.ArrayOf(
           "Breakpoints to arm before the program runs. Each is exactly what `break` takes: `<file>:<line>` "
           + "or a function name (matched exactly, then as Type.method, then as a leaf or prefix — an "
@@ -231,7 +209,8 @@ internal static class DebugTools {
     session.Debug = null;
 
     var debug = McpDebugSession.Start(
-      DebugBuild.Compile(ResolveSource(session, args), McpArgs.OptionalBool(args, "debugStream") ?? false),
+      DebugBuild.Compile(McpSource.Resolve(session, args),
+        McpArgs.OptionalBool(args, "debugStream") ?? false, coverage: false),
       McpArgs.OptionalStringArray(args, "args"),
       McpArgs.OptionalStringMap(args, "env"),
       StopTimeoutOf(args),
@@ -318,44 +297,4 @@ internal static class DebugTools {
     return stopTimeout;
   }
 
-  /// <summary>
-  /// The `source` argument as a path on disk: the caller's own file, or a snippet written into the
-  /// session's scratch directory — which the SESSION owns and reaps, so a snippet that fails to compile
-  /// (and therefore never produces a debug session) still leaves nothing behind.
-  /// </summary>
-  private static string ResolveSource(McpSession session, JsonElement args) {
-    var source = McpArgs.RequireObject(args, "source");
-    if (McpArgs.RequireChoice(source, "kind", SourceKinds) == SourceKindFile)
-      return McpArgs.RequireString(source, "path");
-
-    var text = McpArgs.RequireString(source, "text");
-    var name = McpArgs.OptionalString(source, "name") ?? DefaultSnippetName;
-    if (name.Length == 0 || Path.GetFileName(name) != name)
-      throw new McpInvalidParamsException(
-        $"`source.name` must be a bare file name, got '{name}' — a snippet is written into a scratch "
-        + "directory this server owns, not to a path of the caller's choosing.");
-
-    var path = Path.Combine(session.Workspace(), name);
-    WriteSnippetIfChanged(path, text);
-    return path;
-  }
-
-  /// <summary>
-  /// Write a snippet only when its text actually DIFFERS from what is already on disk.
-  ///
-  /// An unconditional write is what stops a snippet from ever hitting the build cache: the cache keys
-  /// a source on its last-write time, so rewriting identical bytes moves the timestamp and forces a
-  /// full recompile of a program that did not change. That made <c>debug_start</c> on an unchanged
-  /// snippet cost a compile every time, while the identical `kind: "file"` call — whose source nobody
-  /// rewrites — was a cache hit. Measured: ~320 ms rewriting, ~27 ms once the cache can see the
-  /// program is current.
-  ///
-  /// The comparison is the bytes themselves rather than a hash: a snippet is a few hundred bytes, so
-  /// a hash would buy nothing and would answer "probably" where this answers.
-  /// </summary>
-  private static void WriteSnippetIfChanged(string path, string text) {
-    if (File.Exists(path) && File.ReadAllText(path) == text) return;
-
-    File.WriteAllText(path, text);
-  }
 }

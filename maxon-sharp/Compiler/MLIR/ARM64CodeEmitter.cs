@@ -28,7 +28,10 @@ public partial class ARM64CodeEmitter() {
   private readonly Dictionary<string, int> _rdataLabels = [];
 
   // ADRP+ADD fixups for globals
-  private readonly List<(int adrpOffset, int addOffset, string name)> _globalAdrpFixups = [];
+  // A fixup targets a global at an OFFSET into it, not merely its base — a coverage counter is
+  // one slot inside the single `__cov_image` blob. (The rdata/symdata/ucddata lists below keep
+  // the two-field shape; only globals have an interior-address consumer.)
+  private readonly List<(int adrpOffset, int addOffset, string name, int addend)> _globalAdrpFixups = [];
   private readonly Dictionary<string, int> _globalLabels = [];
 
   // ADRP+ADD fixups for symdata
@@ -359,7 +362,10 @@ public partial class ARM64CodeEmitter() {
         EmitAdrpAddFixup(adrp.Dest, _rdataAdrpFixups, adrp.RdataLabel);
         break;
       case ARM64AdrpAddGlobalOp adrp:
-        EmitAdrpAddFixup(adrp.Dest, _globalAdrpFixups, adrp.GlobalName);
+        EmitAdrpAddGlobalFixup(adrp.Dest, adrp.GlobalName, 0);
+        break;
+      case ARM64CovIncOp covInc:
+        EmitCoverageIncrement(covInc.PointId);
         break;
       case ARM64AdrpAddSymdataOp adrp:
         EmitAdrpAddFixup(adrp.Dest, _symdataAdrpFixups, adrp.SymdataLabel);
@@ -877,11 +883,46 @@ public partial class ARM64CodeEmitter() {
   }
 
   private void EmitAdrpAddFixup(ARM64Register dest, List<(int, int, string)> fixupList, string label) {
+    var (adrpOffset, addOffset) = EmitAdrpAddPlaceholder(dest);
+    fixupList.Add((adrpOffset, addOffset, label));
+  }
+
+  /// The globals list carries an ADDEND, so it needs its own append. One shared placeholder emitter
+  /// keeps the two instruction pair identical — only the record they file differs.
+  private void EmitAdrpAddGlobalFixup(ARM64Register dest, string label, int addend) {
+    var (adrpOffset, addOffset) = EmitAdrpAddPlaceholder(dest);
+    _globalAdrpFixups.Add((adrpOffset, addOffset, label, addend));
+  }
+
+  private (int adrpOffset, int addOffset) EmitAdrpAddPlaceholder(ARM64Register dest) {
     var adrpOffset = _code.Count;
     EmitWord(0x90000000 | Reg(dest)); // ADRP Xd, #0 (placeholder)
     var addOffset = _code.Count;
     EmitWord(0x91000000 | (Reg(dest) << 5) | Reg(dest)); // ADD Xd, Xd, #0 (placeholder)
-    fixupList.Add((adrpOffset, addOffset, label));
+    return (adrpOffset, addOffset);
+  }
+
+  /// One `--coverage` counter increment: address the slot with the emitter's own scratch pair, then
+  /// `STADD` 1 into it. STADD is `LDADD Xs, XZR, [Xn]` — a single ATOMIC read-modify-write, matching
+  /// the x64 `lock inc`, because green threads run on real OS threads and a plain load/add/store
+  /// would lose counts whenever two processors reached one point together. LSE has been mandatory
+  /// since ARMv8.1 and every Apple Silicon core implements it, which is the only arm64 host this
+  /// backend targets.
+  private void EmitCoverageIncrement(int pointId) {
+    EmitAdrpAddGlobalFixup(ARM64Register.X17, Runtime.RuntimeEmitter.CoverageImageGlobal,
+      Debug.MxcovFormat.HeaderSize + pointId * Debug.MxcovFormat.CounterSize);
+    EmitMovRegImm(ARM64Register.X16, 1);
+    // STADD X16, [X17]: LDADD (64-bit, no acquire/release) with Rt = XZR.
+    EmitWord(0xF8200000u | (Reg(ARM64Register.X16) << 16) | (Reg(ARM64Register.X17) << 5) | 31u);
+  }
+
+  /// Write <paramref name="bytes"/> into a defined global's data at <paramref name="offset"/> — the
+  /// arm64 twin of the x64 patcher, used to stamp the `.mxcov` header (see there for why the values
+  /// are only knowable after emission).
+  public void PatchGlobalBytes(string name, int offset, ReadOnlySpan<byte> bytes) {
+    if (!_globalLabels.TryGetValue(name, out var globalOffset))
+      throw new InvalidOperationException($"Cannot patch undefined global: {name}");
+    for (int i = 0; i < bytes.Length; i++) _data[globalOffset + offset + i] = bytes[i];
   }
 
   private void EmitGlobalAccess(ARM64Register reg, string globalName, int size, bool isStore, bool isFloat, bool is64bit) {
@@ -1157,18 +1198,18 @@ public partial class ARM64CodeEmitter() {
 
   /// Load a global's address into a register via ADRP+ADD
   private void EmitGlobalLeaReg(ARM64Register dest, string globalName) {
-    EmitAdrpAddFixup(dest, _globalAdrpFixups, globalName);
+    EmitAdrpAddGlobalFixup(dest, globalName, 0);
   }
 
   /// Load a 64-bit value from a global into a register via ADRP+ADD+LDR
   private void EmitGlobalLoadReg(ARM64Register dest, string globalName) {
-    EmitAdrpAddFixup(ARM64Register.X17, _globalAdrpFixups, globalName);
+    EmitAdrpAddGlobalFixup(ARM64Register.X17, globalName, 0);
     EmitLoadStoreUnsignedImm(0xF9400000, dest, ARM64Register.X17, 0, 8); // LDR dest, [X17]
   }
 
   /// Store a 64-bit register to a global via ADRP+ADD+STR
   private void EmitGlobalStoreReg(ARM64Register src, string globalName) {
-    EmitAdrpAddFixup(ARM64Register.X17, _globalAdrpFixups, globalName);
+    EmitAdrpAddGlobalFixup(ARM64Register.X17, globalName, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, src, ARM64Register.X17, 0, 8); // STR src, [X17]
   }
 
@@ -1303,9 +1344,9 @@ public partial class ARM64CodeEmitter() {
     EmitMovRegReg(ARM64Register.X29, ARM64Register.Sp);
 
     // Store argc and argv to writable globals in __DATA segment
-    EmitAdrpAddFixup(ARM64Register.X11, _globalAdrpFixups, "__argc_global");
+    EmitAdrpAddGlobalFixup(ARM64Register.X11, "__argc_global", 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X11, 0, 8); // STR X9, [X11]
-    EmitAdrpAddFixup(ARM64Register.X11, _globalAdrpFixups, "__argv_global");
+    EmitAdrpAddGlobalFixup(ARM64Register.X11, "__argv_global", 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X10, ARM64Register.X11, 0, 8); // STR X10, [X11]
 
     // Call module init if present
@@ -1459,11 +1500,11 @@ public partial class ARM64CodeEmitter() {
     }
 
     // Resolve global ADRP+ADD (data is in separate segment with different VM addr)
-    foreach (var (adrpOffset, addOffset, name) in _globalAdrpFixups) {
+    foreach (var (adrpOffset, addOffset, name, addend) in _globalAdrpFixups) {
       if (!_globalLabels.TryGetValue(name, out var globalOffset)) {
         throw new InvalidOperationException($"Undefined global: {name}");
       }
-      var targetVA = dataSegmentVMAddr + (ulong)globalOffset;
+      var targetVA = dataSegmentVMAddr + (ulong)(globalOffset + addend);
       PatchAdrpAddWithVA(adrpOffset, addOffset, textSectionFileOffset, textSegmentVMAddr, targetVA);
     }
 

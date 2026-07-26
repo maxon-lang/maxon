@@ -69,7 +69,8 @@ public class ARM64CodeEmitterStage {
     // Emit runtime functions
     emitter.EmitRuntimeFunctions();
     var rt = new Ir.Runtime.RuntimeEmitter(emitter.CreateBackend());
-    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames, module.DebugStreamNames);
+    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames,
+      module.DebugStreamNames, module.CoveragePoints.Count, module.CoverageDataPath);
 
     // Build symbol table (compiler-generated functions + runtime functions)
     var symbolEntries = new List<(string name, int codeOffset)>();
@@ -127,6 +128,14 @@ public class ARM64CodeEmitterStage {
     emitter.ResolveJumpTableFixups(layout.TextSectionOffset, MachOLayout.TextSegmentVMAddr, rdataSectionFileOffset);
 
     var code = emitter.GetCode();
+    ulong buildId = MaxonSharp.Debug.MxdbgFormat.ComputeBuildId(code);
+
+    // Stamp the `.mxcov` header into the binary's own counter image — see the x64 twin.
+    if (Compiler.Coverage) {
+      emitter.PatchGlobalBytes(Ir.Runtime.RuntimeEmitter.CoverageImageGlobal, 0,
+        MaxonSharp.Debug.MxcovFormat.BuildHeader(buildId, module.CoveragePoints.Count));
+    }
+
     var rdata = emitter.GetRdata();
     var data = emitter.GetData();
     var ucddata = emitter.GetUcddata();
@@ -140,10 +149,13 @@ public class ARM64CodeEmitterStage {
     dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length,
         f => MaxonSharp.Debug.DebugInfoBuilder.FrameSizeFromPrologue(
             f, op => op is ARM64PrologueOp p ? (uint)p.StackSize : null));
+    // Last: the point table's records point at the offsets NoteOp collected while the functions
+    // above were emitted, and at the file ids RegisterFunctions registered.
+    dbg?.RegisterCoveragePoints(module.CoveragePoints);
 
     Logger.Debug(LogCategory.Codegen, $"ARM64: Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata");
 
-    return new CodeEmitResult(code, rdata, data, ucddata, symdata, [],
+    return new CodeEmitResult(code, rdata, data, ucddata, symdata, [], buildId,
       emitter.HasImports ? gotRaw : null,
       emitter.HasImports ? importNamesList : null,
       dbg?.Writer);

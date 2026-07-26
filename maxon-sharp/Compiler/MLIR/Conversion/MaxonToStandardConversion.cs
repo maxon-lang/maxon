@@ -1903,6 +1903,10 @@ public static partial class MaxonToStandardConversion {
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
+            case MaxonCovPointOp covPoint: {
+              newBlock.AddOp(new StdCovPointOp(covPoint.PointId));
+              break;
+            }
             case MaxonSwitchOp switchOp: {
               LowerSwitch(switchOp, newFunc, newBlock);
               break;
@@ -2724,6 +2728,11 @@ public static partial class MaxonToStandardConversion {
 
     // Build the interned-name table the `__DebugStream` Log events index into (MXDS_STRS).
     EmitDebugStreamNameTable(result);
+
+    // The coverage points the parser minted travel with the module: the emitter sizes
+    // `__cov_counters` from their count and the sidecar's coverage table is written from them.
+    result.CoveragePoints = module.CoveragePoints;
+    result.CoverageDataPath = module.CoverageDataPath;
 
     return result;
   }

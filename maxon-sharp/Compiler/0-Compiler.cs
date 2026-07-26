@@ -108,6 +108,17 @@ public class Compiler {
   [ThreadStatic] private static bool _noDebugAgent;
   public static bool NoDebugAgent { get => _noDebugAgent; set => _noDebugAgent = value; }
 
+  // When set (via --coverage), the parser mints a coverage point per user statement and per `if` arm,
+  // the emitted code increments a counter at each, and the program writes a `<binary>.mxcov` counter
+  // file when it exits. Unlike --debug-info this CHANGES THE EMITTED BYTES — it is an instrumented
+  // build variant, in the same family as --debugstream, and like it must key the build cache.
+  //
+  // It REQUIRES --debug-info (the default): the counters are anonymous without the sidecar's
+  // coverage-point table to interpret them, so `--coverage --no-debug-info` is refused by name rather
+  // than producing a data file nothing can read.
+  [ThreadStatic] private static bool _coverage;
+  public static bool Coverage { get => _coverage; set => _coverage = value; }
+
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
@@ -117,6 +128,24 @@ public class Compiler {
   // normal build is byte-identical whether or not the analysis ran.
   [ThreadStatic] private static bool _literalCoverage;
   public static bool LiteralCoverage { get => _literalCoverage; set => _literalCoverage = value; }
+
+  /// <summary>
+  /// The one statement of "`--coverage` needs the sidecar", as an error or null.
+  ///
+  /// It is a FUNCTION rather than a check written where it is needed, because it is needed in two
+  /// kinds of place: inside <see cref="Compile"/>, so no entry point can compile an invalid
+  /// combination, and ahead of the BUILD CACHE, so a cached binary is not handed back for a request
+  /// that should have been refused. (It was: with the cache keyed on --coverage and satisfied,
+  /// `--coverage --no-debug-info` returned "Compiled ->" and exit 0 without ever reaching the
+  /// compiler.) One rule, two gates.
+  /// </summary>
+  public static CompileError? CoverageConflict() =>
+    Coverage && !DebugInfo
+      ? new CompileError(ErrorCode.CodeEmitterCoverageNeedsDebugInfo,
+          "--coverage requires the debug-info sidecar: the counters it emits are anonymous without the "
+          + "sidecar's coverage-point table, so a .mxcov written by this binary could never be interpreted. "
+          + "Drop --no-debug-info (or debug_info:false in build.maxon), or drop --coverage.")
+      : null;
 
   /// <summary>
   /// Resets process-wide compile state that would otherwise drift across
@@ -141,6 +170,8 @@ public class Compiler {
     target ??= CompileTarget.Default;
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
+    if (CoverageConflict() is { } conflict) return new CompileResult(false, [conflict]);
+
     using var _ = _context.PushScope();
 
     try {
@@ -152,6 +183,10 @@ public class Compiler {
       // Use cached stdlib module, then parse user code into a clone
       var module = StdlibLoader.GetStdlibModule();
       module.EntryFunctionName = entryFunction;
+      // Where a `--coverage` binary will write its counters. Rooted, so the program writes the same
+      // file wherever it is launched from — and so `maxon coverage` finds it beside the binary.
+      module.CoverageDataPath = Coverage
+        ? Path.GetFullPath(outputPath) + Debug.MxcovFormat.DataExtension : "";
 
       ResetStaticCompileState(_context);
 
@@ -232,8 +267,7 @@ public class Compiler {
     if (codeResult.DebugInfo is not { } writer) return;
 
     try {
-      ulong buildId = Debug.MxdbgFormat.ComputeBuildId(codeResult.Code);
-      var image = writer.Build(buildId, target.Triple);
+      var image = writer.Build(codeResult.BuildId, target.Triple);
       var sidecarPath = outputPath + Debug.MxdbgFormat.SidecarExtension;
       File.WriteAllBytes(sidecarPath, image);
       Logger.Info(LogCategory.Compiler, $"Wrote {image.Length} bytes debug info to {sidecarPath}");

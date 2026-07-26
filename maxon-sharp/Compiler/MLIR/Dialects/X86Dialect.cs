@@ -105,6 +105,7 @@ public enum X86OpKind {
   Cld,
   RepStosq,
   CallImport,
+  CovInc,
 }
 
 public abstract class X86Op : IPrintableOp {
@@ -501,6 +502,19 @@ public sealed class X86JccOp(string condition, string target) : X86Op {
   public string Condition { get; } = condition;
   public string Target { get; } = target;
   public override string Mnemonic => $"x64.j{Condition} {Target}";
+}
+
+/// `lock inc qword [rip + __cov_counters + 8*PointId]` — one coverage counter increment
+/// (`--coverage` only). It needs NO register, which is why coverage instrumentation adds no
+/// register pressure on x64 and can be inserted anywhere a statement or an `if` arm begins.
+///
+/// `lock` is not decoration: green threads are multiplexed over real OS threads, so two processors
+/// can reach the same point at once and a plain read-modify-write would silently lose counts. A
+/// coverage report whose numbers are quietly low is exactly the instrument that lies.
+public sealed class X86CovIncOp(int pointId) : X86Op, ICoveragePointOp {
+  public override X86OpKind Kind => X86OpKind.CovInc;
+  public int PointId { get; } = pointId;
+  public override string Mnemonic => $"x64.lock_inc qword [rip+__cov_counters+{PointId * 8}]";
 }
 
 public sealed class X86JmpOp(string target) : X86Op {

@@ -8,6 +8,11 @@ namespace MaxonSharp.Compiler;
 /// Result of code emission. <see cref="DebugInfo"/> is populated only under --debug-info; it carries
 /// the observed line/function/file tables for the compiler to finalize into a `.mxdbg` sidecar. It
 /// influences no emitted byte — a build with it null and one with it populated are byte-identical.
+///
+/// <see cref="BuildId"/> is the FNV-1a hash of <see cref="Code"/>, computed ONCE here where the code
+/// is final. Both consumers — the sidecar's header and (under `--coverage`) the `.mxcov` header
+/// stamped into the binary's own data — read it from this one field rather than each hashing the
+/// same bytes again.
 /// </summary>
 public record CodeEmitResult(
   byte[] Code,
@@ -16,6 +21,7 @@ public record CodeEmitResult(
   byte[] Ucddata,
   byte[] Symdata,
   IReadOnlyList<ImportEntry> Imports,
+  ulong BuildId,
   byte[]? Got = null,
   IReadOnlyList<string>? ImportNames = null,
   MaxonSharp.Debug.MxdbgWriter? DebugInfo = null
@@ -95,7 +101,8 @@ public class X86CodeEmitter {
     // Runtime helpers must be emitted before user code so call targets are resolved
     emitter.EmitRuntimeFunctions();
     var rt = new Ir.Runtime.RuntimeEmitter(emitter.CreateBackend());
-    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames, module.DebugStreamNames);
+    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames,
+      module.DebugStreamNames, module.CoveragePoints.Count, module.CoverageDataPath);
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();
@@ -167,6 +174,16 @@ public class X86CodeEmitter {
     }
 
     var code = emitter.GetCode();
+    ulong buildId = MaxonSharp.Debug.MxdbgFormat.ComputeBuildId(code);
+
+    // Stamp the `.mxcov` header into the binary's own counter image, now that `.text` is final and
+    // its hash is knowable. The running program then writes only the status word — it cannot
+    // disagree with the build it came from about what it is.
+    if (Compiler.Coverage) {
+      emitter.PatchGlobalBytes(Ir.Runtime.RuntimeEmitter.CoverageImageGlobal, 0,
+        MaxonSharp.Debug.MxcovFormat.BuildHeader(buildId, module.CoveragePoints.Count));
+    }
+
     var rdata = emitter.GetRdata();
     var data = emitter.GetData();
     var ucddata = emitter.GetUcddata();
@@ -180,10 +197,13 @@ public class X86CodeEmitter {
     dbg?.RegisterFunctions(module, emitter.GetLabelOffset, symbolEntries, code.Length,
         f => MaxonSharp.Debug.DebugInfoBuilder.FrameSizeFromPrologue(
             f, op => op is X86PrologueOp p ? (uint)p.StackSize : null));
+    // Last: the point table's records point at the offsets NoteOp collected while the functions
+    // above were emitted, and at the file ids RegisterFunctions registered.
+    dbg?.RegisterCoveragePoints(module.CoveragePoints);
 
     Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata, {imports.Count} imports");
 
-    return new CodeEmitResult(code, rdata, data, ucddata, symdata, imports, DebugInfo: dbg?.Writer);
+    return new CodeEmitResult(code, rdata, data, ucddata, symdata, imports, buildId, DebugInfo: dbg?.Writer);
   }
 
   /// <summary>

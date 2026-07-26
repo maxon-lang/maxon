@@ -392,6 +392,10 @@ internal class FunctionCloner {
       // Control flow
       case MaxonCondBrOp cb: return new MaxonCondBrOp(MapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br: return new MaxonBrOp(br.Target);
+      // Every specialization keeps the ORIGINAL point id, so all of them add into one counter. That
+      // is the right answer for a report about SOURCE: the generic body was written once, and its
+      // coverage is how often that text ran, not how many types it was instantiated for.
+      case MaxonCovPointOp cp: return new MaxonCovPointOp(cp.PointId);
       case MaxonSwitchOp sw: return new MaxonSwitchOp(sw.ScrutineeVarName, [.. sw.Intervals], sw.DefaultBlock, sw.DispatchLabelPrefix);
       case MaxonReturnOp ret: return new MaxonReturnOp(ret.Value != null ? MapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName) { IsOwnedLocalTransfer = th.IsOwnedLocalTransfer };

@@ -454,6 +454,17 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // builds a string. Built during MaxonToStandard lowering.
   public List<string?> DebugStreamNames { get; set; } = [];
 
+  // The `--coverage` instrumentation's minted points, in counter order. Populated by the parser
+  // (the one place the user's own control flow is still distinguishable from the branches lowering
+  // synthesizes) and read by the emitter, which sizes `__cov_counters` from it and hands it to the
+  // debug-info builder for the sidecar's coverage table. Empty on every other build.
+  public CoveragePointTable CoveragePoints { get; set; } = new();
+
+  // Where a `--coverage` binary writes its counters. The compiler knows the output path exactly, so
+  // it is baked into the binary rather than derived at run time from the program's own executable
+  // path — see RuntimeEmitter.Coverage.cs. Empty on every other build.
+  public string CoverageDataPath { get; set; } = "";
+
   // Global variable metadata for cross-file seeding (name -> kind/mutability/type info)
   public Dictionary<string, GlobalVarMetadata> GlobalVarInfos { get; } = [];
 

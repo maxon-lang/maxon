@@ -7716,6 +7716,36 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
+  /// <summary>
+  /// Whether this parse should mint `--coverage` counters. Points are minted HERE, in the parser,
+  /// because this is the only stage that can still tell a branch the USER wrote from the dozens the
+  /// lowering synthesizes (bounds checks, error propagation, refcount chains) — instrumenting every
+  /// basic block later would report a never-taken bounds-check arm on a line the user covers fully.
+  ///
+  /// The stdlib is excluded for the same reason `--debug-info` excludes it: a coverage report is
+  /// about the program under test, not about the library it links.
+  /// </summary>
+  private bool CoverageActive => Compiler.Coverage && !_isStdlib && _currentFunction != null && seedModule != null;
+
+  /// <summary>
+  /// Mint one coverage counter for a source position and insert its increment at
+  /// <paramref name="at"/> in <paramref name="block"/>. The point's identity IS the counter index,
+  /// which the op carries; nothing else needs to be threaded through the pipeline.
+  ///
+  /// Points go into the SHARED module's table (each file parses into a fresh module that is merged
+  /// afterwards, so a per-file table would hand out the same indices to different files). Files are
+  /// parsed sequentially in source order, so the numbering is deterministic.
+  /// </summary>
+  private void MintCoveragePoint(IrBlock<MaxonOp> block, int at, uint flags, int line, int col) {
+    // A point OUTLIVES its function (dead-function elimination can remove the function while the
+    // report must still name its file), so the file is required here rather than resolved later —
+    // and a missing one is a loud failure, not an empty string that becomes a wrong file id.
+    var filePath = _sourceFilePath
+      ?? throw new InvalidOperationException("coverage point minted for a parse with no source file");
+    var id = seedModule!.CoveragePoints.Mint(_currentFunction!.Name, filePath, line, col, flags);
+    block.Operations.Insert(at, new MaxonCovPointOp(id));
+  }
+
   private void ParseStatement() {
     if (Check(TokenType.HashIf)) {
       HandleConditionalCompilation();
@@ -7743,6 +7773,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       spanLine = firstTok.Line;
       spanCol = firstTok.Column;
     }
+
+    // `--coverage`: one counter at the head of every user statement, minted BEFORE the statement's
+    // own ops — so a statement whose code a later pass deletes still reports the count its line
+    // really achieved, which the line table (built only from code that survived) cannot. spanBlock
+    // is the same block, and the same "is this instrumentable user code" answer, the span capture
+    // just computed; --coverage requires --debug-info (E5003), so it is set whenever coverage is.
+    if (CoverageActive && spanBlock != null)
+      MintCoveragePoint(spanBlock, spanBlock.Operations.Count, Debug.MxdbgFormat.CovFlagStatement, spanLine, spanCol);
 
     if (Check(TokenType.Return)) {
       ParseReturn();
@@ -11993,11 +12031,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private void ParseIf() {
+    // Both arms of a branch are reported at the `if` keyword's own position, so a coverage report
+    // can pair them: two arms of one branch share a (file, line, col) that no other branch can.
+    var ifToken = Current();
+    var ifPos = new SourceSpan(ifToken.Line, ifToken.Column);
     Advance(); // consume 'if'
 
     // Dispatch to if-try forms: `if try expr`, `if let name = try expr`, or `if var name = try expr`
     if (Check(TokenType.Try) || Check(TokenType.Let) || Check(TokenType.Var)) {
-      ParseIfTry();
+      ParseIfTry(ifPos);
       return;
     }
 
@@ -12029,7 +12071,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     IrBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
     List<string>? elseInnerScope = null;
+    // Whether the SOURCE wrote the false arm. Not the same as "an else block exists": `if try` mints
+    // one to decref an error payload even when the program wrote no `else`, and coverage must not
+    // report that arm as text the author chose (see InstrumentIfArms).
+    bool elseWrittenInSource = false;
     if (Check(TokenType.Else)) {
+      elseWrittenInSource = true;
       Advance(); // consume 'else'
       if (Check(TokenType.If)) {
         // else-if chain: create a synthetic block and parse the nested if into it
@@ -12059,7 +12106,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, thenInnerScope, elseLabel, elseBlock, elseEndBlock, elseInnerScope);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, thenInnerScope, elseLabel, elseBlock, elseEndBlock, elseInnerScope, ifPos, elseWrittenInSource);
   }
 
   /// <summary>
@@ -12068,7 +12115,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// thenEndBlock/elseEndBlock are the final blocks after parsing each branch body
   /// (may differ from initial blocks due to nested if/else creating merge blocks).
   /// </summary>
-  private void EmitConditionalBranch(IrBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, IrBlock<MaxonOp>? elseBlock, IrBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope) {
+  private void EmitConditionalBranch(IrBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, IrBlock<MaxonOp>? elseBlock, IrBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope, SourceSpan ifPos, bool elseWrittenInSource) {
     // Use the end blocks for merge decisions — the end block is where control flow
     // actually is after parsing each branch (may be a merge block from nested if/else)
     bool thenTerminated = thenEndBlock == null || BlockEndsWithTerminator(thenEndBlock);
@@ -12092,24 +12139,67 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         eb.AddOp(new MaxonBrOp(mergeLabel));
       }
 
-      entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel ?? mergeLabel));
+      entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel,
+        InstrumentIfArms(thenLabel, thenBlock, elseBlock, elseLabel ?? mergeLabel, ifPos, elseWrittenInSource)));
       _currentBlock = mergeBlock;
     } else if (elseLabel != null) {
-      entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel));
+      entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel,
+        InstrumentIfArms(thenLabel, thenBlock, elseBlock, elseLabel, ifPos, elseWrittenInSource)));
       _currentBlock = null;
     } else {
       var afterLabel = $"{thenLabel}.after";
       var afterBlock = _currentFunction!.Body.AddBlock(afterLabel);
-      entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, afterLabel));
+      entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel,
+        InstrumentIfArms(thenLabel, thenBlock, elseBlock, afterLabel, ifPos, elseWrittenInSource)));
       _currentBlock = afterBlock;
     }
+  }
+
+  /// <summary>
+  /// Under `--coverage`, put a counter on each arm of a user `if` and return the block the FALSE
+  /// edge must now branch to. Without `--coverage` it adds nothing and returns
+  /// <paramref name="elseTarget"/> unchanged, so a normal build's control-flow graph is untouched.
+  ///
+  /// An arm the source does not write — `if c then … end` — has no block of its own: the false edge
+  /// goes straight to the join, which the true arm also reaches, so no counter placed there could
+  /// tell the two apart. This mints one for it: a block holding just that arm's counter and a jump
+  /// to the original target. THAT is why this rung can report branch coverage at all. A line table
+  /// records `(codeOffset, file, line, col)` with no successor and no condition identity, and it
+  /// cannot hold a row for source text that does not exist — so an implicit else is invisible to it
+  /// by construction, not by omission.
+  ///
+  /// Called from the ONE place every `if`, `else if` and `if try` converges on, so no arm shape can
+  /// be instrumented in one form and silently not in another.
+  /// </summary>
+  private string InstrumentIfArms(string thenLabel, IrBlock<MaxonOp> thenBlock, IrBlock<MaxonOp>? elseBlock,
+      string elseTarget, SourceSpan ifPos, bool elseWrittenInSource) {
+    if (!CoverageActive) return elseTarget;
+
+    MintCoveragePoint(thenBlock, 0, Debug.MxdbgFormat.CovFlagArmThen, ifPos.Line, ifPos.Col);
+
+    // IMPLICIT means "the source did not write this arm", not "no block exists for it". `if try`
+    // mints a cleanup block for the error path even when the program wrote no `else`, and reporting
+    // that as an authored arm would tell a reader their `else` went untaken when they wrote none.
+    var elseFlags = Debug.MxdbgFormat.CovFlagArmElse
+      | (elseWrittenInSource ? 0 : Debug.MxdbgFormat.CovFlagArmImplicit);
+
+    if (elseBlock != null) {
+      MintCoveragePoint(elseBlock, 0, elseFlags, ifPos.Line, ifPos.Col);
+      return elseTarget;
+    }
+
+    var covElseLabel = $"{thenLabel}.covelse";
+    var covElseBlock = _currentFunction!.Body.AddBlock(covElseLabel);
+    MintCoveragePoint(covElseBlock, 0, elseFlags, ifPos.Line, ifPos.Col);
+    covElseBlock.AddOp(new MaxonBrOp(elseTarget));
+    return covElseLabel;
   }
 
   /// <summary>
   /// Parses `if try expr 'label'` (boolean form) and `if let/var name = try expr 'label'` (binding form).
   /// Called after 'if' has been consumed. Current token is 'try', 'let', or 'var'.
   /// </summary>
-  private void ParseIfTry() {
+  private void ParseIfTry(SourceSpan ifPos) {
     // Determine form: binding (`if let/var name = try ...`) or boolean (`if try ...`)
     string? bindingName = null;
     bool bindingIsMutable = false;
@@ -12198,7 +12288,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     IrBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
     List<string>? ifTryElseInnerScope = null;
+    // See ParseIf: the error-cleanup block below is NOT an authored `else`, and coverage must not
+    // report it as one.
+    bool ifTryElseWrittenInSource = false;
     if (Check(TokenType.Else)) {
+      ifTryElseWrittenInSource = true;
       Advance(); // consume 'else'
 
       if (Check(TokenType.If)) {
@@ -12260,7 +12354,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       elseEndBlock = _currentBlock;
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, ifTryThenInnerScope, elseLabel, elseBlock, elseEndBlock, ifTryElseInnerScope);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, ifTryThenInnerScope, elseLabel, elseBlock, elseEndBlock, ifTryElseInnerScope, ifPos, ifTryElseWrittenInSource);
   }
 
   private void ParseWhile() {

@@ -522,6 +522,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonDirectoryExists();
     EmitMaxonCreateDirectory();
     EmitMaxonGetCurrentDirectory();
+    if (Compiler.Coverage) EmitCoverageWriteFile();
 
     // Additional runtime functions
     EmitMaxonBoolToString();
@@ -661,6 +662,65 @@ public partial class ARM64CodeEmitter {
     EmitMovRegReg(ARM64Register.X1, ARM64Register.X0);
     EmitMovRegImm(ARM64Register.X0, 2); // stderr fd
     EmitCallImport("write");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// `__cov_write_file(x0=path, x1=buf, x2=len)` — the arm64 twin of the x64 writer (see
+  /// X86CodeEmitter.Runtime.cs for why this has one body per backend rather than living in the
+  /// platform-neutral layer). `open` is variadic in its mode argument on Apple arm64, which is the
+  /// same reason `__io_op_file_open_write` pushes it rather than passing it in X2.
+  ///
+  /// Every failure returns quietly: instrumentation must not change what the measured program does,
+  /// and an absent file is the driver's cue to report "no coverage data was written".
+  /// </summary>
+  private void EmitCoverageWriteFile() {
+    // [x29+16] path, [x29+24] buf, [x29+32] len, [x29+40] fd, [x29+48] bytes written so far.
+    EmitRuntimeFunctionStart(Runtime.RuntimeEmitter.CoverageWriteFileLabel, 3, 0x40);
+
+    const int pathSlot = 16, bufSlot = 24, lenSlot = 32, fdSlot = 40, writtenSlot = 48;
+    const long fileMode0644 = 0x1A4;
+    var doneLabel = "rt_cov_write_done";
+    var loopLabel = "rt_cov_write_loop";
+    var closeLabel = "rt_cov_write_close";
+
+    // open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, pathSlot, 8);
+    EmitMovRegImm(ARM64Register.X1, O_WRONLY_CREAT_TRUNC);
+    EmitMovRegImm(ARM64Register.X2, fileMode0644);
+    EmitPushVariadicArg(ARM64Register.X2);
+    EmitCallImport("open");
+    EmitVariadicCleanup();
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, fdSlot, 8);
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, doneLabel);
+
+    EmitMovRegImm(ARM64Register.X9, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, writtenSlot, 8);
+
+    DefineLabel(loopLabel);
+    // write(fd, buf + written, len - written); a short write loops, a failed or empty one stops.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, writtenSlot, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X29, lenSlot, 8);
+    EmitAluRegReg(0xCB000000, ARM64Register.X2, ARM64Register.X10, ARM64Register.X9); // X2 = len - written
+    EmitCmpImm(ARM64Register.X2, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, closeLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X29, bufSlot, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X1, ARM64Register.X10, ARM64Register.X9); // X1 = buf + written
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, fdSlot, 8);
+    EmitCallImport("write");
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, closeLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, writtenSlot, 8);
+    EmitAluRegReg(0x8B000000, ARM64Register.X9, ARM64Register.X9, ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, writtenSlot, 8);
+    EmitBranch(loopLabel);
+
+    DefineLabel(closeLabel);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, fdSlot, 8);
+    EmitCallImport("close");
+
+    DefineLabel(doneLabel);
     EmitRuntimeFunctionEnd();
   }
 
@@ -896,10 +956,20 @@ public partial class ARM64CodeEmitter {
     // Restore X19
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X19, ARM64Register.X29, 72, 8);
 
+    EmitCoverageAbortDump();
+
     // Exit with code 1
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitCallImport("_exit");
     EmitWord(0xD4200000); // BRK #0
+  }
+
+  /// Under `--coverage`, dump the counters as an ABORTED run just before a fatal exit — the arm64
+  /// twin of the x64 hook, on the same panic path and for the same reason.
+  private void EmitCoverageAbortDump() {
+    if (!Compiler.Coverage) return;
+    EmitMovRegImm(ARM64Register.X0, Debug.MxcovFormat.StatusAborted);
+    EmitBranchLink(Runtime.RuntimeEmitter.CoverageDumpLabel);
   }
 
   /// <summary>
@@ -2747,7 +2817,7 @@ public partial class ARM64CodeEmitter {
   private void EmitMaxonCommandLineCount() {
     DefineLabel("maxon_command_line_count");
     // Frameless leaf: load argc from global and return
-    EmitAdrpAddFixup(ARM64Register.X0, _globalAdrpFixups, "__argc_global");
+    EmitAdrpAddGlobalFixup(ARM64Register.X0, "__argc_global", 0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X0, 0, 8); // LDR X0, [X0]
     EmitWord(0xD65F03C0); // RET
   }
@@ -2767,7 +2837,7 @@ public partial class ARM64CodeEmitter {
     _uniqueLabelCounter++;
 
     // Load argc, bounds check
-    EmitAdrpAddFixup(ARM64Register.X1, _globalAdrpFixups, "__argc_global");
+    EmitAdrpAddGlobalFixup(ARM64Register.X1, "__argc_global", 0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X1, 0, 8); // X1 = argc
     // CMP X0, X1 — if index >= argc, return empty
     EmitWord(0xEB01001F | (Reg(ARM64Register.X0) << 5)); // CMP X0, X1
@@ -2775,7 +2845,7 @@ public partial class ARM64CodeEmitter {
     EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE empty
 
     // Load argv[index]: argv base + index*8
-    EmitAdrpAddFixup(ARM64Register.X1, _globalAdrpFixups, "__argv_global");
+    EmitAdrpAddGlobalFixup(ARM64Register.X1, "__argv_global", 0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X1, 0, 8); // X1 = argv
     // LSL X0, X0, #3 = UBFM X0, X0, #61, #60
     EmitWord(0xD37DF000 | Reg(ARM64Register.X0) | (Reg(ARM64Register.X0) << 5));

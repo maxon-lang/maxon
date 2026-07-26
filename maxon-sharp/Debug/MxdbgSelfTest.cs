@@ -56,6 +56,13 @@ public static class MxdbgSelfTest {
     w.AddLine(16, fileA, 11, 5, MxdbgFormat.LineFlagStatement);
     w.AddLine(100, fileB, 5, 1, MxdbgFormat.LineFlagStatement);
 
+    // Coverage points, in counter order, including one the optimizer eliminated (no code offset).
+    w.AddCoveragePoint(20, fileA, 11, 5, "withdraw", MxdbgFormat.CovFlagStatement);
+    w.AddCoveragePoint(30, fileA, 11, 5, "withdraw",
+      MxdbgFormat.CovFlagArmThen);
+    w.AddCoveragePoint(0, fileA, 11, 5, "withdraw",
+      MxdbgFormat.CovFlagArmElse | MxdbgFormat.CovFlagArmImplicit | MxdbgFormat.CovFlagEliminated);
+
     var image = w.Build(id1, "x64-windows");
     var r = new MxdbgReader(image);
 
@@ -116,13 +123,40 @@ public static class MxdbgSelfTest {
     Line(130, 6, "io.maxon");       // within B
     Check(r.PcToLine(250) is null, "PcToLine in a gap is null");
 
+    // Coverage-point table round-trip. The counter index IS the record index, which is what binds
+    // this table to a .mxcov's counter array — so the order they came out in is the assertion.
+    Check(r.CoveragePointCount == 3, "coverage point count");
+    var cp0 = r.CoveragePoint(0);
+    Check(cp0 is { CodeOffset: 20, Line: 11, Col: 5, FunctionName: "withdraw", File: "account.maxon" }
+      && cp0.IsStatement && !cp0.Eliminated, "coverage point 0: a statement with code");
+    Check(r.CoveragePoint(1).IsThenArm, "coverage point 1: the true arm");
+    var cp2 = r.CoveragePoint(2);
+    Check(cp2.IsElseArm && cp2.IsImplicitArm && cp2.Eliminated,
+      "coverage point 2: an implicit else arm the optimizer eliminated");
+
+    // The `.mxcov` header the compiler stamps into a binary, read back through the same constants.
+    var covImage = new byte[MxcovFormat.HeaderSize + 3 * MxcovFormat.CounterSize];
+    MxcovFormat.BuildHeader(id1, 3).CopyTo(covImage, 0);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+      covImage.AsSpan(MxcovFormat.OffStatus), (ulong)MxcovFormat.StatusCompleted);
+    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+      covImage.AsSpan(MxcovFormat.HeaderSize), 7);
+    var cov = MxcovReader.TryParse(covImage, out var covError);
+    Check(cov != null, $"mxcov parses ({covError})");
+    Check(cov!.BuildId == id1, "mxcov build-id round-trips");
+    // The status store is a WHOLE WORD and must not reach the build-id beside it — the defect this
+    // layout was changed to make unrepresentable.
+    Check(cov.RunCompleted && cov.Counters.Count == 3 && cov.Counters[0] == 7,
+      "mxcov status + counters, with the build-id intact beside the status");
+
     // A mismatched build-id is the driver's refusal signal; here just prove the reader surfaces it.
     var rMismatch = new MxdbgReader(image);
     Check(rMismatch.BuildId != MxdbgFormat.ComputeBuildId("different"u8), "build-id mismatch is detectable");
 
     if (failures == 0) {
       Console.WriteLine($"mxdbg-selftest OK ({image.Length} bytes, {r.FunctionCount} funcs, "
-        + $"{r.LineCount} lines, {r.TypeCount} types, {r.FieldCount} fields, {r.LocalCount} locals)");
+        + $"{r.LineCount} lines, {r.TypeCount} types, {r.FieldCount} fields, {r.LocalCount} locals, "
+        + $"{r.CoveragePointCount} coverage points)");
       return 0;
     }
 

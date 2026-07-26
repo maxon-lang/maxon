@@ -216,6 +216,7 @@ public enum MaxonOpKind {
   DebugStreamPhase,
   DebugStreamEvent,
   DebugStreamText,
+  CoveragePoint,
 }
 
 public abstract class MaxonOp : IPrintableOp {
@@ -896,6 +897,27 @@ public sealed class MaxonCondBrOp(MaxonValue condition, string thenBlock, string
   // The mnemonic already names the condition, so rendering it again as an operand would
   // print it twice. The READ is still declared above, which is what liveness consumes.
   public override IReadOnlyList<string> PrintableOperands => [];
+}
+
+/// <summary>
+/// "Execution reached coverage point N" — one increment of `__cov_counters[N]`, emitted only under
+/// `--coverage`. Minted by the parser at each user statement and each `if` arm (see
+/// <see cref="MaxonSharp.Compiler.Ir.Core.CoveragePointTable"/>), and carried unchanged through both
+/// lowerings so the emitter can record where each point's code actually landed.
+///
+/// It reads and writes no IR value: its whole effect is a memory write outside the IR's value graph.
+/// Both dead-code sweeps decide by ALLOW-LIST (`DeadFunctionElimination.PureProducerResultId` names
+/// the removable producers; `DeadStoreEliminationPass` removes only ops with a non-negative
+/// `PureResultId`), so this op survives them by construction rather than by a guard that could be
+/// forgotten. It is minted BEFORE they run, so a statement whose code they delete still reports the
+/// count its line really achieved — the line table, built from the code that survived, cannot.
+/// </summary>
+public sealed class MaxonCovPointOp(int pointId) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CoveragePoint;
+  public override string Mnemonic => $"maxon.cov_point {PointId}";
+  public int PointId { get; } = pointId;
+  public override IReadOnlyList<MaxonValue> Results => [];
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 public sealed class MaxonBrOp(string target) : MaxonOp {

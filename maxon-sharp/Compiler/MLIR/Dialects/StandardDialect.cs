@@ -139,6 +139,7 @@ public enum StdOpKind {
   PtrToI64,
   MemCopy,
   MemCopyReverse,
+  CoveragePoint,
 }
 
 public abstract class StandardOp : IPrintableOp {
@@ -1069,6 +1070,17 @@ public sealed class StdCondBrOp(StdBool condition, string thenBlock, string else
   public string ThenBlock { get; } = thenBlock;
   public string ElseBlock { get; } = elseBlock;
   public override List<StdValue> ReadValues => [Condition];
+  public override int PureResultId => -1;
+}
+
+/// One `__cov_counters[PointId]` increment (`--coverage` only) — see
+/// <see cref="MaxonCovPointOp"/>. `PureResultId = -1` is what keeps the dead-value sweep off it:
+/// its effect is a memory write the IR's value graph cannot see.
+public sealed class StdCovPointOp(int pointId) : StandardOp {
+  public override StdOpKind Kind => StdOpKind.CoveragePoint;
+  public override string Mnemonic => $"cov.point {PointId}";
+  public int PointId { get; } = pointId;
+  public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
 }
 

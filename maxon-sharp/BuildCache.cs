@@ -22,6 +22,10 @@ static class BuildCache {
     // touches only the sidecar — it changes the exe bytes and must key the cache, or toggling it
     // returns a stale binary.
     public bool NoDebugAgent { get; init; }
+    // --coverage instruments the emitted code, so it keys the cache for the same reason
+    // --no-debug-agent does: without this, `maxon build --coverage` after a plain build hands back
+    // the uninstrumented binary and every counter reports zero.
+    public bool Coverage { get; init; }
     public string OutputPath { get; init; } = "";
     public Dictionary<string, long> Sources { get; init; } = [];
   }
@@ -65,6 +69,7 @@ static class BuildCache {
     if (manifest.AsyncTrace != Compiler.Compiler.AsyncTrace) return false;
     if (manifest.DebugStream != Compiler.Compiler.DebugStream) return false;
     if (manifest.NoDebugAgent != Compiler.Compiler.NoDebugAgent) return false;
+    if (manifest.Coverage != Compiler.Compiler.Coverage) return false;
 
     if (outputPath != null && manifest.OutputPath != Path.GetFullPath(outputPath)) return false;
     if (!File.Exists(manifest.OutputPath)) return false;
@@ -122,6 +127,7 @@ static class BuildCache {
       AsyncTrace = Compiler.Compiler.AsyncTrace,
       DebugStream = Compiler.Compiler.DebugStream,
       NoDebugAgent = Compiler.Compiler.NoDebugAgent,
+      Coverage = Compiler.Compiler.Coverage,
       OutputPath = Path.GetFullPath(outputPath),
       Sources = sourcesMap
     };

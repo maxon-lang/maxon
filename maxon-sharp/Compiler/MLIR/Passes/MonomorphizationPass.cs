@@ -2387,6 +2387,10 @@ public static class MonomorphizationPass {
         return new MaxonCondBrOp(mapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br:
         return new MaxonBrOp(br.Target);
+      // The point id is kept, not re-minted: every specialization of one generic body adds into the
+      // one counter that body's source text owns (see FunctionCloner's twin).
+      case MaxonCovPointOp cp:
+        return new MaxonCovPointOp(cp.PointId);
       case MaxonSwitchOp sw:
         return new MaxonSwitchOp(sw.ScrutineeVarName, [.. sw.Intervals], sw.DefaultBlock, sw.DispatchLabelPrefix);
       case MaxonPanicOp p:

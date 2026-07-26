@@ -68,8 +68,13 @@ internal static class DebugBuild {
   /// --debugstream" about a build this server had just made. That left the tool's only interesting
   /// answer unreachable through the entire server. (Measured: the exe's hash changed across one
   /// `debug_start`.)
+  ///
+  /// <paramref name="coverage"/> is stated by the caller for exactly the same reason, and it is the
+  /// same hazard: coverage instrumentation is a property of the BUILD, so a `debug_start` that
+  /// silently rebuilt a user's instrumented binary without it would leave the coverage family
+  /// truthfully reporting "not built with --coverage" about a binary this server had just replaced.
   /// </summary>
-  public static string Compile(string sourcePath, bool debugStream) {
+  public static string Compile(string sourcePath, bool debugStream, bool coverage) {
     if (Directory.Exists(sourcePath))
       throw new McpBuildException(
         $"'{sourcePath}' is a directory. debug_start builds ONE .maxon file (or a snippet); "
@@ -88,10 +93,12 @@ internal static class DebugBuild {
     lock (BuildGate) {
       var previousDebugInfo = Compiler.Compiler.DebugInfo;
       var previousDebugStream = Compiler.Compiler.DebugStream;
+      var previousCoverage = Compiler.Compiler.Coverage;
       Compiler.Compiler.DebugInfo = true;
       // Set BEFORE the cache probe below, which compares the option against the manifest: a binary
       // built with the other setting must be seen as out of date rather than handed back as current.
       Compiler.Compiler.DebugStream = debugStream;
+      Compiler.Compiler.Coverage = coverage;
       try {
         // The same cache `maxon build` consults, and consulted for a second reason here: a binary that
         // is already current must not be REWRITTEN, because a debuggee from another session may be
@@ -109,6 +116,7 @@ internal static class DebugBuild {
       } finally {
         Compiler.Compiler.DebugInfo = previousDebugInfo;
         Compiler.Compiler.DebugStream = previousDebugStream;
+        Compiler.Compiler.Coverage = previousCoverage;
       }
     }
 

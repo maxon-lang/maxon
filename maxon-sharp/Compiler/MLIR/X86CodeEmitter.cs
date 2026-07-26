@@ -30,7 +30,10 @@ public partial class X86CodeEmitter() {
   private readonly Dictionary<string, int> _rdataLabels = [];
 
   // Global fixups: code offset -> global name
-  private readonly List<(int offset, string name)> _globalFixups = [];
+  // A fixup targets a global at an OFFSET into it, not merely the global's base: a coverage
+  // counter is one slot inside the single `__cov_image` blob, and per-point labels would be N
+  // dictionary entries naming what one addend already says.
+  private readonly List<(int offset, string name, int addend)> _globalFixups = [];
 
   // Global names: name -> offset within data section
   private readonly Dictionary<string, int> _globalLabels = [];
@@ -414,6 +417,9 @@ public partial class X86CodeEmitter() {
         break;
       case X86GlobalLeaOp globalLea:
         EmitGlobalLeaReg(globalLea.Dest, globalLea.GlobalName);
+        break;
+      case X86CovIncOp covInc:
+        EmitCoverageIncrement(covInc.PointId);
         break;
       case X86GlobalStoreOp globalStore:
         EmitGlobalStoreReg(globalStore.Src, globalStore.GlobalName, globalStore.Size);
@@ -895,13 +901,22 @@ public partial class X86CodeEmitter() {
     }
   }
 
+  /// Write <paramref name="bytes"/> into a defined global's data at <paramref name="offset"/>.
+  /// Used to stamp the `.mxcov` header the emitted program will dump, whose build-id is the hash of
+  /// the `.text` this same emission produced and so can only be known once emission is over.
+  public void PatchGlobalBytes(string name, int offset, ReadOnlySpan<byte> bytes) {
+    if (!_globalLabels.TryGetValue(name, out var globalOffset))
+      throw new InvalidOperationException($"Cannot patch undefined global: {name}");
+    for (int i = 0; i < bytes.Length; i++) _data[globalOffset + offset + i] = bytes[i];
+  }
+
   public void ResolveGlobals(int rvaOffset) {
     var codeSize = _code.Count;
-    foreach (var (offset, name) in _globalFixups) {
+    foreach (var (offset, name, addend) in _globalFixups) {
       if (!_globalLabels.TryGetValue(name, out var globalOffset)) {
         throw new InvalidOperationException($"Unresolved global: {name}");
       }
-      var target = codeSize + rvaOffset + globalOffset;
+      var target = codeSize + rvaOffset + globalOffset + addend;
       var rel = target - (offset + 4);
       PatchDword(offset, rel);
     }
@@ -2218,7 +2233,7 @@ public partial class X86CodeEmitter() {
       EmitByte(0x8B);
     }
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
-    _globalFixups.Add((_code.Count, globalName));
+    _globalFixups.Add((_code.Count, globalName, 0));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
@@ -2228,7 +2243,20 @@ public partial class X86CodeEmitter() {
     Rex.W().Reg(dest).Emit(this);
     EmitByte(0x8D);
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
-    _globalFixups.Add((_code.Count, globalName));
+    _globalFixups.Add((_code.Count, globalName, 0));
+    EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  /// One `--coverage` counter increment: `lock inc qword [rip + __cov_counters + 8*pointId]`.
+  /// F0 (LOCK) REX.W FF /0 with mod=00, r/m=101 — 8 bytes, NO register operand, so instrumentation
+  /// costs no register pressure and can sit at any statement or arm boundary.
+  private void EmitCoverageIncrement(int pointId) {
+    EmitByte(0xF0);                 // LOCK
+    Rex.W().Emit(this);
+    EmitByte(0xFF);                 // INC r/m64 (/0)
+    EmitByte(0x05);                 // mod=00, reg=000 (/0), r/m=101 (RIP-relative)
+    _globalFixups.Add((_code.Count, Runtime.RuntimeEmitter.CoverageImageGlobal,
+      Debug.MxcovFormat.HeaderSize + pointId * Debug.MxcovFormat.CounterSize));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
@@ -2253,7 +2281,7 @@ public partial class X86CodeEmitter() {
       EmitByte(0x89);
     }
     EmitByte((byte)(0x05 | (RegCode(src) << 3))); // mod=00, r/m=101 (RIP-relative)
-    _globalFixups.Add((_code.Count, globalName));
+    _globalFixups.Add((_code.Count, globalName, 0));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
@@ -2264,7 +2292,7 @@ public partial class X86CodeEmitter() {
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x10);
     EmitByte((byte)(0x05 | ((reg & 7) << 3)));
-    _globalFixups.Add((_code.Count, globalName));
+    _globalFixups.Add((_code.Count, globalName, 0));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
@@ -2275,7 +2303,7 @@ public partial class X86CodeEmitter() {
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x11);
     EmitByte((byte)(0x05 | ((reg & 7) << 3)));
-    _globalFixups.Add((_code.Count, globalName));
+    _globalFixups.Add((_code.Count, globalName, 0));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 }

@@ -40,6 +40,8 @@ public static class StandardToX86Conversion {
     result.TagTable = module.TagTable;
     result.TagNames = module.TagNames;
     result.DebugStreamNames = module.DebugStreamNames;
+    result.CoveragePoints = module.CoveragePoints;
+    result.CoverageDataPath = module.CoverageDataPath;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     // Convert functions in parallel — each lowering is independent and writes
@@ -928,6 +930,10 @@ public static class StandardToX86Conversion {
 
           case StdBrOp br:
             x86Block.AddOp(new X86JmpOp($"{func.Name}.{br.Target}"));
+            break;
+
+          case StdCovPointOp covPoint:
+            x86Block.AddOp(new X86CovIncOp(covPoint.PointId));
             break;
 
           case StdSwitchOp switchOp: {

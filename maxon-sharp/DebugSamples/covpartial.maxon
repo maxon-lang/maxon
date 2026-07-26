@@ -1,0 +1,23 @@
+// P6 coverage gate sample: a run that does NOT complete.
+//
+// The program panics halfway through, so its counters are dumped from the panic path and the data
+// file is marked ABORTED. The report must say PARTIAL and exit non-zero: the counts in it are real,
+// but everything after the panic never got its chance to run, and presenting that as a finished
+// measurement would be an instrument reporting a truncated run as a whole one.
+
+typealias ExitCode = int(0 to 255)
+typealias Small = int(0 to 1000)
+
+function reached(n Small) returns Small
+	return n + 1
+end 'reached'
+
+function neverReached(n Small) returns Small
+	return n + 2
+end 'neverReached'
+
+function main() returns ExitCode
+	var total = 0
+	total = reached(total)
+	panic("covpartial: a deliberate abort, so the run is reported PARTIAL")
+end 'main'

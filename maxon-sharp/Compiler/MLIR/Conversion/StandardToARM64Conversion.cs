@@ -16,6 +16,8 @@ public static class StandardToARM64Conversion {
     result.TagTable = module.TagTable;
     result.TagNames = module.TagNames;
     result.DebugStreamNames = module.DebugStreamNames;
+    result.CoveragePoints = module.CoveragePoints;
+    result.CoverageDataPath = module.CoverageDataPath;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     // Snapshot the debug-info flag once on this thread. It is [ThreadStatic] (see
@@ -605,6 +607,10 @@ public static class StandardToARM64Conversion {
       // === Branch ===
       case StdBrOp brOp:
         block.AddOp(new ARM64BranchOp($"{funcName}.{brOp.Target}"));
+        break;
+
+      case StdCovPointOp covPoint:
+        block.AddOp(new ARM64CovIncOp(covPoint.PointId));
         break;
 
       case StdCondBrOp condBr:

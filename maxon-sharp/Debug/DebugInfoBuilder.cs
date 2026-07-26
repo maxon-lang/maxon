@@ -39,12 +39,30 @@ public sealed class DebugInfoBuilder {
   public void BeginFunction() => _haveLast = false;
 
   /// Note the op about to be emitted at <paramref name="codeOffset"/>: if it carries a span, record a
-  /// line row at its source position. One home for the emit-side capture, shared by both code emitters.
+  /// line row at its source position, and if it IS a coverage point's increment, record where that
+  /// point's code landed. One home for the emit-side capture, shared by both code emitters.
   public void NoteOp<TOp>(int codeOffset, IrFunction<TOp> func, TOp op) where TOp : IPrintableOp {
+    bool isCoveragePoint = op is ICoveragePointOp cov && NoteCoveragePoint(cov.PointId, codeOffset);
+
     if (func.TryGetDebugSpan(op, out var span)) {
-      NoteLine(codeOffset, func.SourceFilePath, span.Line, span.Col);
+      // A row at a coverage point's own offset is flagged as one, so `maxon debug --dump-info` shows
+      // which line rows a `--coverage` build put a counter on.
+      NoteLine(codeOffset, func.SourceFilePath, span.Line, span.Col,
+        isCoveragePoint ? MxdbgFormat.LineFlagCoverage : 0);
     }
   }
+
+  // Coverage point index -> the `.text` offset of its increment. A point ABSENT from this map after
+  // emission had no code emitted at all: the optimizer removed what it anchored (today, a whole
+  // function that dead-function elimination dropped). That is a fourth state, distinct from "never
+  // executed", and reporting the two as one is the conflation this table exists to prevent.
+  private readonly Dictionary<int, uint> _covPointOffsets = [];
+
+  /// Record a coverage point's emitted offset. Returns false — and keeps the FIRST offset — if the
+  /// point was already seen: a monomorphized generic body is emitted once per specialization, and
+  /// they all increment the one counter the source text owns.
+  private bool NoteCoveragePoint(int pointId, int codeOffset) =>
+    _covPointOffsets.TryAdd(pointId, (uint)codeOffset);
 
   /// Register a function's `.text` range and its real emitted frame size (bytes the prologue reserves
   /// below the frame pointer), returning its function id (index into the function table). frame-relative
@@ -324,17 +342,39 @@ public sealed class DebugInfoBuilder {
     };
   }
 
+  /// <summary>
+  /// Write the coverage-point table: one record per minted point, IN COUNTER ORDER, whether or not
+  /// its code survived. A point the emitter never saw gets
+  /// <see cref="MxdbgFormat.CovFlagEliminated"/> and offset 0 — the honest fourth state a coverage
+  /// report needs, distinct from "instrumented but never executed".
+  ///
+  /// Runs after emission (the offsets are collected during it) and after
+  /// <see cref="RegisterFunctions"/>, whose file registrations this reuses.
+  /// </summary>
+  public void RegisterCoveragePoints(CoveragePointTable points) {
+    for (int i = 0; i < points.Count; i++) {
+      var p = points[i];
+      if (!TryFileId(p.FilePath, out var fileId))
+        throw new InvalidOperationException($"Coverage point {i} in '{p.FunctionName}' has no source file.");
+
+      bool emitted = _covPointOffsets.TryGetValue(i, out var codeOffset);
+      uint flags = p.Flags | (emitted ? 0 : MxdbgFormat.CovFlagEliminated);
+      _writer.AddCoveragePoint(emitted ? codeOffset : 0, fileId, (uint)p.Line, (uint)p.Col,
+        p.FunctionName, flags);
+    }
+  }
+
   /// Record that execution at <paramref name="codeOffset"/> is at <paramref name="filePath"/>:line:col.
   /// A row is emitted only when the position differs from the previous op's. A null/empty file path
   /// (runtime helpers, synthetic functions with no source) records nothing.
-  private void NoteLine(int codeOffset, string? filePath, int line, int col) {
+  private void NoteLine(int codeOffset, string? filePath, int line, int col, uint extraFlags) {
     if (!TryFileId(filePath, out var fileId)) return;
 
     uint l = (uint)line;
     uint c = (uint)col;
     if (_haveLast && _lastFileId == fileId && _lastLine == l && _lastCol == c) return;
 
-    _writer.AddLine((uint)codeOffset, fileId, l, c, MxdbgFormat.LineFlagStatement);
+    _writer.AddLine((uint)codeOffset, fileId, l, c, MxdbgFormat.LineFlagStatement | extraFlags);
     _haveLast = true;
     _lastFileId = fileId;
     _lastLine = l;

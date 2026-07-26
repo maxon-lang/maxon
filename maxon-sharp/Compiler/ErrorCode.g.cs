@@ -676,6 +676,15 @@ public enum ErrorCode {
   IrTypeCycle = 4014,
 
   /// <summary>
+  /// `--coverage` was combined with `--no-debug-info`. The instrumented binary's counters are
+  /// anonymous numbers: what each one counts lives in the `.mxdbg` sidecar's coverage-point
+  /// table, which `--no-debug-info` suppresses. Emitting them anyway would produce a `.mxcov`
+  /// data file nothing could ever interpret, so the combination is refused rather than silently
+  /// dropping either half.
+  /// </summary>
+  CodeEmitterCoverageNeedsDebugInfo = 5003,
+
+  /// <summary>
   /// An internal compiler invariant was violated. This is a compiler bug.
   /// </summary>
   InternalError = 9001,

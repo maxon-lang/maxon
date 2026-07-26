@@ -28,6 +28,7 @@ class Program {
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
       "mxdbg-selftest" => Debug.MxdbgSelfTest.Run(),
       "debug" => RunDebug(args[1..]),
+      "coverage" => CoverageCommand.Run(args[1..]),
       "lsp-server" => await RunLspAsync(),
       "mcp" => Mcp.McpServer.Run(args[1..]),
       _ => Fail()
@@ -43,6 +44,8 @@ class Program {
     Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
     Console.WriteLine("  monitor <exe> [args...]  Launch executable with shared-memory debug stream monitor");
     Console.WriteLine("  debug [options] <target> Inspect debug info (--debug-info sidecar); see 'Debugger options'");
+    Console.WriteLine("  coverage <run|report> <exe>");
+    Console.WriteLine($"                           Run a {CoverageFlag} binary and report line + branch coverage");
     Console.WriteLine("  spec-test [options]      Run spec tests");
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
@@ -59,6 +62,9 @@ class Program {
     Console.WriteLine("  --literal-coverage       Report static-eligibility of managed literal sites to stderr (measurement only)");
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
     Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
+    Console.WriteLine($"  {CoverageFlag}               Instrument for code coverage: the binary counts each statement and");
+    Console.WriteLine("                           `if` arm it executes and writes <output>.mxcov on exit. Changes the");
+    Console.WriteLine("                           emitted code, so it is a separate build; see 'maxon coverage'");
     Console.WriteLine("  --debug-info             Force-write the <output>.mxdbg debug-info sidecar (on by default; exe stays byte-identical)");
     Console.WriteLine("  --no-debug-info          Do not write the <output>.mxdbg debug-info sidecar");
     Console.WriteLine("  --no-debug-agent         Omit the in-process debug agent entirely (hardened build; smaller binary)");
@@ -120,6 +126,17 @@ class Program {
     Console.WriteLine("Testing log levels:");
     Console.WriteLine("  info   - Show failures and summary only");
     Console.WriteLine("  debug  - Also show each passing test");
+  }
+
+  /// <summary>
+  /// Refuse an option combination the compiler cannot honour, AHEAD of the build cache. A cache hit
+  /// returns a binary without ever reaching the compiler, so a rule enforced only inside the compile
+  /// is a rule a warm build silently skips. The rule itself lives once, on the compiler.
+  /// </summary>
+  static bool RefusedOptionCombination() {
+    if (Compiler.Compiler.CoverageConflict() is not { } error) return false;
+    Console.Error.WriteLine(error.Format());
+    return true;
   }
 
   static int Fail() {
@@ -481,6 +498,11 @@ class Program {
   // so spec-test and internal run/build-runner compiles never pay for or emit a sidecar.
   static bool? _debugInfoOverride;
 
+  /// The build flag that turns on coverage instrumentation. Spelled once here and referenced by the
+  /// usage text, the parser, and the `coverage` command's refusals, so a rename cannot leave one of
+  /// them telling the user to pass something that no longer exists.
+  internal const string CoverageFlag = "--coverage";
+
   static (bool emitIr, bool dumpStages, bool valid) ParseOptions(string[] args, HashSet<string>? additionalOptions = null) {
     var emitIr = false;
     var dumpStages = false;
@@ -504,6 +526,8 @@ class Program {
         Compiler.Compiler.AsyncTrace = true;
       } else if (arg == "--debugstream") {
         Compiler.Compiler.DebugStream = true;
+      } else if (arg == CoverageFlag) {
+        Compiler.Compiler.Coverage = true;
       } else if (arg == "--debug-info") {
         _debugInfoOverride = true;
       } else if (arg == "--no-debug-info") {
@@ -592,6 +616,7 @@ class Program {
     // absent. So the cache is disabled only for the IR/stage-dump artifacts, as before.
     var useCache = !emitIr && !dumpStages;
     Compiler.Compiler.DebugInfo = _debugInfoOverride ?? true;
+    if (RefusedOptionCombination()) return 1;
 
     if (File.Exists(path)) {
       // Single file: compile directly
@@ -666,12 +691,16 @@ class Program {
         var savedAsyncTrace = Compiler.Compiler.AsyncTrace;
         var savedDebugStream = Compiler.Compiler.DebugStream;
         var savedDebugInfo = Compiler.Compiler.DebugInfo;
+        var savedCoverage = Compiler.Compiler.Coverage;
         Compiler.Compiler.MmTrace = false;
         Compiler.Compiler.MmDebug = false;
         Compiler.Compiler.AsyncTrace = false;
         Compiler.Compiler.DebugStream = false;
-        // No sidecar for the internal build-runner — --debug-info is for the user's project.
+        // No sidecar for the internal build-runner — --debug-info is for the user's project. The same
+        // reasoning retires --coverage here: instrumenting the build runner would count the BUILD's
+        // own statements into the user's report and would also trip the sidecar requirement above.
         Compiler.Compiler.DebugInfo = false;
+        Compiler.Compiler.Coverage = false;
         try {
           if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
             // Don't emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
@@ -686,6 +715,7 @@ class Program {
           Compiler.Compiler.AsyncTrace = savedAsyncTrace;
           Compiler.Compiler.DebugStream = savedDebugStream;
           Compiler.Compiler.DebugInfo = savedDebugInfo;
+          Compiler.Compiler.Coverage = savedCoverage;
         }
 
         var (exitCode, json) = RunExecutableCapture(runPath);
@@ -704,6 +734,7 @@ class Program {
         // decides (debug_info); otherwise on by default. Only governs whether a <output>.mxdbg is
         // written — the exe is byte-identical regardless.
         Compiler.Compiler.DebugInfo = _debugInfoOverride ?? config.Debug_info;
+        if (RefusedOptionCombination()) return 1;
 
         // If build.maxon supplied an output path with no extension, append the
         // host-target executable extension (".exe" on Windows, none elsewhere)

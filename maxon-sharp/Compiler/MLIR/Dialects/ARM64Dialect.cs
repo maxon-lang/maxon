@@ -133,6 +133,7 @@ public enum ARM64OpKind {
   BulkZero,
   StoreToSp,
   JumpTable,
+  CovInc,
 }
 
 public abstract class ARM64Op : IPrintableOp {
@@ -802,6 +803,20 @@ public sealed class ARM64AdrpAddGlobalOp(ARM64Register dest, string globalName) 
   public ARM64Register Dest { get; } = dest;
   public string GlobalName { get; } = globalName;
   public override string Mnemonic => $"arm64.adrp_add_global {Dest.ToString().ToLower()}, {GlobalName}";
+}
+
+/// One coverage counter increment (`--coverage` only): `adrp/add` the counter's address into the
+/// emitter's own scratch pair and `stadd` 1 into it. The x64 twin is <c>X86CovIncOp</c>; both are a
+/// single ATOMIC read-modify-write for the same reason — green threads run on real OS threads, so a
+/// plain load/add/store would lose counts whenever two processors reach one point together.
+///
+/// It takes no allocated register: X16/X17 are the emitter's intra-procedure scratch pair (the same
+/// pair `EmitGlobalLoadReg` addresses globals through), so instrumentation adds no register pressure
+/// here either.
+public sealed class ARM64CovIncOp(int pointId) : ARM64Op, ICoveragePointOp {
+  public override ARM64OpKind Kind => ARM64OpKind.CovInc;
+  public int PointId { get; } = pointId;
+  public override string Mnemonic => $"arm64.cov_inc __cov_counters+{PointId * 8}";
 }
 
 public sealed class ARM64AdrpAddSymdataOp(ARM64Register dest, string symdataLabel) : ARM64Op {

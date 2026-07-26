@@ -1,0 +1,154 @@
+P6 CODE-COVERAGE gate — `maxon build --coverage` instruments, the program counts, `maxon coverage`
+reports line AND branch coverage. Reproducible transcript over DebugSamples/coverage.maxon (a run that
+completes) and DebugSamples/covpartial.maxon (a run that does not).
+
+⭐ WHAT THIS GOLDEN IS FOR — THE THING NO LINE TABLE CAN DO. The `.mxdbg` line table holds
+`(codeOffset, file, line, col, flags)`: no successor, no edge, no condition identity. An `if` with no
+`else` therefore has NO ROW for the arm it does not take, and cannot have one — that arm has no source
+text. Both branches below are exactly that shape, and block 1 reports `then=1 else=2` and
+`then=0 else=1` for them. Instrumentation is the only place those numbers can come from.
+
+It also puts all FOUR line states side by side, because three of them are easy to conflate:
+  * a real COUNT (line 24 ran 3 times, line 25 once) — what the run did
+  * `#####` (line 41) — real code the run never reached
+  * `-----` (lines 19-20) — the optimizer emitted NO CODE for it (dead-function elimination removed
+    `neverCalled` whole), which is a different fact from "untested" and must not be reported as one
+  * blank (comments, blanks, every `end`) — no coverage point at all
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/coverage.maxon --coverage
+  maxon build maxon-sharp/DebugSamples/covpartial.maxon --coverage
+  maxon coverage run maxon-sharp/DebugSamples/coverage.exe
+  maxon coverage run maxon-sharp/DebugSamples/coverage.exe --json
+  maxon coverage run maxon-sharp/DebugSamples/covpartial.exe
+
+RED (the same command lines against a pre-P6 binary): `maxon coverage` was not a command at all — it
+fell through to the usage text and exit 1 — and `--coverage` was not a build flag, so the build lines
+above were rejected as unknown options. There were no counters, no `.mxcov`, and the sidecar's
+coverage-point slots were written as zero with the comment "Coverage section slots stay 0 until P6".
+
+WHAT EACH BLOCK PROVES (asserted by the output below):
+  * BLOCK 1 — THE HEADLINE. The annotated listing, with all four states and both branches. Note
+    `classify`'s line 24 at 3 and line 28 at 2: the `if` header runs three times, and the fall-through
+    below it twice, which is the implicit else arm counted from the other direction. Note also that
+    every executable line carries its OWN count — the line table for this same program has rows for
+    only some of them, because a statement whose code is folded away leaves no row behind while its
+    coverage point still counts the line's executions.
+  * BLOCK 2 — THE SAME REPORT AS JSON, from the same model through the second renderer. The two faces
+    are a text renderer and a JSON renderer over ONE report; there is no second aggregation.
+  * BLOCK 3 — PARTIAL. covpartial panics halfway, so the dump runs from the panic path and marks the
+    data ABORTED. The report says the run did not complete and `maxon coverage` exits NONZERO: the
+    counts are real, but presenting a truncated run as a finished measurement is what an instrument
+    must not do. `neverReached` is `-----` here for the same reason `neverCalled` is in block 1.
+  * BLOCK 4 — A DATA FILE FROM A DIFFERENT BUILD IS REFUSED. A counter is an anonymous index, so
+    joining another binary's numbers to this binary's point table would name real source lines with
+    counts belonging to other lines. It is refused on the build-id, exactly as the sidecar is.
+  * BLOCK 5 — `--coverage --no-debug-info` IS REFUSED BY NAME (E5003). The counters are meaningless
+    without the sidecar's point table to interpret them, so the combination cannot produce a readable
+    artifact and is rejected rather than half-honoured. The check runs AHEAD of the build cache: a
+    cached binary must not be handed back for a request that should have been refused.
+
+WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
+  * Every count, state, branch arm and total is the P6 subject and is STABLE: pure integer arithmetic,
+    no stdlib calls, no green threads, so the program executes exactly the same statements every run.
+  * Paths are printed RELATIVE to the working directory, so this transcript is the same on every
+    machine. Run the commands from the repository root, as the gate does.
+  * No addresses, no timings, no session ids appear anywhere in a coverage report.
+
+--- EXPECTED `maxon coverage run` STDOUT, BLOCK 1: the annotated listing ---
+coverage: maxon-sharp/DebugSamples/coverage.exe
+lines: 10/11 covered  branches: 3/4 arms taken  eliminated: 2 lines
+legend: a count = executed, ##### = never executed, ----- = no code emitted (optimized away), blank = no coverage point
+
+=== maxon-sharp/DebugSamples/coverage.maxon ===
+        |   1| // P6 coverage gate sample. Deterministic by construction: pure integer arithmetic, no stdlib calls,
+        |   2| // no green threads, and a distinct exit code (12 = 1 + 1 + 10).
+        |   3| //
+        |   4| // It exists to put all FOUR line states in one listing, because three of them are easy to confuse:
+        |   5| //   - `classify`'s header runs 3 times and its `return 10` once — real counts
+        |   6| //   - `total = 0` inside `if total > 1000` is real code the run never reaches — never executed
+        |   7| //   - `neverCalled` is removed whole by dead-function elimination — NO CODE WAS EMITTED, which is a
+        |   8| //     different fact from "untested" and must not be reported as if it were
+        |   9| //   - this comment, the blank lines and every `end` carry no coverage point at all
+        |  10| //
+        |  11| // It also puts both arms of two `if`s on the record, INCLUDING the `else` neither one writes. That
+        |  12| // arm has no source text, so no line table can ever hold a row for it; instrumentation is the only
+        |  13| // place it can be counted, which is the whole reason this rung mints a point per branch arm.
+        |  14| 
+        |  15| typealias ExitCode = int(0 to 255)
+        |  16| typealias Small = int(0 to 1000000)
+        |  17| 
+        |  18| function neverCalled(n Small) returns Small
+  ----- |  19| 	let doubled = n + n
+  ----- |  20| 	return doubled
+        |  21| end 'neverCalled'
+        |  22| 
+        |  23| function classify(n Small) returns Small
+      3 |  24| 	if n > 1 'big'
+      1 |  25| 		return 10
+        |  26| 	end 'big'
+        |  27| 
+      2 |  28| 	return 1
+        |  29| end 'classify'
+        |  30| 
+        |  31| function main() returns ExitCode
+      1 |  32| 	var total = 0
+      1 |  33| 	var i = 0
+        |  34| 
+      1 |  35| 	while i < 3 'loop'
+      3 |  36| 		total = total + classify(i)
+      3 |  37| 		i = i + 1
+        |  38| 	end 'loop'
+        |  39| 
+      1 |  40| 	if total > 1000 'never'
+  ##### |  41| 		total = 0
+        |  42| 	end 'never'
+        |  43| 
+      1 |  44| 	return total
+        |  45| end 'main'
+        |  46| 
+
+=== branches ===
+  maxon-sharp/DebugSamples/coverage.maxon:24:2  then=1  else=2 (else is implicit)
+  maxon-sharp/DebugSamples/coverage.maxon:40:2  then=0  else=1 (else is implicit)
+
+--- EXPECTED `maxon coverage run --json` STDOUT, BLOCK 2: the same report as JSON ---
+{"exe":"maxon-sharp/DebugSamples/coverage.exe","runCompleted":true,"linesCovered":10,"linesInstrumented":11,"linesEliminated":2,"armsTaken":3,"armsInstrumented":4,"files":[{"path":"maxon-sharp/DebugSamples/coverage.maxon","lines":[{"line":19,"state":"eliminated"},{"line":20,"state":"eliminated"},{"line":24,"state":"covered","count":3},{"line":25,"state":"covered","count":1},{"line":28,"state":"covered","count":2},{"line":32,"state":"covered","count":1},{"line":33,"state":"covered","count":1},{"line":35,"state":"covered","count":1},{"line":36,"state":"covered","count":3},{"line":37,"state":"covered","count":3},{"line":40,"state":"covered","count":1},{"line":41,"state":"notCovered","count":0},{"line":44,"state":"covered","count":1}]}],"branches":[{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":24,"col":2,"then":1,"else":2,"elseImplicit":true},{"file":"maxon-sharp/DebugSamples/coverage.maxon","line":40,"col":2,"then":0,"else":1,"elseImplicit":true}]}
+
+--- EXPECTED `maxon coverage run` STDOUT, BLOCK 3: a run that did not complete ---
+coverage: maxon-sharp/DebugSamples/covpartial.exe
+PARTIAL: the run did not complete — these counts stop where the program died
+lines: 4/4 covered  branches: 0/0 arms taken  eliminated: 1 lines
+legend: a count = executed, ##### = never executed, ----- = no code emitted (optimized away), blank = no coverage point
+
+=== maxon-sharp/DebugSamples/covpartial.maxon ===
+        |   1| // P6 coverage gate sample: a run that does NOT complete.
+        |   2| //
+        |   3| // The program panics halfway through, so its counters are dumped from the panic path and the data
+        |   4| // file is marked ABORTED. The report must say PARTIAL and exit non-zero: the counts in it are real,
+        |   5| // but everything after the panic never got its chance to run, and presenting that as a finished
+        |   6| // measurement would be an instrument reporting a truncated run as a whole one.
+        |   7| 
+        |   8| typealias ExitCode = int(0 to 255)
+        |   9| typealias Small = int(0 to 1000)
+        |  10| 
+        |  11| function reached(n Small) returns Small
+      1 |  12| 	return n + 1
+        |  13| end 'reached'
+        |  14| 
+        |  15| function neverReached(n Small) returns Small
+  ----- |  16| 	return n + 2
+        |  17| end 'neverReached'
+        |  18| 
+        |  19| function main() returns ExitCode
+      1 |  20| 	var total = 0
+      1 |  21| 	total = reached(total)
+      1 |  22| 	panic("covpartial: a deliberate abort, so the run is reported PARTIAL")
+        |  23| end 'main'
+        |  24| 
+
+--- EXPECTED: maxon coverage report maxon-sharp/DebugSamples/coverage.exe --data=maxon-sharp/DebugSamples/covpartial.exe.mxcov 2>&1 ---
+coverage: the .mxcov data was written by a different build of this binary — re-run it
+
+--- EXPECTED: maxon build maxon-sharp/DebugSamples/coverage.maxon --coverage --no-debug-info 2>&1 ---
+error E5003: --coverage requires the debug-info sidecar: the counters it emits are anonymous without the sidecar's coverage-point table, so a .mxcov written by this binary could never be interpreted. Drop --no-debug-info (or debug_info:false in build.maxon), or drop --coverage.

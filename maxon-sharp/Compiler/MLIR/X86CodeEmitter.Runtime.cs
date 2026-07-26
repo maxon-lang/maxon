@@ -63,6 +63,7 @@ public partial class X86CodeEmitter {
     // threads write into mm_raw_alloc'd buffers that the result struct
     // takes ownership of.
     EmitMaxonSubprocess();
+    if (Compiler.Coverage) EmitCoverageWriteFile();
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
@@ -254,6 +255,132 @@ public partial class X86CodeEmitter {
     // Return bytes written
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitRuntimeFunctionEnd();
+  }
+
+  // Win32 file-creation arguments, named rather than left as bare numbers at the call site.
+  private const long GenericWrite = 0x40000000;
+  private const long FileShareRead = 0x00000001;
+  private const long CreateAlways = 2;
+  private const long FileAttributeNormal = 0x00000080;
+  private const long InvalidHandleValue = -1;
+
+  /// <summary>
+  /// `__cov_write_file(path_rcx, buf_rdx, len_r8)` — write a byte range to a file, creating or
+  /// truncating it. The `--coverage` dump's only OS dependency (see RuntimeEmitter.Coverage.cs).
+  ///
+  /// It has one body per backend rather than living in the platform-neutral layer for the reason
+  /// `maxon_write_stderr` does: `CreateFileA` takes SEVEN arguments, three of which go in the Win64
+  /// shadow area, and writing there requires <see cref="EmitSystemStackEnter"/> — a real runtime
+  /// frame, which the neutral VReg layer has no way to express.
+  ///
+  /// It also cannot reuse `maxon_managed_file_*`: those route through `__io_submit_sync`, whose
+  /// worker pool `__io_shutdown` has already torn down by the time a coverage dump runs.
+  ///
+  /// Every failure returns quietly. Instrumentation must not change what the program under
+  /// measurement prints or returns; an unwritable output directory becomes "no data file", which the
+  /// driver reports as exactly that.
+  /// </summary>
+  private void EmitCoverageWriteFile() {
+    // [rbp-0x08] path, [rbp-0x10] buf, [rbp-0x18] len, [rbp-0x20] handle,
+    // [rbp-0x28] bytesWritten (WriteFile out-param), [rbp-0x30] bytes written so far.
+    EmitRuntimeFunctionStart(Runtime.RuntimeEmitter.CoverageWriteFileLabel, 3, 0x50);
+
+    // ⚠ RE-ALIGN THE STACK. The Win64 ABI wants RSP 16-byte aligned at a CALL, and the caller chain
+    // that reaches here does not guarantee it: `IEmitterBackend.FunctionStart` pushes THREE
+    // callee-saved registers after reserving its frame, so every call made from a platform-neutral
+    // runtime body is 8 bytes out relative to its own caller. `__cov_dump` is such a body, and it is
+    // reached from two chains of different parity — the exit path and the panic path — so one of the
+    // two arrived here misaligned and faulted INSIDE CreateFileA (measured: an access violation at a
+    // kernel32 address, only on the panic path).
+    //
+    // Fixed here rather than in FunctionStart because that prologue is in every binary this compiler
+    // has ever emitted, and changing it would move every byte of every one — against the invariant
+    // this whole workstream is built on. RBP already holds the frame, and the epilogue restores RSP
+    // from RBP, so masking RSP costs nothing and is undone for free.
+    EmitBytes(0x48, 0x83, 0xE4, 0xF0); // AND RSP, -16
+
+    var doneLabel = "rt_cov_write_done";
+    var loopLabel = "rt_cov_write_loop";
+    var closeLabel = "rt_cov_write_close";
+
+    // CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    EmitSystemStackEnter(0x40); // shadow(0x20) + 3 stack args + pad
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegImm(X86Register.Rdx, GenericWrite);
+    EmitMovRegImm(X86Register.R8, FileShareRead);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitMovStackArgImm(0x20, CreateAlways);
+    EmitMovStackArgImm(0x28, FileAttributeNormal);
+    EmitMovStackArgImm(0x30, 0);
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    EmitSystemStackLeave(0x40);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitCmpRegImm(X86Register.Rax, InvalidHandleValue);
+    EmitJcc("e", doneLabel);
+
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+
+    DefineLabel(loopLabel);
+    // remaining = len - written; stop at zero (a short write loops, a failed one breaks out).
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("le", closeLabel);
+
+    // Zero the out-param first: WriteFile stores a DWORD and the upper half would otherwise be stale.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    // WriteFile(handle, buf + written, len - written, &bytesWritten, NULL)
+    EmitSystemStackEnter(0x30); // shadow(0x20) + 1 stack arg + pad
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitAddRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitMovRegMem(X86Register.R8, -0x18, 8);
+    EmitSubRegReg(X86Register.R8, X86Register.Rax);
+    EmitLeaRegMem(X86Register.R9, -0x28);
+    EmitMovStackArgImm(0x20, 0);
+    EmitCallImport("kernel32.dll", "WriteFile");
+    EmitSystemStackLeave(0x30);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", closeLabel);
+
+    // A successful call that wrote nothing would spin forever, so zero progress ends the loop too.
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", closeLabel);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitAddRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8);
+    EmitJmp(loopLabel);
+
+    DefineLabel(closeLabel);
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallImportOnSystemStack("kernel32.dll", "CloseHandle");
+
+    DefineLabel(doneLabel);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// MOV QWORD PTR [rsp+disp8], imm32 — a Win64 stack argument, written after the system-stack
+  /// switch has established the frame those arguments live in.
+  private void EmitMovStackArgImm(int rspOffset, long imm) {
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, (byte)rspOffset);
+    EmitDword((int)imm);
+  }
+
+  /// Under `--coverage`, dump the counters as an ABORTED run just before a fatal exit. Placed on the
+  /// panic path as well as the normal one so a program that dies still reports the coverage it did
+  /// achieve — marked PARTIAL, because the statements after the fault never got their chance.
+  private void EmitCoverageAbortDump() {
+    if (!Compiler.Coverage) return;
+    EmitMovRegImm(X86Register.Rcx, Debug.MxcovFormat.StatusAborted);
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, Runtime.RuntimeEmitter.CoverageDumpLabel));
+    EmitDword(0);
   }
 
   /// <summary>maxon_write_stderr(cstr_ptr_in_rcx) -> bytes_written_in_rax</summary>
@@ -510,6 +637,7 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_panic_walk_loop");
 
     DefineLabel("rt_panic_walk_done");
+    EmitCoverageAbortDump();
     EmitMovRegImm(X86Register.Rcx, 1);
     EmitCallImportOnSystemStack("kernel32.dll", "ExitProcess");
     EmitByte(0xCC); // int3

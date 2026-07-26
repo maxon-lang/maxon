@@ -28,6 +28,8 @@ public sealed class MxdbgReader {
   private readonly uint _fieldCount;
   private readonly uint _localTableOff;
   private readonly uint _localCount;
+  private readonly uint _covTableOff;
+  private readonly uint _covCount;
 
   public readonly record struct FuncInfo(
     string Name, uint CodeStart, uint CodeEnd, uint FrameSize, uint ParamCount,
@@ -42,6 +44,20 @@ public sealed class MxdbgReader {
 
   public readonly record struct LocalInfo(
     string Name, MxdbgLocKind LocKind, int LocValue, uint TypeId, uint ScopeStart, uint ScopeEnd);
+
+  /// One coverage point. Its COUNTER INDEX is its index in this table — the same number the emitted
+  /// increment carries and the same slot of the `.mxcov` counter array.
+  public readonly record struct CovPointInfo(
+    uint CodeOffset, string File, uint Line, uint Col, string FunctionName, uint Flags) {
+    /// No code was emitted for this point: the optimizer removed what it anchored. Distinct from a
+    /// zero COUNT, which means real code that never ran.
+    public bool Eliminated => (Flags & MxdbgFormat.CovFlagEliminated) != 0;
+    public bool IsStatement => (Flags & MxdbgFormat.CovFlagStatement) != 0;
+    public bool IsThenArm => (Flags & MxdbgFormat.CovFlagArmThen) != 0;
+    public bool IsElseArm => (Flags & MxdbgFormat.CovFlagArmElse) != 0;
+    /// The `else` the source never wrote — instrumented anyway, which is the whole point.
+    public bool IsImplicitArm => (Flags & MxdbgFormat.CovFlagArmImplicit) != 0;
+  }
 
   public MxdbgReader(byte[] bytes) {
     _b = bytes;
@@ -68,6 +84,8 @@ public sealed class MxdbgReader {
     _fieldCount = MxdbgFormat.U32(_b, MxdbgFormat.OffFieldCount);
     _localTableOff = MxdbgFormat.U32(_b, MxdbgFormat.OffLocalTableOff);
     _localCount = MxdbgFormat.U32(_b, MxdbgFormat.OffLocalCount);
+    _covTableOff = MxdbgFormat.U32(_b, MxdbgFormat.OffCovTableOff);
+    _covCount = MxdbgFormat.U32(_b, MxdbgFormat.OffCovCount);
 
     Triple = Str(MxdbgFormat.U32(_b, MxdbgFormat.OffTripleOff), MxdbgFormat.U32(_b, MxdbgFormat.OffTripleLen));
   }
@@ -78,6 +96,11 @@ public sealed class MxdbgReader {
   public uint TypeCount => _typeCount;
   public uint FieldCount => _fieldCount;
   public uint LocalCount => _localCount;
+
+  /// How many coverage points this binary was instrumented with. Zero on any build that was not
+  /// `--coverage`, which the driver reports as "this binary is not instrumented" rather than as an
+  /// empty measurement.
+  public uint CoveragePointCount => _covCount;
 
   /// Read a string-pool slice as UTF-8. `(0,0)` is the empty string.
   private string Str(uint off, uint len) =>
@@ -148,6 +171,18 @@ public sealed class MxdbgReader {
       MxdbgFormat.U32(_b, rec + 24));
   }
 
+  public CovPointInfo CoveragePoint(uint index) {
+    if (index >= _covCount) throw new ArgumentOutOfRangeException(nameof(index));
+    int rec = (int)(_covTableOff + index * MxdbgFormat.CovEntrySize);
+    return new CovPointInfo(
+      MxdbgFormat.U32(_b, rec),
+      FileName(MxdbgFormat.U32(_b, rec + 4)),
+      MxdbgFormat.U32(_b, rec + 8),
+      MxdbgFormat.U32(_b, rec + 12),
+      Str(MxdbgFormat.U32(_b, rec + 16), MxdbgFormat.U32(_b, rec + 20)),
+      MxdbgFormat.U32(_b, rec + 24));
+  }
+
   /// The name of the type at <paramref name="typeId"/>, or "" when the id is out of range. Used to
   /// render a field's or local's type without the caller re-indexing the type table.
   public string TypeName(uint typeId) => typeId < _typeCount ? Type(typeId).Name : "";
@@ -208,17 +243,35 @@ public sealed class MxdbgReader {
   /// a row the sidecar recorded under an absolute or differently-rooted path. The smallest matching
   /// offset is the statement's entry, past the prologue for any non-first statement.
   /// </summary>
-  public uint? LineToOffset(string fileName, uint line) {
-    var wantLeaf = LeafPathComponent(fileName);
-    uint? best = null;
-    for (uint i = 0; i < _lineCount; i++) {
-      var row = Line(i);
-      if (row.Line != line || !LeafPathComponent(row.File).Equals(wantLeaf, StringComparison.OrdinalIgnoreCase))
-        continue;
-      if (best is null || row.CodeOffset < best) best = row.CodeOffset;
+  public uint? LineToOffset(string fileName, uint line) =>
+    LineStartIndex().TryGetValue(LineKey(LeafPathComponent(fileName), line), out var offset) ? offset : null;
+
+  /// `leaf:line` -> the smallest code offset with a row there, built once on first use.
+  ///
+  /// The line table is sorted by CODE OFFSET, not by line, so this direction cannot be binary-searched
+  /// the way <see cref="PcToLine"/> is — it was a full scan that DECODED a file-name string per row,
+  /// which is O(rows) per resolved line and quadratic across a set of them. Bounded in practice (the
+  /// agent holds 16 breakpoints), but the same shape <see cref="FunctionAt"/>'s index already replaced
+  /// on the stepping path, and built the same lazy way so a session that never resolves a line by
+  /// number pays nothing.
+  private Dictionary<string, uint>? _lineStartIndex;
+
+  private Dictionary<string, uint> LineStartIndex() {
+    if (_lineStartIndex is null) {
+      // OrdinalIgnoreCase on the whole key is exactly the comparison the scan applied to the leaf: a
+      // path leaf cannot contain ':', so no leaf+line pair can collide with another's.
+      var index = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+      for (uint i = 0; i < _lineCount; i++) {
+        var row = Line(i);
+        var key = LineKey(LeafPathComponent(row.File), row.Line);
+        if (!index.TryGetValue(key, out var best) || row.CodeOffset < best) index[key] = row.CodeOffset;
+      }
+      _lineStartIndex = index;
     }
-    return best;
+    return _lineStartIndex;
   }
+
+  private static string LineKey(string leaf, uint line) => $"{leaf}:{line}";
 
   /// The trailing path component, split on both separators so a Windows-rooted sidecar path and a
   /// forward-slash command-line spelling compare equal. Public and single-sourced here because the file

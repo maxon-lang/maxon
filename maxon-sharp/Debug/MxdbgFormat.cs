@@ -19,10 +19,13 @@ namespace MaxonSharp.Debug;
 /// into garbage.
 ///
 /// P2 scope adds the type table, its field sub-table, the local-variable location table, and each
-/// function's real frame size. The coverage-point table (P6) still has reserved header slots
-/// (written as 0). The P2 additions change the header layout and grow the function record, so this is
-/// an INCOMPATIBLE change and <see cref="FormatVersion"/> is bumped — a reader that speaks only the
-/// P1 layout refuses the file rather than misreading the moved fields.
+/// function's real frame size. The P2 additions change the header layout and grow the function
+/// record, so this is an INCOMPATIBLE change and <see cref="FormatVersion"/> is bumped — a reader
+/// that speaks only the P1 layout refuses the file rather than misreading the moved fields.
+///
+/// P6 fills the reserved coverage-point slots. That section is written only by a `--coverage` build:
+/// a coverage point is a COUNTER, and a counter that no instrumented code increments would be a table
+/// describing a binary that cannot produce data for it.
 ///
 /// The compiler populates the type/field tables, each function's frame size, AND (as of P2b) each
 /// function's named locals. A local's source-level TYPE is erased by the Standard dialect (every store
@@ -36,10 +39,17 @@ public static class MxdbgFormat {
   /// 8 bytes so the header stays 4/8-byte aligned. A reader that does not see this refuses the file.
   public static readonly byte[] Magic = "MXDBG\0\0\0"u8.ToArray();
 
-  /// Bumped only on an INCOMPATIBLE layout change. The driver refuses a version it does not speak
-  /// rather than misread it — the "an instrument that lies is worse than none" rule the DebugStream
-  /// handshake established. v2: type table + field sub-table + local table + per-function frame size.
-  public const uint FormatVersion = 2;
+  /// Bumped on any change to what the file MEANS, not merely to where its bytes sit. The driver
+  /// refuses a version it does not speak rather than misread it — the "an instrument that lies is
+  /// worse than none" rule the DebugStream handshake established. v2: type table + field sub-table +
+  /// local table + per-function frame size. v3: the coverage-point table.
+  ///
+  /// v3 is layout-compatible with v2 (every section is found through its own header slot, so a v2
+  /// reader would still read a v3 file correctly) and is bumped anyway, because the CONTRACT changed:
+  /// in v2 a zero <see cref="OffCovCount"/> meant "this format cannot say", and in v3 it means "this
+  /// binary has no coverage points". A reader that cannot tell those apart would report an
+  /// instrumented binary's coverage as empty, which is the one answer worse than refusing.
+  public const uint FormatVersion = 3;
 
   /// The one true width of every count/offset/length word in the file.
   public const int FieldSize = 4;
@@ -66,7 +76,7 @@ public static class MxdbgFormat {
   public const int OffLocalCount = 68;
   public const int OffTypeTableOff = 72;  // type table
   public const int OffTypeCount = 76;
-  public const int OffCovTableOff = 80;   // P6 (0 until then)
+  public const int OffCovTableOff = 80;   // coverage-point table
   public const int OffCovCount = 84;
   public const int OffFieldTableOff = 88; // type-field sub-table (indexed by the type table)
   public const int OffFieldCount = 92;
@@ -82,10 +92,32 @@ public static class MxdbgFormat {
   // nameOff nameLen locKind locValue typeId scopeStart scopeEnd. locValue is a SIGNED rbp-relative
   // offset for a stack slot (stored as its two's-complement u32); read it back through a cast.
   public const int LocalEntrySize = 28;
+  // codeOffset fileId line col funcNameOff funcNameLen flags. A point's COUNTER INDEX is its record
+  // index, which is what binds this table to the `.mxcov` counter array position-for-position.
+  //
+  // The owning function is named by STRING, not by a funcId into the function table, because an
+  // ELIMINATED point's function is not in that table at all (dead-function elimination removed it),
+  // and a funcId would then have to be a sentinel that points at some unrelated function. Naming it
+  // costs one interned string per function and can never mislabel.
+  public const int CovEntrySize = 28;
 
   // Line-entry flag bits.
   public const uint LineFlagStatement = 1 << 0; // a statement boundary (a valid step/breakpoint stop)
-  public const uint LineFlagCoverage = 1 << 1;  // also a coverage point (P6)
+  public const uint LineFlagCoverage = 1 << 1;  // a coverage point's counter increment starts here
+
+  // Coverage-point flag bits. Kind and state are one word because they are one fact about a point:
+  // WHAT the source construct is, and WHETHER the compiler emitted code for it.
+  public const uint CovFlagStatement = 1 << 0;   // the head of a user statement
+  public const uint CovFlagArmThen = 1 << 1;     // the TRUE arm of a user `if`
+  public const uint CovFlagArmElse = 1 << 2;     // the FALSE arm of a user `if`
+  // Set with CovFlagArmElse for the arm the source does not write (`if c then … end`). Instrumenting
+  // it is the whole reason a coverage report can say "the false arm ran 4 times": the line table has
+  // no row for an arm that has no source text, and never can.
+  public const uint CovFlagArmImplicit = 1 << 3;
+  // No code was emitted for this point — the optimizer removed the code it anchored (today: a whole
+  // function dead-function elimination dropped). Distinct from a zero counter, which means real code
+  // that never ran. Set at emit time by observing which points reached `.text`.
+  public const uint CovFlagEliminated = 1 << 4;
 
   /// FNV-1a 64-bit over a byte span — the sidecar's build-id, matching the compiler-fingerprint
   /// content-hash convention. Binds a sidecar to exactly the `.text` it describes.

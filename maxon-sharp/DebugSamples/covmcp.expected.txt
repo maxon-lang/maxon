@@ -1,0 +1,42 @@
+P6 COVERAGE-over-MCP gate — the SAME report an agent asks for, through `maxon mcp`.
+
+⭐ WHAT THIS GOLDEN IS FOR. `coverage.expected.txt` proves the measurement; this one proves there is
+exactly ONE of it. The `coverage` family builds through the same `DebugBuild.Compile` the debug family
+uses (stating `--coverage` rather than inheriting it, for the reason `debug_start` states
+`--debugstream`), runs and joins through the same `CoverageRunner`, and renders through the same
+`CoverageRender.Json` that `maxon coverage --json` prints. Compare the numbers below against block 2 of
+`coverage.expected.txt`: they are equal because they come from one report model through one renderer,
+not because two aggregations happen to agree.
+
+`coverage_report` re-reads the data an earlier run wrote WITHOUT running the program again, which is
+what makes the join separable from the run — an agent that ran its program itself can still ask for the
+report, and CI can aggregate.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler):
+  maxon build maxon-sharp/DebugSamples/coverage.maxon --coverage
+  maxon mcp --port=47822 --idle-timeout=120
+  S=$(curl -sS -D- -o/dev/null -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}' http://127.0.0.1:47822/mcp | tr -d '' | awk '/^Mcp-Session-Id:/{print $2}'); for m in '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"coverage_run","arguments":{"source":{"kind":"file","path":"maxon-sharp/DebugSamples/coverage.maxon"}}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"coverage_report","arguments":{"source":{"kind":"file","path":"maxon-sharp/DebugSamples/coverage.maxon"}}}}'; do curl -sS -H "Mcp-Session-Id: $S" -H 'Content-Type: application/json' -d "$m" http://127.0.0.1:47822/mcp; echo; done
+
+RED (the same command line against a pre-P6 binary): `tools/list` advertised thirteen `debug_*` tools
+and nothing else; `coverage_run` came back as an unknown tool.
+
+WHAT THIS BLOCK PROVES:
+  * `coverage_run` builds WITH instrumentation, runs the program, and answers with the report — one
+    call, no live session to hold, so unlike a debug session nothing here outlives the request.
+  * The report is SPLICED as raw JSON under `coverage`, never re-encoded as a string: it is already
+    the one renderer's output, and wrapping it would hand an agent JSON to parse twice.
+  * `coverage_report` answers with the identical numbers without re-running — the join is a separate
+    step from the run, and both are the same two lines of driver code either face calls.
+  * `linesEliminated:2` and `armsTaken:3/4` travel to an agent as fields, not as prose: the four line
+    states and the implicit `else` arm are machine-readable, which is the whole point of the family.
+
+WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
+  * Every count and state is the P6 subject and is STABLE (see coverage.expected.txt).
+  * `Mcp-Session-Id` is fresh per run and is deliberately never printed — it is captured into a shell
+    variable and echoed back as a header.
+  * The port is FIXED at 47822 rather than chosen, for the reason mcp.expected.txt gives: a server
+    that silently moved would mean a configured client talking to something else.
+
+--- EXPECTED `maxon mcp` coverage family STDOUT ---
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\u0022coverage\u0022:{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/coverage.exe\u0022,\u0022runCompleted\u0022:true,\u0022linesCovered\u0022:10,\u0022linesInstrumented\u0022:11,\u0022linesEliminated\u0022:2,\u0022armsTaken\u0022:3,\u0022armsInstrumented\u0022:4,\u0022files\u0022:[{\u0022path\u0022:\u0022maxon-sharp/DebugSamples/coverage.maxon\u0022,\u0022lines\u0022:[{\u0022line\u0022:19,\u0022state\u0022:\u0022eliminated\u0022},{\u0022line\u0022:20,\u0022state\u0022:\u0022eliminated\u0022},{\u0022line\u0022:24,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:3},{\u0022line\u0022:25,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:28,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:2},{\u0022line\u0022:32,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:33,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:35,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:36,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:3},{\u0022line\u0022:37,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:3},{\u0022line\u0022:40,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:41,\u0022state\u0022:\u0022notCovered\u0022,\u0022count\u0022:0},{\u0022line\u0022:44,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1}]}],\u0022branches\u0022:[{\u0022file\u0022:\u0022maxon-sharp/DebugSamples/coverage.maxon\u0022,\u0022line\u0022:24,\u0022col\u0022:2,\u0022then\u0022:1,\u0022else\u0022:2,\u0022elseImplicit\u0022:true},{\u0022file\u0022:\u0022maxon-sharp/DebugSamples/coverage.maxon\u0022,\u0022line\u0022:40,\u0022col\u0022:2,\u0022then\u0022:0,\u0022else\u0022:1,\u0022elseImplicit\u0022:true}]}}"}]}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\u0022coverage\u0022:{\u0022exe\u0022:\u0022maxon-sharp/DebugSamples/coverage.exe\u0022,\u0022runCompleted\u0022:true,\u0022linesCovered\u0022:10,\u0022linesInstrumented\u0022:11,\u0022linesEliminated\u0022:2,\u0022armsTaken\u0022:3,\u0022armsInstrumented\u0022:4,\u0022files\u0022:[{\u0022path\u0022:\u0022maxon-sharp/DebugSamples/coverage.maxon\u0022,\u0022lines\u0022:[{\u0022line\u0022:19,\u0022state\u0022:\u0022eliminated\u0022},{\u0022line\u0022:20,\u0022state\u0022:\u0022eliminated\u0022},{\u0022line\u0022:24,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:3},{\u0022line\u0022:25,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:28,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:2},{\u0022line\u0022:32,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:33,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:35,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:36,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:3},{\u0022line\u0022:37,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:3},{\u0022line\u0022:40,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1},{\u0022line\u0022:41,\u0022state\u0022:\u0022notCovered\u0022,\u0022count\u0022:0},{\u0022line\u0022:44,\u0022state\u0022:\u0022covered\u0022,\u0022count\u0022:1}]}],\u0022branches\u0022:[{\u0022file\u0022:\u0022maxon-sharp/DebugSamples/coverage.maxon\u0022,\u0022line\u0022:24,\u0022col\u0022:2,\u0022then\u0022:1,\u0022else\u0022:2,\u0022elseImplicit\u0022:true},{\u0022file\u0022:\u0022maxon-sharp/DebugSamples/coverage.maxon\u0022,\u0022line\u0022:40,\u0022col\u0022:2,\u0022then\u0022:0,\u0022else\u0022:1,\u0022elseImplicit\u0022:true}]}}"}]}}
