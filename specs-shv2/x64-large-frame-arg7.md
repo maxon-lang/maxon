@@ -38,9 +38,16 @@ would then pass under any large-frame bug.) The result depends on parameter 7, s
 changes the answer: the pre-fix compiler returned 5568 — *the frame size itself*, read straight out
 of the register the prologue overwrote.
 
+**Targets: an x64-windows case ON ITS MERITS.** `__chkstk` is the Windows stack probe — Linux x64 grows
+the stack without one, and neither arm64 nor wasm has the concept — so no other native target can exhibit
+this bug and a pass on one would be a green light about nothing. The `wasm32-wasi` lane is kept because it
+already passes and costs nothing, but it checks the SUM, not the prologue. arm64 is therefore gated out on
+the merits, not merely for the missing golden.
+
 ## Tests
 
 <!-- test: seventh-param-survives-chkstk-prologue -->
+<!-- targets: x64-windows, wasm32-wasi -->
 ```maxon
 typealias Num = int(0 to 100000000)
 

@@ -9,11 +9,24 @@ category: functions
 
 ## Documentation
 
-The x64 calling convention this compiler uses passes the first seven integer
-parameters in registers and spills the remainder onto the caller's stack, where
-the callee reads them at positive `[rbp + N]` displacements (the first stack arg
-sits at `[rbp + 0x10]`). The FIFTEENTH stack argument — the 22nd integer
-parameter — lands at exactly `[rbp + 128]`.
+shv2's x64 calling convention passes the first SIX integer parameters in registers
+(`rcx, rdx, rax, r9, rsi, rdi`) and spills the remainder onto the caller's stack,
+where the callee reads them at positive `[rbp + N]` displacements. The first stack
+argument sits at `[rbp + 0x30]`: 16 bytes for the return address and the saved
+`rbp`, then the 32-byte shadow space the outgoing region starts past
+(`win64IncomingArgDisp`). The ELEVENTH stack argument — the 17th integer
+parameter — therefore lands at exactly `[rbp + 128]`.
+
+⚠ **Those numbers read SEVEN registers and `[rbp + 0x10]` until this rung, describing
+v1's ABI, from which this spec was ported verbatim.** Corrected here against the
+emitted code, where `sum22`'s parameter loads step `0x78(%rbp)` (disp8) then
+`0x80(%rbp)` (disp32) — so the boundary parameter under shv2 is `a17`, not `a22`.
+**The tests are unaffected and still pin exactly what they claim to**: each sums EVERY
+parameter, so it straddles the boundary and catches a wrong load at any one of them,
+whichever index happens to sit on it. (The same v1 arithmetic survives in a comment
+inside `twenty-second-param-at-rbp-128`'s source. It is left alone deliberately —
+editing it would rewrite a committed fragment for a comment — and rides the same
+regeneration follow-up as the missing `x64-linux` goldens.)
 
 A signed-byte (disp8) memory displacement only spans `-128..+127`, so a `+128`
 displacement must be encoded with a 32-bit displacement (disp32). Encoding it as
@@ -23,9 +36,17 @@ miscompile, not a crash. These tests pin correct value flow across, and past, th
 disp8/disp32 boundary. Every parameter is summed so a corrupted load of any one
 of them changes the result.
 
+**Targets: an x64 case on its merits** — disp8-vs-disp32 is an x86 instruction-encoding fact, so arm64
+cannot exhibit it and the `wasm32-wasi` lane (kept, already green) checks the sum rather than the
+encoding. ⚠ Unlike `x64-large-frame-arg7`, **`x64-linux` DOES share this encoding and belongs here on the
+merits** — it is gated out purely because this host cannot execute it, so its fragment was never
+generated. **To widen**: `spec-test --target=x64-linux --update-required --filter=x64-stack-arg-disp32`
+on a Linux host, commit `specs-shv2/fragments/x64-linux/x64-stack-arg-disp32/`, and add the target below.
+
 ## Tests
 
 <!-- test: twenty-second-param-at-rbp-128 -->
+<!-- targets: x64-windows, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -46,6 +67,7 @@ end 'main'
 
 
 <!-- test: params-straddling-rbp-128-boundary -->
+<!-- targets: x64-windows, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

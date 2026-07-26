@@ -35,9 +35,20 @@ stack slot changes nothing about who owns it: the callee consumes it and drops i
 one arriving in rcx. The tests that pass managed values through stack slots are therefore also leak
 tests — the suite fails a program that ends with a live allocation.
 
+**Targets.** These cases are calling-convention BEHAVIOUR rather than encoding detail, so they run
+wherever the convention does: `x64-windows`, and `wasm32-wasi` (whose parameters are plain locals, so it
+covers the front-end half — the ABI count, the diagnostics — and nothing about slots).
+
+⚠ `x64-linux`, `arm64-macos` and `arm64-linux` are gated OUT for one reason only: this rung was developed
+on a host that can execute neither, so their fragments were never generated. Nothing here is x64-specific.
+**To widen**, on a host that can run the target: `spec-test --target=<t> --update-required
+--filter=stack-arguments`, commit the new `specs-shv2/fragments/<t>/stack-arguments/` goldens, and add the
+target to each case's list.
+
 ## Tests
 
 <!-- test: seven-scalar-parameters -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The seventh argument is the first one that does not fit the register file.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -55,6 +66,7 @@ end 'main'
 ```
 
 <!-- test: eight-scalar-parameters -->
+<!-- targets: x64-windows, wasm32-wasi -->
 Two stack slots, so the second one's displacement is exercised as well as the first's.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -72,6 +84,7 @@ end 'main'
 ```
 
 <!-- test: a-stack-argument-store-does-not-clobber-an-argument-register -->
+<!-- targets: x64-windows, wasm32-wasi -->
 Every argument is a constant, so each one must be materialized into some register before it can be
 stored. The value that lands in argument register 2 is distinctive, and so is the last stack
 argument's: if the stack stores run after the register moves, the constant materialization takes the
@@ -92,6 +105,7 @@ end 'main'
 ```
 
 <!-- test: a-function-typed-parameter-costs-two-argument-slots -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A `function`-typed parameter carries a hidden environment argument under the uniform closure ABI, so
 six written parameters can already need seven slots. The count the ABI uses is the one that decides
 which arguments go on the stack.
@@ -116,6 +130,7 @@ end 'main'
 ```
 
 <!-- test: seven-float-parameters -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The float file overflows on its own counter: seven floats need one stack slot even though no integer
 argument exists. Both reference compilers refuse this case outright.
 ```maxon
@@ -136,6 +151,7 @@ end 'main'
 ```
 
 <!-- test: int-and-float-overflow-share-one-stack-area -->
+<!-- targets: x64-windows, wasm32-wasi -->
 Seven integers and seven floats: each file overflows once, and the two overflowing arguments must
 land in DIFFERENT slots of the single merged stack area. If either file indexed the area by its own
 counter, both would claim slot 0 and one would read the other's bits.
@@ -158,6 +174,7 @@ end 'main'
 ```
 
 <!-- test: a-stack-argument-survives-an-intervening-call -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The seventh parameter is read AFTER a call, so its value must outlive a callee that clobbers every
 caller-saved register — it is loaded once at entry and preserved like any other value.
 ```maxon
@@ -181,6 +198,7 @@ end 'main'
 ```
 
 <!-- test: recursion-through-stack-arguments -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A recursive callee is its own caller, so the outgoing region it writes and the incoming region it
 reads are two different frames' worth of the same layout.
 ```maxon
@@ -202,6 +220,7 @@ end 'main'
 ```
 
 <!-- test: managed-string-arguments-in-stack-slots -->
+<!-- targets: x64-windows, wasm32-wasi -->
 Eight `String`s: two of them travel in stack slots. A managed value is an 8-byte pointer wherever it
 rides, so the callee consumes and drops all eight the same way — the run also fails on a leak. The
 byte lengths are 46 + 2 + 3 + 4 + 5 + 6 + 36 + 25 = 127, so a stack slot read from the wrong place
@@ -222,6 +241,7 @@ end 'main'
 ```
 
 <!-- test: managed-array-arguments-in-stack-slots -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The same for `Array`: the seventh and eighth arguments are heap arrays reached through a stack slot,
 and both are dropped by the callee.
 ```maxon
@@ -250,6 +270,7 @@ end 'main'
 ```
 
 <!-- test: argument-slots-are-capped-and-the-cap-is-stated -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The remaining ceiling is the width of the per-argument float mask that routes each argument to its
 register file, not a register count — and it is diagnosed rather than silently miscompiled.
 ```maxon
@@ -268,6 +289,7 @@ error E2015: specs/fragments/stack-arguments/argument-slots-are-capped-and-the-c
 ```
 
 <!-- test: a-spawn-keeps-the-lower-async-argument-ceiling -->
+<!-- targets: x64-windows, wasm32-wasi -->
 An `async` call's arguments do not travel in the calling convention at all — they ride the green
 thread's inline argument region, which the hand-assembled trampoline reads back into the argument
 registers — so a spawn has no stack-argument path even now that an ordinary call does. The lower
@@ -292,6 +314,7 @@ error E2015: specs/fragments/stack-arguments/a-spawn-keeps-the-lower-async-argum
 ```
 
 <!-- test: every-argument-of-a-wide-call-is-distinct -->
+<!-- targets: x64-windows, wasm32-wasi -->
 Twenty-two arguments, every one a DIFFERENT value, summed. The ported `x64-stack-arg-disp32` cases
 pass zeros everywhere but the boundary, so they catch a wrong displacement at one slot; this one
 catches a wrong slot ANYWHERE, because no two arguments can be swapped, duplicated or dropped without
