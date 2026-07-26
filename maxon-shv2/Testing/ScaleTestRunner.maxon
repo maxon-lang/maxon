@@ -1,25 +1,39 @@
-// ScaleTestRunner — climb the generated ladder, measure its MEMORY, print it, and record the trend.
+// ScaleTestRunner — climb the generated ladder, measure its COST, print it, and record the trend.
 //
 // IT RENDERS NO VERDICT. There is nothing here to pass.
 //
 // `spec-test` proves the compiler is CORRECT and gates on it. This is an INSTRUMENT: it compiles a
-// ladder of generated programs — six rungs, each double the last — measures ALLOCATIONS, FREES and
-// BYTES per phase per rung, prints them, and appends a datapoint to `docs/optimization-log.md`. The
-// question it answers is *"what has this compiler's memory traffic actually done, change by change"*,
-// not *"may I merge"*.
+// ladder of generated programs — six rungs, each double the last — measures ALLOCATIONS, FREES,
+// BYTES and CPU TICKS per phase per rung, prints them, and appends a datapoint to
+// `docs/optimization-log.md`. The question it answers is *"what has this compiler's cost actually
+// done, change by change"*, not *"may I merge"*.
 //
 // ===========================================================================================
-// MEMORY ONLY, AND NO CURVES. Both deletions, and why.
+// NO WALL TIME, AND NO CURVES. Both deletions, and why.
 // ===========================================================================================
 //
-// IT DOES NOT COLLECT TIME. Wall time is machine-dependent, so a dated table of it compares a loaded
-// box in July against an idle one in August and concludes nothing. Allocations and bytes are
-// bit-for-bit reproducible: the same compiler on the same corpus produces the same digits whatever
-// else the machine is doing, so a number that MOVED, moved for a reason. That is the only column in
-// which a trend means anything, so it is the only column there is. (The COMPILER still times itself,
-// and should: `--metrics=<path>` and `--log=compiler:debug` give per-phase milliseconds for one
-// compile, which is where a clock is worth reading and where nothing is being trended against another
-// machine on another day. This runner reads those metrics files and ignores their time column.)
+// IT DOES NOT COLLECT WALL TIME, AND THAT HALF HAS NEVER CHANGED. Wall time counts every OTHER
+// process on the machine too, so a dated table of it compares a loaded box in July against an idle
+// one in August and concludes nothing. Measured, on this very ladder: one run read `phase:parse` at
+// x5.03 then x1.78 across a DOUBLING corpus, which is not a curve of any shape — it is preemption.
+// (The COMPILER still times itself, and should: `--metrics=<path>` and `--log=compiler:debug` give
+// per-phase milliseconds for ONE compile, which is where a clock is worth reading and where nothing
+// is trended against another machine on another day. This runner reads those metrics files and
+// ignores their wall-clock column.)
+//
+// WHAT IT DOES COLLECT INSTEAD IS CPU TIME, and the distinction is the whole reason a cost column
+// can be here at all. `__Builtins.threadCpuTicks()` advances only while the compiling THREAD is
+// scheduled, so preemption and every other process are invisible to it. That makes it trendable
+// where wall time is not — and it is the ONLY column that can see a cost which allocates nothing,
+// the class every time-only quadratic in PLAN.md belongs to.
+//
+// ⚠ IT IS NOT EXACT, AND THE OTHER COLUMNS ARE. Allocations and bytes are bit-for-bit reproducible:
+// the same compiler on the same corpus produces the same digits whatever else the machine is doing,
+// so a number that MOVED, moved for a reason. `cpuTicks` still moves a few percent with turbo,
+// thermal throttling and cache pressure from other cores, which is why each rung is compiled
+// `--repeat` times and the MINIMUM is kept (see the repetition section below). Against the question
+// the ladder asks — x2 linear vs x4 quadratic — that band has a 100% margin. Against a claimed
+// few-percent constant-factor win it is worth nothing; use the allocation columns for that.
 //
 // AND IT FITS NOTHING. The ladder DOUBLES, so the ratio between two consecutive rungs IS the growth,
 // read straight off the raw numbers — x2.00 is linear, x4.00 is quadratic. A fitted exponent could
@@ -49,7 +63,7 @@
 // loudly, and never confuses the two.
 //
 // ===========================================================================================
-// A SUBPROCESS PER RUNG, ONE REPETITION
+// A SUBPROCESS PER RUNG, AND `--repeat` OF THEM
 // ===========================================================================================
 //
 // shv2 has no on-disk cache — `Compiler.loadProject` reads every source fresh in every process — so
@@ -58,10 +72,26 @@
 // shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
 // would report nothing at all about the five rungs that had already climbed.
 //
-// ONE REPETITION, and now it is not even a compromise. Everything measured here is bit-for-bit
-// reproducible, so a second repetition returns the same digits — there is nothing to average out and
-// no reason to pay for it. (This was a real compromise while the suite still timed itself: wall time
-// at n=1 is noisy. It stopped being one when the clock was removed.)
+// EACH RUNG IS COMPILED `--repeat` TIMES (`DefaultRepeatCount` of them unless asked otherwise), AND
+// THE TWO KINDS OF COLUMN TAKE OPPOSITE THINGS FROM THAT:
+//
+//   - MEMORY needs exactly ONE repetition and gains nothing whatever from a second. Allocations,
+//     frees and bytes are bit-for-bit reproducible, so every repeat returns the same digits. They
+//     are taken from the FIRST compile and never re-measured.
+//   - CPU needs SEVERAL, and takes the MINIMUM. `cpuTicks` is the one measure here that is not
+//     reproducible: it moves with turbo, thermal throttling and cache pressure, so one sample is
+//     partly a reading of whatever the machine was doing during it. The minimum is the
+//     least-disturbed run, which is the right estimator for a cost that noise can only ever ADD to.
+//     A mean would be dragged by a single stall, and a stall is exactly the thing that is not the
+//     compiler.
+//
+// The repeats therefore owe the memory columns something other than a second measurement: they are
+// CROSS-CHECKED FOR EQUALITY. Every phase's allocs/frees/bytes, and the emitted code size, must be
+// IDENTICAL in every repeat, and a difference is a BROKEN RUN rather than a number to average away —
+// a compiler that allocates differently for the same input has made every row of the trend log
+// suspect, and that log's whole claim is that a movement in those columns is real. The check costs
+// nothing and only a repeated compile can make it; the one-shot runner this replaced structurally
+// could not.
 
 // A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
 // directory.
@@ -108,21 +138,31 @@ end 'scaleErrorText'
 
 // One phase's numbers, as parsed back out of a rung's metrics TSV.
 //
-// NO `nanos` FIELD. The TSV still carries a nanoseconds column — the compiler times itself, and
-// should — and this suite reads straight past it. Carrying it here would mean carrying it into the
-// report, the JSON and the log, and a machine-dependent number in a trend table is a number that
-// says more about what else the box was doing than about the compiler. See this file's header.
+// STILL NO `nanos` FIELD, and now for a sharper reason than "time is unreliable". The TSV carries
+// TWO cost columns and they are not the same kind of number. Wall time counts every other process
+// on the box — carried into a dated trend table it would compare a loaded machine in July against
+// an idle one in August, which is the argument this suite was built on and it has not changed.
+// `cpuTicks` counts only the compiling thread: preemption is invisible to it, so it survives a
+// busy machine and can be trended. One is read, one is skipped, and the difference is which
+// question each can answer.
+//
+// ⚠ `cpuTicks` IS NOT BIT-REPRODUCIBLE the way allocs/frees/bytes are. It still moves with turbo,
+// thermal throttling and cache pressure from other cores — a few percent, against the x2-vs-x4
+// signal the doubling ladder reads, which has a 100% margin. So: a movement in the memory columns
+// is always real; a movement in this one is real only outside the noise band. See the trust table
+// in docs/optimization-log.md, which states the band that was actually measured.
 export type PhaseMetric
 	export let allocs as AllocCount
 	export let frees as AllocCount
 	export let bytes as ByteCount
+	export let cpuTicks as CpuTicks
 
-	export static function create(allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseMetric
-		return Self{allocs: allocs, frees: frees, bytes: bytes}
+	export static function create(allocs AllocCount, frees AllocCount, bytes ByteCount, cpuTicks CpuTicks) returns PhaseMetric
+		return Self{allocs: allocs, frees: frees, bytes: bytes, cpuTicks: cpuTicks}
 	end 'create'
 
 	export static function zero() returns PhaseMetric
-		return Self{allocs: 0, frees: 0, bytes: 0}
+		return Self{allocs: 0, frees: 0, bytes: 0, cpuTicks: 0}
 	end 'zero'
 end 'PhaseMetric'
 
@@ -208,6 +248,55 @@ export function phaseMetricOf(source PhaseSource, result RungResult) returns Pha
 end 'phaseMetricOf'
 
 // ===========================================================================================
+// `--repeat=<n>` — how many times each rung is compiled
+// ===========================================================================================
+
+// How many compiles one rung gets. The upper bound is a TYPO GUARD and nothing deeper: the cost is
+// LINEAR in it, unlike `--rungs`, where each step doubles the program and the bound is protecting
+// you from a cliff. But `--repeat=300` on a six-rung ladder is an hour of compiling that nobody
+// meant to ask for, and a minimum stops improving long before that.
+//
+// The alias's range IS the accepted range, so the type and `parseRepeatCount`'s bound check cannot
+// disagree about what a valid repeat count is.
+export typealias RepeatCount = int(1 to 25)
+
+export let MinRepeatCount = 1 as RepeatCount
+export let MaxRepeatCount = 25 as RepeatCount
+
+// THREE, and the number is a judgement about NOISE, not a budget. One sample cannot tell a stall
+// from a cost; two cannot tell which of a disagreeing pair was the disturbed one; three is where a
+// minimum starts being stable in practice. It is paid on every rung, so it is the smallest count
+// that does the job rather than the most reassuring one.
+export let DefaultRepeatCount = 3 as RepeatCount
+
+// The outcome of parsing `--repeat=<n>`. A union rather than a throw, for `--rungs`'s reason: the
+// caller is inside the argument loop and must neither diverge nor invent a value — `invalid` is
+// recorded as a bad option and the driver then refuses to run at all.
+export union RepeatCountArg
+	valid(count RepeatCount)
+	invalid
+end 'RepeatCountArg'
+
+// Parse `--repeat=<n>`.
+//
+// REFUSED, never clamped — the same door as `--rungs` and `--workers`. `--repeat=0` asks for a rung
+// that is never compiled, and a caller who typed it and silently got 3 would believe they had
+// measured something they had not.
+//
+// The digits are `parseCount`'s job, as they are for `--rungs`; this decides only what a valid RANGE
+// is, and keeps that decision in the same function as the narrowing cast so the two cannot drift.
+export function parseRepeatCount(raw String) returns RepeatCountArg
+	let value = try parseCount(raw) otherwise 'notANumber'
+		return RepeatCountArg.invalid
+	end 'notANumber'
+
+	if value < MinRepeatCount or value > MaxRepeatCount 'outOfRange'
+		return RepeatCountArg.invalid
+	end 'outOfRange'
+	return RepeatCountArg.valid(value as RepeatCount)
+end 'parseRepeatCount'
+
+// ===========================================================================================
 // Entry point
 // ===========================================================================================
 
@@ -245,7 +334,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
 	end 'badCorpus'
 
-	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}\n")
+	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}, compiling each {args.repeat} time(s)\n")
 	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (error) 'genErr'
 		return brokenRun("the corpus could not be generated", detail: scaleErrorText(error))
 	end 'genErr'
@@ -262,12 +351,26 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	printRungHeader()
 	var results = RungResultArray.create()
 	for rung in ladder 'eachRung'
-		let result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
+		var result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
 			// A rung that would not compile is a broken run, not a slow one: every later rung is a
 			// superset of this one's shapes, so there is nothing left to measure and nothing the rungs
 			// below it can be compared against.
 			return brokenRun("rung {rung.index} FAILED to compile", detail: scaleErrorText(error))
 		end 'rungFailed'
+
+		// The repeats. The first compile above is repeat 1, so this loop runs `repeat - 1` more times
+		// and `--repeat=1` skips it entirely — one path, not a special case. Each fold keeps the first
+		// compile's memory, takes the least CPU seen so far, and refuses a memory number that moved.
+		for run in 1 upto args.repeat 'eachRepeat'
+			let again = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'repeatFailed'
+				return brokenRun("rung {rung.index} compiled once and then FAILED on repeat {run + 1}", detail: scaleErrorText(error))
+			end 'repeatFailed'
+
+			result = try leastCpuRung(result, again: again, run: run) otherwise (error) 'nondeterministic'
+				return brokenRun("the compiler is NONDETERMINISTIC — two identical compiles of rung {rung.index} reported different MEMORY, so every allocation and byte in {OptimizationLogRelativePath} is suspect", detail: scaleErrorText(error))
+			end 'nondeterministic'
+		end 'eachRepeat'
+
 		printRungLine(result, results: results)
 		results.push(result)
 	end 'eachRung'
@@ -278,13 +381,14 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return brokenRun("the generated corpus was DEGENERATE, so this run measured nothing", detail: scaleErrorText(error))
 	end 'degenerate'
 
-	printPhaseTable(results, ofBytes: false)
-	printPhaseTable(results, ofBytes: true)
+	printPhaseTable(results, measure: ScaleMeasure.allocations, repeat: args.repeat)
+	printPhaseTable(results, measure: ScaleMeasure.bytes, repeat: args.repeat)
+	printPhaseTable(results, measure: ScaleMeasure.cpuTicks, repeat: args.repeat)
 	printMemoryTrend(results, trend: trend)
 	printCorpusGrowth(results)
 
 	if not args.resultJson.isEmpty() 'json'
-		try writeResultJson(args.resultJson, results: results, trend: trend) otherwise (error) 'jsonFailed'
+		try writeResultJson(args.resultJson, results: results, trend: trend, repeat: RepeatSampling.stated(args.repeat)) otherwise (error) 'jsonFailed'
 			return brokenRun("the result document could not be written", detail: scaleErrorText(error))
 		end 'jsonFailed'
 	end 'json'
@@ -393,14 +497,90 @@ function corpusRootFile(root FilePath, name String) returns FilePath throws Scal
 end 'corpusRootFile'
 
 // ===========================================================================================
+// Folding the repeats — MIN on the CPU column, EQUALITY on the memory ones
+// ===========================================================================================
+
+// This rung as measured so far, folded with one more compile of it.
+//
+// The result keeps the FIRST compile's memory and the LEAST CPU any compile has reported for each
+// phase. `sourceBytes` is not compared because it cannot differ: it comes from the generated rung,
+// not from the compile, and both compiles were handed the same ScaleRung.
+//
+// ⚠ EVERY CPU COLUMN TAKES ITS OWN MINIMUM, so the printed table can be a COMPOSITE of several
+// compiles and the `total` row is not the sum of the phase rows. It never was — `unattributed` is a
+// real gap between them — but this is a second reason, and it is the deliberate price of removing a
+// stall from the ONE phase it landed in instead of discarding every good reading in the run around
+// it. Each row is the best available answer to "what does this phase cost", which is the question
+// the table is asked; no row is a claim about a particular process.
+function leastCpuRung(first RungResult, again RungResult, run RepeatCount) returns RungResult throws ScaleError
+	// The emitted code size is the degeneracy check's subject, so a rung that emitted a different
+	// executable on the second compile is the same failure as a phase that allocated differently —
+	// it is simply not a number this instrument may keep.
+	if again.codeBytes != first.codeBytes 'codeMoved'
+		throw ScaleError.reason("rung {first.rung} emitted {first.codeBytes} bytes of code on the first compile and {again.codeBytes} on repeat {run + 1}")
+	end 'codeMoved'
+
+	let total = try leastCpuPhase(first.total, again: again.total, what: MetricsKindTotal, rung: first.rung, run: run)
+
+	// Walked off `scalePhaseSources` rather than off the two enums again, for the reason that list
+	// exists: the fold then covers exactly what the tables print, and a phase cannot be added to one
+	// walk and left out of the other. It yields both enums in ordinal order, so pushing in its order
+	// rebuilds the dense ordinal indexing `RungResult.phaseAt`/`regAllocAt` read back.
+	var phases = PhaseMetricArray.create()
+	var regAlloc = PhaseMetricArray.create()
+	for source in scalePhaseSources() 'eachSource'
+		let least = try leastCpuPhase(phaseMetricOf(source, result: first), again: phaseMetricOf(source, result: again), what: phaseSourceName(source), rung: first.rung, run: run)
+		match source 'dest'
+			compilePhase then phases.push(least)
+			regAllocPhase then regAlloc.push(least)
+		end 'dest'
+	end 'eachSource'
+
+	return RungResult.create(first.rung, sourceBytes: first.sourceBytes, codeBytes: first.codeBytes, total: total, phases: phases, regAlloc: regAlloc)
+end 'leastCpuRung'
+
+// One phase, folded across two compiles: the memory triple must MATCH, and the CPU reading is the
+// smaller of the two.
+//
+// MIN, NOT MEAN, and the asymmetry is the justification. Noise on a CPU reading can only ADD — a
+// stall, a migration, a cache line a neighbouring core evicted — so the smallest sample is the one
+// closest to what the phase costs, and every larger one carries something that is not the compiler.
+// A mean has no such property: one stall moves it, and it moves it in the direction that reads as a
+// regression.
+//
+// The memory numbers are not folded at all. They are bit-for-bit reproducible, so a second compile
+// has nothing to add to them and everything to say about whether that claim is still true — which is
+// the one thing a repeated compile can check for free, and the one-shot runner could not check at all.
+function leastCpuPhase(first PhaseMetric, again PhaseMetric, what String, rung RungIndex, run RepeatCount) returns PhaseMetric throws ScaleError
+	if again.allocs != first.allocs or again.frees != first.frees or again.bytes != first.bytes 'memoryMoved'
+		throw ScaleError.reason("rung {rung} `{what}`: the first compile reported {first.allocs} allocs / {first.frees} frees / {first.bytes} bytes, repeat {run + 1} reported {again.allocs} / {again.frees} / {again.bytes}")
+	end 'memoryMoved'
+
+	if again.cpuTicks >= first.cpuTicks 'noQuicker'
+		return first
+	end 'noQuicker'
+
+	return PhaseMetric.create(first.allocs, frees: first.frees, bytes: first.bytes, cpuTicks: again.cpuTicks)
+end 'leastCpuPhase'
+
+// ===========================================================================================
 // Parsing the metrics TSV (the format is MetricsEmit's; see its header)
 // ===========================================================================================
 
 function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws ScaleError
+	// SEEDED BY PUSHING, not by `resize`. `resize` on an array of STRUCTS sets the length
+	// without giving the new slots storage: `count()` answers 5 while `get(0)` reports OOB.
+	// This code survived it only because every slot is `set` before anything reads it — and
+	// the identical line in CompileTimings.create, where the first access IS a read, panicked
+	// on phase 0 the moment its column became a struct. Pushing is correct at both.
 	var phases = PhaseMetricArray.create()
-	phases.resize(CompilePhase.allCases.count())
 	var regAlloc = PhaseMetricArray.create()
-	regAlloc.resize(RegAllocPhase.allCases.count())
+	for _ in 0 upto CompilePhase.allCases.count() 'seedPhases'
+		phases.push(PhaseMetric.zero())
+	end 'seedPhases'
+	for _ in 0 upto RegAllocPhase.allCases.count() 'seedRegAlloc'
+		regAlloc.push(PhaseMetric.zero())
+	end 'seedRegAlloc'
 
 	// `seen` is what turns a missing row into an error instead of a zero. A dense array seeded with
 	// zeroes cannot otherwise tell "this phase did no work" from "this phase never reported".
@@ -467,22 +647,26 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 	return RungResult.create(rung.index, sourceBytes: rung.sourceBytes, codeBytes: codeBytes, total: total, phases: phases, regAlloc: regAlloc)
 end 'parseRungMetrics'
 
-let MetricsFieldCount = 6
+let MetricsFieldCount = 7
 
-// Field 2 is the phase's NANOSECONDS, and it is skipped rather than read.
+// Field 2 is the phase's WALL-CLOCK NANOSECONDS, and it is still skipped rather than read.
 //
-// The row is still required to HAVE six fields — the format is MetricsEmit's contract and a row with
-// five is a malformed row, not a row with no clock — but the value is not carried anywhere. Reading
-// it into a variable this suite then never used would be an invitation to put it back in a column.
+// That is not an oversight kept for consistency — it is the same judgement as ever, and field 6
+// is what changed around it. Wall time counts every other process on the machine, so it cannot be
+// trended; CPU time (field 6) counts only this thread, so it can. The row is still required to
+// HAVE all seven fields — the format is MetricsEmit's contract — but the clock is not carried
+// anywhere, because a column nobody may act on is an invitation to act on it.
 let MetricsAllocsField = 3
 let MetricsFreesField = 4
 let MetricsBytesField = 5
+let MetricsCpuTicksField = 6
 
 function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleError
 	let allocs = try parseCount(try fields.get(MetricsAllocsField) otherwise panic("parseMetricFields: allocs field OOB after count check"))
 	let frees = try parseCount(try fields.get(MetricsFreesField) otherwise panic("parseMetricFields: frees field OOB after count check"))
 	let bytes = try parseCount(try fields.get(MetricsBytesField) otherwise panic("parseMetricFields: bytes field OOB after count check"))
-	return PhaseMetric.create(allocs, frees: frees, bytes: bytes)
+	let cpuTicks = try parseCount(try fields.get(MetricsCpuTicksField) otherwise panic("parseMetricFields: cpuTicks field OOB after count check"))
+	return PhaseMetric.create(allocs, frees: frees, bytes: bytes, cpuTicks: cpuTicks)
 end 'parseMetricFields'
 
 export typealias ParsedCount = int(0 to u64.max)
@@ -556,38 +740,50 @@ function printRungLine(result RungResult, results RungResultArray)
 	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.total.allocs}", width: CountColumnWidth))
-	line.append(padLeft(growthText(growthAgainstPrevious(result.total.allocs, results: results, ofBytes: false)), width: GrowthColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.allocs, results: results, measure: ScaleMeasure.allocations)), width: GrowthColumnWidth))
 	line.append(padLeft("{result.total.frees}", width: CountColumnWidth))
 	line.append(padLeft("{result.total.bytes}", width: CountColumnWidth))
-	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes, results: results, ofBytes: true)), width: GrowthColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes, results: results, measure: ScaleMeasure.bytes)), width: GrowthColumnWidth))
 	print("{line.build()}\n")
 end 'printRungLine'
 
 // This rung's growth over the LAST rung in `results` — which is the rung below it, because the
 // caller has not pushed this one yet. Rung 0 has nothing below it and says so.
-function growthAgainstPrevious(now MemoryCount, results RungResultArray, ofBytes bool) returns GrowthReading
+function growthAgainstPrevious(now MeasuredQuantity, results RungResultArray, measure ScaleMeasure) returns GrowthReading
 	if results.count() == 0 'bottomRung'
 		return GrowthReading.noBaseline
 	end 'bottomRung'
 
 	let below = try results.get(results.count() - 1) otherwise panic("growthAgainstPrevious: count > 0 but the last result is missing")
-	return growthOf(now, previous: measureOf(below.total, ofBytes: ofBytes))
+	return growthOf(now, previous: measureOf(below.total, measure: measure))
 end 'growthAgainstPrevious'
 
-// WHICH of a phase's two published measures a table is about. One `bool` threaded through one
-// accessor, rather than two copies of every table function differing only in the field they read —
-// the allocations table and the bytes table are the same table asked a different question.
+// WHICH of a phase's published measures a table is about. ONE value threaded through one accessor,
+// rather than a copy of every table function per measure differing only in the field it reads — the
+// allocations table, the bytes table and the CPU table are the same table asked a different question.
 //
-// FREES ARE NOT A THIRD TABLE. They track allocations almost exactly (a compile that allocates N and
-// frees N-k has k live at exit, and k is small and constant), so a third copy of this table would be
-// a near-duplicate paid for in a screenful. They are measured, printed per rung above, and carried
+// It was a `bool` while there were exactly two. A third measure is precisely the moment a boolean
+// stops being able to say what it means, so it became an enum rather than growing a second flag —
+// two bools would encode four states for three answers, and nothing would say which fourth.
+//
+// FREES ARE NOT A TABLE HERE. They track allocations almost exactly (a compile that allocates N and
+// frees N-k has k live at exit, and k is small and constant), so a copy of this table would be a
+// near-duplicate paid for in a screenful. They are measured, printed per rung above, and carried
 // per phase in `--result-json` for anyone who wants them.
-export function measureOf(metric PhaseMetric, ofBytes bool) returns MemoryCount
-	if ofBytes 'wantBytes'
-		return metric.bytes
-	end 'wantBytes'
+export enum ScaleMeasure
+	allocations
+	bytes
+	// ⚠ The one measure here that is NOT bit-reproducible — see PhaseMetric's header. It is the only
+	// one that can see a cost which allocates nothing, which is why it is worth its noise band.
+	cpuTicks
+end 'ScaleMeasure'
 
-	return metric.allocs
+export function measureOf(metric PhaseMetric, measure ScaleMeasure) returns MeasuredQuantity
+	return match measure 'm'
+		allocations gives metric.allocs
+		bytes gives metric.bytes
+		cpuTicks gives metric.cpuTicks
+	end 'm'
 end 'measureOf'
 
 // EVERY PHASE, AT EVERY RUNG — the table that localizes a movement.
@@ -599,9 +795,10 @@ end 'measureOf'
 //
 // The regalloc sub-phases are printed under the phases, not among them: they are a BREAKDOWN of
 // `phase:regalloc` and adding them to the same list would double-count every allocation they make.
-function printPhaseTable(results RungResultArray, ofBytes bool)
+function printPhaseTable(results RungResultArray, measure ScaleMeasure, repeat RepeatCount)
 	print("\n")
-	print("  per-phase {measureHeading(ofBytes)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
+	print("  per-phase {measureHeading(measure)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
+	print("  {repeatNote(measure, repeat: repeat)}\n")
 	print("\n")
 
 	var header = StringBuilder.create()
@@ -613,33 +810,61 @@ function printPhaseTable(results RungResultArray, ofBytes bool)
 	print("{header.build()}\n")
 
 	for source in scalePhaseSources() 'eachPhase'
-		printPhaseRow(source, results: results, ofBytes: ofBytes)
+		printPhaseRow(source, results: results, measure: measure)
 	end 'eachPhase'
 end 'printPhaseTable'
 
-function measureHeading(ofBytes bool) returns String
-	if ofBytes 'wantBytes'
-		return "BYTES"
-	end 'wantBytes'
-
-	return "ALLOCATIONS"
+function measureHeading(measure ScaleMeasure) returns String
+	return match measure 'm'
+		allocations gives "ALLOCATIONS"
+		bytes gives "BYTES"
+		cpuTicks gives "CPU TICKS (this thread only — not reproducible to the digit; see the header)"
+	end 'm'
 end 'measureHeading'
 
-function printPhaseRow(source PhaseSource, results RungResultArray, ofBytes bool)
+// WHICH COMPILE THE COLUMN CAME FROM — printed under EVERY table, not under the CPU one alone.
+//
+// The rung was compiled `--repeat` times and the two kinds of column took opposite things from
+// that: the exact ones took the first and re-checked the rest, the CPU one took the smallest (see
+// this file's header). A reader told neither will assume whichever they last read about, and the
+// two carry very different licences to act on a small movement.
+function repeatNote(measure ScaleMeasure, repeat RepeatCount) returns String
+	return match measure 'm'
+		allocations gives exactColumnNote(repeat)
+		bytes gives exactColumnNote(repeat)
+		cpuTicks gives leastCpuNote(repeat)
+	end 'm'
+end 'repeatNote'
+
+function exactColumnNote(repeat RepeatCount) returns String
+	if repeat == 1 'oneCompile'
+		return "from ONE compile per rung (--repeat=1). Exact and reproducible; a repeat would only re-check it."
+	end 'oneCompile'
+	return "from the FIRST of {repeat} compiles per rung, and IDENTICAL in every one of them — checked, not assumed."
+end 'exactColumnNote'
+
+function leastCpuNote(repeat RepeatCount) returns String
+	if repeat == 1 'oneCompile'
+		return "from ONE compile per rung (--repeat=1): a single sample, undefended against a stall."
+	end 'oneCompile'
+	return "the LEAST of {repeat} compiles per rung — the least-disturbed sample, since noise can only ADD to a CPU reading."
+end 'leastCpuNote'
+
+function printPhaseRow(source PhaseSource, results RungResultArray, measure ScaleMeasure)
 	var line = StringBuilder.create()
 	line.append(padRight("  {phaseSourceName(source)}", width: PhaseColumnWidth))
 
 	for result in results 'eachRung'
-		line.append(padLeft("{measureOf(phaseMetricOf(source, result: result), ofBytes: ofBytes)}", width: PhaseCountColumnWidth))
+		line.append(padLeft("{measureOf(phaseMetricOf(source, result: result), measure: measure)}", width: PhaseCountColumnWidth))
 	end 'eachRung'
 
-	line.append(padLeft(growthText(topRungGrowth(source, results: results, ofBytes: ofBytes)), width: GrowthColumnWidth))
+	line.append(padLeft(growthText(topRungGrowth(source, results: results, measure: measure)), width: GrowthColumnWidth))
 	print("{line.build()}\n")
 end 'printPhaseRow'
 
 // The growth of the TOP rung over the one below it — the steepest, most informative end of the
 // ladder, and the one a phase that has gone superlinear shows it in first.
-function topRungGrowth(source PhaseSource, results RungResultArray, ofBytes bool) returns GrowthReading
+function topRungGrowth(source PhaseSource, results RungResultArray, measure ScaleMeasure) returns GrowthReading
 	if results.count() < MinRungsForGrowth 'tooFewRungs'
 		return GrowthReading.noBaseline
 	end 'tooFewRungs'
@@ -647,7 +872,7 @@ function topRungGrowth(source PhaseSource, results RungResultArray, ofBytes bool
 	let top = try results.get(results.count() - 1) otherwise panic("topRungGrowth: the ladder is not empty")
 	let below = try results.get(results.count() - 2) otherwise panic("topRungGrowth: the ladder has at least two rungs")
 
-	return growthOf(measureOf(phaseMetricOf(source, result: top), ofBytes: ofBytes), previous: measureOf(phaseMetricOf(source, result: below), ofBytes: ofBytes))
+	return growthOf(measureOf(phaseMetricOf(source, result: top), measure: measure), previous: measureOf(phaseMetricOf(source, result: below), measure: measure))
 end 'topRungGrowth'
 
 // What the compiler allocated, against what it allocated when the trend log was last written.

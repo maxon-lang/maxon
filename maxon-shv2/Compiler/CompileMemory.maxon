@@ -110,7 +110,7 @@ export type PhaseMemoryColumns
 			byteSum = byteSum + value
 		end 'eachByte'
 
-		return PhaseDelta.create(0, allocs: allocSum, frees: freeSum, bytes: byteSum)
+		return PhaseDelta.create(0, cpuTicks: 0, allocs: allocSum, frees: freeSum, bytes: byteSum)
 	end 'totalDelta'
 end 'PhaseMemoryColumns'
 
@@ -146,7 +146,7 @@ export type RegAllocMemory
 	end 'bytesOf'
 
 	export function deltaOf(phase RegAllocPhase) returns PhaseDelta
-		return PhaseDelta.create(0, allocs: self.allocsOf(phase), frees: self.freesOf(phase), bytes: self.bytesOf(phase))
+		return PhaseDelta.create(0, cpuTicks: 0, allocs: self.allocsOf(phase), frees: self.freesOf(phase), bytes: self.bytesOf(phase))
 	end 'deltaOf'
 end 'RegAllocMemory'
 
@@ -178,7 +178,7 @@ export type CompileMemory
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
 		let allocs = self.columns.allocsAt(phase.ordinal)
 		let frees = self.columns.freesAt(phase.ordinal)
-		return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal))
+		return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal))
 	end 'deltaOf'
 
 	// Allocations no phase claimed: the glue between phases (project construction, output
@@ -206,7 +206,7 @@ export type CompileMemory
 
 		let allocs = self.total.allocs - claimed.allocs
 		let frees = self.total.frees - claimed.frees
-		return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: self.total.bytes - claimed.bytes)
+		return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: self.total.bytes - claimed.bytes)
 	end 'unattributed'
 end 'CompileMemory'
 
@@ -218,7 +218,7 @@ function regAllocMemoryUnattributed(memory CompileMemory) returns PhaseDelta
 	var claimed = PhaseDelta.zero()
 	for sub in RegAllocPhase.allCases 'eachSub'
 		let subDelta = memory.regAlloc.deltaOf(sub)
-		claimed = PhaseDelta.create(0, allocs: claimed.allocs + subDelta.allocs, frees: claimed.frees + subDelta.frees, bytes: claimed.bytes + subDelta.bytes)
+		claimed = PhaseDelta.create(0, cpuTicks: 0, allocs: claimed.allocs + subDelta.allocs, frees: claimed.frees + subDelta.frees, bytes: claimed.bytes + subDelta.bytes)
 	end 'eachSub'
 
 	if claimed.allocs > wall.allocs 'overlap'
@@ -227,7 +227,7 @@ function regAllocMemoryUnattributed(memory CompileMemory) returns PhaseDelta
 
 	let allocs = wall.allocs - claimed.allocs
 	let frees = wall.frees - claimed.frees
-	return PhaseDelta.create(0, allocs: allocs, frees: frees, bytes: wall.bytes - claimed.bytes)
+	return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: wall.bytes - claimed.bytes)
 end 'regAllocMemoryUnattributed'
 
 // The whole-compile memory table: every phase's allocations, frees and byte volume, the

@@ -47,6 +47,11 @@ export let OptimizationLogRelativePath = "docs/optimization-log.md"
 
 let AllocationsTableMarker = "<!-- scale-history:allocations -->"
 let BytesTableMarker = "<!-- scale-history:bytes -->"
+// The CPU table is the one column here that is not bit-reproducible (see PhaseMetric), so its
+// section in the log carries the measured noise band and the rule that a movement inside it is
+// not a datapoint. It is recorded anyway, because it is the ONLY column that can see a cost
+// which allocates nothing — the class of defect the other two are structurally blind to.
+let CpuTableMarker = "<!-- scale-history:cpu -->"
 
 // What both markers above begin with, and the ONE thing a `--note` is checked against — see
 // `assertRecordable`. A note is written verbatim into the row inserted above each marker in turn, so
@@ -380,8 +385,9 @@ export function recordScaleRun(results RungResultArray, note String) throws Scal
 	let existing = try File.readText(path) otherwise throw ScaleError.reason("could not re-read {OptimizationLogRelativePath}")
 
 	let today = todayUtc()
-	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, date: today, ofBytes: false))
-	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, date: today, ofBytes: true))
+	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, date: today, measure: ScaleMeasure.allocations))
+	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, date: today, measure: ScaleMeasure.bytes))
+	updated = try insertRowBefore(updated, marker: CpuTableMarker, row: renderMemoryRow(results, note: note, date: today, measure: ScaleMeasure.cpuTicks))
 
 	try File.writeText(path, content: updated) otherwise throw ScaleError.reason("could not write {OptimizationLogRelativePath}")
 
@@ -431,13 +437,13 @@ let MarkerSplitParts = 2
 // FREES ARE NOT LOGGED, and their absence is deliberate. They track allocations almost exactly, so a
 // third table of them would be a near-duplicate paid for in width. They are measured, reported, and
 // carried in `--result-json` for anyone who wants them.
-function renderMemoryRow(results RungResultArray, note String, date String, ofBytes bool) returns String
+function renderMemoryRow(results RungResultArray, note String, date String, measure ScaleMeasure) returns String
 	var cells = StringArray.create()
 	cells.push(date)
 	cells.push(note)
 
 	for result in results 'eachRung'
-		cells.push(groupDigits(measureOf(result.total, ofBytes: ofBytes) as Delta))
+		cells.push(groupDigits(measureOf(result.total, measure: measure) as Delta))
 	end 'eachRung'
 
 	return renderRow(cells)

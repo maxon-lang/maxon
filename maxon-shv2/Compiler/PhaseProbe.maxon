@@ -11,13 +11,24 @@
 // So there is exactly one bracket type, it captures both, and a phase cannot measure one
 // without the other.
 //
-// THE CLOCK IS READ INNERMOST. `begin` reads the counters first and the clock LAST;
-// `elapsed` reads the clock FIRST and the counters after. The probe's own cost (five
-// runtime calls) therefore falls OUTSIDE the timed interval rather than inside it —
-// which matters because the register allocator probes per FUNCTION, so a 3,200-function
-// program opens tens of thousands of these. The counter interval is correspondingly a
-// hair WIDER than the clock's, and that costs nothing: reading a counter allocates
-// nothing, so the memory delta across the wider interval is identical.
+// THE CPU COUNTER IS READ INNERMOST, and the ordering is a ranking of which measurement
+// is load-bearing. `begin` reads the memory counters, then the clock, then CPU LAST;
+// `elapsed` reads CPU FIRST, then the clock, then the memory counters. So the intervals
+// nest: cpu ⊂ wall ⊂ memory, and the probe's own cost falls outside the tightest one.
+//
+// It used to be the CLOCK that was innermost, because the clock was the only cost signal
+// there was. CPU time displaced it: wall time counts every other process on the box, so it
+// is the number the scaling ladder cannot use, while CPU time cannot see preemption at all
+// (see CompileTimings' header). The tightest bracket belongs to the number people act on.
+//
+// This is not free the way the memory ordering is. A memory counter read allocates
+// nothing, so widening its interval changes the delta by exactly zero — which is why it
+// can sit outermost without comment. A CPU read COSTS ~302 ns (it is a syscall; the wall
+// clock is ~23 ns), so each probe adds roughly 600 ns of its own to the ENCLOSING phase's
+// CPU figure. The register allocator probes per FUNCTION, so that bill grows with function
+// count — which is LINEAR in program size, so it adds a linear term to every phase and
+// cannot manufacture a curve where there is none. It can only make a genuinely flat phase
+// look faintly linear, and it is measured rather than assumed.
 
 // A count of heap allocations, and a volume of heap bytes. Both are cumulative counters
 // read out of the running process's own allocator (see `__Builtins.mm*`), so both are
@@ -34,17 +45,19 @@ export typealias ByteCountArray = Array with ByteCount
 // `frees` is DERIVED, never counted — see PhaseProbe.elapsed.
 export type PhaseDelta
 	export let nanos as DurationNanos
+	export let cpuTicks as CpuTicks
 	export let allocs as AllocCount
 	export let frees as AllocCount
 	export let bytes as ByteCount
 
-	export static function create(nanos DurationNanos, allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseDelta
-		return Self{nanos: nanos, allocs: allocs, frees: frees, bytes: bytes}
+	export static function create(nanos DurationNanos, cpuTicks CpuTicks, allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseDelta
+		return Self{nanos: nanos, cpuTicks: cpuTicks, allocs: allocs, frees: frees, bytes: bytes}
 	end 'create'
 
 	export static function zero() returns PhaseDelta
-		return Self{nanos: 0, allocs: 0, frees: 0, bytes: 0}
+		return Self{nanos: 0, cpuTicks: 0, allocs: 0, frees: 0, bytes: 0}
 	end 'zero'
+
 
 	// This delta MINUS an inner one — the "subtract the inner delta" discipline, applied
 	// to all four quantities at once (see `recordPhaseExcluding`).
@@ -57,6 +70,7 @@ export type PhaseDelta
 	export function minus(inner PhaseDelta) returns PhaseDelta
 		return Self{
 			nanos: self.nanos - inner.nanos,
+			cpuTicks: self.cpuTicks - inner.cpuTicks,
 			allocs: self.allocs - inner.allocs,
 			frees: self.frees - inner.frees,
 			bytes: self.bytes - inner.bytes
@@ -67,6 +81,7 @@ end 'PhaseDelta'
 // An open bracket: the four counters as they stood when the phase began.
 export type PhaseProbe
 	export let nanos as DurationNanos
+	export let cpuTicks as CpuTicks
 	// Cumulative allocations, and allocations LIVE, at the instant the phase opened. Both
 	// are needed because frees are derived from the pair, not counted (see `elapsed`).
 	export let allocTotal as AllocCount
@@ -87,13 +102,14 @@ export type PhaseProbe
 	// what lets `compile` reuse one probe as both the `load` bracket and the whole-compile total
 	// without emitting a second, unpaired END.)
 	//
-	// Counters first, clock last — see this file's header.
+	// Memory counters first, clock next, CPU last — see this file's header.
 	export static function begin(name TraceName, unit TraceUnit) returns PhaseProbe
 		__DebugStream.phaseBegin(name, unit)
 		let allocTotal = totalAllocs()
 		let allocLive = liveAllocs()
 		let bytes = totalAllocBytes()
-		return Self{nanos: Clock.nowNanos(), allocTotal: allocTotal, allocLive: allocLive, bytes: bytes}
+		let nanos = Clock.nowNanos()
+		return Self{nanos: nanos, cpuTicks: threadCpuTicks(), allocTotal: allocTotal, allocLive: allocLive, bytes: bytes}
 	end 'begin'
 
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
@@ -122,6 +138,7 @@ export type PhaseProbe
 	// the free with nobody counting it. Array growth IS reallocation, so this is the whole
 	// difference between an alloc column that can see a growth policy and one that cannot.
 	export function elapsed() returns PhaseDelta
+		let endCpuTicks = threadCpuTicks()
 		let elapsedNanos = Clock.elapsedNanos(self.nanos)
 		let endAllocTotal = totalAllocs()
 		let endAllocLive = liveAllocs()
@@ -130,7 +147,11 @@ export type PhaseProbe
 		let allocs = endAllocTotal - self.allocTotal
 		let liveDelta = endAllocLive - self.allocLive
 
-		return PhaseDelta.create(elapsedNanos, allocs: allocs, frees: allocs - liveDelta, bytes: endBytes - self.bytes)
+		// The CPU counter is per-thread and monotonic, so this subtraction cannot go
+		// negative while the phase runs on the thread that opened it. If green threads ever
+		// migrate a compile across Ms, that stops being true and this is where it would
+		// surface — as a trap on the non-negative range, not as a quietly wrapped number.
+		return PhaseDelta.create(elapsedNanos, cpuTicks: endCpuTicks - self.cpuTicks, allocs: allocs, frees: allocs - liveDelta, bytes: endBytes - self.bytes)
 	end 'elapsed'
 end 'PhaseProbe'
 
@@ -159,6 +180,15 @@ function totalAllocBytes() returns ByteCount
 	return __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
 end 'totalAllocBytes'
 
+// CPU time consumed by the thread running this compile, in the platform's own unit.
+//
+// Named here rather than called inline at the three sites for the same reason the three
+// counter sums above are: the choice of WHICH counter answers "what did this phase cost"
+// is one decision, and it is made once.
+function threadCpuTicks() returns CpuTicks
+	return __Builtins.threadCpuTicks()
+end 'threadCpuTicks'
+
 // --- Recording a closed bracket against a phase ---
 //
 // These are the ONLY writers of per-phase attribution. Both tables are written together,
@@ -170,7 +200,7 @@ export function recordPhase(project Project, phase CompilePhase, probe PhaseProb
 end 'recordPhase'
 
 export function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
-	project.timings.addPhaseNanos(phase, nanos: delta.nanos)
+	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
 	__DebugStream.phaseEnd(compilePhaseName(phase), project.traceUnit)
 end 'recordPhaseDelta'
@@ -193,7 +223,7 @@ export function recordRegAllocPhase(project Project, phase RegAllocPhase, probe 
 end 'recordRegAllocPhase'
 
 export function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
-	project.timings.regAlloc.addPhaseNanos(phase, nanos: delta.nanos)
+	project.timings.regAlloc.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.regAlloc.addPhase(phase, delta: delta)
 	__DebugStream.phaseEnd(regAllocPhaseName(phase), project.traceUnit)
 end 'recordRegAllocDelta'
@@ -201,6 +231,6 @@ end 'recordRegAllocDelta'
 // Everything a register-allocator sub-phase has claimed so far, across both tables. The
 // "before" snapshot `recordPhaseExcluding` subtracts against.
 export function regAllocAccumulated(project Project, phase RegAllocPhase) returns PhaseDelta
-	let nanos = project.timings.regAlloc.phaseNanosOf(phase)
-	return PhaseDelta.create(nanos, allocs: project.memory.regAlloc.allocsOf(phase), frees: project.memory.regAlloc.freesOf(phase), bytes: project.memory.regAlloc.bytesOf(phase))
+	let cost = project.timings.regAlloc.costOf(phase)
+	return PhaseDelta.create(cost.nanos, cpuTicks: cost.cpuTicks, allocs: project.memory.regAlloc.allocsOf(phase), frees: project.memory.regAlloc.freesOf(phase), bytes: project.memory.regAlloc.bytesOf(phase))
 end 'regAllocAccumulated'

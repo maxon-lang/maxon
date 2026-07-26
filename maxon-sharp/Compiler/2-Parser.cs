@@ -10494,6 +10494,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       + "a wall clock can step backwards when the system clock is adjusted, so it must never be used "
       + "to measure a duration.\n\n`__Builtins.currentUnixTimeSeconds() returns int`",
       "maxon_current_unix_time_seconds", [], true),
+    // The CPU-time counter, and the reason it is not just another clock: it advances only
+    // while THIS THREAD IS RUNNING. Wall time counts every other process on the box, so a
+    // phase measured on a loaded machine reports the machine, not the compiler — a single
+    // scale-test run once read the parse phase at x5.03 then x1.78 on a DOUBLING ladder,
+    // which is preemption, not a curve. This one cannot see preemption at all.
+    //
+    // ⚠ ITS UNIT IS PLATFORM-DEFINED AND THE TWO ARE NOT COMPARABLE: TSC ticks on Windows
+    // (QueryThreadCycleTime), nanoseconds on macOS (clock_gettime(CLOCK_THREAD_CPUTIME_ID)).
+    // There is no honest normalization — QueryPerformanceFrequency is NOT the TSC rate — so
+    // the name says `ticks` and callers compare RATIOS, which are unit-free, or absolutes
+    // within one platform. See docs/optimization-log.md's trust table.
+    ["threadCpuTicks"] = RuntimeCallIntrinsic(
+      "Returns CPU time consumed by the CALLING THREAD, in a platform-defined unit that only "
+      + "advances while that thread is scheduled (TSC ticks via QueryThreadCycleTime on Windows, "
+      + "nanoseconds via clock_gettime(CLOCK_THREAD_CPUTIME_ID) on POSIX). Unlike currentTimeNanos "
+      + "it excludes preemption and every other process, which is what makes a per-phase cost "
+      + "measurement survive a busy machine. The unit differs BY PLATFORM and the two are not "
+      + "comparable, so compare ratios, or absolutes from one platform.\n\n"
+      + "`__Builtins.threadCpuTicks() returns int`",
+      "maxon_thread_cpu_ticks", [], true),
     // === Memory-traffic counters ===
     //
     // The allocator's own counters, readable from a RELEASE binary — which is the point:

@@ -60,7 +60,7 @@ must (see Building and Testing below).
 | Build the C# compiler | `mcp__maxon-dev__build` with `target: "csharp"` |
 | Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` (built BY the bootstrap — build `csharp` first if it is stale) |
 | Run a spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler` to pick the suite; `"shv2"` runs `specs-shv2`) |
-| MEASURE compile-time + memory SCALING (shv2) — an instrument, **no verdict** | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
+| MEASURE per-phase MEMORY + CPU-TIME SCALING (shv2) — an instrument, **no verdict** | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
 | Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; either compiler) |
 | Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler`) |
 | Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler`; `dumpStages: true` for stage-by-stage artifacts — csharp only) |
@@ -76,7 +76,7 @@ Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target
 
 ### `run_scale_test` — the scaling INSTRUMENT (shv2 only). ⚠ NOT A GATE.
 
-**`scale-test` collects data for TREND ANALYSIS. It has no verdict, and there is nothing to pass.** It compiles a ladder of generated programs — six rungs, each double the last — measures time and memory per phase per rung, and fits a growth exponent to each. **Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and READ it.** A default run is ~20 s.
+**`scale-test` collects data for TREND ANALYSIS. It has no verdict, and there is nothing to pass.** It compiles a ladder of generated programs — six rungs, each double the last — and measures **MEMORY and CPU TIME per phase per rung**. It fits nothing: there are no growth exponents, because a doubling ladder already *is* the growth (see the next section). **Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and READ it.** A default run is ~20 s.
 
 **The artifact is the trend: `docs/optimization-log.md`** — a dated table you read downwards. The question it answers is *"what has this compiler's cost actually done, change by change?"*, not *"may I merge?"*
 
@@ -84,16 +84,27 @@ Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target
 
 ✅ **The gate apparatus is GONE** (2026-07-14): the committed memory goldens, the exponent budgets, `--update-required` and the PASS/FAIL/VOID/NOISY verdicts have all been deleted, along with `ScaleGates.maxon` and `ScaleBaseline.maxon`. **Do not reintroduce them.** `scale-test` exits **0** whatever the numbers say; a non-zero exit means the **RUN ITSELF BROKE** (a degenerate corpus, a rung that failed to compile, an IO failure) and produced no valid data — never that a number was surprising.
 
-### ⚠ IT COLLECTS MEMORY. NOT TIME, AND NO CURVES.
+### ⚠ IT COLLECTS MEMORY **AND CPU TIME**. NOT WALL TIME, AND NO CURVES.
 
-**`scale-test` measures per-rung, per-phase MEMORY — allocations, frees, bytes — and nothing else.** No timing, no exponent fits, no residuals. That is deliberate, and both halves have a reason:
+**`scale-test` measures per-rung, per-phase MEMORY — allocations, frees, bytes — and, since 2026-07-25, per-rung, per-phase CPU TIME.** There is still no WALL time, no exponent fits and no residuals. Each of those three has its own reason, and they are not the same reason:
 
 - **The ladder DOUBLES, so the RATIO between consecutive rungs IS the growth.** Linear ⇒ allocations double. Quadratic ⇒ they quadruple. **You read it straight off the raw numbers.** An exponent fit adds no information the doubling ladder does not already give you — it is *interpretation dressed up as measurement*, and it is what dragged in the residual, which dragged in the NOISY verdict, which is what once led an agent to **edit the instrument to stop it complaining**.
-- **Time cannot be trended.** It is machine-dependent, so a dated table would be comparing a loaded box in July against an idle one in August. **Memory is exact and bit-for-bit reproducible — it is the only column where a difference MEANS something.** *(Measured: allocation deltas read 0.000 across every curve on an unchanged compiler while time deltas read +0.09…+0.29, purely because the machine was busy.)*
+- **WALL time cannot be trended, and that argument is UNCHANGED.** It counts every *other* process on the box, so a dated table of it would be comparing a loaded machine in July against an idle one in August. *(Measured: allocation deltas read 0.000 across every curve on an unchanged compiler while time deltas read +0.09…+0.29, purely because the machine was busy — and one run read `phase:parse` at ×5.03 then ×1.78 across a DOUBLING ladder, which is not a curve of any shape, it is preemption.)* Wall nanos are still emitted in the metrics TSV and the scale runner still **deliberately skips** them.
+- **CPU time CAN be trended, because it is not a clock.** `__Builtins.threadCpuTicks()` — a bootstrap intrinsic added 2026-07-25 (`QueryThreadCycleTime` on Windows ⇒ TSC ticks; `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` on macOS ⇒ nanoseconds) — advances **only while the CALLING THREAD is scheduled**. It cannot see preemption and it cannot see any other process, which is precisely the property wall time lacks. *(Measured across a 300 ms sleep: it advanced **837,520 ticks** while wall time advanced **301,000,000 ns**.)* `PhaseProbe` brackets it alongside the wall clock and the memory counters, so every `CompilePhase` and every `RegAllocPhase` reports it; `scale-test` prints a third per-phase table beside allocations and bytes, and `docs/optimization-log.md` carries a third table under **`## CPU`**.
 
-⚠ This is only true of **`scale-test`**. The compiler's own per-phase timing (`--metrics=<path>`, `--log=compiler:debug`) is a different thing, is useful interactively, and stays.
+> ### ⚠ THE CPU COLUMN DOES NOT READ LIKE THE OTHER TWO — IT HAS A NOISE BAND, AND A PLATFORM-DEFINED UNIT
+>
+> **Allocations and bytes are exact and bit-for-bit reproducible: ANY movement is real. CPU ticks are NOT.** They still move with turbo, thermal throttling and cache pressure from other cores — **a few percent** — so **a movement inside that band is not a datapoint.** Against the only question a doubling ladder asks (**×2 is linear, ×4 is quadratic**) that band has a **100% margin**, which is exactly why a few percent is good enough. Against a claimed 3% constant-factor win it is worth nothing — use the allocation columns for that.
+>
+> **The unit is platform-defined and the platforms do not agree** (TSC ticks vs nanoseconds), and there is **no honest conversion** — `QueryPerformanceFrequency` is the *performance counter's* rate, not the TSC's, so any normalization would be a guess wearing a unit's name. ⇒ **Compare RATIOS between rungs, which are unit-free; compare absolutes only within one platform.**
 
-**So: read the per-rung memory numbers. Any movement for the same input is REAL, every time.** Explain it, attribute it, and record the reason in the log at the one moment it is still known — the instrument can see exactly WHAT moved and can never see WHY.
+✅ **Why a third column had to exist: a cost that ALLOCATES NOTHING was invisible, and this project keeps measuring them.** Every one of these is a measured quadratic the memory-only instrument read as **Δ0** — the op-insertion quadratic found inside `regalloc:splitting` (fitted `16.0n + 6.59n²`, **68% of the whole compile at N=1024**, and allocation-free); `regalloc:splitting` again at **×3.9 then ×5.0 per doubling, ~98% of the compile**; `requireInterfaceForParse`, whose two arms allocate **identically to the digit, 1,417,523 both ways**, against a **+24.15 ms** parse delta; `getBlockByIdIn`'s per-guard-site linear scan; and the two cascade fixpoint duals, whose commit (`4c4524b45`) says it outright — *"'0 corpus hits' measured the instrument's blind spot, not the cost."* **Those filings are now RE-MEASURABLE rather than structurally unmeasurable**; Workstream O's *"Measured debt the trend log carries"* list in `maxon-shv2/PLAN.md` marks which, and each keeps its original numbers.
+
+⚠ **It cures ONE blind spot, not both. The other is the CORPUS**, and a Δ0 from a ladder that cannot express the feature is still *"the instrument's blind spot, not the cost"* — in **every** column, CPU included. *(The clearest case: `regalloc:splitting`'s float-across-calls quadratic was hidden because the corpus's `floatSpill` knob was **4** — few enough that every float fit a register and no split happened — not because the cost was allocation-free. The knob went 4 → 12; that is a corpus fix.)* **Two different blindnesses; never credit one with the other's fix.**
+
+⚠ The compiler's own per-phase timing (`--metrics=<path>`, `--log=compiler:debug`) is still a **different thing** from `scale-test`, is useful interactively, and stays — and it gained the same column at the same time. `--metrics` appends a **7th** TSV field `cputicks` (appended, not slotted in beside `nanos`, so every existing field keeps its index), and `--log=compiler:debug`'s timing table gained a **`cpu%` beside the wall `%`**. **A phase where the two disagree spent its wall time NOT RUNNING**: `load` measures 51.2% of wall but only 25.4% of CPU because it waits on file IO, while `regalloc` is 22.2% of wall and 36.1% of CPU.
+
+**So: read the per-rung numbers, and know which kind you are reading. In the MEMORY columns any movement for the same input is REAL, every time; in the CPU column, a movement is real once it is OUTSIDE the noise band.** Explain it, attribute it, and record the reason in the log at the one moment it is still known — the instrument can see exactly WHAT moved and can never see WHY.
 
 `perType: true` adds an untimed `--mm-trace` pass that prints TWO ranked tables, each with its own growth exponent:
 

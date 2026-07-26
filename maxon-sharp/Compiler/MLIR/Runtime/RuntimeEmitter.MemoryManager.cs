@@ -1552,6 +1552,35 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // maxon_thread_cpu_ticks() -> i64 (CPU time consumed by the CALLING THREAD)
+  //
+  // The fourth clock, and the only one that is not a clock: it advances solely while this
+  // thread is scheduled on a core. The three above all measure WALL time, so a duration
+  // taken with them includes every other process on the box — which is why a compiler
+  // phase timed on a busy machine reports the machine. A single scale-test run once read
+  // its parse phase at x5.03 then x1.78 across a DOUBLING ladder; that is preemption, not
+  // a growth curve, and this counter cannot see preemption at all.
+  //
+  // It is NOT a retired-instruction count and is not reproducible to the digit — it still
+  // moves with turbo, thermal throttling and cache pressure from other cores. It is good to
+  // a few percent, against a signal (linear x2 vs quadratic x4) with a 100% margin.
+  //
+  // ⚠ THE UNIT DIFFERS BY PLATFORM AND NOTHING CONVERTS IT: TSC ticks on Windows,
+  // nanoseconds on POSIX. QueryPerformanceFrequency is the performance counter's rate, not
+  // the TSC's, so there is no honest normalization to write here — and a dishonest one
+  // would be worse than the divergence. Callers compare ratios, which are unit-free.
+  //
+  // The frame carries 0x40 for the same reason the two clocks above do: both platform entry
+  // points write through an out-parameter (a ULONG64 on Windows, a timespec on POSIX), so
+  // slots 0 and 1 are that buffer on top of Windows's 0x20 call shadow space.
+  // =========================================================================
+  public void EmitThreadCpuTicks() {
+    _b.FunctionStart("maxon_thread_cpu_ticks", 0, 0x40);
+    _b.GetThreadCpuTicks(VReg.Scratch0, scratchSlot: 0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
   // The memory-traffic counter accessors: one runtime function per counter a caller can
   // read, each a bare load. Together they are what makes a compiler's memory measurable
   // from inside itself, in a RELEASE binary — the same binary whose time is being

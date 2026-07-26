@@ -178,7 +178,7 @@ end 'ReuseCopyPlan'
 // not free — leaving them out put ~10% of the compile in a nameless remainder, the
 // same "big cost hiding in the wrong bucket" defect this instrumentation exists to
 // catch. Whatever these arms still do not claim surfaces as an explicit
-// `(unattributed)` row (see CompileTimings.regAllocUnattributedNanos), never as silence.
+// `(unattributed)` row (see CompileTimings.regAllocUnattributedCost), never as silence.
 //
 // Ordinals index a per-run array and are persisted nowhere, so this list may be
 // reordered freely — but every arm must stay a DISJOINT interval (see `allocateFunction`,
@@ -193,8 +193,6 @@ export enum RegAllocPhase
 	rewrite
 end 'RegAllocPhase'
 
-export typealias DurationNanosArray = Array with DurationNanos
-
 // The function name whose pressure was worst, per register class — a class row of names. `stdlib`'s
 // `StringArray` is namespaced to Build and not visible here, and a name is not a `RegCount`, so the
 // class rows above cannot carry it.
@@ -203,7 +201,11 @@ export typealias PressureFuncByClass = Array with String
 // Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
 // than the clock at M5.1's sub-millisecond functions (design §"Stats").
 export type RegAllocStats
+	// Two scalar columns, not one Array with PhaseCost — see CompileTimings' note. These are
+	// the per-FUNCTION probes, so a boxed pair here is what cost the compiler thousands of
+	// allocations per rung and moved the trend log's reproducible column.
 	export var phaseNanos as DurationNanosArray
+	export var phaseCpuTicks as CpuTicksArray
 	export var functionsAllocated as EventCount
 	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
 	export var livenessMarkStepsTotal as EventCount
@@ -234,22 +236,31 @@ export type RegAllocStats
 	export static function create() returns RegAllocStats
 		var phaseNanos = DurationNanosArray.create()
 		phaseNanos.resize(RegAllocPhase.allCases.count())
+		var phaseCpuTicks = CpuTicksArray.create()
+		phaseCpuTicks.resize(RegAllocPhase.allCases.count())
 		var maxPressureFunc = PressureFuncByClass.create()
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
 		end 'eachClass'
-		return Self{phaseNanos: phaseNanos, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
+		return Self{phaseNanos: phaseNanos, phaseCpuTicks: phaseCpuTicks, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
 	end 'create'
 
-	export function addPhaseNanos(phase RegAllocPhase, nanos DurationNanos)
+	// Scalars, not a PhaseCost — see CompileTimings.addPhaseCost. These are the per-function
+	// probes, so this is the site where a boxed pair cost the most.
+	export function addPhaseCost(phase RegAllocPhase, nanos DurationNanos, cpuTicks CpuTicks)
 		let idx = phase.ordinal
-		let cur = try self.phaseNanos.get(idx) otherwise panic("RegAllocStats.addPhaseNanos: phase index OOB")
-		try self.phaseNanos.set(idx, value: cur + nanos) otherwise panic("RegAllocStats.addPhaseNanos: phase index OOB")
-	end 'addPhaseNanos'
+		let curNanos = try self.phaseNanos.get(idx) otherwise panic("RegAllocStats.addPhaseCost: phase index OOB")
+		try self.phaseNanos.set(idx, value: curNanos + nanos) otherwise panic("RegAllocStats.addPhaseCost: phase index OOB")
+		let curCpu = try self.phaseCpuTicks.get(idx) otherwise panic("RegAllocStats.addPhaseCost: phase index OOB")
+		try self.phaseCpuTicks.set(idx, value: curCpu + cpuTicks) otherwise panic("RegAllocStats.addPhaseCost: phase index OOB")
+	end 'addPhaseCost'
 
-	export function phaseNanosOf(phase RegAllocPhase) returns DurationNanos
-		return try self.phaseNanos.get(phase.ordinal) otherwise panic("RegAllocStats.phaseNanosOf: phase index OOB")
-	end 'phaseNanosOf'
+	export function costOf(phase RegAllocPhase) returns PhaseCost
+		let idx = phase.ordinal
+		let nanos = try self.phaseNanos.get(idx) otherwise panic("RegAllocStats.costOf: phase index OOB")
+		let cpuTicks = try self.phaseCpuTicks.get(idx) otherwise panic("RegAllocStats.costOf: phase index OOB")
+		return PhaseCost.create(nanos, cpuTicks: cpuTicks)
+	end 'costOf'
 
 	export function recordLivenessMarkSteps(steps EventCount)
 		self.livenessMarkStepsTotal = self.livenessMarkStepsTotal + steps
@@ -1667,7 +1678,7 @@ function regAllocStatsMessage(stats RegAllocStats) returns String
 	// later, which is how an unmeasured cost hides in the first place.
 	msg.append("  phase ms:")
 	for phase in RegAllocPhase.allCases 'eachPhase'
-		msg.append(" {phase.name}={stats.phaseNanosOf(phase)}")
+		msg.append(" {phase.name}={stats.costOf(phase).nanos}")
 	end 'eachPhase'
 	return msg.build()
 end 'regAllocStatsMessage'

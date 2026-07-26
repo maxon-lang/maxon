@@ -321,10 +321,11 @@ function printUsage()
 	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
 	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
-	print("                                last, and report the per-phase MEMORY: allocations, frees and\n")
-	print("                                bytes. It does NOT collect time — memory is bit-for-bit\n")
-	print("                                reproducible and time is machine-dependent, so memory is the\n")
-	print("                                only thing a trend can be built out of. The ladder doubles, so\n")
+	print("                                last, and report the per-phase MEMORY — allocations, frees and\n")
+	print("                                bytes — plus the CPU TICKS the compiling thread spent. It does\n")
+	print("                                NOT collect WALL time: wall time counts every other process on\n")
+	print("                                the box, so a dated table of it would compare a loaded machine\n")
+	print("                                in July against an idle one in August. The ladder doubles, so\n")
 	print("                                the ratio between rungs IS the growth (x2.00 linear, x4.00\n")
 	print("                                quadratic) and nothing is fitted. An INSTRUMENT, not a gate: it\n")
 	print("                                renders no verdict, and it exits non-zero only when the RUN\n")
@@ -355,6 +356,14 @@ function printUsage()
 	print("  --rungs=<n>                   (scale-test) Climb <n> rungs (default {DefaultRungCount},\n")
 	print("                                range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the\n")
 	print("                                program, so this is exponential in cost.\n")
+	print("  --repeat=<n>                  (scale-test) Compile every rung <n> times (default\n")
+	print("                                {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks\n")
+	print("                                any of them spent in each phase — the least-disturbed sample,\n")
+	print("                                since noise can only ADD to a CPU reading and a mean would be\n")
+	print("                                dragged by one stall. The MEMORY columns take nothing from a\n")
+	print("                                repeat: they are exact, so they come from the first compile and\n")
+	print("                                are CROSS-CHECKED for equality against the rest. A memory number\n")
+	print("                                that differs between two compiles of one rung is a BROKEN RUN.\n")
 	print("  --note=<text>                 (scale-test) Record this run in {OptimizationLogRelativePath}\n")
 	print("                                — one dated row of the per-rung allocations and bytes, with\n")
 	print("                                <text> as the reason. Without it a run reports and records\n")
@@ -419,6 +428,11 @@ export type MaxonArgs
 	// `--rungs=<n>` (scale-test only): how many rungs of the ladder to climb. Each doubles the
 	// program, so this is exponential in cost — see ScaleCorpus.
 	export let rungs as RungCount
+	// `--repeat=<n>` (scale-test only): how many times each rung is compiled. The CPU column takes
+	// the MINIMUM of the repeats (the least-disturbed sample); the memory columns take the first and
+	// are cross-checked for equality across the rest, since they are bit-for-bit reproducible and a
+	// difference is a broken run — see ScaleTestRunner's header.
+	export let repeat as RepeatCount
 	// `--per-type` (scale-test only): also run the untimed `--mm-trace` pass, which attributes
 	// allocations to the TYPE allocated AND to the SCOPE that allocated it. Off by default: it traces
 	// every allocation individually and is far slower than the timed run.
@@ -471,6 +485,7 @@ export type MaxonArgs
 		var metricsPath = ""
 		var emitCorpus = ""
 		var rungs = DefaultRungCount
+		var repeat = DefaultRepeatCount
 		var perType = false
 		var note = ""
 		var resultJson = ""
@@ -526,7 +541,18 @@ export type MaxonArgs
 					valid(count) then rungs = count
 					invalid then badOption = firstBadOption(badOption, arg: arg)
 				end 'rungsArg'
-			end 'rungsFlag' else if arg == "--per-type" 'perTypeFlag'
+			end 'rungsFlag' else if arg.startsWith("--repeat=") 'repeatFlag'
+				let raw = try CommandLine.optionValue(arg) otherwise ""
+				// The same door as `--rungs` and `--workers`: a bad value is a BAD OPTION, not a
+				// clamp. `--repeat=0` asks for a rung that is never compiled, and quietly compiling
+				// it three times would answer a question the caller never asked — the run they get
+				// back would then differ from the one they typed in the column that is least able to
+				// prove it. See ScaleTestRunner.parseRepeatCount.
+				match parseRepeatCount(raw) 'repeatArg'
+					valid(count) then repeat = count
+					invalid then badOption = firstBadOption(badOption, arg: arg)
+				end 'repeatArg'
+			end 'repeatFlag' else if arg == "--per-type" 'perTypeFlag'
 				perType = true
 			end 'perTypeFlag' else if arg.startsWith("--note=") 'noteFlag'
 				note = try CommandLine.optionValue(arg) otherwise ""
@@ -551,6 +577,6 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'

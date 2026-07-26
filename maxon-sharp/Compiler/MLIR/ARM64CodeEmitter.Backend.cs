@@ -600,6 +600,7 @@ public partial class ARM64CodeEmitter {
     private const int CLOCK_UPTIME_RAW = 0x08; // macOS monotonic clock
     private const int CLOCK_MONOTONIC = 0x06;  // macOS _CLOCK_MONOTONIC (POSIX-standard monotonic)
     private const int CLOCK_REALTIME = 0x00;   // macOS _CLOCK_REALTIME (wall clock, counts from the Unix epoch)
+    private const int CLOCK_THREAD_CPUTIME_ID = 0x10; // macOS _CLOCK_THREAD_CPUTIME_ID (this thread's CPU time)
 
     /// <summary>Nanoseconds in a second: the tv_sec -> nanosecond scale of a `struct timespec`.</summary>
     private const long NanosPerSecond = 1_000_000_000L;
@@ -658,6 +659,31 @@ public partial class ARM64CodeEmitter {
       // two monotonic clocks above there is nothing to rebase and nothing to scale — tv_nsec is
       // simply dropped, which is exactly the truncation to whole seconds the caller asked for.
       _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, tsOff, 8); // tv_sec
+
+      var destReg = R(dest);
+      if (destReg != ARM64Register.X2)
+        _e.EmitMovRegReg(destReg, ARM64Register.X2);
+    }
+
+    public void GetThreadCpuTicks(VReg dest, int scratchSlot) {
+      // clock_gettime(CLOCK_THREAD_CPUTIME_ID, &timespec) — structurally identical to
+      // GetCurrentTimeNanos, reading a different clock id. That clock advances only while
+      // this thread is scheduled, so unlike the three above it cannot see preemption.
+      //
+      // POSIX hands back a timespec, so this backend's unit is NANOSECONDS where the Windows
+      // one is TSC ticks. The two are not comparable and nothing here pretends to convert.
+      int tsOff = 16 + scratchSlot * 8; // timespec occupies slots scratchSlot, scratchSlot+1
+      _e.EmitMovRegImm(ARM64Register.X0, CLOCK_THREAD_CPUTIME_ID);
+      _e.EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, tsOff, isAdd: true);
+      _e.EmitCallImport("clock_gettime");
+
+      // nanos = tv_sec * 1e9 + tv_nsec, exact in 64 bits — tv_nsec is < 1e9 by the timespec
+      // contract, and a thread would have to accumulate ~584 years of CPU time to overflow.
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, tsOff, 8); // tv_sec
+      _e.EmitMovRegImm(ARM64Register.X3, NanosPerSecond);
+      _e.EmitWord(0x9B037C42); // MUL X2, X2, X3
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X29, tsOff + 8, 8); // tv_nsec
+      _e.EmitWord(0x8B040042); // ADD X2, X2, X4
 
       var destReg = R(dest);
       if (destReg != ARM64Register.X2)

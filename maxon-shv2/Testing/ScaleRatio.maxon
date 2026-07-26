@@ -56,7 +56,7 @@ let RatioFractionDigits = 2
 // ⚠ THE NAME IS NARROWER THAN WHAT IT HOLDS — a tick reading is not a memory count — and it is said
 // here so a reader is not misled by it. What the type actually means is "a quantity a growth ratio may
 // be taken of", which is the set `ScaleMeasure` (ScaleTestRunner) enumerates.
-export typealias MemoryCount = int(0 to u64.max)
+export typealias MeasuredQuantity = int(0 to u64.max)
 // One of those quantities proven non-zero — the divisor type when computing a growth ratio. Integer
 // `/` is fallible (a zero divisor throws); `previous` is guarded non-zero above the divide, so it is
 // cast to this to make the divide provably safe.
@@ -72,7 +72,7 @@ export union GrowthReading
 	noBaseline
 end 'GrowthReading'
 
-export function growthOf(now MemoryCount, previous MemoryCount) returns GrowthReading
+export function growthOf(now MeasuredQuantity, previous MeasuredQuantity) returns GrowthReading
 	if previous == 0 'nothingToGrowFrom'
 		return GrowthReading.noBaseline
 	end 'nothingToGrowFrom'
@@ -108,6 +108,6 @@ end 'zeroPad2'
 // than by taking the ratio and comparing that, so nothing is lost to integer truncation at the one
 // place in this suite where a comparison decides whether the run is BROKEN (ScaleCorpus's degeneracy
 // check).
-export function grewBy(now MemoryCount, previous MemoryCount, minimum GrowthRatio) returns bool
+export function grewBy(now MeasuredQuantity, previous MeasuredQuantity, minimum GrowthRatio) returns bool
 	return now * RatioScale >= previous * minimum
 end 'grewBy'

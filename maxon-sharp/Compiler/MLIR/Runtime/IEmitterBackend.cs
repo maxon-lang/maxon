@@ -314,6 +314,27 @@ public interface IEmitterBackend {
   void GetCurrentUnixTimeSeconds(VReg dest, int scratchSlot);
 
   /// <summary>
+  /// Get the CPU time consumed by the CALLING THREAD, into dest.
+  /// Windows: QueryThreadCycleTime(GetCurrentThread(), &amp;out) — TSC ticks.
+  /// macOS:   clock_gettime(CLOCK_THREAD_CPUTIME_ID) -> tv_sec * 1e9 + tv_nsec — nanoseconds.
+  /// This is the fourth clock, and the only one that is not a clock at all: it advances only
+  /// while this thread is actually scheduled. The three above all count wall time, so a
+  /// duration measured with them includes every other process on the machine; this one
+  /// cannot see preemption, which is what makes it usable for cost measurement on a box
+  /// that is doing something else.
+  /// ⚠ THE UNIT IS PLATFORM-DEFINED AND THE PLATFORMS DO NOT AGREE — TSC ticks on Windows,
+  /// nanoseconds on POSIX — because there is no reliable way to normalize the first into the
+  /// second (QueryPerformanceFrequency is the performance counter's rate, NOT the TSC's).
+  /// Callers therefore compare ratios, which are unit-free, or absolutes within one platform.
+  /// It is also NOT a retired-instruction count and not reproducible to the digit: it still
+  /// moves with turbo, thermal throttling and cache pressure from other cores.
+  /// The <paramref name="scratchSlot"/> parameter provides the first of TWO consecutive stack
+  /// slots used as the API's out-parameter buffer (a ULONG64 on Windows, a timespec on POSIX).
+  /// Clobbers Arg0..Arg4 and Scratch0..Scratch2.
+  /// </summary>
+  void GetThreadCpuTicks(VReg dest, int scratchSlot);
+
+  /// <summary>
   /// Get current process ID into dest register (zero-extended).
   /// Windows: GetCurrentProcessId.
   /// macOS / POSIX: getpid.

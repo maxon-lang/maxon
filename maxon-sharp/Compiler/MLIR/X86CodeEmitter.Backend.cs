@@ -528,6 +528,36 @@ public partial class X86CodeEmitter {
         _e.EmitMovRegReg(destReg, X86Register.Rax);
     }
 
+    /// <summary>The GetCurrentThread() pseudo-handle, (HANDLE)-2. It is a constant, not a
+    /// handle to open or close, so materializing it inline saves an import and a call.</summary>
+    private const long CurrentThreadPseudoHandle = -2L;
+
+    public void GetThreadCpuTicks(VReg dest, int scratchSlot) {
+      // QueryThreadCycleTime(HANDLE, PULONG64) writes its result through an out-param in RDX,
+      // so slot N — at [rbp-(N+1)*8], see LoadLocal — is that buffer.
+      //
+      // The value is a TSC tick count, NOT a retired-cycle count: on every machine this
+      // targets the TSC is invariant, so a "cycle" here is a fixed-rate tick and the reading
+      // is really CPU TIME at TSC resolution. That is precisely what is wanted — it excludes
+      // preemption and every other process — but it is why the unit is `ticks` and why this
+      // cannot be compared against the POSIX backend's nanoseconds.
+      int cyclesDisp = -(scratchSlot + 1) * 0x08;
+
+      _e.EmitMovRegImm(X86Register.Rcx, CurrentThreadPseudoHandle);
+      _e.EmitLeaRegMem(X86Register.Rdx, cyclesDisp);
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "QueryThreadCycleTime");
+
+      // The BOOL return is deliberately ignored. The only documented failure is an invalid
+      // handle, and the handle is a compile-time constant naming the running thread — there is
+      // no runtime condition under which it can fail, and a caller measuring its own cost has
+      // nothing useful to do about it if it somehow did.
+      _e.EmitMovRegMem(X86Register.Rax, cyclesDisp, 8);
+
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
     public void GetCurrentProcessId(VReg dest) {
       // GetCurrentProcessId() returns a DWORD (process ID). Zero-extends
       // into RAX naturally for the caller's i64 result.
