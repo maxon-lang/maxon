@@ -383,8 +383,13 @@ function trackedValueInArray(args ValueIdArray, subject EscapeScanSubject, func 
 	return false
 end 'trackedValueInArray'
 
+// Function NAME → index in `module.functions` — the Maxon-tier twin of
+// `DeadFunctionElimination.FuncIndexByName` and `StdlibSource.StdlibFuncIndexByName`, named apart from both
+// because its values index the MERGED MAXON module, which is the mutation graph's key space.
+typealias ModuleFuncIndexByName = Map with (ByteArray, FuncIndex)
+
 // ⭐⭐ **THE INTERPROCEDURAL PARAMETER-MUTATION SUMMARY (E3019, the call-site half)** — for each function,
-// which of its parameters a call to it WRITES, keyed by the callee's mangled name. Read at every call site:
+// which of its parameters a call to it WRITES. Read at every call site:
 // an immutable binding handed to a written parameter is refused, which is the diagnostic the runnable
 // oracle raises and the property the byte-string record-immortality work waits on.
 //
@@ -403,77 +408,121 @@ end 'trackedValueInArray'
 //
 // ⭐ **THE SEED IS THE PARSER'S, NOT A RE-DERIVATION.** `IrFunction.writtenParamMask` already says which
 // parameters a body writes DIRECTLY, recorded at the one site that decides whether a receiver-writing method
-// may be called at all (`Parser.noteReceiverWrite`) and at the one field-write door
-// (`Parser.emitFieldWrite`). This pass adds only the transitive closure. Re-deriving the base facts here —
+// may be called at all (`Parser.noteReceiverWrite`). This pass adds only the transitive closure. A FIELD
+// write records nothing, deliberately — see `Parser.receiverOwnerMask` for that ruling and the measured
+// oracle inconsistency it settles. Re-deriving the base facts here —
 // by matching the LOWERED runtime callees (`__arr_push`, `__str_append`, `__set_insert`) — would be a second
 // list of receiver-writing operations, three tiers away from the one the parser consults, and the two would
 // be free to disagree about a method added to either.
 //
-// A function that writes nothing is ABSENT — the same "absence is the answer" `buildThrowsMap` and
-// `ParamEscapeSummary` use, so the overwhelming majority of functions cost no entry and the call-site check
-// is one non-allocating `contains` on the hot path.
-typealias ParamMutationSummary = Map with (ByteArray, MutatedParamMask)
-
-// One propagation edge of the reverse call graph: "`caller` (a function INDEX) passes its own parameter
-// `callerParam` as the argument filling `callee`'s parameter `calleeParam`". Indexed BY CALLEE below, so
-// toggling a bit on a callee scans only the edges that can reach it.
+// ⭐ **THE ADJACENCY IS A `CsrGraph`, NOT A MAP OF PER-CALLEE LISTS**, because `CsrGraph.maxon`'s header says
+// so in as many words — "a new adjacency belongs here rather than hand-rolled at its call site", and "one
+// flat pair of columns instead of `Array with (a per-node array)`, which in Maxon is one heap-boxed,
+// refcounted object per node". It was written the forbidden way first and MEASURED: on a maximal chain of N
+// mutating functions (every function gains a bit, so every distinct callee earns a list), a
+// `Map with (ByteArray, OpIndexArray)` index cost one array per callee and made `phase:semanticCheck` 3.1x
+// the base at N = 6,400. The CSR costs two dense columns for the whole graph and takes the drain loop's
+// hashing to zero — a callee is a function INDEX there, not a name.
 //
-// Four dense scalar columns rather than an `Array with <a record>`: a `type` has reference semantics, so an
-// array of them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that
-// runs over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
+// The published summary is likewise a DENSE column indexed by function, not a name→mask map: the call site
+// resolves its callee's name once (`funcIndexByName`, which the edge walk already needs) and reads the mask
+// off an i64 array. A map of masks would be a second index over the same key space, built by N upserts, to
+// answer a question the first one already answers.
+type ParamMutationSummary
+	// One mask per function of the merged module, by function index. Zero for the overwhelming majority.
+	export let masks as MutatedParamMaskArray
+	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
+	export let funcIndexByName as ModuleFuncIndexByName
+
+	export static function create(masks MutatedParamMaskArray, funcIndexByName ModuleFuncIndexByName) returns ParamMutationSummary
+		return Self{masks: masks, funcIndexByName: funcIndexByName}
+	end 'create'
+
+	// Which parameters a call to `callee` writes. `NoMutatedParams` for a name the module does not declare —
+	// a compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as
+	// E3004 — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a
+	// membership test first.
+	export function maskOf(callee ByteArray) returns MutatedParamMask
+		let index = try self.funcIndexByName.get(callee) otherwise return NoMutatedParams
+		return try self.masks.get(index) otherwise panic("ParamMutationSummary.maskOf: function index {index} for '{String.from(callee)}' is outside the mask column — both are built over `module.functions` in one pass")
+	end 'maskOf'
+end 'ParamMutationSummary'
+
+// The reverse-call-graph edges, as three dense scalar columns plus the CSR key column. Edge `k` says:
+// "function `callerIndices[k]` passes its own parameter `callerParams[k]` as the argument filling parameter
+// `calleeParams[k]` of function `calleeIndices[k]`." The CSR built over `calleeIndices` is what lets a bit
+// toggled on a callee scan only the edges that can carry it.
+//
+// Dense columns rather than an `Array with <a record>`: a `type` has reference semantics, so an array of
+// them is an array of POINTERS to heap-boxed records — one live allocation per edge, on a pass that runs
+// over every call in the program. The same discipline `SourceRangeTable` and `ValueOriginTable` state.
 type MutationEdges
+	export var calleeIndices as CsrColumn
 	export var callerIndices as FuncIndexArray
 	export var callerParams as ParamCountArray
-	export var calleeNames as ByteArrayArray
 	export var calleeParams as ParamCountArray
 
 	export static function create() returns MutationEdges
-		return Self{callerIndices: FuncIndexArray.create(), callerParams: ParamCountArray.create(), calleeNames: ByteArrayArray.create(), calleeParams: ParamCountArray.create()}
+		return Self{calleeIndices: CsrColumn.create(), callerIndices: FuncIndexArray.create(), callerParams: ParamCountArray.create(), calleeParams: ParamCountArray.create()}
 	end 'create'
 
-	export function count() returns OpCount
-		return self.callerIndices.count()
+	export function count() returns CsrIndex
+		return self.calleeIndices.count()
 	end 'count'
 
 	// The four columns are only ever pushed together here, so they stay the same length by construction —
 	// `pushCallArg`'s reason, reaching the third family of parallel columns in the compiler.
-	export function record(callerIndex FuncIndex, callerParam ParamCount, calleeName ByteArray, calleeParam ParamCount)
+	export function record(calleeIndex FuncIndex, callerIndex FuncIndex, callerParam ParamCount, calleeParam ParamCount)
+		self.calleeIndices.push(calleeIndex)
 		self.callerIndices.push(callerIndex)
 		self.callerParams.push(callerParam)
-		self.calleeNames.push(calleeName)
 		self.calleeParams.push(calleeParam)
 	end 'record'
+
+	// The CSR over the callee key space: `graph.neighbour(calleeIndex, k)` is the k-th EDGE ROW reaching that
+	// callee. The `to` column is the row number itself, which is what makes the other three columns readable
+	// straight off a neighbour.
+	export function byCallee(funcCount CsrIndex) returns CsrGraph
+		var rows = CsrColumn.create()
+		for k in 0 upto self.count() 'eachEdge'
+			rows.push(k)
+		end 'eachEdge'
+		return buildCsr(self.calleeIndices, to: rows, nodeCount: funcCount)
+	end 'byCallee'
 end 'MutationEdges'
 
-// The edges that can propagate INTO a given callee, by callee name. A callee nothing passes a parameter to
-// has no entry, which is most of them.
-typealias MutationEdgeIndex = Map with (ByteArray, OpIndexArray)
+// ⚠ The FIRST index wins on a duplicate name. A duplicate user function is E3006 at merge and every
+// compiler-synthesized function is installed at exactly one site, so the tie-break decides only which of
+// two functions of an ALREADY-REFUSED program gets summarised — never what a valid program means. A panic
+// here would turn that refusal into a crash.
+function indexModuleFunctionsByName(module MaxonModule) returns ModuleFuncIndexByName
+	var byName = ModuleFuncIndexByName.create()
+	for i in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(i) otherwise panic("indexModuleFunctionsByName: functions.get OOB at {i}")
+		if not byName.contains(func.name) 'firstOfThisName'
+			byName.upsert(func.name, value: i)
+		end 'firstOfThisName'
+	end 'eachFunc'
+	return byName
+end 'indexModuleFunctionsByName'
 
 function buildParamMutationSummary(project Project, module MaxonModule) returns ParamMutationSummary
+	let funcIndexByName = indexModuleFunctionsByName(module)
+
 	var masks = MutatedParamMaskArray.create()
 	for func in module.functions 'seed'
 		masks.push(func.writtenParamMask)
 	end 'seed'
 
-	let edges = collectMutationEdges(project, module: module)
-	let byCallee = indexMutationEdgesByCallee(edges)
-	propagateMutationMasks(module, masks: masks, edges: edges, byCallee: byCallee)
-
-	var summary = ParamMutationSummary.create()
-	for i in 0 upto module.functions.count() 'publish'
-		let mask = try masks.get(i) otherwise panic("buildParamMutationSummary: masks.get OOB at {i} — one mask was seeded per function")
-		if mask != NoMutatedParams 'writesSomething'
-			let func = try module.functions.get(i) otherwise panic("buildParamMutationSummary: functions.get OOB at {i}")
-			summary.upsert(func.name, value: mask)
-		end 'writesSomething'
-	end 'publish'
-	return summary
+	let edges = collectMutationEdges(project, module: module, funcIndexByName: funcIndexByName)
+	propagateMutationMasks(masks, edges: edges, byCallee: edges.byCallee(module.functions.count()))
+	return ParamMutationSummary.create(masks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
 
 // Walk every call in the program and record one edge per argument that IS one of the caller's own
 // parameters. A caller with no parameters contributes none (nothing of its own can be passed on), which is
 // the cheap gate that keeps `main` and every top-level driver out of the graph entirely.
-function collectMutationEdges(project Project, module MaxonModule) returns MutationEdges
+function collectMutationEdges(project Project, module MaxonModule, funcIndexByName ModuleFuncIndexByName) returns MutationEdges
 	var edges = MutationEdges.create()
 	for i in 0 upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(i) otherwise panic("collectMutationEdges: functions.get OOB at {i}")
@@ -484,7 +533,7 @@ function collectMutationEdges(project Project, module MaxonModule) returns Mutat
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectMutationEdges: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				collectMutationEdgesAt(project, op: try module.ops.get(opIdx) otherwise panic("collectMutationEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, edges: edges)
+				collectMutationEdgesAt(project, op: try module.ops.get(opIdx) otherwise panic("collectMutationEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -496,11 +545,11 @@ end 'collectMutationEdges'
 // to reach — see `checkImmutableArgToMutatingParam` for what that costs and why it is not refused instead.
 // The non-call bands range to `break`, so a newly appended op fails to compile here rather than silently
 // dropping out of the call graph (the band-append invariant).
-function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, edges MutationEdges)
+function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, callerIndex FuncIndex, funcIndexByName ModuleFuncIndexByName, edges MutationEdges)
 	match op 'op'
-		call(_, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, edges: edges)
+		call(_, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		literal to stringLiteral then break 'op'
-		tryCall(_, _, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, edges: edges)
+		tryCall(_, _, callee, args, argLabels, _, _) then addMutationEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		throwError to indirectCall then break 'op'
 		// An `async` spawn runs CONCURRENTLY with its caller, so a write it makes is not ordered against the
 		// caller's own use of the value. shv2 refuses a managed `async` argument outright
@@ -525,8 +574,9 @@ end 'collectMutationEdgesAt'
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter slots out of range and is skipped for the same reason — `slotCallArgs`
 // reports it.
-function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, edges MutationEdges)
+function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, func IrFunction, callerIndex FuncIndex, funcIndexByName ModuleFuncIndexByName, edges MutationEdges)
 	let sig = try project.funcSignatures.get(callee) otherwise return
+	let calleeIndex = try funcIndexByName.get(callee) otherwise return
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("addMutationEdges: args.get OOB at {i}")
 		if argId >= func.paramCount 'notOneOfOurParameters'
@@ -538,38 +588,18 @@ function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, 
 			continue
 		end 'unslottable'
 
-		edges.record(callerIndex, callerParam: argId, calleeName: callee, calleeParam: pos)
+		edges.record(calleeIndex, callerIndex: callerIndex, callerParam: argId, calleeParam: pos)
 	end 'eachArg'
 end 'addMutationEdges'
-
-// Group the edge ROWS by callee name, so a bit toggled on a callee scans only the edges that can carry it.
-// The rows are referenced by INDEX rather than copied: an edge belongs to exactly one callee, so the index
-// costs one i64 per edge plus one array per distinct callee that receives a parameter.
-function indexMutationEdgesByCallee(edges MutationEdges) returns MutationEdgeIndex
-	var byCallee = MutationEdgeIndex.create()
-	for i in 0 upto edges.count() 'eachEdge'
-		let calleeName = try edges.calleeNames.get(i) otherwise panic("indexMutationEdgesByCallee: calleeNames.get OOB at {i}")
-		// The empty list is installed FIRST and appended to through the borrow afterwards — an `upsert` while
-		// the fetched list is still borrowed is E3070, and an `upsert` of a list already in the map would be a
-		// hash write per edge for a reference that has not changed.
-		if not byCallee.contains(calleeName) 'firstEdgeToThisCallee'
-			byCallee.upsert(calleeName, value: OpIndexArray.create())
-		end 'firstEdgeToThisCallee'
-
-		var rows = try byCallee.get(calleeName) otherwise panic("indexMutationEdgesByCallee: '{String.from(calleeName)}' was just installed but get failed")
-		rows.push(i)
-	end 'eachEdge'
-	return byCallee
-end 'indexMutationEdgesByCallee'
 
 // The least-fixpoint sweep. Seeded with every function that already writes something, it pulls a callee off
 // the worklist, propagates its mask across its incoming edges, and re-enqueues a caller only when a bit
 // actually changed — which is what bounds the total work and makes a recursive or mutually recursive graph
-// terminate rather than spin.
-function propagateMutationMasks(module MaxonModule, masks MutatedParamMaskArray, edges MutationEdges, byCallee MutationEdgeIndex)
+// terminate rather than spin. No hashing: the CSR is keyed by function index throughout.
+function propagateMutationMasks(masks MutatedParamMaskArray, edges MutationEdges, byCallee CsrGraph)
 	var worklist = FuncIndexArray.create()
 	var queued = BoolArray.create()
-	for i in 0 upto module.functions.count() 'seedWorklist'
+	for i in 0 upto masks.count() 'seedWorklist'
 		let mask = try masks.get(i) otherwise panic("propagateMutationMasks: masks.get OOB at {i}")
 		queued.push(mask != NoMutatedParams)
 		if mask != NoMutatedParams 'writesSomething'
@@ -577,23 +607,20 @@ function propagateMutationMasks(module MaxonModule, masks MutatedParamMaskArray,
 		end 'writesSomething'
 	end 'seedWorklist'
 
-	var head = 0 as OpCount
+	var head = 0 as CsrIndex
 	while head < worklist.count() 'drain'
 		let calleeIndex = try worklist.get(head) otherwise panic("propagateMutationMasks: worklist.get OOB at {head}")
 		head = head + 1
 		try queued.set(calleeIndex, value: false) otherwise panic("propagateMutationMasks: queued.set OOB at {calleeIndex}")
-
-		let calleeFunc = try module.functions.get(calleeIndex) otherwise panic("propagateMutationMasks: functions.get OOB at {calleeIndex}")
-		if let rows = try byCallee.get(calleeFunc.name) 'hasIncomingEdges'
-			propagateAcrossEdges(rows, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued)
-		end 'hasIncomingEdges'
+		propagateAcrossEdges(byCallee, masks: masks, edges: edges, calleeIndex: calleeIndex, worklist: worklist, queued: queued)
 	end 'drain'
 end 'propagateMutationMasks'
 
 // Propagate one callee's mask across every edge that reaches it, enqueueing each caller whose own mask grew.
-function propagateAcrossEdges(rows OpIndexArray, masks MutatedParamMaskArray, edges MutationEdges, calleeIndex FuncIndex, worklist FuncIndexArray, queued BoolArray)
+function propagateAcrossEdges(byCallee CsrGraph, masks MutatedParamMaskArray, edges MutationEdges, calleeIndex FuncIndex, worklist FuncIndexArray, queued BoolArray)
 	let calleeMask = try masks.get(calleeIndex) otherwise panic("propagateAcrossEdges: masks.get OOB at {calleeIndex}")
-	for row in rows 'eachEdge'
+	for k in 0 upto byCallee.degree(calleeIndex) 'eachEdge'
+		let row = byCallee.neighbour(calleeIndex, k: k)
 		let calleeParam = try edges.calleeParams.get(row) otherwise panic("propagateAcrossEdges: calleeParams.get OOB at {row}")
 		if not paramIsMutated(calleeMask, param: calleeParam) 'calleeDoesNotWriteThisOne'
 			continue
@@ -1303,14 +1330,14 @@ end 'checkSlottedCall'
 // break agreement on a legal program rather than close a hole. `parameter-mutation.md` pins the acceptance
 // so the gap is visible instead of assumed.
 function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, mutationSummary ParamMutationSummary, callRange SourceRange, filePath FilePath)
-	// A `contains` first, not a `get otherwise NoMutatedParams`: the map holds only the functions that write
-	// something, so absence IS the answer for almost every call in the program, and the fallback path of a
-	// throwing `get` allocates the error it throws away (`validatePlainCall`'s throws-map note).
-	if not mutationSummary.contains(callee) 'writesNoParameter'
+	// ONE name resolution and one dense read — `maskOf` answers `NoMutatedParams` for a callee the module
+	// does not declare, so the overwhelming majority of calls leave here after a single hash and an i64
+	// compare, with no membership probe in front of it.
+	let mask = mutationSummary.maskOf(callee)
+	if mask == NoMutatedParams 'writesNoParameter'
 		return
 	end 'writesNoParameter'
 
-	let mask = try mutationSummary.get(callee) otherwise panic("checkImmutableArgToMutatingParam: contains('{String.from(callee)}') true but get failed")
 	for i in 0 upto args.count() 'eachArg'
 		let blamed = immutableArgNameAt(argImmutableNames, index: i)
 		if blamed.isEmpty() 'writableArgument'

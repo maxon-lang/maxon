@@ -992,7 +992,9 @@ instead reaches the same place through what it already has: `.rdata` plus static
 > cannot be written. Two things must exist before the record can move there, and shv2 has neither:
 > (1) the guarantee that such a value is never mutated, and (2) a real COPY promotion for
 > `var b = <borrowed array>`, which today `__mm_incref`s the box — and an rdata box has no refcount
-> word to incref. Half of (1) landed with this rung (below); the rest is a rung of its own.
+> word to incref. **(1) IS NOW WHOLE**: the receiver half landed with the rung below, and the CALL-SITE
+> half — a `let` handed to a parameter the callee writes, transitively — landed with the
+> parameter-mutation rung (see *Parameter mutation* below). (2) remains, and is a rung of its own.
 
 **A `let`-bound container is not writable, and that is enforced — ONCE, for all three of them.**
 `noteReceiverWrite` refuses a receiver-writing method on an immutable receiver with **E3019**, the
@@ -1017,6 +1019,54 @@ again (`let a = p` is still a `let`; E3019, measured).
 > home: what stays per-container is only WHICH NAMES write the receiver — a fact about that container's
 > method table — while the binding's writability and the diagnostic are shared, so a fourth container
 > cannot invent a fourth answer.
+
+⚠ **A SELF-FIELD RECEIVER IS LOADED, AND ITS WRITABILITY IS THE FIELD'S OWN `var`/`let`.**
+`methodReceiverBinding` materializes a bare `items.push(v)` inside a method through the same
+`parseSelfFieldRead` a bare read uses. Without it the dispatch took `VarInfo.boundValue`, which
+`createSelfField` leaves **0** — and 0 is `self`'s own id — so `items.count()` answered **0** for an array
+holding one element (a silent wrong answer; the oracle answers 1), and `items.push(v)` was **E3019**
+against an ordinary struct-with-a-container method, because the alias is neither `mutable` nor
+`isParameter`. The writability question is `layout.fieldIsMutable`, the SAME column
+`emitCheckedSelfFieldStore` asks of `n = 1`. `builtinConformanceReceiverValue` was this rule's third copy
+and is gone: one materialization, four dispatch arms.
+
+### Parameter mutation — the CALL-SITE half of E3019 (a whole-program fixpoint)
+
+The receiver half above refuses a write through an immutable binding where the receiver and the method are
+one expression. The other half is `grow(a)` — legal or not depending on `grow`'s **body**, which may be in
+another file. So it is a whole-program summary, built once in `SemanticCheck` and read at every call site:
+
+| | |
+|---|---|
+| **the seed** | `IrFunction.writtenParamMask`, an i64 bit per parameter, set by the PARSER at `noteReceiverWrite` — the one site that already decides whether a receiver-writing method may be called at all. The summary never re-derives "which methods write their receiver" from the LOWERED callees (`__arr_push`, `__str_append`, `__set_insert`); that would be a second list, three tiers from the first. |
+| **the closure** | a worklist least-fixpoint over the reverse call graph (`buildParamMutationSummary`), the same shape `solveDescriptorNeedFixpoint` uses. A mask only ever GAINS bits and a function has at most `MaxAbiArgs` of them, so a caller is re-enqueued only on a real change — which is what makes a recursive and a mutually recursive graph terminate. |
+| **the adjacency** | a `CsrGraph` keyed by function INDEX, per `CsrGraph.maxon`'s own instruction. Written first as a `Map with (ByteArray, OpIndexArray)`, it cost one array per callee: on a maximal N-function chain, `phase:semanticCheck` allocations grew **+984 → +13,104** from N=400 to N=6,400. The CSR costs **+142 → +238**, and the drain loop hashes nothing. |
+| **the call site** | `checkImmutableArgToMutatingParam`, in `checkSlottedCall`. It reads the SOURCE-order `argImmutableNames` column and bridges to the callee's declaration-ordered mask through `argSlotPosition` — the same mapping `slotCallArgs` applied to produce the `argIds` its sibling checks read. |
+
+**The blamed name rides the CALL OP (`MaxonOp.call.argImmutableNames`), because immutability is a fact
+about the SYNTAX and not about the value.** `let a = p` binds `a` to the parameter `p`'s own ValueId, so a
+per-value mark would refuse `f(p)` in any function that also wrote `let a = p` — while the oracle refuses
+`f(a)` and accepts `f(p)` (measured). The column is parallel to `args` when present and EMPTY when no
+argument names an immutable binding, which is every compiler-emitted call and most user calls; a shared
+empty array serves them all.
+
+⚠ **AN INDIRECT CALL AND A WITNESS DISPATCH ARE NOT CHECKED.** Neither names a callee a summary could be
+keyed on, and BOTH reference compilers accept `let f = grow` then `f(a)` (measured — the oracle compiles it
+and the push takes effect), so a conservative refusal would break agreement on a legal program rather than
+close a hole. `parameter-mutation.md` pins the acceptance so the gap is visible rather than assumed.
+
+⚠ **A METHOD WRITING ITS OWN RECEIVER'S DATA IS NOT A PARAMETER MUTATION, and that is a RULING taken
+because the oracle disagrees with itself.** On one program with a `let` receiver,
+`self.total = self.total + value` is ACCEPTED (42) while `total = total + value` — the same write, the
+other spelling — is **E3019**: its analysis matches op TYPES and only the bare spelling emits the
+operation its self-field check inspects. shv2 has exactly ONE self-field store for both spellings (v1's
+split is what made its field-visibility check structurally blind to bare names), so it must answer once;
+it answers the way the corpus pins (`self-keyword.md`'s `self-with-params`, which both compilers run at
+42, and which `parseSelfFieldAssignment` already stated as the rule: a `let` on a struct binding refuses a
+rebind and a direct field write through it, and *does not reach inside the type's own methods*). The same
+ruling covers a container held in a field — there is no principled line between writing `self.total` and
+writing the array `self.items` points at, and drawing one at the spelling IS the inconsistency above.
+`receiverOwnerMask` is where it lives.
 
 ### Top-level managed `var` — a POINTER slot, filled before `main` and released after it
 
@@ -1138,9 +1188,10 @@ is mutable by nature, so a per-read copy would be a different array every time �
 askers (the two use-doors, the layout, the label minter); `DeclKind` is `inlined | stored`, not `let | var`.
 
 ⚠ **This is a DELIBERATE DIVERGENCE from the oracle**, which makes a never-mutated `let` array an immortal
-shared static record (`MaxonToStandardConversion.cs:1039-1077`). shv2 cannot: immortality needs enforcement
-that such a value is never mutated (only half-built — the E3019 receiver rule) and a real COPY promotion for
-`var b = <borrowed array>`, and it has neither. Heap for both is what it can state truthfully.
+shared static record (`MaxonToStandardConversion.cs:1039-1077`). shv2 cannot yet: immortality needs
+enforcement that such a value is never mutated — **now complete**, the E3019 receiver rule plus the
+call-site rule (*Parameter mutation*) — and a real COPY promotion for `var b = <borrowed array>`, which it
+still lacks. Heap for both is what it can state truthfully until then.
 
 | the refusal | code | where |
 |---|---|---|
