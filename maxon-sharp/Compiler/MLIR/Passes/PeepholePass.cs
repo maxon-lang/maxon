@@ -82,6 +82,15 @@ public static class PeepholePass {
       case X86GlobalLoadOp:
       case X86GlobalLeaOp:
       case X86CvttFloat2SiOp:
+      // `lock inc qword [rip+…]` addresses its counter RIP-relatively, so it names no GPR at all —
+      // the property X86CovIncOp exists to have, and the reason coverage costs no register pressure.
+      // Left in the conservative default it answered "reads every GPR", and `--coverage` puts one of
+      // these at the head of EVERY statement, so that one wrong answer sits between almost every
+      // rewrite candidate and its liveness check. It emits no different byte TODAY (measured: the
+      // same 0 / 2 / 0 rewrites and byte-identical `.text` on programs up to 73,606 coverage points,
+      // because the two patterns below almost never match) — it is stated so the next op added here
+      // is not the one that makes it matter.
+      case X86CovIncOp:
         break;
       // Single GPR read
       case X86MovRegRegOp mov: yield return mov.Src; break;
