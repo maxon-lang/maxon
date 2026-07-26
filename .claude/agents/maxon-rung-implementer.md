@@ -146,22 +146,28 @@ branch.** Two ways this has already bitten:
 compiler and report a green suite. **Always check the build's exit code before believing a test result.**
 This has produced a false green in this project more than once.
 
-## The gate battery — run every one that applies, and paste the REAL output
+## The gate battery — iterate FILTERED; the full battery is the COORDINATOR's
+
+**Iterate on `--filter=<the specs you are unlocking>` while you work — that is your fast loop.** The full
+suite, worker-count invariance (the slow `--workers=1` pass) and the `scale-test` read are the
+**coordinator's single merge gate**, run once on the final tree after the reviewer — you do NOT re-run them
+on every build. Your job is to prove your own slice and hand up a clean tree.
+
+Run every one of these that applies, and paste the real output:
 
 1. Build (bootstrap and/or shv2) → exit 0, **zero warnings**.
-2. **shv2 suite green**, including every pre-existing test. Zero failures.
-3. **Worker-count invariance:** stdout of `--workers=1` and `--workers=12` must be **byte-identical**.
-4. **Fragments:** `git status --short specs-shv2/fragments/` shows **additions only**. An **`M`** on a
+2. **Your ported/enabled specs green** under `--filter`, and — **once, at your finish** — the **full shv2
+   suite green**, including every pre-existing test. That single full run catches broad breakage while you
+   still hold the context to fix it cheaply; the authoritative run is the coordinator's.
+3. **Fragments:** `git status --short specs-shv2/fragments/` shows **additions only**. An **`M`** on a
    pre-existing golden is a **codegen change** — investigate and justify it, or fix it. Never blindly
-   regenerate.
-5. **`scale-test` PASS** — mandatory if you touched a pass, the IR, or a data structure the compiler
-   indexes by. It fits a growth exponent to every phase's **time AND allocations** and checks exact
-   per-rung memory goldens. `VOID` (degenerate corpus) and `NOISY` (loaded machine) are **not** passes.
-   A moved memory golden means the compiler allocates differently for the same input — **the diff is
-   the review.**
-6. **If you touched `maxon-sharp/`:** the C# suite must stay green (2883+), AND **codegen neutrality** —
+   regenerate. An empty diff after a spec run **proves byte-identical codegen** — cheaper than any suite pass.
+4. **If you touched a pass, the IR, or a data structure the compiler indexes by:** run `scale-test` once and
+   **read it** — it doubles the input per rung, so the ratio between consecutive rungs IS the growth (no
+   verdict, nothing to pass). Attribute anything that moved and hand the reading to the optimizer.
+5. **If you touched `maxon-sharp/`:** the C# suite must stay green (2883+), AND **codegen neutrality** —
    `git status --short specs/ specs-shv2/` must be EMPTY, proving the emitted code is byte-identical.
-7. No run exits **101**.
+6. No run exits **101**.
 
 ## Spec tests are ported ON DEMAND, from `/specs`
 

@@ -121,6 +121,10 @@ Never start from a claimed-green tree. Build and run:
 ./maxon-shv2/.maxon/maxon-shv2.exe spec-test --workers=12     # expect all green
 ```
 
+**Kick this off in the BACKGROUND and start step 2 in the same beat.** The reference survey reads source —
+it does not need a built compiler — so the baseline build/suite and the survey agents overlap for free.
+Just confirm the baseline came back green before you commit to the plan.
+
 ## 2. PLAN IT — read BOTH reference compilers before you design anything
 
 **Write a detailed implementation plan BEFORE the contract and before any agent launches, and state it
@@ -249,8 +253,14 @@ otherwise is worth nothing.
 
 ## 6. Optimize — `maxon-rung-optimizer`
 
-Hunts **unscalable (superlinear) algorithms**. Gated objectively by `scale-test`, which fits a growth
-exponent to every phase's time **and** allocations. Commits separately on the same branch.
+Hunts **unscalable (superlinear) algorithms**, read off `scale-test`'s doubling ladder. Commits separately
+on the same branch.
+
+**Scope the pass to the rung.** A rung that adds a new pass, a new IR op, or a new collection the compiler
+indexes by gets the full superlinear hunt. A pure front-end slice that adds none of those gives the hunt
+structurally nothing to find — there `scale-test` is informational, so the optimizer confirms no new
+superlinear structure crept in, reads one `scale-test`, and is done. It still runs; it just does not
+over-invest where there is nothing to invest in.
 
 ## 7. Review — `maxon-rung-reviewer`
 
@@ -271,6 +281,20 @@ selection rule that the author, re-reading their own work, had not seen.
 project once left work uncommitted in a worktree based on a stale parent; another claimed a green build
 by grepping for a success string.
 
+**This is the ONE authoritative full battery, and it runs here — once.** It is your independent
+verification and the pre-merge gate at the same time, not a second run stacked on top of the agents'. The
+agents iterate on `--filter` and prove their own slice; the full suite, the `scale-test` read and the leak
+gate are yours, run once on the final tree. If it comes back red, an agent goes back — that is the trade
+for not running this battery four times.
+
+**Worker-count invariance is OCCASIONAL, not every rung.** The `--workers=1` vs `--workers=12`
+byte-identical check catches ONE thing — nondeterminism leaking into emitted output or diagnostics — and
+the default rung is deterministic by construction, so the slow single-threaded pass buys little most of the
+time. Run it when the rung could plausibly affect determinism (it touches the spec runner / worker pool,
+parallel codegen, or a `Map`/`Set` whose iteration order could reach emitted IR, diagnostic order, or symbol
+order), and as a periodic backstop every few rungs regardless. Otherwise skip it — the full-suite green run
+already proves correctness.
+
 **Check exit codes. Never grep for success.** Exit **101** = memory leak.
 
 ## 9. The gate battery
@@ -279,7 +303,7 @@ by grepping for a success string.
 |---|---|
 | Build | exit 0, zero warnings |
 | shv2 suite | all green, **including every pre-existing test** |
-| Worker-count invariance | `--workers=1` and `--workers=12` stdout **byte-identical** |
+| Worker-count invariance (occasional) | `--workers=1` and `--workers=12` stdout **byte-identical** — but **not every rung** (see step 8). Run it when the rung could affect determinism (spec runner, parallel codegen, a `Map`/`Set` feeding emitted output / diagnostic order) and as a periodic backstop; the `--workers=1` pass is slow and the default rung is deterministic by construction |
 | Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen** |
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
@@ -294,7 +318,11 @@ git checkout main && git merge --ff-only <branch>
 ```
 `merge.ff=only` is configured, so a non-fast-forward merge **errors** rather than making a merge commit.
 
-Re-run the suites on the merged tree, then **`git push origin main`** — the parallel repo consumes it.
+**Re-run the suites on the merged tree ONLY if the rebase actually replayed onto an advanced `main`** — i.e.
+`origin/main` moved while you worked, so `<old-base>` is behind it, and the merged tree is now code your
+step-8 battery never saw. **If `<old-base>` was already `main`** (nothing landed upstream), the fast-forward
+leaves main byte-identical to the branch tip you gated in step 8, so the re-run would only re-derive a
+known-green tree — skip it. Either way, then **`git push origin main`** — the parallel repo consumes it.
 Remove the worktree and delete the branch.
 
 ## 11. Close the loop

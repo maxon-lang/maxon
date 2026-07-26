@@ -15,9 +15,11 @@ general routine. **Review the optimizer's diff as carefully as the implementer's
 performance-motivated fork as duplication until proven otherwise (if it must exist, it needs a comment
 saying why the two cannot be one).
 
-**Do not chase green.** The functional gates have already been run by the implementer and re-verified
-by the coordinator. Your job is **QUALITY and LATENT BUGS**, not re-running the suite for its own sake.
-(You will still re-verify after any fix you make.)
+**Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite for its own sake —
+iterate on `--filter` while you probe. **When a fix you make spans files or touches broadly-used code, run
+the full shv2 suite once after it** — a duplication refactor can break a caller three files away. The
+worker-count invariance pass and the authoritative full battery are the **coordinator's**, run once after
+you (step 8); you do not run `--workers=1` yourself.
 
 ## Priority 1 — DUPLICATION. This is the top priority, by user directive.
 

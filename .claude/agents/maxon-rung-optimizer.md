@@ -1,6 +1,6 @@
 ---
 name: maxon-rung-optimizer
-description: Optimization pass over a completed rung. HUNTS UNSCALABLE (SUPERLINEAR) ALGORITHMS. Gated objectively by scale-test, which fits a growth exponent to every phase's time AND allocations. Run before every merge.
+description: Optimization pass over a completed rung. HUNTS UNSCALABLE (SUPERLINEAR) ALGORITHMS, read off scale-test's doubling ladder. Scope scales with the rung. Run before every merge.
 model: opus
 tools: ["*"]
 ---
@@ -26,6 +26,11 @@ must exist, comment *why the two cannot be one* — otherwise the reviewer will 
   live-set's set bits. Making exactly this change is what turned shv2's allocator linear.
 - **Allocation in a hot path**, especially anything that allocates into the very `mm` stream being
   traced. (`contentHash()` allocates. `String.hash` walks the bytes in place.)
+
+**Scope the hunt to the rung.** A new pass, a new IR op, or a new collection the compiler indexes by earns
+the full hunt above. A pure front-end slice that added none of those gives the hunt structurally nothing to
+find — confirm no new superlinear structure crept in, read one `scale-test`, and stop. Do not manufacture
+work where there is none; do not micro-optimize to look busy.
 
 ## ⚠ `scale-test` IS AN INSTRUMENT. It collects data for TREND ANALYSIS. That is all it is.
 
@@ -80,10 +85,11 @@ making it.
 
 ## Rules of engagement
 
-- **Correctness first, always.** An optimization that changes behaviour is a bug. The suite must stay
-  green and `specs-shv2/fragments/` must stay **clean** — those goldens pin the emitted Target IR, so an
-  empty `git status` after a spec run **proves byte-identical codegen**. That is the non-negotiable gate
-  for any "pure perf" refactor.
+- **Correctness first, always.** An optimization that changes behaviour is a bug. Your correctness proof is
+  **`specs-shv2/fragments/` staying clean** — those goldens pin the emitted Target IR, so an empty `git
+  status` after a spec run **proves byte-identical codegen**, cheaper and stricter than any suite pass —
+  plus your `--filter`ed specs staying green while you iterate. The full suite and worker-count invariance
+  are the **coordinator's single merge gate**, run once on the final tree; you do not re-run them per change.
 - **Do not micro-optimize.** Constant factors are not the mandate; growth curves are. A tidy O(n) beats
   a clever O(n).
 - **A superlinearity you can TRIGGER on a realistic input is FIXED, not filed.** Only a term you have
