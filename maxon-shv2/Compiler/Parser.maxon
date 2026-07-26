@@ -2473,11 +2473,24 @@ end 'LoopPhiVar'
 
 typealias LoopPhiVarArray = Array with LoopPhiVar
 
-// The variable names a loop's token extent ASSIGNS — the set `parseWhileStatement` intersects
+// The variable names a construct's token extent ASSIGNS — the set `parseWhileStatement` intersects
 // with the mutable bindings in scope to decide which ones the loop carries a phi for. Keyed by
 // the identifier's raw source slice, which is how every other name lookup in the parser is keyed
 // (`ByteArray` hashes and compares by content — see Token.value).
 typealias AssignedNameSet = Set with ByteArray
+
+// A dense per-TOKEN column of token indices — `Parser.blockExtentEnds`, which answers "where does the block
+// opened here close?" in one array read. Flat and dense for the reason `SourceRangeTable`'s columns are: a
+// per-opener heap object would be one live allocation per construct, on the token array's own scale.
+typealias TokenIndexColumn = Array with TokenIndex
+
+// The INITIAL `Parser.blockExtentEnds`, AND the anchor whose `is`-identity says the index has not been built
+// yet — `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. A parser that never
+// asks where a block closes (the signature sweep, a file with no `if`/`while`/`match`) allocates nothing
+// here, and `buildBlockExtentIndex` REPLACES the field with a fresh column rather than mutating this one, so
+// it stays empty and is safe to share across the per-file parse fan-out. Reading it before the build is
+// harmless: `matchingEndOf` is the only reader and an empty column makes it panic rather than answer.
+let sharedEmptyBlockExtentEnds = TokenIndexColumn.create()
 
 // The bare member names of a generic type's inner ranged typealiases, in scope while its body is parsed
 // (P1.6-C, `Parser.enclosingInnerAliases`). Keyed by content like every other name set here.
@@ -2853,6 +2866,20 @@ export type Parser
 	// `parseBlockBody` call returns it holds the OWN `end` of the construct's last body, which
 	// is what the guard reads.
 	var lastBlockBodyEnd as TokenIndex
+	// ⭐ **THE FILE'S BLOCK-EXTENT INDEX: per token, the `end` that closes the block opened there.** Filled
+	// in ONE bracket-matching pass by `buildBlockExtentIndex` on the first construct that asks, and read by
+	// `matchingEndOf` so `blockStatementEndIndex` can step OVER a nested construct instead of through it.
+	//
+	// FILE-scoped, not per function, and correct because it is keyed by an ABSOLUTE token index: a construct
+	// only ever asks about a token inside its own extent, so an entry belonging to another function can never
+	// be reached. That is also why `reset` (per function) leaves it alone — the tokens it indexes do not
+	// change for the parser's whole life, and a Parser is built per file and never re-aimed at a second token
+	// stream.
+	//
+	// It points at the shared empty until the first query, and that `is`-identity is what says "not built
+	// yet": a file that opens no block at all still gets a FRESH column, so an empty index and an absent one
+	// are never confused.
+	var blockExtentEnds as TokenIndexColumn
 	// THE BLOCK EXPRESSION PARSING IS EMITTING INTO, and it MOVES. Until P1.0d.2 an
 	// expression always ended in the block it started in, so "where do ops go" could be a
 	// parameter threaded down from the statement. A short-circuit `and`/`or` ends that: it
@@ -3242,6 +3269,7 @@ export type Parser
 			mutableVars: VarInfoArray.create(),
 			loops: LoopContextArray.create(),
 			lastBlockBodyEnd: 0,
+			blockExtentEnds: sharedEmptyBlockExtentEnds,
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
@@ -3785,7 +3813,7 @@ export type Parser
 		var q = bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			// The function's own `end` (at block depth 0) closes the scan.
-			if blockDepth == 0 and self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'funcEnd'
+			if blockDepth == 0 and self.closesBlockAt(q) 'funcEnd'
 				break
 			end 'funcEnd'
 
@@ -3849,7 +3877,7 @@ export type Parser
 			if self.opensBlockAt(q) 'opensBlock'
 				blockDepth = blockDepth + 1
 			end 'opensBlock' else 'notOpener'
-				if kind == TokenKind.end and blockDepth > 0 and not self.keywordIsMatchCaseName(q) 'closesBlock'
+				if blockDepth > 0 and self.closesBlockAt(q) 'closesBlock'
 					blockDepth = blockDepth - 1
 				end 'closesBlock'
 			end 'notOpener'
@@ -3902,7 +3930,7 @@ export type Parser
 
 		var q = self.pos
 		while self.kindAt(q) != TokenKind.eof 'walk'
-			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
+			if self.closesBlockAt(q) 'typeEnd'
 				break
 			end 'typeEnd'
 			// A named `function <ident>` at the member level opens a method body (a closure is `function(` —
@@ -4035,7 +4063,7 @@ export type Parser
 				hasControlFlow = true
 				depth = depth + 1
 			end 'opensBlock' else 'notOpener'
-				if kind == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
+				if self.closesBlockAt(q) 'closes'
 					depth = depth - 1
 					if depth == 0 'methodEnd'
 						return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, endPos: (q + 1) as TokenIndex)
@@ -4455,7 +4483,7 @@ export type Parser
 		var scans = MethodFeedScanArray.create()
 		var q = bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
-			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
+			if self.closesBlockAt(q) 'typeEnd'
 				break
 			end 'typeEnd'
 			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
@@ -4507,7 +4535,7 @@ export type Parser
 			if self.opensBlockAt(q) 'opensBlock'
 				depth = depth + 1
 			end 'opensBlock' else 'notOpener'
-				if kind == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
+				if self.closesBlockAt(q) 'closes'
 					depth = depth - 1
 					if depth == 0 'methodEnd'
 						return MethodFeedScan.create(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, directFeeds: directFeeds, edges: edges, endPos: (q + 1) as TokenIndex)
@@ -10991,14 +11019,38 @@ export type Parser
 	// over-approximates the extent, which is the SAFE direction (a carried set is never too
 	// SMALL — see `parseWhileStatement` / `assignedBindingsIn`), and the real parse runs next
 	// and reports the unexpected EOF with a position.
+	//
+	// ⭐ **A NESTED CONSTRUCT IS STEPPED OVER, NOT WALKED INTO, AND THAT IS WHAT MAKES THIS LINEAR.** The
+	// walk itself is unchanged — the depth counting, the `elseFollowsEnd` continuation and the tolerant
+	// tail all still decide the answer — but a construct opening at depth ≥ 1 has its whole extent skipped
+	// in ONE array read (`matchingEndOf`). That cannot change the answer: inside a nested pair the depth
+	// never returns to 0, so neither the `depth == 0` test nor `elseFollowsEnd` could have fired there, and
+	// the pair contributes net zero to the depth on the way through.
+	//
+	// Walking IN is what made this scan cost `O(depth × tokens)`: a construct nested D deep had its tokens
+	// re-walked by all D scans enclosing it. MEASURED on `Testing/ladders/gennest.sh`, which holds
+	// `depth × stmtsPerLevel` fixed so the program barely changes size while the nesting doubles: at a
+	// constant 1024 statements `phase:parse` CPU climbed ×1.20 ×1.33 ×1.50 ×1.74 per depth doubling, and
+	// with this skip it climbs ×1.11 ×1.20 ×1.39 ×1.40 — HALF the depth term, to the tick. The other half
+	// is `namesAssignedIn`, whose own scan is the same shape; see its header for why inverting THAT one
+	// into a per-name index is a net loss until the Θ(bindings × constructs) loop above it is gone.
 	function blockStatementEndIndex(startIndex TokenIndex, continuesAtElse bool) returns TokenIndex
+		self.buildBlockExtentIndex()
+
 		let count = self.tokens.count()
 		var depth = 0
 		var i = startIndex
 		while i < count 'scan'
 			if self.opensBlockAt(i) 'open'
-				depth = depth + 1
-			end 'open' else if self.kindAt(i) == TokenKind.end and not self.keywordIsMatchCaseName(i) 'close'
+				if depth > 0 'nested'
+					// `i` lands on the nested construct's own `end`; the step below moves past it, so this
+					// scan never sees the pair at all. An UNTERMINATED nested construct answers `count`,
+					// which ends the walk exactly where walking into it would have.
+					i = self.matchingEndOf(i)
+				end 'nested' else 'ownOpener'
+					depth = depth + 1
+				end 'ownOpener'
+			end 'open' else if self.closesBlockAt(i) 'close'
 				depth = depth - 1
 				if depth == 0 and (not continuesAtElse or not self.elseFollowsEnd(i)) 'matched'
 					return i
@@ -11083,6 +11135,15 @@ export type Parser
 		return self.elseFollowsBlockEnd(index)
 	end 'opensBlockAt'
 
+	// Does the token at `index` CLOSE a block — `opensBlockAt`'s counterpart, and its own predicate for the
+	// same reason `assignsAt` is one. Every token scan in this file that counts block depth has to make the
+	// keyword-as-case-name exclusion (`end` is a legal enum case name, so `end then …` is an arm and not a
+	// closer), and eight of them had spelled it out independently. Spelled once, a scan cannot be taught the
+	// opener rule and miss the closer rule — which would leave a depth counter that never comes back down.
+	function closesBlockAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.end and not self.keywordIsMatchCaseName(index)
+	end 'closesBlockAt'
+
 	// Is the `if` at `index` a block-opening STATEMENT `if` rather than the `if` of an inline
 	// conditional `<t> if <c> else <f>`? A block `if` sits at statement start: the preceding token is
 	// a `newline` (a new statement) or an `else` (the `if` of an `else if` chain). A ternary `if`
@@ -11156,7 +11217,7 @@ export type Parser
 		return next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or
 	end 'keywordIsMatchCaseName'
 
-	// The names ASSIGNED anywhere in `[startIndex, endIndex)` — the loop's carried-variable
+	// The names ASSIGNED anywhere in `[startIndex, endIndex)` — the construct's carried-variable
 	// set, read straight off the tokens (see `parseWhileStatement` for why it must be known
 	// before the body is parsed).
 	//
@@ -11171,6 +11232,18 @@ export type Parser
 	//     of the same name is being SHADOWED, in which case the outer one gets a phi it does not
 	//     need. Costs one coalesced copy; the alternative is tracking shadowing at token level,
 	//     which is the block structure written down a THIRD time.
+	//
+	// ⚠ **IT IS A SET, PER CONSTRUCT, AND THAT SHAPE IS LOAD-BEARING FOR ITS TWO CALLERS' COST.** Both
+	// ask it once and then test it once per MUTABLE BINDING IN SCOPE, so the test runs
+	// Θ(bindings × constructs) times — 518 × 800 in ONE function of the scale corpus's `d_blocks`, and
+	// 26.5 MILLION times at rung 5. A small per-construct set keeps each of those tests to one hash and
+	// one probe. MEASURED: replacing it with a per-FILE `name -> ascending assignment sites` index and a
+	// binary-searched `isAssignedIn(name, start, end)` predicate — which does make the SCAN linear in
+	// nesting depth — multiplies that quadratic's per-test constant and costs **`phase:parse` ×3.5 on the
+	// corpus** (rung 5: 10.0G → 34.5G CPU ticks; rung 2 ×3.03). The scan's own depth term is worth far
+	// less than that constant. Making both cheap needs the carried sets computed BOTTOM-UP over the
+	// construct tree (each parent unioning its children's), which is a redesign of how a phi set is
+	// ordered, not an edit to this function.
 	function namesAssignedIn(startIndex TokenIndex, endIndex TokenIndex) returns AssignedNameSet
 		// ⚠ THIS SCAN IS EXHAUSTIVE ONLY BECAUSE PARAMETERS ARE IMMUTABLE. Everything below reads
 		// TOKENS, so it can only ever find a write that IS tokens — `identifier =`. A `var`
@@ -11195,6 +11268,64 @@ export type Parser
 		end 'scan'
 		return assigned
 	end 'namesAssignedIn'
+
+	// ⭐ **THE FILE'S BLOCK-EXTENT INDEX: per token, the `end` that closes the block opened there** — one
+	// linear bracket-matching pass over the token array, run on the first construct that asks and shared
+	// by every `if`/`while`/`match` after it. It is what lets `blockStatementEndIndex` step OVER a nested
+	// construct in one array read instead of walking through its tokens.
+	//
+	// Idempotent, and the shared-empty `is`-identity of the column is the "have I run?" gate (see the
+	// field): the fresh column installed below is what says it has run, whether or not the file opens a
+	// single block.
+	function buildBlockExtentIndex()
+		if self.blockExtentEnds is sharedEmptyBlockExtentEnds 'notBuiltYet'
+			let tokenCount = self.tokens.count()
+			// One entry per token, and ZERO wherever no block opens — a value no real answer can take, since
+			// a matched opener's `end` sits after it and an unmatched one is seeded below with the end of the
+			// token stream. `matchingEndOf` panics on a zero rather than inventing an extent.
+			var extentEnds = TokenIndexColumn.create()
+			extentEnds.resize(tokenCount)
+			// The openers not yet closed, innermost last — the bracket-matching stack.
+			var openers = TokenIndexColumn.create()
+
+			var i = 0 as TokenIndex
+			while i < tokenCount 'scan'
+				if self.opensBlockAt(i) 'opensBlock'
+					openers.push(i)
+					// UNTERMINATED until a closer says otherwise — the end of the token stream, which is the
+					// tolerant answer `blockStatementEndIndex`'s header states for a construct with no `end`.
+					// Seeded at the PUSH so there is no post-scan drain to keep in step with this loop.
+					try extentEnds.set(i, value: tokenCount) otherwise panic("buildBlockExtentIndex: opener {i} is outside this file's token space")
+				end 'opensBlock' else if self.closesBlockAt(i) 'closesBlock'
+					// A closer with nothing open closes nothing — the same malformed input the walk in
+					// `blockStatementEndIndex` carries straight past on a negative depth.
+					if openers.count() > 0 'hasOpener'
+						let opener = try openers.pop() otherwise panic("buildBlockExtentIndex: pop from an opener stack just checked non-empty")
+						try extentEnds.set(opener, value: i) otherwise panic("buildBlockExtentIndex: opener {opener} is outside this file's token space")
+					end 'hasOpener'
+				end 'closesBlock'
+
+				i = i + 1
+			end 'scan'
+
+			self.blockExtentEnds = extentEnds
+		end 'notBuiltYet'
+	end 'buildBlockExtentIndex'
+
+	// The index of the `end` that closes the block opened at `index`, or the end of the token stream when
+	// nothing does — O(1) off `buildBlockExtentIndex`'s column.
+	//
+	// ⚠ ONLY MEANINGFUL AT AN OPENER, which is why a zero entry PANICS rather than answering: no block
+	// opens at that token, and any extent returned for it would be invented. Every caller asks under
+	// `opensBlockAt`, so the panic is a tripwire and not a path.
+	function matchingEndOf(index TokenIndex) returns TokenIndex
+		let closer = try self.blockExtentEnds.get(index) otherwise panic("matchingEndOf: token {index} is outside this file's token space")
+		if closer == 0 'notAnOpener'
+			panic("matchingEndOf: no block opens at token {index} — the extent column holds a matching `end` only for a token `opensBlockAt` accepts")
+		end 'notAnOpener'
+
+		return closer
+	end 'matchingEndOf'
 
 	// THE GUARD ON A TOKEN-EXTENT SCAN, shared by `parseWhileStatement` and `parseIfStatement`.
 	// `blockStatementEndIndex` re-derives Maxon's block structure at the token
@@ -21000,7 +21131,7 @@ export type Parser
 			if isMethod or self.opensBlockAt(q) 'opens'
 				depth = depth + 1
 			end 'opens' else 'notOpener'
-				if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
+				if self.closesBlockAt(q) 'closes'
 					if depth == 0 'typeEnd'
 						break
 					end 'typeEnd'
