@@ -269,6 +269,8 @@ end 'main'
 ### Float range check: runtime guard on a non-literal
 
 <!-- test: float-runtime-range-panic -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 typealias Wide = float(f64.min to f64.max)
@@ -294,6 +296,8 @@ Stack trace:
 ```
 
 <!-- test: float-runtime-negative-bound-panic -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
 ```maxon
 typealias Neg = float(-100.0 to -1.0)
 typealias Wide = float(f64.min to f64.max)
@@ -343,6 +347,8 @@ The narrowing an `f32`-bounded alias promises, checked at run time — a value a
 f64 holds comfortably but an f32 cannot.
 
 <!-- test: float-narrow-f64-to-f32 -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
 ```maxon
 typealias Wide = float(f64.min to f64.max)
 typealias Narrow = float(f32.min to f32.max)
@@ -513,6 +519,8 @@ end 'main'
 ### Runtime range check fails (panic)
 
 <!-- test: runtime-check-fail -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
@@ -630,6 +638,8 @@ end 'main'
 ### Return value range check: runtime panic
 
 <!-- test: return-runtime-check-fail -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY — a PANIC-RUNTIME restriction: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` (which prints both) is a hand-assembled Windows-only `.text` runtime chunk (`X64Runtime.maxon`). Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — `lowerRangePanicLinux` says so for x64-linux, `RangePanicExitCode` for arm64 ("arm64 has no panic runtime"), and wasm the same. Measured 2026-07-26: identical empty-stderr failure on arm64-macos AND wasm32-wasi, which is what makes this the RUNTIME's absence rather than either backend's. The range CHECK itself is target-neutral and is covered everywhere by the in-range and compile-time-rejection cases beside this one; only the message is gated. Un-gate when a non-Windows panic runtime lands. -->
 ```maxon
 typealias Score = int(0 to 100)
 
