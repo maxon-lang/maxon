@@ -230,7 +230,21 @@ end 'recordRegAllocDelta'
 
 // Everything a register-allocator sub-phase has claimed so far, across both tables. The
 // "before" snapshot `recordPhaseExcluding` subtracts against.
+//
+// ⚠ IT READS THE TWO COST COLUMNS DIRECTLY RATHER THAN THROUGH `costOf`, AND THAT IS A
+// MEASUREMENT DECISION. Returning a struct by value ALLOCATES — measured, one allocation per
+// return, and INDEPENDENT of the field count (a 4-, 5- and 6-field struct each cost exactly
+// one per return over 10,000 returns). So the `PhaseCost` that `costOf` hands back is a heap
+// allocation, this function runs once per FUNCTION via `recordPhaseExcluding`, and the bill
+// landed in the trend log's bit-for-bit-reproducible column: the instrument moving the number
+// it reports. The PhaseDelta returned below allocates too, but it always did and is already in
+// every historical row; this one would have been new.
+//
+// `costOf` remains the right accessor everywhere else — the report and the metrics file read
+// it a few dozen times per compile, where one allocation buys the pairing guarantee.
 export function regAllocAccumulated(project Project, phase RegAllocPhase) returns PhaseDelta
-	let cost = project.timings.regAlloc.costOf(phase)
-	return PhaseDelta.create(cost.nanos, cpuTicks: cost.cpuTicks, allocs: project.memory.regAlloc.allocsOf(phase), frees: project.memory.regAlloc.freesOf(phase), bytes: project.memory.regAlloc.bytesOf(phase))
+	let idx = phase.ordinal
+	let nanos = try project.timings.regAlloc.phaseNanos.get(idx) otherwise panic("regAllocAccumulated: phaseNanos index OOB for '{regAllocPhaseName(phase)}'")
+	let cpuTicks = try project.timings.regAlloc.phaseCpuTicks.get(idx) otherwise panic("regAllocAccumulated: phaseCpuTicks index OOB for '{regAllocPhaseName(phase)}'")
+	return PhaseDelta.create(nanos, cpuTicks: cpuTicks, allocs: project.memory.regAlloc.allocsOf(phase), frees: project.memory.regAlloc.freesOf(phase), bytes: project.memory.regAlloc.bytesOf(phase))
 end 'regAllocAccumulated'
