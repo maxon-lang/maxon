@@ -14761,23 +14761,29 @@ export type Parser
 	//     conversion the old no-op `as` skipped (`explicit-cast-int-to-float`).
 	//   • float → int  — emit `trunc` (`cvttsd2si`), the truncating bridge out of the float domain.
 	//   • same representation (int→int, float→float) — the value flows on UNCHANGED, keeping its own tag,
-	//     exactly as the old no-op `as` left it (so a `X as ExitCode` that already compiled keeps its
-	//     codegen byte-for-byte). It is deliberately NOT retagged to the target alias: a `named` value
-	//     TYPE reaches `lowerMaxonToStd` unresolved through an op's stored type (`maxonTypeToStdType`
-	//     panics on it — `resolveTypes` rewrites signatures, not per-value types), and the alias name a
-	//     narrowing check needs rides the recorded site, not the value tag. When the target is a ranged
-	//     INT alias, that site is recorded so `InsertRangeChecks` guards / E3005s it.
+	//     UNLESS the target type says something the source's tag does not. Then the cast MINTS a distinct
+	//     value carrying the target type (`emitRetaggedCastValue`) — see the two predicates below for
+	//     exactly when, and the paragraph after this one for why "unchanged" was a wrong answer.
+	//     The value's alias name is what a narrowing check needs, and it rides the recorded site rather
+	//     than the tag: when the target is a ranged alias that site is recorded so `InsertRangeChecks`
+	//     guards / E3005s it.
 	//
-	//     ⚠ **THAT JUSTIFICATION USED TO NAME A CLOSURE CAPTURE AS ITS SECOND ROUTE, AND NO LONGER
-	//     CAN**: the env slot's ops now take their width from `fieldStorageType`, exactly as a struct
-	//     field's do, so a capture cannot drive a `named` into `maxonTypeToStdType` any more.
-	//     ⚠ And the surviving reason does not cover what the tag is ALSO read for. `valueIsUnsigned`
-	//     asks the TAG, so dropping the alias drops the SIGNEDNESS: MEASURED against the bootstrap
-	//     oracle, `let w = x as Word` (`Word = int(0 to u64.max)`) then `w shr 62` of
-	//     `0xC000000000000000` answers **-1 here and 3 there** — a silent wrong answer, in the one
-	//     direction (`shr` filling with the sign) that no diagnostic can catch. Retagging is not a
-	//     one-line change — a value's tag also picks its drop (`decrefCalleeFor`), its conformance
-	//     dispatch and its float class — so it is stated here rather than done in passing.
+	//     ⚠ **A RE-TAG CANNOT BE DONE IN PLACE, AND THAT IS MEASURED, NOT ASSUMED.** `let w = x as Word`
+	//     leaves `w` and `x` naming ONE SSA value under two declared types (M2 binds a name to a value
+	//     and emits no load), so re-recording that value's tag would make `x` unsigned too. Against the
+	//     bootstrap oracle, `(w shr 62) + (x shr 62)` of `0xC000000000000000` is `3 + -1`; an in-place
+	//     re-tag answers `3 + 3` and a dropped tag `-1 + -1`. Only a DISTINCT value gives both halves
+	//     their own answer, which is why this mints one exactly as the per-instance cast already did.
+	//
+	//     ⚠ **WHAT USED TO BE HERE, AND WHY EACH REASON FELL.** The no-op justified itself by (1) a
+	//     `named` value TYPE reaching `lowerMaxonToStd` unresolved and (2) codegen stability. (1) named a
+	//     closure capture as its route, which `fieldStorageType` closed for env slots; and it does not
+	//     apply to a re-tag at all — a value's TAG is `named` all the time (a `Word` parameter, a
+	//     `Word`-returning call result), and `valueTagToStdType` collapses `named` to i64 without help.
+	//     Only an OP's stored type reaches `maxonTypeToStdType`, and this mints no op that carries one.
+	//     (2) is kept, and it is what the two predicates are for: a cast whose target answers every
+	//     question the tag column decides exactly as the source's own type does is still the no-op it
+	//     was, byte for byte.
 	function applyCast(value ValueId, targetType MaxonType, asTok Token) returns ValueId throws ParseError
 		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
 		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
@@ -14804,13 +14810,16 @@ export type Parser
 			return self.promoteToFloat(value, opTok: asTok)
 		end 'intToFloat'
 
-		// ⭐ **A PER-INSTANCE `as` IS A CONVERSION, NOT A RE-TAG (P1.6-C).** It yields a DISTINCT result value
-		// of the target type and leaves the SOURCE untouched — because the source binding stays usable under
-		// its own identity (`let b = aTag as WB.Idx` must not corrupt `aTag`, which is still `WA.Idx`). A plain
-		// ranged-alias `as` stays the representational no-op below (no new value).
-		if self.castConvertsPerInstance(value, targetType: targetType) 'perInstanceCast'
-			return self.emitPerInstanceCastValue(value, targetType: targetType, asTok: asTok)
-		end 'perInstanceCast'
+		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
+		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
+		// binding stays usable under its own identity: `let b = aTag as WB.Idx` must not corrupt `aTag`
+		// (still `WA.Idx`), and `let w = x as Word` must not make `x` unsigned. TWO things a target can
+		// say, and each has its own predicate rather than one blurred test — a nominal IDENTITY (P1.6-C)
+		// and a SHIFT FILL — because they are answered from different registries and neither implies the
+		// other. Everything else is the representational no-op below, with no new value and no new op.
+		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetType: targetType) 'retaggingCast'
+			return self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok)
+		end 'retaggingCast'
 
 		self.recordCastSite(value, targetType: targetType, asTok: asTok)
 		return value
@@ -14881,25 +14890,107 @@ export type Parser
 		return self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value)))
 	end 'castConvertsPerInstance'
 
-	// ⭐ **EMIT A PER-INSTANCE CAST AS A DISTINCT VALUE (P1.6-C).** The conversion is representationally a no-op
-	// (int→int), so its RESULT is `value + 0` — one op, minted with a FRESH ValueId typed as the target — which
-	// leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag` when a later use
-	// reads it as `WA.Idx`). Both directions ride it: STAMP (`x as StrWrapper.Idx`, result typed the per-instance
-	// alias, sidestepping the bootstrap's E3010 "unneeded cast" quirk) and STRIP (`idx as ExitCode`, result the
-	// plain target, so a per-instance Idx decays to the numeric it is). The extra op appears ONLY in per-instance
-	// programs, so existing goldens are byte-identical; `foldConstOperands` folds it to a single `binOpImm add
-	// 0`. The RESULT (not the source) is the range-check site, so a narrower ranged target still guards correctly.
+	// ⭐ **DOES THIS int→int `as` CHANGE HOW A RIGHT SHIFT OF THE VALUE FILLS?** The shift rule reads the
+	// value's TAG (`valueIsUnsigned`), so a cast that drops the target alias drops the SIGNEDNESS with it —
+	// MEASURED against the bootstrap oracle, `let w = x as Word` (`Word = int(0 to u64.max)`) then
+	// `w shr 62` of `0xC000000000000000` answered **-1 here and 3 there**, and the other direction
+	// (an unsigned parameter cast to a signed alias) answered **3 here and -1 there**. A silent wrong
+	// answer, in the one place no diagnostic can catch it.
+	//
+	// ⭐ **THE FILL IS THE ONLY ANSWER THAT CAN MOVE INSIDE THIS GATE, AND THAT IS WHY THE GATE IS A
+	// DECLARED RANGED ALIAS AND NOTHING ELSE.** A value's tag also picks its DROP routing
+	// (`decrefCalleeFor`), its builtin-conformance dispatch (`builtinConformerOfType`) and its float
+	// register class — so a broader "always re-tag" would be a different change with a different blast
+	// radius. Inside the gate all three are provably fixed: a ranged INT alias is unmanaged (its name is
+	// an alias, never an enum/union — `resolveNamedAlias`'s header states a name is one of those, never
+	// two — so `valueIsBoxedUnion` cannot start answering `true`), it reduces to `integer` for the
+	// conformer exactly as a bare `int` does, and it is not float (a float alias is refused below, since
+	// its bounds are f64 BIT PATTERNS that the integer range predicates would read as signed integers).
+	// A target OUTSIDE the gate is left alone for the same reason it always was — a `structRef` target
+	// would re-point a drop at another type's destructor, and `ExitCode` would trade a fill that cannot
+	// differ (see the observability rule below) for a conformer it does not have (`notAConformer`).
+	//
+	// ⭐ **AND IT ASKS WHETHER THE FILL CAN BE OBSERVED, NOT MERELY WHETHER THE SIGNEDNESS DIFFERS.** An
+	// arithmetic and a logical shift differ only on an operand whose bit 63 is set, so a target whose
+	// range cannot hold such a value answers the same under either reading — `bitwise-operators.md` says
+	// exactly this ("a value of `int(0 to 100)` is provably non-negative, so an arithmetic and a logical
+	// shift of it agree bit for bit"), and the cast is guarded INTO that range by the site
+	// `recordCastSite` records, so the premise is enforced rather than hoped for. That is what keeps
+	// `x as Byte`, `x as Age` and `x as U32` the byte-for-byte no-ops they have always been while
+	// `x as Word` is not.
+	function castChangesTheShiftFill(value ValueId, targetType MaxonType) returns bool
+		if maxonTypeTag(targetType) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(targetType)), readerFilePath: self.filePath) 'a'
+			declared(alias) gives self.aliasChangesTheShiftFill(value, alias: alias)
+			undeclared gives false
+		end 'a'
+	end 'castChangesTheShiftFill'
+
+	// The half of the question above that is about the ALIAS. Split out so the registry lookup and the
+	// range reasoning are not one expression, and because the two arms below read as the two sentences
+	// they are.
+	function aliasChangesTheShiftFill(value ValueId, alias RangedTypeAlias) returns bool
+		if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
+			return false
+		end 'floatAlias'
+
+		if not rangeIsUnsigned(alias.low) 'targetIsSigned'
+			// A signed range admits negatives, so bit 63 is reachable and the two fills genuinely differ.
+			// The cast is load-bearing exactly when the source reads UNSIGNED and the target does not.
+			return self.valueIsUnsigned(value)
+		end 'targetIsSigned'
+
+		// The target is unsigned. A signed source can only be told apart from it by a bit-63-set value,
+		// which an unsigned range admits ONLY in the `u64.max`-upper shape — the same shape the runtime
+		// cascade and the compile-time literal check both key on, asked here through the same predicate
+		// so a fourth reading of it cannot appear.
+		return not self.valueIsUnsigned(value) and rangeIsUnsignedMaxUpper(alias.low, high: alias.high)
+	end 'aliasChangesTheShiftFill'
+
+	// ⭐ **EMIT A REPRESENTATIONALLY-NO-OP CAST AS A DISTINCT VALUE.** The conversion moves no bits
+	// (int→int), so its RESULT is `value + 0` — one op, minted with a FRESH ValueId typed as the target —
+	// which leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag` when a
+	// later use reads it as `WA.Idx`, and would make `x` unsigned after `let w = x as Word`). ONE emitter
+	// for both reasons a cast mints: a per-instance IDENTITY and a changed SHIFT FILL. Both directions of
+	// the per-instance case ride it — STAMP (`x as StrWrapper.Idx`, result typed the per-instance alias,
+	// sidestepping the bootstrap's E3010 "unneeded cast" quirk) and STRIP (`idx as ExitCode`, result the
+	// plain target, so a per-instance Idx decays to the numeric it is). `foldConstOperands` folds the op
+	// to a single `binOpImm add 0`.
+	//
+	// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE RESULT, AND THAT IS A CORRECTNESS REQUIREMENT.**
+	// The two hold the same number by construction, so either would guard correctly at run time — but
+	// `InsertRangeChecks` decides COMPILE-TIME E3005 versus a runtime guard by looking the site's value up
+	// in a map built from Std `const` ops (plus `neg` of one). A constant that arrived through an `add`
+	// is in neither, so anchoring on the result would silently downgrade `3 as Big` from a diagnostic to a
+	// guard that fires at run time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is
+	// the case that says so. The float→int cast anchors on its RESULT for the opposite reason, stated
+	// there: `trunc` changes the number, so the source is not the value being checked.
+	//
+	// ⚠ **THE PARSER'S CONSTANT VIEW CROSSES THE MINT**, and that is not an optimization either. `x + 0`
+	// is `x`, so a constant source names a constant result — and the parser's const table is what turns a
+	// shift COUNT into a compile-time decision (`emitShift` rejects a negative count and folds an
+	// over-wide one, both guarded on `constIsKnown`). Without this, `a shl (0 - 1 as Word)` would trade
+	// its diagnostic for a runtime guard purely because the cast started minting. `recordFold` is what
+	// `emitBinOp` does with the same `+`, so the two agree on what a folded `add` knows.
 	//
 	// ⚠ The base-range compatibility check the spec names (`fooIdx as BarContainer.Idx` requires the SAME
 	// low/high) is inert at this rung — every inner alias is `int(0 to u64.max)` — and its diagnostic form is
 	// deferred with the first narrower inner range.
-	function emitPerInstanceCastValue(value ValueId, targetType MaxonType, asTok Token) returns ValueId
+	function emitRetaggedCastValue(value ValueId, targetType MaxonType, asTok Token) returns ValueId
+		self.recordCastSite(value, targetType: targetType, asTok: asTok)
 		let result = self.mintValueOfType(targetType)
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(asTok))
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: SourceRange.ofToken(asTok))
-		self.recordCastSite(result, targetType: targetType, asTok: asTok)
+
+		if self.constIsKnown(value) 'constantSource'
+			self.recordConst(result, folded: self.constOf(value))
+		end 'constantSource'
+
 		return result
-	end 'emitPerInstanceCastValue'
+	end 'emitRetaggedCastValue'
 
 	// Record a narrowing-check site for `value` when `targetType` is a ranged alias, integer or float
 	// (P1.9, and #19 for the float half). `block` is the CAST'S evaluation block (`self.currentBlock`),

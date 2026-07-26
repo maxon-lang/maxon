@@ -966,3 +966,157 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: shift-ranged-operand-is-64-bit -->
+⭐ **A RANGED LEFT OPERAND DECIDES A SHIFT'S FILL, NEVER ITS WIDTH.** The compiler used to conflate
+the two: a shift whose operands fit a narrow ranged type was lowered as a **32-bit** op, which
+truncated the shift's *value*. `(0-8) shl 29` on an `int(-2147483648 to 2147483647)` needs 61 bits
+to hold its answer and got 32, so it answered **0** — while the identical shift by a count the
+compiler could not fold (and so lowered at 64 bits) answered **-4294967296**.
+
+**Same value, same count, same program, two answers.** The folded path and the emitted path had
+become two opinions.
+
+Nothing in the suite shifted a ranged operand, which is why nothing caught it: every existing shift
+case uses a bare `int`, and a bare `int` never narrows. Each case below therefore compares the two
+paths *against each other* — a folded count against a count passed as a parameter — so it fails if
+they ever diverge again, whatever they diverge to.
+```maxon
+typealias I32 = int(-2147483648 to 2147483647)
+typealias U32 = int(0 to 4294967295)
+typealias Num = int(i64.min to i64.max)
+
+function shlBy(v Num, d Num) returns Num
+	return v shl d
+end 'shlBy'
+
+function shrBy(v Num, d Num) returns Num
+	return v shr d
+end 'shrBy'
+
+function main() returns ExitCode
+	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
+	// answer needs all 64.
+	let narrow = 0 - 8 as I32
+	if narrow shl 29 != shlBy(0 - 8, d: 29) 'signedFoldVsEmitted'
+		return 1
+	end 'signedFoldVsEmitted'
+	if narrow shl 29 != 0 - 4294967296 'signedValue'
+		return 2
+	end 'signedValue'
+
+	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
+	// `shr 33` would have quietly become `shr 1`.
+	if narrow shr 33 != shrBy(0 - 8, d: 33) 'signedCountFoldVsEmitted'
+		return 3
+	end 'signedCountFoldVsEmitted'
+	if narrow shr 33 != 0 - 1 'signedCountValue'
+		return 4
+	end 'signedCountValue'
+
+	// NARROW UNSIGNED. Zero-filling, and still 64 bits wide.
+	let wide = 4294967295 as U32
+	if wide shl 33 != shlBy(4294967295, d: 33) 'unsignedFoldVsEmitted'
+		return 5
+	end 'unsignedFoldVsEmitted'
+	if wide shr 4 != shrBy(4294967295, d: 4) 'unsignedShrFoldVsEmitted'
+		return 6
+	end 'unsignedShrFoldVsEmitted'
+	if wide shr 4 != 268435455 'unsignedShrValue'
+		return 7
+	end 'unsignedShrValue'
+
+	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
+	// agree with it rather than merely with each other.
+	let plain = 0 - 8 as Num
+	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
+		return 8
+	end 'rangedAgreesWithPlain'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shift-signedness-follows-the-cast -->
+⚠ A cast to a ranged type emits no op, so `let w = p as Wide` leaves `w` and `p` **sharing one SSA
+value** with two different declared types. The bootstrap resolved a shift's ranged type by searching
+for a variable bound to that value, and returned whichever the search reached first — `p`'s. So
+`w shr 60` sign-filled a type declared unsigned, and answered **-1** where the same shift on a
+parameter declared `Wide` answered **15**.
+
+The cast is the whole of what the programmer wrote to say "treat this as unsigned". It has to be
+what the shift reads.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function viaCast(p Num) returns Wide
+	let w = p as Wide
+	return w shr 60
+end 'viaCast'
+
+function viaParam(w Wide) returns Wide
+	return w shr 60
+end 'viaParam'
+
+function main() returns ExitCode
+	if viaParam(u64.max) != 15 'declaredParam'
+		return 1
+	end 'declaredParam'
+	if viaCast(u64.max) != 15 'castLocal'
+		return 2
+	end 'castLocal'
+	if viaCast(u64.max) != viaParam(u64.max) 'twoRoutesOneType'
+		return 3
+	end 'twoRoutesOneType'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: shift-signedness-follows-the-cast-in-both-directions -->
+The case above pins that the CAST decides the fill; these two pin what that costs, and shv2 got both
+wrong in opposite directions for the same reason — `as` produced no value at all, so `w` and `p`
+shared one SSA value and one tag.
+
+**The SOURCE keeps its own type.** Making the cast decide the fill must not make it decide the
+source's: after `let w = p as Wide`, `p` is still `Num`, and `p shr 60` must still sign-fill. An
+in-place re-tag passes `shift-signedness-follows-the-cast` and fails here, which is exactly why that
+case cannot pin this one — `15 - (-1)` is 16, `15 - 15` is 0, and `-1 - (-1)` is 0 too.
+
+**And the cast runs the other way.** `v as Num` on an unsigned parameter has to make the shift
+*sign*-fill, not merely stop it zero-filling: a rule stated only as "an unsigned target zero-fills"
+leaves the unsigned→signed direction reading the SOURCE, and shv2 answered 15 where the bootstrap
+answered -1.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function sourceKeepsItsOwnType(p Num) returns Num
+	let w = p as Wide
+	return (w shr 60) - (p shr 60)
+end 'sourceKeepsItsOwnType'
+
+function castToSigned(v Wide) returns Num
+	let n = v as Num
+	return n shr 60
+end 'castToSigned'
+
+function main() returns ExitCode
+	if sourceKeepsItsOwnType(u64.max) != 16 'sourceKeeps'
+		return 1
+	end 'sourceKeeps'
+	if castToSigned(u64.max) != 0 - 1 'toSigned'
+		return 2
+	end 'toSigned'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
