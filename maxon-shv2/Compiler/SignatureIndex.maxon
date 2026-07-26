@@ -140,6 +140,18 @@ let FieldShapeDefaulted = 19 as ContentHash
 let ConstShapeValue = 10 as ContentHash
 let ConstShapeNoValue = 11 as ContentHash
 
+// The THIRD shape a top-level constant's answer hashes under (P1.7a): it folded to a managed LITERAL.
+// Its own discriminator for `ConstShapeValue`'s reason — a `let X = 0` that becomes `let X = "0"` must
+// move the hash, and the payload alone cannot say so (the bytes `"0"` and the number 0 are different
+// facts that a shared shape would let collide).
+let ConstShapeManagedValue = 45 as ContentHash
+
+// Which managed literal a constant folded to, mixed beside its bytes (P1.7a). Two constants because a
+// `String` and an `Array with Byte` over the SAME bytes are different types with different records, so
+// a reader that saw one must re-parse when it becomes the other.
+let ManagedShapeString = 46 as ContentHash
+let ManagedShapeByteArray = 47 as ContentHash
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -352,7 +364,38 @@ export union TopLevelConstant
 	// same, dropping cycle victims so their readers see a plain "Undefined name" rather than a
 	// cascade (TypeResolution.maxon:8332-8338).
 	poisoned
+	// ⭐ **IT EVALUATED TO A MANAGED LITERAL** (P1.7a top-level managed `let`) — `bytes` is the decoded
+	// payload and `kind` says which literal it came from. The `value` arm's twin, and a SEPARATE arm
+	// rather than a widened one because the two payloads are different things: a number a reader copies
+	// into a `literal` op, versus bytes a reader re-materializes as a record.
+	//
+	// ⚠ **APPENDED AT THE END, on purpose.** Three range arms read this union (`value to poisoned`,
+	// `failed to poisoned`, `pending to evaluating`); appending leaves every one of them EXCLUDING this
+	// case, so each site fails to compile until it has been visited and decided — where inserting it
+	// beside `value` would have let `value to poisoned` swallow it silently. Same rule, same reason, as
+	// `StdOp`'s bands.
+	managedValue(bytes ByteArray, kind ManagedConstKind)
 end 'TopLevelConstant'
+
+// WHICH managed literal a top-level `let` folded to — the ONE fact a use site needs beyond the bytes,
+// because the two kinds materialize through different record shapes: a String literal is a wholly
+// immortal `.rdata` record, while a byte string is an owned `Array with Byte` record over an immortal
+// `.rdata` blob. Both are `LowerMaxonToStd`'s existing literal lowerings, reached through the ops the
+// use site emits — this enum picks WHICH op, and nothing else.
+export enum ManagedConstKind
+	string
+	byteArray
+end 'ManagedConstKind'
+
+// The `ValueTypeTag` a managed constant of `kind` denotes — the SAME tag its literal gives a value in
+// expression position (`Parser.emitStringLiteral` / `emitByteStringLiteralValue`), stated once so the
+// declaration's storability rule and the use site's value cannot disagree about what the constant is.
+export function managedConstValueTag(kind ManagedConstKind) returns ValueTypeTag
+	return match kind 'k'
+		string gives ValueTypeTag.string
+		byteArray gives ValueTypeTag.genericInstance
+	end 'k'
+end 'managedConstValueTag'
 
 // A top-level `let` OR `var`, as the declaration sweep found it: WHAT it is called, WHETHER it is
 // mutable, WHERE it was written, and the TOKEN RANGE of its initializer — read, never evaluated on
@@ -470,6 +513,19 @@ export type ConstValue
 	end 'create'
 end 'ConstValue'
 
+// ⭐ **WHAT ONE TOP-LEVEL INITIALIZER FOLDED TO** — the evaluator's ENTRY-POINT answer, and the one
+// place the scalar/managed split is made.
+//
+// A constant's value is either a NUMBER or a managed literal's BYTES, and those cannot share
+// `ConstValue`'s scalar payload. Answering with this union at the entry point keeps every fold BELOW
+// it (`evalConstBinary`, `foldConstBinOp`, `applyConstCast`, …) scalar and untouched — so a managed
+// literal is never an operand of an operator that would have to reject it, and the arithmetic rules
+// stay one reading of the grammar rather than two.
+export union ConstInitializerValue
+	scalar(value ConstValue)
+	managed(bytes ByteArray, kind ManagedConstKind)
+end 'ConstInitializerValue'
+
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
 export union ConstEvalOutcome
@@ -494,6 +550,12 @@ end 'ConstEvalError'
 // not be able to, so it is given a type with no `failed` arm to mishandle.
 export union TopLevelConstantLookup
 	found(payload ParsedInt, tag ValueTypeTag)
+	// The MANAGED twin of `found` (P1.7a top-level managed `let`): a use re-materializes the literal
+	// from these bytes rather than inlining a number. It sits BESIDE `found` — unlike
+	// `TopLevelConstant.managedValue`, which is appended — because the two "a constant of this name is
+	// visible here" cases want to be one range arm at the caller that only asks whether it EXISTS
+	// (`Parser.rejectNonGlobalAssignment`: assigning to either is E2013).
+	foundManaged(bytes ByteArray, kind ManagedConstKind)
 	notFound
 end 'TopLevelConstantLookup'
 
@@ -1712,10 +1774,23 @@ export type ProgramSignatures
 	// declaration probe pointed at a constant, a 7 → 8 edit re-parses every file in the project; the
 	// gate's `invalidation` property is what keeps it that way.
 	export var hash as ContentHash
+	// ⭐ **DOES THIS PROGRAM DECLARE ANY MANAGED TOP-LEVEL CONSTANT?** (P1.7a) — a WHOLE-PROGRAM bool,
+	// set by `settleManagedValue`, read by `Parser.managedConstantReceiverAt`.
+	//
+	// It exists because the reader is on a HOT path: `methodCallsAt` runs at every dotted-call shape in
+	// the program, and the probe behind this bool builds a file-scoped STRING key (~4 allocations —
+	// `fileScopedDeclKey`). A program with no managed constant must not pay that per method call, and
+	// nearly every program has none. One bool, written once per managed constant, read once per probe.
+	var anyManagedConstant as bool
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), anyManagedConstant: false}
 	end 'create'
+
+	// Does any declaration in the program hold a MANAGED constant? See `anyManagedConstant`.
+	export function hasManagedConstant() returns bool
+		return self.anyManagedConstant
+	end 'hasManagedConstant'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
 	// index — and its hash — are a deterministic function of the program, not of the order the
@@ -2212,8 +2287,10 @@ export type ProgramSignatures
 		for i in 0 upto self.decls.count() 'eachDecl'
 			let decl = self.declAt(i)
 			match decl.outcome 'state'
-				// Already settled by an earlier decl's DFS — it referenced this one.
+				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
+				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
+				managedValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -2270,12 +2347,22 @@ export type ProgramSignatures
 	// The answer is recorded ON THE DECL and only summarized in the return: a failure's diagnostic
 	// belongs to the declaration that caused it, and is raised (once) by the real parse when it
 	// reaches that line. Callers get `failed` — an instruction to stop, not an error to report.
+	//
+	// ⭐ **A MANAGED CONSTANT ANSWERS `notFound` HERE, AND THAT IS THE SLICE'S HARD BOUNDARY** (P1.7a).
+	// The only caller that reads this answer for a NAME is `evaluateNamed`, i.e. a reference from inside
+	// another initializer — and a managed constant is not a number, so there is nothing an arithmetic
+	// fold could do with it. `notFound` makes `let A = "x"` / `let B = A` report **E2004 `Undefined
+	// constant 'A'`**, which is MEASURED to be exactly what the runnable oracle does, in BOTH declaration
+	// orders (its bare literal goes to the managed bucket while its bare identifier goes to the scalar
+	// folder, and the scalar folder never sees managed declarations). So there is no managed-to-managed
+	// dependency to order and no managed cycle to detect: the arena's DFS never reaches one.
 	function evaluateDecl(index TopLevelDeclIndex, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
 		var decl = self.declAt(index)
 
 		match decl.outcome 'state'
 			value(payload, tag) then return ConstEvalOutcome.value(payload, tag: tag)
 			failed to poisoned then return ConstEvalOutcome.failed
+			managedValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -2303,13 +2390,30 @@ export type ProgramSignatures
 	// top-level constant build no parser here at all.
 	function walkConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstEvalOutcome
 		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self)
-		let value = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
+		let folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
 
+		match folded 'kind'
+			scalar(value) then return self.settleScalarValue(decl, value: value)
+			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
+		end 'kind'
+	end 'walkConstInitializer'
+
+	// Settle a decl whose initializer folded to a NUMBER — the arm this arena has always had.
+	function settleScalarValue(decl TopLevelDecl, value ConstValue) returns ConstEvalOutcome
 		decl.outcome = TopLevelConstant.value(value.payload, tag: value.tag)
 		return ConstEvalOutcome.value(value.payload, tag: value.tag)
-	end 'walkConstInitializer'
+	end 'settleScalarValue'
+
+	// Settle a decl whose initializer folded to a MANAGED literal (P1.7a). It answers `notFound` for
+	// `evaluateDecl`'s reason — a managed constant is invisible to the scalar folder — while the decl
+	// itself carries the bytes every USE site re-materializes (`resolvedValueOf`).
+	function settleManagedValue(decl TopLevelDecl, bytes ByteArray, kind ManagedConstKind) returns ConstEvalOutcome
+		decl.outcome = TopLevelConstant.managedValue(bytes, kind: kind)
+		self.anyManagedConstant = true
+		return ConstEvalOutcome.notFound
+	end 'settleManagedValue'
 
 	// Settle a decl that produced no value: it either OWNS the defect or merely inherited one.
 	function recordFailure(decl TopLevelDecl, error ConstEvalError) returns ConstEvalOutcome
@@ -2330,7 +2434,8 @@ export type ProgramSignatures
 			// `recordCycle` already ruled on this decl.
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
-			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a value AND failed to evaluate — an initializer produces one or the other")
+			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
+			managedValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -2460,6 +2565,12 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), tag: tag)
 			failed to poisoned then return TopLevelGlobalLookup.notFound
+			// A MANAGED `var` (P1.7a): the declaration itself is already rejected by
+			// `Parser.requireStorableGlobal` — a `.data` slot holds a scalar image, never a heap or rdata
+			// POINTER — but the parse that reports it runs on, so a use of the name can still reach here
+			// before the error gate bails. It reads as `notFound`, exactly as a failed one does, for
+			// exactly its reason: there are no bytes to name.
+			managedValue then return TopLevelGlobalLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
@@ -2495,7 +2606,10 @@ export type ProgramSignatures
 			end 'constantHasNoSlot'
 			match decl.outcome 'state'
 				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(tag, name: decl.name), value: payload))
+				// A managed `var` contributes no slot, for `resolvedGlobalOf`'s reason: its declaration is
+				// already an error and a `.data` image has no bytes for a pointer.
 				failed to poisoned then continue
+				managedValue then continue
 				pending to evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -2559,6 +2673,7 @@ export type ProgramSignatures
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
 			value(payload, tag) then return TopLevelConstantLookup.found(payload, tag: tag)
+			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
 			failed to poisoned then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
@@ -2636,6 +2751,11 @@ export type ProgramSignatures
 		let keyed = mixBytes(self.mixMutability(state, mutable: decl.mutable), bytes: decl.storageKey)
 		match decl.outcome 'o'
 			value(payload, tag) then return self.mixDeclAnswer(keyed, decl: decl, payload: payload, tag: tag)
+			// ⭐ **THE BYTES RIDE, for `mixDeclAnswer`'s reason applied to a managed constant.** A use
+			// re-materializes the literal from exactly these bytes, so `export let G = "a"` → `"b"` changes
+			// what every OTHER file compiles to while their own bytes never move. The KIND rides too: the
+			// same bytes as a `String` and as a `b"…"` produce different records and different types.
+			managedValue(bytes, kind) then return mixBytes(self.mixManagedKind(mix(keyed, value: ConstShapeManagedValue), kind: kind), bytes: bytes)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
@@ -2656,6 +2776,16 @@ export type ProgramSignatures
 	function mixMutability(state ContentHash, mutable bool) returns ContentHash
 		return mix(state, value: DeclShapeMutable if mutable else DeclShapeConstant)
 	end 'mixMutability'
+
+	// Mix a managed constant's KIND (P1.7a). Its own discriminator per kind, so `let G = "ab"` and a
+	// hypothetical byte-string of the same bytes hash apart — they materialize different records and
+	// give the reader a different TYPE, which is exactly the acceptance a stale memo would keep.
+	function mixManagedKind(state ContentHash, kind ManagedConstKind) returns ContentHash
+		return match kind 'k'
+			string gives mix(state, value: ManagedShapeString)
+			byteArray gives mix(state, value: ManagedShapeByteArray)
+		end 'k'
+	end 'mixManagedKind'
 
 	// ⭐⭐ **MIX WHAT A READER COPIES — AND A `var` DOES NOT COPY ITS VALUE.**
 	//

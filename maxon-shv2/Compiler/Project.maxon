@@ -118,9 +118,23 @@ export type VarInfo
 	// The union case this binding belongs to — different cases of the same
 	// union have independent payload field types, so the case name is required.
 	export var payloadCaseName as ByteArray
+	// ⭐ **IS THIS NAME A PARAMETER?** — set only by `Parser.bindParameters`.
+	//
+	// It exists because `mutable` answers a DIFFERENT question and the two diverge on exactly one
+	// binding kind. `mutable` is "may this NAME be rebound?", and a parameter's answer is NO (a
+	// reassignment to one is E2013, and `ParametersAreMutable` is false for the loop-phi reason
+	// `bindParameters` documents at length). But "may the CONTAINER this name denotes be written?" is
+	// a different question, and a parameter's answer is YES: it is a borrowed reference to the
+	// caller's record, and `dest.append(src)` inside a helper is ordinary Maxon.
+	//
+	// **MEASURED against the runnable oracle**: a mutating `Array` method is accepted on a PARAMETER
+	// receiver and rejected (E3019) on a `let` LOCAL — including a `let` that merely aliases a field
+	// or another local. Read by `Parser.bindingArrayMutability`; without it that rule would reject
+	// every array-mutating helper in the corpus (measured: 3 `array-append-managed-elements` cases).
+	export var isParameter as bool
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false}
 	end 'create'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
@@ -136,11 +150,11 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false}
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -148,8 +162,21 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false}
 	end 'createValueBinding'
+
+	// The value binding a PARAMETER gets — `createValueBinding` plus the one bit that distinguishes it
+	// (`isParameter`). A separate constructor rather than a flag on the shared one because a parameter
+	// is bound at exactly ONE site (`Parser.bindParameters`) while `createValueBinding` has many, and a
+	// flag would have every one of those callers pass `false` to a question they are not asking.
+	//
+	// ⚠ `mutable` is still the CALLER's to pass, and deliberately not read from `ParametersAreMutable`
+	// here: `bindParameters`'s tripwire panics on the flag it actually passes, and a constructor that
+	// re-read the constant would take that flag out of the caller's hands — exactly the defeat that
+	// tripwire's comment warns about.
+	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true}
+	end 'createParameterBinding'
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)

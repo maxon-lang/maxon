@@ -15,7 +15,7 @@ type Container uses Element
 	end 'push'
 
 	export function drainViaLocal()
-		let arr = self.items
+		var arr = self.items
 		let x = try arr.pop() otherwise return
 	end 'drainViaLocal'
 end 'Container'
@@ -76,15 +76,22 @@ func @Container.drainViaLocal {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __arr_pop
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.epilogue 40
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -92,7 +99,10 @@ func @Container.drainViaLocal {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __drop_type_param
-    x64.epilogue 40
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

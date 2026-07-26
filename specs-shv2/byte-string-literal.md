@@ -202,7 +202,7 @@ end 'main'
 ```
 
 <!-- disabled-test: byte-string-literal.top-level-let -->
-<!-- P1.7 top-level managed const: shv2 has NO top-level managed constant support (`let G = "hi"` is also rejected E2004 — the const evaluator is scalar-only); this case additionally needs `ByteArray` type-name resolution (E3011 today). A separate top-level-managed-const sub-rung. -->
+<!-- stdlib whitelist: the top-level managed `let` half now WORKS — supply `typealias ByteArray = Array with Byte` and this exact program builds and returns 0. What is missing is the NAME: `ByteArray` is not a compiler builtin in any compiler (the bootstrap looks it up as an ordinary type alias, 2-Parser.cs:18044), it is `stdlib/File.maxon`'s `export typealias ByteArray = Array with Byte`, and shv2's stdlib whitelist loads only `Clock.maxon`. It unlocks when the whitelist reaches that declaration — E3011 `Unknown type 'ByteArray'` until then. -->
 
 A byte string literal initializes a module-scope `let`, and the global is a `ByteArray`.
 ```maxon
@@ -221,7 +221,7 @@ end 'main'
 ```
 
 <!-- disabled-test: byte-string-literal.top-level-var -->
-<!-- P1.7 top-level managed const: a module-scope `var` byte-string needs a MANAGED `.data` slot (holding an rdata-record pointer via relocation) — shv2's global-var storage is scalar-only, and top-level managed consts are unbuilt. A separate top-level-managed-const sub-rung. -->
+<!-- top-level managed `var`: the immutable `let` half is built; a MUTABLE managed global is not, and is refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 deliberately has none of — and a reassignment would then have to drop the old value. Its own sub-rung. -->
 
 A module-scope `var` holds a byte string literal and can be reassigned to another one.
 ```maxon
@@ -260,8 +260,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: byte-string-literal.dead-global-not-leaked -->
-<!-- P1.7 top-level managed const: two module-scope `let` byte-string globals — needs top-level managed constant support (const evaluator is scalar-only, top-level `let s = "hi"` is also E2004). A separate top-level-managed-const sub-rung. -->
+<!-- test: byte-string-literal.dead-global-not-leaked -->
 
 A byte string global whose only reader is eliminated as dead code must not be allocated and
 then left unreleased — dead-code elimination drops the literal along with the global it fed.

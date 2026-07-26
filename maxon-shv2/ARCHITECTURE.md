@@ -57,8 +57,9 @@ allocator under it:
 - `let` / `var` bindings, `var` reassignment, integer literals, identifiers.
 - **Top-level `let` and `var`** — a module-scope `let` is a compile-time constant that INLINES
   at every use; a module-scope `var` is a real `.data` slot that loads and stores. Both take
-  constant-only initializers (no calls), evaluated once by the declaration sweep. Scalars only
-  (`int`/`bool`) — a managed global needs the heap (P1.2).
+  constant-only initializers (no calls), evaluated once by the declaration sweep. A `let` may be
+  MANAGED — a `String` or a `b"…"` byte-string literal; a `var` is scalar only (`int`/`bool`/`float`).
+  See *Top-level managed `let`* below.
 - **Arithmetic** — `+ - * / mod` with Pratt precedence, prefix `-`.
 - **Comparisons** — `== != < > <= >=`, valid *only* as the sole top-level operator
   of an `if`/`while` condition (there is no `setcc`/bool materialization yet, so a
@@ -850,6 +851,60 @@ shape the spec above is about. `$` is legal in no Maxon identifier, so the disam
 minter of suffixed labels and its count IS the next free ordinal. Measured off-instrument (the scale
 corpus contains no top-level `var` at all): 800 file-private globals all named `counter` compile at
 **x2.02 per doubling** across a 16x span, and produce 800 distinct slots.
+
+### Top-level managed `let` — a constant whose value is BYTES, not a number
+
+A module-scope `let` may hold a `String` or a `b"…"` byte-string literal. It is the SAME mechanism a
+scalar constant uses, with one thing changed: what the constant's value IS.
+
+- **The arena is the same one.** `ProgramSignatures`'s `TopLevelDecl` arena, its memoized DFS, its
+  cycle detection and its file-scoped resolution are untouched; `TopLevelConstant` simply gains a
+  `managedValue(bytes, kind)` answer beside `value(payload, tag)`.
+- **The split is made ONCE, at the evaluator's entry, on the token range.** An initializer that is
+  exactly one `stringLiteral` / `byteStringLiteral` token folds to bytes; everything else runs the
+  scalar walk unchanged, so no arithmetic fold ever has to reject a managed operand. An interpolated
+  `"a{x}b"` is several tokens and is therefore *not* a constant, which is correct.
+- **The use site materializes the literal**, exactly as the scalar use inlines the number.
+
+> ⚠ **A MANAGED INITIALIZER MAY NOT REFERENCE ANOTHER GLOBAL, and that is a hard boundary rather than
+> an ordering quirk.** `evaluateDecl` answers `notFound` for a managed decl, so `let A = "x"` /
+> `let B = A` is **E2004 `Undefined constant 'A'`** — in BOTH declaration orders, which is MEASURED to
+> be exactly what the runnable oracle does (its bare literal goes to the managed bucket while its bare
+> identifier goes to the scalar folder, and the scalar folder never sees managed declarations). ⇒ there
+> is no managed-to-managed dependency to order and no managed cycle to detect. Nothing about a managed
+> constant depends on file order.
+
+**Storage: shv2's OWN immortality, not the oracle's refcount sentinel.** The bootstrap marks such
+records with `MmImmortalRefcount = 0x4000_0000_0000_0000` and gates `mm_incref`/`mm_decref` on it.
+shv2 imports none of that — a second immortality mechanism is this project's signature bug — and
+instead reaches the same place through what it already has: `.rdata` plus static ownership.
+
+| kind | what a read materializes | shared? | dropped? |
+|---|---|---|---|
+| `String` | `lea` of the ONE immortal `.rdata` 48-byte record `lowerStringLiteral` registers (deduped by bytes) | **yes, one record for the whole program** | never — the value is borrowed |
+| `b"…"` | `lowerByteStringLiteral`'s owned 48-byte record over the ONE immortal `.rdata` blob (deduped by bytes) | the **payload** is; the record is per read | the record is, by the ordinary owned-temp drop |
+
+> ⚠ **THE BYTE-STRING RECORD IS NOT IMMORTAL, AND THE REASON IS A MISSING PREREQUISITE, NOT A CHOICE
+> OF MECHANISM.** An `Array` is a MUTABLE container whose own methods rewrite its record — a `push`
+> detaches the buffer by writing `buffer@0`, `capacity@16` and `length@8` — and a `.rdata` record
+> cannot be written. Two things must exist before the record can move there, and shv2 has neither:
+> (1) the guarantee that such a value is never mutated, and (2) a real COPY promotion for
+> `var b = <borrowed array>`, which today `__mm_incref`s the box — and an rdata box has no refcount
+> word to incref. Half of (1) landed with this rung (below); the rest is a rung of its own.
+
+**A `let`-bound array is not writable, and that is enforced.** `dispatchArrayMethod` refuses a
+receiver-writing method (`push`/`set`/`insert`/`append`/`reserve`/`resize`/`clear`/`pop`/`remove`) on
+an immutable receiver with **E3019**, the array twin of `parseStringAppend`'s existing String rule and
+the same diagnostic the oracle raises. Without it a top-level managed `let` would silently mutate a
+per-read copy — a wrong answer with no diagnostic. A **PARAMETER is exempt**: it is not `mutable` (it
+cannot be rebound) yet its array very much can be written, because it is a borrowed reference to the
+caller's record. That is what `VarInfo.isParameter` exists to say — `mutable` answers "may this NAME
+be rebound?", which is a different question. All four answers are the oracle's, measured one program
+at a time.
+
+**A managed `var` stays refused** (`Parser.requireStorableGlobal`, E2015): its `.data` slot would have
+to hold a POINTER to a record built before `main` runs, which is module initialization, and shv2
+deliberately has none. That guard was written for this exact day and had fired on nothing until now.
 
 ## Register allocator (Std `ValueId`s → physical GPRs)
 

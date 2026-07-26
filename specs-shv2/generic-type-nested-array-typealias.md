@@ -444,12 +444,18 @@ end 'main'
 
 ### Move out through a local bound to the opaque array field
 
-The opaque array field can be aliased to a local (`let arr = self.items`, a borrow) and moved out through the
+The opaque array field can be aliased to a local (`var arr = self.items`) and moved out through the
 local. The descriptor-need pre-scan runs before the body is parsed and cannot resolve the receiver of a
 `pop`/`remove`, so it reserves the descriptor for ANY move-out in the shared body — the owned element still
 drops through the descriptor-gated `__drop_type_param` whether the receiver is the field directly or a local
 bound to it. `drainViaLocal` pops one of two Strings through the local and drops it; the container drops the
 survivor — each freed once.
+
+⚠ The alias must be a `var`. This case was written `let arr = self.items`, which is **not legal Maxon**:
+`pop` mutates its receiver, and a mutating method on a `let` binding is E3019 in the reference compiler
+(measured on the equivalent non-generic program) — shv2 simply did not enforce the rule until the
+top-level-managed-`let` rung needed it. The property under test is unchanged: the move-out still goes
+through a LOCAL bound to the field rather than through the field directly.
 
 <!-- test: pop-via-local-binding -->
 <!-- targets: x64-windows, x64-linux -->
@@ -470,7 +476,7 @@ type Container uses Element
 	end 'push'
 
 	export function drainViaLocal()
-		let arr = self.items
+		var arr = self.items
 		let x = try arr.pop() otherwise return
 	end 'drainViaLocal'
 end 'Container'

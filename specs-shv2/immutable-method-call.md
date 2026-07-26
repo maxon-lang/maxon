@@ -12,8 +12,7 @@ Calling a mutating method on an immutable (`let`) variable is a compile-time err
 
 ## Tests
 
-<!-- disabled-test: push-on-let-array-error -->
-<!-- P1.7: Array -->
+<!-- test: push-on-let-array-error -->
 Calling `push` on a `let` array should produce a compile-time error.
 
 ```maxon
@@ -46,8 +45,7 @@ end 'main'
 error E3019: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
 ```
 
-<!-- disabled-test: set-on-let-array-error -->
-<!-- P1.7: Array -->
+<!-- test: set-on-let-array-error -->
 Calling `set` on a `let` array should produce a compile-time error.
 
 ```maxon
@@ -65,8 +63,7 @@ end 'main'
 error E3019: specs/fragments/immutable-method-call/set-on-let-array-error.test:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
 ```
 
-<!-- disabled-test: read-on-let-array-ok -->
-<!-- P1.7: Array -->
+<!-- test: read-on-let-array-ok -->
 Reading from a `let` array (non-mutating methods) should work fine.
 
 ```maxon
@@ -84,8 +81,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: push-on-var-array-ok -->
-<!-- P1.7: Array -->
+<!-- test: push-on-var-array-ok -->
 Calling `push` on a `var` array should work fine.
 
 ```maxon

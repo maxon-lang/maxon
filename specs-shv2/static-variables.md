@@ -359,7 +359,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-array-literal -->
-<!-- P1.7 Array -->
+<!-- top-level managed `var`: this is a MUTABLE managed global, refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 has none of. The immutable `let` half is built; this is its own sub-rung. -->
 ```maxon
 var items = [10, 20, 30]
 
@@ -376,7 +376,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-array-cross-function -->
-<!-- P1.7 Array -->
+<!-- top-level managed `var`: this is a MUTABLE managed global, refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 has none of. The immutable `let` half is built; this is its own sub-rung. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -404,7 +404,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-array-mutate-cross-function -->
-<!-- P1.7 Array -->
+<!-- top-level managed `var`: this is a MUTABLE managed global, refused at its declaration with a positioned E2015 (`Parser.requireStorableGlobal`). Its `.data` slot would have to hold a POINTER to a record built before `main` runs — module initialization, which shv2 has none of. The immutable `let` half is built; this is its own sub-rung. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -435,6 +435,22 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: top-level-let-string-literal -->
+```maxon
+let name = "Ada"
+
+function main() returns ExitCode
+	print(name)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Ada
 ```
 
 <!-- test: data-section-bool-1byte -->

@@ -1688,6 +1688,24 @@ let ArrayEndIndexLabel = b"endIndex"
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
 
+// ⭐ **WHICH `Array` METHODS WRITE THEIR RECEIVER** — the ONE list behind the `let`-receiver rule
+// (`requireMutableArrayReceiver`, E3019). Every one of these rewrites the record's own slots:
+// `push`/`insert`/`append`/`reserve`/`resize` can grow (`buffer@0` + `capacity@16`), `set` writes an
+// element, and `pop`/`remove`/`clear` shorten it (`length@8`).
+//
+// **MEASURED AGAINST THE RUNNABLE ORACLE, one method at a time**, over `let a = [1, 2, 3]`: these nine
+// are E3019 ("cannot pass 'a' to function that mutates parameter 'self'") and `count`/`get`/`clone`
+// are accepted. The oracle derives the same list structurally — from the by-reference `self` in the
+// stdlib `Array` signatures — which shv2 does not read, so the list is stated here and pinned by
+// `specs-shv2/arrays.md`'s `error.let-array-*` cases rather than left to be re-derived.
+//
+// ⚠ It is NOT `isArrayMoveInMutator`, and neither can be defined from the other: that one answers
+// "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
+// the ARGUMENT. This one is about the RECEIVER.
+function arrayMethodMutatesReceiver(name ByteArray) returns bool
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(ArrayInsertMethod) or name.equals(ArrayAppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
+end 'arrayMethodMutatesReceiver'
+
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
 // slice when positional), and its source span.
 //
@@ -5188,23 +5206,35 @@ export type Parser
 		let outcome = self.signatures.declaredOutcome(decl)
 		match outcome 'outcome'
 			value(_, tag) then try self.requireStorableGlobal(decl, tag: tag)
+			// A MANAGED constant (P1.7a). A `let` needs no storage and passes; a `var` is refused by the
+			// SAME guard a scalar one goes through, handed the tag its literal would have — so "which
+			// globals have `.data` storage?" stays one rule with one message.
+			managedValue(_, kind) then try self.requireStorableGlobal(decl, tag: managedConstValueTag(kind))
 			poisoned then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
 
-	// ⚠ **A TOP-LEVEL `var` MUST BE A SCALAR — there is no heap until P1.2.** Rejected AT THE
-	// DECLARATION, which is the line the user wrote and the only place the diagnostic can name it;
-	// a use site would report against code that is merely reading a name.
+	// ⚠ **A TOP-LEVEL `var` MUST BE A SCALAR — a `.data` slot holds a scalar IMAGE, not a pointer.**
+	// Rejected AT THE DECLARATION, which is the line the user wrote and the only place the diagnostic
+	// can name it; a use site would report against code that is merely reading a name.
 	//
-	// It fires on nothing today and that is deliberate rather than dead: the constant evaluator folds
-	// integers and bools only, so a `var s = "hi"` is already rejected upstream as a non-constant
-	// initializer. This is the guard for the day the evaluator LEARNS a type before the backend can
-	// store one — the first of those is P1.0d.4's float, which is a scalar and will simply pass, and
-	// the one that matters is P1.2's `String`, which is a heap pointer and must not. `globalStdType`
-	// is the same decision's other half, and it panics where this reports: a decl that reached the
-	// backend unstorable is an invariant break, a decl the USER wrote unstorable is a diagnostic.
+	// ⭐ **IT IS LIVE AS OF P1.7a, and it is the guard it was written to be.** It used to fire on
+	// nothing — the evaluator folded integers and bools only, so a `var s = "hi"` was already rejected
+	// upstream as a non-constant initializer — and was kept "for the day the evaluator LEARNS a type
+	// before the backend can store one". That day is this rung: the evaluator now folds a managed
+	// LITERAL (`raiseBindingFailure` hands its tag straight here), so `var s = "hi"` and
+	// `var b = b"ab"` are refused HERE, by this one rule, while their `let` twins pass. P1.0d.4's
+	// float went the other way and simply passed, exactly as predicted: a double is a scalar.
+	//
+	// A MANAGED `var` is the genuinely harder feature and not merely an unwritten arm: its slot would
+	// hold a POINTER to a record built before `main` runs, which is module initialization, and shv2
+	// deliberately has none (see `emitManagedConstant` for what a `let` does instead).
+	//
+	// `globalStdType` is the same decision's other half, and it panics where this reports: a decl that
+	// reached the backend unstorable is an invariant break, a decl the USER wrote unstorable is a
+	// diagnostic.
 	function requireStorableGlobal(decl TopLevelDecl, tag ValueTypeTag) throws ParseError
 		if not decl.mutable 'constantNeedsNoStorage'
 			return
@@ -5216,7 +5246,7 @@ export type Parser
 			return
 		end 'scalar'
 
-		throw ParseError.unsupported("a top-level `var` of type '{typeTagName(tag)}' (a global with a managed or non-scalar type needs the heap and the runtime that owns it — P1.2 String; only `int`/`bool`/`float` globals have storage today)", line: decl.nameLine, column: decl.nameColumn)
+		throw ParseError.unsupported("a top-level `var` of type '{typeTagName(tag)}' (a `.data` slot holds a scalar image, so a managed global's slot would have to hold a pointer to a record built before `main` runs — module initialization, which shv2 has none of; only `int`/`bool`/`float` globals have storage today, and an immutable `let` needs none)", line: decl.nameLine, column: decl.nameColumn)
 	end 'requireStorableGlobal'
 
 	// Re-raise a diagnostic the constant evaluator recorded earlier, on another file's behalf. It
@@ -6846,7 +6876,7 @@ export type Parser
 				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `namesAssignedIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`namesAssignedIn` the new write form before binding a parameter mutable.")
 			end 'writesThisScanCannotSee'
 
-			let binding = try self.scope.declareValueBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -8247,7 +8277,9 @@ export type Parser
 	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
 		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
-			found then throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			// Either kind of constant is immutable — assigning to a managed `let` is the same mistake as
+			// assigning to a scalar one, and gets the same diagnostic.
+			found to foundManaged then throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			notFound then throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -15154,12 +15186,22 @@ export type Parser
 	function parseByteStringLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.byteStringLiteral)
 		let bytes = try decodeByteStringLiteral(tok.value, tok: tok)
+		return self.emitByteStringLiteralValue(bytes, range: SourceRange.ofToken(tok))
+	end 'parseByteStringLiteral'
+
+	// Append a `byteStringLiteral` op carrying the DECODED bytes; return the owned `Array with Byte`
+	// ValueId it defines. `emitStringLiteral`'s twin, and split out for its reason: a second caller
+	// already holds decoded bytes — a use of a top-level managed constant (`emitManagedConstant`), whose
+	// bytes were decoded once by the declaration sweep. One emit site, so the value's TYPE (the concrete
+	// `Array with Byte` gid) and its OWNERSHIP (an owned temp the statement drops) cannot drift between
+	// the two spellings of the same literal.
+	function emitByteStringLiteralValue(bytes ByteArray, range SourceRange) returns ValueId
 		let giid = self.signatures.internArrayByteInstance()
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.byteStringLiteral(result, bytes: bytes), range: SourceRange.ofToken(tok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.byteStringLiteral(result, bytes: bytes), range: range)
 		self.trackOwnedTemp(result)
 		return result
-	end 'parseByteStringLiteral'
+	end 'emitByteStringLiteralValue'
 
 	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
 	// ONE `__mm_alloc`'d fused record: the 48-byte String record with its UTF-8 bytes INLINE right behind it
@@ -16454,56 +16496,98 @@ export type Parser
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = self.current()
 		if self.scope.contains(self.baseBindingName(baseTok)) 'localReceiver'
-			let binding = self.scope.getInfo(self.baseBindingName(baseTok))
-
-			// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
-			// through requireStructBase, which would reject it as not a struct. String is the one non-struct
-			// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
-			// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
-			if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
-				return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
-			end 'stringMethod'
-
-			// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
-			// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
-			// split is on the binding's genericInstance TAG being an `Array` instance — the parser's type oracle.
-			if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
-				return try self.parseArrayMethodCall(func, binding: binding, baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
-			end 'arrayMethod'
-
-			// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) is dispatched to the set runtime, like an array
-			// receiver — the split is on the binding's genericInstance TAG being a `Set` instance (P1.7b slice A).
-			if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
-				return try self.parseSetMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
-			end 'setMethod'
-
-			// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
-			// synthesized conformance impl rather than through `requireStructBase`, which would reject an
-			// `int` as not a struct. The split is on the binding's declared TYPE reduced to its conformer
-			// (`builtinConformerOfType` — the parser's type oracle again), and it must sit AFTER the String
-			// arm above: `String` is a conformer too, but a String receiver's methods are
-			// `parseStringMethodCall`'s (`s.hash()` direct dispatch is its own slice).
-			// A receiver that is NOT a builtin conformer — a struct, a generic instance, or a type with no
-			// conformance at all — falls through to the struct path below, which resolves the first two and
-			// reports the third.
-			let receiverConformer = self.builtinConformerOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
-			if isBuiltinConformer(receiverConformer) 'builtinConformer'
-				return try self.parseBuiltinConformanceMethodCall(func, binding: binding, baseTok: baseTok, conformer: receiverConformer)
-			end 'builtinConformer'
-
-			self.advance()
-			try self.consume(TokenKind.dot)
-			return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
+			return try self.dispatchMethodOnBinding(func, binding: self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok, resultUsed: resultUsed)
 		end 'localReceiver'
+
+		// ⭐ **A TOP-LEVEL MANAGED CONSTANT IS A RECEIVER (P1.7a)** — `Live.count()`, `name.byteLength()`.
+		// It is not a binding and not a capture, so without this arm the base reads as a TYPE NAME and the
+		// call is mangled to a callee `Live.count` no file declares (E3004, measured).
+		//
+		// It materializes the literal and then hands the value to the SAME `dispatchMethodOnBinding` a
+		// local receiver goes through, wearing a synthetic IMMUTABLE binding. That is not a shortcut: the
+		// dispatch already routes by TAG (String / Array / Set / conformer / struct) and already enforces
+		// the immutability rule a `let` receiver owes (`parseStringAppend`'s E3019). Re-deciding either
+		// here would be a second copy of both.
+		if self.managedConstantReceiverAt(baseTok) 'managedConstantReceiver'
+			let value = try self.topLevelBindingReference(baseTok)
+			return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: self.typeOf(value), mutable: false, boundValue: value), baseTok: baseTok, resultUsed: resultUsed)
+		end 'managedConstantReceiver'
 
 		// A CAPTURED enclosing struct is the receiver (P1.5-A2b-2): `b.doubled()` inside a closure that
 		// captures the struct `b`. `methodCallsAt` already gated this — the base is not in the closure's own
 		// scope but resolves into a capture scope — so a `notCaptured` here is a driver invariant violation.
 		match try self.captureScopeOf(baseTok) 'captured'
 			found(enclosing) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, resultUsed: resultUsed)
-			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
+			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a top-level managed constant, nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
 		end 'captured'
 	end 'parseMethodCall'
+
+	// ⭐ **ROUTE A METHOD CALL BY ITS RECEIVER'S TYPE.** The cursor sits ON the base token; every arm
+	// consumes it and the `.` itself. Shared by a LOCAL receiver and a top-level MANAGED CONSTANT one,
+	// which differ only in where the binding came from — so the two spellings cannot come to disagree
+	// about which dispatch a `String`, an `Array`, a `Set` or a conformer receiver gets.
+	function dispatchMethodOnBinding(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
+		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
+		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
+		// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
+		if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
+			return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+		end 'stringMethod'
+
+		// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
+		// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
+		// split is on the binding's genericInstance TAG being an `Array` instance — the parser's type oracle.
+		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
+			return try self.parseArrayMethodCall(func, binding: binding, baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
+		end 'arrayMethod'
+
+		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) is dispatched to the set runtime, like an array
+		// receiver — the split is on the binding's genericInstance TAG being a `Set` instance (P1.7b slice A).
+		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
+			return try self.parseSetMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+		end 'setMethod'
+
+		// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
+		// synthesized conformance impl rather than through `requireStructBase`, which would reject an
+		// `int` as not a struct. The split is on the binding's declared TYPE reduced to its conformer
+		// (`builtinConformerOfType` — the parser's type oracle again), and it must sit AFTER the String
+		// arm above: `String` is a conformer too, but a String receiver's methods are
+		// `parseStringMethodCall`'s (`s.hash()` direct dispatch is its own slice).
+		// A receiver that is NOT a builtin conformer — a struct, a generic instance, or a type with no
+		// conformance at all — falls through to the struct path below, which resolves the first two and
+		// reports the third.
+		let receiverConformer = self.builtinConformerOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
+		if isBuiltinConformer(receiverConformer) 'builtinConformer'
+			return try self.parseBuiltinConformanceMethodCall(func, binding: binding, baseTok: baseTok, conformer: receiverConformer)
+		end 'builtinConformer'
+
+		self.advance()
+		try self.consume(TokenKind.dot)
+		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
+	end 'dispatchMethodOnBinding'
+
+	// ⭐ **DOES `tok` NAME A TOP-LEVEL MANAGED CONSTANT?** (P1.7a) The ONE predicate behind both askers —
+	// `methodCallsAt` (is this token shape a method call at all?) and `parseMethodCall` (build the
+	// receiver) — for `methodCallsAt`'s own stated reason: a receiver test written twice is free to
+	// drift, and the drift is silent.
+	//
+	// ⚠ **THE `hasManagedConstant` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
+	// `methodCallsAt` runs at every dotted-call shape in the program, and `constantValueOf`'s
+	// file-scoped probe BUILDS A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). Behind
+	// this bool a program with no managed constant — which is the whole scale corpus and nearly the
+	// whole suite — pays one bool read and allocates nothing.
+	function managedConstantReceiverAt(tok Token) returns bool
+		if not self.signatures.hasManagedConstant() 'noneInProgram'
+			return false
+		end 'noneInProgram'
+
+		return match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
+			foundManaged gives true
+			found gives false
+			notFound gives false
+		end 'constant'
+	end 'managedConstantReceiverAt'
 
 	// Dispatch a method (or a function-typed FIELD load) on an already-resolved struct base — the shared tail
 	// of a LOCAL receiver and a CAPTURED one (P1.5-A2b-2). The cursor sits on the member name.
@@ -17201,8 +17285,25 @@ export type Parser
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed)
+		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableArrayReceiverName(binding, baseTok: baseTok))
 	end 'parseArrayMethodCall'
+
+	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
+	// written through.** The ONE place the `let` rule and the parameter exception meet.
+	//
+	// A `var` may be written through, and so may a PARAMETER — which is NOT `mutable` (a parameter
+	// cannot be rebound, `ParametersAreMutable`) yet whose array very much can be written, because the
+	// parameter is a borrowed reference to the caller's record. `let a = [1,2,3]` may not, however it
+	// was bound — a literal, a `create()`, an alias of a field or of another local.
+	//
+	// **All four answers are the runnable oracle's, measured one program at a time**, and the parameter
+	// case is not a nicety: without it every array-mutating helper in the corpus is rejected.
+	function immutableArrayReceiverName(binding VarInfo, baseTok Token) returns ByteArray
+		if binding.mutable or binding.isParameter 'writable'
+			return EmptySourceText
+		end 'writable'
+		return baseTok.value
+	end 'immutableArrayReceiverName'
 
 	// A method on an array-typed VALUE that is not a plain local binding — a fresh literal (`[10,20,30].get(0)`)
 	// or any array-valued expression, reached from the postfix loop and the `try` target. The cursor sits on
@@ -17210,7 +17311,10 @@ export type Parser
 	// drops at statement end).
 	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
-		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed)
+		// A receiver that is not a binding is WRITABLE: it is a fresh literal, a call result or a field
+		// read, and no `let` promises anything about it. There is also no name a rejection could blame,
+		// which is exactly what the empty answer says.
+		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: EmptySourceText)
 	end 'parseArrayMethodOnValue'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
@@ -17407,9 +17511,16 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
-	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
+
+		// ⭐ **A `let`-BOUND ARRAY IS NOT WRITABLE** — checked HERE, once, ahead of every arm, because the
+		// question is about the METHOD NAME and this is where the name is first known. It is the array
+		// twin of `parseStringAppend`'s immutable-receiver guard, raising the same E3019 with the same
+		// framing, and it is what makes the top-level managed `let` a CONSTANT rather than a value that
+		// silently mutates a copy at each read (`emitManagedConstant`).
+		try self.requireMutableArrayReceiver(func, immutableReceiverName: immutableReceiverName, methodTok: methodTok)
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
@@ -17496,6 +17607,30 @@ export type Parser
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
+
+	// Refuse a RECEIVER-WRITING `Array` method on an immutable receiver (E3019). A read-only method on
+	// either kind of receiver, and any method on a writable one, pass straight through.
+	//
+	// ⚠ **`immutableReceiverName` IS ONE `ByteArray`, NOT A UNION, AND THAT IS MEASURED.** The obvious
+	// shape is `mutable | immutable(name)` — and it was written that way first — but this runs at every
+	// `Array` method call in the program, and Maxon heap-BOXES a union case, INCLUDING a payload-free
+	// one. `scale-test` billed it at exactly one box per array-method call site
+	// (+120/+240/+480/… across the doubling ladder). This is the same reading, and the same fix, that
+	// `BuiltinConformer`'s header records for the per-method-call classifier one rung earlier.
+	//
+	// **EMPTY IS NOT A SENTINEL, it is the literal truth**: a writable receiver has no immutable binding
+	// for a diagnostic to blame — a `var`, a parameter and a temporary all have nothing to name. The
+	// diagnostic REQUIRES a name, so "immutable" and "nameable" are the same state by construction.
+	function requireMutableArrayReceiver(func IrFunction, immutableReceiverName ByteArray, methodTok Token) throws ParseError
+		if immutableReceiverName.isEmpty() 'writableReceiver'
+			return
+		end 'writableReceiver'
+		if not arrayMethodMutatesReceiver(methodTok.value) 'readOnlyMethod'
+			return
+		end 'readOnlyMethod'
+
+		throw ParseError.immutableMutatingCall(String.from(immutableReceiverName), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
+	end 'requireMutableArrayReceiver'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`
@@ -18873,11 +19008,40 @@ export type Parser
 	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			found(payload, tag) then return self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok))
+			foundManaged(bytes, kind) then return self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok))
 			notFound then break 'constant'
 		end 'constant'
 
 		return try self.topLevelGlobalRead(tok)
 	end 'topLevelBindingReference'
+
+	// ⭐ **A USE OF A TOP-LEVEL MANAGED CONSTANT MATERIALIZES ITS LITERAL** (P1.7a) — the managed twin of
+	// the `literal`-op inline directly above, and the same storage model: the declaration reserves
+	// nothing, and the READ is where the value comes from.
+	//
+	// It emits the very ops the literal itself emits, so a managed constant's storage class is the one
+	// its literal already has and shv2 grows NO second immortality mechanism (the oracle's
+	// `MmImmortalRefcount` sentinel is deliberately not imported — see `ARCHITECTURE.md`):
+	//
+	//   • a **String** literal is a wholly IMMORTAL `.rdata` record (`lowerStringLiteral`), and
+	//     `registerRdataConstant` dedupes it by bytes — so every read of `let name = "Ada"` in the whole
+	//     program shares ONE record, materialized once, never allocated and never freed. This is exactly
+	//     "materialized once, shared by every read, immortal", reached with no new mechanism at all.
+	//   • a **byte string** literal is an owned `Array with Byte` RECORD over an immortal `.rdata` BLOB
+	//     (`lowerByteStringLiteral`). The payload is still materialized once and shared — the blob dedupes
+	//     by bytes — but the 48-byte record is heap and per-read, because an Array is a MUTABLE container
+	//     whose record its own methods rewrite (a `push` detaches the buffer by writing `buffer@0`,
+	//     `capacity@16` and `length@8`), and a `.rdata` record cannot be written. Making the RECORD
+	//     immortal too needs two things shv2 does not have — enforcement that a `let`-bound array is never
+	//     mutated, and a real COPY promotion for `var b = <borrowed array>` (which today increfs the box,
+	//     and an rdata box has no refcount word to incref). Both are named in OPEN.md; neither is invented
+	//     here, because a SECOND immortality mechanism is precisely what this design exists to avoid.
+	function emitManagedConstant(bytes ByteArray, kind ManagedConstKind, range SourceRange) returns ValueId
+		return match kind 'k'
+			string gives self.emitStringLiteral(bytes, range: range)
+			byteArray gives self.emitByteStringLiteralValue(bytes, range: range)
+		end 'k'
+	end 'emitManagedConstant'
 
 	// ⭐ **A USE OF A TOP-LEVEL CONSTANT INLINES ITS VALUE, AND THAT IS THE WHOLE STORAGE MODEL.**
 	//
@@ -19301,13 +19465,76 @@ export type Parser
 
 	// Fold one declaration's initializer to its value. The cursor is seated on the recorded token
 	// range, and the walk must consume ALL of it — see `requireInitializerConsumed`.
-	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
+	//
+	// ⭐ **A MANAGED LITERAL IS THE WHOLE INITIALIZER OR IT IS NOT A CONSTANT AT ALL** (P1.7a). The
+	// split is made HERE, once, on the token range — never inside the fold — and that is what keeps
+	// this ONE mechanism rather than v1's four. v1 dispatches a top-level initializer into four
+	// structurally different implementations chosen by the RHS's syntax (`Parser.maxon:3251-3347`): a
+	// const-folded string rematerialized at every read, an eagerly-built array in a synthesized
+	// `__module_init_<n>`, the same again for `T.from`, and a LAZILY-built struct behind a first-read
+	// guard. Here there is one arena, one memoized DFS, one outcome union and one use-site inline; a
+	// managed constant differs from a scalar one in exactly what its VALUE is (bytes, not a number).
+	//
+	// The runnable oracle makes the same split at the same place and for the same reason — its
+	// `IsComplexInitializer` (2-Parser.cs:2101-2143) routes a bare managed literal away from the scalar
+	// evaluator before a single operator is read.
+	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		self.pos = decl.initStart
+
+		// ⚠ **ONE TOKEN IS THE WHOLE MANAGED TEST, and that is what keeps an INTERPOLATION out.** The
+		// lexer splits `"a{x}b"` into `stringLiteral("a") stringInterpStart … stringInterpEnd
+		// stringLiteral("b")`, so an interpolated string is never one token: it falls to the scalar walk,
+		// which rejects it — correctly, since its value is a heap String built from a runtime expression
+		// and no constant at all. The same test turns away `"a" as T` and every other trailing form, each
+		// of which would need a rule this slice does not have.
+		//
+		// The two arms are written out HERE rather than behind a probe that answers "which kind?",
+		// because that probe's answer is a union and this walk runs once per top-level binding in the
+		// program: it would be a heap box per declaration, allocated only to be matched on one line
+		// later. The token test IS the kind test, read once.
+		if decl.initEnd == decl.initStart + 1 'singleTokenInitializer'
+			if self.at(TokenKind.stringLiteral) 'stringLiteral'
+				return ConstInitializerValue.managed(try self.decodeConstStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.string)
+			end 'stringLiteral'
+			if self.at(TokenKind.byteStringLiteral) 'byteStringLiteral'
+				return ConstInitializerValue.managed(try self.decodeConstByteStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.byteArray)
+			end 'byteStringLiteral'
+		end 'singleTokenInitializer'
+
 		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
 		try self.requireInitializerConsumed(decl)
 
-		return value
+		return ConstInitializerValue.scalar(value)
 	end 'evalConstInitializer'
+
+	// Take the managed-literal token the caller has just recognized and step past it. It cannot be
+	// `consumeConst(kind)`: the caller has already matched the kind, and this is used in ARGUMENT
+	// position, where a two-statement read-then-advance cannot be written inline.
+	function consumeManagedLiteral() returns Token
+		let tok = self.current()
+		self.advance()
+		return tok
+	end 'consumeManagedLiteral'
+
+	// ⭐ The two decoders below are the ones the EXPRESSION path uses (`decodeEscapes`,
+	// `decodeByteStringLiteral`), so a literal means the same thing in a `let` as it does in a function
+	// body — the property the scalar evaluator's header states for numbers, applied to bytes. Each is
+	// wrapped for the evaluator's error type, for `consumeConst`'s reason: a `ParseError` raised here is
+	// a defect in THIS initializer and must be recorded on its declaration, not thrown at whatever file
+	// happens to be parsing.
+
+	function decodeConstStringLiteral(tok Token) returns ByteArray throws ConstEvalError
+		match decodeEscapes(tok.value) 'decoded'
+			bytes(buf) then return buf
+			unknownEscape(text) then throw ConstEvalError.defective(ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column))
+		end 'decoded'
+	end 'decodeConstStringLiteral'
+
+	function decodeConstByteStringLiteral(tok Token) returns ByteArray throws ConstEvalError
+		return try decodeByteStringLiteral(tok.value, tok: tok) otherwise (err) 'rejected'
+			throw ConstEvalError.defective(err)
+		end 'rejected'
+	end 'decodeConstByteStringLiteral'
 
 	// ⚠ A PARTLY-FOLDED INITIALIZER IS AN ERROR, NOT A TRUNCATION. The walk stops at the first token
 	// it cannot fold; without this check the rest of the line is silently DISCARDED and the constant
@@ -21225,10 +21452,13 @@ export type Parser
 		if self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notADottedCall'
 			return false
 		end 'notADottedCall'
-		// A LOCAL receiver, or a CAPTURED enclosing one (`b.doubled()` inside a closure — P1.5-A2b-2). Either
-		// is a VALUE the method dispatches on, which is what separates it from a static call on a TYPE name.
+		// A LOCAL receiver, a CAPTURED enclosing one (`b.doubled()` inside a closure — P1.5-A2b-2), or a
+		// top-level MANAGED CONSTANT (`Live.count()` — P1.7a). Each is a VALUE the method dispatches on,
+		// which is what separates it from a static call on a TYPE name. The managed constant is asked LAST
+		// because it is the only one of the three that can allocate (see `managedConstantReceiverAt`), and
+		// a local or captured base has already answered by then.
 		let baseTok = self.tokenAt(index)
-		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
+		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) or self.managedConstantReceiverAt(baseTok)
 	end 'methodCallsAt'
 
 	// **The token shape of a `__Builtins` INTRINSIC CALL STATEMENT** — `__Builtins . <member> (`, the one
