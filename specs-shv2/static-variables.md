@@ -591,11 +591,22 @@ error E2004: <fragment>:2:9: Undefined constant 'A'
 ```
 
 <!-- test: error.top-level-let-array-var-alias -->
-A `let` array's record cannot be laundered into a mutable ALIAS. A borrowed managed aggregate bound to a
-`var` is promoted to owned by an INCREF of the same box — reference semantics, deliberately, because the
-alias is observable — so without this refusal `var b = A` then `b.push(9)` would grow `A` with E2013 and
-E3019 both intact and nothing to report it. Refused where the SOURCE is immutable, and only there: the
-same binding off a `var` global shares, exactly as it does in the reference compiler.
+A `let` array's record cannot be laundered into a mutable ALIAS **within the function that reads it**. A
+borrowed managed aggregate bound to a `var` is promoted to owned by an INCREF of the same box — reference
+semantics, deliberately, because the alias is observable — so without this refusal `var b = A` then
+`b.push(9)` would grow `A` with E2013 and E3019 both intact and nothing to report it. Refused where the
+SOURCE is immutable, and only there: the same binding off a `var` global shares, exactly as it does in the
+reference compiler.
+
+⚠ **THE GUARD IS INTRA-FUNCTION, AND THAT BOUND IS EXACT.** It is a mark on the VALUE the read produced,
+so it reaches every use of that value in that function — the direct binding, a reassignment, and a
+ternary/`match` merge that joins it (all four are pinned below). It does NOT cross a CALL: `g(A)` where
+`g(xs …)` does `var b = xs` still grows `A` (measured: 3), because the callee's parameter is a fresh value
+in a fresh SSA space and whether it may alias an immutable global is a property of every call site, not of
+the callee. Closing that needs the same whole-program call-graph fixpoint the transitive-consume case is
+waiting on, so it is part of the **mutation enforcement** prerequisite the immortality residual already
+names, not a hole this refusal was meant to cover. The reference compiler does not refuse the call form
+either — it shares and then leaks (exit 101) — so shv2 is no looser here, only not yet stricter.
 ```maxon
 let A = [1, 2]
 
@@ -626,9 +637,72 @@ end 'main'
 error E2015: <fragment>:6:2: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
 ```
 
+<!-- test: error.top-level-let-array-ternary-alias -->
+And through a value MERGE, which is the door that costs one extra keyword. The mark that refuses the two
+above rides the VALUE, and a merge mints a NEW value — so the phi has to inherit it, or `var pick = A if c
+else M` launders exactly what `var pick = A` is refused for. Measured before the phi inherited it: this
+program compiled and returned 3.
+```maxon
+let A = [1, 2]
+var M = [5, 5]
+
+function main() returns ExitCode
+	var pick = A if M.count() == 2 else M
+	pick.push(9)
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```
+
+<!-- test: error.top-level-let-array-match-arm-alias -->
+The same merge, through the `match`-expression door rather than the ternary — one `finalizeMatchMerge`
+serves both, so a phi that inherits the mark for one inherits it for the other by construction.
+```maxon
+let A = [1, 2]
+var M = [5, 5]
+
+enum Which
+	fixed
+	live
+end 'Which'
+
+function main() returns ExitCode
+	let w = Which.fixed
+	var pick = match w 'w'
+		fixed gives A
+		live gives M
+	end 'w'
+	pick.push(9)
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+```
+
+<!-- test: top-level-array-merge-of-mutable-globals-shares -->
+The merge mark is narrow to the same thing the direct one is: a merge of two MUTABLE globals still binds
+and still SHARES, so the phi rule refuses laundering rather than refusing merges. `P` grows, `Q` does not.
+```maxon
+var P = [1, 2]
+var Q = [5, 5]
+
+function main() returns ExitCode
+	var pick = P if Q.count() == 2 else Q
+	pick.push(9)
+	return P.count() + Q.count()
+end 'main'
+```
+```exitcode
+5
+```
+
 <!-- test: top-level-let-array-let-alias -->
 A `let` binding of a `let` array is fine and stays fine: it can only read, so there is nothing to
-launder. This is the remedy the refusal above names, so it has to work.
+launder. This is the remedy the refusal above names, so it has to work. A `let` binding of a MERGE that
+includes one is legal for the same reason — it can only read.
 ```maxon
 let A = [1, 2]
 

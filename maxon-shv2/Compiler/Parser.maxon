@@ -2565,6 +2565,19 @@ end 'MergeConstruct'
 // they sit in different files), so a future change to the mapping that touched only one would silently
 // diverge the two constructs' diagnostics; keeping it here is what forecloses that. `expectedDisplay` is
 // the FIRST branch's already-formatted type, `gotDisplay` the mismatching one.
+// ⭐ **THE ONE E2013 "you may not write this name" DIAGNOSTIC**, built from the token that names the
+// target. THREE statements raise it and they know three different things — a local binding declared `let`
+// (`requireMutableBinding`), a top-level binding that has a slot and still refuses the write
+// (`storeToGlobal`, P1.7 slice 2b), and a name that resolved to an INLINED top-level constant
+// (`rejectNonGlobalAssignment`) — but they are one RULE stated once, and nothing else makes the three agree
+// on the payload or the anchor. A fourth site, or a future change to what E2013 says, has one place to go.
+//
+// It takes the TOKEN, not a name and a position: the three sites all anchor on the token that spells the
+// target, and passing the pieces separately is what lets one of them anchor somewhere else by accident.
+function assignToImmutableError(nameTok Token) returns ParseError
+	return ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+end 'assignToImmutableError'
+
 export function valueMergeMismatchError(isTernary bool, expectedDisplay String, gotDisplay String, line LineNumber, column ColumnNumber) returns ParseError
 	if isTernary 'ternary'
 		return ParseError.ternaryValueTypeMismatch(expectedDisplay, falseType: gotDisplay, line: line, column: column)
@@ -8042,7 +8055,7 @@ export type Parser
 	// declared name as undefined.
 	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, mutable bool) throws ParseError
 		if not mutable 'immutableGlobal'
-			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			throw assignToImmutableError(nameTok)
 		end 'immutableGlobal'
 
 		try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
@@ -8100,7 +8113,7 @@ export type Parser
 	// and reads `VarInfo.Mutable` in three unrelated places.
 	function requireMutableBinding(binding VarInfo, nameTok Token) throws ParseError
 		if not binding.mutable 'immutable'
-			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			throw assignToImmutableError(nameTok)
 		end 'immutable'
 	end 'requireMutableBinding'
 
@@ -8403,7 +8416,7 @@ export type Parser
 		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
 			// Either kind of constant is immutable — assigning to a managed `let` is the same mistake as
 			// assigning to a scalar one, and gets the same diagnostic.
-			found to foundManaged then throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			found to foundManaged then throw assignToImmutableError(nameTok)
 			notFound then throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -10322,7 +10335,17 @@ export type Parser
 
 		if self.valueIsNonTextAggregate(value) 'aggregate'
 			// The one asker of `immutableGlobalReads`, and the one place the answer changes anything: a
-			// borrowed managed aggregate about to become an owned mutable binding.
+			// borrowed managed aggregate about to become an owned mutable binding. The mark reaches every use
+			// of the read in THIS function — the direct binding, a reassignment, and a ternary/`match` merge
+			// that joins it (`propagateImmutableGlobalReadToPhi`).
+			//
+			// ⚠ **IT STOPS AT A CALL, and that bound is stated rather than hoped for.** `g(A)` whose callee
+			// binds its parameter to a `var` still aliases: the parameter is a fresh value in a fresh SSA
+			// space, and whether it may hold an immutable global's record is a property of every CALL SITE,
+			// not of the callee — so the answer is a whole-program fixpoint, the same one the transitive
+			// -consume case waits on, not something a per-function value mark can ever carry. Recorded in
+			// `specs-shv2/static-variables.md` as part of the mutation-enforcement prerequisite, so the gap
+			// is documented where a reader of the rule will look rather than discovered by a user.
 			if self.immutableGlobalReads.contains(value) 'immutableSource'
 				throw ParseError.unsupported("binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`", line: range.line, column: range.column)
 			end 'immutableSource'
@@ -12004,6 +12027,21 @@ export type Parser
 			if resultOwned 'ownedResultPhi'
 				self.trackOwnedTemp(phiId)
 			end 'ownedResultPhi'
+
+			// ⭐⭐ **AN IMMUTABLE-GLOBAL READ SURVIVES THE MERGE (P1.7 slice 2b).** The mark that refuses
+			// `var b = <a `let` array>` rides the VALUE — deliberately, so it needs no second encoding of the
+			// name-resolution order — and a merge MINTS A NEW VALUE, so without this the mark simply stops at
+			// the join and the refusal is bypassed by writing the same thing one keyword longer:
+			// `var pick = A if c else M`, or a `match … gives A` arm, then `pick.push(9)` grew a `let` array
+			// with E2013, E3019 and the direct E2015 all intact (MEASURED at 3 where 2 is correct, through the
+			// ternary AND the match-expression door, including the degenerate `A if c else A`).
+			//
+			// ANY marked arm marks the phi: the phi is one value standing for every arm's, so it is laundered
+			// if even one path can reach it holding an immutable global's record. That is the conservative
+			// direction, and it is the only sound one here — the alternative refuses nothing on the path that
+			// actually aliases.
+			self.propagateImmutableGlobalReadToPhi(phiId, gives: finalGives)
+
 			result = MatchGiveValue.value(phiId)
 		end 'resultPhi'
 
@@ -12173,6 +12211,25 @@ export type Parser
 	// The per-arm give value the merge should use — after any promotion — is collected into `finalGives`
 	// (one entry per reaching arm, in order) rather than written back onto the `MatchArmExit`, so nothing
 	// here mutates the arm records the caller still reads. `finalGives` is empty for a statement match.
+	// Carry the immutable-global-read mark from a merge's arms onto its result phi (P1.7 slice 2b) — see the
+	// call site in `finalizeMatchMerge` for why the phi must inherit it at all.
+	//
+	// It reads the FINAL gives (post-`resolveGivesOwnership`), which is the set of values the phi genuinely
+	// joins. On today's rules that is the same set as the raw gives whenever a mark can be present at all: a
+	// marked value is a borrowed non-text AGGREGATE (only an ARRAY binding is both stored and immutable — a
+	// `let` String has no slot to read), and `promoteBorrowedGive` REFUSES a borrowed aggregate rather than
+	// promoting one, so an owned phi cannot have a marked arm. Reading the finals anyway keeps this true if
+	// that ever gains a real aggregate copy: the copy's fresh record is what the phi would then hold, and a
+	// fresh record is correctly unmarked.
+	function propagateImmutableGlobalReadToPhi(phi ValueId, gives ValueIdArray)
+		for give in gives 'eachGive'
+			if self.immutableGlobalReads.contains(give) 'markedArm'
+				self.markImmutableGlobalRead(phi)
+				return
+			end 'markedArm'
+		end 'eachGive'
+	end 'propagateImmutableGlobalReadToPhi'
+
 	function resolveGivesOwnership(reachingArms MatchArmExitArray, isExpression bool, matchTok Token, finalGives ValueIdArray) returns bool throws ParseError
 		if not isExpression 'statementMatch'
 			return false
@@ -19434,7 +19491,7 @@ export type Parser
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
 			// A read itself does not care whether the slot may be WRITTEN — it borrows the occupant either
 			// way. What the MUTABILITY decides is whether the borrowed value may later become a mutable
-			// ALIAS, which is `markImmutableGlobalRead`'s business (P1.7 slice 2b).
+			// ALIAS, which is `recordGlobalReadValue`'s business (P1.7 slice 2b).
 			found(label, valueType, mutable) then return self.recordGlobalReadValue(self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok)), mutable: mutable)
 			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
@@ -19449,12 +19506,24 @@ export type Parser
 			return value
 		end 'writableSlot'
 
+		self.markImmutableGlobalRead(value)
+		return value
+	end 'recordGlobalReadValue'
+
+	// ⭐⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
+	// PROPAGATES one both come through here (P1.7 slice 2b), because the copy-on-write off the shared empty
+	// set is the half of this that is dangerous to write twice: a second insert site that skipped the
+	// identity test would insert into `sharedEmptyImmutableGlobalReads` itself, and that value is MODULE
+	// level and shared across the per-file parse fan-out — every other function in every other file would
+	// then see a mark naming an unrelated value in its own SSA space, and a program would be refused for a
+	// binding it never wrote. One home makes that unwritable rather than merely unwritten.
+	function markImmutableGlobalRead(value ValueId)
 		if self.immutableGlobalReads is sharedEmptyImmutableGlobalReads 'stillShared'
 			self.immutableGlobalReads = ImmutableGlobalReadSet.create()
 		end 'stillShared'
+
 		self.immutableGlobalReads.insert(value)
-		return value
-	end 'recordGlobalReadValue'
+	end 'markImmutableGlobalRead'
 
 	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
 	// falls to after it is not a local, a self-field, a top-level constant or a `var`. It is what makes

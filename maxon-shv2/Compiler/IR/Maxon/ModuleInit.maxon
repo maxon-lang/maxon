@@ -115,7 +115,7 @@ function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns V
 	return match global.initializer 'initializer'
 		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: global.valueType, range: global.range)
 		byteStringRecord(bytes) gives ownedByteStringRecord(fn, bytes: bytes, valueType: global.valueType, range: global.range)
-		arrayRecord(elements, elementSize, elementDestroy) gives builtArrayRecord(fn, global: global, elements: elements, elementSize: elementSize, elementDestroy: elementDestroy)
+		arrayRecord(elements, elementSize, elementDestroy) gives builtArrayRecord(fn, elements: elements, elementSize: elementSize, elementDestroy: elementDestroy, valueType: global.valueType, range: global.range)
 	end 'initializer'
 end 'initialRecordOf'
 
@@ -149,14 +149,18 @@ end 'ownedByteStringRecord'
 // where the instance registry lives (`ProgramSignatures.arrayRecordInitializer`), off the very instance the
 // global's slot is typed by — so the strides this record is born with and the type every use loads through
 // cannot disagree, and the element destructor equals the one a body's literal of the same elements stamps.
-function builtArrayRecord(fn SynthesizedFunction, global ManagedGlobal, elements ConstArrayElementArray, elementSize ByteOffset, elementDestroy ArrayElementDestroy) returns ValueId
+//
+// It takes the type and range rather than the `ManagedGlobal` for its two siblings' reason, and now the
+// three arms read alike: nothing here is a fact about a GLOBAL, and a builder that cannot see one cannot
+// come to read a second field off it that the other two arms would not have.
+function builtArrayRecord(fn SynthesizedFunction, elements ConstArrayElementArray, elementSize ByteOffset, elementDestroy ArrayElementDestroy, valueType MaxonType, range SourceRange) returns ValueId
 	var args = ValueIdArray.create()
-	args.push(fn.emitIntegerLiteral(elementSize as ParsedInt, range: global.range))
-	args.push(elementDestroyValue(fn, destroy: elementDestroy, range: global.range))
-	let record = fn.emitRuntimeCall(ArrCreateName, args: args, resultTag: maxonTypeTag(global.valueType), resultNameId: typeNameIdOf(global.valueType), range: global.range)
+	args.push(fn.emitIntegerLiteral(elementSize as ParsedInt, range: range))
+	args.push(elementDestroyValue(fn, destroy: elementDestroy, range: range))
+	let record = fn.emitRuntimeCall(ArrCreateName, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 
 	for element in elements 'eachElement'
-		_ = fn.emitRuntimeCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: global.range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
+		_ = fn.emitRuntimeCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'eachElement'
 
 	return record
