@@ -1,11 +1,11 @@
 /// Compiler internals: platform-neutral runtime helpers that need raw access
 /// to Std-level system ops. Only this file is allowed to invoke `__Internals.*`
 /// intrinsics — the lowering pass rejects calls from any other source file.
-/// 
+///
 /// Functions in here participate in the full stdlib optimization pipeline
 /// (canonicalize, cse, licm, dce, Stage A const hoist, inliner) — that's why
 /// they live in stdlib rather than runtime.std (which only gets mem2reg).
-/// 
+///
 /// @category Compiler-internal
 // Raw machine word — covers pointers, sizes, byte values, refcounts, and
 // any other i64-sized scalar that flows through the runtime intrinsics.
@@ -13,6 +13,7 @@
 // is intentional here so signed-arithmetic on byte offsets, atomic xadd
 // with negative deltas, and pointer values all flow through one type.
 typealias MachineWord = int(i64.min to i64.max)
+
 // A machine word proven non-zero: the divisor type for `/`/`mod`. Integer division is fallible (a
 // zero divisor throws), so a structurally-non-zero-but-0-inclusive divisor is cast to this at the
 // divide — a bare divide, no check, and portable across compilers that do not model a throwing `/`.

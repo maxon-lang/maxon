@@ -53,9 +53,9 @@ function tinyTask() returns Integer
 end 'tinyTask'
 
 function main() returns ExitCode
-	let ps = async spinTask()   // spawned FIRST, so it is the local queue's head — the entry a worker steals
-	let t1 = async tinyTask()   // displaces spinTask into the local queue
-	let t2 = async tinyTask()   // displaces tinyTask too, so the local queue reaches the stealable length
+	let ps = async spinTask()  // spawned FIRST, so it is the local queue's head — the entry a worker steals
+	let t1 = async tinyTask()  // displaces spinTask into the local queue
+	let t2 = async tinyTask()  // displaces tinyTask too, so the local queue reaches the stealable length
 
 	// Busy-wait WITHOUT touching the scheduler, so the worker gets the steal and main runs nothing.
 	var spin = 0
@@ -63,7 +63,7 @@ function main() returns ExitCode
 		spin = spin + 1
 	end 'wait'
 
-	let rs = await ps           // breakpoint here: spinTask is on-cpu on the worker processor
+	let rs = await ps  // breakpoint here: spinTask is on-cpu on the worker processor
 	let r1 = await t1
 	let r2 = await t2
 	return rs + r1 + r2

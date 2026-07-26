@@ -1,0 +1,35 @@
+// Test: builtins-type.bits-to-float
+function main() returns ExitCode
+	let value = __Builtins.bitsToFloat(4607182418800017408)
+	// IEEE 754: 0x3FF0000000000000 = 4607182418800017408 is exactly 1.0.
+	// A numeric conversion would instead yield ~4.6e18, so this distinguishes
+	// a bitcast from a widening int-to-float conversion.
+	if value == 1.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #4607182418800017408
+    arm64.fmov d0, x0
+    arm64.fldr d1, [__float_1]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cmp x1, #0
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.ret
+  }
+}
+---

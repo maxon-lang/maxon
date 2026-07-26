@@ -393,6 +393,7 @@ export let GtPromiseDropName = b"__gt_promise_drop"
 // scheduler internals it and the await drivers share.
 export let GtSleepName = b"__gt_sleep"
 let GtDriveUntilName = b"__gt_drive_until"
+
 // ⭐ **EXPORTED BECAUSE THE FRONT END TARGETS IT DIRECTLY** — `__Builtins.currentTimeNanos()` and
 // `currentTimeMs()` lower to a call to THIS function rather than to a monotonic clock of their own
 // (`Parser.parseCallNamed`'s `__Builtins` table). That is the point rather than a convenience: the
@@ -519,6 +520,7 @@ let CriticalSectionSlotBytes = 8
 // The `.data` slab-region size the read buffer / scratch structs are `__slab_alloc`'d per read (see `__gt_io_read`).
 // A read buffer big enough for one line of child stdout; the probe reads `cmd /c echo hello` (~7 bytes).
 let IoReadBufferBytes = 4096
+
 // SECURITY_ATTRIBUTES: nLength=24 @0, lpSecurityDescriptor=0 @8, bInheritHandle=1 @16 — the inheritable SA the
 // child WRITE end (CreateFileW) is opened with, so CreateProcessA(bInheritHandles=TRUE) passes it to the child.
 let SecurityAttributesSize = 24
@@ -526,6 +528,7 @@ let SecurityAttributesNLengthOffset = 0
 let SecurityAttributesLpSdOffset = 8
 let SecurityAttributesBInheritOffset = 16
 let SecurityAttributesInheritable = 1
+
 // STARTUPINFOA fields the read builtin sets so the child's stdout is the pipe write end. `cb`=0x68, `dwFlags`
 // STARTF_USESTDHANDLES (0x100) @0x3C, hStdInput @0x50, hStdOutput @0x58, hStdError @0x60. Every other field 0.
 let StartfUseStdHandles = 0x100
@@ -533,10 +536,12 @@ let StartupInfoDwFlagsOffset = 0x3C
 let StartupInfoHStdInputOffset = 0x50
 let StartupInfoHStdOutputOffset = 0x58
 let StartupInfoHStdErrorOffset = 0x60
+
 // ReadFile / GetLastError classification: ERROR_IO_PENDING (997) → the read yields; ERROR_BROKEN_PIPE (109) →
 // clean EOF (0 bytes). Any other GetLastError value is treated as EOF/0 for the slice-1a probe.
 let ErrorIoPending = 997
 let ErrorBrokenPipe = 109
+
 // The wide pipe-name buffer: prefix `\\.\pipe\mx` (11 wchars) + a 16-wchar hex uniquifier + NUL, in a `__slab_alloc`
 // buffer. `PipeNamePrefixWchars` counts the prefix wide chars; `PipeNameHexDigits` the uniquifier digits (a 64-bit
 // value); `WideCharBytes` is 2 (UTF-16). The uniquifier packs GetCurrentProcessId in the high 32 bits and a
@@ -547,7 +552,9 @@ let ErrorBrokenPipe = 109
 // monotonic counter (within-process) in the low 32 bits, so FILE_FLAG_FIRST_PIPE_INSTANCE never collides.
 let PidShiftBits = 32
 let PipeSeqMask = 0xFFFFFFFF
+
 typealias PipeWcharIndex = int(0 to 63)
+
 let PipeNamePrefixWchars = 11
 let PipeNameHexDigits = 16
 let WideCharBytes = 2
@@ -559,6 +566,7 @@ let HexAlphaThreshold = 10 as ParsedInt
 let NibbleBits = 4
 let TopNibbleShift = 60  // (PipeNameHexDigits - 1) * NibbleBits — the highest nibble of a 64-bit value
 let NibbleMask = 0xF
+
 // The global pipe-name uniquifier counter's `.data` slot (main-thread-only increment, single-M).
 let IoPipeSeqLabel = b"__io_pipe_seq"
 
@@ -1462,6 +1470,7 @@ function emitIoEventWait(module StdModule, block IrBlock, ids ValueMinter, timeo
 	let waitResult = ids.mint()
 	module.appendOp(block, op: StdOp.osWaitHandle(waitResult, handleId: eventHandle, timeoutMsId: timeoutMs))
 end 'emitIoEventWait'
+
 function emitProcWait(module StdModule, block IrBlock, ids ValueMinter, pc ValueId, timeoutMs ValueId)
 	let handlesBaseAddr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
@@ -2006,7 +2015,6 @@ function emitGtIoCancelArm(module StdModule, func IrFunction, ids ValueMinter, s
 	module.appendOp(ioPendingDec, op: StdOp.storeIndirect(pendingAddr, offset: 0, valueId: pendingLowered, valueType: StdType.i64))
 	module.setTerminator(ioPendingDec, op: StdOp.branch(cont.id))
 end 'emitGtIoCancelArm'
-
 
 // Splice `gt` out of the FIFO run queue (head/tail linked through `GtOffNext`), then branch to `cont`. Used
 // by `__gt_promise_drop`'s ready arm. Mirrors `__gt_enqueue`/`__gt_dequeue`'s head/tail/next discipline: if
@@ -2974,7 +2982,6 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	storeArm.branchEdges.push(BranchEdge.create(hexHdr.id, argIds: argsOf(iNext)))
 end 'buildPipeName'
 
-
 // ⭐ `__gt_io_read(strPtr) -> bytesRead` — THE YIELDING OVERLAPPED PIPE READ (P1.5 slice 1a-ii, the `spawnReadLine`
 // probe). Spawns the Windows child named by the command String with its stdout redirected to a fresh overlapped pipe,
 // issues an overlapped ReadFile that YIELDS the green thread (via the IOCP completion thread) when the read is pending,
@@ -3154,6 +3161,7 @@ end 'buildGtIoRead'
 export let SubpTableLabel = b"__subp_table"
 let SubpMaxHandles = 64
 let SubpSlotBytes = 136
+
 // Slot fields (i64). The two stream sub-blocks are identical 5-word layouts (readEnd/bufPtr/bufCap/bufLen/eof), so
 // the reader takes a stream-base offset and indexes within. The persistent buffers (bufPtr/bytesOut/writeBuf)
 // survive release for reuse; the OS handles are cleared at release.
@@ -3184,6 +3192,7 @@ let SubpInitialLineBufBytes = 4096
 let SubpMaxLineBytes = 1048576  // 1 MiB per-line cap — a newline-less child cannot grow the buffer without bound
 let SubpBytesOutBytes = 8
 let SubpPipeScratchBytes = 16  // the two handle out-param slots for a single osPipeCreate*, reused across the 3 pipes
+
 // The 3 CHILD-side pipe ends are parked in a slab region across pipe creation so they do not occupy registers across
 // the (register-hungry) pipe-name-formatting loops — the "keep values off the working set" discipline a hand-built
 // runtime function must observe (its values are span-less, so a register-pressure E5001 has no user code to blame).
@@ -3203,6 +3212,7 @@ export let SubpCloseStdinName = b"__gt_subp_close_stdin"
 export let SubpWaitName = b"__gt_subp_wait"
 export let SubpReleaseName = b"__gt_subp_release"
 let SubpStrFromBytesName = b"__gt_subp_str_from_bytes"
+
 // The prefix `scanRuntimeUsage` matches to turn on the whole streaming runtime for any `__gt_subp_*` call.
 export let SubpCalleePrefix = b"__gt_subp_"
 
@@ -4015,4 +4025,3 @@ function installSubpRuntime(module StdModule)
 	buildSubpWait(module)
 	buildSubpRelease(module)
 end 'installSubpRuntime'
-

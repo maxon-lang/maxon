@@ -1,0 +1,143 @@
+// Test: dispatch.shape-binary-search
+typealias Big = int(0 to 1000000)
+typealias Result = int(0 to 100)
+
+function classify(n Big) returns Result
+	match n 'm'
+		1 then return 1
+		17 then return 2
+		290 then return 3
+		4000 then return 4
+		51234 then return 5
+		99999 then return 6
+		default then return 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(51234)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @classify(n: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #4000
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch0
+    arm64.b classify.m_0.dispatch1
+  m_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch2
+    arm64.b classify.m_0.case0
+  m_0.dispatch2:
+    arm64.mov x0, #17
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch3
+    arm64.b classify.m_0.case1
+  m_0.dispatch3:
+    arm64.mov x0, #290
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch4
+    arm64.b classify.m_0.case2
+  m_0.dispatch4:
+    arm64.b classify.m_0.case6
+  m_0.dispatch1:
+    arm64.mov x0, #4000
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch5
+    arm64.b classify.m_0.case3
+  m_0.dispatch5:
+    arm64.mov x0, #51234
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch6
+    arm64.b classify.m_0.case4
+  m_0.dispatch6:
+    arm64.mov x0, #99999
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.dispatch7
+    arm64.b classify.m_0.case5
+  m_0.dispatch7:
+    arm64.b classify.m_0.case6
+  m_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.case2:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.case3:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.case4:
+    arm64.mov x0, #5
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.case5:
+    arm64.mov x0, #6
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.case6:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  m_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #51234
+    arm64.bl classify
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

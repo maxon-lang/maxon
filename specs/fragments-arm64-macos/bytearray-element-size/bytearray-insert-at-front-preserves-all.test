@@ -1,0 +1,138 @@
+// Test: bytearray-insert-at-front-preserves-all
+function main() returns ExitCode
+	var bytes = b"axbxc"
+	bytes.insert(0, value: 90)
+	if bytes.count() != 6 'cnt'
+		return 1
+	end 'cnt'
+	return 0 if String.from(bytes) == "Zaxbxc" else 2
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.adrp_add_rdata x0, __bstr_5
+    arm64.mov x1, x0
+    arm64.mov x2, #5
+    arm64.adrp_add_func x3, __destruct_ByteArray
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-48]
+    arm64.mov x1, x4
+    arm64.mov x0, #40
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x5, #-2
+    arm64.mov x6, #1
+    arm64.mov x7, #0
+    arm64.ldr x8, [x29, #-8]
+    arm64.ldr x9, [x29, #-48]
+    arm64.str x9, [x8, #0]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #5
+    arm64.str x11, [x10, #8]
+    arm64.ldr x12, [x29, #-8]
+    arm64.str x5, [x12, #16]
+    arm64.ldr x14, [x29, #-8]
+    arm64.str x6, [x14, #24]
+    arm64.ldr x15, [x29, #-8]
+    arm64.str x7, [x15, #32]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.mov x2, #90
+    arm64.bl ByteArray.insert
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl ByteArray.count
+    arm64.mov x1, #6
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.cnt_0
+    arm64.b main.cnt_0.after
+  cnt_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_36
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_36
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=112
+    arm64.ret
+  cnt_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl stdlib.String.from
+    arm64.str x0, [x29, #-24]
+    arm64.adrp_add_global x1, __static_lit_4
+    arm64.mov x2, x1
+    arm64.mov x3, #32
+    arm64.add x4, x2, x3
+    arm64.str x4, [x29, #-32]
+    arm64.ldr x5, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x7, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl stdlib.String.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.ternary_0.true
+    arm64.b main.ternary_0.false
+  ternary_0.true:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-40]
+    arm64.b main.ternary_0.merge
+  ternary_0.false:
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-40]
+    arm64.b main.ternary_0.merge
+  ternary_0.merge:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_69
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_69
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_71
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_71
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-40]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+}
+---

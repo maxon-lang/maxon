@@ -158,6 +158,7 @@ end 'assertSymtabStride'
 // end-of-line, so the FORM is free — 16 fixed zero-padded digits, no leading-zero
 // suppression to get wrong.
 let HexDigitsPerWord = 16
+
 // log2 of the 4 bits a hex digit carries: `index * 4` is emitted as `shl index, 2`. Spelled
 // as its own constant because a shift COUNT is not a bit-width — deriving one from the other
 // (`bits / 2`) is right for 4-bit digits and silently wrong for any other width.
@@ -181,14 +182,17 @@ let PrintFrameName = b"mrt_panic_print_frame"
 let WalkFramesName = b"mrt_panic_walk_frames"
 let FaultBacktraceName = b"mrt_fault_backtrace"
 let FaultThunkName = b"mrt_fault_thunk"
+
 // The x64-LINUX fault entry — the SIGFPE handler `mrt_runtime_init` registers via rt_sigaction. Its own
 // name (distinct from the Windows `mrt_fault_thunk`) because the two are reached differently; only the
 // Linux `runtime_init` references it, by taking its address.
 let LinuxFaultHandlerName = b"mrt_fault_handler"
+
 // The rt_sigreturn trampoline `sa_restorer` points at. x86-64 has no kernel signal trampoline, so the
 // kernel demands a restorer address to build the return frame — mandatory even though this handler never
 // returns through it. Just `mov eax, 15; syscall` (rt_sigreturn).
 let LinuxSigreturnName = b"mrt_rt_sigreturn"
+
 // The callable SOFTWARE panic entry (P1.9 range checks). EXPORTED so `StdToX64Conversion.lowerRangePanic`
 // names the SAME chunk the `osRangePanic` guard's `callDirect` targets — one string, one fixup.
 export let PanicName = b"mrt_panic"

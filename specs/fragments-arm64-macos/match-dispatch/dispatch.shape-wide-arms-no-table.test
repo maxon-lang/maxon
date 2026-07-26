@@ -1,0 +1,121 @@
+// Test: dispatch.shape-wide-arms-no-table
+typealias Val = int(0 to 200000)
+typealias Code = int(0 to 255)
+
+function pick(v Val) returns Code
+	match v 'p'
+		1 to 2000 then return 1
+		2500 to 3500 then return 2
+		3800 then return 3
+		3900 then return 4
+		default then return 0
+	end 'p'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(3000)
+end 'main'
+---
+ExitCode: 2
+---
+// CompiledIR
+module {
+  func @pick(v: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #3800
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne pick.p_0.dispatch0
+    arm64.b pick.p_0.dispatch1
+  p_0.dispatch0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.sub x2, x1, x0
+    arm64.mov x3, #1999
+    arm64.cmp x2, x3
+    arm64.cset x4, hi
+    arm64.cmp x4, #0
+    arm64.b.ne pick.p_0.dispatch2
+    arm64.b pick.p_0.case0
+  p_0.dispatch2:
+    arm64.mov x0, #2500
+    arm64.ldr x1, [x29, #-8]
+    arm64.sub x2, x1, x0
+    arm64.mov x3, #1000
+    arm64.cmp x2, x3
+    arm64.cset x4, hi
+    arm64.cmp x4, #0
+    arm64.b.ne pick.p_0.dispatch3
+    arm64.b pick.p_0.case1
+  p_0.dispatch3:
+    arm64.b pick.p_0.case4
+  p_0.dispatch1:
+    arm64.mov x0, #3800
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne pick.p_0.dispatch4
+    arm64.b pick.p_0.case2
+  p_0.dispatch4:
+    arm64.mov x0, #3900
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne pick.p_0.dispatch5
+    arm64.b pick.p_0.case3
+  p_0.dispatch5:
+    arm64.b pick.p_0.case4
+  p_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  p_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  p_0.case2:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  p_0.case3:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  p_0.case4:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  p_0.merge:
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #3000
+    arm64.bl pick
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

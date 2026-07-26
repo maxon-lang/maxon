@@ -756,7 +756,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 			match try module.ops.get(opIdx) otherwise panic("collectAwaitSites: opIdx {opIdx} not in module.ops") 'op'
 				call to indirectCall then break 'op'
 				asyncCall then break 'op'
-				await(_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
+				await (_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
 				// A `try await` awaits (and consumes) its promise exactly as a plain `await` does — linearity
 				// is a property of the green thread, not of whether the error is caught — so it is an await site.
 				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
@@ -894,7 +894,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 	match op 'op'
 		call to indirectCall then break 'op'
 		asyncCall(result, _, _, _, _, _) then return roleIfEqual(result, promise: promise, role: OpAwaitRole.rearmOf)
-		await(_, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
+		await (_, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
 		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
 		tryAwait(_, _, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
 		sizeofType then break 'op'
