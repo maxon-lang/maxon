@@ -116,6 +116,19 @@ export let SetContainsMethod = b"contains"
 export let SetRemoveMethod = b"remove"
 export let SetCountMethod = b"count"
 
+// ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the one immutable-receiver rule
+// (`Parser.requireMutableReceiver`, E3019), stated beside the names it is about rather than in the
+// parser, so adding a method here and forgetting the rule is one edit away rather than two files away.
+// `insert` adds a member and `remove` takes one out — both rewrite the record's own slots (and `insert`
+// may `__set_grow` the buffers); `contains` and `count` only read.
+//
+// **MEASURED AGAINST THE RUNNABLE ORACLE, one method at a time**, over `let s = IntSet.create()`: both
+// of these are E3019 ("cannot pass 's' to function that mutates parameter 'self'") and `contains` /
+// `count` are accepted.
+export function setMethodMutatesReceiver(name ByteArray) returns bool
+	return name.equals(SetInsertMethod) or name.equals(SetRemoveMethod)
+end 'setMethodMutatesReceiver'
+
 // The `__set_` prefix identifying EVERY set runtime entry point — the one test `recordCallUsage` reads to set
 // `usesSet` (and `usesHeap`).
 let SetRuntimePrefix = b"__set_"

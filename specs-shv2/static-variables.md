@@ -453,6 +453,106 @@ end 'main'
 Ada
 ```
 
+### A managed constant is the WEAKEST claim on `<base>.<member>(…)`
+
+A top-level managed `let` is the first method RECEIVER whose name can also be a declared TYPE, so
+`Widget.byteLength()` is ambiguous in a way `c.increment()` never was. The type-based reading is tried
+FIRST and the constant is its fallback — measured against the reference compiler, which answers 42 here
+and 10 in the next case.
+
+<!-- test: top-level-let-name-shadowed-by-type -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let Widget = "abcdefghij"
+
+type Widget
+	export var v as Integer
+
+	export static function byteLength() returns Integer
+		return 42
+	end 'byteLength'
+end 'Widget'
+
+function main() returns ExitCode
+	return Widget.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+When the type declares no static of that name there is no static call to make, and the same spelling
+reads as the CONSTANT — the reference compiler's answer, and the reason the rule is a fallback rather
+than "a type name always wins".
+
+<!-- test: top-level-let-falls-back-when-type-has-no-such-static -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let Widget = "abcdefghij"
+
+type Widget
+	export var v as Integer
+
+	export static function create() returns Widget
+		return Self{v: 7}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	return Widget.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+A union CONSTRUCT (`Move.walk(5)`) has the same token shape, and an `Array`-instance alias's static
+(`IntArray.create()`) is claimed by the array runtime rather than by any declared callee — both keep
+their reading when a managed constant happens to share the name.
+
+<!-- test: top-level-let-name-shadowed-by-union -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let Move = "shadow"
+
+union Move
+	walk(steps Integer)
+	stop
+end 'Move'
+
+function main() returns ExitCode
+	let m = Move.walk(5)
+	let n = match m 'k'
+		walk(s) gives s
+		stop gives 0
+	end 'k'
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: top-level-let-name-shadowed-by-array-alias -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let IntArray = "shadow"
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	return a.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: data-section-bool-1byte -->
 <!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A single bool global occupies 1 byte in the .data section.

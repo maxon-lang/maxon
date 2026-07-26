@@ -127,10 +127,16 @@ export type VarInfo
 	// a different question, and a parameter's answer is YES: it is a borrowed reference to the
 	// caller's record, and `dest.append(src)` inside a helper is ordinary Maxon.
 	//
-	// **MEASURED against the runnable oracle**: a mutating `Array` method is accepted on a PARAMETER
-	// receiver and rejected (E3019) on a `let` LOCAL — including a `let` that merely aliases a field
-	// or another local. Read by `Parser.bindingArrayMutability`; without it that rule would reject
-	// every array-mutating helper in the corpus (measured: 3 `array-append-managed-elements` cases).
+	// **MEASURED against the runnable oracle**: a mutating `String`/`Array`/`Set` method is accepted on a
+	// PARAMETER receiver and rejected (E3019) on a `let` LOCAL — including a `let` that merely aliases a
+	// field, another local, or THE PARAMETER ITSELF. Read by `Parser.immutableReceiverNameOf`, the one
+	// home of that rule; without it every container-mutating helper in the corpus is rejected (measured:
+	// 3 `array-append-managed-elements` cases).
+	//
+	// ⚠ It is deliberately NOT derived from the parameter ValueId convention (`boundValue < paramCount`,
+	// `requireReceiverValue`), which looks like the same fact and is not: `let a = p` carries the
+	// PARAMETER's ValueId while being a `let`, and `a.push(9)` is E3019 in the oracle. See
+	// `Parser.immutableReceiverNameOf` for the measurement.
 	export var isParameter as bool
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo

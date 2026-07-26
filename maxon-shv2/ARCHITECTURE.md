@@ -866,6 +866,25 @@ scalar constant uses, with one thing changed: what the constant's value IS.
   `"a{x}b"` is several tokens and is therefore *not* a constant, which is correct.
 - **The use site materializes the literal**, exactly as the scalar use inlines the number.
 
+> ⚠ **IT IS ALSO THE FIRST RECEIVER WHOSE NAME CAN BELONG TO A DECLARED TYPE, AND THAT BREAKS AN
+> INVARIANT THE DISPATCHERS RESTED ON.** `methodCallsAt`'s premise was that the token shape alone
+> cannot tell `c.increment()` from `Point.create()` and that *"only the scope knows which"* — true
+> while every receiver was a local or a capture, because a name was a value **or** a type, never both.
+> A managed constant can be both, and `methodCallsAt` is the FIRST arm of all three dispatchers, so a
+> constant claiming the shape outranks every type-based reading of it. Left unstated, `let Widget =
+> "abcdefghij"` beside a `type Widget` made `Widget.byteLength()` answer **10** — the constant's byte
+> length — where the oracle answers **42**, the type's static. Silently, with a green suite.
+>
+> ⇒ **A managed constant is the WEAKEST claim on `<base> . <member> (`** (`staticCallClaimsBase`,
+> the mirror of `parseDottedPrimary`'s arm order). The type-based readings are asked first, each
+> through the authority its own arm uses — `containsEnum` for a union CONSTRUCT (`Move.walk(5)`, same
+> token shape), `isGenericAlias` for the `Array`/`Set` statics `parseQualifiedCall` intercepts ahead of
+> its mangle (no file declares an `Array.create` for a callee probe to find), and `declaresCallee` on
+> the mangled name built by the SAME expression `parseQualifiedCall` builds it with. It is a FALLBACK,
+> not a precedence: when the type declares no such static the constant reads, and the oracle answers
+> 10 there too. Every one of those five answers is measured against the runnable oracle, one program at
+> a time, and pinned by `static-variables`'s `top-level-let-name-shadowed-by-*` cases.
+
 > ⚠ **A MANAGED INITIALIZER MAY NOT REFERENCE ANOTHER GLOBAL, and that is a hard boundary rather than
 > an ordering quirk.** `evaluateDecl` answers `notFound` for a managed decl, so `let A = "x"` /
 > `let B = A` is **E2004 `Undefined constant 'A'`** — in BOTH declaration orders, which is MEASURED to
@@ -892,15 +911,29 @@ instead reaches the same place through what it already has: `.rdata` plus static
 > `var b = <borrowed array>`, which today `__mm_incref`s the box — and an rdata box has no refcount
 > word to incref. Half of (1) landed with this rung (below); the rest is a rung of its own.
 
-**A `let`-bound array is not writable, and that is enforced.** `dispatchArrayMethod` refuses a
-receiver-writing method (`push`/`set`/`insert`/`append`/`reserve`/`resize`/`clear`/`pop`/`remove`) on
-an immutable receiver with **E3019**, the array twin of `parseStringAppend`'s existing String rule and
-the same diagnostic the oracle raises. Without it a top-level managed `let` would silently mutate a
-per-read copy — a wrong answer with no diagnostic. A **PARAMETER is exempt**: it is not `mutable` (it
-cannot be rebound) yet its array very much can be written, because it is a borrowed reference to the
-caller's record. That is what `VarInfo.isParameter` exists to say — `mutable` answers "may this NAME
-be rebound?", which is a different question. All four answers are the oracle's, measured one program
-at a time.
+**A `let`-bound container is not writable, and that is enforced — ONCE, for all three of them.**
+`requireMutableReceiver` refuses a receiver-writing method on an immutable receiver with **E3019**, the
+diagnostic the oracle raises. Without it a top-level managed `let` would silently mutate a per-read
+copy — a wrong answer with no diagnostic. A **PARAMETER is exempt**: it is not `mutable` (it cannot be
+rebound) yet the record it denotes very much can be written, because it is a borrowed reference to the
+caller's. That is what `VarInfo.isParameter` exists to say — `mutable` answers "may this NAME be
+rebound?", which is a different question, and one a `let` ALIASING a parameter answers differently
+again (`let a = p` is still a `let`; E3019, measured).
+
+| receiver | receiver-writing methods | where that list lives |
+|---|---|---|
+| `String` | `append` | the arm that dispatches it (`parseStringAppend`) |
+| `Array` | `push`/`set`/`insert`/`append`/`reserve`/`resize`/`clear`/`pop`/`remove` | `arrayMethodMutatesReceiver` |
+| `Set` | `insert`/`remove` | `setMethodMutatesReceiver` |
+
+> ⚠ **THE THREE HAD ALREADY DRIFTED, AND TWO OF THEM DISAGREED WITH THE ORACLE.** Each container
+> answered "may this receiver be written?" with its own premise: `String` asked `not binding.mutable`,
+> `Array` asked `mutable or isParameter`, and `Set` asked *nothing at all*. So `function grow(s String)
+> … s.append("XY")` was a FALSE REJECTION (a parameter is never `mutable`) where the oracle returns 4,
+> and `let s = IntSet.create() … s.insert(1)` was ACCEPTED where the oracle raises E3019. One rule, one
+> home: what stays per-container is only WHICH NAMES write the receiver — a fact about that container's
+> method table — while the binding's writability and the diagnostic are shared, so a fourth container
+> cannot invent a fourth answer.
 
 **A managed `var` stays refused** (`Parser.requireStorableGlobal`, E2015): its `.data` slot would have
 to hold a POINTER to a record built before `main` runs, which is module initialization, and shv2

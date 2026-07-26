@@ -1688,8 +1688,9 @@ let ArrayEndIndexLabel = b"endIndex"
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
 
-// ⭐ **WHICH `Array` METHODS WRITE THEIR RECEIVER** — the ONE list behind the `let`-receiver rule
-// (`requireMutableArrayReceiver`, E3019). Every one of these rewrites the record's own slots:
+// ⭐ **WHICH `Array` METHODS WRITE THEIR RECEIVER** — the `Array` half of the one immutable-receiver
+// rule (`requireMutableReceiver`, E3019; `setMethodMutatesReceiver` is the `Set` half, and `String`'s
+// half is the single method `append`). Every one of these rewrites the record's own slots:
 // `push`/`insert`/`append`/`reserve`/`resize` can grow (`buffer@0` + `capacity@16`), `set` writes an
 // element, and `pop`/`remove`/`clear` shorten it (`length@8`).
 //
@@ -16508,7 +16509,7 @@ export type Parser
 		// dispatch already routes by TAG (String / Array / Set / conformer / struct) and already enforces
 		// the immutability rule a `let` receiver owes (`parseStringAppend`'s E3019). Re-deciding either
 		// here would be a second copy of both.
-		if self.managedConstantReceiverAt(baseTok) 'managedConstantReceiver'
+		if self.managedConstantReceiverAt(self.pos) 'managedConstantReceiver'
 			let value = try self.topLevelBindingReference(baseTok)
 			return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: self.typeOf(value), mutable: false, boundValue: value), baseTok: baseTok, resultUsed: resultUsed)
 		end 'managedConstantReceiver'
@@ -16567,25 +16568,36 @@ export type Parser
 		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
-	// ⭐ **DOES `tok` NAME A TOP-LEVEL MANAGED CONSTANT?** (P1.7a) The ONE predicate behind both askers —
-	// `methodCallsAt` (is this token shape a method call at all?) and `parseMethodCall` (build the
-	// receiver) — for `methodCallsAt`'s own stated reason: a receiver test written twice is free to
-	// drift, and the drift is silent.
+	// ⭐ **IS THE `<base> . <member> (` AT `index` A METHOD CALL ON A TOP-LEVEL MANAGED CONSTANT?** (P1.7a)
+	// The ONE predicate behind both askers — `methodCallsAt` (is this token shape a method call at all?)
+	// and `parseMethodCall` (build the receiver) — for `methodCallsAt`'s own stated reason: a receiver
+	// test written twice is free to drift, and the drift is silent.
+	//
+	// It takes the base's INDEX rather than its token because the answer needs the MEMBER name too
+	// (`staticCallClaimsBase`), and deriving that from a token would re-assume the cursor is parked on
+	// the base — true at both askers today, and exactly the premise that quietly stops holding.
 	//
 	// ⚠ **THE `namesManagedConstant` GATE IN FRONT OF IT IS NOT AN OPTIMIZATION, IT IS THE COST MODEL.**
 	// `methodCallsAt` runs at every dotted-call shape in the program, and `constantValueOf`'s
 	// file-scoped probe BUILDS A STRING KEY (~4 allocations per call — see `fileScopedDeclKey`). Behind
 	// this filter a base that is not spelled like any managed constant in the program — every static
 	// call, `Widget.create(…)` and `String.from(…)` alike, which is nearly every base that reaches here
-	// — costs ONE hash of bytes it already holds and allocates nothing.
+	// — costs ONE hash of bytes it already holds and allocates nothing. `staticCallClaimsBase` sits
+	// BEHIND the same filter and inherits the same model: it runs only for a base actually spelled like
+	// a managed constant, so its mangled-callee probe is off the hot path entirely.
 	//
 	// It is a NAME set rather than a whole-program bool for a measured reason: a bool goes permanently
 	// true at the first managed constant, and every static dotted call in the program then pays the full
 	// probe to be told no. See `ProgramSignatures.managedConstantNames`.
-	function managedConstantReceiverAt(tok Token) returns bool
+	function managedConstantReceiverAt(index TokenIndex) returns bool
+		let tok = self.tokenAt(index)
 		if not self.signatures.namesManagedConstant(tok.value) 'notAManagedConstantName'
 			return false
 		end 'notAManagedConstantName'
+
+		if self.staticCallClaimsBase(index) 'typeReadingWins'
+			return false
+		end 'typeReadingWins'
 
 		return match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			foundManaged gives true
@@ -16593,6 +16605,48 @@ export type Parser
 			notFound gives false
 		end 'constant'
 	end 'managedConstantReceiverAt'
+
+	// ⭐⭐ **DOES A TYPE-BASED READING ALREADY CLAIM THIS `<base> . <member> (`?** A managed constant is the
+	// WEAKEST claim on that shape, and this is what says so.
+	//
+	// ⚠ **IT IS THE MIRROR OF `parseDottedPrimary`'S ARM ORDER, AND IT EXISTS BECAUSE THE MANAGED-CONSTANT
+	// ARM BROKE THAT ORDER'S PREMISE.** `methodCallsAt`'s header states it: the token shape alone cannot
+	// tell `c.increment()` from `Point.create()`, and "only the scope knows which". That held while every
+	// receiver was a LOCAL or a CAPTURE — a name was a value or a type, never both. A top-level managed
+	// constant is the first receiver that can share its spelling with a declared type, so the shape has to
+	// be decided against the type-based readings instead of ahead of them. `methodCallsAt` is asked FIRST
+	// of the three dispatchers' arm chains, so without this the constant silently outranks all of them.
+	//
+	// **MEASURED AGAINST THE RUNNABLE ORACLE, one program at a time.** With `let Widget = "abcdefghij"`
+	// beside a `type Widget`, the oracle answers 42 for `Widget.byteLength()` when the type declares that
+	// static and 10 — the CONSTANT's byte length — when it declares only `create`. So the rule is not
+	// "a type name always wins": the type-based reading is TRIED FIRST and the constant is its FALLBACK,
+	// which is exactly what asking the three claims below reproduces. Without it shv2 answered 10 in both
+	// cases, silently, with no diagnostic and a green suite.
+	//
+	// Each clause delegates to the authority that arm already uses — none of them re-derives what a type
+	// is:
+	//
+	//   • `containsEnum` — the enum/union arm, which claims a payload CONSTRUCT `Move.walk(5)`; that has
+	//     the same token shape a static call does (`parseDottedPrimary` says so where it orders the two).
+	//   • `isGenericAlias` — the `IntArray.create()` / `IntSet.create()` statics `parseQualifiedCall`
+	//     intercepts AHEAD of its own mangle. They are the one type-based claim the callee probe below
+	//     structurally cannot see: `Array`/`Set` have no base struct, so their statics lower to the array
+	//     and set runtimes and NO file declares an `Array.create` to be found.
+	//   • a DECLARED callee under the mangled static name — every plain struct's `Widget.byteLength`, and
+	//     a user generic alias's `IntBox.create` through its base. The name is built by the SAME
+	//     expression `parseQualifiedCall` builds it with, `qualifiedCallBaseName` included, rather than
+	//     re-spelled here: two derivations of one callee name is the drift `builtinsIntrinsicCallsAt`
+	//     documents at length, and its failure is a call accepted at one door and refused at the other.
+	function staticCallClaimsBase(index TokenIndex) returns bool
+		let baseName = self.tokenAt(index).value
+
+		if self.signatures.containsEnum(baseName) or self.signatures.isGenericAlias(baseName) 'enumOrGenericAlias'
+			return true
+		end 'enumOrGenericAlias'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(self.qualifiedCallBaseName(baseName), methodName: self.tokenAt(index + 2).value))
+	end 'staticCallClaimsBase'
 
 	// Dispatch a method (or a function-typed FIELD load) on an already-resolved struct base — the shared tail
 	// of a LOCAL receiver and a CAPTURED one (P1.5-A2b-2). The cursor sits on the member name.
@@ -16756,9 +16810,12 @@ export type Parser
 	// blitted), so it is neither moved nor consumed: an owned interpolation argument stays a pending temp
 	// and drops at statement end, AFTER the copy. append is void, so a value-position call is rejected.
 	function parseStringAppend(func IrFunction, binding VarInfo, baseTok Token, methodTok Token, resultUsed bool) returns ValueId throws ParseError
-		if not binding.mutable 'immutableReceiver'
-			throw ParseError.immutableMutatingCall(String.from(baseTok.value), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
-		end 'immutableReceiver'
+		// `append` IS the String's one receiver-writing method — the caller matched it to get here — so the
+		// per-container half of the rule is a constant `true` and everything else is the shared home's.
+		// It used to ask `not binding.mutable` on its own, which made a String PARAMETER receiver a false
+		// rejection: see `requireMutableReceiver` for the measurement.
+		try self.requireMutableReceiver(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), methodTok: methodTok, mutatesReceiver: true)
+
 		if resultUsed 'voidResultUsed'
 			throw ParseError.voidCallResultUsed(String.from(StringAppendMethod), line: methodTok.line, column: methodTok.column)
 		end 'voidResultUsed'
@@ -17184,7 +17241,7 @@ export type Parser
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed)
+		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
 	end 'parseSetMethodCall'
 
 	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).
@@ -17194,10 +17251,15 @@ export type Parser
 	// the parser passes only `[set, elem]`. The set's key type (`giid`, off the receiver's name-id) gates the key
 	// argument's type and decides ownership: `insert` MOVES a managed key in (`consume: true`), while
 	// `contains`/`remove` BORROW it (`consume: false`).
-	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool) returns ValueId throws ParseError
+	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool, immutableReceiverName ByteArray) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(set)
+
+		// A `let`-bound set is not writable either — the same rule, through the same home the `String` and
+		// `Array` receivers ask (`requireMutableReceiver`). This dispatcher carried NO such guard, which
+		// accepted `let s = IntSet.create()` / `s.insert(1)` where the oracle raises E3019.
+		try self.requireMutableReceiver(func, immutableReceiverName: immutableReceiverName, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(SetCountMethod) 'count'
 			try self.parseArrayNoArgs()
@@ -17290,25 +17352,34 @@ export type Parser
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableArrayReceiverName(binding, baseTok: baseTok))
+		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
 	end 'parseArrayMethodCall'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
-	// written through.** The ONE place the `let` rule and the parameter exception meet.
+	// written through.** The ONE place the `let` rule and the parameter exception meet, for EVERY
+	// container: `String`, `Array` and `Set` all ask through here (see `requireMutableReceiver`).
 	//
 	// A `var` may be written through, and so may a PARAMETER — which is NOT `mutable` (a parameter
-	// cannot be rebound, `ParametersAreMutable`) yet whose array very much can be written, because the
-	// parameter is a borrowed reference to the caller's record. `let a = [1,2,3]` may not, however it
-	// was bound — a literal, a `create()`, an alias of a field or of another local.
+	// cannot be rebound, `ParametersAreMutable`) yet whose container very much can be written, because
+	// the parameter is a borrowed reference to the caller's record. `let a = [1,2,3]` may not, however
+	// it was bound — a literal, a `create()`, an alias of a field or of another local.
 	//
-	// **All four answers are the runnable oracle's, measured one program at a time**, and the parameter
-	// case is not a nicety: without it every array-mutating helper in the corpus is rejected.
-	function immutableArrayReceiverName(binding VarInfo, baseTok Token) returns ByteArray
+	// **Every answer here is the runnable oracle's, measured one program at a time**, and the parameter
+	// case is not a nicety: without it every container-mutating helper in the corpus is rejected.
+	//
+	// ⚠ **`isParameter` IS NOT `boundValue < paramCount` WEARING A FLAG, AND THE DIFFERENCE IS A
+	// MEASURED ANSWER.** The parameter ValueId convention (`requireReceiverValue`) tempts a reader to
+	// derive this from the value instead of storing it — but a `let` that ALIASES a parameter carries
+	// the parameter's own ValueId while being a `let`, and `let a = p` / `a.push(9)` is **E3019 in the
+	// oracle** (measured). Deriving it from the value would silently accept that. The flag distinguishes
+	// "this binding IS the parameter" from "this binding holds the parameter's value"; the ValueId
+	// cannot. Do not "simplify" it away.
+	function immutableReceiverNameOf(binding VarInfo, baseTok Token) returns ByteArray
 		if binding.mutable or binding.isParameter 'writable'
 			return EmptySourceText
 		end 'writable'
 		return baseTok.value
-	end 'immutableArrayReceiverName'
+	end 'immutableReceiverNameOf'
 
 	// A method on an array-typed VALUE that is not a plain local binding — a fresh literal (`[10,20,30].get(0)`)
 	// or any array-valued expression, reached from the postfix loop and the `try` target. The cursor sits on
@@ -17521,11 +17592,11 @@ export type Parser
 		let range = SourceRange.ofToken(methodTok)
 
 		// ⭐ **A `let`-BOUND ARRAY IS NOT WRITABLE** — checked HERE, once, ahead of every arm, because the
-		// question is about the METHOD NAME and this is where the name is first known. It is the array
-		// twin of `parseStringAppend`'s immutable-receiver guard, raising the same E3019 with the same
-		// framing, and it is what makes the top-level managed `let` a CONSTANT rather than a value that
-		// silently mutates a copy at each read (`emitManagedConstant`).
-		try self.requireMutableArrayReceiver(func, immutableReceiverName: immutableReceiverName, methodTok: methodTok)
+		// question is about the METHOD NAME and this is where the name is first known. It goes through
+		// `requireMutableReceiver`, the ONE home this rule has for every container, and it is what makes
+		// the top-level managed `let` a CONSTANT rather than a value that silently mutates a copy at each
+		// read (`emitManagedConstant`).
+		try self.requireMutableReceiver(func, immutableReceiverName: immutableReceiverName, methodTok: methodTok, mutatesReceiver: arrayMethodMutatesReceiver(methodTok.value))
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
@@ -17613,29 +17684,45 @@ export type Parser
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
 
-	// Refuse a RECEIVER-WRITING `Array` method on an immutable receiver (E3019). A read-only method on
-	// either kind of receiver, and any method on a writable one, pass straight through.
+	// ⭐⭐ **REFUSE A RECEIVER-WRITING METHOD ON AN IMMUTABLE RECEIVER (E3019) — ONE RULE, ONE HOME, FOR
+	// EVERY CONTAINER.** A read-only method on either kind of receiver, and any method on a writable
+	// one, pass straight through.
+	//
+	// ⚠ **IT IS SHARED BY `String`, `Array` AND `Set` BECAUSE THE THREE HAD ALREADY DRIFTED APART.**
+	// `parseStringAppend` asked `not binding.mutable`, `dispatchArrayMethod` asked `mutable or
+	// isParameter`, and `dispatchSetMethod` asked NOTHING — three premises for one rule, and two of them
+	// disagreed with the runnable oracle, MEASURED:
+	//
+	//   • `function grow(s String) … s.append("XY")` — the oracle ACCEPTS it (a parameter is a borrowed
+	//     reference to the caller's record, exactly as for an array). The `mutable`-only premise made it
+	//     a FALSE REJECTION, because a parameter is never `mutable`.
+	//   • `let s = IntSet.create() … s.insert(1)` / `s.remove(1)` — the oracle REFUSES both with E3019.
+	//     With no premise at all, shv2 accepted them.
+	//
+	// What stays per-container is only WHICH METHOD NAMES WRITE THE RECEIVER, which is a fact about that
+	// container's method table and nothing else; the caller passes it as `mutatesReceiver`. What is
+	// shared — the writability of the binding, and the diagnostic — lives here, so a fourth container
+	// cannot invent a fourth answer to the same question.
 	//
 	// ⚠ **`immutableReceiverName` IS ONE `ByteArray`, NOT A UNION, AND THAT IS MEASURED.** The obvious
 	// shape is `mutable | immutable(name)` — and it was written that way first — but this runs at every
-	// `Array` method call in the program, and Maxon heap-BOXES a union case, INCLUDING a payload-free
+	// container method call in the program, and Maxon heap-BOXES a union case, INCLUDING a payload-free
 	// one. `scale-test` billed it at exactly one box per array-method call site
 	// (+120/+240/+480/… across the doubling ladder). This is the same reading, and the same fix, that
-	// `BuiltinConformer`'s header records for the per-method-call classifier one rung earlier.
+	// `BuiltinConformer`'s header records for the per-method-call classifier one rung earlier. It is a
+	// `ByteArray` rather than the `VarInfo` for a second reason the array path forces: a receiver that is
+	// not a binding at all (`[10,20,30].get(0)`) has no `VarInfo` to hand over.
 	//
 	// **EMPTY IS NOT A SENTINEL, it is the literal truth**: a writable receiver has no immutable binding
 	// for a diagnostic to blame — a `var`, a parameter and a temporary all have nothing to name. The
 	// diagnostic REQUIRES a name, so "immutable" and "nameable" are the same state by construction.
-	function requireMutableArrayReceiver(func IrFunction, immutableReceiverName ByteArray, methodTok Token) throws ParseError
-		if immutableReceiverName.isEmpty() 'writableReceiver'
+	function requireMutableReceiver(func IrFunction, immutableReceiverName ByteArray, methodTok Token, mutatesReceiver bool) throws ParseError
+		if immutableReceiverName.isEmpty() or not mutatesReceiver 'writableReceiverOrReadOnlyMethod'
 			return
-		end 'writableReceiver'
-		if not arrayMethodMutatesReceiver(methodTok.value) 'readOnlyMethod'
-			return
-		end 'readOnlyMethod'
+		end 'writableReceiverOrReadOnlyMethod'
 
 		throw ParseError.immutableMutatingCall(String.from(immutableReceiverName), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
-	end 'requireMutableArrayReceiver'
+	end 'requireMutableReceiver'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`
@@ -21462,8 +21549,12 @@ export type Parser
 		// which is what separates it from a static call on a TYPE name. The managed constant is asked LAST
 		// because it is the only one of the three that can allocate (see `managedConstantReceiverAt`), and
 		// a local or captured base has already answered by then.
+		//
+		// ⚠ The managed constant is ALSO the only one of the three whose name can belong to a declared
+		// TYPE as well — which is why it, alone, has to weigh itself against the type-based readings of
+		// this same shape (`staticCallClaimsBase`) rather than simply claiming it.
 		let baseTok = self.tokenAt(index)
-		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) or self.managedConstantReceiverAt(baseTok)
+		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok) or self.managedConstantReceiverAt(index)
 	end 'methodCallsAt'
 
 	// **The token shape of a `__Builtins` INTRINSIC CALL STATEMENT** — `__Builtins . <member> (`, the one

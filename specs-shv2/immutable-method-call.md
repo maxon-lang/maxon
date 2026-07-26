@@ -8,7 +8,9 @@ category: semantics
 
 ## Documentation
 
-Calling a mutating method on an immutable (`let`) variable is a compile-time error. Mutating methods include `push`, `pop`, `set`, `remove`, `clear`, `resize`, `reserve`, `append`, and similar operations that modify the receiver.
+Calling a receiver-writing method on an immutable (`let`) binding is a compile-time error. The receiver-writing methods are, exactly: `append` on a `String`; `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`; and `insert` and `remove` on a `Set`. Every other method only reads its receiver and is legal on a `let`.
+
+A **parameter** is exempt, and that is not a loophole: `mutable` asks whether the NAME may be rebound (a parameter's answer is no), while this rule asks whether the CONTAINER the name denotes may be written — and a parameter is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon. A `let` that merely *aliases* a parameter is still a `let`, and is still refused.
 
 ## Tests
 
@@ -43,6 +45,109 @@ end 'main'
 ```
 ```maxoncstderr
 error E3019: specs/fragments/immutable-method-call/append-on-let-string-error.test:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: append-on-string-parameter-ok -->
+A `String` PARAMETER may be appended to. It is not `mutable` — a parameter cannot be rebound — but the
+record it denotes is the caller's and may be written, exactly as an array parameter's is.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function grow(s String) returns Integer
+	s.append("XY")
+	return s.byteLength()
+end 'grow'
+
+function main() returns ExitCode
+	var t = "ab"
+	return grow(t) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: push-on-let-alias-of-parameter-error -->
+A `let` that merely ALIASES a parameter is still a `let`. The alias carries the parameter's own value,
+so a rule derived from that value rather than from the binding would wrongly accept this.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(p IntArray) returns Integer
+	let a = p
+	a.push(9)
+	return a.count()
+end 'grow'
+
+function main() returns ExitCode
+	var v = IntArray.create()
+	return grow(v) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/push-on-let-alias-of-parameter-error.test:7:4: cannot pass 'a' to function that mutates parameter 'self' (in grow)
+```
+
+<!-- test: insert-on-let-set-error -->
+A `Set` receiver obeys the same rule as a `String` and an `Array` one.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	let s = IntSet.create()
+	s.insert(1)
+	return s.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/insert-on-let-set-error.test:7:4: cannot pass 's' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: remove-on-let-set-error -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	let s = IntSet.create()
+	let gone = s.remove(1)
+	if gone 'g'
+		return 1
+	end 'g'
+	return s.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/remove-on-let-set-error.test:7:15: cannot pass 's' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: contains-on-let-set-ok -->
+<!-- targets: x64-windows, x64-linux -->
+A read-only `Set` method on a `let` receiver is fine. Restricted to x64 like every other Set case that
+actually COMPILES a set: a `Set` instance's descriptor needs `destroyFunc@40` patched with
+`funcAbs64InRdata`, which only the x64 writers do. (The `let`-receiver ERROR cases above are refused
+before any of that, so they carry no restriction.)
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	let s = IntSet.create()
+	let has = s.contains(1)
+	if has 'h'
+		return 1
+	end 'h'
+	return s.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: set-on-let-array-error -->

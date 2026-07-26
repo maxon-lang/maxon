@@ -4487,6 +4487,19 @@ export type ProgramSignatures
 		return CalleeReturn.declared(self.adoptReturnType(declared, into: into))
 	end 'returnTypeOf'
 
+	// Does ANY file declare a function under `callee` — the `bool` half of `returnTypeOf`, and its twin
+	// in the sense `containsEnum` is `enumOf`'s: a caller that only needs "does this name resolve to a
+	// call at all?" must not pay the answer's cost to throw it away. `returnTypeOf` ADOPTS the return
+	// type into the asker's interner, which allocates for every id-bearing arm and needs an interner the
+	// asker may not even have in hand; a `Map.contains` allocates nothing and needs none.
+	//
+	// ⚠ **IT IS ASKED OF A MANGLED name (`Widget.byteLength`), never a bare one**, because that is the
+	// key the index files a method under (`declaredMethodName`) — see `Parser.staticCallClaimsBase`, the
+	// one asker, for why a static call's existence has to be decidable before the call is parsed.
+	export function declaresCallee(callee ByteArray) returns bool
+		return self.returnTypes.contains(callee)
+	end 'declaresCallee'
+
 	function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
 		return match rt 'r'
 			void gives rt
