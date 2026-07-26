@@ -2763,6 +2763,25 @@ each named RE-MEASURE TRIGGER can now be **pulled on the ladder** instead of wai
 that only bend under a specific future change. Each is filed with its measurement and its re-measure
 trigger, not chased (a superlinearity you can *trigger* today is fixed, not filed):
 
+- **#124 — shv2's ARRAY ROSTER IS SHORT OF THE BOOTSTRAP'S, AND ITS EMPTY-SLOT SURFACE IS ONE FUNCTION WIDE.**
+  Two residuals from the `Array.resize` fix (`98834dd2e`), both disclosed rather than papered over.
+  **(a) THE REMEDY LIST IS ASYMMETRIC.** E3106 refuses `resize`-to-grow on a managed element type in BOTH
+  compilers, but shv2 synthesizes neither `growFilled` nor `truncate`, so its diagnostic can only offer `push`
+  where the bootstrap offers all three. A user told to shrink a managed array in shv2 has **no supported call** —
+  `resize` is now refused and `truncate` does not exist. **5 cases in `specs-shv2/array-slots.md` are
+  `disabled-test`** with the missing mechanism named in each.
+  **(b) `emptySlot` COLLAPSES INTO `indexOutOfBounds`.** The bootstrap now distinguishes them — that was the second
+  defect the fix uncovered, and the reason `CompileTimings` died reporting *"phase index OOB for 'load'"* about an
+  index that was perfectly in range. shv2's `emitLoadElemAndOkReturn` still reports a NULL slot through the same
+  `emitOobReturn` a real range violation uses, so 4 of those 5 disabled cases are this. **A wrong error code sent a
+  reader hunting an index bug for a null-slot bug once already; it will again.**
+  **(c) AND THE CHECK LIVES ONLY IN `get`, IN BOTH.** Measured, not inferred: `for x in arr` over a sparse array
+  panics *nil pointer or invalid memory access*, and `arr.pop()` gives *mm_incref called with NULL pointer* in
+  `SlotArray.pop`. E3106 closes the only ORDINARY route to a sparse array, so these are now reachable only through
+  raw `managed.setLength` or opaque-generic code — which is why this is filed and not chased.
+  **Re-measure trigger:** shv2 gaining `growFilled`/`truncate` (which would let the 5 specs re-enable and is the
+  natural moment to widen the read surface), or any new route that can open a slot without going through `resize`.
+
 - **#122 — `phase:parse` IS Θ(MUTABLE BINDINGS × CONSTRUCTS) ON THE REAL CORPUS, AND IT IS A RUNG RATHER THAN AN EDIT.**
   ⭐ **This is the corpus's parse superlinearity — NOT nesting depth**, and the distinction was measured, not reasoned.
   `parseWhileStatement` (`Parser.maxon:10925`) and `assignedBindingsIn` (`:11463`) each loop
