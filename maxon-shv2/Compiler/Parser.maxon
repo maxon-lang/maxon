@@ -784,12 +784,14 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
-// The module-level shared EMPTY immutable-global-read list (P1.7 slice 2b), held as the initial value of
+// The module-level shared EMPTY immutable-global-read set (P1.7 slice 2b), held as the initial value of
 // `immutableGlobalReads` AND as the COW anchor its reset points at — `sharedEmptyInstanceAliasMap`'s pattern,
 // for its reason and with its invariant. A program that declares no immutable top-level global with STORAGE
 // (which is every program with no array `let`) never writes it, so it stays empty, is safe to share across
-// the per-file parse fan-out, and costs ONE allocation for the whole compile rather than one per function.
-let sharedEmptyImmutableGlobalReads = ValueIdArray.create()
+// the per-file parse fan-out, and costs a fixed handful of allocations for the whole compile rather than one
+// structure per function. `Set.contains` on a zero-capacity set returns before it hashes anything, so the
+// programs that never mark also never pay to ask.
+let sharedEmptyImmutableGlobalReads = ImmutableGlobalReadSet.create()
 
 // The NAME-keyed twin delivered to SemanticCheck for a function that has range checks but constructs no
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
@@ -2397,6 +2399,10 @@ typealias InnerAliasNameSet = Set with ByteArray
 // `Idx` results and arguments DECAY to plain (no per-instance identity) — which matches the oracle.
 typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 
+// The per-function set of SSA values loaded out of an IMMUTABLE top-level global's slot (P1.7 slice 2b) —
+// see `Parser.immutableGlobalReads` for what it decides and why it is a hash set rather than a list.
+typealias ImmutableGlobalReadSet = Set with ValueId
+
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
 // lists they carry to the exit / header. Because the header phis are created EAGERLY
@@ -2878,12 +2884,22 @@ export type Parser
 	// (slice 2a's receiver read the capture and the global for one name in one expression). A value carries
 	// where it came from with no order to re-derive and no shadow to mistake.
 	//
-	// A SPARSE list, not a dense per-value column like `valueOwnsHeap`: the population is the immutable-global
-	// reads of ONE function, which is zero in every program that declares no array `let`. It is scanned only
-	// at the one promotion gate, which a borrowed managed aggregate is the only thing to reach. Reset per
-	// function and SWAPPED across a closure body, exactly like the sibling value columns — a closure's value
-	// ids are its own SSA space, so a mark that leaked across would name an unrelated value.
-	var immutableGlobalReads as ValueIdArray
+	// A SPARSE set, not a dense per-value column like `valueOwnsHeap`: the population is the immutable-global
+	// reads of ONE function, which is zero in every program that declares no array `let`. Reset per function
+	// and SWAPPED across a closure body, exactly like the sibling value columns — a closure's value ids are
+	// its own SSA space, so a mark that leaked across would name an unrelated value.
+	//
+	// ⚠ **A SET RATHER THAN A LIST, BECAUSE BOTH ENDS GROW WITH THE FUNCTION.** The first cut scanned a
+	// `ValueIdArray` at the one promotion gate, which is O(1) only if one of the two populations is bounded —
+	// and neither is: the marks are this function's immutable-global reads and the scans are its borrowed
+	// managed-aggregate promotions, so a single function carrying K of each pays Theta(K^2). MEASURED on a
+	// ladder of K interleaved `g(A)` reads and `b = s` promotions, against the identical program with `A`
+	// declared `var` (which marks nothing, so the two differ in exactly this structure): the scan's own cost
+	// was 3.5 / 15.6 / 65.2 / 259.6 ms at K = 2,000 / 4,000 / 8,000 / 16,000 — x4.41, x4.19, x3.98 per
+	// doubling, a textbook quadratic — and 39% of `phase:parse` at the top rung, while the `var` control
+	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
+	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
+	var immutableGlobalReads as ImmutableGlobalReadSet
 	// ⭐ **THE CAPTURE SET OF THE CLOSURE CURRENTLY BEING PARSED (P1.5-A2b).** Populated by `captureEnclosing`
 	// as the body reads enclosing names (first-seen order = env slot order), read by `parseClosureExpression`
 	// after the body parse to build the env block (one `storeIndirect` per capture, by VALUE). SWAPPED across
@@ -10305,7 +10321,9 @@ export type Parser
 		end 'text'
 
 		if self.valueIsNonTextAggregate(value) 'aggregate'
-			if self.valueIsImmutableGlobalRead(value) 'immutableSource'
+			// The one asker of `immutableGlobalReads`, and the one place the answer changes anything: a
+			// borrowed managed aggregate about to become an owned mutable binding.
+			if self.immutableGlobalReads.contains(value) 'immutableSource'
 				throw ParseError.unsupported("binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`", line: range.line, column: range.column)
 			end 'immutableSource'
 
@@ -19432,25 +19450,11 @@ export type Parser
 		end 'writableSlot'
 
 		if self.immutableGlobalReads is sharedEmptyImmutableGlobalReads 'stillShared'
-			self.immutableGlobalReads = ValueIdArray.create()
+			self.immutableGlobalReads = ImmutableGlobalReadSet.create()
 		end 'stillShared'
-		self.immutableGlobalReads.push(value)
+		self.immutableGlobalReads.insert(value)
 		return value
 	end 'recordGlobalReadValue'
-
-	// Was `value` read out of an IMMUTABLE top-level global's slot? A linear scan of a list holding one entry
-	// per such read IN THIS FUNCTION — which is zero in every program that declares no array `let`, and a
-	// handful in one that does. It is asked only where a borrowed managed AGGREGATE is about to be promoted
-	// to an owned mutable binding, which is the one place the answer changes anything.
-	function valueIsImmutableGlobalRead(value ValueId) returns bool
-		for marked in self.immutableGlobalReads 'each'
-			if marked == value 'hit'
-				return true
-			end 'hit'
-		end 'each'
-
-		return false
-	end 'valueIsImmutableGlobalRead'
 
 	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
 	// falls to after it is not a local, a self-field, a top-level constant or a `var`. It is what makes
