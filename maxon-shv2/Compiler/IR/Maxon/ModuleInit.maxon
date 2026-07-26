@@ -90,9 +90,7 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 
 	for global in globals 'eachGlobal'
 		let record = initialRecordOf(fn, global: global)
-		let addr = fn.mintOfType(MaxonType.integer)
-		fn.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
-		fn.emit(MaxonOp.storeIndirect(addr, offset: GlobalSlotOffset, value: record, valueType: global.valueType), range: global.range)
+		fn.emit(MaxonOp.storeIndirect(fn.emitSlotAddr(global), offset: GlobalSlotOffset, value: record, valueType: global.valueType), range: global.range)
 	end 'eachGlobal'
 
 	fn.terminate(MaxonOp.retVoid, range: anchorRange(globals))
@@ -154,8 +152,7 @@ function buildGlobalCleanup(module MaxonModule, project Project, globals Managed
 	var fn = SynthesizedFunction.open(module, project: project, name: GlobalCleanupName, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
 
 	for global in globals 'eachGlobal'
-		let addr = fn.mintOfType(MaxonType.integer)
-		fn.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
+		let addr = fn.emitSlotAddr(global)
 		let record = fn.mintOfType(global.valueType)
 		fn.emit(MaxonOp.loadIndirect(record, addr: addr, offset: GlobalSlotOffset, valueType: global.valueType), range: global.range)
 		_ = fn.emitRuntimeCall(global.dropCallee, arg: record, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: global.range)
@@ -238,6 +235,19 @@ type SynthesizedFunction
 	function mintOfType(valueType MaxonType) returns ValueId
 		return self.mint(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintOfType'
+
+	// ⭐ **THE ADDRESS OF A MANAGED GLOBAL'S `.data` SLOT** — `globalAddr <label>`, minted as a pointer
+	// (`Parser.emitGlobalAddr`'s twin on this carrier). BOTH synthesized functions open every global with
+	// it, so it is one method rather than two identical pairs of lines: `__module_init` writes the slot and
+	// `__maxon_global_cleanup` reads it, and if those two ever derived the address differently the init
+	// would fill one slot while the cleanup dropped another — a wrong answer at run time, on a program the
+	// compiler accepted. The OFFSET is not repeated for the same reason: `GlobalSlotOffset` is the one
+	// constant both stores and loads spell.
+	function emitSlotAddr(global ManagedGlobal) returns ValueId
+		let addr = self.mintOfType(MaxonType.integer)
+		self.emit(MaxonOp.globalAddr(addr, label: global.label), range: global.range)
+		return addr
+	end 'emitSlotAddr'
 
 	// Append a body op, recording its span and the origin of the value it defines — the choke point
 	// `FileParseArtifact.emitOp` is for parsed code, and it keeps the identical two invariants.

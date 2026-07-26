@@ -83,10 +83,27 @@ end 'eliminateDeadFunctions'
 // A duplicate name cannot reach here — `mergeArtifact` raises E3006 on a duplicate user function, and
 // every installed runtime symbol is `__`-prefixed and installed at exactly one site — so `upsert`'s
 // last-wins has no case to decide.
+//
+// ⚠ **AND NOW IT IS CHECKED RATHER THAN MERELY WRITTEN DOWN.** The claim above was a documented
+// invariant with nothing behind it, and `upsert` is silent by construction: a second install would take
+// the first one's index out of this map, the walk would mark ONE of the two live, and the other would be
+// swept — a call fixup with no target, or a `__maxon_global_cleanup` that never runs, from a compile
+// nothing complained about. P1.7 slice 2a is what made the premise worth enforcing: `ModuleInit` installs
+// from a NEW site, and it is the only installer that appends into the MEMOIZED `queryAllModule` module
+// rather than into the post-pipeline `stdModule`, so "installed at exactly one site" acquired a second
+// dependency — that `compileToCodeResult` runs at most once per `Project`, which is a property of the
+// DRIVER and not of this pass (see that file's mutate-the-memo header).
+//
+// The check costs one integer compare per function and no hash probe: the loop inserts index `i` on
+// iteration `i`, so the map's height IS `i + 1` after every insert unless one collapsed two names into
+// one entry.
 function indexFunctionsByName(module StdModule) returns FuncIndexByName
 	var byName = FuncIndexByName.create()
 	for i in 0 upto module.funcCount() 'eachFunc'
 		byName.upsert(module.getFunc(i).name, value: i)
+		if byName.count() != i + 1 'duplicateName'
+			panic("indexFunctionsByName: two functions are named '{String.from(module.getFunc(i).name)}' — a duplicate user function is E3006 at merge and every runtime symbol is installed at exactly one site, so this is an installer that ran twice (or a compile driven twice over one memoized module), and the name index can only keep one of them")
+		end 'duplicateName'
 	end 'eachFunc'
 	return byName
 end 'indexFunctionsByName'

@@ -16521,6 +16521,28 @@ export type Parser
 			return try self.dispatchMethodOnBinding(func, binding: self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok, resultUsed: resultUsed)
 		end 'localReceiver'
 
+		// A CAPTURED enclosing receiver (P1.5-A2b-2): `b.doubled()` inside a closure that captures the
+		// struct `b`. The base is not in the closure's OWN scope (checked above) but resolves into an
+		// enclosing one.
+		//
+		// ⚠⚠ **IT IS ASKED BEFORE THE TOP-LEVEL FALL-THROUGH, AND THAT ORDER *IS* THE SHADOWING RULE —
+		// ONE RULE, ENCODED IN THREE PLACES, WHICH IS WHY EACH OF THEM SAYS SO.** `parseVariableReference`
+		// states it for a bare read ("an enclosing local that SHADOWS a same-named global is caught as the
+		// capture it is, not silently resolved to the global — a wrong answer"), and `methodCallsAt` asks
+		// its two membership tests in the same order. A method RECEIVER is the same name in the same
+		// position, so it must resolve to the same binding.
+		//
+		// This arm sat BELOW the managed one until the P1.7-slice-2a review, and the inversion was a LIVE
+		// wrong answer rather than a latent one. With a top-level `var msg = "GLOBAL-TWELVE"` and a
+		// `let msg = "ab"` in `main`, a closure body read the CAPTURE for `{msg}` (printing `ab`) and the
+		// GLOBAL for `msg.byteLength()` (yielding 13) — two resolutions of one name, in one expression,
+		// neither of them a compile error. The `var` half is the worse one: a `var` receiver is WRITABLE,
+		// so a mutating method would have written the global while the program named a local.
+		match try self.captureScopeOf(baseTok) 'captured'
+			found(enclosing) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, resultUsed: resultUsed)
+			notCaptured then break 'captured'
+		end 'captured'
+
 		// ⭐ **A TOP-LEVEL MANAGED BINDING IS A RECEIVER** — a `let` (`Live.count()`, `name.byteLength()`,
 		// P1.7a) or a `var` (`msg.append("!")`, `Buffer.count()`, P1.7 slice 2a). Neither is a binding in
 		// scope and neither is a capture, so without this arm the base reads as a TYPE NAME and the call is
@@ -16539,9 +16561,9 @@ export type Parser
 		// `mutable` is what makes `Live.push(1)` an E3019 while `Buffer.push(1)` is legal.
 		//
 		// A `none` here is a base spelled like a managed binding but not VISIBLE from this file. It cannot
-		// arrive through `methodCallsAt` (which resolved the same answer and declined the shape), so it
-		// falls through to the capture arm exactly as a non-managed base does — no arm of its own, and no
-		// impossible-state panic asserting a recompute agreed with itself.
+		// arrive through `methodCallsAt` (which resolved the same answer and declined the shape), and with
+		// the capture already ruled out above there is nothing left for it to be — so it joins the gate's
+		// own `false` at the one impossible-state panic below rather than getting an arm of its own.
 		//
 		// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
 		// receiver-writing method rewrites the RECORD in place and never moves it: `__str_append` grows a
@@ -16561,13 +16583,7 @@ export type Parser
 			end 'binding'
 		end 'managedTopLevelBase'
 
-		// A CAPTURED enclosing struct is the receiver (P1.5-A2b-2): `b.doubled()` inside a closure that
-		// captures the struct `b`. `methodCallsAt` already gated this — the base is not in the closure's own
-		// scope but resolves into a capture scope — so a `notCaptured` here is a driver invariant violation.
-		match try self.captureScopeOf(baseTok) 'captured'
-			found(enclosing) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, resultUsed: resultUsed)
-			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a top-level managed binding, nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
-		end 'captured'
+		panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding, a capture, nor a top-level managed binding, but `methodCallsAt` gated this call — the two must agree on what a method receiver is, and on the ORDER they resolve one in")
 	end 'parseMethodCall'
 
 	// ⭐ **THE SHAPE OF A SYNTHETIC RECEIVER BINDING, DECIDED ONCE.** A top-level managed receiver is not a
@@ -19097,6 +19113,12 @@ export type Parser
 		// enclosing local that SHADOWS a same-named global is caught as the capture it is, not silently
 		// resolved to the global (a wrong answer). Outside a closure `closureCaptureScopes` is empty and this
 		// returns `notCaptured` after one `count()` read.
+		//
+		// ⚠ **THE SAME ORDER BINDS A METHOD RECEIVER, WHICH IS THE SAME NAME IN THE SAME POSITION.** It is
+		// re-encoded in `parseMethodCall`'s arms and in `methodCallsAt`'s membership tests, because neither
+		// can route through this function (one needs a receiver binding, the other a side-effect-free bool).
+		// `parseMethodCall` had them the other way round until the P1.7-slice-2a review and carries the
+		// measurement of what that cost; a change here is a change there.
 		match try self.captureEnclosing(tok) 'capture'
 			captured(value) then return value
 			notCaptured then break 'capture'
@@ -21654,6 +21676,12 @@ export type Parser
 		// VALUE the method dispatches on, which is what separates it from a static call on a TYPE name. The
 		// managed binding is asked LAST because it is the only one of the three that can allocate (see
 		// `managedTopLevelBaseAt`), and a local or captured base has already answered by then.
+		//
+		// ⚠ **THAT ORDER IS ALSO THE SHADOWING RULE, AND IT MUST MATCH `parseMethodCall`'S ARMS EXACTLY.**
+		// Cheapest-first and local-then-capture-then-top-level happen to agree here, which is what makes the
+		// agreement easy to break: a reorder for cost alone would silently re-point a name that a closure
+		// captures at a same-named global. `parseMethodCall` carries the measurement of what that cost —
+		// two resolutions of one name in one expression, neither a compile error.
 		//
 		// ⚠ The managed binding is ALSO the only one of the three whose name can belong to a declared
 		// TYPE as well — which is why it, alone, has to weigh itself against the type-based readings of

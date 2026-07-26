@@ -1006,9 +1006,26 @@ receiver-writing method rewrites the record in place and never moves it. `manage
 ONE resolution both the token-shape predicate and the dispatch read, so they cannot claim the shape for
 one door and resolve it through the other.
 
+> ⚠ **A RECEIVER RESOLVES IN THE SAME ORDER A BARE READ DOES — local, then CAPTURE, then top-level — and
+> that order is the shadowing rule, not a cost preference.** It is encoded in three places that cannot
+> route through one another (`parseVariableReference` returns a value, `parseMethodCall` needs a receiver
+> binding, `methodCallsAt` must be a side-effect-free bool), so each of them states it. `parseMethodCall`
+> had the last two INVERTED until the slice-2a review, and it was a live wrong answer rather than a latent
+> one: with `var msg = "GLOBAL-TWELVE"` and a `let msg = "ab"` in `main`, one closure body read the
+> capture for `{msg}` and the **global** for `msg.byteLength()` — two resolutions of one name in one
+> expression, neither of them a compile error. A `var` receiver is the worse half, because it is WRITABLE:
+> a mutating method would have written the global while the program named a local. Correctly ordered, a
+> captured String receiver is refused exactly as it is without the name collision (`capturedStructBase` —
+> only a struct carries methods through a capture at this rung).
+
 **Both functions are unconditional DFE roots**, beside `__mm_leak_check`, for its reason: the entry stub
 that calls them is built after the prune, so a pruned root leaves a call with no callee — loud on every
-backend, never silent.
+backend, never silent. And the name index the prune walks now **PANICS on a duplicate** rather than
+silently keeping the last one: `indexFunctionsByName` documented "installed at exactly one site" without
+checking it, and `ModuleInit` is the first installer to append into the MEMOIZED `queryAllModule` module,
+so that premise acquired a second dependency — that `compileToCodeResult` runs at most once per `Project`,
+which is the driver's property and not the pass's. The check is one integer compare per function (the loop
+inserts index `i` on iteration `i`, so the map's height must be `i + 1`), and it costs zero allocations.
 
 **Nothing about a managed `var` depends on file order.** A managed initializer may not reference another
 global (`evaluateDecl` answers `notFound` for one, so `let A = "x"` / `let B = A` is E2004 in both
