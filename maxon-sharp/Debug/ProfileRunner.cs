@@ -107,6 +107,13 @@ public static class ProfileRunner {
       return null;
     }
 
+    // Asked before the sidecar is read, so a target that is simply not there is reported as that rather
+    // than as whatever the sidecar loader makes of a file it cannot open.
+    if (TargetLauncher.MissingExecutable(exePath) is { } missing) {
+      error = missing;
+      return null;
+    }
+
     var sidecar = MxdbgSidecar.TryLoad(exePath,
       "a profile needs it to name the code its samples land in", out _, out error);
     if (sidecar == null) return null;

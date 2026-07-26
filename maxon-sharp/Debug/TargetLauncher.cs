@@ -42,11 +42,21 @@ public static class TargetLauncher {
   /// the program has ended — however it ended, including the timeout kill. That shape is what stops a
   /// sampler from outliving its target: there is no path out of here that skips the dispose.
   /// </summary>
+  /// <summary>
+  /// The refusal for a target that is not there, or null when it is — worded ONCE.
+  ///
+  /// It is public because the profiler must ask BEFORE this class runs anything: it validates debug
+  /// info first (so a run is never burned to reach a refusal that was knowable up front), and reaching
+  /// a missing file through the sidecar loader instead produced a raw framework message carrying an
+  /// ABSOLUTE path — a refusal that reads worse than its sibling's and cannot be diffed across machines.
+  /// </summary>
+  public static string? MissingExecutable(string exePath) =>
+    File.Exists(exePath) ? null : $"no such executable: {ReportPath.Display(exePath)}";
+
   public static TargetRun Run(string exePath, IReadOnlyList<string> targetArgs, TimeSpan timeout,
       Action<string> onOutput, Func<Process, IDisposable?>? observe = null,
       IReadOnlyDictionary<string, string>? targetEnv = null) {
-    if (!File.Exists(exePath))
-      return Failed($"no such executable: {ReportPath.Display(exePath)}");
+    if (MissingExecutable(exePath) is { } missing) return Failed(missing);
 
     // Rooted: Process.Start resolves a relative program name against PATH rather than the working
     // directory, so `dir/prog.exe` would be reported as missing.
