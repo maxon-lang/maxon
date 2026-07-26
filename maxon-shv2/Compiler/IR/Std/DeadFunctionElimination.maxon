@@ -43,8 +43,13 @@
 // second "live vars excluding inits" pre-walk, and a hand-maintained `shouldKeepGlobal` allow-list of
 // name prefixes. shv2 keeps the data and prunes only code, which is what lets the root set below stay
 // three lines long: because every `.rdata` function slot survives, every function a slot NAMES must
-// survive too, and "is this label reachable?" never has to be asked. Dead-DATA elimination is a
+// survive too, and "is this label reachable?" never has to be asked. Dead-`.rdata` elimination is a
 // separate rung with its own goldens (`.rdata` offsets move, so `RequiredData` moves with them).
+//
+// ⚠ **`.data` IS ALREADY DONE, AND DELIBERATELY NOT HERE** (P1.7 slice 3): a dead top-level global's slot
+// is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`. That is
+// upstream of this pass for the reason stated above — a `.data` slot cannot be laid out after the fact — so
+// the two never both answer for a global, and nothing here needs a `shouldKeepGlobal` list either.
 //
 // Orphaned blocks and ops are LEFT BEHIND, exactly as every block-rebuilding pass leaves them
 // (`IrModule.liveOpIndices`' header). `compactOps`/`compactBlocks` would reclaim them, but they cost

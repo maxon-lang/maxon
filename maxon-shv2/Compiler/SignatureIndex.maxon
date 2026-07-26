@@ -2830,16 +2830,16 @@ export type ProgramSignatures
 	function resolvedGlobalOf(index TopLevelDeclIndex) returns TopLevelGlobalLookup
 		let decl = self.declAt(index)
 		match decl.outcome 'state'
-			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: constantValueType(tag), mutable: decl.mutable)
+			value(_, tag) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: constantValueType(tag), mutable: decl.mutable)
 			failed to poisoned then return TopLevelGlobalLookup.notFound
 			// ⭐ A MANAGED `var` (P1.7 slice 2a) reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
 			// and a use of the literal it was initialized from are the same type by construction.
-			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: self.managedConstValueType(kind), mutable: decl.mutable)
+			managedValue(_, kind) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.managedConstValueType(kind), mutable: decl.mutable)
 			// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reads as a managed `var` does — a POINTER slot holding the
 			// heap record `__module_init` built. It is the one arm `mutable` can arrive `false` from, and that
 			// bit is the whole of what makes `Live.push(1)` an E3019 and `Live = […]` an E2013.
-			arrayValue(_, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(index), valueType: self.constArrayValueType(element), mutable: decl.mutable)
+			arrayValue(_, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element), mutable: decl.mutable)
 			pending to evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
@@ -2875,11 +2875,17 @@ export type ProgramSignatures
 		end 'e'
 	end 'constArrayValueType'
 
-	// The `.data` label of the STORED decl at `index`. Having storage is a precondition, not a case: an
-	// inlined binding has no slot, and every caller reached this through a `stored`-filtered lookup or the
-	// same `hasStorage` filter the arena walks use.
-	function dataLabelOf(index TopLevelDeclIndex) returns ByteArray
-		let decl = self.declAt(index)
+	// The `.data` label of a STORED decl. Having storage is a precondition, not a case: an inlined binding
+	// has no slot, and every caller reached this through a `stored`-filtered lookup or the same
+	// `hasStorage` filter the arena walks use.
+	//
+	// ⚠ **IT TAKES THE DECL, NOT ITS ARENA INDEX** (P1.7 slice 3 review). Every caller already holds the
+	// decl — each one fetched it to read `outcome` or `name` — so an index parameter would be a SECOND way
+	// to say which declaration is meant, with nothing forcing the two to agree: a caller that paired
+	// `declAt(j)` with index `i` would be answered about `i`'s label under `j`'s storage bit, which is a
+	// wrong answer rather than a compile error. One parameter cannot desynchronize from itself, and it
+	// drops the re-fetch this made every caller pay.
+	function dataLabelOf(decl TopLevelDecl) returns ByteArray
 		if not decl.hasStorage 'inlined'
 			panic("ProgramSignatures.dataLabelOf: '{String.from(decl.name)}' is an inlined top-level constant and has no .data slot — a constant materializes its value at every read")
 		end 'inlined'
@@ -2889,8 +2895,8 @@ export type ProgramSignatures
 		return decl.dataLabel
 	end 'dataLabelOf'
 
-	// ⭐⭐ **DOES THE DECLARATION AT `index` STILL CONTRIBUTE STORAGE?** — the ONE filter both arena walks
-	// below apply, and the whole of what makes a dead global's THREE PIECES drop TOGETHER (P1.7 slice 3).
+	// ⭐⭐ **DOES THIS DECLARATION STILL CONTRIBUTE STORAGE?** — the ONE filter both arena walks below
+	// apply, and the whole of what makes a dead global's THREE PIECES drop TOGETHER (P1.7 slice 3).
 	// The `.data` slot `declaredGlobals` reserves, the `__module_init` store `managedGlobals` causes and
 	// the `__maxon_global_cleanup` drop it causes are all downstream of this single answer, so they cannot
 	// disagree — and every way they COULD disagree is broken: a slot with no initializer holds null where
@@ -2901,12 +2907,12 @@ export type ProgramSignatures
 	// askable: an INLINED binding has no slot at all (a `let` scalar materializes its value at every read,
 	// and `dataLabelOf` panics rather than inventing a label for one), and a STORED binding whose label no
 	// `globalAddr` in the program names is dead.
-	function contributesStorage(index TopLevelDeclIndex, decl TopLevelDecl, live LiveGlobalLabelSet) returns bool
+	function contributesStorage(decl TopLevelDecl, live LiveGlobalLabelSet) returns bool
 		if not decl.hasStorage 'inlinedHasNoSlot'
 			return false
 		end 'inlinedHasNoSlot'
 
-		return live.contains(self.dataLabelOf(index))
+		return live.contains(self.dataLabelOf(decl))
 	end 'contributesStorage'
 
 	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
@@ -2922,20 +2928,20 @@ export type ProgramSignatures
 		var entries = DataSectionEntryArray.create()
 		for i in 0 upto self.decls.count() 'each'
 			let decl = self.declAt(i)
-			if not self.contributesStorage(i, decl: decl, live: live) 'noReachableSlot'
+			if not self.contributesStorage(decl, live: live) 'noReachableSlot'
 				continue
 			end 'noReachableSlot'
 			match decl.outcome 'state'
-				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(tag, name: decl.name), value: payload))
+				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload))
 				failed to poisoned then continue
 				// ⭐ A MANAGED `var` (P1.7 slice 2a) reserves a POINTER slot holding NULL. The record it will
 				// point at cannot be baked into a constant image — a data→data pointer has no compile-time VA
 				// under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero here and
 				// `__module_init` writes the address before `main` runs.
-				managedValue(_, kind) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(maxonTypeTag(self.managedConstValueType(kind)), name: decl.name), value: ManagedGlobalInitialSlot))
+				managedValue(_, kind) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.managedConstValueType(kind)), name: decl.name), value: ManagedGlobalInitialSlot))
 				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) reserves the SAME null POINTER slot, for the same reason
 				// and now for a `let` too — its record is built, so there is even less to bake than a String's.
-				arrayValue(_, element) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(i)), valueType: globalStdType(maxonTypeTag(self.constArrayValueType(element)), name: decl.name), value: ManagedGlobalInitialSlot))
+				arrayValue(_, element) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(maxonTypeTag(self.constArrayValueType(element)), name: decl.name), value: ManagedGlobalInitialSlot))
 				pending to evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -2959,15 +2965,15 @@ export type ProgramSignatures
 		var entries = ManagedGlobalArray.create()
 		for i in 0 upto self.decls.count() 'each'
 			let decl = self.declAt(i)
-			if not self.contributesStorage(i, decl: decl, live: live) 'noReachableSlot'
+			if not self.contributesStorage(decl, live: live) 'noReachableSlot'
 				continue
 			end 'noReachableSlot'
 			match decl.outcome 'state'
 				value to poisoned then continue
-				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(i, decl: decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind)))
+				managedValue(bytes, kind) then entries.push(self.managedGlobalEntry(decl, initializer: managedLiteralInitializer(bytes, kind: kind), valueType: self.managedConstValueType(kind)))
 				// ⭐ AN ARRAY BINDING (P1.7 slice 2b) is a managed global whichever keyword declared it — its
 				// record is built before `main` and released after, and `let` refuses only the WRITE.
-				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(i, decl: decl, initializer: self.arrayRecordInitializer(elements, element: element), valueType: self.constArrayValueType(element)))
+				arrayValue(elements, element) then entries.push(self.managedGlobalEntry(decl, initializer: self.arrayRecordInitializer(elements, element: element), valueType: self.constArrayValueType(element)))
 				pending to evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
@@ -2977,8 +2983,8 @@ export type ProgramSignatures
 	// One managed global's full description. Split out so each `match` arm above stays one line, and it takes
 	// the TYPE its arm already built rather than re-deriving one: the drop callee is routed off that same
 	// type, so the record the init builds and the drop the cleanup emits cannot name two different types.
-	function managedGlobalEntry(index TopLevelDeclIndex, decl TopLevelDecl, initializer ManagedGlobalInitializer, valueType MaxonType) returns ManagedGlobal
-		return ManagedGlobal.create(self.dataLabelOf(index), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
+	function managedGlobalEntry(decl TopLevelDecl, initializer ManagedGlobalInitializer, valueType MaxonType) returns ManagedGlobal
+		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
 	end 'managedGlobalEntry'
 
 	// The record construction an ARRAY literal global asks for: `__arr_create` with the stamps this instance

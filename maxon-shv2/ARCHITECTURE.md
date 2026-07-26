@@ -1123,6 +1123,12 @@ table to re-lay-out, and no ordering between three edits to get right.
 > set is built from the very ops that would reference the slot — making "an op names a slot the layout
 > dropped" **unrepresentable** rather than merely unlikely.
 >
+> ⭐ **AND IF IT IS EVER WRONG ANYWAY, IT FAILS LOUD ON EVERY TARGET.** All three backends resolve a
+> `globalAddr` label through the one `GlobalDataTable.dataSectionOffsetOf`, which PANICS by name on a label
+> the layout does not hold. So an under-walk is a compile-time abort naming the global, never a miscompile —
+> verified by forcing the walk to answer "nothing is live": x64, arm64 and wasm all died with
+> `no .data slot is labelled '__data_G'`. That backstop is what makes the pass safe to extend.
+>
 > ⭐ **BIDIRECTIONALITY IS FREE, and the three-op split is why.** The spec states liveness as "a `globalLoad`
 > OR a `globalStore`"; shv2 has neither fused op — a read is `globalAddr`+`loadIndirect`, a write is
 > `globalAddr`+`storeIndirect` — so both open with the SAME op and there is no second question to ask. A

@@ -26,6 +26,15 @@
 // names a slot the layout dropped") is not merely unlikely, it is unrepresentable. A binding that is
 // resolved but never emitted merely fails to keep a slot nothing asks for.
 //
+// ⭐ **AND IF THIS FILE IS EVER WRONG ANYWAY, IT FAILS LOUD — ON EVERY TARGET.** The argument above is an
+// argument; this is the mechanism behind it. All three backends resolve a `globalAddr`'s label through the
+// ONE lookup `GlobalDataTable.dataSectionOffsetOf`, which PANICS by name on a label the layout does not
+// hold (x64 `X64Backend:1804`, arm64 `Arm64Backend:1344-1345`, wasm `StdToWasm:1697`). So an under-walk
+// here — a block source this loop cannot see, a `globalAddr` emitted by something new after it runs — is a
+// COMPILE-TIME abort naming the global, never a miscompile. MEASURED (P1.7 slice 3 review) by forcing the
+// walk to answer "nothing is live" and compiling a program that reads one global: all three targets died
+// with `no .data slot is labelled '__data_G'`. That is what makes this pass safe to extend.
+//
 // ⭐ **BIDIRECTIONALITY IS FREE HERE, AND IT IS THE THREE-OP SPLIT THAT MAKES IT SO.** The spec requires
 // that a var only ever STORED to survives — "stores are observable through `globalLoad` or a debugger"
 // (`specs/dead-top-level-var-elim.md:32`) — and states liveness as "a `globalLoad` OR a `globalStore`
