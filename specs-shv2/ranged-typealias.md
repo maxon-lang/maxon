@@ -269,7 +269,6 @@ end 'main'
 ### Float range check: runtime guard on a non-literal
 
 <!-- test: float-runtime-range-panic -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 typealias Wide = float(f64.min to f64.max)
@@ -295,7 +294,6 @@ Stack trace:
 ```
 
 <!-- test: float-runtime-negative-bound-panic -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Neg = float(-100.0 to -1.0)
 typealias Wide = float(f64.min to f64.max)
@@ -345,7 +343,6 @@ The narrowing an `f32`-bounded alias promises, checked at run time — a value a
 f64 holds comfortably but an f32 cannot.
 
 <!-- test: float-narrow-f64-to-f32 -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Wide = float(f64.min to f64.max)
 typealias Narrow = float(f32.min to f32.max)
@@ -417,7 +414,6 @@ error E3005: specs/fragments/ranged-typealias/error.return-float-literal-out-of-
 ### Error: top-level let float cast out of range
 
 <!-- test: error.top-level-float-cast-out-of-range -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 
@@ -432,7 +428,6 @@ error E3005: specs/fragments/ranged-typealias/error.top-level-float-cast-out-of-
 ```
 
 <!-- test: top-level-float-cast-in-range -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 
@@ -518,7 +513,6 @@ end 'main'
 ### Runtime range check fails (panic)
 
 <!-- test: runtime-check-fail -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
@@ -636,7 +630,6 @@ end 'main'
 ### Return value range check: runtime panic
 
 <!-- test: return-runtime-check-fail -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -1135,7 +1128,6 @@ own LITERAL check agrees the value is in range; only its RUNTIME check keeps the
 signed lower bound and panics — a bootstrap inconsistency this does not copy.)
 
 <!-- test: unsigned-max-upper-runtime-pass -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Big = int(5 to u64.max)
 
@@ -1158,7 +1150,6 @@ A negative literal into `int(5 to u64.max)` wraps to a huge unsigned inside the
 range, so `-1 as Big` is `u64.max` — in range, no compile error.
 
 <!-- test: unsigned-max-upper-literal-in-range -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Big = int(5 to u64.max)
 
@@ -1180,7 +1171,6 @@ A small non-negative literal below the low bound is still out of range for
 `int(5 to u64.max)` — the unsigned upper does not admit `3`.
 
 <!-- test: error.unsigned-max-upper-literal-out-of-range -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Big = int(5 to u64.max)
 
@@ -1200,7 +1190,6 @@ initializer is caught with the same E3005 a body cast gets — even though a
 top-level `let` is not a function and records no runtime-guard site.
 
 <!-- test: error.top-level-cast-out-of-range -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias SmallByte = int(0 to 10)
 
@@ -1219,7 +1208,6 @@ error E3005: specs/fragments/ranged-typealias/error.top-level-cast-out-of-range.
 An in-range top-level `let` cast compiles and its value is usable.
 
 <!-- test: top-level-cast-in-range -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias SmallByte = int(0 to 10)
 

@@ -111,7 +111,6 @@ error E3009: specs/fragments/invalid-cast/error.function-to-int.test:11:14: Cann
 ```
 
 <!-- test: valid.compatible-casts-still-compile -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Small = int(0 to 100)
 typealias Big = int(0 to 1000)

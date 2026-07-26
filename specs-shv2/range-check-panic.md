@@ -33,7 +33,6 @@ Stack trace:
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Percent = int(0 to 100)
 
@@ -58,7 +57,6 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.lower-bound -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Natural = int(0 to i64.max)
 
@@ -99,7 +97,6 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.nested-call -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Score = int(0 to 100)
 

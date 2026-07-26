@@ -33,7 +33,6 @@ var values = items.map(function(_) gives defaultValue)
 ## Tests
 
 <!-- test: closure-capture.basic -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -54,7 +53,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.ignore-param -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -75,7 +73,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.struct-field -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -129,7 +126,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.multiple-captures -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -151,7 +147,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.no-capture-regression -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -171,7 +166,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.capture-string -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -307,8 +301,8 @@ end 'main'
 ```
 
 <!-- test: closure-capture.block-local-method-receiver -->
-<!-- targets: x64-windows, x64-linux -->
-<!-- wasm32-wasi OMITTED: the closure returns `ExitCode` (via `b.doubled() returns ExitCode`), and an ExitCode-returning function VALUE traps on wasm — a PRE-EXISTING A1 limitation, closure-INDEPENDENT and NOT the method-on-captured-struct mechanism (the same shape with `Integer` returns runs clean on wasm). `ExitCode` lowers to u32/i32 (valueTagToStdType), but the wasm `call_indirect` functype is ARG-COUNT-derived to `(i64^n) -> i64` (A1's "every fn value is (i64ⁿ)→i64" assumption), so a `(i64)->i32` closure mismatches `(i64)->i64` and wasmtime traps "indirect call type mismatch". Fixing it needs the callIndirect to carry its RESULT width to the wasm tier — an A1-design change, its own follow-up rung. The method-on-captured-struct mechanism itself is target-neutral and covered on x64 here. -->
+<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+<!-- wasm32-wasi OMITTED: the closure returns `ExitCode` (via `b.doubled() returns ExitCode`), and an ExitCode-returning function VALUE traps on wasm — a PRE-EXISTING A1 limitation, closure-INDEPENDENT and NOT the method-on-captured-struct mechanism (the same shape with `Integer` returns runs clean on wasm). `ExitCode` lowers to u32/i32 (valueTagToStdType), but the wasm `call_indirect` functype is ARG-COUNT-derived to `(i64^n) -> i64` (A1's "every fn value is (i64ⁿ)→i64" assumption), so a `(i64)->i32` closure mismatches `(i64)->i64` and wasmtime traps "indirect call type mismatch". Fixing it needs the callIndirect to carry its RESULT width to the wasm tier — an A1-design change, its own follow-up rung; re-verified live on 2026-07-26 (wasmtime still traps "indirect call type mismatch"). The mechanism itself is target-neutral and runs on every REGISTER target, all four of which are listed. -->
 A `let` declared inside an `if`-block body — a nested block scope — captured
 into a closure whose body calls a METHOD on it (`b.doubled()`). Historically a
 method call on a captured outer receiver fell through `parseIdentifierExpr`'s
@@ -356,7 +350,6 @@ end 'main'
 ### Closure body that is a bare string literal
 
 <!-- test: closure-capture.string-literal-body -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Msg = function(Integer) returns String
@@ -403,7 +396,6 @@ None of the cases below is a diagnostics test. Each is a correct program that mu
 and run.
 
 <!-- test: closure-capture.type-declared-after-a-closure-in-a-free-function -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A closure literal in a FREE function's body, with a `type` declared after it. The sweep must leave
 its block depth at zero across the closure, or `type Box` is never recorded and `Self{…}` panics.
 ```maxon
@@ -433,7 +425,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.type-declared-after-a-closure-bearing-type -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same overshoot one level in: the closure sits in a METHOD body, so the sweep runs past `type
 Counter`'s `end` and consumes `type Box` as though it were more of `Counter`.
 ```maxon
@@ -467,7 +458,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.field-declared-after-a-closure-bearing-method -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A field declared BELOW a method that contains a closure literal. The overshoot puts the field one
 level too deep for the sweep's depth-0 field gate, so it is dropped from the layout and every use of
 it is refused as "no field named …" — a wrong answer about a field that is right there.
@@ -496,7 +486,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.top-level-binding-after-a-closure -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A top-level `let` and `var` declared after a closure literal. Both are recorded only at depth zero,
 so both go missing — and `dispatchTopLevel` then meets a binding the sweep never saw.
 ```maxon
@@ -521,7 +510,6 @@ end 'main'
 ```
 
 <!-- test: closure-capture.enum-declared-after-a-closure -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 An `enum` declared after a closure literal — the third depth-0 gate, and the one whose failure is a
 parse-level diagnostic (an unrecorded `Color.green` is read as a ranged-alias bound) rather than a
 panic.
