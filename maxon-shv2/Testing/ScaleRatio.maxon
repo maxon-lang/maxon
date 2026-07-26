@@ -3,8 +3,8 @@
 // THE LADDER DOUBLES. Every rung is twice the program of the rung below it, so the ratio between two
 // consecutive rungs IS the growth, read straight off the raw numbers:
 //
-//     x2.00   linear        — twice the program, twice the allocations
-//     x4.00   quadratic     — twice the program, four times the allocations
+//     x2.00   linear        — twice the program, twice the allocations (or bytes, or CPU ticks)
+//     x4.00   quadratic     — twice the program, four times as many
 //     x1.00   constant      — the phase does not grow with the program at all
 //
 // There is nothing to fit, and that is the point. This file replaces a least-squares power-law fit
@@ -16,14 +16,30 @@
 // the instrument so it would stop complaining. A ratio has no residual, no verdict and nothing to
 // exempt, because a ratio is a division.
 //
-// AND IT IS TAKEN OF MEMORY ONLY. Allocation counts and byte volumes are bit-for-bit reproducible —
-// the same compiler on the same corpus produces the same digits on an idle machine and a loaded one —
-// so a ratio of them is exact, and a change in it is REAL. Wall time is not reproducible, so a
-// number derived from it says as much about what else the machine was doing as it does about the
-// compiler. scale-test therefore does not collect time at all. (The COMPILER still times itself:
-// `--metrics=<path>` and `--log=compiler:debug` report per-phase milliseconds for one compile, which
-// is exactly where a wall-clock reading is worth having and where it is not being trended against a
-// different machine on a different day.)
+// IT IS THE SAME DIVISION IN EVERY COLUMN — BUT THE COLUMNS ARE NOT EQUALLY EXACT, AND A RATIO
+// INHERITS WHATEVER ITS INPUTS CARRY. Allocation counts and byte volumes are bit-for-bit
+// reproducible — the same compiler on the same corpus produces the same digits on an idle machine
+// and a loaded one — so a ratio of them is exact, and a change in it is REAL. CPU ticks are not.
+// They count only the compiling THREAD, which is what makes them trendable at all where wall time is
+// not, but they still move a few percent with turbo, thermal throttling and cache pressure from
+// other cores. So a ratio taken of CPU ticks carries that band and a ratio taken of allocations does
+// not, and the two must not be read with the same confidence.
+//
+// THE BAND IS SMALL AGAINST THE QUESTION THE LADDER ASKS, WHICH IS WHY THE COLUMN IS WORTH HAVING.
+// x2.00 against x4.00 is a 100% margin; a few percent cannot move a reading across it. And the CPU
+// ratio answers the one question the exact columns structurally cannot — a pass that re-walks tokens
+// and allocates almost nothing reads x1.00 in allocations however quadratic it is. What a CPU ratio
+// may NOT be used for is a claimed constant-factor win of a few percent: that is inside the band, and
+// the exact columns are where it belongs. The unit is platform-defined (TSC ticks on Windows,
+// nanoseconds on POSIX) with no honest conversion between the two, which costs the RATIO nothing —
+// a division cancels the unit — and is exactly why the ratio, not the absolute, is what travels.
+//
+// WALL TIME IS STILL NOT COLLECTED AT ALL, and that has not changed. It counts every other process
+// on the box, so a dated table of it would compare a loaded machine in July against an idle one in
+// August and conclude nothing. The metrics TSV carries a nanosecond column and the runner reads past
+// it. (The COMPILER still times itself: `--metrics=<path>` and `--log=compiler:debug` report
+// per-phase milliseconds for one compile, which is exactly where a wall-clock reading is worth having
+// and where it is not being trended against a different machine on a different day.)
 
 // A growth ratio in HUNDREDTHS: 200 is x2.00. Integer arithmetic end to end — the inputs are exact
 // counters and there is no reason to launder them through a float on the way to a division.
@@ -32,13 +48,18 @@ export typealias GrowthRatio = int(0 to u64.max)
 let RatioScale = 100 as GrowthRatio
 let RatioFractionDigits = 2
 
-// What a ratio is taken OF: an allocation count, a byte volume, a code size. One type for all three,
-// because the division is the same division and a second copy of it differing only in the name of its
-// parameter is exactly the duplication that has no reason to exist.
+// What a ratio is taken OF: an allocation count, a byte volume, a code size — and, since the CPU
+// column landed, a CPU tick reading. One type for all four, because the division is the same division
+// and a second copy of it differing only in the name of its parameter is exactly the duplication that
+// has no reason to exist.
+//
+// ⚠ THE NAME IS NARROWER THAN WHAT IT HOLDS — a tick reading is not a memory count — and it is said
+// here so a reader is not misled by it. What the type actually means is "a quantity a growth ratio may
+// be taken of", which is the set `ScaleMeasure` (ScaleTestRunner) enumerates.
 export typealias MemoryCount = int(0 to u64.max)
-// A memory count proven non-zero — the divisor type when computing a growth ratio. Integer `/` is
-// fallible (a zero divisor throws); `previous` is guarded non-zero above the divide, so it is cast
-// to this to make the divide provably safe.
+// One of those quantities proven non-zero — the divisor type when computing a growth ratio. Integer
+// `/` is fallible (a zero divisor throws); `previous` is guarded non-zero above the divide, so it is
+// cast to this to make the divide provably safe.
 typealias NonZeroCount = int(1 to u64.max)
 
 // The growth of one rung over the rung below it.

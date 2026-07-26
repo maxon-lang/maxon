@@ -11,29 +11,60 @@
 // or a model — reads them. A field named `verdict` would invite exactly the reflex the whole redesign
 // removed: look for the green light, and if it is not green, make it green.
 //
-// AND THERE IS NO TIME, AND NO EXPONENT. Not `nanos`, not `ms`, not a fitted growth curve, not a
-// residual, not a share. The ladder DOUBLES, so the ratio between two rungs IS the growth and a
-// consumer can take it from the counts in this document with a division; and wall time is
-// machine-dependent, so any number derived from it would say more about what else the box was doing
-// than about the compiler. Everything here is bit-for-bit reproducible, which is what makes
-// differencing two of these documents mean anything at all.
+// AND THERE IS NO WALL TIME, AND NO EXPONENT. Not `nanos`, not `ms`, not a fitted growth curve, not
+// a residual, not a share. The ladder DOUBLES, so the ratio between two rungs IS the growth and a
+// consumer can take it from the counts in this document with a division; and wall time counts every
+// other process on the box, so any number derived from it would say more about what else the machine
+// was doing than about the compiler. The metrics TSV carries a nanosecond column, the runner reads
+// past it, and it does not reach this document.
+//
+// THERE IS A `cpuTicks`, AND IT IS NOT THE SAME KIND OF NUMBER AS THE OTHER THREE. It counts time
+// consumed by the COMPILING THREAD alone — preemption and every other process are invisible to it —
+// which is exactly what makes it trendable where wall time is not, and it is the only column here
+// that can see a cost which allocates nothing. But it is NOT bit-reproducible the way allocs, frees
+// and bytes are: it moves a few percent with turbo, thermal throttling and cache pressure from other
+// cores, and a movement inside that band is not a datapoint. Its unit is platform-defined (TSC ticks
+// on Windows, nanoseconds on POSIX) and there is no honest conversion between them, so a consumer
+// compares RATIOS between rungs, which are unit-free, and absolutes only against runs from the same
+// platform. The other three carry no such caveat, which is what makes differencing two of these
+// documents on THEM mean anything at all.
+//
+// AND THAT ASYMMETRY IS WHY `repeat` IS HERE. Each rung is compiled `--repeat` times: the exact
+// columns come from the first compile and are CROSS-CHECKED identical in every other, while
+// `cpuTicks` is the MINIMUM across them — the least-disturbed sample, since noise can only ADD to a
+// CPU reading. Nothing else in this document distinguishes a single undefended sample from a
+// min-of-three, and that is the difference between a CPU number worth acting on and one that is not.
 //
 // Shape:
 //   {
-//     "rungs":  [ { rung, sourceBytes, codeBytes, allocs, frees, bytes,
+//     "repeat": 3,                                    // compiles per rung; ABSENT if not stated
+//     "rungs":  [ { rung, sourceBytes, codeBytes, allocs, frees, bytes, cpuTicks,
 //                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none
-//                   phases:   [ {name, allocs, frees, bytes} ],
-//                   regalloc: [ {name, allocs, frees, bytes} ] } ],
+//                   phases:   [ {name, allocs, frees, bytes, cpuTicks} ],
+//                   regalloc: [ {name, allocs, frees, bytes, cpuTicks} ] } ],
 //     "corpus": { grew, minGrowthPermille?, floorPermille, reason? },
 //     "previous": { present, date?, note? }
 //   }
 
-export function writeResultJson(path String, results RungResultArray, trend LoggedMemory) throws ScaleError
+// HOW MANY COMPILES each rung's numbers were folded from — the value of `--repeat`.
+//
+// A UNION, NOT A COUNT WITH A DEFAULT. This file cannot know what `--repeat` was given, and writing
+// the usual answer because it is usual would put a number in a machine-readable document that no run
+// produced. `unstated` omits the field entirely, which is the rule `allocsDelta` already follows:
+// absence says "not known", and it is never spelled as a value a consumer could arithmetic on.
+export union RepeatSampling
+	stated(count RepeatCount)
+	unstated
+end 'RepeatSampling'
+
+export function writeResultJson(path String, results RungResultArray, trend LoggedMemory, repeat RepeatSampling = RepeatSampling.unstated) throws ScaleError
 	let target = try FilePath.from(path) otherwise throw ScaleError.reason("'{path}' is not a valid --result-json path")
 
 	var doc = JsonDoc.create()
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
+
+	addRepeatSampling(doc, keys: keys, children: children, repeat: repeat)
 
 	keys.push("rungs")
 	children.push(rungsNode(doc, results: results, trend: trend))
@@ -57,6 +88,15 @@ export function writeResultJson(path String, results RungResultArray, trend Logg
 	try File.writeText(target, content: Json.stringifyPrettyNode(doc, root: doc.root)) otherwise throw ScaleError.reason("could not write the result document to {path}")
 end 'writeResultJson'
 
+// FIRST FIELD IN THE DOCUMENT, because it qualifies every number after it: the CPU readings below
+// are a minimum over this many compiles, and the exact ones were checked identical across them.
+function addRepeatSampling(doc JsonDoc, keys StringArray, children JsonNodeIdArray, repeat RepeatSampling)
+	match repeat 'r'
+		unstated then return
+		stated(count) then pushNumber(doc, keys: keys, children: children, key: "repeat", value: count as JsonFloat)
+	end 'r'
+end 'addRepeatSampling'
+
 // ===========================================================================================
 // Rungs
 // ===========================================================================================
@@ -77,6 +117,13 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory) ret
 		// The deltas the report prints, so a consumer never has to re-derive them from the log. ABSENT
 		// rather than zero when there is nothing to compare against: a zero delta means "identical",
 		// which is a strong claim, and it must not be what "no previous run" looks like.
+		//
+		// THERE IS NO `cpuTicksDelta`, and its absence is a decision rather than an omission. The
+		// logged row it would subtract from may have been recorded on another machine, or on a
+		// platform whose ticks are a different unit entirely — so the subtraction would be arithmetic
+		// over two numbers that are not the same quantity, and it would produce a confident one. The
+		// CPU column is compared as a RATIO between rungs of ONE run, which is unit-free and
+		// machine-free; `LoggedMemory` carries allocs and bytes and nothing else for the same reason.
 		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend)
 
 		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
@@ -130,12 +177,18 @@ function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNo
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'metricNode'
 
-// The three numbers a PhaseMetric IS, written by ONE function — so the whole-rung object and the
+// The four numbers a PhaseMetric IS, written by ONE function — so the whole-rung object and the
 // per-phase objects cannot drift into carrying different fields for the same measurement.
+//
+// `cpuTicks` is APPENDED after the three exact counters rather than interleaved among them, and the
+// order is the TRUST order: everything before it is bit-reproducible and everything after it is not.
+// A consumer reading these fields in order reads them in decreasing order of how much a small
+// movement in one is worth — see the header for the band.
 function addMetricFields(doc JsonDoc, keys StringArray, children JsonNodeIdArray, metric PhaseMetric)
 	pushNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs)
 	pushNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees)
 	pushNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes)
+	pushNumber(doc, keys: keys, children: children, key: "cpuTicks", value: metric.cpuTicks)
 end 'addMetricFields'
 
 // ===========================================================================================

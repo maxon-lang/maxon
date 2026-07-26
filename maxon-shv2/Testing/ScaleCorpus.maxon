@@ -10,9 +10,10 @@
 //
 // ⚠ THE CORPUS NOW DECLARES ITSELF. Every run prints `printCorpusManifest` — the constructs it
 // generates, the dimensions it scales, and, load-bearing, the ones it structurally CANNOT see (it
-// measures memory, never time; it compiles a subset of Maxon, not the whole language). The corpus was
-// blind in four measured dimensions at once and every blind spot was silent; an instrument that cannot
-// name what it cannot see keeps producing confident zeros.
+// measures allocations, bytes and the compiling thread's CPU time, never WALL time; it compiles a
+// subset of Maxon, not the whole language; and no column of it can see a cost the generated programs
+// never TRIGGER). The corpus was blind in four measured dimensions at once and every blind spot was
+// silent; an instrument that cannot name what it cannot see keeps producing confident zeros.
 //
 // ARCHITECTURE.md claims compilation is linear in program size, and quotes measurements to back it —
 // 1.96 -> ~1.0 for a 3,200-`if` function, 40x faster, a 19,200-block function that used to
@@ -220,11 +221,15 @@ let PressuredLoopsBase = 2 as KnobSize
 // them (`namesAssignedIn`), and a loop NESTED inside another has its tokens re-scanned once per
 // enclosing loop. So D nested loops make the scan O(depth x tokens) — quadratic in TIME.
 //
-// ⚠ IT WILL LIKELY READ ~LINEAR HERE ANYWAY, AND THAT IS THE POINT OF THE BLIND-SPOT DECLARATION. The
-// scan allocates ~one small `AssignedNameSet` per loop and mints one phi per carried var per loop —
-// both LINEAR in depth — so its cost is in TIME, which scale-test does not measure. The knob exists so
-// the shape is present the day the scan starts ALLOCATING per token; until then the manifest names it
-// as the canonical example of a superlinearity this instrument cannot see. See `printCorpusManifest`.
+// ⚠ IT WILL READ ~LINEAR IN THE ALLOCATION COLUMN ANYWAY, AND THAT IS A LIMIT OF THAT COLUMN RATHER
+// THAN OF THIS KNOB. The scan allocates ~one small `AssignedNameSet` per loop and mints one phi per
+// carried var per loop — both LINEAR in depth — so allocations and bytes cannot express the scan's
+// cost however quadratic in TIME it is. THE CPU COLUMN IS WHERE IT SHOULD NOW SHOW: per-phase CPU
+// ticks measure the compiling thread's own time, so a `phase:parse` that bends past x2 per doubling
+// on this ladder while its allocations hold at x2 is this scan, made visible. It stays the worked
+// example in `printCorpusManifest` — of what ONE column can see and another structurally cannot,
+// rather than of what the instrument cannot see at all. The knob is also still what will catch the
+// day the scan starts ALLOCATING per token.
 //
 // Its base is the smallest of any knob: the loops all carry the SINGLE accumulator `acc`, so peak
 // register pressure is one value at ANY depth (an E5001-safe deep nest — a per-level counter would be
@@ -2707,12 +2712,26 @@ end 'codeGrowthAt'
 // under GENERATED rather than being filed whole under either. A heading is a claim; an omission is a
 // claim too, and it is the one nobody audits.
 //
-// TWO of these are STRUCTURAL — no knob can close them, so they are stated as blind spots rather than
-// filed as TODOs:
-//   • MEMORY ONLY. scale-test measures allocations and bytes, never time; a time-only superlinearity
-//     is invisible here by construction, and the loop-nest knob's own scan is the worked example.
+// THREE of these are STRUCTURAL — no knob can close them, so they are stated as blind spots rather
+// than filed as TODOs:
+//   • NO WALL TIME — and this one is HALF-CURED, so it is stated at its new width rather than at its
+//     old one. scale-test used to measure allocations and bytes and nothing else, which made a
+//     time-only superlinearity invisible by construction; it now also measures per-phase CPU TICKS,
+//     the compiling thread's own time, and that column sees exactly that cost. The loop-nest knob's
+//     scan remains the worked example — of a cost ONE column can see and another cannot. What is
+//     still structurally absent is WALL time, which counts every other process on the box and
+//     therefore cannot be trended at all. And the CPU column is not exact: it carries a few percent
+//     of noise, so a movement inside that band is not a datapoint.
 //   • THE SUBSET. shv2 compiles a fragment of Maxon, so whole language features generate nothing at
 //     all, and a codegen change to any of them moves no number here.
+//   • ONLY WHAT THE LADDER TRIGGERS — the blind spot the CPU column does NOT touch, in ANY column.
+//     A construct the generator never emits, or a knob set too low to reach the cost it exists to
+//     measure, reads a flat zero in allocations, in bytes AND in CPU ticks alike. `FloatsLivePerSpillLoop`
+//     was 4, which stopped overflowing the callee-saved XMM half the day that half existed, so the
+//     knob whose whole job is forcing a float spill forced none and a genuinely quadratic path read
+//     FLAT. A delta of zero from an instrument that cannot express the feature is not evidence of
+//     anything, and no amount of measuring can distinguish it from a delta of zero that means the
+//     compiler did not change.
 export function printCorpusManifest()
 	print("\n")
 	print("scale-test: CORPUS MANIFEST — what this ladder exercises, and what it structurally cannot see.\n")
@@ -2806,12 +2825,37 @@ export function printCorpusManifest()
 	print("    absent too: nothing here deep-clones a MANAGED-element array, so `neededCloners` stays\n")
 	print("    empty and that fixpoint early-outs at every rung.\n")
 	print("\n")
-	print("  !! MEASURES MEMORY ONLY — a TIME-only superlinearity is invisible here BY DESIGN. Time is not\n")
-	print("     reproducible, so it cannot be trended; a cost that re-walks tokens or chases pointers but\n")
-	print("     allocates little will read FLAT in these columns even when it is quadratic in time. The\n")
-	print("     worked example is IN this corpus: the loop-nest knob drives the loop-phi token pre-scan\n")
-	print("     (Parser.loopBodyEndIndex + namesAssignedIn) to O(depth x tokens), yet that scan allocates\n")
-	print("     ~one small set per loop and reads roughly LINEAR here. For the time view of one compile,\n")
-	print("     use `--log=compiler:debug` or `--metrics=<path>` — this instrument will not show it.\n")
+	print("  !! THE MEMORY COLUMNS CANNOT SEE A COST THAT ALLOCATES NOTHING. THE CPU COLUMN CAN.\n")
+	print("     Allocations and bytes are exact and blind in the same breath: a pass that re-walks tokens or\n")
+	print("     chases pointers without allocating reads FLAT in them however quadratic it is in time. That\n")
+	print("     is why there is now a THIRD per-phase table — CPU TICKS, the compiling THREAD's own time, so\n")
+	print("     preemption and every other process are invisible to it and it can be trended where wall time\n")
+	print("     never could. The worked example is IN this corpus: the loop-nest knob drives the loop-phi\n")
+	print("     token pre-scan (Parser.loopBodyEndIndex + namesAssignedIn) to O(depth x tokens) while\n")
+	print("     allocating ~one small set per loop, so it reads ~x2 in allocations and is the CPU column's\n")
+	print("     to show. It is no longer an example of what this instrument cannot see.\n")
+	print("     ⚠ THE CPU COLUMN IS NOT EXACT, AND IS NOT READ LIKE THE OTHER TWO. It moves a few percent\n")
+	print("     with turbo, thermal throttling and cache pressure from other cores, so a movement inside that\n")
+	print("     band is NOT a datapoint — against the x2-vs-x4 question the ladder asks that band has a 100%\n")
+	print("     margin, but against a claimed few-percent constant-factor win it is worth nothing. Its unit is\n")
+	print("     platform-defined (TSC ticks on Windows, nanoseconds on POSIX) with no honest conversion, so\n")
+	print("     compare RATIOS between rungs, and absolutes only within one platform. Each rung is compiled\n")
+	print("     --repeat times and the CPU reading is the MINIMUM of them, since noise can only ADD.\n")
+	print("     WALL time is still never collected: it counts every other process on the box and cannot be\n")
+	print("     trended at all. For the wall-clock view of ONE compile use `--log=compiler:debug` or\n")
+	print("     `--metrics=<path>` — this instrument will not show it.\n")
+	print("\n")
+	print("  !! AND THE CPU COLUMN CURES ONLY HALF THE BLINDNESS. THE OTHER HALF IS THIS CORPUS, AND NO\n")
+	print("     COLUMN CAN CURE IT: every one of the three can only see a cost the generated programs\n")
+	print("     actually TRIGGER. A construct this generator never emits, or a knob set too low to reach the\n")
+	print("     cost it exists to measure, reads a flat delta of ZERO in allocations, in bytes AND in CPU\n")
+	print("     ticks — indistinguishable from a compiler that did not change.\n")
+	print("     THIS HAS HAPPENED, TWICE, WHICH IS WHY IT IS PRINTED RATHER THAN FILED: FloatsLivePerSpillLoop\n")
+	print("     was 4, which stopped overflowing the callee-saved XMM half the day that half existed, so the\n")
+	print("     knob that exists to FORCE a float spill forced none and a genuinely quadratic path read flat;\n")
+	print("     and ten consecutive rungs of match / String / Array / generics / interfaces were in the\n")
+	print("     subset while this ladder emitted NOT ONE of them, with every rung's log entry recording a\n")
+	print("     delta of zero as though it meant something. A zero from an instrument that cannot express\n")
+	print("     the feature is not evidence. Check the list above before believing one.\n")
 	print("\n")
 end 'printCorpusManifest'

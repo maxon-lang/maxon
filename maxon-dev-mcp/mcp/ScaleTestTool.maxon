@@ -1,5 +1,5 @@
-// `run_scale_test` MCP tool. Wraps `maxon-shv2 scale-test` — the MEMORY-scaling INSTRUMENT — and
-// returns its measurements as a STRUCTURED document.
+// `run_scale_test` MCP tool. Wraps `maxon-shv2 scale-test` — the scaling INSTRUMENT — and returns
+// its measurements as a STRUCTURED document.
 //
 // ⚠ IT HAS NO VERDICT, AND THIS TOOL MUST NOT INVENT ONE. scale-test reports numbers and their
 // deltas from the last run recorded in `docs/optimization-log.md`; it renders no judgement about
@@ -9,12 +9,16 @@
 // pass/fail thing in the envelope, and it means only ONE thing: non-zero iff the RUN BROKE and
 // measured nothing (a rung would not compile, or the generated corpus folded away).
 //
-// ⚠ AND IT REPORTS NO TIME. The document carries allocations, frees and bytes — per rung and per
-// phase — and no milliseconds, no exponents, no residuals. Memory is bit-for-bit reproducible and
-// wall time is machine-dependent, so memory is the only thing a trend can be built out of; and the
-// ladder DOUBLES, so the ratio between two rungs IS the growth (x2.00 linear, x4.00 quadratic) and a
-// consumer takes it from the counts with a division. If a caller wants the milliseconds of one
-// compile, that is the COMPILER's own instrument: `log: "compiler:debug"`.
+// ⚠ AND IT REPORTS NO WALL TIME. The document carries allocations, frees, bytes and CPU TICKS — per
+// rung and per phase — and no milliseconds, no exponents, no residuals. Wall time counts every other
+// process on the box, so it cannot be trended and is never collected; if a caller wants the
+// milliseconds of one compile, that is the COMPILER's own instrument: `log: "compiler:debug"`.
+// CPU ticks are different in kind: they count only the COMPILING THREAD, so preemption is invisible
+// to them and they CAN be trended — and they are the only column that can see a cost which allocates
+// nothing. They are not exact the way the memory columns are (a few percent of turbo/thermal/cache
+// noise) and their unit is platform-defined, which is why `repeat` is in the document beside them and
+// why a consumer compares RATIOS. The ladder DOUBLES, so the ratio between two rungs IS the growth
+// (x2.00 linear, x4.00 quadratic) in every column, taken from the counts with a division.
 //
 // NO `compiler` ARGUMENT. Only shv2 has `scale-test`, so the tool is fixed to it, exactly as `fmt`
 // is fixed to the C# bootstrap. This follows Compilers.maxon's stated discipline: never hand a
@@ -30,6 +34,8 @@
 //
 // Inputs (JSON):
 //   rungs?: int          → --rungs=<n>          how many rungs to climb. Each DOUBLES the program.
+//   repeat?: int         → --repeat=<n>         compiles per rung. CPU takes the MINIMUM of them;
+//                                               memory takes the first and cross-checks the rest
 //   note?: string        → --note=<text>        RECORD this run in docs/optimization-log.md, with
 //                                               <text> as the reason the numbers moved
 //   perType?: bool       → --per-type           also run the untimed --mm-trace pass (by type AND by scope)
@@ -38,9 +44,15 @@
 //
 // Output (JSON): { command, exitCode, durationMs, result: <the runner's document>, rawTail }
 
-// A full six-rung ladder is ~20 s of compiling, but the top rungs are superlinear and a slow or
-// loaded machine can take several times that. Ten minutes is the same head room `run_spec_test`
-// allows, and for the same reason: a runaway run should be reported, not silently killed.
+// A full six-rung ladder is ~20 s of compiling PER REPEAT — so ~60 s at the default `repeat` of 3 —
+// and the top rungs are superlinear, so a slow or loaded machine can take several times that. Ten
+// minutes is the same head room `run_spec_test` allows, and for the same reason: a runaway run should
+// be reported, not silently killed.
+//
+// ⚠ THE TWO KNOBS MULTIPLY, and their product can exceed this: `rungs` is exponential and `repeat` is
+// linear, so `rungs=8, repeat=25` is on the order of half an hour. That is not clamped here — a
+// caller who asks for it gets this timeout, reported as an error with the elapsed time on it, which
+// is the honest answer to a request for more compiling than ten minutes buys.
 let defaultScaleTestTimeoutMs = 600000
 
 // Where the runner is asked to leave its structured result. Under the corpus temp dir, which is
@@ -99,6 +111,15 @@ function buildScaleTestArgv(argsDoc JsonDoc, argsId JsonNodeId, resultPath FileP
 	if rungs > 0 'haveRungs'
 		argv.push("--rungs={rungs}")
 	end 'haveRungs'
+
+	// Forwarded verbatim, INCLUDING a value the runner will reject. `--repeat` is refused and never
+	// clamped there, and clamping it here would put this tool's opinion of a valid repeat count beside
+	// the runner's — two copies of one rule, which is the bug this repo keeps paying for. A caller who
+	// asks for something impossible gets the runner's own refusal and a non-zero exitCode.
+	let repeat = try argsDoc.getInt(argsId, key: "repeat") otherwise 0
+	if repeat > 0 'haveRepeat'
+		argv.push("--repeat={repeat}")
+	end 'haveRepeat'
 
 	let note = try argsDoc.getString(argsId, key: "note") otherwise ""
 	if not note.isEmpty() 'haveNote'
