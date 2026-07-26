@@ -685,7 +685,7 @@ typealias AsyncCalleeVisited = Set with ValueId
 function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLookup
 	return match op 'op'
 		call to indirectCall gives AsyncCalleeLookup.none
-		asyncCall(result, callee, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
+		asyncCall(result, callee, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 		await to tryAwait gives AsyncCalleeLookup.none
 		sizeofType gives AsyncCalleeLookup.none
 		byteStringLiteral gives AsyncCalleeLookup.none
@@ -726,6 +726,32 @@ end 'asyncReturnTypeTag'
 // KEYWORD's own text, which no parameter can ever be called) closes it for free but departs from
 // both references' convention, so it is recorded here rather than taken unilaterally.
 export let SelfParamName = b"__self"
+
+// The empty `MutatedParamMask` — this function writes none of its parameters, which is the overwhelmingly
+// common answer and the initial value of every function's mask.
+export let NoMutatedParams = 0 as MutatedParamMask
+
+// **THE SOURCE SPELLING OF THE RECEIVER PARAMETER.** `__self` is the IR's name for it; `self` is the
+// KEYWORD the user actually wrote, and the only one a diagnostic may quote back at them — a message
+// naming `__self` would name an identifier that appears nowhere in their program (and one the language
+// reserves). Both reference compilers print `self`.
+export let SelfParamDisplayName = "self"
+
+// A parameter's name AS A DIAGNOSTIC PRINTS IT. Only the receiver differs from its IR name; every other
+// parameter is spelled exactly as it was declared.
+export function displayParamName(name ByteArray) returns String
+	return SelfParamDisplayName if name.equals(SelfParamName) else String.from(name)
+end 'displayParamName'
+
+// ⭐ **THE ONE WIRE FORMAT OF E3019.** Its two producers are deliberately far apart — the RECEIVER half is
+// a `ParseError` the parser throws at the method token (`noteReceiverWrite`, rendered by `Queries`), and
+// the CALL-SITE half is a diagnostic SemanticCheck reports at the call, because only it holds the callee's
+// whole-program summary — so the sentence itself lives here, where neither owns it. They differ in exactly
+// one field: the receiver half's written parameter is always the container's `self`, while the call-site
+// half names whichever parameter of the callee the argument filled.
+export function immutableMutatingCallMessage(blamed String, paramName String, functionName String) returns String
+	return "cannot pass '{blamed}' to function that mutates parameter '{paramName}' (in {functionName})"
+end 'immutableMutatingCallMessage'
 
 // A generic type's bare-method-name -> "does it carry a layout-descriptor param?" map (P1.6-B1). See
 // `Parser.typeDescriptorNeeds`.
@@ -888,7 +914,10 @@ let ReservedNamePrefix = b"__"
 // `none` is every free and static call; `value` is an instance method's receiver.
 union ReceiverArg
 	none
-	value(id ValueId)
+	// `immutableName` is the E3019 blame name for the receiver AS AN ARGUMENT — empty when it may be
+	// written through. It rides the receiver because `parseCallNamed` prepends the receiver at argument 0
+	// and the fourth argument column needs one entry per argument (`pushCallArg`).
+	value(id ValueId, immutableName ByteArray)
 end 'ReceiverArg'
 
 // ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
@@ -922,9 +951,14 @@ end 'NestedAliasResult'
 type StructBase
 	export let layout as StructLayout
 	export let box as ValueId
+	// The name an E3019 would blame for a write through this base, EMPTY when it may be written through
+	// (`immutableReceiverNameOf`). It travels with the box for the same reason the layout does: a method
+	// dispatched on this base prepends the box as ARGUMENT 0, and the argument's blame name is a fact
+	// about the BINDING the base came from — which is exactly what a caller holding only the box has lost.
+	export let immutableName as ByteArray
 
-	export static function create(layout StructLayout, box ValueId) returns StructBase
-		return Self{layout: layout, box: box}
+	export static function create(layout StructLayout, box ValueId, immutableName ByteArray) returns StructBase
+		return Self{layout: layout, box: box, immutableName: immutableName}
 	end 'create'
 end 'StructBase'
 
@@ -1738,7 +1772,7 @@ let ArrayEndIndexLabel = b"endIndex"
 let ArrayValueLabel = b"value"
 
 // ⭐ **WHICH `Array` METHODS WRITE THEIR RECEIVER** — the `Array` half of the one immutable-receiver
-// rule (`requireMutableReceiver`, E3019; `setMethodMutatesReceiver` is the `Set` half, and `String`'s
+// rule (`noteReceiverWrite`, E3019; `setMethodMutatesReceiver` is the `Set` half, and `String`'s
 // half is the single method `append`). Every one of these rewrites the record's own slots:
 // `push`/`insert`/`append`/`reserve`/`resize` can grow (`buffer@0` + `capacity@16`), `set` writes an
 // element, and `pop`/`remove`/`clear` shorten it (`length@8`).
@@ -1766,10 +1800,16 @@ end 'arrayMethodMutatesReceiver'
 // and the second is what made this worth a function: an argument the SOURCE wrote
 // (`parseCallArgs`), and the RECEIVER an instance method call prepends (`parseCallNamed`), which is
 // positional by construction and would otherwise have been a second, hand-written triple.
-function pushCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, value ValueId, label ByteArray, range SourceRange)
+//
+// `immutableName` is the FOURTH column (`MaxonOp.call`'s `argImmutableNames`): the binding name an
+// E3019 would blame for this argument, empty when it may be written through. It rides here rather
+// than being derived later for the reason the label does — it is a fact about the SYNTAX at this
+// argument, and nothing downstream can recover it (see the op's own header).
+function pushCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, value ValueId, label ByteArray, range SourceRange, immutableName ByteArray)
 	args.push(value)
 	argLabels.push(label)
 	argRanges.push(range)
+	argImmutableNames.push(immutableName)
 end 'pushCallArg'
 
 // A `MaxonOp.call`'s `argLabels` column for a call whose every argument is POSITIONAL — one empty
@@ -1800,6 +1840,36 @@ export function uniformArgRanges(args ValueIdArray, range SourceRange) returns S
 	end 'each'
 	return ranges
 end 'uniformArgRanges'
+
+// ⭐ **THE `argImmutableNames` COLUMN OF A CALL WHOSE ARGUMENTS NAME NO IMMUTABLE BINDING** — one array
+// for the whole compile, the `sharedEmptyInstanceAliasMap` pattern with its invariant: it is never
+// mutated (`pushCallArg` builds a FRESH column, and `emitCall` only ever SUBSTITUTES this one in place of
+// an all-empty one), so it is safe to share across the per-file parse fan-out.
+//
+// Every COMPILER-emitted call takes it directly: those callees are `__`-prefixed, `validateCall` returns
+// before the E3019 check for them, and their arguments are the compiler's own — so there is no argument a
+// blame name could describe. That is the difference from `emptyArgLabels`, which must materialize a real
+// per-argument column because `slotCallArgs` indexes it.
+export let NoImmutableArgNames = ByteArrayArray.create()
+
+// The name an E3019 would blame for argument `index` of a call, or empty. Decodes BOTH shapes of the
+// column — parallel-to-`args`, or the shared empty one above — so no reader has to know which it holds.
+export function immutableArgNameAt(argImmutableNames ByteArrayArray, index ParamCount) returns ByteArray
+	return try argImmutableNames.get(index) otherwise EmptySourceText
+end 'immutableArgNameAt'
+
+// The `argImmutableNames` column to put ON the op: the shared empty one when no argument named an
+// immutable binding, else the column as built. Called once per source-written call, at the emit, so the
+// overwhelming majority of calls retain nothing — the transient column the parser filled is freed instead
+// of living as long as the module.
+function settledImmutableArgNames(argImmutableNames ByteArrayArray) returns ByteArrayArray
+	for name in argImmutableNames 'each'
+		if not name.isEmpty() 'hasOne'
+			return argImmutableNames
+		end 'hasOne'
+	end 'each'
+	return NoImmutableArgNames
+end 'settledImmutableArgNames'
 
 // The Maxon comparison operator a comparison token maps to. Only called for tokens
 // `comparisonOperator` classified as comparisons; anything else is a climber bug, so
@@ -2936,6 +3006,17 @@ export type Parser
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	var immutableGlobalReads as ImmutableGlobalReadSet
+	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THE BARE IDENTIFIER `parseVariableReference` LAST RESOLVED**,
+	// empty when that binding may be written through. A scalar hand-off from the ONE resolution that can
+	// answer it to the ONE consumer that needs it (`bareArgImmutableName`, at a call argument), because a
+	// `ValueId` cannot carry the answer: `let a = p` binds `a` to the parameter `p`'s own value, so the
+	// question is about the NAME and dies with the token unless it is published here.
+	//
+	// ⚠ **ITS SCOPE IS EXACTLY ONE ARGUMENT.** `parseCallArgs` clears it before each argument and reads it
+	// after, and only when the argument consumed exactly one identifier token — so a stale answer cannot
+	// blame the wrong argument, and a primary path that publishes nothing answers "writable", which is the
+	// safe direction (a missed diagnostic, never a refused program).
+	var lastBareBindingImmutableName as ByteArray
 	// ⭐ **THE CAPTURE SET OF THE CLOSURE CURRENTLY BEING PARSED (P1.5-A2b).** Populated by `captureEnclosing`
 	// as the body reads enclosing names (first-seen order = env slot order), read by `parseClosureExpression`
 	// after the body parse to build the env block (one `storeIndirect` per capture, by VALUE). SWAPPED across
@@ -3172,6 +3253,7 @@ export type Parser
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
+			lastBareBindingImmutableName: EmptySourceText,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
@@ -8888,7 +8970,7 @@ export type Parser
 		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block")
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
-			call(result, callee, args, argLabels, argRanges) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			call(result, callee, args, argLabels, argRanges, argImmutableNames) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
 			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
 			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
@@ -8910,8 +8992,8 @@ export type Parser
 
 	// Replace the `call` op at `opIdx` with a `tryCall` defining the second `errorFlag` result, preserving
 	// every call field, and return the callee name.
-	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) returns ByteArray
-		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
+	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) returns ByteArray
+		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
 		return callee
 	end 'commitTryCallRewrite'
 
@@ -9847,7 +9929,7 @@ export type Parser
 	// future labelled runtime call fail loudly rather than mis-slot.
 	function emitRuntimeCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		let result = self.mintValue(resultTag, nameId: resultNameId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range)), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames), range: range)
 		return result
 	end 'emitRuntimeCall'
 
@@ -15547,7 +15629,7 @@ export type Parser
 		argLabels.push(EmptySourceText)
 		var argRanges = SourceRangeArray.create()
 		argRanges.push(range)
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none)
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none)
 		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeStructToStringPart'
 
@@ -16757,7 +16839,7 @@ export type Parser
 		// It materializes the receiver and then hands it to the SAME `dispatchMethodOnBinding` a local
 		// receiver goes through, wearing a SYNTHETIC binding. That is not a shortcut: the dispatch already
 		// routes by TAG (String / Array / Set / conformer / struct) and already enforces the one
-		// immutable-receiver rule (`requireMutableReceiver`, E3019). Re-deciding either here would be a
+		// immutable-receiver rule (`noteReceiverWrite`, E3019). Re-deciding either here would be a
 		// second copy of both.
 		//
 		// ⭐ **THE TWO KINDS ARE TOLD APART BY MATCHING THE RESOLUTION, NOT BY RE-ASKING FOR IT.** Past the
@@ -16812,21 +16894,24 @@ export type Parser
 		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
 		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
 		// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
+		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `methodReceiverBinding` materializes
+		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
+		// that the record belongs to `self`. See `receiverOwnerMask`.
 		if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
-			return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+			return try self.parseStringMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
 		end 'stringMethod'
 
 		// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
 		// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
 		// split is on the binding's genericInstance TAG being an `Array` instance — the parser's type oracle.
 		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
-			return try self.parseArrayMethodCall(func, binding: binding, baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
+			return try self.parseArrayMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
 		end 'arrayMethod'
 
 		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) is dispatched to the set runtime, like an array
 		// receiver — the split is on the binding's genericInstance TAG being a `Set` instance (P1.7b slice A).
 		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
-			return try self.parseSetMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+			return try self.parseSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
 		end 'setMethod'
 
 		// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
@@ -16840,13 +16925,50 @@ export type Parser
 		// reports the third.
 		let receiverConformer = self.builtinConformerOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
 		if isBuiltinConformer(receiverConformer) 'builtinConformer'
-			return try self.parseBuiltinConformanceMethodCall(func, binding: binding, baseTok: baseTok, conformer: receiverConformer)
+			return try self.parseBuiltinConformanceMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok, conformer: receiverConformer)
 		end 'builtinConformer'
 
+		// ⚠ The STRUCT arm alone is handed the ORIGINAL binding, unmaterialized. A struct-typed self field
+		// is REFUSED by `requireStructBase` (it has no constructible value at this rung, and that refusal
+		// documents its own unreachability); materializing it here would silently turn that refusal into a
+		// load nothing has ever exercised.
 		self.advance()
 		try self.consume(TokenKind.dot)
 		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
+
+	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
+	// MATERIALIZED first.** Every other binding already holds its value; a self-field alias holds NONE.
+	// `VarInfo.createSelfField` leaves `boundValue` 0 because a read of the alias is a `loadIndirect`
+	// through the receiver — **and ValueId 0 IS the receiver** — so a dispatch that took `boundValue` on
+	// its own addressed the enclosing struct's BOX as if it were the field.
+	//
+	// ⚠ **BOTH HALVES OF THAT WERE MEASURED WRONG, and one of them silently.** With `var items as IntArray`
+	// inside `type Bag`:
+	//   • `items.count()` inside a method compiled clean and answered **0** for an array holding one
+	//     element — `__arr_count` was handed the Bag's box and read its second word. A wrong answer with no
+	//     diagnostic anywhere, and the runnable oracle answers 1.
+	//   • `items.push(v)` was **E3019** — a false rejection of an ordinary struct-with-a-container method,
+	//     because the alias is neither `mutable` nor `isParameter`, so `immutableReceiverNameOf` blamed it.
+	//     The oracle accepts it.
+	//
+	// The second half is fixed by asking the right question: a self field's writability is the FIELD's own
+	// `var`/`let` (`layout.fieldIsMutable`, the SAME column `emitCheckedSelfFieldStore` asks of `n = 1`),
+	// not the receiver binding's — the receiver is a parameter and is therefore never `mutable`. So a `var`
+	// field is written freely and a `let` field is refused, blaming the field's name, which is byte-for-byte
+	// the oracle's diagnostic.
+	//
+	// `builtinConformanceReceiverValue` used to be this rule's third copy, for the conformer arm alone
+	// (`count.hash()` hashing the receiver's box pointer). It is gone: one materialization, four arms.
+	function methodReceiverBinding(binding VarInfo, baseTok Token) returns VarInfo throws ParseError
+		if not binding.isSelfField 'holdsItsOwnValue'
+			return binding
+		end 'holdsItsOwnValue'
+
+		let layout = try self.enclosingLayout(baseTok)
+		let loaded = try self.parseSelfFieldRead(baseTok, binding: binding)
+		return VarInfo.createValueBinding(baseTok.value, varType: binding.varType, mutable: layout.fieldIsMutable(binding.fieldIndex), boundValue: loaded)
+	end 'methodReceiverBinding'
 
 	// ⭐ **COULD THE `<base> . <member> (` AT `index` BE A METHOD CALL ON A TOP-LEVEL MANAGED BINDING?** — a
 	// `let` (P1.7a) or a `var` (P1.7 slice 2a). The ONE gate in front of both askers — `methodCallsAt` (is
@@ -16994,7 +17116,7 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box))
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box))
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
@@ -17102,7 +17224,7 @@ export type Parser
 		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
 			throw ParseError.unsupported("a field access or method call on the captured '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields and methods)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
-		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: self.emitCaptureRead(baseTok, enclosing: enclosing))
+		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
 	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
@@ -17110,14 +17232,14 @@ export type Parser
 	// The receiver must be LIVE (a moved-from String touched through a method is use-after-move, E3102),
 	// checked here before the method name is even resolved -- the same guard requireStructBase gives a
 	// struct base.
-	function parseStringMethodCall(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+	function parseStringMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, resultUsed bool) returns ValueId throws ParseError
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
 
 		let methodTok = try self.consume(TokenKind.identifier)
 		if methodTok.value.equals(StringAppendMethod) 'append'
-			return try self.parseStringAppend(func, binding: binding, baseTok: baseTok, methodTok: methodTok, resultUsed: resultUsed)
+			return try self.parseStringAppend(func, binding: binding, receiverOwner: receiverOwner, baseTok: baseTok, methodTok: methodTok, resultUsed: resultUsed)
 		end 'append'
 		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
 			return try self.parseStringByteLength(binding, methodTok: methodTok)
@@ -17132,12 +17254,12 @@ export type Parser
 	// (parseBinding) -- so there is nothing to make writable here. t is BORROWED and COPIED (its bytes are
 	// blitted), so it is neither moved nor consumed: an owned interpolation argument stays a pending temp
 	// and drops at statement end, AFTER the copy. append is void, so a value-position call is rejected.
-	function parseStringAppend(func IrFunction, binding VarInfo, baseTok Token, methodTok Token, resultUsed bool) returns ValueId throws ParseError
+	function parseStringAppend(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, methodTok Token, resultUsed bool) returns ValueId throws ParseError
 		// `append` IS the String's one receiver-writing method — the caller matched it to get here — so the
 		// per-container half of the rule is a constant `true` and everything else is the shared home's.
 		// It used to ask `not binding.mutable` on its own, which made a String PARAMETER receiver a false
-		// rejection: see `requireMutableReceiver` for the measurement.
-		try self.requireMutableReceiver(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), methodTok: methodTok, mutatesReceiver: true)
+		// rejection: see `noteReceiverWrite` for the measurement.
+		try self.noteReceiverWrite(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: true)
 
 		if resultUsed 'voidResultUsed'
 			throw ParseError.voidCallResultUsed(String.from(StringAppendMethod), line: methodTok.line, column: methodTok.column)
@@ -17186,7 +17308,7 @@ export type Parser
 	// `i.compare(j)` on a BINDING receiver. The cursor sits on the base token; the conformer has already
 	// been resolved from the binding's declared type by `parseMethodCall`.
 	function parseBuiltinConformanceMethodCall(func IrFunction, binding VarInfo, baseTok Token, conformer BuiltinConformer) returns ValueId throws ParseError
-		let receiver = try self.builtinConformanceReceiverValue(baseTok, binding: binding)
+		let receiver = binding.boundValue
 		self.advance()
 		try self.consume(TokenKind.dot)
 		return try self.dispatchBuiltinConformanceMethod(func, receiver: receiver, conformer: conformer, baseTok: baseTok)
@@ -17201,20 +17323,6 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		return try self.dispatchBuiltinConformanceMethod(func, receiver: receiver, conformer: self.builtinConformerOfValue(receiver), baseTok: dotTok)
 	end 'parseBuiltinConformanceMethodOnValue'
-
-	// ⭐ **THE VALUE A BUILTIN-CONFORMANCE RECEIVER DENOTES — AND A SELF-FIELD ALIAS HAS NONE.**
-	// `createSelfField` leaves `VarInfo.boundValue` 0 because a read of the alias is a `loadIndirect`
-	// through the receiver, **and ValueId 0 IS the receiver** — so taking `boundValue` for a bare
-	// `count.hash()` inside a method would hash the receiver's BOX POINTER and return it as the field's
-	// hash. A wrong answer with no diagnostic anywhere, which is exactly the class `requireStructBase`'s
-	// header records having measured three times. The field is therefore MATERIALIZED by the same load a
-	// bare read emits (`parseSelfFieldRead`); every other binding already holds its value.
-	function builtinConformanceReceiverValue(baseTok Token, binding VarInfo) returns ValueId throws ParseError
-		if binding.isSelfField 'selfFieldAlias'
-			return try self.parseSelfFieldRead(baseTok, binding: binding)
-		end 'selfFieldAlias'
-		return binding.boundValue
-	end 'builtinConformanceReceiverValue'
 
 	// Resolve the method name against the conformer's INTRINSIC conformances and emit the call. The cursor
 	// sits on the method NAME. A name no intrinsic conformance supplies is a clean positioned reject — never
@@ -17570,11 +17678,11 @@ export type Parser
 	// `parseArrayMethodCall`. `s.insert(e)` / `s.contains(e)` / `s.remove(e)` / `s.count()`; the receiver is a
 	// live `Set` instance (a moved-from set is use-after-move, E3102). The set record's address is stable across
 	// a grow (only its buffer pointers move), so a mutating method never rebinds the receiver.
-	function parseSetMethodCall(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+	function parseSetMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, resultUsed bool) returns ValueId throws ParseError
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
+		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner)
 	end 'parseSetMethodCall'
 
 	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).
@@ -17584,15 +17692,15 @@ export type Parser
 	// the parser passes only `[set, elem]`. The set's key type (`giid`, off the receiver's name-id) gates the key
 	// argument's type and decides ownership: `insert` MOVES a managed key in (`consume: true`), while
 	// `contains`/`remove` BORROW it (`consume: false`).
-	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool, immutableReceiverName ByteArray) returns ValueId throws ParseError
+	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(set)
 
 		// A `let`-bound set is not writable either — the same rule, through the same home the `String` and
-		// `Array` receivers ask (`requireMutableReceiver`). This dispatcher carried NO such guard, which
+		// `Array` receivers ask (`noteReceiverWrite`). This dispatcher carried NO such guard, which
 		// accepted `let s = IntSet.create()` / `s.insert(1)` where the oracle raises E3019.
-		try self.requireMutableReceiver(func, immutableReceiverName: immutableReceiverName, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(SetCountMethod) 'count'
 			try self.parseArrayNoArgs()
@@ -17681,16 +17789,16 @@ export type Parser
 	// the last op emitted; the rest are non-throwing. A non-throwing VOID method (`push`/`reserve`/`resize`/
 	// `clear`/`insert`) in value position is E3059. The array record's ADDRESS is stable across a grow (only
 	// its `buffer@0` moves), so a mutating method never rebinds the receiver.
-	function parseArrayMethodCall(func IrFunction, binding VarInfo, baseTok Token, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+	function parseArrayMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
+		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner)
 	end 'parseArrayMethodCall'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
 	// written through.** The ONE place the `let` rule and the parameter exception meet, for EVERY
-	// container: `String`, `Array` and `Set` all ask through here (see `requireMutableReceiver`).
+	// container: `String`, `Array` and `Set` all ask through here (see `noteReceiverWrite`).
 	//
 	// A `var` may be written through, and so may a PARAMETER — which is NOT `mutable` (a parameter
 	// cannot be rebound, `ParametersAreMutable`) yet whose container very much can be written, because
@@ -17722,8 +17830,9 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		// A receiver that is not a binding is WRITABLE: it is a fresh literal, a call result or a field
 		// read, and no `let` promises anything about it. There is also no name a rejection could blame,
-		// which is exactly what the empty answer says.
-		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: EmptySourceText)
+		// which is exactly what the empty answer says. It denotes no PARAMETER either, so a write through it
+		// mutates none: `NoMutatedParams`.
+		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: EmptySourceText, receiverOwner: NoMutatedParams)
 	end 'parseArrayMethodOnValue'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
@@ -17920,16 +18029,16 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
-	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray) returns ValueId throws ParseError
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
 		// ⭐ **A `let`-BOUND ARRAY IS NOT WRITABLE** — checked HERE, once, ahead of every arm, because the
 		// question is about the METHOD NAME and this is where the name is first known. It goes through
-		// `requireMutableReceiver`, the ONE home this rule has for every container, and it is what makes
+		// `noteReceiverWrite`, the ONE home this rule has for every container, and it is what makes
 		// the top-level managed `let` a CONSTANT rather than a value that silently mutates a copy at each
 		// read (`emitManagedConstant`).
-		try self.requireMutableReceiver(func, immutableReceiverName: immutableReceiverName, methodTok: methodTok, mutatesReceiver: arrayMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: arrayMethodMutatesReceiver(methodTok.value))
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
@@ -18049,13 +18158,86 @@ export type Parser
 	// **EMPTY IS NOT A SENTINEL, it is the literal truth**: a writable receiver has no immutable binding
 	// for a diagnostic to blame — a `var`, a parameter and a temporary all have nothing to name. The
 	// diagnostic REQUIRES a name, so "immutable" and "nameable" are the same state by construction.
-	function requireMutableReceiver(func IrFunction, immutableReceiverName ByteArray, methodTok Token, mutatesReceiver bool) throws ParseError
-		if immutableReceiverName.isEmpty() or not mutatesReceiver 'writableReceiverOrReadOnlyMethod'
+	//
+	// ⭐⭐ **IT ALSO RECORDS THE WRITE IT PERMITS, AND THE TWO HALVES ARE ONE DECISION.** A write through a
+	// receiver that denotes a PARAMETER's record is a mutation of that parameter, which is exactly what the
+	// call-site half of E3019 (`SemanticCheck.buildParamMutationSummary`) must know about the enclosing
+	// function. Refusing the write and recording it are the same question asked of the same receiver at the
+	// same instant — `mutatesReceiver` is the per-container authority's answer and is read ONCE — so they
+	// are answered together rather than by two passes that would then have to agree for ever. A summary
+	// built by re-reading the LOWERED callee names (`__arr_push`, `__str_append`, `__set_insert`) would be
+	// precisely that second list, three tiers away from the one the parser already consults.
+	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner MutatedParamMask, methodTok Token, mutatesReceiver bool) throws ParseError
+		if not mutatesReceiver 'readOnlyMethod'
 			return
-		end 'writableReceiverOrReadOnlyMethod'
+		end 'readOnlyMethod'
 
-		throw ParseError.immutableMutatingCall(String.from(immutableReceiverName), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
-	end 'requireMutableReceiver'
+		if not immutableReceiverName.isEmpty() 'immutableReceiver'
+			throw ParseError.immutableMutatingCall(String.from(immutableReceiverName), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
+		end 'immutableReceiver'
+
+		func.writtenParamMask = func.writtenParamMask or receiverOwner
+	end 'noteReceiverWrite'
+
+	// ⭐ **WHICH OF THE ENCLOSING FUNCTION'S PARAMETERS THIS RECEIVER'S RECORD BELONGS TO** — the bits
+	// `noteReceiverWrite` sets when the write goes ahead, and 0 for a receiver that denotes storage no
+	// parameter owns (a local, a temporary, a top-level global).
+	//
+	// ⚠ **THIS IS A QUESTION ABOUT THE VALUE, WHERE `VarInfo.isParameter` IS ONE ABOUT THE BINDING, AND THE
+	// TWO MUST NOT BE UNIFIED.** `immutableReceiverNameOf` needs `isParameter` because `let a = p` is a
+	// `let` even though it carries `p`'s ValueId (E3019, measured). Here the opposite is wanted: `var b = p`
+	// followed by `b.push(9)` writes the CALLER's array, so the mutation belongs to `p`. The parameter
+	// ValueId convention (`bindParameters` reserves 0..paramCount-1 and `mintValue` starts above it) is what
+	// makes "this value IS parameter k" decidable, and it is the right test for THIS question only.
+	//
+	// ⭐⭐ **A SELF-FIELD ALIAS OWNS NOTHING HERE, AND THAT IS A RULING, NOT AN OMISSION.** A method writing
+	// its own receiver's data does NOT make the CALLER's `let` an error in shv2:
+	//
+	//   *"A `let` on a struct binding refuses a REBIND (`acc = other`) and a direct field write through it
+	//   (`acc.total = 1`, E2013); it does not reach inside the type's own methods."*
+	//
+	// — the rule `parseSelfFieldAssignment` already states, pinned by `specs-shv2/self-keyword.md`'s
+	// `self-with-params`: `let acc = Accumulator.create(0)` then `acc.add(10)` expects **42**, and both
+	// compilers deliver it.
+	//
+	// ⚠ **IT IS A MEASURED DIVERGENCE FROM THE ORACLE, AND THE ORACLE DISAGREES WITH ITSELF.** On the same
+	// program with a `let` receiver, `self.total = self.total + value` is ACCEPTED (42) while
+	// `total = total + value` is **E3019** — one write, two spellings, two verdicts, because its analysis
+	// matches op TYPES and only the bare spelling emits the `MaxonAssignOp` its self-field check inspects.
+	// shv2 has exactly ONE self-field store (`emitCheckedSelfFieldStore`, deliberately — see its header on
+	// what v1's split cost), so it cannot reproduce that split and must choose one answer for both. It
+	// chooses the one the corpus pins.
+	//
+	// The same ruling covers a CONTAINER held in a field (`items.push(v)` / `self.items.push(v)`, which the
+	// oracle refuses through a `let` receiver): there is no principled line between writing `self.total` and
+	// writing the array `self.items` points at, and drawing one at the spelling is the very inconsistency
+	// above. What a `let`-bound struct still refuses is unchanged — a rebind, a direct field write through
+	// it, and a receiver-writing method on it AS a container (E3019, the receiver half, which still refuses
+	// a `let` FIELD: `push-on-let-self-field-array-error`).
+	//
+	// ⚠ The arm is EXPLICIT rather than left to the value test below, because a self-field alias's
+	// `boundValue` is 0 — `createSelfField` leaves it so — and 0 is `self`'s own id, so the value test would
+	// mark parameter 0 for the wrong reason, off the very coincidence `requireStructBase`'s header records
+	// three measured miscompiles from.
+	function receiverOwnerMask(func IrFunction, binding VarInfo) returns MutatedParamMask
+		if binding.isSelfField 'ownedByTheTypeNotTheCaller'
+			return NoMutatedParams
+		end 'ownedByTheTypeNotTheCaller'
+
+		return self.paramOwnerOfValue(func, value: binding.boundValue)
+	end 'receiverOwnerMask'
+
+	// The parameter `value` IS, as a mask — the value half of the rule above, shared with the field-write
+	// door (`emitFieldWrite`), which holds a box rather than a binding. `bindParameters` reserves ids
+	// 0..paramCount-1 for the parameters and `mintValue` starts above them, so the comparison is exact:
+	// no body value can collide with a parameter's id.
+	function paramOwnerOfValue(func IrFunction, value ValueId) returns MutatedParamMask
+		if value >= func.paramCount 'notAParameter'
+			return NoMutatedParams
+		end 'notAParameter'
+
+		return withMutatedParam(NoMutatedParams, param: value)
+	end 'paramOwnerOfValue'
 
 	// ⭐ **THE COPY GATE for `slice`/`clone`/`append`, routed by element KIND (P1.7 slice 3b-vi-b).** An OPAQUE-`T`
 	// element (a generic body's shared `Array with <type parameter>`) copies through the descriptor's `copyFunc@32`
@@ -18749,6 +18931,12 @@ export type Parser
 	// is promoted, an owned value transfers, a borrowed struct is refused), so the field owns exactly one
 	// value across the write and the old one is freed exactly once. Mirrors the `var`-String reassignment
 	// drop model, one indirection out.
+	// ⚠ **A FIELD WRITE DELIBERATELY RECORDS NO PARAMETER MUTATION (E3019, the call-site half).** The only
+	// box a write can reach today is the enclosing `self` (a field write through a PARAMETER is refused by
+	// `requireMutableBinding`, E2013), and a method writing its own receiver's data does not make the
+	// caller's `let` an error in shv2 — see `receiverOwnerMask` for the ruling, the corpus case that pins it
+	// and the measured oracle inconsistency it settles. The rung that makes a struct PARAMETER's field
+	// writable inherits the question, and inherits it here.
 	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be stored in a struct FIELD** — a struct box is
 		// heap memory that outlives the frame, so the field would hold a closure whose env is gone. Positioned
@@ -19073,7 +19261,7 @@ export type Parser
 			throw ParseError.unsupported("a field access through '{String.from(baseTok.value)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)", line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
-		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: binding.boundValue)
+		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
 	end 'requireStructBase'
 
 	// The `StructLayout` a struct-typed binding names — the guarded layout half of `requireStructBase`,
@@ -19304,11 +19492,19 @@ export type Parser
 	// it were the answer, and ValueId 0 is the RECEIVER: `return count` inside a method would
 	// silently compile to `return self`, reading a box pointer as an integer. A wrong answer with
 	// no diagnostic anywhere.
+	// ⭐ **IT ALSO PUBLISHES WHAT THE NAME RESOLVED TO, for the ONE consumer no ValueId can serve** —
+	// `lastBareBindingImmutableName`, the E3019 blame name of a bare-identifier call ARGUMENT (see
+	// `bareArgImmutableName`). Each arm that can answer sets it, through the same `immutableReceiverNameOf`
+	// a receiver asks, so an argument and a receiver naming the same binding get the same verdict.
 	function parseVariableReference() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.identifier)
 
 		if self.scope.isSelfField(tok.value) 'selfField'
-			return try self.parseSelfFieldRead(tok, binding: self.scope.getInfo(tok.value))
+			// A self field's writability is the FIELD's own `var`/`let`, exactly as it is for a self-field
+			// method receiver (`methodReceiverBinding`) — the receiver is a parameter and is never `mutable`.
+			let binding = self.scope.getInfo(tok.value)
+			self.publishBareBindingName(tok, immutable: not (try self.enclosingLayout(tok)).fieldIsMutable(binding.fieldIndex))
+			return try self.parseSelfFieldRead(tok, binding: binding)
 		end 'selfField'
 
 		// A LOCAL binding: reject a read of one that has been MOVED FROM through the shared liveness guard
@@ -19319,6 +19515,7 @@ export type Parser
 		if self.scope.contains(tok.value) 'local'
 			let binding = self.scope.getInfo(tok.value)
 			try self.requireBindingLive(binding, nameTok: tok)
+			self.lastBareBindingImmutableName = self.immutableReceiverNameOf(binding, baseTok: tok)
 			return binding.boundValue
 		end 'local'
 
@@ -19335,6 +19532,10 @@ export type Parser
 		// can route through this function (one needs a receiver binding, the other a side-effect-free bool).
 		// `parseMethodCall` had them the other way round until the P1.7-slice-2a review and carries the
 		// measurement of what that cost; a change here is a change there.
+		// A CAPTURE publishes nothing, so it reads "writable" — capture is BY VALUE (`loadIndirect` out of
+		// the env block), and writing through the loaded copy does not reach the enclosing binding. A
+		// captured managed CONTAINER, whose value IS the shared record, is refused outright at this rung
+		// (`capturedStructBase` admits only a struct), so the case the answer would matter for cannot arise.
 		match try self.captureEnclosing(tok) 'capture'
 			captured(value) then return value
 			notCaptured then break 'capture'
@@ -19342,6 +19543,13 @@ export type Parser
 
 		return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
+
+	// Publish the blame name of the bare identifier just resolved, or clear it when the binding may be
+	// written through — the one shape the arms that do not hold a `VarInfo` (a self field, a top-level
+	// binding) use to reach `lastBareBindingImmutableName`'s "empty is writable" convention.
+	function publishBareBindingName(tok Token, immutable bool)
+		self.lastBareBindingImmutableName = tok.value if immutable else EmptySourceText
+	end 'publishBareBindingName'
 
 	// ⭐ **CAPTURE AN ENCLOSING BINDING INTO THE CLOSURE'S ENVIRONMENT (P1.5-A2b) — the real env handling
 	// that replaces A2a's E2015 refusal.** A name is a capture iff it resolves into one of the enclosing
@@ -19436,15 +19644,28 @@ export type Parser
 	end 'captureSlotFor'
 
 	// A bare name that is not a local: a top-level constant, a top-level `var`, or nothing.
+	//
+	// A top-level CONSTANT is a `let`, so it is immutable wherever it is read — and for a MANAGED one that
+	// is not a formality: `let G = "hi"` materializes the ONE immortal `.rdata` record every read of those
+	// bytes shares, so a callee that appended through it would write read-only memory (measured: exit 139,
+	// where the oracle raises E3019). It publishes its name for the same reason a `let` local does.
 	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
-			found(payload, tag) then return self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok))
-			foundManaged(bytes, kind) then return self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok))
+			found(payload, tag) then return self.recordImmutableConstantRead(tok, value: self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok)))
+			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
 
 		return try self.topLevelGlobalRead(tok)
 	end 'topLevelBindingReference'
+
+	// Publish a top-level constant read's blame name and hand the value straight back —
+	// `recordGlobalReadValue`'s shape, for its reason: the two arms above differ only in how the value is
+	// materialized, and a `let` is immutable in both.
+	function recordImmutableConstantRead(tok Token, value ValueId) returns ValueId
+		self.publishBareBindingName(tok, immutable: true)
+		return value
+	end 'recordImmutableConstantRead'
 
 	// ⭐ **A USE OF A TOP-LEVEL MANAGED CONSTANT MATERIALIZES ITS LITERAL** (P1.7a) — the managed twin of
 	// the `literal`-op inline directly above, and the same storage model: the declaration reserves
@@ -19516,16 +19737,21 @@ export type Parser
 			// A read itself does not care whether the slot may be WRITTEN — it borrows the occupant either
 			// way. What the MUTABILITY decides is whether the borrowed value may later become a mutable
 			// ALIAS, which is `recordGlobalReadValue`'s business (P1.7 slice 2b).
-			found(label, valueType, mutable) then return self.recordGlobalReadValue(self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok)), mutable: mutable)
+			found(label, valueType, mutable) then return self.recordGlobalReadValue(tok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok)), mutable: mutable)
 			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
 	end 'topLevelGlobalRead'
 
 	// Mark a global read that came out of an IMMUTABLE slot, and hand the value straight back (P1.7 slice 2b).
 	// It is only the READ path that marks: a receiver load (`parseMethodCall`'s stored-binding arm) is
-	// consumed by the dispatch on the spot, where `requireMutableReceiver` already refuses a write through
+	// consumed by the dispatch on the spot, where `noteReceiverWrite` already refuses a write through
 	// an immutable binding, and it can never reach a `var`'s initializer.
-	function recordGlobalReadValue(value ValueId, mutable bool) returns ValueId
+	function recordGlobalReadValue(tok Token, value ValueId, mutable bool) returns ValueId
+		// The blame name rides the same mutability answer (a top-level `let` refuses a write through it
+		// exactly as a `let` local does), published here so the constant and the slot-backed halves of a
+		// top-level read reach `lastBareBindingImmutableName` through one decision each.
+		self.publishBareBindingName(tok, immutable: not mutable)
+
 		if mutable 'writableSlot'
 			return value
 		end 'writableSlot'
@@ -20672,7 +20898,9 @@ export type Parser
 			return ReceiverArg.none
 		end 'staticSibling'
 		try self.requireNotInSelfCapture(anchor)
-		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none)
+		// `self` is a PARAMETER — a borrowed reference to the caller's record — so it is writable and has no
+		// blame name, which is exactly what keeps a sibling call inside a mutating method legal.
+		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none, immutableName: EmptySourceText)
 	end 'implicitSelfReceiver'
 
 	// Populate `siblingReceivers` (the enclosing type's member methods, bare name -> takesReceiver) unless it is
@@ -20767,6 +20995,7 @@ export type Parser
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
+		var argImmutableNames = ByteArrayArray.create()
 
 		// ⭐ **THE RECEIVER GOES IN FIRST, AS AN UNLABELLED ARGUMENT, AND THEN IT IS JUST AN
 		// ARGUMENT.** Pushed BEFORE the source's own arguments are parsed, so it occupies index 0
@@ -20795,10 +21024,10 @@ export type Parser
 		// token a diagnostic about the receiver has to point at.
 		match receiver 'prependReceiver'
 			none then break 'prependReceiver'
-			value(id) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor))
+			value(id, immutableName) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
 		end 'prependReceiver'
 
-		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
+		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -20912,7 +21141,7 @@ export type Parser
 			end 'sleep'
 		end 'builtinsIntrinsic'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
 	end 'parseCallNamed'
 
 	// ⭐ **`__Builtins.currentTimeMs()` — THE NANOSECOND READING, SCALED. NOT the coarse tick.**
@@ -21233,7 +21462,7 @@ export type Parser
 	// must be labelled (`consumeArgLabel` enforces both, positioned at the offending
 	// token). Whether a `name:` label actually matches a parameter is a SEMANTIC check
 	// (SemanticCheck, which has the callee's signature) — not the parser's job.
-	function parseCallArgs(func IrFunction, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
+	function parseCallArgs(func IrFunction, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
 		if self.at(TokenKind.rightParen) 'noArgs'
 			return
 		end 'noArgs'
@@ -21244,6 +21473,12 @@ export type Parser
 			// value's first token — anchors this argument's diagnostic span.
 			let argFirstTok = self.current()
 			let label = try self.consumeArgLabel(argIndex)
+			let valueTok = self.current()
+			let valueStart = self.pos
+			// Cleared HERE, before the argument is parsed, so an argument whose one identifier token resolved
+			// through a primary path that publishes nothing reads "writable" rather than a previous
+			// argument's answer. See `bareArgImmutableName`.
+			self.lastBareBindingImmutableName = EmptySourceText
 			// `parseValueExpression` (the climber plus a trailing ternary — `f(a if c else b)`), not
 			// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
 			// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
@@ -21253,7 +21488,7 @@ export type Parser
 			// travels as the companion argument the lowering appends at the function-typed parameter position
 			// (`LowerMaxonToStd.appendCalleeEnvArgs`), so the callee's `f(x)` reads the right env. No refusal
 			// here. (A capturing closure at a NON-function parameter is a type error caught by SemanticCheck.)
-			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: label, range: SourceRange.ofToken(argFirstTok))
+			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.bareArgImmutableName(valueTok, valueStart: valueStart))
 			argIndex = argIndex + 1
 
 			if not self.at(TokenKind.comma) 'endArgs'
@@ -21262,6 +21497,29 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'argLoop'
 	end 'parseCallArgs'
+
+	// ⭐⭐ **THE NAME AN E3019 WOULD BLAME FOR THE ARGUMENT JUST PARSED — and the ONE token that makes the
+	// question answerable.** An argument names an immutable binding only if it IS that name and nothing
+	// else: `f(a)` blames `a`, while `f(a + 1)`, `f(g(a))` and `f(a.count())` all hand over a value the
+	// binding does not own and must blame nothing.
+	//
+	// The test is the CURSOR, not a lookahead: an argument that consumed exactly ONE token, and that token
+	// an identifier, is a bare name. A predicate run BEFORE `parseValueExpression` would be a token-shape
+	// guess sitting in front of the resolution it guards — the shape this file has already paid for three
+	// times — whereas asking afterwards is a statement about what the resolution actually did.
+	//
+	// The ANSWER comes from the resolution itself (`Parser.lastBareBindingImmutableName`, written by
+	// `parseVariableReference` and by nothing else), so the argument rule and the receiver rule reach the
+	// same `immutableReceiverNameOf`. `parseCallArgs` clears it before every argument, so a one-token
+	// identifier that resolved through some OTHER primary path — one that publishes nothing — answers
+	// "writable" rather than inheriting a neighbouring argument's name.
+	function bareArgImmutableName(valueTok Token, valueStart TokenIndex) returns ByteArray
+		if valueTok.kind != TokenKind.identifier or self.pos != valueStart + 1 'notABareName'
+			return EmptySourceText
+		end 'notABareName'
+
+		return self.lastBareBindingImmutableName
+	end 'bareArgImmutableName'
 
 	// Consume and validate an optional `name:` label on the next argument, returning the
 	// label text (the empty string when unlabelled). The FIRST argument (`argIndex == 0`)
@@ -21296,7 +21554,7 @@ export type Parser
 	// The result is minted BEFORE the op is appended, because the op stores its id — and it is
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
-	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
+	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
@@ -21304,7 +21562,7 @@ export type Parser
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames)), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
 
@@ -21325,10 +21583,11 @@ export type Parser
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
-		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
+		var argImmutableNames = ByteArrayArray.create()
+		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
-		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok)
+		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok)
 	end 'parseAsyncCall'
 
 	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. B1a is SCALAR ONLY: the
@@ -21343,7 +21602,7 @@ export type Parser
 	// would then be void-tagged and `let p = async voidFn()` could not bind it (a void tag names no value).
 	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
 	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
-	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId throws ParseError
+	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token) returns ValueId throws ParseError
 		try requireCalleeIsNotReservedName(callee, anchor: anchor)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
@@ -21378,7 +21637,7 @@ export type Parser
 		// and an UNBOUND, UNAWAITED spawn (`async f()` as a bare statement) is dropped at statement end
 		// through `drainPendingTemps` — so no spawn path can leak its thread.
 		self.pendingTempDrops.push(result)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames)), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitAsyncCall'
 

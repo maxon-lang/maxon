@@ -55,7 +55,7 @@ end 'MaxonOpResult'
 // the branch/return arms return `none`.
 export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
 	return match op 'result'
-		call(result, _, _, _, _) gives MaxonOpResult.value(result)
+		call(result, _, _, _, _, _) gives MaxonOpResult.value(result)
 		literal(result, _, _) gives MaxonOpResult.value(result)
 		ret to retVoid gives MaxonOpResult.none
 		binOp(result, _, _, _) gives MaxonOpResult.value(result)
@@ -71,14 +71,14 @@ export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
 		stringLiteral(result, _) gives MaxonOpResult.value(result)
 		// A throwing call DEFINES its primary result (its error-flag second result is compiler-synthetic
 		// and needs no source origin); the throw/propagate terminators and `panicAbort` define none (P1.4b).
-		tryCall(result, _, _, _, _, _) gives MaxonOpResult.value(result)
+		tryCall(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
 		throwError to panicAbort gives MaxonOpResult.none
 		// P1.5-A1: a `functionRef` DEFINES its result (a code address, like `literal`); an `indirectCall`
 		// DEFINES its result (the call's return value, like `call`).
 		functionRef(result, _) gives MaxonOpResult.value(result)
 		indirectCall(result, _, _) gives MaxonOpResult.value(result)
 		// P1.5-B1a: an async spawn DEFINES its promise handle; an await DEFINES its awaited scalar.
-		asyncCall(result, _, _, _, _) gives MaxonOpResult.value(result)
+		asyncCall(result, _, _, _, _, _) gives MaxonOpResult.value(result)
 		await(result, _) gives MaxonOpResult.value(result)
 		// P1.5-B2b: a throwing await DEFINES its primary result (its error-flag second result is
 		// compiler-synthetic and needs no source origin), exactly as `tryCall` does.

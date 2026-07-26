@@ -544,7 +544,7 @@ type MaxonToStdLowering
 	// appended rather than set.
 	function lowerOp(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
-			call(result, callee, args, argLabels, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			call(result, callee, args, argLabels, _, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			literal(result, value, litType) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
 			retVoid then self.emitRetVoidOrErrorReturn(dstBlock, asTerminator: false)
@@ -562,7 +562,7 @@ type MaxonToStdLowering
 			storeIndirect(addr, offset, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(addr, offset: offset, valueId: value, valueType: maxonTypeToStdType(valueType)))
 			stringLiteral(result, bytes) then self.lowerStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
 			// A throwing call: like `call`, plus the second `errorFlag` result (the Std `tryCall`).
-			tryCall(result, errorFlag, callee, args, argLabels, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			tryCall(result, errorFlag, callee, args, argLabels, _, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			// `panicAbort` expands into `osExit` (the message is validated but not printed — see the helper).
 			panicAbort then self.lowerPanicAbort(dstBlock)
 			// A function VALUE — a `.text` code address (P1.5-A1). Lowers to the Std `funcAddr`, the
@@ -577,7 +577,7 @@ type MaxonToStdLowering
 			// P1.5-B1a: `async f(…)` spills its scalar args into a slab argument buffer and spawns a green
 			// thread; `await p` drives the scheduler until the promise completes. `args` is safe to bind in
 			// this big match because a later field (`argLabels`/`argRanges`) follows it — see lowerIndirectCall.
-			asyncCall(result, callee, args, argLabels, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			asyncCall(result, callee, args, argLabels, _, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			await (result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
 			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
 			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor (P1.6-B1). The

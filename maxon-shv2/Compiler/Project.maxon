@@ -1439,6 +1439,26 @@ end 'ArgSlotResult'
 // value list, or the first slotting error found (arity, unknown label, or two arguments
 // targeting one parameter). THE one place the label→position mapping lives — shared by
 // call validation and call lowering.
+// ⭐ **THE LABEL→POSITION MAPPING ITSELF, allocation-free** — a positional argument at index `i` fills
+// parameter `i`; a labelled one fills the position of the parameter it names, which is
+// `sig.paramCount()` (one past the end) when no parameter has that name. That out-of-range answer is
+// `indexOfParam`'s own not-found convention and is DECODED by the two askers rather than re-derived:
+// `slotCallArgs` turns it into `unknownLabel`, and the parameter-mutation edge builder skips the
+// argument (a call whose labels do not resolve is reported by `slotCallArgs`, not by the summary).
+//
+// It is factored out because the mutation summary needs the mapping WITHOUT the slotted array
+// (`SemanticCheck.addMutationEdges` asks "which parameter does source argument `i` fill?" for a handful
+// of arguments and would otherwise pay `slotCallArgs`'s two per-call buffers for every call in the
+// program) — and because a second hand-written copy of `label.isEmpty() ? i : indexOfParam(label)` is
+// exactly the drift that would let a call be summarised against one slotting and checked against another.
+export function argSlotPosition(sig FuncSignature, argIndex ParamCount, label ByteArray) returns ParamCount
+	if label.isEmpty() 'positional'
+		return argIndex
+	end 'positional'
+
+	return sig.indexOfParam(label)
+end 'argSlotPosition'
+
 export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray) returns ArgSlotResult
 	let paramCount = sig.paramCount()
 	if args.count() != paramCount 'arity'
@@ -1459,13 +1479,10 @@ export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels Byt
 		let argId = try args.get(i) otherwise panic("slotCallArgs: args.get OOB at {i}")
 		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
 
-		var pos = i as ParamCount
-		if not label.isEmpty() 'labelled'
-			pos = sig.indexOfParam(label)
-			if pos >= paramCount 'unknown'
-				return ArgSlotResult.unknownLabel(i, label: String.from(label))
-			end 'unknown'
-		end 'labelled'
+		let pos = argSlotPosition(sig, argIndex: i, label: label)
+		if pos >= paramCount 'unknown'
+			return ArgSlotResult.unknownLabel(i, label: String.from(label))
+		end 'unknown'
 
 		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
 		if alreadyFilled 'dup'

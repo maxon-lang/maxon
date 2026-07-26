@@ -995,7 +995,7 @@ instead reaches the same place through what it already has: `.rdata` plus static
 > word to incref. Half of (1) landed with this rung (below); the rest is a rung of its own.
 
 **A `let`-bound container is not writable, and that is enforced — ONCE, for all three of them.**
-`requireMutableReceiver` refuses a receiver-writing method on an immutable receiver with **E3019**, the
+`noteReceiverWrite` refuses a receiver-writing method on an immutable receiver with **E3019**, the
 diagnostic the oracle raises. Without it a top-level managed `let` would silently mutate a per-read
 copy — a wrong answer with no diagnostic. A **PARAMETER is exempt**: it is not `mutable` (it cannot be
 rebound) yet the record it denotes very much can be written, because it is a borrowed reference to the
@@ -1144,7 +1144,7 @@ that such a value is never mutated (only half-built — the E3019 receiver rule)
 
 | the refusal | code | where |
 |---|---|---|
-| `Live.push(9)` — a receiver-writing method on an immutable receiver | `E3019` | `requireMutableReceiver`, via the `mutable` bit on the synthetic receiver binding |
+| `Live.push(9)` — a receiver-writing method on an immutable receiver | `E3019` | `noteReceiverWrite`, via the `mutable` bit on the synthetic receiver binding |
 | `Live = […]` — assigning a binding that has a slot and still refuses writes | `E2013` | `storeToGlobal`, off `TopLevelGlobalLookup.found`'s `mutable` |
 | `var b = Live` / `b = Live` — a mutable ALIAS of an immutable record | `E2015` | `promoteBorrowedToOwned`'s aggregate arm |
 

@@ -204,3 +204,135 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: read-on-var-self-field-array-ok -->
+A bare self-field name used as a method RECEIVER must load the FIELD, not the receiver. A self-field
+alias carries no SSA value (`VarInfo.boundValue` is left 0 — and ValueId 0 IS the receiver), so
+dispatching on it addressed the enclosing struct's box as if it were the array: `items.count()` read the
+Bag's second word and answered 0 for an array holding one element, with no diagnostic anywhere.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export var items as IntArray
+
+	static function create() returns Bag
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push(1)
+	return b.size() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: push-on-var-self-field-array-ok -->
+A `var` FIELD's container may be written through its bare self-field name. The field's own `var`/`let` is
+what decides — the same `layout.fieldIsMutable` column a self-field ASSIGNMENT asks — and not the
+receiver binding, which is a parameter and therefore never `mutable`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export var items as IntArray
+
+	static function create() returns Bag
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function add(v Integer)
+		items.push(v)
+	end 'add'
+
+	export function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.add(1)
+	return b.size() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: append-on-var-self-field-string-ok -->
+The `String` half of the same rule.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Buf
+	export var s as String
+
+	static function create() returns Buf
+		return Self{s: "ab"}
+	end 'create'
+
+	export function grow()
+		s.append("XY")
+	end 'grow'
+
+	export function size() returns Integer
+		return s.byteLength()
+	end 'size'
+end 'Buf'
+
+function main() returns ExitCode
+	var b = Buf.create()
+	b.grow()
+	return b.size() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: push-on-let-self-field-array-error -->
+A `let` FIELD refuses the write, blaming the field's own name — byte-identical to the runnable oracle.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Bag
+	export let items as IntArray
+
+	static function create() returns Bag
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function add(v Integer)
+		items.push(v)
+	end 'add'
+
+	export function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.add(1)
+	return b.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/immutable-method-call/push-on-let-self-field-array-error.test:13:9: cannot pass 'items' to function that mutates parameter 'self' (in Bag.add)
+```

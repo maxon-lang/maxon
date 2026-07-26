@@ -65,6 +65,33 @@ export typealias ThrowsClauseArray = Array with ThrowsClause
 // the ranged-type convention rather than pinned to a false ceiling.
 export typealias ClosureSubIndex = int(0 to u64.max)
 
+// ⭐ **WHICH PARAMETERS A FUNCTION WRITES — one bit per parameter position, 0 for the overwhelming
+// majority that write none** (the E3019 call-site rule, `SemanticCheck.buildParamMutationSummary`).
+//
+// A BITMASK and not a `BoolArray`, for the reason `ArgFloatMask` is one: this field is on EVERY
+// `IrFunction` in the program, and a per-function array would be one live heap object each for a fact
+// that is a single machine word — with `0` (no parameter is written) being both the common case and the
+// literal truth rather than a sentinel. Its width is `MaxAbiArgs`, the same ceiling `ArgFloatMask`
+// states and `Parser.requireAbiParamCount` diagnoses, so `1 shl param` always lands inside the word.
+export typealias MutatedParamMask = int(0 to u64.max)
+
+// One mask per function of the module, indexed by function INDEX — the working state of the
+// parameter-mutation fixpoint (`SemanticCheck.buildParamMutationSummary`), before it is published as the
+// name-keyed summary a call site reads.
+export typealias MutatedParamMaskArray = Array with MutatedParamMask
+
+// Does `mask` say parameter `param` is written? The ONE reader of the bit order — the parser sets bits
+// and SemanticCheck's fixpoint both propagates and tests them, and a second spelling of the shift is a
+// second chance for the two ends to disagree about which bit is which.
+export function paramIsMutated(mask MutatedParamMask, param ParamCount) returns bool
+	return ((mask shr param) and 1) != 0
+end 'paramIsMutated'
+
+// `mask` with parameter `param`'s bit set — the ONE writer, paired with the reader above.
+export function withMutatedParam(mask MutatedParamMask, param ParamCount) returns MutatedParamMask
+	return mask or (1 shl param)
+end 'withMutatedParam'
+
 export type IrFunction
 	// --- Common fields (all phases) ---
 	// A zero-copy slice of the source, straight off the declaring token. It stays bytes all
@@ -181,6 +208,16 @@ export type IrFunction
 	// closure nested inside a closure uses THAT function's counter (`<outer>$closure_0$closure_0`).
 	export var closureSubCounter as ClosureSubIndex
 
+	// ⭐ **THE PARAMETERS THIS BODY ITSELF WRITES (E3019, the call-site half)** — bit `i` set iff a
+	// receiver-writing container method was called on parameter `i`'s record, or a field of `self` was
+	// assigned. Seeded by the PARSER, at the one site that already decides whether a receiver may be
+	// written (`Parser.noteReceiverWrite`) and at the one self-field store, so "which methods write their
+	// receiver" is answered exactly once in the program and never re-derived from lowered runtime callee
+	// names. SemanticCheck then closes it under the call graph (`buildParamMutationSummary`) — a callee
+	// that writes what it was handed makes its caller write what IT was handed — and the closure is what
+	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
+	export var writtenParamMask as MutatedParamMask
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
@@ -216,7 +253,8 @@ export type IrFunction
 			stackSize: 0,
 			outgoingArgSize: 0,
 			isPure: true,
-			closureSubCounter: 0
+			closureSubCounter: 0,
+			writtenParamMask: 0
 		}
 	end 'create'
 
@@ -250,7 +288,8 @@ export type IrFunction
 			stackSize: 0,
 			outgoingArgSize: 0,
 			isPure: true,
-			closureSubCounter: 0
+			closureSubCounter: 0,
+			writtenParamMask: 0
 		}
 	end 'createFromStd'
 
@@ -288,7 +327,8 @@ export type IrFunction
 			stackSize: src.stackSize,
 			outgoingArgSize: src.outgoingArgSize,
 			isPure: src.isPure,
-			closureSubCounter: src.closureSubCounter
+			closureSubCounter: src.closureSubCounter,
+			writtenParamMask: src.writtenParamMask
 		}
 	end 'shallowCopy'
 

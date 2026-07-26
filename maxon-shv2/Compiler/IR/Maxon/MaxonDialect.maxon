@@ -614,7 +614,23 @@ export union MaxonOp
 	// kept ON the op (genuine per-ARGUMENT payload, so not in the op-parallel
 	// SourceRangeTable) for per-argument diagnostics. lowerCall reorders the labelled args
 	// to the callee's declaration order using the `funcSignatures` registry.
-	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.callFree}
+	//
+	// ⭐ **`argImmutableNames` — THE NAME AN E3019 WOULD BLAME FOR EACH ARGUMENT, or empty.** The
+	// call-site half of the immutable-mutation rule needs to know which arguments name an IMMUTABLE
+	// BINDING, and that is a property of the SYNTAX, not of the value: `let a = p` carries the
+	// parameter `p`'s own ValueId while being a `let`, so a per-VALUE mark would refuse `f(p)` in any
+	// function that also wrote `let a = p` (measured — the oracle refuses `f(a)` and accepts `f(p)`).
+	// The parser resolves each argument exactly once and records the answer here, through the same
+	// `immutableReceiverNameOf` the receiver half asks.
+	//
+	// ⚠ **IT IS PARALLEL TO `args` WHEN PRESENT AND EMPTY WHEN THE CALL HAS NO IMMUTABLE-BINDING
+	// ARGUMENT** — unlike `argLabels`/`argRanges`, which are parallel unconditionally. Emptiness is the
+	// literal answer ("no argument of this call names an immutable binding"), not a shortened column:
+	// it is the state of every COMPILER-emitted call — none of which is checkable, their callees being
+	// `__`-prefixed and in no signature registry — and of most user calls, so a shared empty array
+	// serves them all and the op costs nothing. `immutableArgNameAt` is the one reader and decodes both
+	// shapes.
+	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) = MaxonOpMeta{category: OpCategory.callFree}
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit
@@ -723,7 +739,8 @@ export union MaxonOp
 	// a scalar error (the `+1` reserving 0 for "no error in flight"). The compare/branch desugar the
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
-	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.callFree}
+	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
+	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) = MaxonOpMeta{category: OpCategory.callFree}
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
 	// heap-box POINTER (a payload-bearing/boxed union), and `errorIsBoxed` is which — the ONE bit the
@@ -790,7 +807,8 @@ export union MaxonOp
 	// `__gt_spawn(funcAddr(callee), argBuf)`, spilling the scalar args into `argBuf`. `result` is the i64
 	// promise handle (the spawned GT's pointer). The parser rejects a managed/float async arg or result
 	// (E2015) before this op is emitted, so every `args` value and the callee's return are GPR scalars.
-	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
+	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) = MaxonOpMeta{category: OpCategory.awaiting}
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
 	await(result ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
