@@ -215,7 +215,7 @@ type X64RuntimeAsm
 	export var callFixups as CallFixupArray
 	export var iatRelocs as RelocationArray
 	export var rel32Fixups as ChunkRel32FixupArray
-	export var labelOffsets as ChunkLabelOffsetMap
+	export var labelOffsets as BlockOffsetTable
 	export var nextLabel as BlockId
 	// Strings are laid down at the END of the chunk, past the `ret`, so they are data the
 	// function can address but never execute. Deduped by content within the chunk.
@@ -247,7 +247,7 @@ type X64RuntimeAsm
 			callFixups: CallFixupArray.create(),
 			iatRelocs: RelocationArray.create(),
 			rel32Fixups: ChunkRel32FixupArray.create(),
-			labelOffsets: ChunkLabelOffsetMap.create(),
+			labelOffsets: BlockOffsetTable.create(),
 			nextLabel: 0,
 			stringLabelOf: RuntimeStringLabelMap.create(),
 			stringLabels: RuntimeStringLabelArray.create(),
@@ -292,7 +292,7 @@ type X64RuntimeAsm
 	// Fix `label` at the current offset. Every branch to it — already emitted or not — is
 	// patched by `finishFunction`.
 	export function placeLabel(label BlockId)
-		self.labelOffsets.upsert(label, value: self.code.count())
+		self.labelOffsets.place(label, offset: self.code.count())
 	end 'placeLabel'
 
 	// The label of a NUL-terminated string constant in this chunk, laying it out on first

@@ -985,9 +985,6 @@ end 'ChunkRel32Fixup'
 
 export typealias ChunkRel32FixupArray = Array with ChunkRel32Fixup
 
-// Label id -> its start offset within the current function chunk.
-export typealias ChunkLabelOffsetMap = Map with (BlockId, CodeOffset)
-
 // `jmp rel32` to a block. The 4-byte displacement is left zero and a fixup records its
 // offset; `resolveChunkRel32Fixups` patches it once the target's chunk offset is known.
 export function encodeJmp(code ByteArray, rel32Fixups ChunkRel32FixupArray, targetBlockId BlockId)
@@ -1188,7 +1185,7 @@ end 'patchChunkRel32'
 // Patch every chunk-local rel32/disp32 to the chunk-local displacement of its target label
 // (a forward jump targets a block emitted later in the chunk; a runtime string label is
 // always emitted after the code that references it).
-export function resolveChunkRel32Fixups(code ByteArray, labelOffsets ChunkLabelOffsetMap, rel32Fixups ChunkRel32FixupArray)
+export function resolveChunkRel32Fixups(code ByteArray, labelOffsets BlockOffsetTable, rel32Fixups ChunkRel32FixupArray)
 	for fixup in rel32Fixups 'resolve'
 		let targetOffset = try labelOffsets.get(fixup.targetLabel) otherwise panic("resolveChunkRel32Fixups: {fixup.site.name} at chunk offset {fixup.codeOffset} targets label {fixup.targetLabel}, which was never laid out in this chunk")
 		patchChunkRel32(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset, what: fixup.site)
@@ -1566,7 +1563,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
 	// resolved after the block loop, when `chunkLabelOffsets` holds every block's chunk-local offset.
 	var jumpTables = JumpTablePendingArray.create()
-	var chunkLabelOffsets = ChunkLabelOffsetMap.create()
+	// Sized from `func.nextBlockId` — the function's ids run 0..nextBlockId-1 — so the table is two
+	// allocations and `place` never grows. See BlockOffsetTable for why this is an array and not a Map.
+	var chunkLabelOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// The base rsp offset of this function's spill-slot area, computed once (it depends
 	// only on whether the function makes a call — a caller's slots sit ABOVE the Win64
@@ -1597,7 +1596,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 		// Record this block's chunk-local start BEFORE emitting its ops, so branches
 		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
-		chunkLabelOffsets.upsert(block.id, value: code.count())
+		chunkLabelOffsets.place(block.id, offset: code.count())
 
 		if isFirstBlock and emitGuard 'guard'
 			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes)

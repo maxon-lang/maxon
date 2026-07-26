@@ -803,7 +803,6 @@ type Arm64BlockBranchFixup
 end 'Arm64BlockBranchFixup'
 
 typealias Arm64BlockBranchFixupArray = Array with Arm64BlockBranchFixup
-typealias Arm64BlockOffsetMap = Map with (BlockId, CodeOffset)
 
 // `b` to a block — placeholder imm26, fixup recorded.
 function arm64EmitBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, targetBlock BlockId)
@@ -830,7 +829,7 @@ end 'arm64EmitCbnz'
 
 // Patch every pending block branch to its target's chunk-local offset. A branch's displacement is
 // PC-relative from the branch itself (not the end of a field, as on x64) and scaled by 4.
-function arm64ResolveBlockBranches(code ByteArray, blockOffsets Arm64BlockOffsetMap, fixups Arm64BlockBranchFixupArray)
+function arm64ResolveBlockBranches(code ByteArray, blockOffsets BlockOffsetTable, fixups Arm64BlockBranchFixupArray)
 	for fixup in fixups 'resolve'
 		let targetOffset = try blockOffsets.get(fixup.targetBlock) otherwise panic("arm64ResolveBlockBranches: branch to block {fixup.targetBlock} with no recorded offset")
 		if fixup.wide 'uncond'
@@ -1261,12 +1260,12 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
 	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
 	var jumpTables = JumpTablePendingArray.create()
-	var blockOffsets = Arm64BlockOffsetMap.create()
+	var blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
 
-		blockOffsets.upsert(block.id, value: code.count())
+		blockOffsets.place(block.id, offset: code.count())
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")

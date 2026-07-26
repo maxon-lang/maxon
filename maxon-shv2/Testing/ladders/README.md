@@ -23,6 +23,7 @@ Each writes one self-contained `.maxon` program to `<outfile>`. All four call an
 | `gen12i.sh <N> <intsPer> <out>` | the same, with ints | its control, and the one that shows the single-basic-block splitting quadratic is **file-agnostic**. |
 | `genloop.sh <loops> <floatsPer> <out>` | the exact shape `ScaleCorpus.floatSpillSource` generates | ties a hand-ladder reading back to the corpus's own shape — the check that a pathological ladder is not being mistaken for the realistic case. |
 | `genmutchain.sh <chains> <depth> <params> <out>` | `chains` chains of `depth` functions passing `params` arrays along; the last link writes them all | the parameter-mutation fixpoint (`SemanticCheck.buildParamMutationSummary`) and the label→position slotting. **Its three knobs are INDEPENDENT**, which is its whole point — see below. |
+| `genemit.sh <funcs> <stmts> <ifs> <out>` | `funcs` functions of `stmts` straight-line statements and `ifs` two-way branches each | the ENCODE phase's shape. **Its three knobs are INDEPENDENT**: function COUNT, ops per function, and BLOCKS per function. This is the ladder that found the `chunkLabelOffsets` quadratic — funcs-doubling and stmts-doubling both read a flat ×2.00 while ifs-doubling read ×3.17, which located the term in blocks-per-function and nowhere else. |
 
 ### `genmutchain.sh` — why three knobs and not one
 
@@ -36,6 +37,16 @@ re-enter the worklist. The three readings that matter:
 - `genmutchain.sh <N> 2 1` — size and call sites at constant depth.
 - `genmutchain.sh 1 256 <P>` — mask width. **This is the one that found the `argSlotPosition`
   quadratic**: every argument is labelled, so it is also the ladder for the label→position mapping.
+
+### `genemit.sh` — and why the CONSTANT-SIZE reading is the decisive one
+
+`genemit.sh 64 0 32` … `genemit.sh 2 0 1024` holds `funcs × ifs` FIXED, so the program size, the total
+block count and the total op count are all constant and only the SPLIT moves. A cost that is quadratic
+in one function's block count then reads as a straight RISE across that series while the memory columns
+sit still — which is exactly what `phase:encode` did (29.2M → 76.0M CPU ticks at a constant ~96 KB of
+source), and what it stopped doing once the per-function `BlockId → offset` map became a dense array.
+A ladder that grows the program cannot make that distinction: everything doubles there, including the
+thing you are trying to hold still.
 
 ## Reading one
 

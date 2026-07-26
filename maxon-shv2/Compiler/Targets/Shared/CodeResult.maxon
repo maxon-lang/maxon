@@ -229,16 +229,12 @@ end 'JumpTablePending'
 
 export typealias JumpTablePendingArray = Array with JumpTablePending
 
-// A block id → its CHUNK-LOCAL `.text` offset. Both backends' block-offset maps are this type
-// (`ChunkLabelOffsetMap` / `Arm64BlockOffsetMap`), so `resolveJumpTableRelocs` reads either.
-export typealias BlockTextOffsetMap = Map with (BlockId, CodeOffset)
-
 // ⭐ Expand each encoded jump table into a `JumpTableReloc` whose `targetTextOffsets[i]` is slot `i`'s
 // target block's CHUNK-LOCAL offset — every block's offset is known once its chunk's block loop has run, and
 // the concat pass rebases these to whole-`.text` offsets. This IS the block→text-offset map the coordinator's
-// crux note asked to expose to concat: the chunk's own block-offset map, read per slot. Shared by the x64 and
+// crux note asked to expose to concat: the chunk's own `BlockOffsetTable`, read per slot. Shared by the x64 and
 // arm64 chunk emitters.
-export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockTextOffsetMap) returns JumpTableRelocArray
+export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockOffsetTable) returns JumpTableRelocArray
 	var out = JumpTableRelocArray.create()
 	for pending in jumpTables 'eachTable'
 		var targetOffsets = CodeOffsetArray.create()

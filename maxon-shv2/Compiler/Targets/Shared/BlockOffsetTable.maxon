@@ -1,0 +1,96 @@
+// BlockOffsetTable — a block's CHUNK-LOCAL `.text` offset, keyed by BlockId, for the one chunk
+// being emitted. Written as each block is laid down, read when the chunk's branch fixups and jump
+// tables are resolved at the end of the chunk. Both native backends and the hand-assembled runtime
+// chunks use this ONE type; it replaces the three aliases (`ChunkLabelOffsetMap`,
+// `Arm64BlockOffsetMap`, `BlockTextOffsetMap`) that were the same `Map with (BlockId, CodeOffset)`
+// written down three times.
+//
+// ⭐ WHY A DENSE ARRAY AND NOT A HASH MAP — this is the fix for a MEASURED QUADRATIC, not a
+// preference. `IrModule.addBlock` numbers blocks PER FUNCTION from `func.nextBlockId`, so a
+// function's block ids are exactly `0 .. nextBlockId-1`: a dense index space, which is the one
+// shape a hash adds nothing to. What it added instead was a quadratic, and the mechanism is worth
+// stating because it is a trap any int-keyed `Map` in this compiler can fall into:
+//
+//   `int.hash()` is the IDENTITY (`self and 0xFFFFFFFF`) and `Map` is open-addressed with LINEAR
+//   PROBING, so a key's home slot is `id and (capacity - 1)`. A function's ids are two contiguous
+//   runs — the original blocks, then the blocks the register allocator's critical-edge split
+//   appended — and `blockRefs` LAYOUT order interleaves them (`0 1 2049 2 3 2050 …`). Until the
+//   table's capacity EXCEEDS the id range, the high run WRAPS onto the low run's slots and the two
+//   collapse into one solid cluster that every insert must walk to the end of.
+//
+//   Replaying a real 3,073-block function's id sequence through the `Map` algorithm, probes per
+//   insert broken down by the capacity in force at the time:
+//
+//        cap    16    32    64   128   256   512  1024  2048 | 4096  8192
+//        /ins  3.33  8.67 16.67 32.67 64.67 128.67 256.67 512.67 | 1.00  1.00
+//
+//   It is `capacity/4 + 2/3` exactly, and it falls to ONE the instant capacity (4096) first exceeds
+//   the id range (3,073). Capacity is proportional to the block count, so probes-per-insert is too,
+//   and the fill is O(blocks²): **171.44 probes per insert** averaged over the function, against
+//   1.00 for the same keys inserted in sorted order and 6.11 for the same total blocks split across
+//   64 small functions. It allocates nothing, so the memory-only instrument read it as flat for the
+//   whole history of the phase; the CPU column is what saw it.
+//
+//   The LOOKUPS were never the problem, and that asymmetry is the tell: by the time the fixups are
+//   resolved the table has reached its FINAL capacity, which is past the id range, so every key sits
+//   at its home slot. `resolveChunkRel32Fixups` measured FLAT across the same ladder that showed the
+//   inserts growing 4.3x.
+//
+// So the index space is dense, the key IS the index, and both operations are one bounds-checked
+// array access.
+//
+// `laidOut` is a parallel array rather than a sentinel offset because 0 is a REAL chunk offset —
+// the first block of every chunk is at 0 — so there is no offset value that can mean "absent". It
+// is what preserves the check the `Map` gave for free: a fixup naming a block this chunk never laid
+// down is a lowering bug, and it must stay loud rather than silently resolving to offset 0.
+export type BlockOffsetTable
+	var offsets as CodeOffsetArray
+	var laidOut as BoolArray
+
+	// An empty table that grows to fit whatever ids are placed in it. For the hand-assembled
+	// runtime chunks, which mint their labels one at a time (`X64RuntimeAsm.newLabel`) and have no
+	// count to size from. `place` extends geometrically, so growing this way is amortized linear.
+	export static function create() returns BlockOffsetTable
+		return Self{offsets: CodeOffsetArray.create(), laidOut: BoolArray.create()}
+	end 'create'
+
+	// A table sized for a function whose block ids run `0 .. blockCount-1` — one allocation per
+	// array, and `place` never grows. `IrFunction.nextBlockId` IS that count.
+	export static function forBlockCount(blockCount BlockId) returns BlockOffsetTable
+		var table = Self.create()
+		table.offsets.growFilled(blockCount, value: 0)
+		table.laidOut.growFilled(blockCount, value: false)
+		return table
+	end 'forBlockCount'
+
+	// Record that block `id` starts at chunk-local offset `offset`. Re-placing an id overwrites,
+	// which is what the runtime chunk builders' label reuse relies on.
+	export function place(id BlockId, offset CodeOffset)
+		let needed = id + 1
+		self.offsets.growFilled(needed, value: 0)
+		self.laidOut.growFilled(needed, value: false)
+
+		try self.offsets.set(id, value: offset) otherwise panic("BlockOffsetTable.place: offsets.set OOB for block {id} — the array was just extended to {needed}")
+		try self.laidOut.set(id, value: true) otherwise panic("BlockOffsetTable.place: laidOut.set OOB for block {id} — the array was just extended to {needed}")
+	end 'place'
+
+	// The chunk-local offset of block `id`, or `notLaidOut` when this chunk never laid it down.
+	// Every caller turns that into a panic naming its own fixup, which is more use than one message
+	// here could be.
+	export function get(id BlockId) returns CodeOffset throws BlockOffsetLookupError
+		let placed = try self.laidOut.get(id) otherwise 'past'
+			throw BlockOffsetLookupError.notLaidOut
+		end 'past'
+
+		if not placed 'absent'
+			throw BlockOffsetLookupError.notLaidOut
+		end 'absent'
+
+		return try self.offsets.get(id) otherwise panic("BlockOffsetTable.get: laidOut says block {id} was placed but offsets has no slot for it — `place` extends both arrays together, so they can only disagree if one was extended without the other")
+	end 'get'
+end 'BlockOffsetTable'
+
+// Why a `get` can fail: the chunk never laid the block down.
+export enum BlockOffsetLookupError implements Error
+	notLaidOut
+end 'BlockOffsetLookupError'
