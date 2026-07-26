@@ -9,7 +9,7 @@ category: concurrency
 
 ## Documentation
 
-Maxon supports cooperative concurrency via `async` and `await` with green threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 2KB). All green threads run on a single OS thread — context switching happens only at `await` points.
+Maxon supports cooperative concurrency via `async` and `await` with green threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 2KB). Green threads are multiplexed over a POOL of OS worker threads — one per processor, up to the detected CPU count — so two green threads can be running at the same instant on different cores. Scheduling is still cooperative: a green thread yields the processor it is on only at an `await` or an I/O point, never by pre-emption.
 
 ```text
 // Spawn a green thread
@@ -26,10 +26,16 @@ var r2 = await p2
 ```
 
 **Key properties:**
-- No OS threads — all green threads share one OS thread
-- Cooperative scheduling — context switches only at `await`
+- Worker pool — green threads run on OS worker threads, one per processor, spawned on demand as work
+  appears. `MAXON_MAX_PROCS` caps the count; `MAXON_MAX_PROCS=1` pins the program to one processor,
+  which is what makes a concurrent program's execution order reproducible.
+- Cooperative scheduling — a green thread keeps its processor until it reaches an `await` or an I/O
+  point. Cooperative is not the same as serial: other green threads run on the other processors
+  meanwhile.
 - Growable stacks — 2KB initial, doubles when needed
-- No atomics needed — reference counting stays non-atomic
+- Reference counting IS atomic — `mm_incref`/`mm_decref` use atomic read-modify-write, because two
+  worker threads can hold references to one object at the same time. Anything else shared between
+  green threads needs the same care.
 - Fire-and-forget safe — unawaited green threads are drained at program exit
 
 **Restrictions:**
