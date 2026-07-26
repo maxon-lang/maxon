@@ -40,8 +40,8 @@ let arm64ArgRegisters = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, A
 
 // The AAPCS64 FLOAT argument registers, in slot order: a FLOAT parameter/argument travels in
 // `arm64FpArgRegisters[fpSlot]` = d0..d7, where `fpSlot` is counted by a SEPARATE FP counter from the
-// integer `arm64ArgRegisters` (the same separate-counter convention x64 uses — see
-// `computeParamSlotIndex`). d0 doubles as the float RETURN register (`Arm64FloatReturnReg`), exactly as
+// integer `arm64ArgRegisters` (the same independent-file convention x64 uses — see
+// `abiFileSlotIndex`). d0 doubles as the float RETURN register (`Arm64FloatReturnReg`), exactly as
 // x0 is both the first integer arg register and the integer return register. The whole SIMD file is
 // caller-saved for d0..d7 (see `arm64CallerSavedMask`), so a float live across a call is spilled by the
 // allocator with no hand-holding.
@@ -379,9 +379,9 @@ type StdToArm64Lowering
 	function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		return match op 'o'
 			const to param gives 0
-			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			call(_, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
 			retVoid to rdataAddr gives 0
-			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
 			errorReturn to funcAddr gives 0
 			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osRangePanic to switch gives 0
@@ -864,10 +864,11 @@ type StdToArm64Lowering
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
 	// looked up by name and collected into an `ArgFloatMask` (`calleeArgFloatMask`), then slotted and emitted
 	// through the shared `emitArgMovesByFloatMask`. Reading the callee's own parameter files is what makes a
-	// float written to d0 here read back from d0 in the callee (the running-counter twin of the callee's
-	// `computeParamSlotIndex`). Shared by `lowerCall` and `lowerTryCall`, whose argument passing is identical.
+	// float written to d0 here read back from d0 in the callee — the mask this hands the placement rule is
+	// the very one the callee's `lowerParam` folds out of its declared parameter types. Shared by `lowerCall`
+	// and `lowerTryCall`, whose argument passing is identical.
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstRef BlockRef)
-		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), dstRef: dstRef)
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), dstRef: dstRef)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call`: move each argument into its ABI register (`emitCallArgMoves`), `bl` the callee,

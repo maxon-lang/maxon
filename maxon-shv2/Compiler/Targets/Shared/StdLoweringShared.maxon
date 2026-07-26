@@ -204,49 +204,66 @@ export function floatParamMaskOf(paramTypes StdTypeArray) returns ArgFloatMask
 	return mask
 end 'floatParamMaskOf'
 
-// The register FILE argument `paramIndex` travels in — the callee's PARAM class, looked up by name.
-// Exported so the caller-side arg routing picks the SAME file (XMM for a float, else GPR) the callee
-// captures the parameter into (`lowerParam` reads the parameter's own f64 Std type through the
-// value-class column): one door, so the argument's destination register and its allocation class
-// cannot disagree. Mirrors `calleeResultClass`.
-export function calleeParamClass(calleeParamClasses CalleeParamClassMap, callee ByteArray, paramIndex ParamCount) returns RegClass
+// The per-ARGUMENT float mask for a DIRECT call to `callee` — ONE lookup of the map whose VALUE ALREADY IS
+// THAT MASK. It is the name-keyed twin of the `ArgFloatMask` an indirect `callIndirect` carries ON THE OP:
+// producing the direct call's mask here lets the DIRECT and INDIRECT argument-move loops share ONE
+// slotting+emit path (`emitArgMovesByFloatMask` in each backend), so the two differ ONLY in where the mask
+// comes from — a callee NAME here, the op there — and never in how an argument is slotted onto its file or
+// emitted.
+//
+// ⚠ IT USED TO REBUILD THE MASK BIT BY BIT: `argCount` map lookups, each pulling one bit out through a
+// `RegClass` and ORing it back into the mask it had just read. That was the same fact derived twice — the
+// stored value IS the answer `floatParamMaskOf` computed — and each backend asks for it TWICE per direct
+// call op (once to size the outgoing region, once to emit the moves), so the reconstruction ran 2·argCount
+// times per call. A rebuild that ever disagreed with the stored mask would route a float through an integer
+// register with no compile error, which is the whole failure mode this file exists to make unspellable.
+//
+// The mask is returned WHOLE rather than truncated to `argCount` bits, and that is deliberate twice over:
+// every reader (`argIsFloat` / `abiFileSlotIndex` / `abiStackSlotsBefore`) is only ever asked about an index
+// below `argCount`, so the high bits are unreadable; and the truncation itself — `(1 shl argCount) - 1` —
+// would overflow the machine word at the perfectly legal `argCount` of `MaxAbiArgs`.
+export function calleeArgFloatMask(calleeParamClasses CalleeParamClassMap, callee ByteArray, argCount ParamCount, registerCapacity RegisterArgCapacity) returns ArgFloatMask
 	let mask = try calleeParamClasses.get(callee) otherwise 'runtimeChunk'
-		return runtimeChunkFallbackClass(callee, context: "calleeParamClass")
+		return runtimeChunkArgFloatMask(callee, argCount: argCount, registerCapacity: registerCapacity)
 	end 'runtimeChunk'
-	return RegClass.xmm if argIsFloat(mask, argIndex: paramIndex) else RegClass.gpr
-end 'calleeParamClass'
 
-// The per-ARGUMENT float mask for a DIRECT call to `callee`: bit k set iff parameter k is XMM-classed in
-// the callee's declared param file (each bit decided by `calleeParamClass`, so its runtime-chunk fallback —
-// and its panic on a genuinely-unresolved callee — is inherited unchanged). It is the name-keyed twin of the
-// `ArgFloatMask` an indirect `callIndirect` carries ON THE OP: building the direct call's mask here lets the
-// DIRECT and INDIRECT argument-move loops share ONE slotting+emit path (`emitArgMovesByFloatMask` in each
-// backend), so the two can differ ONLY in where the mask comes from — a callee NAME here, the op there — and
-// never in how an argument is slotted onto its file's counter or emitted. Without this shared door the two
-// loops were byte-identical forks whose slotting could silently diverge (a wrong register file, not a
-// compile error). Same `calleeParamClass` call count as the old per-argument loop, so it is emission-neutral.
-export function calleeArgFloatMask(calleeParamClasses CalleeParamClassMap, callee ByteArray, argCount ParamCount) returns ArgFloatMask
-	var mask = 0 as ArgFloatMask
-	for k in 0 upto argCount 'eachArg'
-		if calleeParamClass(calleeParamClasses, callee: callee, paramIndex: k) == RegClass.xmm 'floatArg'
-			mask = mask or (1 shl k)
-		end 'floatArg'
-	end 'eachArg'
 	return mask
 end 'calleeArgFloatMask'
 
-// The register FILE fallback for a callee that is NOT a Std function in the merged module. A `__`-prefixed
-// such callee is a HAND-ASSEMBLED runtime chunk — the mrt_* panic runtime, or the GT `__gt_context_switch`
-// that a builder-built `__gt_await` calls across the Std→chunk boundary. Every runtime chunk uses the
-// GPR-only internal ABI (i64 arguments, R8 result) by construction (see X64Runtime / X64GtRuntime headers),
-// so both its parameters and its result are GPR. A callee WITHOUT that prefix and without a Std function is
-// a genuine resolution bug and still panics — the safety this fallback narrows rather than removes.
-function runtimeChunkFallbackClass(callee ByteArray, context String) returns RegClass
+// A callee with NO Std function in the merged module must be a `__`-prefixed HAND-ASSEMBLED runtime chunk —
+// the mrt_* panic runtime, or the GT `__gt_context_switch` that a builder-built `__gt_await` calls across
+// the Std→chunk boundary. Anything else is a genuine resolution bug and panics here: this narrows the old
+// unconditional panic rather than removing it.
+//
+// ⭐ **EVERY CHUNK USES THE GPR-ONLY INTERNAL ABI** — i64 arguments, R8 result, by construction (see the
+// X64Runtime / X64GtRuntime headers). That ONE fact is what both fallbacks past this door return, and it is
+// stated here because they cannot share a return type: `calleeResultClass` needs the result's register FILE
+// (`gpr`), `runtimeChunkArgFloatMask` the per-argument MASK (all-integer, so zero).
+function requireRuntimeChunkCallee(callee ByteArray, context String)
 	if not isCompilerInternalCallee(callee) 'notRuntimeChunk'
 		panic("{context}: no Std function is named '{String.from(callee)}' — every non-runtime callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
 	end 'notRuntimeChunk'
-	return RegClass.gpr
-end 'runtimeChunkFallbackClass'
+end 'requireRuntimeChunkCallee'
+
+// The argument mask for a runtime chunk: all-integer, per the GPR-only chunk ABI above.
+//
+// ⛔ **AND A CHUNK MUST FIT THE REGISTER FILE — the ceiling stack arguments did NOT raise.** A chunk is
+// hand-written assembly that reads its arguments out of the argument registers and nowhere else; it has no
+// prologue that could reach into a caller's outgoing stack region. Until stack arguments landed, an
+// overflowing argument to one was caught for free: `argRegisterAt` / `arm64ArgRegisterAt` panicked past the
+// end of the file. Routing the overflow to a stack slot instead turned that loud break into a store nothing
+// ever loads — a silent wrong answer. So the limit a chunk genuinely has is stated HERE, at the one door a
+// call site learns its callee is a chunk at all. (It is `MaxAsyncArgs` again: a mechanism that never joined
+// the calling convention keeps the older, lower ceiling, and says so rather than being assumed.)
+function runtimeChunkArgFloatMask(callee ByteArray, argCount ParamCount, registerCapacity RegisterArgCapacity) returns ArgFloatMask
+	requireRuntimeChunkCallee(callee, context: "calleeArgFloatMask")
+
+	if argCount > registerCapacity 'pastRegisterFile'
+		panic("calleeArgFloatMask: the hand-assembled runtime chunk '{String.from(callee)}' is called with {argCount} arguments, but this target passes only {registerCapacity} per register file — a chunk reads its arguments out of the argument registers and has no stack-argument path, so the overflow would be stored where nothing loads it")
+	end 'pastRegisterFile'
+
+	return 0
+end 'runtimeChunkArgFloatMask'
 
 // ==========================================================================
 // ARGUMENT PLACEMENT — the whole cross-target calling-convention contract
@@ -492,7 +509,9 @@ end 'classifyIndirectResult'
 // result under — one door, so the capture and the class cannot disagree.
 export function calleeResultClass(calleeResultClasses CalleeResultClassMap, callee ByteArray) returns RegClass
 	let cls = try calleeResultClasses.get(callee) otherwise 'runtimeChunk'
-		return runtimeChunkFallbackClass(callee, context: "calleeResultClass")
+		requireRuntimeChunkCallee(callee, context: "calleeResultClass")
+		return RegClass.gpr
 	end 'runtimeChunk'
+
 	return cls
 end 'calleeResultClass'

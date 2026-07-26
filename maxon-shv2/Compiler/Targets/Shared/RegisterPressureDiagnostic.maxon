@@ -1,8 +1,8 @@
-// RegisterPressureDiagnostic — the E5001 "this loop needs more registers than exist"
+// RegisterPressureDiagnostic — the E5001 "this needs more registers than exist"
 // message (design: ARCHITECTURE.md's register-allocator section). The DECISION that a point is a
 // genuine HOT overflow already happened in `SplitLiveRanges`: the cold-spill splitter
 // relieved every idle value and rematerialized every constant, and `chooseVictim` still
-// found NO value crossing the peak that can be moved — so what remains is the loop's true
+// found NO value crossing the peak that can be moved — so what remains is the region's true
 // working set against the FULL pool. This file does NOT re-decide feasibility; it only turns that
 // already-exact decision into a source-mapped message. So it can add no false positive — every
 // number it prints comes from the peak the splitter converged on, measured against that peak's own
@@ -19,13 +19,18 @@
 // let the agent converge in ONE step (design Phase 7):
 //   • the EXACT deficit ("remove N values"), not "too many";
 //   • each blocking value's SOURCE def site (via ValueOrigin -> Maxon op -> SourceRange),
-//     ranked cheapest-to-move first (fewest uses inside the loop — the fewest reloads after
+//     ranked cheapest-to-move first (fewest uses inside the region — the fewest reloads after
 //     the array rewrite);
 //   • the concrete transformation (hold the working set in an array).
 //
+// **THE OVERFLOW IS NOT ALWAYS A LOOP.** It was, until stack arguments removed the six-parameter cap: a
+// straight-line function could not hold more live values than the pool. A wide signature can, so the peak's
+// own block decides the REGION (`LoopBodyDepth` vs `AnyBlockDepth`) and, with it, the anchor, the use
+// counts, and which of the two message bodies is built. The loop body is byte-for-byte unchanged.
+//
 // **Deterministic byte-for-byte** (the `maxoncstderr` spec block gates it): no map iteration
 // anywhere, values are swept in id order, and the candidate list is sorted by a TOTAL order
-// (uses-in-loop asc, then value id).
+// (uses-in-region asc, then value id).
 //
 // **RULE 3 (design):** no compiler-introduced value may appear in the blocking set — an agent
 // told to delete a value that is not in its source cannot converge. Every blocking value is
@@ -38,23 +43,32 @@
 // unreachable — the routes cover every value that can block an allocation — so the panic is a
 // backstop that guards the invariant the whole contract rests on.
 
-// How many times a blocking value is USED inside the offending loop — the move-cost rank key
-// (fewer in-loop uses => fewer reloads after the array rewrite). A count of USES, so it is neither a
+// How many times a blocking value is USED inside the OVERFLOWING REGION — the move-cost rank key
+// (fewer uses in it => fewer reloads after the array rewrite). A count of USES, so it is neither a
 // `UseOrdinal` (which use, of one value) nor a `UseRecordIndex` (which record, of the function).
-typealias LoopUseCount = int(0 to u64.max)
+typealias RegionUseCount = int(0 to u64.max)
 
-// One blocking value the user must consider removing from the loop: its id, the SOURCE span
+// ⭐ THE OVERFLOWING REGION, as a minimum block loop depth — the ONE thing that differs between the two
+// shapes of E5001, so it is named once and everything downstream is asked in terms of it. A peak inside a
+// LOOP is the case the design was written for: the region is the loop body, and what makes the overflow
+// worth REFUSING rather than spilling is that a spill would land inside a body that runs many times. A peak
+// in STRAIGHT-LINE code overflows the file all the same — a wide signature can hold more live values than
+// the machine has registers with no loop anywhere — and its region is simply the function.
+let LoopBodyDepth = 1 as LoopDepth
+let AnyBlockDepth = 0 as LoopDepth
+
+// One blocking value the user must consider removing from the region: its id, the SOURCE span
 // that declares it (a parameter's declaration, an op-defined value's op, or — for a phi — the
 // incoming value it copies; a rematerialized/reloaded value chases to what it derives from —
-// see `defRangeOf`), and how many times it is USED inside the loop (the rank key).
+// see `defRangeOf`), and how many times it is USED inside the region (the rank key).
 type PressureCandidate
 	export var valueId as ValueId
 	export var line as LineNumber
 	export var column as ColumnNumber
-	export var usesInLoop as LoopUseCount
+	export var usesInRegion as RegionUseCount
 
-	static function create(valueId ValueId, line LineNumber, column ColumnNumber, usesInLoop LoopUseCount) returns PressureCandidate
-		return Self{valueId: valueId, line: line, column: column, usesInLoop: usesInLoop}
+	static function create(valueId ValueId, line LineNumber, column ColumnNumber, usesInRegion RegionUseCount) returns PressureCandidate
+		return Self{valueId: valueId, line: line, column: column, usesInRegion: usesInRegion}
 	end 'create'
 end 'PressureCandidate'
 
@@ -111,10 +125,21 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 
 	let cfg = liveness.cfg
 	let filePath = func.sourceFilePath.toString()
-	let loopLine = loopAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex)
 
-	let candidates = collectCandidates(project, module: module, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage)
+	// ⭐⭐ **IS THE PEAK EVEN IN A LOOP?** Until stack arguments removed the six-parameter cap it always was:
+	// straight-line code could not hold more live values than the pool, and `loopAnchorLine`'s line-0
+	// fallback carried a comment saying it "cannot happen for a real loop overflow". A wide signature made
+	// it happen — ~20 live parameters overflow the file with no loop anywhere — and the message then named
+	// A LOOP THAT DOES NOT EXIST, at line 0, with every candidate "used 0 times in the loop". The REFUSAL is
+	// correct in both shapes; only the region differs, so it is decided once here and nothing below
+	// re-derives it.
+	let peakLoopDepth = try cfg.loopDepth.get(peak.blockLocal) otherwise panic("buildRegisterPressureMessage: loopDepth.get OOB for peak block {peak.blockLocal}")
+	let peakInLoop = peakLoopDepth != 0
+	let regionDepth = LoopBodyDepth if peakInLoop else AnyBlockDepth
+
+	let candidates = collectCandidates(project, module: module, cfg: cfg, funcIndex: funcIndex, peak: peak, lineage: lineage, regionDepth: regionDepth)
 	let order = sortedOrder(candidates)
+	let anchorLine = pressureAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex, peak: peak, peakInLoop: peakInLoop, candidates: candidates)
 
 	// EVERY count in the message is the number of LISTED, removable values — `candidates.count()`
 	// (the raw live-virtual working set, exactly what the worklist enumerates). The headline,
@@ -129,14 +154,33 @@ function buildRegisterPressureMessage(project Project, module TargetModule, func
 	let heldCount = candidates.count()
 	let deficit = minCount(peak.pressure - available, b: heldCount)
 
+	// TWO WORDINGS, ONE SET OF NUMBERS. Every quantity above is computed once and both bodies read it, so
+	// the two can differ in prose and never in arithmetic. The LOOP body is byte-for-byte what it has always
+	// been — the committed `maxoncstderr` goldens on four targets pin it, and three of those targets cannot
+	// be executed on any one host, so it is left untouched rather than re-derived.
 	var msg = StringBuilder.create()
-	msg.append("the loop at {filePath}:{loopLine} needs {deficit} more register(s) than are available\n")
-	msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
-	msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by uses inside the loop):\n")
-	msg.append(candidateList(candidates, order: order, filePath: filePath))
-	msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
+	if peakInLoop 'inLoop'
+		msg.append("the loop at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
+		msg.append("  {heldCount} values must be held in registers at once inside this loop, but\n  only {available} registers are available. The values idle across the loop were already\n  spilled around it at no cost; spilling any of these would put a load or store inside\n  the loop body, which is exactly what this error exists to prevent.\n")
+		msg.append("\n  remove {deficit} of these {heldCount} value(s) from the loop, cheapest first (ranked by uses inside the loop):\n")
+		msg.append(candidateList(candidates, order: order, filePath: filePath, regionNoun: "the loop"))
+		msg.append("\n  to fix: hold the loop's working set in an array and index it inside the loop.\n")
+		msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
+		msg.append("  and the loop body no longer needs a register for each one.")
+		return msg.build()
+	end 'inLoop'
+
+	// The straight-line body. It may NOT borrow the loop wording: there is no loop body for a spill to land
+	// in, so the reason a spill is refused here is different — the values are all live AT ONE POINT, and the
+	// remedy is to stop them being live together rather than to lift them out of a repeated region.
+	msg.append("the code at {filePath}:{anchorLine} needs {deficit} more register(s) than are available\n")
+	msg.append("  {heldCount} values must be held in registers at once at this point, but\n  only {available} registers are available. Every value that could be moved out of the\n  way already was; the ones listed below are all live across this point at the same\n  time, so no further spill can relieve it.\n")
+	msg.append("\n  remove {deficit} of these {heldCount} value(s) from this point, cheapest first (ranked by uses in the function):\n")
+	msg.append(candidateList(candidates, order: order, filePath: filePath, regionNoun: "the function"))
+	msg.append("\n  to fix: hold this working set in an array and index it, or split the function so\n")
+	msg.append("  fewer of these values are live at the same time.\n")
 	msg.append("  array elements are never promoted into registers, so the values stay in memory\n")
-	msg.append("  and the loop body no longer needs a register for each one.")
+	msg.append("  and the code no longer needs a register for each one.")
 	return msg.build()
 end 'buildRegisterPressureMessage'
 
@@ -149,15 +193,63 @@ end 'minCount'
 // count. The location is what identifies the value to the user — shv2 carries no value NAMES
 // (see IrValueId), so the def site IS the handle, and it is exactly what ValueOrigin exists
 // to recover.
-function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String) returns String
+// `regionNoun` names what the use count was counted over — "the loop" or "the function", the same region
+// `regionDepth` selected for `usesInRegion`. Passed in rather than re-derived from the depth here, so a
+// count and the noun describing it cannot come apart.
+function candidateList(candidates PressureCandidateArray, order CandidateOrder, filePath String, regionNoun String) returns String
 	var out = StringBuilder.create()
 	for idx in order 'each'
 		let c = try candidates.get(idx) otherwise panic("candidateList: candidates.get OOB at {idx}")
-		let plural = "" if c.usesInLoop == 1 else "s"
-		out.append("    {filePath}:{c.line}:{c.column}   used {c.usesInLoop} time{plural} in the loop\n")
+		let plural = "" if c.usesInRegion == 1 else "s"
+		out.append("    {filePath}:{c.line}:{c.column}   used {c.usesInRegion} time{plural} in {regionNoun}\n")
 	end 'each'
 	return out.build()
 end 'candidateList'
+
+// The source line the headline anchors on, by region. IN A LOOP it is the loop's first body statement
+// (`loopAnchorLine`, unchanged). IN STRAIGHT-LINE CODE it is the PEAK OP's own line — the point every
+// blocking value is live at, which is the only place the user can act.
+//
+// ⚠ NEITHER ROUTE MAY RETURN 0, and the straight-line one needs a fallback to promise that: the peak op is
+// often a spill, a call or a control op that defines no origin-carrying value, and `firstOriginLineOfOp`
+// answers 0 for those. It then falls back to the earliest blocking value's def site, which RULE 3
+// guarantees is real user source. Reporting `:0` — a source position that does not exist — is exactly the
+// old loopless behaviour this replaces.
+function pressureAnchorLine(module TargetModule, cfg FuncCfg, project Project, funcIndex FuncIndex, peak PressurePeak, peakInLoop bool, candidates PressureCandidateArray) returns LineNumber
+	if peakInLoop 'loop'
+		return loopAnchorLine(module, cfg: cfg, project: project, funcIndex: funcIndex)
+	end 'loop'
+
+	var buf = OperandList.create()
+	let peakOp = try module.ops.get(peak.peakOpIdx) otherwise panic("pressureAnchorLine: peak op {peak.peakOpIdx} not in module.ops")
+	let peakLine = firstOriginLineOfOp(project, funcIndex: funcIndex, op: peakOp, buf: buf)
+
+	if peakLine != 0 'atPeakOp'
+		return peakLine
+	end 'atPeakOp'
+
+	return earliestCandidateLine(candidates)
+end 'pressureAnchorLine'
+
+// The smallest def line among the blocking values. The set cannot be empty — a point with no live value
+// cannot overflow a register file — and RULE 3 resolves every member to a user span, so this always names
+// real source rather than the 0 it is standing in for.
+function earliestCandidateLine(candidates PressureCandidateArray) returns LineNumber
+	var best = 0 as LineNumber
+	var found = false
+	for c in candidates 'each'
+		if (not found) or c.line < best 'smaller'
+			best = c.line
+			found = true
+		end 'smaller'
+	end 'each'
+
+	if not found 'empty'
+		panic("earliestCandidateLine: the blocking set is empty — a program point with no live value cannot overflow the register file, so the peak's live-before row was not the one the deficit was measured against")
+	end 'empty'
+
+	return best
+end 'earliestCandidateLine'
 
 // The source line to anchor "the loop at ..." on: the SMALLEST source line among the Target
 // ops that DEFINE an origin-carrying value inside the loop (blocks at loop depth >= 1). Note
@@ -215,12 +307,12 @@ end 'firstOriginLineOfOp'
 // ==========================================================================
 
 // The blocking values (everything live at the peak op), each resolved to its source def site
-// and its in-loop use count. `peak.liveBefore` IS the working set the deficit was measured
-// against, so listing it is exactly the set the user chooses from. UNSORTED here (swept in id
+// and its use count within the overflowing region. `peak.liveBefore` IS the working set the deficit was
+// measured against, so listing it is exactly the set the user chooses from. UNSORTED here (swept in id
 // order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
 // than moving the reference-typed candidates around (moving them would mutate the array while
 // an element borrow is live, which the borrow checker rejects).
-function collectCandidates(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage) returns PressureCandidateArray
+function collectCandidates(project Project, module TargetModule, cfg FuncCfg, funcIndex FuncIndex, peak PressurePeak, lineage SplitLineage, regionDepth LoopDepth) returns PressureCandidateArray
 	let wordsPerRow = bitsetWordsFor(cfg.valueCount)
 	var candidates = PressureCandidateArray.create()
 
@@ -229,8 +321,8 @@ function collectCandidates(project Project, module TargetModule, cfg FuncCfg, fu
 			continue
 		end 'notLive'
 		let range = defRangeOf(project, module: module, topo: cfg.topo, funcIndex: funcIndex, valueId: v, wordsPerRow: wordsPerRow, lineage: lineage)
-		let useCount = usesInLoop(module, cfg: cfg, valueId: v)
-		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInLoop: useCount))
+		let useCount = usesInRegion(module, cfg: cfg, valueId: v, regionDepth: regionDepth)
+		candidates.push(PressureCandidate.create(v, line: range.line, column: range.column, usesInRegion: useCount))
 	end 'eachValue'
 
 	return candidates
@@ -265,30 +357,34 @@ end 'sortedOrder'
 function candidateAtGreater(candidates PressureCandidateArray, aIndex CandidateIndex, bIndex CandidateIndex) returns bool
 	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
 	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")
-	if a.usesInLoop != b.usesInLoop 'byUses'
-		return a.usesInLoop > b.usesInLoop
+	if a.usesInRegion != b.usesInRegion 'byUses'
+		return a.usesInRegion > b.usesInRegion
 	end 'byUses'
 	return a.valueId > b.valueId
 end 'candidateAtGreater'
 
-// The number of times `valueId` is USED (as a virtual operand) by an op inside a loop (a block
-// at loop depth >= 1) — the move-cost rank key (fewer uses => fewer reloads after the array
-// rewrite). A value in the HOT blocking set is used only in ITS OWN loop (a value idle across
-// this loop would have been cold-spilled already and never reach here), so counting uses at any
-// depth->=1 block is exactly its uses in the offending loop.
-function usesInLoop(module TargetModule, cfg FuncCfg, valueId ValueId) returns LoopUseCount
-	var count = 0 as LoopUseCount
+// The number of times `valueId` is USED (as a virtual operand) by an op in the OVERFLOWING REGION — the
+// move-cost rank key (fewer uses => fewer reloads after the array rewrite). `regionDepth` IS the region,
+// and it is the whole difference between the two shapes of E5001:
+//   • `LoopBodyDepth` — only blocks inside a loop. A value in a HOT LOOP blocking set is used only in ITS
+//     OWN loop (one idle across this loop would have been cold-spilled already and never reach here), so
+//     counting every depth->=1 block is exactly its uses in the offending loop.
+//   • `AnyBlockDepth` — every block. A STRAIGHT-LINE peak has no loop to count in, and the loop floor would
+//     rank every candidate 0, which is not a ranking at all: the list would come out in bare value-id
+//     order and the "cheapest first" promise the message makes would be empty.
+function usesInRegion(module TargetModule, cfg FuncCfg, valueId ValueId, regionDepth LoopDepth) returns RegionUseCount
+	var count = 0 as RegionUseCount
 	var buf = OperandList.create()
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
-		let depth = try cfg.loopDepth.get(i) otherwise panic("usesInLoop: loopDepth.get OOB")
-		if depth == 0 'notInLoop'
+		let depth = try cfg.loopDepth.get(i) otherwise panic("usesInRegion: loopDepth.get OOB")
+		if depth < regionDepth 'outsideRegion'
 			continue
-		end 'notInLoop'
+		end 'outsideRegion'
 		let block = blockAt(module, topo: cfg.topo, local: i)
 		var ordered = OpIndexArray.create()
 		collectBlockOps(block, out: ordered)
 		for opIdx in ordered 'eachOp'
-			let op = try module.ops.get(opIdx) otherwise panic("usesInLoop: op not in module.ops")
+			let op = try module.ops.get(opIdx) otherwise panic("usesInRegion: op not in module.ops")
 			targetOpOperands(op, buf: buf)
 			for o in buf 'eachOperand'
 				if (not operandIsDef(o)) and operandIsVirtual(o) and operandValueId(o) == valueId 'use'
@@ -298,7 +394,7 @@ function usesInLoop(module TargetModule, cfg FuncCfg, valueId ValueId) returns L
 		end 'eachOp'
 	end 'eachBlock'
 	return count
-end 'usesInLoop'
+end 'usesInRegion'
 
 // ==========================================================================
 // Source mapping (Target ValueId -> Maxon op -> source), with phi chasing

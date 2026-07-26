@@ -743,10 +743,10 @@ type StdToX64Lowering
 			// The two NAME-callee calls: the callee's declared parameter files decide which arguments overflow,
 			// exactly as they decide which register each of the others travels in (`emitCallArgMoves` reads the
 			// same mask through the same `calleeArgFloatMask`).
-			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			call(_, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
 			retVoid to osAllocPages gives 0
 			rdataAddr gives 0
-			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), argCount: args.count())
+			tryCall(_, _, callee, args) gives callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), argCount: args.count())
 			// `errorReturn`/`osExit` have no outgoing args; a `funcAddr` is a register-only `lea`.
 			errorReturn to funcAddr gives 0
 			// The two VALUE-callee calls carry their own per-argument mask (there is no callee name to look one
@@ -1532,11 +1532,11 @@ type StdToX64Lowering
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
 	// looked up by name and collected into an `ArgFloatMask` (`calleeArgFloatMask`), then slotted and emitted
 	// through the shared `emitArgMovesByFloatMask`. Reading the callee's own parameter files is what makes a
-	// float written to xmm0 here read back from xmm0 in the callee (the running-counter twin of the callee's
-	// `computeParamSlotIndex`). Shared by `lowerCall` and `lowerTryCall`, whose argument passing is identical
-	// (extracted so the two cannot drift).
+	// float written to xmm0 here read back from xmm0 in the callee — the mask this hands the placement rule
+	// is the very one the callee's `lowerParam` folds out of its declared parameter types. Shared by
+	// `lowerCall` and `lowerTryCall`, whose argument passing is identical (extracted so the two cannot drift).
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), dstBlock: dstBlock)
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: x64RegisterArgCapacity()), dstBlock: dstBlock)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call` to the x64 call sequence: move each argument into its ABI register

@@ -6547,8 +6547,8 @@ export type Parser
 		// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
 		// gets, and no part of the call path, the lowering or the backend learns that methods
 		// exist. It is pushed BEFORE `parseFunctionParameters` so the user's own parameters land
-		// after it — which also means the `MaxRegisterParams` cap that routine enforces counts the
-		// receiver, correctly: a 6-argument register ABI passes the receiver in one of the six.
+		// after it — which also means the receiver is inside the ABI count `requireAbiParamCount`
+		// judges, correctly: it occupies an argument slot exactly like a declared parameter.
 		//
 		// It is typed `structRef(enclosingType)` — the same `Self` means here, through the same
 		// routine that resolves the `Self` keyword, so a receiver and a `returns Self` cannot come
@@ -19604,7 +19604,9 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 
 		// Parse the parameters through the shared `parseFunctionParameters` — `name Type` pairs, the
-		// no-default and MaxRegisterParams rules, and the reserved-name check all apply identically. `_` is
+		// no-default rule and the reserved-name check all apply identically. (The ARGUMENT-COUNT ceiling is
+		// NOT among them and deliberately so: only a caller knows how many hidden slots its own ABI adds, so
+		// each asks `requireAbiParamCount` itself — see that routine's header.) `_` is
 		// a legal identifier the check accepts (the corpus's `function(_ Integer) gives …`). An UNTYPED
 		// parameter (`function(p) gives …`) is a separate feature — its type is inferred from the call-arg
 		// slot at TypeResolution — and the A2a corpus types every one, so `parseTypeReference` rejecting the
@@ -19623,13 +19625,23 @@ export type Parser
 		// ABI adds, and a check that did not would be the weak second count all over again.
 		//
 		// ⚠⚠ AND IT IS ASKED **BEFORE** THE CONTEXT SAVE BELOW, WHICH IS A HARD REQUIREMENT, NOT AN ORDERING
-		// PREFERENCE. Between `let savedScope = self.scope` and the reassignment that follows it, every one of
-		// ~25 `savedX` locals ALIASES the field it was read from — one object, two names, no incref. A call
-		// that can THROW inside that window gives the enclosing frame a failure edge through it, and the drop
-		// the throw edge owes for each alias releases an object the field still holds. Placed there, this check
-		// made every closure program die compiling with `mm_decref: refcount underflow` inside
-		// `__destruct_Parser` — a compiler crash, on programs with SIX parameters, from a check about
-		// sixty-five. Nothing may throw between the saves and the restore.
+		// PREFERENCE. Each of the ~25 `savedX` locals ALIASES the field it was read from — one object, two
+		// names, no incref — until that field is re-pointed at a fresh object. A call that can THROW while an
+		// alias is live gives the enclosing frame a failure edge through it, and the drop the throw edge owes
+		// for the alias releases an object the field still holds. Placed there, this check made every closure
+		// program die compiling with `mm_decref: refcount underflow` inside `__destruct_Parser` — a compiler
+		// crash, on programs with SIX parameters, from a check about sixty-five.
+		//
+		// ⛔ **THE PROTECTED WINDOW IS FIRST SAVE → LAST REASSIGNMENT, *NOT* SAVE → RESTORE.** Getting that
+		// boundary right is the whole of the rule, and the two are not the same span: `bindParameters`,
+		// `parseExpression` and `emitOwnedValueReturn` all sit between the saves and the restore and all
+		// throw — they MUST, since that is how a syntax error inside a closure body is reported. They are
+		// safe because by then every managed field has been re-pointed (`self.scope = Scope.create()` and
+		// the block below it), so each `savedX` uniquely owns its object and the throw edge releases it
+		// exactly once. **So: add nothing that can throw between the first `let savedX =` and the last
+		// `self.X =` of that block — and when adding a new saved field, put its reassignment inside that
+		// block rather than after the parse.** The fields with no reassignment (`lastFieldRead*`,
+		// `closureEnvParamId`, `artifact.currentFuncIndex`) are scalars: copying one aliases nothing.
 		try requireAbiParamCount(paramNames.count() + 1, anchor: functionTok)
 		let givesTok = try self.consume(TokenKind.gives)
 

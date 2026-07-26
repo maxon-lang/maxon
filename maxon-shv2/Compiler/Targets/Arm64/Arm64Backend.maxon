@@ -1188,7 +1188,19 @@ end 'arm64EmitLdpPostIndex'
 
 // STP/LDP x29, x30, [sp, #offset] (plain signed offset) — the large-frame record store/reload.
 // `opcode` selects STP (`Arm64OpStpOffX`) or LDP (`Arm64OpLdpOffX`).
+//
+// ⚠ THE imm7 IS SIGNED, AND MASKING IS NOT CLAMPING. `Arm64PairImm7Mask` keeps 7 bits, so an offset whose
+// scaled value reaches 64 encodes as a NEGATIVE displacement: the prologue would write the x29/x30 record
+// BELOW sp and the epilogue would reload x30 from there, returning to whatever the outgoing-argument
+// region happened to hold. `offset` was a literal 0 until stack arguments made it the outgoing-argument
+// size, so this became reachable arithmetic rather than a constant — and the ceiling that keeps it in
+// range (`(MaxAbiArgs - arm64RegisterArgCapacity()) * 8` = 448 ≤ 504) lives in two other files. Assert it
+// where it is relied on rather than inferring it three files away.
 function arm64EmitFrameRecordPair(code ByteArray, opcode MachineWord, offset MachineWord)
+	if offset > Arm64FramePairIndexMax 'unencodable'
+		panic("arm64EmitFrameRecordPair: frame-record offset {offset} exceeds the {Arm64FramePairIndexMax}-byte reach of the signed STP/LDP imm7 — the outgoing stack-argument region has outgrown it, and a masked immediate would place the frame record below sp")
+	end 'unencodable'
+
 	emitArm64Insn(code, insn: opcode or (((offset / 8) and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
 end 'arm64EmitFrameRecordPair'
 
@@ -1196,7 +1208,19 @@ end 'arm64EmitFrameRecordPair'
 // At offset 0 this IS `mov x29, sp`, and it must be the ADD alias rather than the ORR/XZR MOV (register 31
 // is SP here, not XZR — see the SP-vs-XZR note); a nonzero offset is the same instruction with the same
 // alias, so the two frame shapes share one encoder.
+//
+// ⚠ THE 12-BIT FIELD IS CHECKED, NOT ASSUMED. `arm64EmitAddSubImm12` masks, so an offset past 0xFFF would
+// be SILENTLY TRUNCATED and x29 would point into the middle of the outgoing-argument region — every spill,
+// every callee-saved save and every incoming stack argument then addressed off a wrong frame pointer, with
+// no diagnostic anywhere. The offset is the outgoing-argument region, so today it is at most
+// `(MaxAbiArgs - arm64RegisterArgCapacity()) * 8` = 448 and cannot reach the field; that is a conclusion
+// about THREE numbers in three files, not a property of this one, so it is asserted where it is relied on.
+// (`arm64EmitAddSubImmWide` exists for exactly this trap on the frame-size path.)
 function arm64EmitAddFpFromSp(code ByteArray, offset StackSize)
+	if offset > Arm64ImmMask 'unencodable'
+		panic("arm64EmitAddFpFromSp: frame-record offset {offset} exceeds the 12-bit ADD immediate — the outgoing stack-argument region has outgrown what `add x29, sp, #imm` can reach, and a masked immediate would silently point the frame pointer inside that region")
+	end 'unencodable'
+
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64Fp, rn: Arm64SpBaseField, imm12: offset, shiftHi: false)
 end 'arm64EmitAddFpFromSp'
 
