@@ -22,6 +22,20 @@ Each writes one self-contained `.maxon` program to `<outfile>`. All four call an
 | `gen12.sh <N> <floatsPer> <out>` | N units, `floatsPer` floats live across one call | overflow **past** the callee-saved XMM half. With `floatsPer > 10` the spill is forced, so the splitter really runs and `growValueSpace` mints ids on every split. |
 | `gen12i.sh <N> <intsPer> <out>` | the same, with ints | its control, and the one that shows the single-basic-block splitting quadratic is **file-agnostic**. |
 | `genloop.sh <loops> <floatsPer> <out>` | the exact shape `ScaleCorpus.floatSpillSource` generates | ties a hand-ladder reading back to the corpus's own shape — the check that a pathological ladder is not being mistaken for the realistic case. |
+| `genmutchain.sh <chains> <depth> <params> <out>` | `chains` chains of `depth` functions passing `params` arrays along; the last link writes them all | the parameter-mutation fixpoint (`SemanticCheck.buildParamMutationSummary`) and the label→position slotting. **Its three knobs are INDEPENDENT**, which is its whole point — see below. |
+
+### `genmutchain.sh` — why three knobs and not one
+
+A ladder that doubles functions, call sites and depth **together** cannot tell a depth term from a
+size term: both read ×2. Hold `chains × depth` **fixed** and vary `depth` and the program size barely
+moves while the fixpoint's iteration depth changes by 1000×, so anything that bends is depth. Vary
+`params` alone and you move the number of **bits** a mask gains — how many times a function can
+re-enter the worklist. The three readings that matter:
+
+- `for d in 2 4 … 2048; do genmutchain.sh $((2048/d)) $d 1 out.maxon; done` — depth at constant size.
+- `genmutchain.sh <N> 2 1` — size and call sites at constant depth.
+- `genmutchain.sh 1 256 <P>` — mask width. **This is the one that found the `argSlotPosition`
+  quadratic**: every argument is labelled, so it is also the ladder for the label→position mapping.
 
 ## Reading one
 

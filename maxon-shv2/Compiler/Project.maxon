@@ -1451,10 +1451,37 @@ end 'ArgSlotResult'
 // of arguments and would otherwise pay `slotCallArgs`'s two per-call buffers for every call in the
 // program) — and because a second hand-written copy of `label.isEmpty() ? i : indexOfParam(label)` is
 // exactly the drift that would let a call be summarised against one slotting and checked against another.
+// ⭐⭐ **THE LABEL USUALLY NAMES THE PARAMETER AT ITS OWN POSITION, AND TESTING THAT FIRST IS WHAT
+// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `indexOfParam` is a scan of the whole name list, so a
+// call written `f(a, b: b, c: c)` — Maxon's own spelling, labels in declaration order — costs
+// `1 + 2 + … + P` comparisons, i.e. **O(P²) per call**, and this mapping is asked once per argument by
+// `slotCallArgs`, again by `SemanticCheck.addMutationEdges`, and again by
+// `checkImmutableArgToMutatingParam`. One equality test against `paramNames[argIndex]` collapses the
+// common case to **O(P) per call** and costs one comparison in the reordered case that still falls
+// through to the scan.
+//
+// ⚠ **IT IS EXACTLY EQUIVALENT, NOT AN APPROXIMATION, AND THE REASON IS THAT PARAMETER NAMES ARE
+// UNIQUE** — a repeated one is E2014 at the DECLARATION (`duplicate parameter name`, measured), so if
+// `paramNames[argIndex]` equals the label then `indexOfParam` cannot answer any position but
+// `argIndex`: there is no earlier match for it to find. A signature that DID carry a duplicate belongs
+// to an already-refused program, so the tie-break could only change which diagnostic that program
+// gets — the same reasoning `SemanticCheck.indexModuleFunctionsByName` states for first-index-wins.
+//
+// MEASURED on `Testing/ladders/genmutchain.sh 1 256 <P>` (one chain, depth 256, every argument
+// labelled in declaration order): `phase:semanticCheck` at P = 64 goes **69.8 ms -> 20.5 ms**, and the
+// growth per doubling of P falls from **x3.05 to x1.89** while the program itself doubles at x2.00 —
+// so the quadratic term is GONE rather than merely smaller. It also lands below the PRE-RUNG base
+// (39.6 ms at P = 64), which had the same scan and paid it once instead of twice. Allocations are
+// bit-identical on every rung of that ladder: this buys time and moves no memory.
 export function argSlotPosition(sig FuncSignature, argIndex ParamCount, label ByteArray) returns ParamCount
 	if label.isEmpty() 'positional'
 		return argIndex
 	end 'positional'
+
+	let atOwnPosition = try sig.paramNames.get(argIndex) otherwise EmptySourceText
+	if atOwnPosition.equals(label) 'labelsInDeclarationOrder'
+		return argIndex
+	end 'labelsInDeclarationOrder'
 
 	return sig.indexOfParam(label)
 end 'argSlotPosition'
