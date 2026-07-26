@@ -1027,8 +1027,20 @@ again (`let a = p` is still a `let`; E3019, measured).
 holding one element (a silent wrong answer; the oracle answers 1), and `items.push(v)` was **E3019**
 against an ordinary struct-with-a-container method, because the alias is neither `mutable` nor
 `isParameter`. The writability question is `layout.fieldIsMutable`, the SAME column
-`emitCheckedSelfFieldStore` asks of `n = 1`. `builtinConformanceReceiverValue` was this rule's third copy
-and is gone: one materialization, four dispatch arms.
+`emitCheckedSelfFieldStore` asks of `n = 1`, and it is asked through `selfFieldIsWritable` — the receiver
+(`items.push(v)`) and the bare-name ARGUMENT (`grow(items)`, whose blame name `parseVariableReference`
+publishes) are one question about one field, and they were derived twice, once INVERTED.
+`builtinConformanceReceiverValue` was this rule's third copy and is gone: one materialization, four
+dispatch arms.
+
+⚠ **A SELF-FIELD ALIAS IS NOT A CAPTURABLE BINDING, FOR THE SAME REASON — `boundValue` 0 IS THE
+RECEIVER.** `emitCaptureRead` read it as an ordinary enclosing local, so a closure inside a method naming a
+field by its bare name stored the enclosing receiver's BOX in its env slot and handed it back as the field:
+`apply(function(k int) gives k + n, x: 1)` on a `type Counter{ var n as int }` holding 3 returned **25**,
+with no diagnostic anywhere — while `self.n`, the same expression's other spelling, was refused, and the
+ranged-alias spelling panicked in lowering (the env slot's type is filled at parse time, so a `named`
+reaches `maxonTypeToStdType` unresolved). All three now reach `requireNotInSelfCapture`, which
+`requireReceiverValue` also owns so no future receiver user has to remember to call it.
 
 ### Parameter mutation — the CALL-SITE half of E3019 (a whole-program fixpoint)
 

@@ -272,3 +272,68 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: insert.alias-typed-key -->
+<!-- targets: x64-windows, x64-linux -->
+A key whose static type is a ranged ALIAS is an int key. It carries the `named` tag until TypeResolution
+collapses it — which is every parameter and every field read of `typealias Int = int(…)` — so a key check
+spelled `== integer` rather than "is integral" rejected it as *"`Set with int` requires an int key — got a
+'int' value"*, a sentence that argues against itself.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntSet = Set with Int
+
+function add(s IntSet, v Int)
+	s.insert(v)
+end 'add'
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	add(s, v: 3)
+	add(s, v: 4)
+	add(s, v: 3)
+	return s.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: insert.self-field-set -->
+<!-- targets: x64-windows, x64-linux -->
+A `Set` held in a `var` FIELD, inserted into and counted through the bare field name. The alias holds no
+SSA value (`boundValue` is 0, and 0 is `self`'s own id), so the receiver has to be materialized before the
+dispatch — taking it directly handed `__set_count` the enclosing struct's box.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntSet = Set with Int
+
+type Reg
+	export var seen as IntSet
+
+	static function create() returns Reg
+		return Self{seen: IntSet.create()}
+	end 'create'
+
+	export function add(v Int)
+		seen.insert(v)
+	end 'add'
+
+	export function size() returns Int
+		return seen.count()
+	end 'size'
+end 'Reg'
+
+function main() returns ExitCode
+	var r = Reg.create()
+	r.add(3)
+	r.add(4)
+	r.add(3)
+	return r.size() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```

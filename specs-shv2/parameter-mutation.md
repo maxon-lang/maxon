@@ -752,3 +752,83 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: var-self-field-passed-to-mutating-param-ok -->
+A `var` field is writable BOTH ways — as a method receiver (`items.push(v)`) and as an ARGUMENT handed to a
+callee that writes it (`grow(items)`). They are one question about one field, and the two askers derive the
+answer from one place (`Parser.selfFieldIsWritable`); derived twice, and once INVERTED, a `var` field could
+become one a method may push onto but no callee may be handed.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(d IntArray)
+	d.push(9)
+end 'grow'
+
+type Bag
+	export var items as IntArray
+
+	static function create() returns Bag
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function add(v Integer)
+		items.push(v)
+		grow(items)
+	end 'add'
+
+	export function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.add(1)
+	return b.size() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: let-self-field-passed-to-mutating-param-error -->
+The `let` half of the same pair: the field's own `let` is what refuses it, and the diagnostic blames the
+FIELD's name. The receiver half of this (`items.push(v)`) is `immutable-method-call.md`'s
+`push-on-let-self-field-array-error`; both must answer from the same reading of `layout.fieldIsMutable`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(d IntArray)
+	d.push(9)
+end 'grow'
+
+type Bag
+	export let items as IntArray
+
+	static function create() returns Bag
+		return Self{items: IntArray.create()}
+	end 'create'
+
+	export function add()
+		grow(items)
+	end 'add'
+
+	export function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.add()
+	return b.size() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/parameter-mutation/let-self-field-passed-to-mutating-param-error.test:17:3: cannot pass 'items' to function that mutates parameter 'd' (in Bag.add)
+```

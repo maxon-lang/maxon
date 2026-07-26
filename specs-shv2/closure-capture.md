@@ -553,3 +553,42 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: closure-capture.bare-self-field-refused -->
+A closure body naming a field of the enclosing type by its BARE name is a capture of `self`, and is refused
+in the same words — through the same wire format — the `self.n` spelling already was.
+
+It used to be captured as if it were an ordinary enclosing local. A self-field alias holds NO SSA value
+(`VarInfo.createSelfField` leaves `boundValue` 0) and **0 is the enclosing method's receiver**, so the env
+slot stored the receiver's BOX and the closure handed it back as the field: this program returned **25** —
+the box pointer's low byte — where the answer is 4, with no diagnostic anywhere. Declaring the field
+through a ranged alias instead PANICKED in lowering, because the env slot's type is filled from the
+binding at parse time and a `named` reaches `maxonTypeToStdType` unresolved. One defect, two faces.
+```maxon
+
+typealias Fn1 = function(int) returns int
+
+function apply(f Fn1, x int) returns int
+	return f(x)
+end 'apply'
+
+type Counter
+	export var n as int
+
+	static function create() returns Counter
+		return Self{n: 3}
+	end 'create'
+
+	export function via() returns int
+		return apply(function(k int) gives k + n, x: 1)
+	end 'via'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create()
+	return c.via() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:17:42: Unsupported: a closure that captures `self` (P1.5-A2b: capturing closures + env block)
+```
