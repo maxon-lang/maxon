@@ -48,7 +48,7 @@ function main() returns ExitCode
 	a.push(Tagged.init(5, tag: 109))
 	var scratch = ScratchArr.create()
 	let cap = 4 as Idx
-	scratch.resize(cap)
+	scratch.growFilled(cap, value: Tagged.init(0, tag: 0))
 	a.mergePartition(0, mid: 10, hi: 20, scratch: scratch, scratchCap: cap, cmp: byKey)
 	// Check stability: within each key, all tag-< 100 elements come first.
 	var stable = true
@@ -283,9 +283,15 @@ module {
     arm64.bl TaggedArr.push
     arm64.bl ScratchArr.create
     arm64.str x0, [x29, #-176]
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.bl Tagged.init
+    arm64.str x0, [x29, #-184]
     arm64.ldr x0, [x29, #-176]
+    arm64.ldr x1, [x29, #-184]
+    arm64.ldr x2, [x29, #-184]
     arm64.mov x1, #4
-    arm64.bl ScratchArr.resize
+    arm64.bl ScratchArr.growFilled
     arm64.adrp_add_func x0, byKey
     arm64.ldr x1, [x29, #-8]
     arm64.ldr x2, [x29, #-176]
@@ -299,34 +305,34 @@ module {
     arm64.mov x7, #0
     arm64.bl TaggedArr.mergePartition
     arm64.mov x0, #1
-    arm64.str x0, [x29, #-184]
-    arm64.mov x0, #0
     arm64.str x0, [x29, #-192]
     arm64.mov x0, #0
     arm64.str x0, [x29, #-200]
     arm64.mov x0, #0
+    arm64.str x0, [x29, #-208]
+    arm64.mov x0, #0
     arm64.ldr x1, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.bl TaggedArr.count
-    arm64.str x0, [x29, #-208]
-    arm64.mov x0, #0
     arm64.str x0, [x29, #-216]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-224]
     arm64.b main.walk_0.header
   walk_0.header:
-    arm64.ldr x0, [x29, #-216]
-    arm64.ldr x1, [x29, #-208]
+    arm64.ldr x0, [x29, #-224]
+    arm64.ldr x1, [x29, #-216]
     arm64.cmp x0, x1
     arm64.cset x2, lt
     arm64.cmp x2, #0
     arm64.b.ne main.walk_0
     arm64.b main.walk_0.exit
   walk_0:
-    arm64.ldr x0, [x29, #-216]
+    arm64.ldr x0, [x29, #-224]
     arm64.ldr x1, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-216]
+    arm64.ldr x1, [x29, #-224]
     arm64.bl TaggedArr.get
-    arm64.str x0, [x29, #-224]
+    arm64.str x0, [x29, #-232]
     arm64.mov x2, #0
     arm64.cmp x1, x2
     arm64.cset x3, ne
@@ -334,158 +340,163 @@ module {
     arm64.b.ne main.otherwise_stmt_0
     arm64.b main.otherwise_continue_0
   otherwise_stmt_0:
-    arm64.ldr x0, [x29, #-224]
+    arm64.ldr x0, [x29, #-232]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_180
+    arm64.b.eq main.__skip_guarded_185
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_180
-    arm64.ldr x1, [x29, #-168]
+    arm64.label main.__skip_guarded_185
+    arm64.ldr x1, [x29, #-184]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_182
+    arm64.b.eq main.__skip_guarded_187
+    arm64.ldr x0, [x29, #-184]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_187
+    arm64.ldr x2, [x29, #-168]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_189
     arm64.ldr x0, [x29, #-168]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_182
-    arm64.ldr x2, [x29, #-160]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_184
+    arm64.label main.__skip_guarded_189
+    arm64.ldr x3, [x29, #-160]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_191
     arm64.ldr x0, [x29, #-160]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_184
-    arm64.ldr x3, [x29, #-152]
-    arm64.cmp x3, #0
-    arm64.b.eq main.__skip_guarded_186
+    arm64.label main.__skip_guarded_191
+    arm64.ldr x4, [x29, #-152]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_193
     arm64.ldr x0, [x29, #-152]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_186
-    arm64.ldr x4, [x29, #-144]
-    arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_188
+    arm64.label main.__skip_guarded_193
+    arm64.ldr x5, [x29, #-144]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_195
     arm64.ldr x0, [x29, #-144]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_188
-    arm64.ldr x5, [x29, #-136]
-    arm64.cmp x5, #0
-    arm64.b.eq main.__skip_guarded_190
+    arm64.label main.__skip_guarded_195
+    arm64.ldr x6, [x29, #-136]
+    arm64.cmp x6, #0
+    arm64.b.eq main.__skip_guarded_197
     arm64.ldr x0, [x29, #-136]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_190
-    arm64.ldr x6, [x29, #-128]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_192
+    arm64.label main.__skip_guarded_197
+    arm64.ldr x7, [x29, #-128]
+    arm64.cmp x7, #0
+    arm64.b.eq main.__skip_guarded_199
     arm64.ldr x0, [x29, #-128]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_192
-    arm64.ldr x7, [x29, #-120]
-    arm64.cmp x7, #0
-    arm64.b.eq main.__skip_guarded_194
+    arm64.label main.__skip_guarded_199
+    arm64.ldr x8, [x29, #-120]
+    arm64.cmp x8, #0
+    arm64.b.eq main.__skip_guarded_201
     arm64.ldr x0, [x29, #-120]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_194
-    arm64.ldr x8, [x29, #-112]
-    arm64.cmp x8, #0
-    arm64.b.eq main.__skip_guarded_196
+    arm64.label main.__skip_guarded_201
+    arm64.ldr x9, [x29, #-112]
+    arm64.cmp x9, #0
+    arm64.b.eq main.__skip_guarded_203
     arm64.ldr x0, [x29, #-112]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_196
-    arm64.ldr x9, [x29, #-104]
-    arm64.cmp x9, #0
-    arm64.b.eq main.__skip_guarded_198
+    arm64.label main.__skip_guarded_203
+    arm64.ldr x10, [x29, #-104]
+    arm64.cmp x10, #0
+    arm64.b.eq main.__skip_guarded_205
     arm64.ldr x0, [x29, #-104]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_198
-    arm64.ldr x10, [x29, #-96]
-    arm64.cmp x10, #0
-    arm64.b.eq main.__skip_guarded_200
+    arm64.label main.__skip_guarded_205
+    arm64.ldr x11, [x29, #-96]
+    arm64.cmp x11, #0
+    arm64.b.eq main.__skip_guarded_207
     arm64.ldr x0, [x29, #-96]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_200
-    arm64.ldr x11, [x29, #-88]
-    arm64.cmp x11, #0
-    arm64.b.eq main.__skip_guarded_202
+    arm64.label main.__skip_guarded_207
+    arm64.ldr x12, [x29, #-88]
+    arm64.cmp x12, #0
+    arm64.b.eq main.__skip_guarded_209
     arm64.ldr x0, [x29, #-88]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_202
-    arm64.ldr x12, [x29, #-80]
-    arm64.cmp x12, #0
-    arm64.b.eq main.__skip_guarded_204
+    arm64.label main.__skip_guarded_209
+    arm64.ldr x14, [x29, #-80]
+    arm64.cmp x14, #0
+    arm64.b.eq main.__skip_guarded_211
     arm64.ldr x0, [x29, #-80]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_204
-    arm64.ldr x14, [x29, #-72]
-    arm64.cmp x14, #0
-    arm64.b.eq main.__skip_guarded_206
+    arm64.label main.__skip_guarded_211
+    arm64.ldr x15, [x29, #-72]
+    arm64.cmp x15, #0
+    arm64.b.eq main.__skip_guarded_213
     arm64.ldr x0, [x29, #-72]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_206
-    arm64.ldr x15, [x29, #-64]
-    arm64.cmp x15, #0
-    arm64.b.eq main.__skip_guarded_208
+    arm64.label main.__skip_guarded_213
     arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_215
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_208
+    arm64.label main.__skip_guarded_215
     arm64.ldr x0, [x29, #-56]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_210
+    arm64.b.eq main.__skip_guarded_217
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_210
+    arm64.label main.__skip_guarded_217
     arm64.ldr x0, [x29, #-48]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_212
+    arm64.b.eq main.__skip_guarded_219
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_212
+    arm64.label main.__skip_guarded_219
     arm64.ldr x0, [x29, #-40]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_214
+    arm64.b.eq main.__skip_guarded_221
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_214
+    arm64.label main.__skip_guarded_221
     arm64.ldr x0, [x29, #-32]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_216
+    arm64.b.eq main.__skip_guarded_223
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_216
+    arm64.label main.__skip_guarded_223
     arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_218
+    arm64.b.eq main.__skip_guarded_225
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_218
+    arm64.label main.__skip_guarded_225
     arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_220
+    arm64.b.eq main.__skip_guarded_227
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_220
+    arm64.label main.__skip_guarded_227
     arm64.ldr x0, [x29, #-176]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_222
+    arm64.b.eq main.__skip_guarded_229
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_222
+    arm64.label main.__skip_guarded_229
     arm64.ldr x0, [x29, #-8]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_224
+    arm64.b.eq main.__skip_guarded_231
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_224
+    arm64.label main.__skip_guarded_231
     arm64.mov x0, #99
     arm64.epilogue stack_size=528
     arm64.ret
   otherwise_continue_0:
-    arm64.ldr x0, [x29, #-224]
-    arm64.str x0, [x29, #-232]
-    arm64.ldr x1, [x29, #-232]
+    arm64.ldr x0, [x29, #-232]
+    arm64.str x0, [x29, #-240]
+    arm64.ldr x1, [x29, #-240]
     arm64.ldr x2, [x1, #0]
-    arm64.ldr x3, [x29, #-192]
+    arm64.ldr x3, [x29, #-200]
     arm64.cmp x2, x3
     arm64.cset x4, ne
     arm64.cmp x4, #0
     arm64.b.ne main.newGroup_0
     arm64.b main.newGroup_0.merge
   newGroup_0:
-    arm64.ldr x0, [x29, #-232]
+    arm64.ldr x0, [x29, #-240]
     arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-192]
+    arm64.str x1, [x29, #-200]
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-200]
+    arm64.str x2, [x29, #-208]
     arm64.b main.newGroup_0.merge
   newGroup_0.merge:
-    arm64.ldr x0, [x29, #-232]
+    arm64.ldr x0, [x29, #-240]
     arm64.ldr x1, [x0, #8]
     arm64.mov x2, #100
     arm64.cmp x1, x2
@@ -495,58 +506,39 @@ module {
     arm64.b main.isLeft_0
   isRight_0:
     arm64.mov x0, #1
-    arm64.str x0, [x29, #-200]
+    arm64.str x0, [x29, #-208]
     arm64.b main.isRight_0.merge
   isLeft_0:
-    arm64.ldr x0, [x29, #-200]
+    arm64.ldr x0, [x29, #-208]
     arm64.cmp x0, #0
     arm64.b.ne main.leftAfterRight_0
     arm64.b main.leftAfterRight_0.merge
   leftAfterRight_0:
     arm64.mov x0, #0
-    arm64.str x0, [x29, #-184]
+    arm64.str x0, [x29, #-192]
     arm64.b main.leftAfterRight_0.merge
   leftAfterRight_0.merge:
     arm64.b main.isRight_0.merge
   isRight_0.merge:
-    arm64.ldr x0, [x29, #-224]
+    arm64.ldr x0, [x29, #-232]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_254
+    arm64.b.eq main.__skip_guarded_261
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_254
+    arm64.label main.__skip_guarded_261
     arm64.b main.walk_0.incr
   walk_0.incr:
     arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-216]
+    arm64.ldr x1, [x29, #-224]
     arm64.add x2, x1, x0
-    arm64.str x2, [x29, #-216]
+    arm64.str x2, [x29, #-224]
     arm64.b main.walk_0.header
   walk_0.exit:
-    arm64.ldr x0, [x29, #-184]
+    arm64.ldr x0, [x29, #-192]
     arm64.cmp x0, #0
     arm64.b.ne main.ok_0
     arm64.b main.no_0
   ok_0:
     arm64.adrp_add_global x0, __static_lit_31
-    arm64.mov x1, x0
-    arm64.mov x2, #32
-    arm64.add x3, x1, x2
-    arm64.str x3, [x29, #-240]
-    arm64.ldr x4, [x29, #-240]
-    arm64.ldr x0, [x29, #-240]
-    arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-240]
-    arm64.ldr x0, [x29, #-240]
-    arm64.bl stdlib.print
-    arm64.ldr x6, [x29, #-240]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_273
-    arm64.ldr x0, [x29, #-240]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_273
-    arm64.b main.ok_0.merge
-  no_0:
-    arm64.adrp_add_global x0, __static_lit_53
     arm64.mov x1, x0
     arm64.mov x2, #32
     arm64.add x3, x1, x2
@@ -559,136 +551,160 @@ module {
     arm64.bl stdlib.print
     arm64.ldr x6, [x29, #-248]
     arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_285
+    arm64.b.eq main.__skip_guarded_280
     arm64.ldr x0, [x29, #-248]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_285
+    arm64.label main.__skip_guarded_280
+    arm64.b main.ok_0.merge
+  no_0:
+    arm64.adrp_add_global x0, __static_lit_53
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-256]
+    arm64.ldr x4, [x29, #-256]
+    arm64.ldr x0, [x29, #-256]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-256]
+    arm64.ldr x0, [x29, #-256]
+    arm64.bl stdlib.print
+    arm64.ldr x6, [x29, #-256]
+    arm64.cmp x6, #0
+    arm64.b.eq main.__skip_guarded_292
+    arm64.ldr x0, [x29, #-256]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_292
     arm64.b main.ok_0.merge
   ok_0.merge:
-    arm64.ldr x0, [x29, #-168]
+    arm64.ldr x0, [x29, #-184]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_289
+    arm64.b.eq main.__skip_guarded_296
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_289
-    arm64.ldr x1, [x29, #-160]
+    arm64.label main.__skip_guarded_296
+    arm64.ldr x1, [x29, #-168]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_291
+    arm64.b.eq main.__skip_guarded_298
+    arm64.ldr x0, [x29, #-168]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_298
+    arm64.ldr x2, [x29, #-160]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_300
     arm64.ldr x0, [x29, #-160]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_291
-    arm64.ldr x2, [x29, #-152]
-    arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_293
+    arm64.label main.__skip_guarded_300
+    arm64.ldr x3, [x29, #-152]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_302
     arm64.ldr x0, [x29, #-152]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_293
-    arm64.ldr x3, [x29, #-144]
-    arm64.cmp x3, #0
-    arm64.b.eq main.__skip_guarded_295
+    arm64.label main.__skip_guarded_302
+    arm64.ldr x4, [x29, #-144]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_304
     arm64.ldr x0, [x29, #-144]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_295
-    arm64.ldr x4, [x29, #-136]
-    arm64.cmp x4, #0
-    arm64.b.eq main.__skip_guarded_297
+    arm64.label main.__skip_guarded_304
+    arm64.ldr x5, [x29, #-136]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_306
     arm64.ldr x0, [x29, #-136]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_297
-    arm64.ldr x5, [x29, #-128]
-    arm64.cmp x5, #0
-    arm64.b.eq main.__skip_guarded_299
+    arm64.label main.__skip_guarded_306
+    arm64.ldr x6, [x29, #-128]
+    arm64.cmp x6, #0
+    arm64.b.eq main.__skip_guarded_308
     arm64.ldr x0, [x29, #-128]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_299
-    arm64.ldr x6, [x29, #-120]
-    arm64.cmp x6, #0
-    arm64.b.eq main.__skip_guarded_301
+    arm64.label main.__skip_guarded_308
+    arm64.ldr x7, [x29, #-120]
+    arm64.cmp x7, #0
+    arm64.b.eq main.__skip_guarded_310
     arm64.ldr x0, [x29, #-120]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_301
-    arm64.ldr x7, [x29, #-112]
-    arm64.cmp x7, #0
-    arm64.b.eq main.__skip_guarded_303
+    arm64.label main.__skip_guarded_310
+    arm64.ldr x8, [x29, #-112]
+    arm64.cmp x8, #0
+    arm64.b.eq main.__skip_guarded_312
     arm64.ldr x0, [x29, #-112]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_303
-    arm64.ldr x8, [x29, #-104]
-    arm64.cmp x8, #0
-    arm64.b.eq main.__skip_guarded_305
+    arm64.label main.__skip_guarded_312
+    arm64.ldr x9, [x29, #-104]
+    arm64.cmp x9, #0
+    arm64.b.eq main.__skip_guarded_314
     arm64.ldr x0, [x29, #-104]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_305
-    arm64.ldr x9, [x29, #-96]
-    arm64.cmp x9, #0
-    arm64.b.eq main.__skip_guarded_307
+    arm64.label main.__skip_guarded_314
+    arm64.ldr x10, [x29, #-96]
+    arm64.cmp x10, #0
+    arm64.b.eq main.__skip_guarded_316
     arm64.ldr x0, [x29, #-96]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_307
-    arm64.ldr x10, [x29, #-88]
-    arm64.cmp x10, #0
-    arm64.b.eq main.__skip_guarded_309
+    arm64.label main.__skip_guarded_316
+    arm64.ldr x11, [x29, #-88]
+    arm64.cmp x11, #0
+    arm64.b.eq main.__skip_guarded_318
     arm64.ldr x0, [x29, #-88]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_309
-    arm64.ldr x11, [x29, #-80]
-    arm64.cmp x11, #0
-    arm64.b.eq main.__skip_guarded_311
+    arm64.label main.__skip_guarded_318
+    arm64.ldr x12, [x29, #-80]
+    arm64.cmp x12, #0
+    arm64.b.eq main.__skip_guarded_320
     arm64.ldr x0, [x29, #-80]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_311
-    arm64.ldr x12, [x29, #-72]
-    arm64.cmp x12, #0
-    arm64.b.eq main.__skip_guarded_313
+    arm64.label main.__skip_guarded_320
+    arm64.ldr x14, [x29, #-72]
+    arm64.cmp x14, #0
+    arm64.b.eq main.__skip_guarded_322
     arm64.ldr x0, [x29, #-72]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_313
-    arm64.ldr x14, [x29, #-64]
-    arm64.cmp x14, #0
-    arm64.b.eq main.__skip_guarded_315
+    arm64.label main.__skip_guarded_322
+    arm64.ldr x15, [x29, #-64]
+    arm64.cmp x15, #0
+    arm64.b.eq main.__skip_guarded_324
     arm64.ldr x0, [x29, #-64]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_315
-    arm64.ldr x15, [x29, #-56]
-    arm64.cmp x15, #0
-    arm64.b.eq main.__skip_guarded_317
+    arm64.label main.__skip_guarded_324
     arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_326
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_317
+    arm64.label main.__skip_guarded_326
     arm64.ldr x0, [x29, #-48]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_319
+    arm64.b.eq main.__skip_guarded_328
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_319
+    arm64.label main.__skip_guarded_328
     arm64.ldr x0, [x29, #-40]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_321
+    arm64.b.eq main.__skip_guarded_330
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_321
+    arm64.label main.__skip_guarded_330
     arm64.ldr x0, [x29, #-32]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_323
+    arm64.b.eq main.__skip_guarded_332
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_323
+    arm64.label main.__skip_guarded_332
     arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_325
+    arm64.b.eq main.__skip_guarded_334
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_325
+    arm64.label main.__skip_guarded_334
     arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_327
+    arm64.b.eq main.__skip_guarded_336
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_327
+    arm64.label main.__skip_guarded_336
     arm64.ldr x0, [x29, #-176]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_329
+    arm64.b.eq main.__skip_guarded_338
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_329
+    arm64.label main.__skip_guarded_338
     arm64.ldr x0, [x29, #-8]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_331
+    arm64.b.eq main.__skip_guarded_340
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_331
+    arm64.label main.__skip_guarded_340
     arm64.mov x0, #0
     arm64.epilogue stack_size=528
     arm64.ret
