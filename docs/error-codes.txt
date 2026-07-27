@@ -1136,6 +1136,22 @@ E6001 PeWriteError
 	reserved retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused.
 	doc The PE writer could not produce the output image.
 
+E6002 BinaryOutputNotReplaceable
+	csharp BinaryOutputNotReplaceable
+	shv2 binaryOutputNotReplaceable
+	doc The previous build output at this path could not be removed before the build began, so this
+	doc build cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)
+	doc or read-only. Refused up front rather than at the write, because the write is logged and
+	doc swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
+	doc which is the exact confident-wrong-answer this deletion exists to prevent.
+
+E6003 BinaryOutputNotWritten
+	shv2 binaryOutputNotWritten
+	doc The backend reported no failure, yet nothing exists at the output path after the write. The
+	doc build removed that path before compiling, so its ABSENCE afterwards means the writer did not
+	doc produce it -- a swallowed IO failure. A build that cannot say where its output is must not
+	doc report success.
+
 E9001 InternalError
 	csharp InternalError
 	doc An internal compiler invariant was violated. This is a compiler bug.

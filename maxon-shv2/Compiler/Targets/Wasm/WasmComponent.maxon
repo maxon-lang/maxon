@@ -1,13 +1,14 @@
-// WasmComponent — the post-processing step that turns the wasm backend's emitted CORE module into a
-// runnable WASI-Preview2 COMPONENT, plus the vendored-tool location helpers that step needs.
+// WasmComponent — the wasm target's object writer (`writeWasm`, the `wasi` arm of
+// `writeExecutable`): it turns the backend's emitted CORE module into a runnable WASI-Preview2
+// COMPONENT on disk, plus the vendored-tool location helpers that step needs.
 //
 // The backend (`buildWasmBackend` → StdToWasm) emits a core module that imports the raw Preview2
 // interface funcs (`wasi:cli/exit`) and exports `wasi:cli/run`. wasmtime runs COMPONENTS, not bare
-// core modules, so `writeWasm` hands the written `.wasm` here to be wrapped in place: `wasm-tools
-// component embed` records the `maxon:app/command` world (so the component model knows which
-// interfaces the core lifts/lowers), then `component new` produces the final component. There is NO
-// asyncify pass — that is async-only, and shv2 has no `async` yet (v1 asyncified every module for its
-// green-thread runtime; the scalar slice has none).
+// core modules, so those bytes are staged to a scratch file here and put through `wasm-tools
+// component embed` (which records the `maxon:app/command` world, so the component model knows which
+// interfaces the core lifts/lowers) and then `component new`, whose output is renamed onto the build's
+// output path. There is NO asyncify pass — that is async-only, and shv2 has no `async` yet (v1
+// asyncified every module for its green-thread runtime; the scalar slice has none).
 //
 // `findFileUpward` / `hostWasmToolCandidates` are the general vendored-binary locators, exported so
 // any other vendored-tool lookup (e.g. the spec-test runner's `wasmtime`) can reuse the SAME upward
@@ -104,64 +105,96 @@ function findWasmWitDir() returns FilePath
 	return try witFile.parent() otherwise return FilePath from ""
 end 'findWasmWitDir'
 
-// Wrap the just-written core module into a WASI Preview2 component, IN PLACE. `component embed`
-// records the `maxon:app/command` world so the component model knows which interfaces the core module
-// lifts/lowers; `component new` produces the final component wasmtime runs. The `cli-exit-with-code`
-// feature must be enabled at embed time because the `wasi:cli/exit` import is gated
-// `@unstable(cli-exit-with-code)` in the WIT. A missing tool or a tool failure PANICS with the tool's
-// own stderr — an unrecoverable environment/emitter fault, surfaced verbatim so the reason is not
-// swallowed.
-export function wrapWasmComponent(outputPath FilePath)
+// The three scratch files a component build passes through, named off the output so they share its
+// (writable) directory: the emitted CORE module, the same module with the world's metadata EMBEDDED,
+// and the finished COMPONENT before it is published. Named rather than spelled inline because the
+// whole point of them is that none is `outputPath`.
+let WasmCoreExtension = ".core.wasm"
+let WasmEmbedExtension = ".embed.wasm"
+let WasmComponentExtension = ".component.wasm"
+
+// Emit the wasm backend's output: write the CORE module to a scratch file, post-process it into a
+// WASI Preview2 component (`wasm-tools component embed` then `component new`), and PUBLISH that with
+// a single rename onto `outputPath`. `component embed` records the `maxon:app/command` world so the
+// component model knows which interfaces the core module lifts/lowers; `component new` produces the
+// final component wasmtime runs. The `cli-exit-with-code` feature must be enabled at embed time
+// because the `wasi:cli/exit` import is gated `@unstable(cli-exit-with-code)` in the WIT. A missing
+// tool or a tool failure PANICS with the tool's own stderr — an unrecoverable environment/emitter
+// fault, surfaced verbatim so the reason is not swallowed.
+//
+// ⚠ **NOTHING IS WRITTEN TO `outputPath` UNTIL THERE IS A FINISHED COMPONENT TO PUT THERE.** This
+// used to emit the core module straight to `outputPath` and wrap it IN PLACE, which meant a missing
+// or failing `wasm-tools` left a BARE CORE MODULE at the output path. That is worse than a stale
+// binary — it is a WRONG one, not a component at all — and it fails at RUN time with `unknown
+// import: wasi:cli/exit…`, a complaint about the program that says nothing about the toolchain fault
+// that actually happened. Publishing by rename is the same discipline the stdlib cache uses
+// (`File.rename` replaces the destination in one step), and it is what lets
+// `Compiler.requireOutputWritten` read the mere PRESENCE of `outputPath` as proof of a finished
+// build on this target exactly as it does on the other three.
+export function writeWasm(outputPath FilePath, coreModule ByteArray)
 	let wasmToolsExe = findWasmToolsPath()
 	if wasmToolsExe.isEmpty() 'missingTool'
-		panic("wrapWasmComponent: wasm-tools not found in vendor/wasm-tools/ — required to wrap the wasm core module into a Preview2 component")
+		panic("writeWasm: wasm-tools not found in vendor/wasm-tools/ — required to wrap the wasm core module into a Preview2 component")
 	end 'missingTool'
 
 	let witDir = findWasmWitDir()
 	if witDir.isEmpty() 'missingWit'
-		panic("wrapWasmComponent: WASI WIT package not found at vendor/wasi-wit/ — required to wrap the wasm core module into a Preview2 component")
+		panic("writeWasm: WASI WIT package not found at vendor/wasi-wit/ — required to wrap the wasm core module into a Preview2 component")
 	end 'missingWit'
 
-	// The embedded intermediate (component metadata recorded, not yet a component) lives next to the
-	// output so it shares the same writable directory.
-	let tmpEmbed = outputPath.changeExtension(".embed.wasm")
+	let corePath = outputPath.changeExtension(WasmCoreExtension)
+	let embedPath = outputPath.changeExtension(WasmEmbedExtension)
+	let componentPath = outputPath.changeExtension(WasmComponentExtension)
 	let cwd = Directory.currentPath()
+
+	// A failed core write returns without wrapping: `outputPath` stays empty, and
+	// `Compiler.requireOutputWritten` turns that absence into the build's failure. Wrapping a file
+	// that was never written would panic inside wasm-tools with a much less useful message.
+	try File.writeBinary(corePath, content: coreModule) otherwise 'coreWriteFailed'
+		logError(LogCategory.binary, message: function() gives "Failed to write wasm core module: {corePath}")
+		return
+	end 'coreWriteFailed'
 
 	var embedArgs = StringArray.create()
 	embedArgs.push("component")
 	embedArgs.push("embed")
 	embedArgs.push(witDir.toString())
-	embedArgs.push(outputPath.toString())
+	embedArgs.push(corePath.toString())
 	embedArgs.push("-o")
-	embedArgs.push(tmpEmbed.toString())
+	embedArgs.push(embedPath.toString())
 	embedArgs.push("--world")
 	embedArgs.push("maxon:app/command")
 	embedArgs.push("--features")
 	embedArgs.push("cli-exit-with-code")
 	let embedResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: embedArgs, workingDirectory: cwd) otherwise (err) 'embedRunFail'
-		panic("wrapWasmComponent: failed to run wasm-tools component embed: {err.displayReason()}")
+		panic("writeWasm: failed to run wasm-tools component embed: {err.displayReason()}")
 	end 'embedRunFail'
 	if not embedResult.succeeded() 'embedFailed'
-		panic("wrapWasmComponent: wasm-tools component embed exited {embedResult.exitCode()}:\n{embedResult.stderr}")
+		panic("writeWasm: wasm-tools component embed exited {embedResult.exitCode()}:\n{embedResult.stderr}")
 	end 'embedFailed'
 
 	var newArgs = StringArray.create()
 	newArgs.push("component")
 	newArgs.push("new")
-	newArgs.push(tmpEmbed.toString())
+	newArgs.push(embedPath.toString())
 	newArgs.push("-o")
-	newArgs.push(outputPath.toString())
+	newArgs.push(componentPath.toString())
 	let newResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: newArgs, workingDirectory: cwd) otherwise (err) 'newRunFail'
-		panic("wrapWasmComponent: failed to run wasm-tools component new: {err.displayReason()}")
+		panic("writeWasm: failed to run wasm-tools component new: {err.displayReason()}")
 	end 'newRunFail'
 	if not newResult.succeeded() 'newFailed'
-		panic("wrapWasmComponent: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
+		panic("writeWasm: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
 	end 'newFailed'
 
-	// `component new` has overwritten `outputPath` with the finished component, so the embedded
-	// intermediate has served its purpose — remove it rather than leave a `.embed.wasm` beside every
-	// output (the spec runner's `cleanup` deletes the `.wasm`, not this). A delete failure is ignored:
-	// litter is not worth failing a successful compile over, and the panic paths above deliberately
-	// leave it for post-mortem inspection.
-	try File.delete(tmpEmbed) otherwise ignore
-end 'wrapWasmComponent'
+	// THE PUBLICATION. Everything above wrote scratch files; this one step makes the output exist.
+	try File.rename(componentPath, to: outputPath) otherwise 'publishFailed'
+		panic("writeWasm: could not publish the finished component as {outputPath} — it is locked or read-only")
+	end 'publishFailed'
+
+	// The two intermediates have served their purpose — remove them rather than leave a `.core.wasm`
+	// and a `.embed.wasm` beside every output (the spec runner's `cleanup` deletes the `.wasm`, not
+	// these). A delete failure is ignored: litter is not worth failing a successful compile over, and
+	// the panic paths above deliberately leave both for post-mortem inspection.
+	try File.delete(embedPath) otherwise ignore
+	try File.delete(corePath) otherwise ignore
+end 'writeWasm'

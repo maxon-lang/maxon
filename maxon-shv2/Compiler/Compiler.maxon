@@ -45,13 +45,17 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 	var project = try loadProject(inputPath, target: target)
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
 
-	let codeResult = try compileToCodeResult(project)
-
+	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
+	// artifacts are removed HERE, ahead of every step that can fail. See `discardPreviousOutput`.
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
+	try discardPreviousOutput(project, outputPath: outputPath)
+
+	let codeResult = try compileToCodeResult(project)
 
 	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
+	try requireOutputWritten(project, outputPath: outputPath)
 
 	if emitIr 'emitIr'
 		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
@@ -78,6 +82,57 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 	logInfo(LogCategory.compiler, message: function() gives "Wrote {codeResult.code.count()} bytes of code to {outputPath}")
 	return outputPath
 end 'compile'
+
+// ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
+//
+// Truncate-on-open does NOT cover this, and believing it does is the trap. `File.writeBinary` opens
+// `CREATE_ALWAYS`, which truncates — but only at the instant the WRITER runs, and the writer is the
+// LAST step of a SUCCESSFUL compile. A parse error, a semantic error, an E5001 register overflow or
+// an encoder fault never reaches it, so the previous build's bytes survive untouched and keep
+// answering. Anything that checks the BINARY rather than the build's exit code then gets a confident
+// wrong answer from stale code, which is the one thing this compiler must never hand anybody.
+//
+// The `.ir` sidecar goes UNCONDITIONALLY, not only under `--emit-ir`: a build that does not produce
+// one must not leave the previous one behind either, or dropping the flag silently preserves a stale
+// answer beside a fresh exe — a mismatched pair that reads as a matched one.
+//
+// ⚠ AN OUTPUT THAT SURVIVES THE DELETE IS A HARD FAILURE, and that is what makes
+// `requireOutputWritten` exact. On Windows a running (or read-only) executable cannot be removed,
+// and the write that follows would fail for the same reason — which `writePe`/`writeElf`/`writeMachO`
+// LOG AND SWALLOW, so the compile would go on to print "Wrote N bytes" and exit 0 over the stale
+// binary. Refusing here means that once this returns, NOTHING is at `outputPath`; so its presence
+// afterwards is proof the writer put it there, and its absence is proof the writer did not.
+function discardPreviousOutput(project Project, outputPath FilePath) throws CompileError
+	// Absence is the ordinary case (a first build), and `File.delete` signals it by throwing — so the
+	// throw carries no information here. The existence re-check below is the only test that can tell
+	// "it was not there" from "it would not go", which is the distinction that matters.
+	try File.delete(outputPath.changeExtension(IrFileExtension)) otherwise ignore
+	try File.delete(outputPath) otherwise ignore
+
+	if File.exists(outputPath) 'undeletable'
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotReplaceable, message: "could not remove the previous build output at {outputPath} — it is locked or read-only, so this build cannot replace it"))
+		printDiagnostics(project)
+		throw CompileError.compileError
+	end 'undeletable'
+end 'discardPreviousOutput'
+
+// The backend claimed to have written the executable; check that something is actually there.
+//
+// `discardPreviousOutput` emptied this path before the compile started, so this is not a heuristic —
+// it is an exact reading of whether the writer produced a file. It exists because the four backend
+// writers report a failed `File.writeBinary` by LOGGING it and returning, which left `compile` free
+// to announce "Wrote N bytes" and exit 0 while nothing had been written. Measured: with the output
+// made read-only, a build printed `[BIN] ERROR: Failed to write PE file`, then `Wrote 1512 bytes of
+// code`, then `Compiled -> …`, and exited 0 over the previous build's binary.
+function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
+	if File.exists(outputPath) 'written'
+		return
+	end 'written'
+
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at {outputPath} — the write failed (the writer logged the reason above)"))
+	printDiagnostics(project)
+	throw CompileError.compileError
+end 'requireOutputWritten'
 
 // Write the lowered Target IR (via `printTargetModule`) beside the produced exe
 // as `<output>.ir`, for `build --emit-ir` and the spec runner's fragment capture.

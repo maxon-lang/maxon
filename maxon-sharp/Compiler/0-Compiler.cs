@@ -175,6 +175,8 @@ public class Compiler {
     using var _ = _context.PushScope();
 
     try {
+      DiscardPreviousOutput(outputPath, irOutputPath);
+
       var totalSw = System.Diagnostics.Stopwatch.StartNew();
       var stageSw = StageTimer.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
       Logger.Debug(LogCategory.Compiler, "Starting compilation");
@@ -250,6 +252,38 @@ public class Compiler {
       return new CompileResult(false, [ex]);
     } catch (Exception ex) {
       return new CompileResult(false, [new CompileError(ErrorCode.InternalError, $"{ex.Message}\n{ex.StackTrace}")]);
+    }
+  }
+
+  /// <summary>
+  /// Removes every artifact this compile would publish — the executable, its `.mxdbg` debug-info
+  /// sidecar, and the `--emit-ir` sidecar — BEFORE the first step that can fail.
+  ///
+  /// <para>`FileMode.Create` truncates, but only when the WRITER opens the file, and the writer is
+  /// the LAST step of a SUCCESSFUL compile. A lex, parse, semantic or emitter failure never reaches
+  /// it, so the previous build's bytes survive untouched and go on answering. Measured: a
+  /// `r.maxon` edited to call an undefined function exits 1 with a clean E2004 — and `r.exe`,
+  /// `r.exe.mxdbg` and `r.ir` are all still there, and the exe still returns the OLD source's exit
+  /// code. Anything that checks the BINARY rather than the build's exit code then gets a confident
+  /// wrong answer from stale code.</para>
+  ///
+  /// <para>Deleting a path that is not there is the ordinary first-build case and not a failure, so
+  /// absent paths are skipped rather than caught. A delete that genuinely FAILS is a build error and
+  /// not a warning: the write that follows would fail for the same reason (a running or read-only
+  /// exe), and a build that cannot remove the old binary must not go on to claim it replaced it.</para>
+  /// </summary>
+  private static void DiscardPreviousOutput(string outputPath, string? irOutputPath) {
+    string?[] published = [outputPath, outputPath + Debug.MxdbgFormat.SidecarExtension, irOutputPath];
+
+    foreach (var path in published) {
+      if (path == null || !File.Exists(path)) continue;
+
+      try {
+        File.Delete(path);
+      } catch (Exception ex) {
+        throw new CompileError(ErrorCode.BinaryOutputNotReplaceable,
+          $"could not remove the previous build artifact at {path} — it is locked or read-only, so this build cannot replace it: {ex.Message}");
+      }
     }
   }
 

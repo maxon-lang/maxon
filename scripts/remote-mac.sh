@@ -199,10 +199,12 @@ if ! ssh "${SSH_OPTS[@]}" "$HOST" true 2>/dev/null; then
 fi
 
 if [ -n "$FILTER" ]; then
-	echo "remote-mac: NOTE — a FILTERED run's fragment goldens are not authoritative."
-	echo "                  The runner batches tests into a shared module and slices the IR per test,"
-	echo "                  so literal-pool indices (__str_N, __static_lit_N) depend on WHICH tests are"
-	echo "                  in the batch. Only spec sources will be collected; fragments are excluded."
+	echo "remote-mac: NOTE — a filtered run brings home the shv2 goldens but NOT the C# ones."
+	echo "                  shv2 compiles each test on its own, so its .test fragments do not depend on"
+	echo "                  which OTHER tests ran. The C# runner batches a spec's tests into one module"
+	echo "                  and slices the IR per test, so under a partial filter its literal-pool"
+	echo "                  indices move; specs/fragments-* are excluded. Spec sources come home from"
+	echo "                  both. (See THE TWO SUITES DISAGREE, below.)"
 fi
 
 REMOTE_PATCH="/tmp/maxon-remote-mac-${SHORT_SHA}.patch"
@@ -417,9 +419,32 @@ fi
 git add -A
 
 if [ -n "$FILTER" ]; then
-	# A filtered run's fragments are batch-dependent noise (see the local NOTE), so only the spec
-	# SOURCES — where `--update-required` writes RequiredIR — are worth carrying home.
-	git diff --cached --binary -- . ':(exclude)specs/fragments-*' ':(exclude)specs-shv2/fragments' > "$PATCH_OUT"
+	# ⭐ THE TWO SUITES DISAGREE ABOUT WHETHER A FILTERED RUN'S FRAGMENTS ARE AUTHORITATIVE, AND ONLY
+	# ONE OF THEM BATCHES. This used to drop BOTH fragment trees, which made the arm64 goldens
+	# unregenerable by the only tool that can run arm64: the script demanded a --filter and then threw
+	# away what the filtered run produced, so every arm64 regeneration had to be done by hand over ssh.
+	#
+	#   shv2  — AUTHORITATIVE. `SpecTestRunner.runOneSpec` walks its selected tests one at a time and
+	#           `stageTest` writes ONE source file per test, which one `maxon-shv2 build` subprocess
+	#           compiles alone. There is no shared module and no shared literal pool, so which OTHER
+	#           tests the filter selected cannot reach the `.test` it emits. MEASURED: 178 tests, each
+	#           a proper subset of its spec, re-run with --update-required, produced ZERO churn under
+	#           `git status specs-shv2/fragments/`.
+	#   C#    — NOT authoritative under a partial filter. `FragmentGenerator` collapses a spec's
+	#           batchable tests into ONE SpecBatchWorkItem, compiles them as a single module and slices
+	#           the IR per test, so the literal-pool / rdata indices depend on batch membership.
+	#           MEASURED: string-interpolation/basic-variable alone rewrote its own golden's
+	#           `x64.mov r8, 2` to `x64.mov r8, 1`; the whole spec (51 tests) rewrote nothing.
+	#
+	# So the C# tree stays excluded. A SPEC-GRANULAR filter (one that takes every test of each spec it
+	# touches) would make it authoritative too — that is what the second measurement shows — but
+	# nothing REPORTS that fact, and re-deriving "which tests does this filter select" here would be a
+	# second copy of a rule `FragmentGenerator.PrepareWorkItems` already owns. It has to come from the
+	# runner, or not at all.
+	#
+	# Spec SOURCES are carried home from both suites either way: that is where --update-required writes
+	# RequiredIR, and a spec's own text has nothing to do with any batch.
+	git diff --cached --binary -- . ':(exclude)specs/fragments-*' > "$PATCH_OUT"
 else
 	git diff --cached --binary > "$PATCH_OUT"
 fi

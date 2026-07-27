@@ -379,4 +379,16 @@ export enum ErrorCode
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"
+
+	// The previous build output at this path could not be removed before the build began, so this
+	// build cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)
+	// or read-only. Refused up front rather than at the write, because the write is logged and
+	// swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
+	// which is the exact confident-wrong-answer this deletion exists to prevent.
+	binaryOutputNotReplaceable = "E6002"
+	// The backend reported no failure, yet nothing exists at the output path after the write. The
+	// build removed that path before compiling, so its ABSENCE afterwards means the writer did not
+	// produce it -- a swallowed IO failure. A build that cannot say where its output is must not
+	// report success.
+	binaryOutputNotWritten = "E6003"
 end 'ErrorCode'

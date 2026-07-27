@@ -378,27 +378,14 @@ end 'prependFunction'
 
 // Write the CodeResult to a runnable executable, dispatched on target OS: an x64-windows PE, an
 // arm64-macOS Mach-O, an arm64-linux static ELF, or a wasm32-wasi component (`writeWasm`).
+// Each writer lives beside the format it emits; the wasm one takes the core module bytes rather than
+// the whole CodeResult because building a component is a multi-step, multi-file job it owns end to
+// end (see its header).
 export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath)
 	match target.os 'os'
 		windows then writePe(outputPath, codeResult: codeResult, target: target)
 		macos then writeMachO(outputPath, codeResult: codeResult, target: target)
 		linux then writeElf(outputPath, codeResult: codeResult, target: target)
-		wasi then writeWasm(outputPath, codeResult: codeResult)
+		wasi then writeWasm(outputPath, coreModule: codeResult.wasmCoreModule)
 	end 'os'
 end 'writeExecutable'
-
-// Write the wasm backend's output: emit the CORE module bytes to `outputPath`, then post-process it
-// IN PLACE into a WASI-Preview2 component (`wasm-tools component embed` + `component new` — see
-// WasmComponent). The core module already exports `wasi:cli/run` and imports `wasi:cli/exit`; the
-// component step lifts/lowers those against the `maxon:app/command` world so wasmtime can run it. A
-// failed write is logged and aborts before wrapping — wrapping a file that was never written would
-// panic in wasm-tools with a less useful message. No `target` param: the sole wasm target is
-// wasm32-wasi, so the emitted format is target-invariant.
-function writeWasm(outputPath FilePath, codeResult CodeResult)
-	try File.writeBinary(outputPath, content: codeResult.wasmCoreModule) otherwise 'writeErr'
-		logError(LogCategory.binary, message: function() gives "Failed to write wasm core module: {outputPath}")
-		return
-	end 'writeErr'
-
-	wrapWasmComponent(outputPath)
-end 'writeWasm'

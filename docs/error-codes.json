@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "da1b95099ad93526",
+  "sourceHash": "755a9c67b3d3293b",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1271,6 +1271,24 @@
       "emittedBy": {},
       "notEmittedBy": ["csharp", "selfhosted", "shv2"],
       "reserved": "retired 2026-07-14 -- the member was DECLARED but no site ever emitted it, which `error-codes check` now refuses. The number stays TAKEN: a retired meaning must not be silently reused."
+    },
+    {
+      "code": 6002,
+      "tag": "E6002",
+      "name": "BinaryOutputNotReplaceable",
+      "stage": "pewriter",
+      "doc": "The previous build output at this path could not be removed before the build began, so this\nbuild cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)\nor read-only. Refused up front rather than at the write, because the write is logged and\nswallowed: carrying on would print \"Wrote N bytes\" and exit 0 over an untouched STALE binary,\nwhich is the exact confident-wrong-answer this deletion exists to prevent.",
+      "emittedBy": {"csharp": "BinaryOutputNotReplaceable", "shv2": "binaryOutputNotReplaceable"},
+      "notEmittedBy": ["selfhosted"]
+    },
+    {
+      "code": 6003,
+      "tag": "E6003",
+      "name": "BinaryOutputNotWritten",
+      "stage": "pewriter",
+      "doc": "The backend reported no failure, yet nothing exists at the output path after the write. The\nbuild removed that path before compiling, so its ABSENCE afterwards means the writer did not\nproduce it -- a swallowed IO failure. A build that cannot say where its output is must not\nreport success.",
+      "emittedBy": {"shv2": "binaryOutputNotWritten"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 9001,

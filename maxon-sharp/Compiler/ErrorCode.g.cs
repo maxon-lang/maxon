@@ -708,6 +708,15 @@ public enum ErrorCode {
   CodeEmitterCoverageNeedsDebugInfo = 5003,
 
   /// <summary>
+  /// The previous build output at this path could not be removed before the build began, so this
+  /// build cannot replace it -- it is locked (on Windows a RUNNING executable cannot be deleted)
+  /// or read-only. Refused up front rather than at the write, because the write is logged and
+  /// swallowed: carrying on would print "Wrote N bytes" and exit 0 over an untouched STALE binary,
+  /// which is the exact confident-wrong-answer this deletion exists to prevent.
+  /// </summary>
+  BinaryOutputNotReplaceable = 6002,
+
+  /// <summary>
   /// An internal compiler invariant was violated. This is a compiler bug.
   /// </summary>
   InternalError = 9001,

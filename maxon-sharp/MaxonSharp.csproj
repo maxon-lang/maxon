@@ -35,12 +35,47 @@
   <PropertyGroup>
     <_ExeExt Condition="$(_HostOS) == 'win'">.exe</_ExeExt>
     <_ExeExt Condition="$(_HostOS) != 'win'"></_ExeExt>
+    <!-- The published compiler's resting place, and the name a LOCKED one is parked under. Both
+         targets below name these paths, and they must name the SAME ones: the pre-build removal and
+         the post-publish restore are two halves of one contract about one file. -->
+    <_BinExe>$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)</_BinExe>
+    <_BinExeOld>$(_BinExe).old</_BinExeOld>
   </PropertyGroup>
+
+  <!-- ⭐ A FAILED BUILD MUST LEAVE NO COMPILER AT bin/. Publishing and copying are AfterTargets, so a
+       build that fails never reaches them and the PREVIOUS bin/maxon.exe survived intact, working,
+       and silently one commit (or one branch) out of date. That is not hypothetical: during an arm64
+       golden regeneration over ssh, `dotnet` was missing from the non-login shell, `dotnet build`
+       failed, `bin/maxon` ran anyway, and the regeneration began minting goldens from the wrong
+       compiler. Removing it up front makes the next command fail loudly instead of answering
+       confidently from stale code.
+
+       It runs BEFORE the compile, not after a failure, because there is no "after a failure" hook to
+       hang it on — and because the property being established is simply that no binary is at that
+       path unless THIS build put it there.
+
+       ⚠ Windows cannot delete a RUNNING executable, so a plain Delete is not enough; renaming one is
+       allowed, and `.old` is the same parking spot CopyToBin already uses at the other end of the
+       build (it clears the previous `.old` first, so the two do not accumulate). If BOTH fail, two
+       generations of maxon.exe are running and the build stops rather than proceed toward a copy it
+       cannot make.
+
+       ⚠ It deliberately does NOT cover a failure AFTER CopyToBin — `CheckErrorCodeRegistry` runs the
+       binary it just published, and a registry that fails the check is not a broken compiler: it is
+       the very tool `maxon error-codes generate` needs to fix the registry with. -->
+  <Target Name="DiscardStaleBin" BeforeTargets="BeforeBuild">
+    <Delete Files="$(_BinExe)" Condition="Exists('$(_BinExe)')" ContinueOnError="true" />
+    <Delete Files="$(_BinExeOld)" Condition="Exists('$(_BinExe)') AND Exists('$(_BinExeOld)')"
+      ContinueOnError="true" />
+    <Move SourceFiles="$(_BinExe)" DestinationFiles="$(_BinExeOld)"
+      Condition="Exists('$(_BinExe)')" ContinueOnError="true" />
+    <Error Condition="Exists('$(_BinExe)')"
+      Text="$(_BinExe) could neither be deleted nor renamed out of the way. It is running (and so is a previous build's copy, parked at $(_BinExeOld)). Stop them, then rebuild — a build that cannot remove the old compiler must not leave one behind." />
+  </Target>
 
   <Target Name="CopyToBin" AfterTargets="Publish">
     <!-- Clean up any leftover .old file from a previous locked build -->
-    <Delete Files="$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt).old"
-      Condition="Exists('$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt).old')" ContinueOnError="true" />
+    <Delete Files="$(_BinExeOld)" Condition="Exists('$(_BinExeOld)')" ContinueOnError="true" />
     <!-- Try a direct copy first (fast path when not locked) -->
     <!-- On Windows, use Exec instead of Copy to suppress MSB3021 warning when the exe is locked -->
     <Exec
@@ -55,8 +90,7 @@
       <Output TaskParameter="CopiedFiles" ItemName="_CopiedFiles" />
     </Copy>
     <!-- If direct copy failed (exe locked), rename the locked file out of the way and copy again -->
-    <Move SourceFiles="$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)"
-      DestinationFiles="$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt).old"
+    <Move SourceFiles="$(_BinExe)" DestinationFiles="$(_BinExeOld)"
       Condition="('$(_CopyExitCode)' != '0' AND '$(_CopyExitCode)' != '') OR ('@(_CopiedFiles)' == '' AND '$(_CopyExitCode)' == '')"
       ContinueOnError="true" />
     <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_ExeExt)"

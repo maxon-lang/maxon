@@ -737,6 +737,17 @@ end 'isSafeRelativeName'
 //
 // `--update-required` regenerates instead of comparing. That is the one door through which a change
 // enters, and it is deliberately a door you have to open: the diff is the review.
+//
+// ⭐ **A GOLDEN IS INDEPENDENT OF WHICH OTHER TESTS RAN, AND `scripts/remote-mac.sh` RELIES ON IT.**
+// The content compared (or written) here comes from ONE compile of ONE test: `runOneSpec` walks its
+// selected tests one at a time and `stageTest` puts a single source file on disk for each, which a
+// single `build` subprocess compiles alone. Nothing is shared between two tests — no module, no
+// literal pool — so `--filter` cannot move a byte of any fragment it does not exclude, and a
+// FILTERED `--update-required` regenerates exactly what an unfiltered one would. That is what lets
+// the remote-golden script carry an arm64 run's `specs-shv2/fragments` home from a filtered run; the
+// C# suite, which batches a spec's tests into one module, is excluded there for exactly the reason
+// this runner does not need to be. ⚠ If shv2 ever compiles several tests together, that script's
+// exclusion list is the OTHER end of this invariant and must change with it.
 function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irPath FilePath, updateRequired bool) returns TestOutcome
 	// The fragment pins the CODE, so a run expectation contributes only its exit code and
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
