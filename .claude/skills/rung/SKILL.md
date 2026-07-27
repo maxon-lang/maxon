@@ -1,6 +1,6 @@
 ---
 name: rung
-description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, independent review, optimization pass, gate battery, rebase, fast-forward merge, push. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
+description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, independent review, optimization pass, gate battery, cross-target gate (all targets, non-native over ssh), rebase, fast-forward merge, push. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
 ---
 
 # Run one rung of the plan
@@ -55,8 +55,9 @@ have marched straight past that and built P1.1 on it.)*
 - **`PLAN.md`'s next rung is ambiguous** — the no-argument form depends on that ladder being current. Say
   so; do not pick for yourself.
 
-**Everything else runs unattended.** Landing a clean rung — the plan, the wave, the gates, the merge,
-**the push (step 10)**, and the `PLAN.md` update (step 11) — needs no permission. Report what you did;
+**Everything else runs unattended.** Landing a clean rung — the plan, the wave, the gates, the
+**cross-target gate (step 10)**, the merge, **the push (step 11)**, and the `PLAN.md` update (step 12) —
+needs no permission. Report what you did;
 ask only when the list above fires.
 
 ## Deferred work lives in PLAN.md — there is NO separate backlog file
@@ -200,7 +201,7 @@ The plan must name, per layer:
 
 **The plan MUST list the exact `/specs` files this rung ports into `specs-shv2/`**, and per file, **which
 cases the rung UNLOCKS versus which stay `disabled-test:`, and on which later rung.** That list is the
-rung's acceptance criteria *and* its deliverable (step 11).
+rung's acceptance criteria *and* its deliverable (step 12).
 
 **It is the COORDINATOR's call, not the agent's.** An agent left to choose its own coverage tests what it
 remembered — which is exactly how a "finished" scalar core scored **48 of 2,746** (see the closing
@@ -310,8 +311,43 @@ size, so the check was re-deriving a known answer at full suite cost. Run the su
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
 | Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks |
+| Cross-target | **step 10** — every target the compiler claims, not just this host's. Unreachable ⇒ SKIP (say which); ran-and-failed ⇒ **RED** |
 
-## 10. Land it — linear history, then push
+## 10. The CROSS-TARGET gate — every target the compiler claims, once, before it lands
+
+**Step 8's battery proved the rung on exactly ONE target: whichever one this host happens to be.**
+Everything else the compiler emits — `arm64-macos`, `arm64-linux`, `x64-linux`, `wasm32-wasi` — stays
+unverified until somebody eventually runs it, and *"somebody eventually"* is how **317 stale
+`specs/fragments-arm64-macos/` goldens** came to sit on `main` unnoticed, through a run of rungs that
+were all green on x64-windows. **A green suite on one target is evidence about one target.**
+
+```
+scripts/cross-target-gate.sh --mac-host=user@mac        # add --csharp if the rung touched maxon-sharp/
+```
+
+It builds both compilers, then runs the shv2 suite **per target**, each behind the runner that target
+needs — WSL for the Linux ELF, the vendored wasmtime for the wasm component, and `ssh` to a macOS host
+for the two arm64 targets (natively for `arm64-macos`, inside OrbStack for `arm64-linux`). It prints a
+matrix, one row per target.
+
+**Run it ONCE, here — on the final tree, after review and optimization, before the merge.** It does not
+belong on every commit: it is minutes of work whose answer only changes when the rung is finished.
+Running it *before* the merge is the point — the branch tip is shipped to the Mac as a **`git bundle`**,
+so nothing has to be pushed to be tested and no rung branch leaks onto `origin`.
+
+| | |
+|---|---|
+| **Unreachable ⇒ SKIP, and the gate still passes** | A laptop asleep in another room must not block a rung. |
+| **But a SKIP is reported, never folded into the green** | It means **UNVERIFIED**, not *proven good*. **Name the skipped targets in the rung report** — the one thing worse than not testing arm64 is believing you did. |
+| **A target that RUNS and FAILS is RED** | A rung-halting gate — **HALT AND ASK**, exactly like any other red gate. No flag softens it, and you never turn it green by dropping a target. |
+
+⚠ **Golden churn from this gate is real and belongs in the commit** — a non-native fragment that moves
+is a codegen change on that target. ⚠ **But a FILTERED run's fragments are not authoritative:** the
+runner batches tests into a shared module and slices the IR per test, so literal-pool indices
+(`__str_N`, `__static_lit_N`) depend on *which* tests are in the batch. The gate excludes fragments on
+filtered runs for exactly this reason — **regenerate goldens only from an unfiltered run.**
+
+## 11. Land it — linear history, then push
 
 ```
 git fetch origin
@@ -327,7 +363,7 @@ leaves main byte-identical to the branch tip you gated in step 8, so the re-run 
 known-green tree — skip it. Either way, then **`git push origin main`** — the parallel repo consumes it.
 Remove the worktree and delete the branch.
 
-## 11. Close the loop
+## 12. Close the loop
 
 Update `maxon-shv2/PLAN.md`: a rung's deliverable is the set of `disabled-test:` markers it flipped to
 `test:`. **Mark the rung done ONLY if it has no open residuals** — if the plan sanctioned any deferral in
