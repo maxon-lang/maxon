@@ -2729,6 +2729,12 @@ end 'PressureSweepScratch'
 //    (`LivenessResult.clearForbidden`).
 //  • the dead-phi count and the register demand are functions of THIS block's ops and live sets alone.
 //
+// ⚠ THE SPLITTER'S `analyzeBlockPressure` WALKS THE SAME BLOCK BACKWARD OVER THE SAME OPS, AND THE TWO
+// ARE ORDERED RATHER THAN REDUNDANT — this one WRITES the `forbidden` masks and the dead-phi count
+// that one READS (through `EffectivePools` and `deadPhiCountOf`), across ALL the dirty blocks before
+// any of it is read. Fusing them reads a value's effective pool partway through its own rebuild. The
+// argument in full, with the third reason the two block SETS differ, is in that function's header.
+//
 // A DEAD block-arg phi (never used, not live-out — e.g. the continuation phi a merge mints for a value
 // nothing reads after an `if`) is never "live", so the op sweep counts it as zero. But the colorer
 // colors EVERY block-arg and holds its register for the WHOLE block — a dead phi never appears as an
@@ -3133,19 +3139,29 @@ function collectForbidTargets(liveRow BitWordArray, rebuildFor ScannedValues, wo
 	end 'scope'
 end 'collectForbidTargets'
 
-// The split's own ids that are live across this op. Its `all` counterpart walks the row's SET BITS
-// (never the value space); this one walks the two or three ids instead and tests each — the row is the
-// index either way, and neither ever iterates a value space.
+// The split's own ids that are live across this op: the VICTIM's one bit, then the SET BITS of the
+// contiguous stretch its fresh ids occupy. Its `all` counterpart walks the row's set bits rather than
+// the value space, and so does this one — over a range instead of the whole row.
+//
+// ⚠ IT MUST NOT WALK THE FRESH IDS AND TEST EACH, WHICH IS WHAT IT USED TO DO, AND THE RANGE HAS NO
+// BOUND. A split mints one fresh id per RUN of the victim's uses (`spillOneValue` — a run breaks at
+// every block boundary) or one per USE (`rematerializeConstant`), so the count is a property of the
+// PROGRAM: MEASURED at 6 on the committed suite as it stands (`streaming-subprocess/*`), and at
+// exactly M for a value read in M separate blocks — 8 / 16 / 32 / 64 fresh ids at M = 8 / 16 / 32 /
+// 64. This runs at every CLOBBER op of every dirty block, and the dirty region of that split HOLDS
+// those M blocks, so a per-id test is Θ(clobber-ops × M) per split — the same shape of quadratic the
+// `all` arm walks set bits to avoid, reintroduced on the arm that exists to remove it. Over the row
+// it is Θ(range/64 + ids actually live there). "The probe never saw more than 8" is an observation
+// about a corpus, not a bound on a range the program picks.
 function collectLiveSplitValues(liveRow BitWordArray, values SplitValues, out ValueIdArray)
 	out.clear()
+	// The victim is a PRE-EXISTING id and the fresh ones are minted above the value space it lived in,
+	// so it always precedes them and the list stays ascending, exactly as the whole-row walk's is.
 	if bitsetTest(liveRow, base: 0, bit: values.victim) 'victimLiveHere'
 		out.push(values.victim)
 	end 'victimLiveHere'
-	for f in values.freshFrom upto values.freshTo 'eachFresh'
-		if bitsetTest(liveRow, base: 0, bit: f) 'freshLiveHere'
-			out.push(f)
-		end 'freshLiveHere'
-	end 'eachFresh'
+
+	bitsetAppendRange(liveRow, base: 0, fromBit: values.freshFrom, toBit: values.freshTo, out: out)
 end 'collectLiveSplitValues'
 
 function operandDefinesValue(buf OperandList, v ValueId) returns bool

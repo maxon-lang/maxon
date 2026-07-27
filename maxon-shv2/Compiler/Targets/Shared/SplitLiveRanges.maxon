@@ -780,8 +780,8 @@ type PeakTree
 	end 'combineAt'
 
 	// The winner of two subtrees. `right` holds the HIGHER block indices, so it is the CANDIDATE and
-	// `left` the incumbent — and `betterRank` returns the candidate on an exact tie, which is how the
-	// full sweep resolves one (the last block offered wins).
+	// `left` the incumbent — and `rankOutranks` is TRUE on an exact tie, which is how the full sweep
+	// resolves one (the last block offered wins).
 	function betterBlock(left CfgIndex, right CfgIndex) returns CfgIndex
 		if right == self.numBlocks 'rightEmpty'
 			return left
@@ -817,17 +817,34 @@ type PeakTree
 		into.takeOver(demand, atBlock: blockLocal, atPos: pos, seq: seq, confined: confined, tightSet: tightSet, tightClass: tightClass, atClobber: atClobber)
 	end 'fillRank'
 
-	// The function's peak — the root of the tournament. A FRESH object, because it outlives the next
-	// combine: the driver holds the analysis it becomes across the whole split that follows.
+	// The function's peak — the root of the tournament.
+	//
+	// A FRESH object, and NOT because it "outlives the next combine" — that reason was stated here and
+	// is false. What it becomes is a `PressurePeak`, which `materializePeak` fills by COPYING these
+	// scalars out, so nothing holds this rank past the call it is handed to. The reason is the other
+	// way round: this is the ONE rank of the three that leaves the tree, so a caller may NAME it, and
+	// `refreshPeak` does — across a loop that re-sweeps and PROMOTES every block. Handing back
+	// `leftRank` or `rightRank` would give that binding a lifetime of "until the next combine", which
+	// nothing here states and nothing checks, and the first reader to move a use below that loop would
+	// read a rank belonging to some other block with no diagnostic anywhere. One allocation per
+	// analysis is the price of a value with no expiry date on it.
 	export function best() returns PeakRank
 		var out = emptyRank()
-		let champion = try self.winner.get(1) otherwise panic("PeakTree.best: the tree has no root — `reset` must run before any query")
-		if champion == self.numBlocks 'noPeak'
-			return out
-		end 'noPeak'
-		self.fillRank(champion, into: out)
+		self.fillBest(out)
 		return out
 	end 'best'
+
+	// The root, into a rank the CALLER owns — for the one caller that already has an empty one to
+	// spend (`analyzePressure`'s fold seed, which the tournament path never uses). It is the same read
+	// `best` does, so the two cannot come to disagree about what an empty tree answers.
+	export function fillBest(into PeakRank)
+		let champion = try self.winner.get(1) otherwise panic("PeakTree.fillBest: the tree has no root — `reset` must run before any query")
+		if champion == self.numBlocks 'noPeak'
+			into.clear(0, pool: 0)
+			return
+		end 'noPeak'
+		self.fillRank(champion, into: into)
+	end 'fillBest'
 end 'PeakTree'
 
 // A rank offering nothing — what a tournament slot holds before anything is published to it, and the
@@ -1305,14 +1322,15 @@ function refreshPeak(module TargetModule, liveness LivenessResult, pool RegMask,
 		resweepBlock(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: blockLocal, wantConfined: confinedModeOnEntry)
 	end 'eachDirtyBlock'
 
-	if confinedModeOnEntry 'bothHalvesAreCurrent'
-		return analysisOf(module, liveness: liveness, scratch: scratch)
-	end 'bothHalvesAreCurrent'
-
-	let fullPoolBest = scratch.tree.best()
-	if fullPoolBest.found and not fullPoolBest.clobberOnly 'aFullPoolPeakOutranksEveryConfinedOne'
-		return analysisOf(module, liveness: liveness, scratch: scratch)
-	end 'aFullPoolPeakOutranksEveryConfinedOne'
+	// ONE query of the root, answering both the mode test and — when the ranks turn out to be current —
+	// the analysis. `best()` mints a rank, and asking the tournament twice for the same champion was two
+	// of them per split on the full-pool path.
+	let champion = scratch.tree.best()
+	if confinedModeOnEntry or (champion.found and not champion.clobberOnly) 'ranksAreCurrent'
+		// Either both halves were swept, or a FULL-POOL peak came back — and one of those outranks every
+		// confined rank in the function, computed or not.
+		return analysisOf(module, liveness: liveness, rank: champion, scratch: scratch)
+	end 'ranksAreCurrent'
 
 	// THE MODE FLIP. Every leaf swept since the mode began holds a full-pool-only rank, so the confined
 	// half of the whole function is re-derived once, here.
@@ -1320,7 +1338,7 @@ function refreshPeak(module TargetModule, liveness LivenessResult, pool RegMask,
 		resweepBlock(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: blockLocal, wantConfined: true)
 	end 'eachBlock'
 	scratch.confinedMode = true
-	return analysisOf(module, liveness: liveness, scratch: scratch)
+	return analysisOf(module, liveness: liveness, rank: scratch.tree.best(), scratch: scratch)
 end 'refreshPeak'
 
 // One block's leaf, re-derived and published to the root.
@@ -1329,9 +1347,12 @@ function resweepBlock(module TargetModule, liveness LivenessResult, pool RegMask
 	scratch.tree.promote(blockLocal)
 end 'resweepBlock'
 
-// The tournament's current champion, materialized — the same pairing `analyzePressure` returns.
-function analysisOf(module TargetModule, liveness LivenessResult, scratch SplitScratch) returns PressureAnalysis
-	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: scratch.tree.best(), scratch: scratch), defLiveAfter: scratch.defLiveAfter)
+// A winning rank, materialized and paired with the def-point column — THE one spelling of what a
+// pressure analysis is, so the whole-function sweep and the incremental refresh cannot come to pair
+// them differently. Both quantities come from one sweep and neither is copied out (see
+// `SplitScratch.peakLiveBefore` and `PressureAnalysis`).
+function analysisOf(module TargetModule, liveness LivenessResult, rank PeakRank, scratch SplitScratch) returns PressureAnalysis
+	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: rank, scratch: scratch), defLiveAfter: scratch.defLiveAfter)
 end 'analysisOf'
 
 // Nothing crossing the peak can be relieved. What that MEANS depends on which overflow it is —
@@ -1456,22 +1477,40 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 		scratch.tree.reset(topo.numBlocks)
 	end 'sizeTheTournament'
 
-	// Blocks in ASCENDING index, and `betterRank` replaces on an exact tie — so the winner is the LAST
+	// ⚠ EXACTLY ONE OF THE TWO ANSWERS IS COMPUTED, AND IT IS THE ONE THAT WILL BE READ. The fold and
+	// the tournament are two mechanisms for one question — "which block holds the function's peak?" —
+	// and this call used to run BOTH and return the FOLD's, after which every `refreshPeak` returned
+	// the TREE's. Nothing compared them, so a disagreement would have moved the peak silently between
+	// the first split and the second. Whenever a tree is being seeded it is also the answer from here
+	// on, so it answers this call too; the fold exists only for the pass that seeds no tree (the
+	// driver's first analysis, and `verifyIncremental`'s independent rebuild).
+	//
+	// They must nevertheless AGREE, and that is checked rather than asserted: `verifyIncremental`
+	// compares the tree-derived peak against a full `analyzePressure(intoTree: false)` rebuild — i.e.
+	// against the fold — after every single split.
+	//
+	// Blocks in ASCENDING index, and the fold replaces on an exact tie, so its winner is the LAST
 	// maximal rank offered. The tournament reproduces exactly that (see `PeakTree`).
 	var best = PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let rank = analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: i, wantConfined: true)
-		best = betterRank(best, candidate: rank)
 		if intoTree 'recordTheLeaf'
 			scratch.tree.setLeaf(i, rank: rank)
-		end 'recordTheLeaf'
+		end 'recordTheLeaf' else 'foldIt'
+			if rankOutranks(rank, best: best) 'aNewBest'
+				best = rank
+			end 'aNewBest'
+		end 'foldIt'
 	end 'eachBlock'
 
 	if intoTree 'buildTheTournament'
+		// Into the seed rank the fold above did not use, rather than into a fresh one — this call is
+		// the only place a `PeakTree` query has an empty rank of its own already lying spare.
 		scratch.tree.build()
+		scratch.tree.fillBest(best)
 	end 'buildTheTournament'
 
-	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: best, scratch: scratch), defLiveAfter: scratch.defLiveAfter)
+	return analysisOf(module, liveness: liveness, rank: best, scratch: scratch)
 end 'analyzePressure'
 
 // Does `candidate` outrank `best`? THE one ranking, shared by the whole-function fold and by the
@@ -1484,11 +1523,6 @@ function rankOutranks(candidate PeakRank, best PeakRank) returns bool
 	end 'nothingOffered'
 	return peakOutranks(not candidate.clobberOnly, atFixedRegisterOp: candidate.atFixedRegisterOp, pressure: candidate.pressure, best: best)
 end 'rankOutranks'
-
-// `best`, replaced by `candidate` iff it outranks it.
-function betterRank(best PeakRank, candidate PeakRank) returns PeakRank
-	return candidate if rankOutranks(candidate, best: best) else best
-end 'betterRank'
 
 // ONE BLOCK's backward sweep, computing both quantities a spill decision needs: that block's peak
 // OVER-POOL op (a candidate for where a victim is chosen) and, for every value DEFINED in it, the
@@ -1530,6 +1564,28 @@ end 'betterRank'
 // Every quantity comes from the operand model + the liveness `forbidden` column, never a hardcoded
 // opcode, so calls, `idiv`, `cqo` and argument pre-moves are handled uniformly. Mirrors
 // TargetLiveness's pressure sweep.
+//
+// ⚠⚠ IT WALKS THE SAME DIRTY BLOCK BACKWARD OVER THE SAME OPS THAT `sweepBlockPressure` JUST DID, AND
+// THE TWO CANNOT BE FUSED. They are ORDERED, not redundant, and the order is a fact about what each
+// one WRITES and what the other READS — so anyone who reaches for the obvious saving needs this
+// paragraph rather than a benchmark. Both walks are named as separate per-split terms in
+// ARCHITECTURE.md's shape warning; that is what they are, and it is not a lapse.
+//
+//  • `sweepBlockPressure` WRITES `forbidden`, and this reads `EffectivePools`, which is
+//    `popcount(pool ∖ forbidden(v))`. A split clears the victim's mask and the fresh ids' and the
+//    dirty sweep rebuilds them by ORing in each dirty block's clobbers — so the victim's mask is not
+//    final until the LAST dirty block has been swept, and `refreshAfterSplit` refreshes their pools
+//    only after that loop. A fused walk would read block 0's effective pools before block 5's
+//    clobbers had been folded into them, and Hall's condition would be tested against a value's pool
+//    as it looked partway through a rebuild.
+//  • Even WITHIN one block the order holds: `sweepBlockPressure`'s dead-phi count is computed at the
+//    END of its backward walk (the row is only the live-IN view once), and this adds that count to
+//    EVERY op's effective demand. The number is not available at the first op of a walk that is also
+//    producing it.
+//  • And the two walks do not even run over the same block SET. `refreshAfterSplit` sweeps the dirty
+//    region; `refreshPeak` sweeps the dirty region OR, on the mode flip, the whole function.
+//
+// A per-op incremental structure feeding both is the redesign ARCHITECTURE.md names — not a fusion.
 //
 // ⚠ `wantConfined` IS A COST GATE, NOT A CORRECTNESS ONE, and it is the whole reason the confined half
 // is separable. A FULL-POOL overflow outranks EVERY confined one unconditionally (`peakOutranks`), so a
@@ -1717,43 +1773,32 @@ function materializePeak(module TargetModule, liveness LivenessResult, rank Peak
 	zeroRow(liveBefore, wordsPerRow: liveness.wordsPerRow)
 	var peakOpIdx = 0 as OpIndex
 	if rank.found 'derivePeakRow'
-		fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
-		peakOpIdx = opAtBlockPos(module, topo: liveness.cfg.topo, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos)
+		peakOpIdx = fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
 	end 'derivePeakRow'
 	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, peakOpIdx: peakOpIdx, clobberOnly: rank.clobberOnly, witness: rank.witness, witnessClass: rank.witnessClass, atFixedRegisterOp: rank.atFixedRegisterOp)
 end 'materializePeak'
 
-// The `module.ops` index of the op at forward layout position `forwardPos` of local block
-// `blockLocal` — the block's body ops then its terminator, which is the same `collectBlockOps`
-// numbering the sweep walks and the `UseIndex` records.
-//
-// INDEXED, NOT REBUILT. This used to `collectBlockOps` the WHOLE block into a scratch list and then
-// take one element out of it — an O(block) copy to answer an O(1) question, paid once per split. The
-// numbering is `opRefs` in order followed by the terminator, so it IS an index; spelling it out here
-// keeps the one place that knows that layout next to `collectBlockOps`, which is the other.
-function opAtBlockPos(module TargetModule, topo FuncTopology, blockLocal CfgIndex, forwardPos BlockOpPos) returns OpIndex
-	let block = blockAt(module, topo: topo, local: blockLocal)
-	let bodyCount = block.opRefs.count()
-	if forwardPos < bodyCount 'bodyOp'
-		return try block.opRefs.get(forwardPos) otherwise panic("opAtBlockPos: opRefs.get OOB at {forwardPos} of block {blockLocal}")
-	end 'bodyOp'
-	if forwardPos == bodyCount and block.hasTerminatorOp() 'terminatorOp'
-		return block.terminatorIndex()
-	end 'terminatorOp'
-	panic("opAtBlockPos: position {forwardPos} past the end of block {blockLocal} ({bodyCount} body op(s){", terminated" if block.hasTerminatorOp() else ", unterminated"})")
-end 'opAtBlockPos'
-
 // The live-BEFORE set at ONE op, re-derived by re-walking its block backward from the block's live-out
-// set down to that op. `row` must be zero on entry.
+// set down to that op — and the `module.ops` index of that op, RETURNED rather than looked up. `row`
+// must be zero on entry.
 //
 // This is the SAME seed (`seedRowFromLiveOut`) and the SAME backward transfer
 // (`stepRowBackwardOverOperands`) the sweep itself steps with — not a second implementation of either
 // — so it lands on exactly the row the sweep held there. There is no transfer function here to drift
 // out of step with the one that found the peak.
 //
+// ⚠ THE OP INDEX COMES OUT OF THIS WALK BECAUSE THE BLOCK'S LAYOUT MUST BE STATED ONCE. The walk's
+// LAST step is by definition the op at `forwardPos`, and it reads that op out of the list
+// `collectBlockOps` just built — which is the one place that knows a block's execution order is its
+// `opRefs` followed by its terminator. A separate positional accessor spelling that order out again
+// is a second statement of it, and the two would not fail loudly: `peakOpIdx` feeds `usesAtPeakOp`
+// (which values the peak op READS, hence which are excluded as victims) and the mutators, so a
+// disagreement is a different victim and different code, never a crash. It also costs nothing to take
+// it from here — this walk builds the list either way.
+//
 // It costs ONE partial block sweep per pressure analysis, and it is what buys the removal of a heap
 // row plus a full `wordsPerRow` copy at EVERY tying op of EVERY block (see `PeakRank`).
-function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLocal CfgIndex, forwardPos BlockOpPos, row BitWordArray, scratch SplitScratch)
+function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLocal CfgIndex, forwardPos BlockOpPos, row BitWordArray, scratch SplitScratch) returns OpIndex
 	let block = blockAt(module, topo: liveness.cfg.topo, local: blockLocal)
 	liveness.seedRowFromLiveOut(blockLocal, row: row, scratch: scratch.seedBuf)
 	// This walk wants the ROW alone, but the step maintains the per-class tally as it flips bits and
@@ -1763,14 +1808,22 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 	scratch.sweep.ordered.clear()
 	collectBlockOps(block, out: scratch.sweep.ordered)
 	let opCount = scratch.sweep.ordered.count()
+	if forwardPos >= opCount 'positionPastTheEnd'
+		panic("fillLiveBeforeOp: position {forwardPos} past the end of block {blockLocal}, which lays out {opCount} op(s) — a `PeakRank`'s forward position always names an op the sweep that produced it visited")
+	end 'positionPastTheEnd'
+
 	// Step back over the ops at forward positions `opCount-1` down to `forwardPos` INCLUSIVE: after the
-	// step over the op AT `forwardPos`, the row is that op's live-BEFORE set.
+	// step over the op AT `forwardPos`, the row is that op's live-BEFORE set — and the op it just
+	// stepped over is the one at `forwardPos`, which is what comes back.
+	var atForwardPos = 0 as OpIndex
 	for ri in 0 upto opCount - forwardPos 'stepBackToPeak'
 		let opIdx = try scratch.sweep.ordered.get(opCount - 1 - ri) otherwise panic("fillLiveBeforeOp: ordered.get OOB")
 		let op = try module.ops.get(opIdx) otherwise panic("fillLiveBeforeOp: opIdx not in module.ops")
 		targetOpOperands(op, buf: scratch.sweep.buf)
 		stepRowBackwardOverOperands(row, base: 0, buf: scratch.sweep.buf, liveByClass: scratch.sweep.liveByClass, classes: liveness.valueClass)
+		atForwardPos = opIdx
 	end 'stepBackToPeak'
+	return atForwardPos
 end 'fillLiveBeforeOp'
 
 // The better of `best` and a CONFINED overflow at this op — but only if there IS one. The

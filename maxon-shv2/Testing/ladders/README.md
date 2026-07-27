@@ -22,6 +22,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `gen.sh <N> <float\|int> <out>` | N units, **one** value live across one call | the Wave 2 headline: is a cross-call float force-spilled? The `int` form is the **control** — it must stay bit-identical across a change that only touches the float path. |
 | `gen12.sh <N> <floatsPer> <out>` | N units, `floatsPer` floats live across one call | overflow **past** the callee-saved XMM half. With `floatsPer > 10` the spill is forced, so the splitter really runs and `growValueSpace` mints ids on every split. |
 | `gen12i.sh <N> <intsPer> <out>` | the same, with ints | its control, and the one that shows the single-basic-block splitting quadratic is **file-agnostic**. |
+| `genwidelive.sh <N> <sum\|dead> <out>` | N call results **all live at once** in ONE straight-line block | the shape `specs-shv2/x64-large-frame-arg7.md` is the N=800 rung of, and the one where the splitter's **two Θ(N) terms multiply**: liveness is Θ(N) at the last call, so the SPLIT COUNT is Θ(N) too and each split re-derives a Θ(N) block. **Its two knobs are the SHAPE and its CONTROL**, not two axes: `sum` feeds all N values into one N-term sum at the end (Θ(N) splits — `valuesSplit` is 96 / 196 / 396 at N = 100 / 200 / 400); `dead` folds each result into an accumulator on the next statement, so at most two values are live and **nothing is ever split**. They differ ONLY in where the results are consumed, so parse/lowering/isel cost the same and the DIFFERENCE between their `regalloc:splitting` columns is the splitting cost alone. Both modes return **7** at every N, so a rung that miscompiles shows up as a wrong exit code and not merely as a time. |
 | `genloop.sh <loops> <floatsPer> <out>` | the exact shape `ScaleCorpus.floatSpillSource` generates | ties a hand-ladder reading back to the corpus's own shape — the check that a pathological ladder is not being mistaken for the realistic case. |
 | `genmutchain.sh <chains> <depth> <params> <out>` | `chains` chains of `depth` functions passing `params` arrays along; the last link writes them all | the parameter-mutation fixpoint (`SemanticCheck.buildParamMutationSummary`) and the label→position slotting. **Its three knobs are INDEPENDENT**, which is its whole point — see below. |
 | `genemit.sh <funcs> <stmts> <ifs> <out>` | `funcs` functions of `stmts` straight-line statements and `ifs` two-way branches each | the ENCODE phase's shape. **Its three knobs are INDEPENDENT**: function COUNT, ops per function, and BLOCKS per function. This is the ladder that found the `chunkLabelOffsets` quadratic — funcs-doubling and stmts-doubling both read a flat ×2.00 while ifs-doubling read ×3.17, which located the term in blocks-per-function and nowhere else. |
@@ -142,3 +143,11 @@ is a real cost the compiler can be made to pay, but it is not automatically a co
 the single-basic-block splitting quadratic filed against P1.7 bends at ×3.99 on `gen12i.sh` while
 `genloop.sh` — the corpus's own shape — reads ×2.02 out to 256 loops. **Report both**, and say
 which one a real program looks like.
+
+⚠ **And a ladder that does not move a quantity cannot bound it.** `genwidelive.sh <N> sum` splits
+Θ(N) values and mints exactly **one** fresh reload id per split, so it reads flat over anything whose
+cost is per-fresh-id — which is how a Θ(fresh ids) walk at every clobber op survived it. The count is
+one per **RUN** of the victim's uses (a run breaks at every block boundary), so it is the *use-block*
+count that moves it, and no generator here moves that: measured **8 / 16 / 32 / 64** fresh ids in ONE
+split for a value read in 8 / 16 / 32 / 64 separate blocks, against 1 on this whole ladder. **Read
+which quantity a ladder actually varies before believing its flat column.**

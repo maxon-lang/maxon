@@ -2150,7 +2150,10 @@ rate the program does.
 > when a split clears only the victim's and the fresh ids' masks and `forbidden` only ever ORs — so the
 > other N-2 were re-derived onto a column that already held the answer, O(clobber-ops × live) per split,
 > which on this shape is **past quadratic in its own right** (measured ×5.07 then ×5.70 per doubling).
-> And `opAtBlockPos` copied the block's whole op list into scratch to answer one indexed lookup.
+> And `opAtBlockPos` copied the block's whole op list into scratch to answer one indexed lookup — it
+> is gone entirely now: `fillLiveBeforeOp` re-walks that same block in the same analysis and its LAST
+> step IS the peak op, so the index comes back from the walk instead of from a second reading of a
+> block's execution order.
 >
 > **New reading, same decisions** (`valuesSplit` 96 / 196 / 396 unchanged, all 243 committed IR goldens
 > byte-identical, suite 1789/0 with `VerifyIncrementalSplit` both off AND on): **0.14 s / 0.46 s /
