@@ -126,6 +126,28 @@ From your worktree root. `bin/` is gitignored, so it is copied in for you.
 | shv2 suite | `./maxon-shv2/.maxon/maxon-shv2.exe spec-test [--filter=P]` (the pool defaults to 12 workers — do not pass `--workers`) |
 | Scaling gate | `./maxon-shv2/.maxon/maxon-shv2.exe scale-test` |
 
+⚠ **REDIRECT EVERY SUITE RUN TO A FILE. NEVER PIPE ONE THROUGH `head`, `tail`, OR `grep`.**
+
+```
+mkdir -p temp
+./maxon-shv2/.maxon/maxon-shv2.exe spec-test > temp/shv2-spec.log 2>&1; echo "exit=$?"
+grep -n '^FAIL' temp/shv2-spec.log          # shv2: which tests failed
+grep -n '\[FAIL\]' temp/csharp-spec.log     # bootstrap: same question, its own marker
+```
+
+Then **Read the file** at each hit for the whole reason. A golden mismatch renders a multi-line diff and
+a failed compile embeds the compiler's entire stderr, so the grep gives you the headline and the file
+still holds the evidence.
+
+**A pipe decides what to keep before you know what failed**, and a suite is 35s–several minutes, so the
+cost of that decision is a *second full run* to recover what the first one already printed. Redirecting
+costs nothing and the answer is on disk the moment the run ends — reread it as many times as you like,
+from any later step, without spending the suite again. The shv2 runner prints a line per test (~1,500 of
+them) and the failures sit wherever those tests fall in declaration order, so `tail` shows you PASS lines
+and a summary while the reason you need is thousands of lines up.
+
+`temp/` is gitignored — see the repo root `.gitignore`.
+
 ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments.** It ignores unknown args and reformats the entire
 tree in place. Multiple agents have destroyed unrelated files this way and had to revert. Format via
 the `mcp__maxon-dev__fmt` file form, and check `git status` immediately after.

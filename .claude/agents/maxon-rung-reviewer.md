@@ -24,6 +24,11 @@ authoritative full battery is the **coordinator's**, run once after you (step 8)
 nondeterminism, not a gate — there is no worker-count invariance step in this process, and a serial suite
 run is slow enough to matter. Run the suite parallel.
 
+⚠ **Redirect every suite run to a file — never pipe one through `head`/`tail`/`grep`:**
+`... spec-test > temp/shv2-spec.log 2>&1; echo "exit=$?"`, then `grep -n '^FAIL' temp/shv2-spec.log` and
+**Read the file** at each hit. A pipe throws away the failure reason before you know which failure you
+wanted, and the only way back is running the whole suite again. `temp/` is gitignored.
+
 ## Priority 1 — DUPLICATION. This is the top priority, by user directive.
 
 Refactor shared logic into helpers, **including pre-existing duplication** in the files touched.

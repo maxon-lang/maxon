@@ -187,6 +187,26 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 - `--mm-trace` — trace memory management operations (useful for memory leak debugging)
 - `--target=ARCH-OS` — test a specific target (`x64-windows`, `arm64-macos`, `wasm32-wasi`). The bootstrap emits x64/arm64; the **shv2 binary** adds `wasm32-wasi` (scalar core, WASI Preview2 component — run the output under `vendor/wasmtime/wasmtime -S cli-exit-with-code=y`). The MCP rejects `--target` for shv2, so use the binary directly for wasm.
 
+### ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe it through `head`/`tail`/`grep`.
+
+```
+mkdir -p temp
+./maxon-shv2/.maxon/maxon-shv2.exe spec-test > temp/shv2-spec.log 2>&1; echo "exit=$?"
+grep -n '^FAIL' temp/shv2-spec.log          # shv2's marker; the bootstrap's is `[FAIL]`
+```
+
+Then **read the file** at each hit for the full reason. **A pipe decides what to keep before you know
+what failed**, so when the run goes red the detail is already gone and the only way back is *running the
+whole suite again* — which is how a red suite routinely costs two runs instead of one. Redirected, the
+run is on disk the instant it ends and can be reread from any later step for free. Grep alone is not
+enough either: a golden mismatch is a multi-line diff and a failed compile embeds the compiler's entire
+stderr, so the marker line is a headline, not the evidence.
+
+Do not assume the console is small: **shv2's runner prints one line per test (~1,500) and only then the
+summary**, with failures wherever those tests fall in declaration order — `tail` shows PASS lines while
+the reason sits thousands of lines above. (The bootstrap prints only failures unless `--verbose`.)
+`temp/` is gitignored. The MCP tools above need none of this — they return structured results.
+
 Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
 
 Exit code 101 means a memory leak was detected.

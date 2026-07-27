@@ -118,9 +118,18 @@ upstream, so local `main` goes stale between rungs.
 Never start from a claimed-green tree. Build and run:
 
 ```
+mkdir -p temp
 ./bin/maxon.exe build maxon-shv2
-./maxon-shv2/.maxon/maxon-shv2.exe spec-test     # expect all green
+./maxon-shv2/.maxon/maxon-shv2.exe spec-test > temp/shv2-spec.log 2>&1; echo "exit=$?"
+grep -n '^FAIL' temp/shv2-spec.log               # expect no hits
 ```
+
+⚠ **REDIRECT EVERY SUITE RUN TO A FILE — never pipe one through `head`/`tail`/`grep`.** A pipe decides
+what to keep *before* you know what failed, so the failure detail is gone by the time you want it and the
+only way back is a **second full run**. Redirected, the whole run is on disk the instant it ends: grep it
+for the verdicts, then **Read it** at each hit for the full reason (a golden mismatch is a multi-line
+diff; a failed compile carries the compiler's whole stderr). The C# runner's marker is `[FAIL]`, shv2's
+is a leading `FAIL`. `temp/` is gitignored. This holds for every suite run in every step below.
 
 **Never pass `--workers`** — the default pool is 12 (`SpecWorkerPool.maxon:140`) and that is the only
 count this process runs the suite at.
@@ -322,8 +331,13 @@ unverified until somebody eventually runs it, and *"somebody eventually"* is how
 were all green on x64-windows. **A green suite on one target is evidence about one target.**
 
 ```
-scripts/cross-target-gate.sh --mac-host=user@mac        # add --csharp if the rung touched maxon-sharp/
+scripts/cross-target-gate.sh --mac-host=user@mac > temp/cross-target.log 2>&1; echo "exit=$?"
+tail -20 temp/cross-target.log        # the matrix; the FIVE suites behind it are in the same file
 ```
+
+Add `--csharp` if the rung touched `maxon-sharp/`. **Redirect it** — this one runs five suites, so a
+piped run that goes red costs *minutes* to re-run just to read what a file already had. Here `tail` is
+fine for the matrix precisely *because* the file is there for everything behind it.
 
 It builds both compilers, then runs the shv2 suite **per target**, each behind the runner that target
 needs — WSL for the Linux ELF, the vendored wasmtime for the wasm component, and `ssh` to a macOS host

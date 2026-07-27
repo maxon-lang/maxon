@@ -91,7 +91,10 @@ making it.
   plus your `--filter`ed specs staying green while you iterate. The full suite is the **coordinator's single
   merge gate**, run once on the final tree; you do not re-run it per change. ⚠ **Never run the suite under
   `--workers=1`** — it is a debugging tool for chasing a suspected nondeterminism, not a gate, and a serial
-  suite run is slow enough to matter.
+  suite run is slow enough to matter. ⚠ **Redirect suite and `scale-test` runs to a file** — never pipe one
+  through `head`/`tail`/`grep`: `... > temp/shv2-spec.log 2>&1; echo "exit=$?"`, then grep the file and
+  **Read** it at each hit. A pipe discards the detail before you know which part you needed, and the only
+  way back is a second full run. `temp/` is gitignored.
 - **Do not micro-optimize.** Constant factors are not the mandate; growth curves are. A tidy O(n) beats
   a clever O(n).
 - **A superlinearity you can TRIGGER on a realistic input is FIXED, not filed.** Only a term you have
