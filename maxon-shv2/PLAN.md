@@ -1425,13 +1425,62 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   of a SET, not a number: there is no per-op aggregate with an associative combine (knowing [a,b] and [b,c] are
   feasible says nothing about [a,c], and adjacent ops have different live sets), and even ONE point cannot be
   maintained cheaply because adding a value triggers an augmenting path that may rewire arbitrarily many prior
-  assignments. **A matching is a flow problem, not an aggregation problem.** ⭐ **BUT THE SCREEN IS A COUNT.**
-  `RegPoolCensus.screenViolates` is a cheap NECESSARY condition over a per-effective-pool-size distribution, it
-  is already maintained incrementally along the walk, and a bucketed count IS range-additive. So the promising
-  shape is: **carry the census screen in the positional index as a per-bucket suffix-sum (≤ RegisterFileSize
-  buckets), find the confined CANDIDATE ops in O(log ops) instead of O(block), and run the exact matching only
-  there.** That is 2a's move one level over, and it works precisely because the screen is a count even though
-  the matching is not.
+  assignments. **A matching is a flow problem, not an aggregation problem.**
+
+  **⛔ TWO DESIGNS FOR THIS ARE NOW REFUTED BY MEASUREMENT (2026-07-27). Do not re-derive either.**
+
+  **(D1) "Index the census SCREEN and run the matching only at candidates" — CANNOT RANK, so it buys nothing.**
+  `RegPoolCensus.screenViolates` is a count and IS range-additive, so it can find CANDIDATES. But a confined
+  rank's `pressure` is `tight`, and `tight = countConfinedTo(allowed, witness)` where
+  `witness = tightRegisterSet(...)` is alternating-path reachability over the FINISHED maximum matching
+  (`HallCondition.maxon:567-568`), with a consistency panic at `:575-578` that makes the dependency
+  STRUCTURAL. `screenViolates` returns a bare `bool` and stops at the first violating `p` (`:379-384`).
+  Since `peakOutranks` orders confined ranks PRIMARILY by `pressure`, an index of the screen can identify
+  candidates but never ORDER them — and the screen fires at ~44% of ops, so you still run the matching
+  Θ(block) times per split.
+
+  **(D2) "MEMOIZE the per-op verdict and invalidate proportionally to the edit" — DEAD TWICE OVER, both
+  measured on `gen12i.sh <N> 8`, N=32/64/128.**
+  - **The obvious invalidation rule is Θ(block).** *"Ops whose live set changed, plus ops where a value whose
+    `forbidden` mask changed is live"* sums **×3.98 then ×4.00**; mean per split 233 → 463 → 923 (×1.99), max
+    per split 2,224 → 4,528 → 9,136. **Cause: an unbroken RELOAD CASCADE.** `let s = scaleSeed()` is live
+    across the whole function; one reload serves all its after-peak uses, so the fresh id is live across every
+    remaining call and is itself the next victim — N/2 times, each over a Θ(N−i) range. **19% of splits carry
+    89.7% of the width.** `markRunStarts` exists to break exactly this, but its rule is *"the op leaves this
+    file NO register at all"* and **on x64 no op clobbers all 14 GPRs** (`SplitLiveRanges.maxon:4475-4495`), so
+    the INT cascade is unbroken by design.
+  - ⭐ **A LINEAR invalidation set DOES exist — and it still does not save the design.** Invalidating where the
+    MULTISET `{allowedRegistersOf(v) : v live at p}` changed (which is all `hallVerdictAt` reads) sums
+    **×2.01, ×2.01**, mean 29.5/29.5/29.6, **max per split 46/46/46 — FLAT across a doubling ladder**, because
+    a victim and its reload have IDENTICAL allowed sets so almost every op cancels.
+  - ⛔ **The killer is REACHING the invalidated ops, not finding them.** Recomputing a verdict needs the live
+    set AT that op, and shv2's only route is `fillLiveBeforeOp` (`SplitLiveRanges.maxon:3348-3377`), a backward
+    walk seeded from the block's live-OUT. That reach cost is **×3.94 then ×3.97** — mean per split
+    651 → 1,278 → 2,533 — **quadratic INDEPENDENTLY of the cascade**, and it is ~45% of today's whole sweep.
+    ⇒ ***The memo's MISSES are not the cost. REACHING them is.*** Any design that must materialize a live set
+    at an arbitrary op inherits this, and that is the sentence to re-read before proposing the next one.
+
+  ⭐ **(R2) THE ROUTE THAT REMAINS, and it is a COUNT after all — but of the right quantity.** Hall is
+  infeasible at `p` iff `∃U : #{v live at p : A(v) ⊆ U} > |U|`. A minimal violating `U` is always a **UNION OF
+  THE LIVE VALUES' OWN ALLOWED MASKS** — if `U` violates then so does `U' = ⋃{A(v) : A(v) ⊆ U}`, which is no
+  larger — so enumerating the union-closure of the distinct masks is **EXACT, not a screen**. For each candidate
+  witness `U`, `tight_U(p)` is a per-value-INTERVAL count: precisely the range-additive shape
+  `PressureIndex.leafDelta` already carries per class, repairable in O(uses of one value) by the same
+  `applyValueToPressure` machinery. **The confined peak becomes an argmax over `(slot, U)` read off the tree —
+  no live set, no matching, no memo, so it escapes the `reach` trap.**
+  **The number that decides it is the witness-family size, MEASURED:** distinct `allowedRegistersOf` masks are
+  **2** on `gen12i` at N=32/64/128 (**flat in N**) and **8** on `genwidelive 100 sum`.
+  ⚠ Two real risks, both needing red-before-green: (a) whether the union-CLOSURE stays small on the committed
+  corpus, not just on ladders; (b) **the tie-break is a GOLDENS question** — the counting formulation picks the
+  MAXIMAL violating `U` while today's code reports the Dulmage–Mendelsohn canonical one, and `peakOutranks`
+  compares `(pressure, atFixedRegisterOp)` derived from it.
+  ⚠ **OPEN, and do not assume it:** the memo argument above needs `tightRegisterSet`'s witness to be independent
+  of WHICH maximum matching `augmentValue` happens to build (D-M canonicity). **The panic at
+  `HallCondition.maxon:575-578` does NOT prove it** — that identity holds for any maximum matching. Probe it
+  before building on it.
+  📌 **The measuring scaffold was deliberately NOT committed** (a compile-time `let MeasureInvalidationWidth`
+  plus interval/symmetric-difference width helpers, ~110 lines in `SplitLiveRanges.maxon`): it is O(function)
+  per split and must never ship enabled. Its shape is recorded here so it can be rebuilt.
   **Ladder + knob are the deliverable here: `Testing/ladders/gen12i.sh <N> 8 <out>`, doubling N.**
   ⭐ **The old "re-measure trigger: a single block's PRESSURE growing" was too vague and is why this went
   unmeasured — the trigger is specifically a LARGE BLOCK ENTERING CONFINED MODE EARLY.**
@@ -1614,6 +1663,16 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
 
 - **🔴 BOOTSTRAP ORACLE BUGS — top-level constants** (found while surveying for the rung above; the **"Bootstrap oracle bugs"** list is their home). **(1) An immortal constant is MUTATED IN PLACE, and it leaks.** `let name = "Ada"` ; `var s = name` ; `s.append("!")` ; `print(name)` prints **`Ada!`** and exits **101** (`MM raw leak: 1 allocation(s) remain`). **shv2 gets this right** (`promoteBorrowedToOwned` copies). **(2) Dead-global elimination decides side-effect removal by a NAMING HEURISTIC** — see Slice 3 above; renaming a method changes whether its side effects run, silently, with no warning. **(3) A top-level constant's member access is broken outside interpolation:** `print(X.toString())` where `let X = 5` is `E2010 Expected ')' but got '.'` while `print("{X.toString()}")` works — the top-level-constant branch of `ParsePrimary` (`2-Parser.cs:17129-17131`) is the only one that skips `ParseFieldAccessChain`. **(4)** For a String-backed enum, a top-level `let CT = ContentType.json` then `"{CT.name}"` prints the **raw value**, not the case name; the same access on a *local* correctly prints the case name.
 
+- **🔴 BOOTSTRAP ORACLE BUG — a closure created AFTER a loop reads a mutated `var` from INSIDE the loop body**
+  (found 2026-07-27 by the confined-half investigation's measuring scaffold, hit twice; the "Bootstrap oracle
+  bugs" list is its home). A closure constructed after a `for` (or `while`) loop, capturing a `var` the loop
+  mutated, binds the value from the loop BODY rather than from the loop-exit phi. **shv2's own verifier catches
+  it**, which is how it surfaced:
+  `error E9001: … op 'maxon.closure_create @_$closure_30' … reads %179270, which is defined in block
+  'eachFresh_13' — and 'eachFresh_13' does not dominate 'eachFresh_13.exit'`.
+  Reproduced with both a `while`-carried and a `for`-carried var. **Workaround: a `let` snapshot before the
+  closure.** Not minimized. ⭐ Note the shape of the evidence — the BOOTSTRAP miscompiles and **shv2's verifier
+  is the thing that noticed**, which is the oracle relationship running backwards and worth keeping.
 - **🔴 BOOTSTRAP ORACLE BUGS — two LOWERING failures, both found by the splitter positional-structure rung
   (2026-07-27, merged `e40405890`); the "Bootstrap oracle bugs" list is their home, each needs the full C# suite as its
   gate.** Both are `E9001` out of `MaxonToStandardConversion`, both were hit while writing ordinary Maxon, and both were
