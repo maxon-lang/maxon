@@ -41,13 +41,36 @@ public static class ProfileRunner {
   /// The default sampling rate. A kilohertz gives a thousand readings per second of runtime, so even a
   /// one-second program clears <see cref="ProfileReport.MinimumTrustworthySamples"/> by an order of
   /// magnitude, while costing the target only a suspend/resume pair per millisecond per running thread.
+  ///
+  /// ⚠ WHAT THAT PAIR COSTS, MEASURED rather than assumed, because "negligible" was the assumption and
+  /// it is not negligible. Against a NULL CONTROL — the same launcher, the same attach, the same module
+  /// snapshot, only <c>--rate=1</c> so nothing is ever sampled — a CPU-bound single-threaded target runs
+  /// <b>+8.1%</b> longer at this rate (median 0.9326 s vs 0.8630 s, n=21 per arm, arms order-randomized
+  /// within each repetition, ranges disjoint). The curve to it is not linear and it saturates:
+  /// +1.2% at 100 Hz, +4.9% at 250, +7.1% at 500, +8.1% at 1000. Only about a third of that is the
+  /// suspension itself (23 us held x 927 samples = 21 ms of the 70 ms); the rest is what suspending and
+  /// resuming does to a thread's scheduling and caches, which is not something a sampler can avoid — it
+  /// is the price of the measurement, and it is worth knowing rather than assuming away.
   /// </summary>
   public const double DefaultRateHz = 1000;
 
   /// <summary>
-  /// The fastest rate this accepts. Past a kilohertz the suspend/resume pair starts to be a
-  /// significant share of the interval it is measuring, so the profiler would be reporting its own
-  /// perturbation; refused rather than silently clamped, which would report a rate that was not used.
+  /// The fastest rate this accepts. Refused rather than silently clamped, which would report a rate that
+  /// was not used.
+  ///
+  /// ⚠ THIS CEILING IS NOT THE ONE THAT BINDS, and the difference is worth stating because the reason
+  /// written here used to be the suspend/resume share and that is measurably not it. The sampler's own
+  /// per-tick work is 48-57 us, good for ~18 kHz; what actually caps the loop is the granularity of the
+  /// OS waitable timer it ticks on. MEASURED: at <c>--rate=5000</c> and <c>--rate=10000</c> essentially
+  /// every tick is already past its deadline (1609/1610 and 1616/1617) and the wait STILL returns after
+  /// ~520 us, so both collect ~1,750 samples/second — while the report's header prints the rate that was
+  /// ASKED FOR. It does not scale with the number of running threads (a two-processor green-thread run
+  /// reads the same 517 us), which is what identifies the timer rather than the work.
+  ///
+  /// Left alone deliberately: ~0.5 ms is this host's granularity, not a portable constant, so replacing
+  /// 10000 with 2000 would trade one number that can be wrong for another. The honest remedies are a
+  /// design choice — report the ACHIEVED rate beside the requested one, or skip the wait when the
+  /// deadline has already passed (which would deliver the rate, at the cost of sampling in bursts).
   /// </summary>
   public const double MaxRateHz = 10000;
 

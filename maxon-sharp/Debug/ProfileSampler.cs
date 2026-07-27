@@ -97,11 +97,10 @@ internal sealed class ProfileSampler : IDisposable {
   /// <summary>
   /// How often the target's thread list is re-enumerated, as opposed to how often it is SAMPLED.
   ///
-  /// They are different rates on purpose. A Toolhelp snapshot walks every thread ON THE MACHINE, so
-  /// taking one per tick would cost more than the sampling does, and the answer barely changes: the
-  /// scheduler creates its workers at <c>__gt_init</c> and rarely again. A thread that appears later is
-  /// picked up within this interval, and one that EXITS is noticed immediately without any enumeration,
-  /// because its handle starts failing (see <see cref="SampleThread"/>).
+  /// They are different rates on purpose: the scheduler creates its workers at <c>__gt_init</c> and
+  /// rarely again, so the answer barely changes between ticks. A thread that appears later is picked up
+  /// within this interval, and one that EXITS is noticed immediately without any enumeration, because
+  /// its handle starts failing (see <see cref="SampleThread"/>).
   /// </summary>
   private static readonly TimeSpan ThreadListRefreshInterval = TimeSpan.FromMilliseconds(100);
 
@@ -113,6 +112,10 @@ internal sealed class ProfileSampler : IDisposable {
   /// <see cref="Marshal.AllocHGlobal"/> does not promise.
   private readonly nint _contextAllocation;
   private readonly nint _context;
+
+  /// Signalled by <see cref="Stop"/> so the tick wait ends AT the stop rather than at its next deadline
+  /// — see <see cref="WaitableTimer"/>.
+  private readonly nint _stopEvent;
 
   /// The copied stack window, reused by every sample so the sampling loop allocates nothing per tick.
   private readonly byte[] _stackWindow = new byte[MaxStackWindowBytes];
@@ -138,13 +141,19 @@ internal sealed class ProfileSampler : IDisposable {
 
   private readonly Dictionary<int, TargetThread> _threads = [];
 
+  /// The ids the last enumeration listed, reused so a refresh allocates nothing — see
+  /// <see cref="RefreshThreadList"/>.
+  private readonly HashSet<int> _liveThreadIds = [];
+
   private volatile bool _stop;
 
-  private ProfileSampler(Process process, nint processHandle, nint contextAllocation, nint context) {
+  private ProfileSampler(Process process, nint processHandle, nint contextAllocation, nint context,
+      nint stopEvent) {
     _process = process;
     _processHandle = processHandle;
     _contextAllocation = contextAllocation;
     _context = context;
+    _stopEvent = stopEvent;
   }
 
   /// <summary>
@@ -157,11 +166,26 @@ internal sealed class ProfileSampler : IDisposable {
   /// a port is an ENTITLEMENT question and not a coding one. Answering with an empty profile instead
   /// would be the "instrument that lies" this workstream keeps refusing.
   /// </summary>
-  public static string? UnsupportedReason => OperatingSystem.IsWindows()
-    ? null
-    : $"`maxon profile` samples by suspending the target's threads, which on {RuntimeInformation.OSDescription}"
-      + " needs task_for_pid — a privileged Mach call requiring root or a signed entitlement. Only the"
-      + " Windows sampler is implemented, so there is nothing here that could measure this program.";
+  public static string? UnsupportedReason =>
+    !OperatingSystem.IsWindows()
+      ? $"`maxon profile` samples by suspending the target's threads, which on {RuntimeInformation.OSDescription}"
+        + " needs task_for_pid — a privileged Mach call requiring root or a signed entitlement. Only the"
+        + " Windows sampler is implemented, so there is nothing here that could measure this program."
+    : !HasThreadWalk
+      ? "`maxon profile` enumerates the target's threads through ntdll's NtGetNextThread, which this"
+        + " system's ntdll.dll does not export. The documented alternative snapshots every thread on the"
+        + " machine, which costs more than the sampling itself, so there is no usable sampler here."
+    : null;
+
+  /// <summary>
+  /// Whether this ntdll exports the one non-Win32 entry point the sampler needs (see
+  /// <see cref="RefreshThreadList"/> for why nothing documented will do). Asked here, with the other
+  /// reasons a host cannot be sampled, so a missing export is a refusal BEFORE a program is launched
+  /// rather than a sampler that dies on its first refresh.
+  /// </summary>
+  private static bool HasThreadWalk =>
+    NativeLibrary.TryLoad("ntdll.dll", out nint ntdll)
+    && NativeLibrary.TryGetExport(ntdll, nameof(NtGetNextThread), out _);
 
   /// <summary>
   /// Attach to an already-running <paramref name="process"/>. Refuses on a host with no sampler rather
@@ -174,22 +198,46 @@ internal sealed class ProfileSampler : IDisposable {
     // and AllocHGlobal guarantees only pointer alignment.
     nint allocation = Marshal.AllocHGlobal(ContextSize + ContextAlignment);
     nint context = (nint)(((ulong)allocation + ContextAlignment - 1) & ~(ulong)(ContextAlignment - 1));
+    nint stopEvent = 0;
 
     try {
-      return new ProfileSampler(process, process.Handle, allocation, context);
+      // MANUAL-reset: once the run is over the event stays signalled, so a tick that reaches the wait
+      // after Stop() has already returned still leaves immediately instead of sleeping out an interval
+      // nobody is waiting for.
+      stopEvent = CreateEventW(0, manualReset: true, initialState: false, null);
+      if (stopEvent == 0)
+        throw new ProfileUnsupportedException(
+          $"cannot create the sampler's stop event: Win32 error {Marshal.GetLastWin32Error()}");
+
+      return new ProfileSampler(process, process.Handle, allocation, context, stopEvent);
     } catch {
+      if (stopEvent != 0) CloseHandle(stopEvent);
       Marshal.FreeHGlobal(allocation);
       throw;
     }
   }
 
+  /// <summary>
   /// Ask the loop to finish after the tick it is on. The runner calls this once the target has exited or
   /// its deadline has passed; the loop also stops on its own when the target goes away.
-  public void Stop() => _stop = true;
+  ///
+  /// The event matters as much as the flag, because a flag alone cannot interrupt a wait. Without it the
+  /// sampling thread sat out its whole remaining tick before noticing, so the tool hung for up to ONE
+  /// SAMPLING INTERVAL after the program had ended and — worse, because it is silent — the run's
+  /// measured window was inflated by that same wait. MEASURED at <c>--rate=1</c>: a program that ran for
+  /// 0.947 s was reported as "over 1.0018s", the interval rounded up. At the default kilohertz that is a
+  /// millisecond and invisible; at the low rates a long-running service is profiled with, it is the
+  /// whole error.
+  /// </summary>
+  public void Stop() {
+    _stop = true;
+    SetEvent(_stopEvent);
+  }
 
   public void Dispose() {
     foreach (var thread in _threads.Values) CloseHandle(thread.Handle);
     _threads.Clear();
+    CloseHandle(_stopEvent);
     Marshal.FreeHGlobal(_contextAllocation);
   }
 
@@ -204,7 +252,7 @@ internal sealed class ProfileSampler : IDisposable {
   /// measuring itself.
   /// </summary>
   public void Run(TimeSpan interval, ProfileSampleSink sink) {
-    using var timer = WaitableTimer.Create();
+    using var timer = WaitableTimer.Create(_stopEvent);
 
     long intervalTicks = Math.Max(1, interval.Ticks);
     long deadline = DateTime.UtcNow.ToFileTimeUtc();
@@ -229,37 +277,64 @@ internal sealed class ProfileSampler : IDisposable {
   }
 
   /// <summary>
-  /// Re-enumerate the target's threads, opening a handle for each new one. A thread that has gone away
+  /// Re-enumerate the target's threads, keeping a handle for each new one. A thread that has gone away
   /// is dropped HERE only if the enumeration no longer lists it; the sampling path drops it sooner, on
   /// the first call its handle refuses.
+  ///
+  /// ⭐ IT WALKS THE TARGET'S THREAD LIST, NOT THE MACHINE'S, and that is the whole reason
+  /// <c>NtGetNextThread</c> is used instead of a Toolhelp snapshot.
+  ///
+  /// <c>CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, …)</c> is documented to IGNORE the process id it is
+  /// handed: it snapshots every thread on the system, and the caller filters. That makes the cost of
+  /// learning six thread ids proportional to how busy the whole BOX is — which for a profiler is the
+  /// worst property an operation can have, because the instrument's own cost then depends on everything
+  /// it is not measuring. MEASURED on this machine: 7,198 system threads, 43–59 ms per snapshot to find
+  /// the target's 6, against 19–26 us for the walk below — and at a refresh every 100 ms that snapshot
+  /// was 335 ms of every second, 88% of the sampling thread's entire budget. Two visible consequences,
+  /// both gone with it: the loop could not tick faster than ~1.1 kHz whatever <c>--rate</c> asked for
+  /// (so a report headed "at 5000 Hz" was collected at 1,102), and each 50 ms stall was repaid by the
+  /// absolute-deadline schedule as a BURST of ~50 back-to-back samples — 39% of one run's samples
+  /// arrived in 7 such bursts, which for a statistical sampler is not 50 readings but one.
+  ///
+  /// <c>NtGetNextThread</c> is an ntdll export rather than a documented Win32 one, which is why
+  /// <see cref="UnsupportedReason"/> checks for it up front rather than letting a missing export surface
+  /// as a sampler that stopped. It hands back a handle already carrying the access asked for, so there
+  /// is no <c>OpenThread</c> here either.
   /// </summary>
   private void RefreshThreadList() {
-    nint snapshot = CreateToolhelp32Snapshot(Th32CsSnapThread, 0);
-    if (snapshot == InvalidHandle) return;
+    _liveThreadIds.Clear();
 
-    try {
-      var entry = new ThreadEntry32 { Size = (uint)Marshal.SizeOf<ThreadEntry32>() };
-      if (!Thread32First(snapshot, ref entry)) return;
+    // The walk's cursor is a handle to the thread just returned. One of two things happens to it: it is
+    // KEPT (a thread not seen before, so `_threads` takes ownership) or it is a second handle to a
+    // thread already tracked and must be closed — but only AFTER the next call has used it to find its
+    // successor, which is what `spare` defers.
+    nint cursor = 0;
+    nint spare = 0;
 
-      var seen = new HashSet<int>();
-      uint targetPid = (uint)_process.Id;
-      do {
-        if (entry.OwnerProcessId != targetPid) continue;
-
-        int id = (int)entry.ThreadId;
-        seen.Add(id);
-        if (_threads.ContainsKey(id)) continue;
-
-        nint handle = OpenThread(ThreadSampleAccess, false, entry.ThreadId);
-        if (handle != 0) _threads[id] = new TargetThread(handle);
-      } while (Thread32Next(snapshot, ref entry));
-
-      foreach (var id in _threads.Keys.Where(id => !seen.Contains(id)).ToList()) {
-        CloseHandle(_threads[id].Handle);
-        _threads.Remove(id);
+    while (NtGetNextThread(_processHandle, cursor, ThreadSampleAccess, 0, 0, out nint next) == StatusSuccess) {
+      // Cleared as well as closed. A handle VALUE is recycled the moment it is closed, so carrying a
+      // stale one forward would eventually close something else this sampler owns.
+      if (spare != 0) {
+        CloseHandle(spare);
+        spare = 0;
       }
-    } finally {
-      CloseHandle(snapshot);
+
+      cursor = next;
+
+      uint threadId = GetThreadId(cursor);
+      if (threadId != 0 && _liveThreadIds.Add((int)threadId) && !_threads.ContainsKey((int)threadId))
+        _threads[(int)threadId] = new TargetThread(cursor);
+      else
+        spare = cursor;
+    }
+
+    if (spare != 0) CloseHandle(spare);
+
+    // A thread the walk did not list has exited. Collected into a list first because the dictionary is
+    // being read while it is edited.
+    foreach (var id in _threads.Keys.Where(id => !_liveThreadIds.Contains(id)).ToList()) {
+      CloseHandle(_threads[id].Handle);
+      _threads.Remove(id);
     }
   }
 
@@ -437,40 +512,62 @@ internal sealed class ProfileSampler : IDisposable {
   ///
   /// <c>Thread.Sleep</c> is not usable for this: its resolution is the system timer tick — ~15.6 ms
   /// unless something on the machine has raised it — so a 1 ms sleep is a 15 ms sleep, and a profiler
-  /// asking for 1 kHz would silently collect 64 Hz. A high-resolution waitable timer is exact and, when
-  /// the host predates it, the ordinary one still beats sleeping.
+  /// asking for 1 kHz would silently collect 64 Hz. A high-resolution waitable timer is what makes the
+  /// default kilohertz real (measured: 996 Hz asked 1000) and, when the host predates it, the ordinary
+  /// one still beats sleeping.
+  ///
+  /// ⚠ It is NOT exact, and this is where the sampler's real rate ceiling lives — see
+  /// <see cref="ProfileRunner.MaxRateHz"/> for the measurement. Its granularity is ~0.5 ms, so a wait
+  /// whose deadline has ALREADY PASSED still returns after ~520 us: past ~1.75 kHz the loop cannot tick
+  /// faster however short the interval it is handed.
   /// </summary>
-  private sealed class WaitableTimer(nint handle) : IDisposable {
-    public static WaitableTimer Create() {
+  private sealed class WaitableTimer : IDisposable {
+    private readonly nint _timer;
+
+    /// The timer AND the sampler's stop event, in one array built once: a per-tick wait must not
+    /// allocate, and marshalling a fresh handle array at the sampling rate would.
+    private readonly nint[] _waitOn;
+
+    private WaitableTimer(nint timer, nint stopEvent) {
+      _timer = timer;
+      _waitOn = [timer, stopEvent];
+    }
+
+    public static WaitableTimer Create(nint stopEvent) {
       nint handle = CreateWaitableTimerExW(0, null, CreateWaitableTimerHighResolution, TimerAllAccess);
       if (handle == 0) handle = CreateWaitableTimerExW(0, null, 0, TimerAllAccess);
       if (handle == 0)
         throw new ProfileUnsupportedException(
           $"cannot create the sampling timer: Win32 error {Marshal.GetLastWin32Error()}");
 
-      return new WaitableTimer(handle);
+      return new WaitableTimer(handle, stopEvent);
     }
 
-    /// Wait until <paramref name="fileTimeUtc"/>. A POSITIVE due time is absolute, which is what keeps
-    /// the schedule from drifting by however long the previous tick's work took.
+    /// Wait until <paramref name="fileTimeUtc"/> — or until the run is stopped, whichever comes first. A
+    /// POSITIVE due time is absolute, which is what keeps the schedule from drifting by however long the
+    /// previous tick's work took; waiting on the stop event beside it is what keeps the SHUTDOWN from
+    /// costing an interval (see <see cref="Stop"/>).
     public void WaitUntil(long fileTimeUtc) {
-      if (!SetWaitableTimer(handle, in fileTimeUtc, 0, 0, 0, false)) return;
-      WaitForSingleObject(handle, InfiniteWait);
+      if (!SetWaitableTimer(_timer, in fileTimeUtc, 0, 0, 0, false)) return;
+      WaitForMultipleObjects((uint)_waitOn.Length, _waitOn, waitAll: false, InfiniteWait);
     }
 
-    public void Dispose() => CloseHandle(handle);
+    /// The stop event belongs to the sampler, which outlives every timer and closes it itself.
+    public void Dispose() => CloseHandle(_timer);
   }
 
   // ---- Win32 ----
 
-  private const nint InvalidHandle = -1;
   private const uint InfiniteWait = 0xFFFFFFFF;
 
-  /// Suspend/resume, read the context, and read the cycle counter — exactly the four things this engine
-  /// does to a thread and nothing more.
-  private const uint ThreadSampleAccess = 0x0002 | 0x0008 | 0x0040 | 0x0800;
+  /// STATUS_SUCCESS. <c>NtGetNextThread</c> ends a walk with STATUS_NO_MORE_ENTRIES, so anything but
+  /// success — including a genuine failure — stops it, exactly as running out of threads does.
+  private const int StatusSuccess = 0;
 
-  private const uint Th32CsSnapThread = 0x00000004;
+  /// Suspend/resume, read the context, and read the cycle counter — exactly the four things this engine
+  /// does to a thread and nothing more. Also the access the thread walk asks for each handle it hands
+  /// back, so an enumerated thread arrives ready to sample.
+  private const uint ThreadSampleAccess = 0x0002 | 0x0008 | 0x0040 | 0x0800;
 
   private const uint CreateWaitableTimerHighResolution = 0x00000002;
   private const uint TimerAllAccess = 0x1F0003;
@@ -500,20 +597,15 @@ internal sealed class ProfileSampler : IDisposable {
     public uint Type;
   }
 
-  [StructLayout(LayoutKind.Sequential)]
-  private struct ThreadEntry32 {
-    public uint Size;
-    public uint Usage;
-    public uint ThreadId;
-    public uint OwnerProcessId;
-    public int BasePriority;
-    public int DeltaPriority;
-    public uint Flags;
-  }
-
 #pragma warning disable SYSLIB1054 // DllImport keeps this block uniform with Testing/WindowsJobObject.cs
+  /// The target's OWN thread list, one thread per call. <paramref name="thread"/> is the previous
+  /// result (0 to start) and is only READ — the walk does not take ownership of it.
+  [DllImport("ntdll.dll")]
+  private static extern int NtGetNextThread(nint process, nint thread, uint desiredAccess,
+    uint handleAttributes, uint flags, out nint newThread);
+
   [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern nint OpenThread(uint desiredAccess, bool inheritHandle, uint threadId);
+  private static extern uint GetThreadId(nint thread);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern uint SuspendThread(nint thread);
@@ -535,15 +627,6 @@ internal sealed class ProfileSampler : IDisposable {
   private static extern nint VirtualQueryEx(nint process, nint address,
     out MemoryBasicInformation buffer, nint length);
 
-  [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern nint CreateToolhelp32Snapshot(uint flags, uint processId);
-
-  [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern bool Thread32First(nint snapshot, ref ThreadEntry32 entry);
-
-  [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern bool Thread32Next(nint snapshot, ref ThreadEntry32 entry);
-
   [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
   private static extern nint CreateWaitableTimerExW(nint attributes, string? name, uint flags, uint access);
 
@@ -552,7 +635,15 @@ internal sealed class ProfileSampler : IDisposable {
     nint completionRoutine, nint argument, bool resume);
 
   [DllImport("kernel32.dll", SetLastError = true)]
-  private static extern uint WaitForSingleObject(nint handle, uint milliseconds);
+  private static extern uint WaitForMultipleObjects(uint count, nint[] handles, bool waitAll,
+    uint milliseconds);
+
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  private static extern nint CreateEventW(nint attributes, bool manualReset, bool initialState,
+    string? name);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool SetEvent(nint handle);
 
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(nint handle);
