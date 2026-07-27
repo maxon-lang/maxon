@@ -556,6 +556,20 @@ public static partial class MaxonToStandardConversion {
   private const int StringStructSize = 48;
   private const int CharacterStructSize = 40;
 
+  // Associated-value union record layout. A union with ANY payload-carrying case is heap-boxed as a
+  // discriminant followed by flat 8-byte payload slots: [tag@0, payload_0@8, payload_1@16, ...].
+  // The value stored in the tag slot is IrEnumCase.TagValue — that property is the ONE source of the
+  // discriminant, so nothing here re-derives it from RawValue/Ordinal.
+  private const int UnionFieldTag = 0;
+  private const int UnionPayloadSlotSize = 8;
+  private const int UnionFirstPayloadOffset = 8;
+
+  /// Byte offset of a union payload slot within the heap record. Passing the slot COUNT yields the
+  /// offset one past the last slot, which is exactly the record's size — the two facts are the same
+  /// arithmetic and are deliberately not written down separately.
+  private static int UnionPayloadOffset(int slotIndex) =>
+    UnionFirstPayloadOffset + slotIndex * UnionPayloadSlotSize;
+
   /// True for a fused String type (conforms to BuiltinStringLiteral): a 48-byte record
   /// whose first 40 bytes are a __ManagedMemory, with isAsciiFlag at offset 40.
   private static bool IsFusedStringType(string? typeName) =>

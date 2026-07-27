@@ -568,19 +568,18 @@ public static partial class MaxonToStandardConversion {
                 : temps.CreateTemp("enum", enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, OwnershipFlags.None);
               var enumTypeDef = (IrEnumType)module.TypeDefs[enumConstructOp.EnumTypeName];
               int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
-              int heapSize = 8 + maxPayload * 8;
+              int heapSize = UnionPayloadOffset(maxPayload);
               var enumPtr = EmitAlloc(newBlock, heapSize, enumConstructOp.EnumTypeName, scopeName: func.Name);
               EmitStore(newBlock, enumPtr, tempName, varTypes);
 
-              // Store tag at offset 0
               var tagOp = new StdConstI64Op(enumConstructOp.TagValue);
               newBlock.AddOp(tagOp);
-              newBlock.AddOp(new StdStoreIndirectOp(tagOp.Result, enumPtr, 0, IrType.I64));
+              newBlock.AddOp(new StdStoreIndirectOp(tagOp.Result, enumPtr, UnionFieldTag, IrType.I64));
 
               // Store associated values as payload slots via indirect stores
               int slotIdx = 0;
               for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
-                int byteOffset = 8 + slotIdx * 8;
+                int byteOffset = UnionPayloadOffset(slotIdx);
                 if (valueMap.TryGetValue(enumConstructOp.Args[ai], out var ecArgSv) && ecArgSv is StdHeapPtr ecArgHp) {
                   // Heap-pointer payload: store and incref — enum holds a reference
                   var childHeapPtr = (StdI64)EmitLoad(newBlock, ecArgHp.VarName!, varTypes);
@@ -598,7 +597,7 @@ public static partial class MaxonToStandardConversion {
               for (int ai = slotIdx; ai < maxPayload; ai++) {
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
-                newBlock.AddOp(new StdStoreIndirectOp(zeroOp.Result, enumPtr, 8 + ai * 8, IrType.I64));
+                newBlock.AddOp(new StdStoreIndirectOp(zeroOp.Result, enumPtr, UnionPayloadOffset(ai), IrType.I64));
               }
 
               valueMap[enumConstructOp.Result] = new StdHeapPtr(enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, tempName);
@@ -619,11 +618,8 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonEnumTagOp enumTagOp: {
               if (valueMap.TryGetValue(enumTagOp.EnumValue, out var enumPrefixSv) && enumPrefixSv is StdHeapPtr enumPrefixHp) {
-                // Associated-value enum: load tag from heap pointer at offset 0
-                var heapPtr = (StdI64)EmitLoad(newBlock, enumPrefixHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
-                newBlock.AddOp(tagLoad);
-                valueMap[enumTagOp.Result] = tagLoad.Result;
+                // Associated-value union: the tag lives in the heap record
+                valueMap[enumTagOp.Result] = EmitUnionTagLoad(enumPrefixHp, newBlock, varTypes);
               } else {
                 // Simple enums without associated values pass the ordinal directly
                 valueMap[enumTagOp.Result] = valueMap[enumTagOp.EnumValue];
@@ -633,9 +629,8 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumPayloadOp enumPayloadOp: {
               // Load a payload value from the heap-allocated enum via indirect load
               var enumVarName = ((StdHeapPtr)valueMap[enumPayloadOp.EnumValue]).VarName!;
-              int flatSlotOffset = enumPayloadOp.PayloadIndex;
               var heapPtr = (StdI64)EmitLoad(newBlock, enumVarName, varTypes);
-              int byteOffset = 8 + flatSlotOffset * 8;
+              int byteOffset = UnionPayloadOffset(enumPayloadOp.PayloadIndex);
 
               if (enumPayloadOp.ResultKind == MaxonValueKind.Struct && enumPayloadOp.ResultStructTypeName != null) {
                 // Struct-typed payload: load heap pointer from payload slot
@@ -762,7 +757,7 @@ public static partial class MaxonToStandardConversion {
               // Write a value back to a specific payload slot via heap-pointer indirection
               var resolvedPrefix = varNameToStructPrefix.GetValueOrDefault(payloadAssign.EnumVarName, payloadAssign.EnumVarName);
               var enumHeapPtr = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
-              int byteOffset = 8 + payloadAssign.PayloadIndex * 8;
+              int byteOffset = UnionPayloadOffset(payloadAssign.PayloadIndex);
 
               if (valueMap.TryGetValue(payloadAssign.NewValue, out var newStructSrcSv) && newStructSrcSv is StdHeapPtr newStructSrcHp) {
                 // Heap-pointer payload: decref old value, store new, incref new
@@ -782,11 +777,8 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumRawValueOp rawValueOp: {
               var enumStdVal = valueMap[rawValueOp.EnumValue];
               if (enumStdVal is StdHeapPtr rawHp) {
-                // Associated-value enum: load tag from heap offset 0
-                var heapPtr = (StdI64)EmitLoad(newBlock, rawHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
-                newBlock.AddOp(tagLoad);
-                valueMap[rawValueOp.Result] = tagLoad.Result;
+                // Associated-value union: the tag lives in the heap record
+                valueMap[rawValueOp.Result] = EmitUnionTagLoad(rawHp, newBlock, varTypes);
               } else {
                 // Simple enum: the backing value IS the raw value - just pass through
                 valueMap[rawValueOp.Result] = enumStdVal;
@@ -2949,11 +2941,14 @@ public static partial class MaxonToStandardConversion {
           // Re-load tag in each check block to avoid cross-block value references
           var ptrLoad = new StdLoadI64Op("__destr_ptr");
           entry.AddOp(ptrLoad);
-          var tagLoad = new StdLoadIndirectOp(ptrLoad.Result, 0, IrType.I64);
-          entry.AddOp(tagLoad);
-          var tagConst = new StdConstI64Op(ci);
+          var tagLoad = EmitUnionTagLoadFrom(ptrLoad.Result, entry);
+          // Compare against the case's TagValue, not its list index: construction stores TagValue
+          // (see MaxonEnumConstructOp), and the two diverge as soon as any case carries an explicit
+          // raw value — auto-increment resumes from it, so `c` in `union { a = 5, b = 9, c(s String) }`
+          // is stored as 10 while its index is 2, and an index comparison could never match.
+          var tagConst = new StdConstI64Op(caseInfo.TagValue);
           entry.AddOp(tagConst);
-          var tagCmp = new StdCmpI64Op("eq", (StdI64)tagLoad.Result, tagConst.Result);
+          var tagCmp = new StdCmpI64Op("eq", tagLoad, tagConst.Result);
           entry.AddOp(tagCmp);
           var caseBlock = $"case_{ci}";
           var nextBlock = ci < enumType.Cases.Count - 1 ? $"check_{ci + 1}" : "done";
@@ -2963,7 +2958,7 @@ public static partial class MaxonToStandardConversion {
           foreach (var (slotIndex, _) in managedPayloads) {
             var casePtr = new StdLoadI64Op("__destr_ptr");
             caseBody.AddOp(casePtr);
-            int byteOffset = 8 + slotIndex * 8;
+            int byteOffset = UnionPayloadOffset(slotIndex);
             var payloadLoad = new StdLoadIndirectOp(casePtr.Result, byteOffset, IrType.I64);
             caseBody.AddOp(payloadLoad);
             EmitDecrefValueIfNonnull(caseBody, (StdI64)payloadLoad.Result, $"~{typeName}");

@@ -653,7 +653,6 @@ public static partial class MaxonToStandardConversion {
 
 	/// <summary>
 	/// Processes interpolation parts into (buffer, length) pairs and tracks temporary buffers.
-	/// Shared by LowerStringInterp and LowerStringAppend.
 	/// </summary>
 	private static (List<(StdI64 Buffer, StdI64 Length)> partInfos, List<string> tempBufVars) EmitInterpParts(
 	  List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, IrType? OptimalType)> parts,
@@ -681,7 +680,15 @@ public static partial class MaxonToStandardConversion {
 				partInfos.Add(EmitRdataLiteral(LiteralValue!, rdataLabel, block, result));
 			} else {
 				var exprValue = ExprValue!;
-				if (valueMap.TryGetValue(exprValue, out var exprStdVal) && exprStdVal is StdHeapPtr hp) {
+				// Dispatch on the VALUE KIND before the lowered representation. A union with any
+				// payload-carrying case is heap-boxed, so it maps to a StdHeapPtr exactly as a String
+				// does — but its record is [tag@0, payload@8...], not a __ManagedMemory. Testing the
+				// representation first sent unions down the struct path, which reads offsets 0 and 8 as
+				// (buffer, length): a payload-less case rendered "" (tag 0 as buffer, zeroed slot as
+				// length) and a payload-carrying case copied from its tag as an address, faulting.
+				if (exprValue is MaxonEnum enumValue) {
+					AddEnumToStringResult(EmitEnumToString(enumValue, valueMap, block, varTypes, result));
+				} else if (valueMap.TryGetValue(exprValue, out var exprStdVal) && exprStdVal is StdHeapPtr hp) {
 					partInfos.Add(EmitStructInterpolation(hp.VarName!, block, varTypes));
 				} else if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
 					var stdVal = valueMap[exprValue];
@@ -709,8 +716,6 @@ public static partial class MaxonToStandardConversion {
 					else AddToStringResult(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
 				} else if (exprValue is MaxonBool) {
 					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
-				} else if (exprValue is MaxonEnum enumValue) {
-					AddEnumToStringResult(EmitEnumToString(enumValue, valueMap, block, varTypes, result));
 				} else {
 					throw new InvalidOperationException(
 					  $"String {rdataPrefix}: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
@@ -933,6 +938,18 @@ public static partial class MaxonToStandardConversion {
 		var backingIrType = ResolveEnumBackingIrType(enumType);
 		var stdValue = valueMap[enumValue];
 
+		// A union with any payload-carrying case is heap-boxed, so its discriminant must be loaded
+		// from the record's tag slot rather than read off the value. Such a union renders its case
+		// name: scalar backing is only available to all-bare unions (so there is no raw value to
+		// print here), and a struct backing is compile-time metadata, which the struct-backed branch
+		// below also renders as the case name. The payload is deliberately not rendered — see the
+		// "Union Types" section of specs/string-interpolation.md for why.
+		if (stdValue is StdHeapPtr unionPtr) {
+			var tag = EmitUnionTagLoad(unionPtr, block, varTypes);
+			var rUnion = EmitEnumCaseNameToString(enumType, tag, block, result);
+			return (rUnion.Buffer, rUnion.Length, null);
+		}
+
 		if (enumType.BackingType is IrStringBackingType or IrCharBackingType) {
 			var r = EmitStringEnumToString(enumType, (StdI64)stdValue, block, result);
 			return (r.Buffer, r.Length, null);
@@ -974,9 +991,10 @@ public static partial class MaxonToStandardConversion {
 			var caseLabel = $"__enum_name_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
 			var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, caseLabel, block, result);
 
-			// Int-backed enums use raw values at runtime; simple enums use ordinals
-			long runtimeValue = enumCase.RawValue is long rawLong ? rawLong : enumCase.Ordinal;
-			var caseConst = new StdConstI64Op(runtimeValue);
+			// IrEnumCase.TagValue is the ONE source of the discriminant codegen actually stores
+			// (raw value for int-backed, ordinal for everything else). Re-deriving it here would be
+			// a second copy that silently mislabels every case the moment the two disagree.
+			var caseConst = new StdConstI64Op(enumCase.TagValue);
 			block.AddOp(caseConst);
 			var cmpOp = new StdCmpI64Op("eq", ordinalValue, caseConst.Result);
 			block.AddOp(cmpOp);

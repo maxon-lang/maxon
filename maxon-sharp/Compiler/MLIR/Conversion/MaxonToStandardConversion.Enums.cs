@@ -5,6 +5,33 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
   /// <summary>
+  /// Loads the discriminant out of a union record, given a pointer to the record itself.
+  /// </summary>
+  /// <remarks>
+  /// Every reader of a union's tag must agree on where it lives. Four do — <c>MaxonEnumTagOp</c>,
+  /// <c>MaxonEnumRawValueOp</c>, string interpolation, and the generated union destructor — so they
+  /// share this one load rather than each spelling out the load-at-offset-0 by hand.
+  /// </remarks>
+  private static StdI64 EmitUnionTagLoadFrom(StdI64 recordPtr, IrBlock<StandardOp> block) {
+    var tagLoad = new StdLoadIndirectOp(recordPtr, UnionFieldTag, IrType.I64);
+    block.AddOp(tagLoad);
+    return (StdI64)tagLoad.Result;
+  }
+
+  /// <summary>
+  /// Loads the discriminant of a heap-boxed (associated-value) union held in a named variable.
+  /// </summary>
+  /// <remarks>
+  /// The record pointer is reloaded from the variable on every call because intervening runtime
+  /// calls clobber registers.
+  /// </remarks>
+  private static StdI64 EmitUnionTagLoad(
+    StdHeapPtr unionPtr,
+    IrBlock<StandardOp> block,
+    Dictionary<string, string> varTypes) =>
+    EmitUnionTagLoadFrom((StdI64)EmitLoad(block, unionPtr.VarName!, varTypes), block);
+
+  /// <summary>
   /// Lowers EnumType.fromRawValue(arg) inline as a comparison chain.
   /// For simple/int-backed enums: compares arg against each case's ordinal/raw value.
   /// For float-backed enums: compares arg against each case's float raw value.
@@ -250,21 +277,20 @@ public static partial class MaxonToStandardConversion {
     bool hasExtraArgs,
     VarRegistry temps) {
 
-    // Heap-allocate the enum: [tag:i64 @ 0, payload_0:i64 @ 8, ...]
     var tempName = temps.CreateTemp("enum", tryCallOp.Result!.Id, enumType.Name, OwnershipFlags.None);
     int maxPayload = GetMaxFlatPayloadSlots(enumType);
-    int heapSize = 8 + maxPayload * 8;
+    int heapSize = UnionPayloadOffset(maxPayload);
     var enumPtr = EmitAlloc(block, heapSize, enumType.Name, scopeName: _currentFuncName);
     EmitStore(block, enumPtr, tempName, varTypes);
 
     // Initialize tag=0 and zero payload slots on the heap
     var defaultTag = new StdConstI64Op(0);
     block.AddOp(defaultTag);
-    block.AddOp(new StdStoreIndirectOp(defaultTag.Result, enumPtr, 0, IrType.I64));
+    block.AddOp(new StdStoreIndirectOp(defaultTag.Result, enumPtr, UnionFieldTag, IrType.I64));
     for (int i = 0; i < maxPayload; i++) {
       var zeroPayload = new StdConstI64Op(0);
       block.AddOp(zeroPayload);
-      block.AddOp(new StdStoreIndirectOp(zeroPayload.Result, enumPtr, 8 + i * 8, IrType.I64));
+      block.AddOp(new StdStoreIndirectOp(zeroPayload.Result, enumPtr, UnionPayloadOffset(i), IrType.I64));
     }
 
     var noMatchFlag = new StdConstI64Op(1);
@@ -288,19 +314,19 @@ public static partial class MaxonToStandardConversion {
       currentErrorFlag = selectFlag.Result;
 
       // On match, set the tag via indirect load/select/store on the heap
-      var tagConst = new StdConstI64Op(enumCase.RawValue is long rv ? rv : enumCase.Ordinal);
+      var tagConst = new StdConstI64Op(enumCase.TagValue);
       block.AddOp(tagConst);
-      var currentTag = new StdLoadIndirectOp(enumPtr, 0, IrType.I64);
+      var currentTag = new StdLoadIndirectOp(enumPtr, UnionFieldTag, IrType.I64);
       block.AddOp(currentTag);
       var selectTag = new StdSelectI64Op(isMatch, tagConst.Result, (StdI64)currentTag.Result);
       block.AddOp(selectTag);
-      block.AddOp(new StdStoreIndirectOp(selectTag.Result, enumPtr, 0, IrType.I64));
+      block.AddOp(new StdStoreIndirectOp(selectTag.Result, enumPtr, UnionFieldTag, IrType.I64));
 
       if (hasExtraArgs && caseHasAssocValues) {
         for (int ai = 0; ai < enumCase.AssociatedValues!.Count; ai++) {
           var avArg = tryCallOp.Args[1 + ai];
           var avStdVal = valueMap[avArg];
-          int byteOffset = 8 + ai * 8;
+          int byteOffset = UnionPayloadOffset(ai);
           var currentPayload = new StdLoadIndirectOp(enumPtr, byteOffset, IrType.I64);
           block.AddOp(currentPayload);
           var selectPayload = new StdSelectI64Op(isMatch, (StdI64)avStdVal, (StdI64)currentPayload.Result);

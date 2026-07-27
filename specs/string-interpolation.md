@@ -92,6 +92,70 @@ var s = Status.active
 print("Status: {s}\n")  // "Status: Active"
 ```
 
+### Union Types
+
+A union interpolates by exactly the same rule as an enum. The rule is stated once, over the whole
+enum family, and it turns on how the value is **represented**:
+
+- A union with **no payload-carrying case** is represented as a bare discriminant, exactly like an
+  enum. It interpolates to its **raw value** if its cases were given explicit scalar raw values, and
+  to its **case name** otherwise.
+- A union with **any** payload-carrying case is heap-boxed, and interpolates to the **name of its
+  live case**. This holds for every case of such a union, payload-carrying or not, and it holds even
+  if some case was given an explicit raw value — a heap-boxed union prints case names throughout.
+  It also covers struct-backed unions, whose backing is compile-time metadata rather than a scalar.
+
+Representation is the deciding fact rather than "does this case have a raw value", because a union
+may mix the two: `union { a = 1001, b(s String) }` is accepted, and `a` prints `a`, not `1001`.
+
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+union Shape
+	empty
+	point(x Coord)
+end 'Shape'
+
+var a = Shape.empty
+print("{a}\n")  // "empty"
+
+var b = Shape.point(7)
+print("{b}\n")  // "point"
+
+union Code            // all cases bare, so scalar backing is available
+	lexer = 1001
+	parser = 2001
+end 'Code'
+
+print("{Code.parser}\n")  // "2001" — the raw value, as for an int-backed enum
+```
+
+The payload is deliberately **not** rendered, for two reasons:
+
+- A union's discriminant is total — every value has exactly one live case name — while its payloads
+  are per-case and heterogeneous. The case name is the only thing every union value has, so it is
+  the only rule that stays well-defined as cases are added.
+- Rendering payloads would make a union interpolable only when *every* payload type of *every* case
+  is itself renderable. Adding one case with an unrenderable payload would then break every existing
+  `"{u}"` site for that union — action at a distance from an unrelated edit.
+
+The case name is also stable under the edit that adds the *first* payload to a union. A union whose
+cases are all payload-less is stored as a bare discriminant, while one with any payload is stored as
+a heap record; case-name rendering is the same rule across that representation change, so adding a
+payload to one case does not silently alter how the *other* cases print.
+
+To render a payload, match on the union and interpolate the binding:
+
+```maxon
+let text = match b 'm'
+	point(x) gives "point({x})"
+	empty gives "empty"
+end 'm'
+```
+
+As with enums, a `toString()` method declared on the union is **not** consulted by interpolation —
+the case name is used regardless. Use `match` when you need a custom rendering.
+
 ### Custom Types
 
 Custom types can be interpolated by implementing the `Stringable` interface:
@@ -907,6 +971,371 @@ end 'main'
 ```
 ```stdout
 Priorities: 1 and 3
+```
+
+### Union Interpolation - Payload-less Case
+
+A union with any payload-carrying case is stored as a heap record (`tag@0`, payload slots from 8).
+The payload-less cases of such a union interpolate to their case name, exactly as an enum does.
+
+Regression: interpolation dispatched on the lowered *representation* (a heap pointer) before the
+*value kind* (an enum), so a union reached the struct path, which reads offsets 0 and 8 as a
+`__ManagedMemory`'s buffer and length. For `empty` that read tag 0 as the buffer and the zeroed
+payload slot as the length, copying 0 bytes and rendering the empty string.
+
+<!-- test: union-payloadless-interpolation -->
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+union Shape
+	empty
+	point(x Coord)
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.empty
+	print("Shape: [{s}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Shape: [empty]
+```
+
+### Union Interpolation - Payload-carrying Case
+
+The same struct-path misdispatch read the tag of a payload-carrying case as a buffer address: for
+`point` the tag is 1, so the copy read from address 0x1 and the program died with a nil-pointer
+panic before printing anything.
+
+<!-- test: union-payload-interpolation -->
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+union Shape
+	empty
+	point(x Coord)
+end 'Shape'
+
+function main() returns ExitCode
+	let s = Shape.point(7)
+	print("Shape: [{s}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Shape: [point]
+```
+
+### Union Interpolation - Payload Kinds Do Not Affect Rendering
+
+Only the discriminant is read, so a managed payload (`String`) and a multi-slot payload render
+exactly like a scalar one. A `String` payload is the case that would fault most readily under the
+old struct path, since its slot holds a real heap pointer that would be copied from as text.
+
+<!-- test: union-payload-kinds -->
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+union Node
+	leaf
+	named(label String)
+	pair(a Coord, b Coord)
+end 'Node'
+
+function main() returns ExitCode
+	let a = Node.leaf
+	let b = Node.named("hello")
+	let c = Node.pair(1, b: 2)
+	print("{a} {b} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+leaf named pair
+```
+
+### Union Interpolation - Error Bound by `otherwise`
+
+Unions are the idiomatic error type when throw sites carry context, so the handler binding is the
+main road for this path, not a corner. The binding `e` is the union value itself.
+
+<!-- test: union-error-otherwise-binding -->
+```maxon
+typealias Code = int(i64.min to i64.max)
+
+union OpError implements Error
+	notFound
+	badCode(code Code)
+end 'OpError'
+
+function risky() returns Code throws OpError
+	throw OpError.badCode(42)
+end 'risky'
+
+function main() returns ExitCode
+	try risky() otherwise (e) 'h'
+		print("caught: [{e}]\n")
+	end 'h'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught: [badCode]
+```
+
+### Union Interpolation - All Cases Payload-less
+
+A union with no payload at all is stored as a bare discriminant rather than a heap record. It
+already rendered its case name, and must keep doing so: the fix must not move this shape onto the
+heap-record path.
+
+<!-- test: union-all-payloadless-interpolation -->
+```maxon
+union Flat
+	alpha
+	beta
+end 'Flat'
+
+function main() returns ExitCode
+	let a = Flat.alpha
+	let b = Flat.beta
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha beta
+```
+
+### Union Interpolation - Every Route a Union Value Arrives By
+
+A heap-boxed union reaches interpolation through several distinct lowerings, each of which builds
+the heap pointer at a different place: a locally constructed value, a function parameter, a call
+return, a payload unpacked from an enclosing union, and a struct field read through `self`. All of
+them must find the discriminant in the same slot, so all of them are exercised here rather than
+just the local-construction path the other tests use.
+
+<!-- test: union-interpolation-value-routes -->
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+union Inner
+	zero
+	one(v Wide)
+end 'Inner'
+
+union Outer
+	nothing
+	wrap(i Inner)
+end 'Outer'
+
+type Holder
+	export var cur as Inner
+
+	function show() returns Wide
+		print("field=[{self.cur}]\n")
+		return 0
+	end 'show'
+
+	static function create(cur Inner) returns Self
+		return Self{cur: cur}
+	end 'create'
+end 'Holder'
+
+function viaParam(s Inner) returns Wide
+	print("param=[{s}]\n")
+	return 0
+end 'viaParam'
+
+function viaReturn() returns Inner
+	return Inner.one(5)
+end 'viaReturn'
+
+function main() returns ExitCode
+	let p = Inner.one(3)
+	print("paramrc={viaParam(p)}\n")
+	print("ret=[{viaReturn()}]\n")
+	let o = Outer.wrap(Inner.zero)
+	print("outer=[{o}]\n")
+	let nested = match o 'm'
+		wrap(inner) gives "nested=[{inner}]"
+		nothing gives "none"
+	end 'm'
+	print("{nested}\n")
+	let h = Holder.create(Inner.one(9))
+	print("showrc={h.show()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+param=[one]
+paramrc=0
+ret=[one]
+outer=[wrap]
+nested=[zero]
+field=[one]
+showrc=0
+```
+
+### Union Interpolation - Struct-backed Union with Payloads
+
+A struct-backed union carries compile-time metadata as its backing *and* runtime payloads. Its
+backing is not a scalar, so there is no raw value to print and the case name is used — the same
+answer the struct-backed *enum* path already gives. Its discriminant is still the ordinal, so this
+shape faulted identically before the fix (case `add` is ordinal 0, so the copy read address 0x0).
+
+<!-- test: union-struct-backed-interpolation -->
+```maxon
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type OpMeta
+	export let latency as Latency
+end 'OpMeta'
+
+union Instruction
+	add(dest ID, src ID) = OpMeta{latency: 1}
+	nop = OpMeta{latency: 0}
+end 'Instruction'
+
+function main() returns ExitCode
+	let op = Instruction.add(1, src: 2)
+	print("{op}\n")
+	let n = Instruction.nop
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+add
+nop
+```
+
+### Union Interpolation - Scalar-backed Union Renders Its Raw Value
+
+A union whose cases are all payload-less may give each case an explicit scalar raw value, which
+makes it representationally identical to an int-backed enum — and it renders like one. This pins the
+boundary of the case-name rule: the fix must route only *heap-boxed* unions to case names, leaving
+the scalar-backed shape reading its raw value.
+
+<!-- test: union-scalar-backed-interpolation -->
+```maxon
+union Code
+	lexer = 1001
+	parser = 2001
+end 'Code'
+
+function main() returns ExitCode
+	let c = Code.parser
+	print("{c}\n")
+	let l = Code.lexer
+	print("{l}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2001
+1001
+```
+
+### Union Interpolation - Explicit Raw Value Mixed With a Payload Case
+
+A union may give one case an explicit scalar raw value *and* give another a payload; the parser
+accepts it. Such a union is heap-boxed, so the case-name rule governs the whole type — `a` renders
+`a`, not `1001`. This is why the rule above is stated over the representation rather than over "does
+this case have a raw value": the two answers differ precisely here.
+
+Note the discriminant is not the list index in this shape. Auto-increment resumes from the explicit
+value, so `b` is stored as 1002 while its position is 1 — anything that dispatches on a union's tag
+has to compare against the stored discriminant, not the case's ordinal position.
+
+<!-- test: union-mixed-rawvalue-and-payload -->
+```maxon
+union U
+	a = 1001
+	b(s String)
+end 'U'
+
+function main() returns ExitCode
+	let x = U.a
+	print("{x}\n")
+	let y = U.b("hello")
+	print("{y}\n")
+	print("{y.rawValue}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a
+b
+1002
+```
+
+### Union Interpolation - Alongside Enums in One String
+
+Enum rendering must not regress when a union shares the string: the two kinds are dispatched by the
+same code, and an int-backed enum still renders its raw value while a union renders its case name.
+
+<!-- test: union-and-enum-interpolation -->
+```maxon
+typealias Coord = int(i64.min to i64.max)
+
+enum Level
+	low = 10
+	high = 20
+end 'Level'
+
+enum Bare
+	first
+	second
+end 'Bare'
+
+union Shape
+	empty
+	point(x Coord)
+end 'Shape'
+
+function main() returns ExitCode
+	let lvl = Level.high
+	let bare = Bare.second
+	let shape = Shape.point(3)
+	print("{lvl} {bare} {shape}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+20 second point
 ```
 
 ### Integer Format Specifier - Zero Padding
