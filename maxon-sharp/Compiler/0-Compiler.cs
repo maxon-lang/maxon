@@ -365,6 +365,62 @@ public class Compiler {
   }
 
   /// <summary>
+  /// Every <c>test</c> declaration in <paramref name="sources"/>, in the order the parser reached
+  /// them, or the errors that stopped the parse.
+  ///
+  /// It runs <see cref="CompileSources"/> and NOTHING ELSE, which is what makes it usable on a
+  /// project that has no entry point yet: <see cref="SemanticCheckPass"/> — the pass that throws
+  /// <see cref="ErrorCode.SemanticNoMain"/> — lives inside <see cref="IrPipeline.Run"/>, downstream
+  /// of here. So `maxon test --list` can answer for a project whose test dispatcher has not been
+  /// generated, and answer it by PARSING rather than by pattern-matching source text: a regex over
+  /// `.test.maxon` would find a `test` inside a comment or a string, would miss the file rule, and
+  /// would have to re-derive the name mangling the compiler already performs.
+  ///
+  /// <see cref="IrFunction{TOp}.DisplayName"/> is the single fact "is a test" (nothing else sets
+  /// it), so this asks that question and no other — there is no second definition of what a test is
+  /// for the two to disagree about.
+  /// </summary>
+  /// <param name="target">
+  /// The target the tests will be COMPILED for, which decides what is discovered. Required rather
+  /// than defaulted to the host: the parser resolves <c>#if os(...)</c> / <c>arch(...)</c>, so a
+  /// test behind one of those exists for some targets and not others. Discovering for the host and
+  /// building for <c>--target</c> would drop a test from the report without saying so, and emit a
+  /// call to one that the real compile cannot resolve.
+  /// </param>
+  internal static List<CompileError> DiscoverTests(SourceFile[] sources, CompileTarget target,
+      out List<DiscoveredTest> tests) {
+    tests = [];
+    var context = new IrContext();
+    using var _ = context.PushScope();
+
+    try {
+      var module = StdlibLoader.GetStdlibModule();
+      ResetStaticCompileState(context);
+      var errors = CompileSources(module, sources, false, target);
+      if (errors.Count > 0) return errors;
+
+      foreach (var func in module.Functions) {
+        if (func.DisplayName == null) continue;
+
+        // A test that reached here without a source anchor could not be reported to a human — the
+        // report groups by file and points at a line. The parser sets both at each of the two sites
+        // that mint a test, so an absent one is a compiler bug, not a user's input.
+        if (func.SourceFilePath == null || func.SourceLine == null) {
+          return [new CompileError(ErrorCode.InternalError,
+            $"test '{func.DisplayName}' ({func.Name}) has no source anchor; "
+            + "every test is minted with SourceFilePath and SourceLine set.")];
+        }
+
+        tests.Add(new DiscoveredTest(func.Name, func.DisplayName, func.SourceFilePath, func.SourceLine.Value));
+      }
+
+      return errors;
+    } catch (CompileError ex) {
+      return [ex];
+    }
+  }
+
+  /// <summary>
   /// Run lightweight analysis passes (parameter mutation + borrow check) on
   /// an already-parsed module. Returns any <see cref="CompileError"/>s found.
   /// Used by the LSP to surface E3070 and similar errors that the parse phase
@@ -381,6 +437,23 @@ public class Compiler {
       return [];
     }
   }
+
+  /// <summary>
+  /// Build the parser for one source file.
+  ///
+  /// Every pre-scan and parse pass below needs a parser configured identically from the SAME
+  /// <see cref="SourceFile"/>, and each used to spell that configuration out at its own call site —
+  /// six copies of one argument list, differing only in whether a cache was threaded through. A
+  /// field added to <see cref="SourceFile"/> then has six places to be forgotten in, and the pass
+  /// that forgot it would simply parse the file under a different rule.
+  /// </summary>
+  private static Parser NewParser(List<Token> tokens, IrModule<MaxonOp> module, SourceFile source,
+      bool isStdLib, string parserOs, string parserArch,
+      Dictionary<string, object>? foreignPerspectiveCache = null) =>
+    new(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing,
+      targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath,
+      foreignPerspectiveCache: foreignPerspectiveCache,
+      compilerOwnedDeclarations: source.CompilerOwnedDeclarations);
 
   internal static List<CompileError> CompileSources(IrModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null, Dictionary<string, long>? timings = null) {
     target ??= CompileTarget.Default;
@@ -449,7 +522,7 @@ public class Compiler {
       try {
         var tokens = TokensFor(source);
         ReportLexerErrors(tokens, source.Path, errors);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+        var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch);
         parser.PreScanTypeAliasesOnly(module);
         // PreScanTypeAliasesOnly recovers from per-block errors (e.g. duplicate
         // enum raw value) so the rest of the file's typealiases still register.
@@ -481,7 +554,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+        var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch);
         parser.PreScanTopLevelConstantDecls(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -498,7 +571,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath, foreignPerspectiveCache: foreignPerspectiveCache);
+        var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch, foreignPerspectiveCache);
         parser.PreScan(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -519,7 +592,7 @@ public class Compiler {
         if (!module.DeferredExtensionFiles.Contains(source.Path)) continue;
         try {
           var tokens = TokensFor(source);
-          var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+          var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch);
           parser.RescanExtensionBlocks(module);
         } catch (CompileError ex) {
           ex.FilePath ??= source.Path;
@@ -570,7 +643,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+        var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch);
         parser.PreScanTypeAliasesOnly(module, rescan: true);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -602,7 +675,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath, foreignPerspectiveCache: foreignPerspectiveCache);
+        var parser = NewParser(tokens, module, source, isStdLib, parserOs, parserArch, foreignPerspectiveCache);
         var parsed = parser.Parse();
         module.Merge(parsed);
         // Collect declaration-level errors from parser recovery
@@ -1112,4 +1185,22 @@ public static class StdlibLoader {
   }
 }
 
-public record SourceFile(string Path, string Content, string? RootPath = null);
+/// <summary>One file handed to the compiler.</summary>
+/// <param name="Path">Where it came from. Normalized (forward slashes, absolute) by every collector.</param>
+/// <param name="Content">The text to parse — not necessarily what is on disk.</param>
+/// <param name="RootPath">The compile root this file's namespace is derived relative to.</param>
+/// <param name="CompilerOwnedDeclarations">
+/// Names in <paramref name="Content"/> that the COMPILER wrote and therefore may declare with the
+/// reserved <c>__</c> prefix, despite this not being a stdlib file.
+///
+/// It is a set of NAMES rather than a flag on the file, and that is the whole point. `maxon test`
+/// appends a generated dispatcher to each test file's own text, so the file is part user's and part
+/// compiler's; a file-level exemption would let the USER's half declare <c>__foo</c> too, quietly
+/// widening a rule that exists to keep the compiler's namespace disjoint from theirs. Naming the
+/// declarations exempts exactly what was generated and nothing else.
+/// </param>
+public record SourceFile(
+  string Path,
+  string Content,
+  string? RootPath = null,
+  IReadOnlySet<string>? CompilerOwnedDeclarations = null);

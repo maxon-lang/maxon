@@ -63,6 +63,24 @@ public static class SourceCollector {
   public static bool IsTestFile(string path) =>
     Path.GetFileName(path).EndsWith(TestFileSuffix, StringComparison.OrdinalIgnoreCase);
 
+  /// <summary>The <c>.maxon</c> extension itself, so <see cref="SuggestTestFileName"/> can strip it.</summary>
+  private const string MaxonFileSuffix = ".maxon";
+
+  /// <summary>
+  /// What <paramref name="fileName"/> would have to be called to hold a <c>test</c> declaration.
+  ///
+  /// It lives HERE, beside <see cref="IsTestFile"/>, because it is the inverse of that question and
+  /// the two have to agree: a suggestion the predicate would then reject is worse than none. The
+  /// parser used to derive it from a private copy of the suffix — and that copy also compared
+  /// case-SENSITIVELY, so `Api.Test.maxon` was a test file to the build (excluded from it) and not
+  /// one to the parser (E2058 on its first `test`), leaving the file neither buildable nor testable
+  /// and told to rename itself to a name it already had.
+  /// </summary>
+  public static string SuggestTestFileName(string fileName) =>
+    fileName.EndsWith(MaxonFileSuffix, StringComparison.OrdinalIgnoreCase)
+      ? string.Concat(fileName.AsSpan(0, fileName.Length - MaxonFileSuffix.Length), TestFileSuffix)
+      : fileName + TestFileSuffix;
+
   /// <summary>
   /// Resolve a <see cref="SourceSelection"/> to the one question the walk asks of each file.
   /// An unknown value throws rather than defaulting: a selection nobody taught this method is a

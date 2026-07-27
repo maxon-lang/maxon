@@ -4,10 +4,33 @@ using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false, string? rootPath = null, Dictionary<string, object>? foreignPerspectiveCache = null) {
+public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false, string? rootPath = null, Dictionary<string, object>? foreignPerspectiveCache = null, IReadOnlySet<string>? compilerOwnedDeclarations = null) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
+
+  /// See <see cref="SourceFile.CompilerOwnedDeclarations"/>. Null for every ordinary compile.
+  private readonly IReadOnlySet<string>? _compilerOwnedDeclarations = compilerOwnedDeclarations;
+
+  /// <summary>
+  /// The name of the function this compile enters through — <c>main</c> unless the caller named
+  /// another (`maxon build`'s build-runner, `maxon test`'s dispatcher). Falls back to <c>main</c>
+  /// when there is no module to ask, which is the parse-a-fragment case.
+  ///
+  /// Written once because three places ask it and one of them meant something subtly different: two
+  /// ask "is this name UNQUALIFIED" (the entry, or `main`, keeps its bare name), and the third asks
+  /// "is this THE entry" — and spelling the third as the first's disjunction emitted `__module_init`
+  /// twice whenever a custom entry coexisted with a `main`, failing the build with E3006.
+  /// </summary>
+  private string EntryFunctionName => seedModule?.EntryFunctionName ?? "main";
+
+  /// <summary>
+  /// Whether <paramref name="baseName"/> keeps its bare, unqualified name rather than taking its
+  /// file's namespace. Both the entry point and <c>main</c> do: a linker looks for one fixed symbol,
+  /// and `main` stays callable as `main` even when the entry is something else.
+  /// </summary>
+  private bool KeepsUnqualifiedName(string baseName) =>
+    baseName == "main" || baseName == EntryFunctionName;
   private readonly string _targetOs = targetOs;
   private readonly string _targetArch = targetArch;
   private readonly bool _testing = testing;
@@ -2574,8 +2597,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // that turn a test's prose name into a symbol.
   internal const string TestFailureTypeName = "TestFailure";
   private const string TestSymbolPrefix = "__test_";
-  private const string MaxonFileSuffix = ".maxon";
-  private const string TestFileSuffix = ".test" + MaxonFileSuffix;
 
   /// The pieces of `stdlib/Testing.maxon` the COMPILER names on the author's behalf. Spelled here
   /// rather than inside the synthesized source that uses them, so the emitter and the stdlib
@@ -2634,17 +2655,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private TestHeader ParseTestHeader() {
     var testToken = Advance(); // the contextual `test` identifier
 
-    // Checked at the declaration, not at the file: ONE rule in ONE place, and the message can
-    // name both the file to rename and the declaration to move.
-    if (_sourceFilePath == null
-        || !Path.GetFileName(_sourceFilePath).EndsWith(TestFileSuffix, StringComparison.Ordinal)) {
+    // Checked at the declaration, not at the file, so the message can name both the file to rename
+    // and the declaration to move. WHICH files are test files is asked of SourceCollector, which
+    // owns that question for the build and the LSP too — a second answer here compared
+    // case-sensitively where the collector does not, so `Api.Test.maxon` was a test file to one and
+    // not the other, and was left neither buildable nor testable.
+    if (_sourceFilePath == null || !SourceCollector.IsTestFile(_sourceFilePath)) {
       var fileName = _sourceFilePath == null ? "<none>" : Path.GetFileName(_sourceFilePath);
-      var renamed = fileName.EndsWith(MaxonFileSuffix, StringComparison.Ordinal)
-        ? string.Concat(fileName.AsSpan(0, fileName.Length - MaxonFileSuffix.Length), TestFileSuffix)
-        : fileName + TestFileSuffix;
       throw new CompileError(ErrorCode.ParserTestOutsideTestFile,
-        $"a 'test' declaration is only allowed in a file whose name ends in '{TestFileSuffix}'; "
-        + $"rename '{fileName}' to '{renamed}', or move this declaration into one",
+        $"a 'test' declaration is only allowed in a file whose name ends in "
+        + $"'{SourceCollector.TestFileSuffix}'; rename '{fileName}' to "
+        + $"'{SourceCollector.SuggestTestFileName(fileName)}', or move this declaration into one",
         testToken.Line, testToken.Column);
     }
 
@@ -2746,7 +2767,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     } else {
       // Top-level function: prepend file-based namespace (except main)
       var namespace_ = NamespaceOf();
-      funcName = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
+      funcName = (KeepsUnqualifiedName(baseName) || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
     }
 
     Expect(TokenType.LeftParen);
@@ -7476,7 +7497,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Top-level functions get qualified with file-based namespace (except main)
     var namespace_ = NamespaceOf();
-    var name = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
+    var name = (KeepsUnqualifiedName(baseName) || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -7511,7 +7532,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Emit deferred top-level expression lets/vars into a separate __module_init function
     // that runs in the root scope (before the entry function), so globals survive its scope exit.
     // Emitted after the entry function so __module_init's IDs don't shift its labels.
-    if (baseName == "main" || baseName == seedModule?.EntryFunctionName) {
+    //
+    // Triggered by the ENTRY function and only it. This used to read `baseName == "main" ||
+    // baseName == seedModule?.EntryFunctionName` — the same disjunction the two NAME-QUALIFYING
+    // sites use, where it is correct — and a compile where a non-`main` entry coexists with a `main`
+    // satisfied BOTH arms, emitting `__module_init` twice and failing the whole build with E3006.
+    // Nothing hit it while a non-`main` entry only ever came from build.maxon, which is refused if
+    // it declares a `main`; `maxon test` names `__maxon_test_main` as the entry of a project that
+    // still has its own `main`, and does.
+    if (baseName == EntryFunctionName) {
       EmitModuleInitFunction(module);
     }
   }
@@ -24399,6 +24428,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         nameToken.Line, nameToken.Column);
     }
     if (!nameToken.Value.StartsWith("__")) return;
+
+    // A name the compiler itself GENERATED into this file — `maxon test`'s dispatcher. Checked by
+    // name, not by file, so the user's own declarations in the same file are still refused: see
+    // SourceFile.CompilerOwnedDeclarations. Deliberately below the `self` check, which nothing is
+    // exempt from.
+    if (_compilerOwnedDeclarations?.Contains(nameToken.Value) == true) return;
+
     throw new CompileError(ErrorCode.ParserReservedIdentifier,
       $"identifier '{nameToken.Value}' is reserved: declarations starting with '__' are reserved for compiler internals",
       nameToken.Line, nameToken.Column);

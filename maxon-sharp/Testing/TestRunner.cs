@@ -16,10 +16,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private readonly string _tempDir = tempDir;
   private readonly string _projectRoot = projectRoot;
   private readonly string? _filter = filter;
-  // Default to ProcessorCount-2 (leave two cores for OS / IDE / background work).
-  // Tests are I/O + compile bound, not CPU-saturating per worker, so under-using
-  // the box at 50% wastes wall time. Override with --workers=N.
-  private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount - 2);
+  // How many workers to use, from the one place that decides it for every harness in this process.
+  // The number used to be written here as a bare literal AND copied into `maxon test`'s executor
+  // with a comment asking the two to stay in step; two harnesses that carve up one machine must
+  // carve it the same way, and a note is not a mechanism. Override with --workers=N.
+  private readonly int _workerCount = workers ?? TestExecutor.DefaultWorkers;
   private readonly bool _updateRequired = updateRequired;
   private readonly Compiler.CompileTarget _target = target ?? Compiler.CompileTarget.Default;
   private readonly bool _verbose = verbose;
@@ -809,6 +810,16 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         var monitorRun = CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
         var monitorStderr = monitorRun.Stderr;
 
+        if (IncompleteRunError(monitorRun) is { } monitorIncomplete) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = monitorIncomplete,
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
+
         // THE EXIT CODE COMES FIRST. It is the monitor's, and so the child's —
         // but only if the monitor got as far as running one. A monitor that died
         // on its own produces a trace that is EMPTY rather than wrong, and an
@@ -844,7 +855,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
         if (successExpectation.Stdout != null) {
           var plainRun = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
-          var stdoutError = CheckStdout(successExpectation.Stdout, plainRun.Stdout);
+          var stdoutError = IncompleteRunError(plainRun) ?? CheckStdout(successExpectation.Stdout, plainRun.Stdout);
           if (stdoutError != null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -867,6 +878,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // Run the executable if we have runtime expectations
       if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
         var run = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
+
+        // Ahead of every expectation below: a killed or half-drained child has a PREFIX, and each
+        // of those checks would happily match one.
+        if (IncompleteRunError(run) is { } incomplete) {
+          return new TestResult {
+            TestName = fragment.TestName,
+            Passed = false,
+            ErrorMessage = incomplete,
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
+          };
+        }
 
         if (successExpectation.ExitCode.HasValue) {
           var exitError = CheckExitCode(successExpectation.ExitCode.Value, run.ExitCode);
@@ -1066,10 +1089,39 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private const string MmTraceEventPrefix = "mm_";
 
   /// <summary>
+  /// Why this run's output cannot be compared against an expectation, or null when it can.
+  ///
+  /// A child that was KILLED for outliving its deadline, or whose streams never finished draining,
+  /// did not produce a result — it produced a PREFIX. Comparing a prefix against a golden is how a
+  /// hanging binary passes: it prints exactly what the spec expects, then hangs, and every
+  /// expectation matches. It used to be caught by accident, because the launcher replaced a killed
+  /// child's output with the words "Process timed out" and the stderr check tripped on them. That
+  /// substitution is gone — the prefix is now reported, because `maxon test` needs it to say WHICH
+  /// test was running — so the accident has to become a rule.
+  ///
+  /// <see cref="ProcessRunOutcome"/> is the launcher's answer to "did this finish", and this is the
+  /// one place the spec runner asks it, so no individual expectation check has to remember to.
+  /// </summary>
+  private static string? IncompleteRunError(ProcessRunResult run) => run.Outcome switch {
+    ProcessRunOutcome.Exited => null,
+    ProcessRunOutcome.TimedOut =>
+      "process did not exit before its timeout and was killed. What it wrote before the kill is a "
+      + $"prefix, not a result, so no expectation was compared against it:\nstdout:\n{run.Stdout}\nstderr:\n{run.Stderr}",
+    ProcessRunOutcome.OutputReadTimedOut =>
+      $"process exited ({run.ExitCode}) but its output never finished draining, so what it printed "
+      + "is incomplete and no expectation was compared against it",
+    var unhandled => throw new ArgumentOutOfRangeException(nameof(run), unhandled,
+      "Unhandled process outcome; every outcome must state whether its output is comparable."),
+  };
+
+  /// <summary>
   /// Run a compiled test binary and capture it. This is where the spec suite's own
   /// policy lives — a test with no stated timeout gets <see cref="DefaultTestTimeoutMs"/>,
   /// and a spec's `Args:` line is a command line its author already quoted, so it is
   /// passed through verbatim rather than re-split into argv.
+  ///
+  /// Every caller must pass the result through <see cref="IncompleteRunError"/> before comparing it
+  /// against anything.
   /// </summary>
   private static ProcessRunResult RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
     // Code signing and executable permissions are now handled by MachOWriter at compile time
@@ -1787,8 +1839,16 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             SetCompileFlags(asyncTrace: test.AsyncTrace);
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
-            if (result.Success) {
-              var actualStderr = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs).Stderr;
+            // A run that did not finish is not a golden. Regeneration writes what it observed
+            // straight into the committed spec, so splicing a killed child's PREFIX in would commit
+            // a truncated expectation that then passes forever — the one failure a regenerator must
+            // never produce.
+            var stderrRun = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs);
+            if (result.Success && IncompleteRunError(stderrRun) is { } stderrIncomplete) {
+              Logger.Error(LogCategory.Testing,
+                $"Not updating stderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}: {stderrIncomplete}");
+            } else if (result.Success) {
+              var actualStderr = stderrRun.Stderr;
               var normalize = test.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
               var oldStderr = normalize(success.Stderr);
               var newStderr = normalize(StripFaultRipSuffix(actualStderr));
@@ -1825,8 +1885,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             SetCompileFlags(debugStream: true);
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
-            if (result.Success) {
-              var monitorStdout = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs).Stdout;
+            // Refused for the reason the stderr regeneration above is: a prefix must never become a
+            // committed expectation.
+            var traceRun = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs);
+            if (result.Success && IncompleteRunError(traceRun) is { } traceIncomplete) {
+              Logger.Error(LogCategory.Testing,
+                $"Not updating mm-trace for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}: {traceIncomplete}");
+            } else if (result.Success) {
+              var monitorStdout = traceRun.Stdout;
               var newTrace = NormalizeMmTrace(monitorStdout);
               var oldTrace = NormalizeMmTrace(success.MmTraceExpected ?? "");
               if (oldTrace != newTrace || success.MmTraceExpected == null) {

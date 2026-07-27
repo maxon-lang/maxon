@@ -23,6 +23,7 @@ class Program {
       "run" => RunRun(args[1..]),
       "fmt" => RunFmt(args[1..]),
       "monitor" => DebugStreamMonitor.Run(args[1..]),
+      "test" => TestCommand.Run(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
       "error-codes" => ErrorCodeRegistry.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
@@ -49,7 +50,9 @@ class Program {
     Console.WriteLine($"                           Run a {CoverageFlag} binary and report line + branch coverage");
     Console.WriteLine("  profile run <exe>        Sample a running program and report where its CPU time went.");
     Console.WriteLine("                           Needs no instrumentation and no rebuild — only the .mxdbg sidecar");
-    Console.WriteLine("  spec-test [options]      Run spec tests");
+    Console.WriteLine("  test [directory]         Run the project's *.test.maxon unit tests");
+    Console.WriteLine("                           Exit 0 all passed, 1 a failure OR no tests found, 2 could not run");
+    Console.WriteLine("  spec-test [options]      Run spec tests (the COMPILER's own suite, not a project's)");
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
@@ -111,7 +114,7 @@ class Program {
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
-    Console.WriteLine("  --workers=N              Use N worker threads (default: ProcessorCount - 2)");
+    Console.WriteLine($"  --workers=N              Use N worker threads (default: {Testing.TestExecutor.DefaultWorkers} here)");
     Console.WriteLine("  --update-required        Force regeneration and update RequiredIR, stderr, and mm-trace blocks");
     Console.WriteLine("  --verbose                Show per-test PASS/FAIL timing logs");
     Console.WriteLine("  --no-batch               Disable per-spec compile batching (each test compiled individually)");
@@ -690,25 +693,11 @@ class Program {
         BuildCache.EnsureCacheDir(path);
         var runPath = Path.Combine(BuildCache.GetCacheDir(path), $".maxon-run{ext}");
 
-        // Build runner is an internal tool — compile without debug flags so it
-        // doesn't spew mm-trace/async-trace to stderr (which would deadlock the
-        // capture pipe and isn't useful anyway).
-        var savedMmTrace = Compiler.Compiler.MmTrace;
-        var savedMmDebug = Compiler.Compiler.MmDebug;
-        var savedAsyncTrace = Compiler.Compiler.AsyncTrace;
-        var savedDebugStream = Compiler.Compiler.DebugStream;
-        var savedDebugInfo = Compiler.Compiler.DebugInfo;
-        var savedCoverage = Compiler.Compiler.Coverage;
-        Compiler.Compiler.MmTrace = false;
-        Compiler.Compiler.MmDebug = false;
-        Compiler.Compiler.AsyncTrace = false;
-        Compiler.Compiler.DebugStream = false;
-        // No sidecar for the internal build-runner — --debug-info is for the user's project. The same
-        // reasoning retires --coverage here: instrumenting the build runner would count the BUILD's
-        // own statements into the user's report and would also trip the sidecar requirement above.
-        Compiler.Compiler.DebugInfo = false;
-        Compiler.Compiler.Coverage = false;
-        try {
+        // Build runner is an internal tool — compile it quiet, so it doesn't spew mm-trace/
+        // async-trace to stderr (which would deadlock the capture pipe below and isn't useful
+        // anyway) and doesn't leave a sidecar or a coverage file of its own. The list of flags that
+        // means lives in ONE place; `maxon test` compiles its binary under the same rule.
+        using (Compiler.InternalCompileScope.Enter()) {
           if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, cacheName: "build-runner"))) {
             // Don't emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
             var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath: null,
@@ -716,13 +705,6 @@ class Program {
             if (compileResult != 0) return compileResult;
             if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, cacheName: "build-runner");
           }
-        } finally {
-          Compiler.Compiler.MmTrace = savedMmTrace;
-          Compiler.Compiler.MmDebug = savedMmDebug;
-          Compiler.Compiler.AsyncTrace = savedAsyncTrace;
-          Compiler.Compiler.DebugStream = savedDebugStream;
-          Compiler.Compiler.DebugInfo = savedDebugInfo;
-          Compiler.Compiler.Coverage = savedCoverage;
         }
 
         var (exitCode, json) = RunExecutableCapture(runPath);

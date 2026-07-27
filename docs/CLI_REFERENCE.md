@@ -11,7 +11,8 @@ This document covers the Maxon command-line interface and project system.
 | `maxon build [file\|directory]` | Compile a file, directory, or project (default: current directory) |
 | `maxon run [function]` | Run an exported function from `build.maxon`; lists commands if omitted |
 | `maxon fmt [file\|directory]` | Format `.maxon` source files in-place (default: current directory) |
-| `maxon spec-test [options]` | Run spec tests |
+| `maxon test [directory]` | Run a project's `*.test.maxon` unit tests |
+| `maxon spec-test [options]` | Run the COMPILER's own spec suite (not a project's tests) |
 | `maxon monitor [--filter=…] <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
 | `maxon lsp-server` | Start the language server (LSP) |
 
@@ -159,9 +160,90 @@ maxon fmt src/
 
 ---
 
+### `maxon test`
+
+Runs a project's unit tests — every `test` declaration in its `*.test.maxon` files.
+
+All discovered tests are compiled into ONE binary with a generated entry point, and which of them
+run is a runtime argument. That is why changing `--filter` between runs does not recompile
+anything, and why every re-run the harness needs (isolating a crash, attributing a leak) costs a
+process rather than a build.
+
+The project's own `main` needs no change: the test binary is compiled with a generated entry
+instead, so `main` becomes unreachable and is dropped. The same directory still builds and runs
+normally with `maxon build`.
+
+**Usage:**
+```bash
+maxon test [directory] [options]
+```
+
+**Arguments:**
+- `[directory]` - The project to test (default: current directory).
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `-t`, `--filter=PATTERN` | Run only tests whose NAME or FILE path contains PATTERN (case-insensitive). Comma-separated patterns run a union. |
+| `--list` | Print the tests that would run, and compile nothing |
+| `--json` | Emit the report as JSON instead of text |
+| `--isolate` | Run every test in its own process |
+| `--bail[=N]` | Stop claiming new work after N failures (default 1) |
+| `--workers=N` | Run N test processes at once (default `ProcessorCount - 2`) |
+| `--timeout=MS` | Kill a test process after MS milliseconds (default 5000) |
+| `--no-timing` | Omit durations, making stdout byte-reproducible |
+| `--color=auto\|always\|never` | Colour; `auto` colours only when stdout is a terminal |
+| `--target=ARCH-OS` | Compile the test binary for a specific target |
+
+**Outcomes.** A test that does not pass is reported as one of five distinct states, because they
+are found by different evidence and call for different action:
+
+| State | Meaning |
+|-------|---------|
+| `FAIL` | The body threw — a failed assertion, or a foreign error the compiler reported |
+| `CRASHED` | The test began and never ended: it took the process down (`panic` is uncatchable) |
+| `TIMED OUT` | Still running when its process hit `--timeout`, and was killed |
+| `DID NOT RUN` | Selected for a process that died before reaching it, and re-running made no progress. Never reported as a pass. |
+| `LEAKED` | Held an allocation at exit (exit code 101), attributed by re-running the test alone |
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every test passed |
+| `1` | A test failed, crashed, timed out, leaked, or did not run — **or no tests were found** |
+| `2` | The run could not happen: a bad flag, a compile error, no such project |
+
+A zero-test run exits 1 on purpose: a silently-green suite that stopped containing tests is the
+failure this command exists to prevent.
+
+**Examples:**
+```bash
+# Run every test in the current directory
+maxon test
+
+# Run one project's tests
+maxon test src/parser
+
+# Only tests whose name or file mentions "json"
+maxon test -t json
+
+# Two patterns, as a union
+maxon test --filter=parser,lexer
+
+# What would run, without compiling
+maxon test --list
+
+# Machine-readable, and reproducible byte for byte
+maxon test --json --no-timing
+```
+
+---
+
 ### `maxon spec-test`
 
-Runs the spec tests.
+Runs the spec tests — the COMPILER's own suite. For a project's unit tests see `maxon test`.
 
 **Usage:**
 ```bash
@@ -389,6 +471,10 @@ end 'internal'
 |------|---------|
 | 0 | Success |
 | 1 | Error (compilation failed, invalid arguments, etc.) |
+
+`maxon test` splits that 1 in two, because CI has to tell a broken program from a harness that
+never ran: 1 means a test failed (or none was found), 2 means the run could not happen. See
+[`maxon test`](#maxon-test).
 
 ---
 

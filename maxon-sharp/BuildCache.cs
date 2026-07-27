@@ -95,7 +95,12 @@ static class BuildCache {
     return Compiler.StdlibLoader.PrependStdlib(stdlib, userSources);
   }
 
-  static long GetCompilerModifiedTicks() {
+  /// <remarks>
+  /// Internal for the reason <see cref="SourceTimestamps"/> is: the test manifest must go stale on a
+  /// new compiler for exactly the same reason a cached binary does — the parse it recorded is the
+  /// old compiler's answer.
+  /// </remarks>
+  internal static long GetCompilerModifiedTicks() {
     if (_compilerModifiedTicks == null) {
       var exePath = Environment.ProcessPath;
       _compilerModifiedTicks = exePath != null ? File.GetLastWriteTimeUtc(exePath).Ticks : 0;
@@ -130,7 +135,13 @@ static class BuildCache {
   /// <see cref="ArgumentException"/> from deep inside the cache instead. Callers that synthesize
   /// source pass its content hash as <c>extraKey</c>.
   /// </summary>
-  static Dictionary<string, long> SourceTimestamps(SourceFile[] onDiskSources) {
+  /// <remarks>
+  /// Internal rather than private because a SECOND cache keys on the same fact: the test manifest
+  /// (<see cref="Testing.TestManifest"/>) is valid for exactly the inputs a build is, and computing
+  /// "which files, at which versions" a second way is how the two would come to disagree about
+  /// whether a change had happened.
+  /// </remarks>
+  internal static Dictionary<string, long> SourceTimestamps(SourceFile[] onDiskSources) {
     var timestamps = new Dictionary<string, long>();
     foreach (var source in WithStdlibSources(onDiskSources)) {
       if (!File.Exists(source.Path)) {

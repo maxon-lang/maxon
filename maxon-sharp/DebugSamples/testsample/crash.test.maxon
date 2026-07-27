@@ -1,0 +1,20 @@
+// The attribution case that cannot be faked: a test that PANICS, followed by another test in the
+// SAME file.
+//
+// `panic` is uncatchable (specs/safety.md), so the first test takes the whole process down. The
+// binary cannot report either outcome — the panicking test never writes an end marker, and the
+// second test never writes a begin marker at all. The only reading of that stream is "crashed" and
+// "did not run"; what the second must never be read as is a PASS, since nothing observed it.
+//
+// The runner then re-queues the unobserved test into a fresh process, so this one is finally
+// reported by whatever it really does there — a pass, here. The two steps are the point: absence is
+// classified as absence FIRST, and only an actual run can turn it into a verdict. Disable the
+// re-queue and this test reports DID NOT RUN, which is how that ordering was checked.
+
+test 'panics on purpose'
+	panic("this test takes the process down")
+end 'panics on purpose'
+
+test 'runs after the panicking test'
+	print("this line must not be reached\n")
+end 'runs after the panicking test'

@@ -15,8 +15,12 @@ internal enum ProcessRunOutcome {
   Exited,
 
   /// <summary>
-  /// The child outlived its timeout and was killed (with its tree). It never produced an
-  /// exit code, and its output was abandoned mid-read, so both streams are unusable.
+  /// The child outlived its timeout and was killed (with its tree), so it never produced an exit
+  /// code of its own.
+  ///
+  /// Its output is whatever it had written before it died — a PREFIX, not a complete stream, and
+  /// possibly cut mid-line. That prefix is reported rather than discarded because how far the child
+  /// got is usually the only evidence of what it was doing when the deadline expired.
   /// </summary>
   TimedOut,
 
@@ -225,14 +229,36 @@ internal static class ProcessLauncher {
 
     bool exited = process.WaitForExit(request.TimeoutMs);
     if (!exited) {
-      // Process timed out - kill it and drain streams
+      // Process timed out - kill it, then collect whatever it managed to write.
       try { process.Kill(entireProcessTree: true); } catch { }
       try { process.Kill(); } catch { }
-      // Wait briefly for async reads to complete after kill, then abandon
+
+      // Killing the child closes its pipes, so the readers reach EOF and hand back everything it
+      // wrote BEFORE it died. That PREFIX is kept rather than discarded: it used to be thrown away
+      // as "abandoned mid-read", which is true of the stream and false of the bytes — and it is the
+      // only record of how far the child got. `maxon test` reads exactly that to say WHICH test was
+      // running when the deadline expired; with it discarded, a killed shard looked identical to one
+      // that never started, and the timed-out test was reported as "did not run".
+      //
+      // A drain that does not finish, or a reader that FAULTED on the pipe the kill just closed,
+      // leaves the text incomplete in a way nothing downstream can detect — so those cases report
+      // the reason instead of a prefix of unknown length. The fault is caught rather than allowed to
+      // escape as an AggregateException: this is called on worker threads, where an unhandled
+      // exception ends the process.
+      //
+      // EVERY caller must branch on Outcome. A killed child's output looks exactly like a complete
+      // one otherwise, and comparing it against an expectation is how a hanging program passes.
 #pragma warning disable VSTHRD002
-      Task.WaitAll([stdoutTask, stderrTask], PostKillDrainMs);
+      try {
+        bool drained = Task.WaitAll([stdoutTask, stderrTask], PostKillDrainMs);
+        return drained
+          ? new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess,
+              stdoutTask.GetAwaiter().GetResult(), stderrTask.GetAwaiter().GetResult())
+          : new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess, "", TimedOutMessage);
+      } catch (Exception ex) when (ex is AggregateException or IOException or ObjectDisposedException) {
+        return new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess, "", TimedOutMessage);
+      }
 #pragma warning restore VSTHRD002
-      return new ProcessRunResult(ProcessRunOutcome.TimedOut, NoExitCodeFromKilledProcess, "", TimedOutMessage);
     }
 
     // Process exited normally - wait for async reads to complete with a timeout
