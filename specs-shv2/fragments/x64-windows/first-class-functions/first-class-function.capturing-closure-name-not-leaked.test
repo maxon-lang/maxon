@@ -1,0 +1,160 @@
+// Test: first-class-function.capturing-closure-name-not-leaked
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function usesClosure(bump Integer) returns Integer
+	let op = function(n Integer) gives n + bump
+	return op(1)
+end 'usesClosure'
+
+function storeIt(h Handler, op UnaryOp) returns Handler
+	var hh = h
+	hh.op = op
+	return hh
+end 'storeIt'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	let h2 = storeIt(h, op: double)
+	return h2.op(20) + usesClosure(1)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Handler.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @double {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @usesClosure {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegFunc r12, [rip + usesClosure$closure_0]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegImm32 rcx, 1
+    x64.movRegReg rdx, r13
+    x64.callReg r12
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @usesClosure$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.leaRegRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @storeIt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.callDirect __mm_retain
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegFunc rcx, [rip + __fnref_double]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect Handler.create
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rdx, [rip + __fnref_double]
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect storeIt
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 r13, [r12 + 0]
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callReg r13
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect usesClosure
+    x64.leaRegRegReg r13, r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

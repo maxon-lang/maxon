@@ -1,0 +1,83 @@
+// Test: shift-signedness-follows-the-cast-in-both-directions
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function sourceKeepsItsOwnType(p Num) returns Num
+	let w = p as Wide
+	return (w shr 60) - (p shr 60)
+end 'sourceKeepsItsOwnType'
+
+function castToSigned(v Wide) returns Num
+	let n = v as Num
+	return n shr 60
+end 'castToSigned'
+
+function main() returns ExitCode
+	if sourceKeepsItsOwnType(u64.max) != 16 'sourceKeeps'
+		return 1
+	end 'sourceKeeps'
+	if castToSigned(u64.max) != 0 - 1 'toSigned'
+		return 2
+	end 'toSigned'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @sourceKeepsItsOwnType {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 rax, rcx, 0
+    x64.shrRegImm8 rax, rax, 60
+    x64.sarRegImm8 rcx, rcx, 60
+    x64.movRegReg r8, rax
+    x64.subRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @castToSigned {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 0
+    x64.sarRegImm8 r8, r8, 60
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm rcx, -1
+    x64.callDirect sourceKeepsItsOwnType
+    x64.cmpRegImm32 r8, 16
+    x64.jcc notEqual, sourceKeeps
+    x64.jmp ifcont
+  sourceKeeps:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.callDirect castToSigned
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, toSigned
+    x64.jmp ifcont
+  toSigned:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
