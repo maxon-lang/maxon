@@ -43,6 +43,26 @@ computed the wrong answer.
 
 The fix keys a ranged element by NAME, exactly as struct and enum elements already are.
 
+### ⚠ A STRIDE IS NOT DIRECTLY OBSERVABLE FROM SOURCE, AND AN ASSERTION THAT CANNOT FAIL IS NOT A GATE
+
+Every accessor reads at the same stride the write before it used — the address arithmetic and the
+load width both come from the record's own `element_size@24` — so `push` / `get` / `clone` / `slice`
+round-trip *whatever* stride the record was stamped with. A test that only pushes values and reads
+them back therefore passes identically at 1 byte and at 8, and pins nothing about the width at all.
+
+What DOES discriminate is a second record whose stride was fixed by a **different producer**. A
+`b"…"` byte-string literal is exactly that: its record is stamped `element_size = 1` directly by
+`LowerMaxonToStd.lowerByteStringLiteral`, a path that never consults the element type. `__arr_append`
+compares the two records' `element_size@24` at RUN time and aborts
+(`RuntimeAbort.arrayAppendElementSizeMismatch`) when they disagree — so appending a byte-string into
+an `Array with Byte` succeeds at a 1-byte stride and aborts at any other.
+
+The front-end guard cannot stand in for it: `Parser.requireArrayAppendArg` compares
+`arrayElementSize(receiver)` against `arrayElementSize(argument)`, and for these two the *instance is
+the same*, so both sides re-derive the same number through the same function and the check passes
+whatever that number is. A check that re-derives both of its sides through one function cannot catch
+that function being wrong. Only the run can.
+
 ## Tests
 
 <!-- test: clone-preserves-narrow-ranged-element-width -->
@@ -52,11 +72,17 @@ second, 8-byte integer-element instantiation is in play and the element type can
 recovered from the value kind alone. Reading element 0 back out of the clone must give
 `1`, not `0x030201`. `slice()` returns `Self` through the same path, so it is pinned
 here too.
+
+The final third is the part that can actually FAIL: a `Byte` array is cloned and a `b"CD"`
+literal appended into the CLONE, so the clone must have carried the 1-byte stride across.
+At an 8-byte stride the two records disagree and the append aborts.
 ```maxon
 typealias Narrow = int(0 to 16)
 typealias Wide = int(0 to u64.max)
 typealias NarrowCol = Array with Narrow
 typealias WideCol = Array with Wide
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
 
 function main() returns ExitCode
 	var n = NarrowCol.create()
@@ -76,8 +102,17 @@ function main() returns ExitCode
 	let s0 = try s.get(0) otherwise 0
 	let s1 = try s.get(1) otherwise 0
 
+	var b = Bytes.create()
+	b.push(65)
+	var bc = b.clone()
+	bc.append(b"CD")
+	let b0 = try bc.get(0) otherwise 0
+	let b1 = try bc.get(1) otherwise 0
+	let b2 = try bc.get(2) otherwise 0
+
 	let ok = c0 == 1 and c1 == 2 and c2 == 3 and s0 == 2 and s1 == 3
-	return 0 if ok else 1
+	let strideOk = bc.count() == 3 and b0 == 65 and b1 == 67 and b2 == 68 and b.count() == 1
+	return 0 if ok and strideOk else 1
 end 'main'
 ```
 ```exitcode

@@ -1,28 +1,23 @@
-// Test: byte-array-max-values
-
-typealias Byte = int(0 to u8.max)
-
-typealias ByteArray = Array with Byte
-
+// Test: element-size-respected-in-create
 function main() returns ExitCode
-	var arr = ByteArray.create()
-	arr.push(255 as Byte)
-	arr.push(0 as Byte)
-	arr.push(128 as Byte)
+	var arr = [0]
+	arr.push(65)
+	arr.push(66)
+	arr.push(67)
 
-	let v0 = try arr.get(0) otherwise 0 as Byte
-	let v1 = try arr.get(1) otherwise 99 as Byte
-	let v2 = try arr.get(2) otherwise 0 as Byte
+	let b0 = try arr.get(1) otherwise 0
+	let b1 = try arr.get(2) otherwise 0
+	let b2 = try arr.get(3) otherwise 0
 
-	if v0 != 255 'c0'
+	if b0 != 65 'check0'
 		return 1
-	end 'c0'
-	if v1 != 0 'c1'
+	end 'check0'
+	if b1 != 66 'check1'
 		return 2
-	end 'c1'
-	if v2 != 128 'c2'
+	end 'check1'
+	if b2 != 67 'check2'
 		return 3
-	end 'c2'
+	end 'check2'
 
 	return 0
 end 'main'
@@ -43,20 +38,23 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 255
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_push
-    x64.movRegImm32 rdx, 128
+    x64.movRegImm32 rdx, 65
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_push
-    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rdx, 66
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 67
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get
     x64.cmpRegImm32 r10, 0
@@ -69,20 +67,20 @@ func @main {
     x64.movRegReg r12, r8
     x64.jmp trycont
   trycont:
-    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r13, 99
+    x64.movRegImm32 r13, 0
     x64.jmp trycont
   tryok:
     x64.movRegReg r13, r8
     x64.jmp trycont
   trycont:
-    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get
     x64.cmpRegImm32 r10, 0
@@ -95,10 +93,10 @@ func @main {
     x64.movRegReg rax, r8
     x64.jmp trycont
   trycont:
-    x64.cmpRegImm32 r12, 255
-    x64.jcc notEqual, c0
+    x64.cmpRegImm32 r12, 65
+    x64.jcc notEqual, check0
     x64.jmp ifcont
-  c0:
+  check0:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
@@ -110,10 +108,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.cmpRegImm32 r13, 0
-    x64.jcc notEqual, c1
+    x64.cmpRegImm32 r13, 66
+    x64.jcc notEqual, check1
     x64.jmp ifcont
-  c1:
+  check1:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
@@ -125,10 +123,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.cmpRegImm32 rax, 128
-    x64.jcc notEqual, c2
+    x64.cmpRegImm32 rax, 67
+    x64.jcc notEqual, check2
     x64.jmp ifcont
-  c2:
+  check2:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref

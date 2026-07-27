@@ -252,6 +252,11 @@ export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 // `record`'s same-file test, which must agree or a redeclaration is missed.
 typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 
+// One name ⇒ the WIDEST storage width any file's declaration of it needs — the file-INDEPENDENT half of
+// this registry, maintained by `record` alongside `multiplyDeclared`. See `storageBytesInEveryFile` for
+// why the answer must be a fold over every declaration rather than a probe of one.
+typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
+
 // The names more than one FILE declares -> every declaration of each, by declaring file. Empty for
 // a program where no name is declared twice, which is nearly every program — see `RangedAliasRegistry`.
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
@@ -337,15 +342,25 @@ export type RangedAliasRegistry
 	// one hash of a short type name and no allocation whatever, which is what the whole-program map
 	// cost before file scoping existed.
 	var multiplyDeclared as MultiplyDeclaredAliasMap
+	// ⭐ The WIDEST `rangedAliasStorageBytes` any declaration of a name needs — folded in by `record` as
+	// each declaration arrives, so the file-less reader below answers in one probe and never walks.
+	//
+	// It is a derived INDEX over the same declarations `byName`/`multiplyDeclared` index, maintained by
+	// the same single writer, for the same reason `multiplyDeclared` is: the question is asked far more
+	// often than it is written. A width is asked once per array op site and once per `sizeof`; it is
+	// written once per `typealias` declaration in the program.
+	var storageBytes as AliasStorageBytesMap
 
 	export static function create() returns RangedAliasRegistry
-		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create()}
+		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create()}
 	end 'create'
 
 	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with the one every
 	// earlier declaration of the name shares — the one place that decides it, so the conflict test and
 	// the insert sit on one structure and cannot come to disagree about which declarations conflict.
 	export function record(alias RangedTypeAlias) returns AliasRecordOutcome
+		self.widenStorageBytesFor(alias)
+
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
 		// single one of them — collides with nothing and contests nothing. It costs ONE probe and one
 		// insert, and never touches `multiplyDeclared` or builds anything at all.
@@ -477,6 +492,46 @@ export type RangedAliasRegistry
 		let any = try self.byName.get(name)
 		return any.underlying
 	end 'underlyingInAnyFile'
+
+	// ⭐ **THE STORAGE WIDTH THAT HOLDS EVERY FILE'S DECLARATION OF `name` — the other file-less door, and
+	// the one range question a file-less reader IS allowed to ask.**
+	//
+	// `underlyingInAnyFile` above refuses to hand out bounds, and its reason is exact: a reader with no
+	// file reading A file's bounds is reading a STRANGER's bounds. That reason does not reach this
+	// question, because this answer is not any one file's — it is a width correct for every file's bounds
+	// at once, and it is the MAX that makes it so. A wider slot holds a narrower one's values, so no
+	// file's range is ever truncated by another file's width.
+	//
+	// ⚠ **THE FOLD IS NOT OPTIONAL, because a generic instance is interned on the NAME.**
+	// `Array with Small` is ONE instance however many files declare `Small`, so its `element_size@24` is
+	// ONE number — a record created in one file is pushed, appended, read and dropped in another, and they
+	// must stride identically. A bare `byName` probe would answer with whichever file merged LAST:
+	// `stdlib/helpers/string/`'s `Utf16UnitCount` pair (`utf16.maxon`'s `int(1 to 2)`, `views.maxon`'s
+	// `int(0 to u64.max)`) would stride 1 or 8 by load order, and on the 1 the file that meant 8 would
+	// truncate silently. That is the same order-dependent wrong answer file scoping was added to kill,
+	// one door along.
+	//
+	// A name only ONE file declares — nearly every name — cost exactly one probe to fold and costs exactly
+	// one probe to read. `throws` is `Map.get`'s own channel: a name no file declares is not a ranged
+	// alias, which is the caller's case to handle, not a width to invent.
+	export function storageBytesInEveryFile(name ByteArray) returns ByteOffset throws MapError
+		return try self.storageBytes.get(name)
+	end 'storageBytesInEveryFile'
+
+	// Fold one declaration's width into the running max for its name. The ONLY writer of `storageBytes`,
+	// called by `record` before any of its own branching, so the index covers every declaration whatever
+	// that branching concludes about contest or conflict.
+	function widenStorageBytesFor(alias RangedTypeAlias)
+		let width = rangedAliasStorageBytes(alias.low, high: alias.high)
+		let widest = try self.storageBytes.get(alias.name) otherwise 'firstDeclarationOfThisName'
+			self.storageBytes.upsert(alias.name, value: width)
+			return
+		end 'firstDeclarationOfThisName'
+
+		if width > widest 'wider'
+			self.storageBytes.upsert(alias.name, value: width)
+		end 'wider'
+	end 'widenStorageBytesFor'
 end 'RangedAliasRegistry'
 
 // --- The TYPE-NAME namespace: one name, one declaration ---

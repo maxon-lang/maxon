@@ -1495,8 +1495,9 @@ export let SetTypeParamCount = 1 as FieldIndex
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
 // NOT the element's full logical size. A trivial element is stored inline and strides by its own size (an
-// `int` 8, a `Byte` 8 word-slot). This is why `arrayElementSize` cannot simply be the source `sizeof`: the
-// STORAGE width of a managed element is the pointer, and the drop walk / accessors move exactly that.
+// `int` 8, a `Byte = int(0 to u8.max)` 1). This is why `arrayElementSize` cannot simply be the source
+// `sizeof`: the STORAGE width of a managed element is the pointer — a `String` element's slot is 8, where
+// its `sizeof` is the 48-byte record — and the drop walk / accessors move exactly that pointer.
 let ManagedArrayElementBytes = 8 as ByteOffset
 
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
@@ -3635,18 +3636,45 @@ export type ProgramSignatures
 		return maxonTypeName(self.arrayElementType(id), typeNames: self.typeNames)
 	end 'arrayElementDisplayName'
 
-	// The byte size of one element of `Array with T` — the value `element_size@24` is stamped with and every
-	// array helper strides by. A MANAGED element (String / struct / union / instance / nested Array) is a heap
-	// box stored as an 8-byte POINTER (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the
-	// element's full logical size — the drop walk destroys the pointer, the accessors load/store it. A TRIVIAL
-	// element is stored inline and strides by its source `sizeof` (`Array with Integer` ⇒ 8). Reuses the
-	// single-arg logical-size door for the trivial case (which reads args, not a base layout).
+	// ⭐ **THE SOLE PRODUCER OF `element_size@24`** — the number every `__arr_create` is stamped with, every
+	// array helper strides by at run time, and every same-shape check compares. A MANAGED element (String /
+	// struct / union / instance / nested Array) is a heap box stored as an 8-byte POINTER
+	// (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the element's full logical size — the
+	// drop walk destroys the pointer, the accessors load/store it. A TRIVIAL element is stored inline, at
+	// the width `trivialElementStorageBytes` gives it.
+	//
+	// ⚠ **IT IS NOT THE SOURCE `sizeof`, AND NO LONGER ROUTES THROUGH THE LOGICAL-SIZE DOOR.** Both of the
+	// storage rules above diverge from `sizeof`: a `String` element's slot is 8 where its `sizeof` is the
+	// 48-byte record, and a `Byte` element's slot is 1 where `sizeof(Byte)` is a machine word. Sharing one
+	// door forced one answer on two questions — see `typeLogicalByteSize`, which is the other.
 	export function arrayElementSize(id GenericInstanceId) returns ByteOffset
 		if self.arrayElementIsManaged(id) 'managed'
 			return ManagedArrayElementBytes
 		end 'managed'
-		return self.genericInstanceSoleArgLogicalSize(id)
+		return self.trivialElementStorageBytes(self.arrayElementType(id))
 	end 'arrayElementSize'
+
+	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
+	// stored INLINE, so its slot is as wide as its values need and no wider: a `named` element is a ranged-
+	// int alias sized by the width that holds every file's declaration of the name
+	// (`RangedAliasRegistry.storageBytesInEveryFile`), and every other trivial tag is its
+	// `primitiveTypeByteSize` (`integer`/`float` 8, `boolean` 1, `ExitCode` 4).
+	//
+	// A trivial element is never a struct or a generic instance — every aggregate is a managed box, caught
+	// by the `arrayElementIsManaged` arm above — so this has no aggregate arms to carry and needs no
+	// interner walk past the element's own name.
+	//
+	// ⚠ An ENUM/UNION element deliberately keeps the machine word. Its ordinal range is not in the ranged-
+	// alias registry (an enum is not an `int(lo to hi)` declaration), so it MISSES the probe rather than
+	// being excluded by a test — and `specs-shv2/array-enum-element-size.md` pins the current stride.
+	// Narrowing an enum element is its own rung.
+	function trivialElementStorageBytes(t MaxonType) returns ByteOffset
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.named 'rangedAliasOrEnum'
+			return try self.typeAliases.storageBytesInEveryFile(self.nameOfId(typeNameIdOf(t))) otherwise primitiveTypeByteSize(tag)
+		end 'rangedAliasOrEnum'
+		return primitiveTypeByteSize(tag)
+	end 'trivialElementStorageBytes'
 
 	// The element DESTRUCTOR callee for a managed-element `Array with T` (P1.7 slice 3) — the runtime entry the
 	// drop walk calls on each live slot: a String → `__str_decref`, a struct/union that owns managed heap → its
@@ -3823,6 +3851,14 @@ export type ProgramSignatures
 	// declared struct (stored `named` by the sweep, which does not resolve `structRef`) is its full box; a
 	// nested generic instance is its base box; a `named` that is not a struct is a ranged alias (a machine
 	// word); every other type is its `primitiveTypeByteSize`.
+	//
+	// ⚠ **THIS IS THE LOGICAL SIZE — `elementLogicalSize@56`, what `sizeof(T)` reads inside a shared
+	// generic body — and it is NOT the array element STRIDE.** A ranged alias is a machine word here even
+	// where `arrayElementSize` strides it in one byte, because the two answer different questions and the
+	// descriptor header says so (`elementSize@16` vs `elementLogicalSize@56`, "DISTINCT and must stay so").
+	// It must keep agreeing with the parser's concrete fold, `Parser.concreteSizeofBytes`, which sizes an
+	// already-RESOLVED type and so cannot see an alias's bounds at all: narrowing here and not there made
+	// `sizeof(T)` for `Sizer with Byte` answer 1 while `sizeof(Byte)` in the same program answered 8.
 	function typeLogicalByteSize(t MaxonType) returns ByteOffset
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'

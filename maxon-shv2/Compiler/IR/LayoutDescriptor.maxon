@@ -73,10 +73,63 @@ export let LAYOUT_MIN_ALIGNMENT = 8 as MachineWord
 // says the two concepts must stay separate.
 export let LAYOUT_TYPE_PARAM_SLOT_BYTES = 8 as MachineWord
 
+// The MACHINE WORD every value with no narrower home occupies — a bare `int`, a `float`, a function
+// pointer, a managed box's pointer, and a ranged alias whose range does not fit a narrower slot. Named
+// because `rangedAliasStorageBytes` returns it as an ANSWER ("nothing narrower holds this range") rather
+// than as the size of any particular thing, and a bare `8` there would read as one of the ladder's rungs.
+export let MachineWordBytes = 8 as ByteOffset
+
+// ⭐ **THE STORAGE WIDTH OF A RANGED-INT ALIAS — the smallest slot that holds every value its declared
+// range admits**, and the SINGLE producer of a narrow element stride. `Byte = int(0 to u8.max)` ⇒ 1;
+// `HashValue = int(0 to u32.max)` ⇒ 4; `int(i64.min to i64.max)` ⇒ 8. Both reference compilers draw the
+// same ladder — `MlirType.cs:472 ComputeOptimalIntType`, `maxon-selfhosted/Compiler/Parser.maxon:21227
+// computeOptimalIntType` — and this is where shv2 draws it.
+//
+// `high` rides as the raw 64-bit pattern `ParsedInt` holds (`RangedTypeAlias`'s header), so a `u64.max`
+// upper bound arrives NEGATIVE. That is tested first, ahead of the ladder, exactly as v1's `wrappedU64`
+// arm is: read as a signed number it would look like the narrowest rung and truncate the widest range
+// there is.
+//
+// ⚠⚠ **IT IS THE UNSIGNED LADDER ONLY. A NEGATIVE LOWER BOUND KEEPS THE MACHINE WORD — a DELIBERATE
+// divergence from both references, forced by shv2's own storage and not by taste.** The references
+// narrow `int(-5 to 5)` to a SIGNED byte (i8) because they carry a static, signed element type into the
+// load: the bootstrap monomorphizes the accessor, and v1 stamps a `StoreWidth` + signedness. shv2 does
+// neither — `ArrayRuntime.emitLoadElem` is ONE compiled byte loop shared by every array instance, strided
+// by the record's runtime `element_size@24` and **zero-extending** (`loadIndirect … StdType.u8`,
+// shift-and-OR), with no signedness anywhere in the record to consult. Narrow a signed element under it
+// and the value does not survive the round trip: measured, `int(-5 to 5)` storing `-5` reads back `251`.
+// So the honest question here is *"what is the smallest slot whose UNSIGNED value set contains this
+// range?"*, and for a negative lower bound the answer is the full word. Narrow signed storage needs the
+// element's signedness to reach the load — a runtime/ABI slice, not a stamp — and is its own rung.
+export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns ByteOffset
+	if low < 0 or high < 0 'noNarrowUnsignedSlotHoldsIt'
+		return MachineWordBytes
+	end 'noNarrowUnsignedSlotHoldsIt'
+
+	if high <= u8.max 'oneByte'
+		return 1
+	end 'oneByte'
+
+	if high <= u16.max 'twoBytes'
+		return 2
+	end 'twoBytes'
+
+	if high <= u32.max 'fourBytes'
+		return 4
+	end 'fourBytes'
+
+	return MachineWordBytes
+end 'rangedAliasStorageBytes'
+
 // The full source-level `sizeof` of a NON-AGGREGATE type — the one shared by the parser's concrete-sizeof
 // fold and the descriptor's `elementLogicalSize` (an aggregate arg is sized by its caller through
 // `StructLayout.sizeBytes`, which needs an interner this tag-only helper cannot see). A machine word
-// (int/float/function/a ranged `named` alias) is 8; a `bool` is 1; an `ExitCode` (`u32`) is 4.
+// (int/float/function) is 8; a `bool` is 1; an `ExitCode` (`u32`) is 4.
+//
+// ⚠ The `named` arm is the FALLBACK for a name this compiler cannot size from a range — an enum, a union,
+// or a name no loaded file declares. A ranged alias never reaches it: `ProgramSignatures.namedTypeStorageBytes`
+// answers those from `rangedAliasStorageBytes` above, because sizing one needs the declared bounds a
+// tag-only helper cannot see.
 //
 // ⭐ A managed `String` is its FULL 48-byte record, NOT its 8-byte pointer — the oracle's rule
 // (`sizeof(managed T)` = the value record), which B2's managed args inherit unchanged.
