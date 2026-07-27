@@ -1399,13 +1399,46 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   BEFORE the fix it was **below 2%** and was struck off as disproved; with the terms burying it removed it is **7.0%**.
   A term measured small behind a dominant one is not a term disproved.
 
-  **⛔ RESIDUALS — why this is ◑ and not ✅** (~31% of the pass, all measured LINEAR-per-split, so debt not defect):
-  `confinedPeakAt`/`hallVerdictAt` **49.5%** of the splitter and linear (×2.03/×2.07) — the exact Hall bipartite
-  matching, and **a matching is not a suffix sum**, so making it incremental is a genuinely different problem;
-  `fillLiveBeforeOp` 15.8% — the peak's live-before SET is Θ(pressure) data no count-tree can carry;
-  `SplitEdits.resequence`/`commit` 8.6%; `chooseVictim` 7.0%. Also `refreshSplitTransients` is O(uses(victim)²) worst
-  case, measured ×1.98 per doubling. **Re-measure trigger: a single block's PRESSURE growing — an inliner, or
-  machine-generated wide types.**
+  **⛔⛔ THE CONFINED HALF IS STILL QUADRATIC, AND THIS RUNG DID NOT FIX IT — MEASURED 2026-07-27, and it
+  CORRECTS THIS ENTRY'S OWN FIRST CLAIM.** The entry originally said `confinedPeakAt`/`hallVerdictAt` was
+  "49.5% of the splitter and LINEAR (×2.03/×2.07), so debt not defect". **That reading was corpus blindness of
+  the known kind, on BOTH standing ladders at once**, and it is the reason to state a shape before a verdict:
+  - `genwidelive` is one big block but has Θ(N) values against a 14-register pool, so it sits in **FULL-POOL
+    mode for ~386 of its 396 splits** — Hall barely engages, and reads linear.
+  - the scale corpus IS in confined mode from its first analysis, but its **blocks are small**, so the
+    O(block) confined walk is tiny and also reads linear.
+  **The product of the two axes — a LARGE block in CONFINED mode — is what neither expresses**, and
+  `gen12i.sh <N> 8` reaches it exactly: at `intsPer ≤ 10` **100% of splits are confined**
+  (`valuesSplit` == `forced at fixed-reg points`, measured 159/159, 319/319, 639/639 at N=32/64/128).
+  On that shape, at head: allocations **69,537 → 269,494 → 1,062,605 = ×3.88 then ×3.94**, CPU ×4.11 then ×4.42.
+  **That is QUADRATIC in the exact column.** A/B against `d28583442` proves it **PRE-EXISTING, not introduced**:
+  base reads ×3.98 / ×4.14 on the same inputs. **What the rung bought here is the CONSTANT — allocations
+  −85.7% / −86.0%, CPU ≈ −14% — and NOT the exponent.**
+  **⇒ MECHANISM, and it is one line of code:** `resweepBlock` calls
+  `analyzeBlockPressure(wantFullPool: false, wantConfined: wantConfined)`. 2a moved the FULL-POOL peak onto the
+  positional index (O(log ops)); **the CONFINED peak still requires the per-op backward walk**, so once a
+  function enters confined mode the pass reverts to its pre-rung Θ(splits × block) shape. Profiled at N=64:
+  `analyzeBlockPressure` **81.4%**, `confinedPeakAt` 59.0%, `hallVerdictAt` 56.2%, `augmentValue` 38.3% —
+  while `refreshAfterSplit` is only 11.1%, i.e. **2b's edit-proportional work is holding; this is the confined
+  re-sweep alone.**
+  **⇒ WHY THE 2a TRICK DOES NOT TRANSFER DIRECTLY, and where it still might.** Hall feasibility is a property
+  of a SET, not a number: there is no per-op aggregate with an associative combine (knowing [a,b] and [b,c] are
+  feasible says nothing about [a,c], and adjacent ops have different live sets), and even ONE point cannot be
+  maintained cheaply because adding a value triggers an augmenting path that may rewire arbitrarily many prior
+  assignments. **A matching is a flow problem, not an aggregation problem.** ⭐ **BUT THE SCREEN IS A COUNT.**
+  `RegPoolCensus.screenViolates` is a cheap NECESSARY condition over a per-effective-pool-size distribution, it
+  is already maintained incrementally along the walk, and a bucketed count IS range-additive. So the promising
+  shape is: **carry the census screen in the positional index as a per-bucket suffix-sum (≤ RegisterFileSize
+  buckets), find the confined CANDIDATE ops in O(log ops) instead of O(block), and run the exact matching only
+  there.** That is 2a's move one level over, and it works precisely because the screen is a count even though
+  the matching is not.
+  **Ladder + knob are the deliverable here: `Testing/ladders/gen12i.sh <N> 8 <out>`, doubling N.**
+  ⭐ **The old "re-measure trigger: a single block's PRESSURE growing" was too vague and is why this went
+  unmeasured — the trigger is specifically a LARGE BLOCK ENTERING CONFINED MODE EARLY.**
+
+  **⛔ OTHER RESIDUALS** (measured linear-per-split): `fillLiveBeforeOp` 15.8% — the peak's live-before SET is
+  Θ(pressure) data no count-tree can carry; `SplitEdits.resequence`/`commit` 8.6%; `chooseVictim` 7.0%. Also
+  `refreshSplitTransients` is O(uses(victim)²) worst case, measured ×1.98 per doubling.
   Ladders: `Testing/ladders/genwidelive.sh <N> sum|dead <out>` and `genrespace.sh <N> <out>`; oracle:
   `VerifyIncrementalSplit` (`SplitLiveRanges.maxon`, compile-time `let`, ships `false`) — it caught two real bugs this
   rung and no committed test enables it.
