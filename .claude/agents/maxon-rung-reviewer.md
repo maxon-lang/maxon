@@ -18,8 +18,11 @@ saying why the two cannot be one).
 **Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite for its own sake —
 iterate on `--filter` while you probe. **When a fix you make spans files or touches broadly-used code, run
 the full shv2 suite once after it** — a duplication refactor can break a caller three files away. The
-worker-count invariance pass and the authoritative full battery are the **coordinator's**, run once after
-you (step 8); you do not run `--workers=1` yourself.
+authoritative full battery is the **coordinator's**, run once after you (step 8).
+
+⚠ **Never run the suite under `--workers=1`.** It is a debugging tool for chasing a suspected
+nondeterminism, not a gate — there is no worker-count invariance step in this process, and a serial suite
+run is slow enough to matter. Run the suite parallel.
 
 ## Priority 1 — DUPLICATION. This is the top priority, by user directive.
 

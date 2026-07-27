@@ -123,7 +123,7 @@ From your worktree root. `bin/` is gitignored, so it is copied in for you.
 | Build the bootstrap | `dotnet build maxon-sharp` (~60s — exceeds a 30s timeout; produces `./bin/maxon.exe`) |
 | C# suite | `./bin/maxon.exe spec-test` (~35s) |
 | Build shv2 | `./bin/maxon.exe build maxon-shv2` |
-| shv2 suite | `./maxon-shv2/.maxon/maxon-shv2.exe spec-test [--workers=N] [--filter=P]` |
+| shv2 suite | `./maxon-shv2/.maxon/maxon-shv2.exe spec-test [--filter=P]` (the pool defaults to 12 workers — do not pass `--workers`) |
 | Scaling gate | `./maxon-shv2/.maxon/maxon-shv2.exe scale-test` |
 
 ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments.** It ignores unknown args and reformats the entire
@@ -149,9 +149,13 @@ This has produced a false green in this project more than once.
 ## The gate battery — iterate FILTERED; the full battery is the COORDINATOR's
 
 **Iterate on `--filter=<the specs you are unlocking>` while you work — that is your fast loop.** The full
-suite, worker-count invariance (the slow `--workers=1` pass) and the `scale-test` read are the
-**coordinator's single merge gate**, run once on the final tree after the reviewer — you do NOT re-run them
-on every build. Your job is to prove your own slice and hand up a clean tree.
+suite and the `scale-test` read are the **coordinator's single merge gate**, run once on the final tree
+after the reviewer — you do NOT re-run them on every build. Your job is to prove your own slice and hand up
+a clean tree.
+
+⚠ **Never run the suite under `--workers=1`.** It is a debugging tool for chasing a suspected
+nondeterminism, not a gate — there is no worker-count invariance step in this process, and a serial suite
+run is slow enough to matter. Run the suite parallel.
 
 Run every one of these that applies, and paste the real output:
 

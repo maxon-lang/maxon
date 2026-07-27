@@ -28,8 +28,8 @@ have marched straight past that and built P1.1 on it.)*
 
 **STOP, report, and ask when:**
 
-- **Any gate is red** — a non-zero build, a non-green suite, a worker-count mismatch, exit **101**, or an
-  unjustified **`M`** on a pre-existing fragment. **Never turn a gate green by narrowing what it tests.**
+- **Any gate is red** — a non-zero build, a non-green suite, exit **101**, or an unjustified **`M`** on a
+  pre-existing fragment. **Never turn a gate green by narrowing what it tests.**
 - **A reachable DEFECT in this rung's own mechanism — a WRONG ANSWER as much as a leak — even one the
   SUITE is GREEN over.** The leak gate ("no run exits 101") checks the *committed suite*; the defects that
   matter most are the ones a suite run never reaches — a `let m = f()` that exits **101**, or a correct
@@ -118,8 +118,11 @@ Never start from a claimed-green tree. Build and run:
 
 ```
 ./bin/maxon.exe build maxon-shv2
-./maxon-shv2/.maxon/maxon-shv2.exe spec-test --workers=12     # expect all green
+./maxon-shv2/.maxon/maxon-shv2.exe spec-test     # expect all green
 ```
+
+**Never pass `--workers`** — the default pool is 12 (`SpecWorkerPool.maxon:140`) and that is the only
+count this process runs the suite at.
 
 **Kick this off in the BACKGROUND and start step 2 in the same beat.** The reference survey reads source —
 it does not need a built compiler — so the baseline build/suite and the survey agents overlap for free.
@@ -287,13 +290,13 @@ agents iterate on `--filter` and prove their own slice; the full suite, the `sca
 gate are yours, run once on the final tree. If it comes back red, an agent goes back — that is the trade
 for not running this battery four times.
 
-**Worker-count invariance is OCCASIONAL, not every rung.** The `--workers=1` vs `--workers=12`
-byte-identical check catches ONE thing — nondeterminism leaking into emitted output or diagnostics — and
-the default rung is deterministic by construction, so the slow single-threaded pass buys little most of the
-time. Run it when the rung could plausibly affect determinism (it touches the spec runner / worker pool,
-parallel codegen, or a `Map`/`Set` whose iteration order could reach emitted IR, diagnostic order, or symbol
-order), and as a periodic backstop every few rungs regardless. Otherwise skip it — the full-suite green run
-already proves correctness.
+**There is NO worker-count invariance gate.** `--workers=1` is a **debugging tool**, not a step of this
+process — reach for it when you are chasing a suspected nondeterminism or want serial output while reading
+a failure, and never as a routine pre-merge pass. It was costing a slow single-threaded suite run on every
+rung to re-prove something the runner holds **structurally**: `--workers=1` is the same pool with one worker
+in it, not a separate serial branch, and the parent never prints a result as it arrives — it buffers and
+reports in fixed order (`maxon-shv2/Testing/SpecWorkerPool.maxon:17-34`). Ordering cannot vary with the pool
+size, so the check was re-deriving a known answer at full suite cost. Run the suite parallel and move on.
 
 **Check exit codes. Never grep for success.** Exit **101** = memory leak.
 
@@ -303,7 +306,6 @@ already proves correctness.
 |---|---|
 | Build | exit 0, zero warnings |
 | shv2 suite | all green, **including every pre-existing test** |
-| Worker-count invariance (occasional) | `--workers=1` and `--workers=12` stdout **byte-identical** — but **not every rung** (see step 8). Run it when the rung could affect determinism (spec runner, parallel codegen, a `Map`/`Set` feeding emitted output / diagnostic order) and as a periodic backstop; the `--workers=1` pass is slow and the default rung is deterministic by construction |
 | Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen** |
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |

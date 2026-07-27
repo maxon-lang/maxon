@@ -88,8 +88,10 @@ making it.
 - **Correctness first, always.** An optimization that changes behaviour is a bug. Your correctness proof is
   **`specs-shv2/fragments/` staying clean** — those goldens pin the emitted Target IR, so an empty `git
   status` after a spec run **proves byte-identical codegen**, cheaper and stricter than any suite pass —
-  plus your `--filter`ed specs staying green while you iterate. The full suite and worker-count invariance
-  are the **coordinator's single merge gate**, run once on the final tree; you do not re-run them per change.
+  plus your `--filter`ed specs staying green while you iterate. The full suite is the **coordinator's single
+  merge gate**, run once on the final tree; you do not re-run it per change. ⚠ **Never run the suite under
+  `--workers=1`** — it is a debugging tool for chasing a suspected nondeterminism, not a gate, and a serial
+  suite run is slow enough to matter.
 - **Do not micro-optimize.** Constant factors are not the mandate; growth curves are. A tidy O(n) beats
   a clever O(n).
 - **A superlinearity you can TRIGGER on a realistic input is FIXED, not filed.** Only a term you have
