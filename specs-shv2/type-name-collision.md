@@ -69,13 +69,13 @@ aliases with different signatures, or two generic-instance aliases over differen
 still resolved last-wins. Making those agree is cross-file name resolution, the rung that also owns
 E3063; the ranged form's half of it is already enforced (E3105).
 
-## The COMPILED name of a generic instantiation is in that same namespace
+## The COMPILED name of a generic instantiation lives in the RESERVED namespace
 
 A generic instantiation has no source-level name of its own, so the compiler builds one: `Box with
 String` becomes **`Box_String`**, the base name joined to each argument's name. Every per-type symbol
-the backend emits is derived from that string — `__destruct_Box_String`, `__layout_Box_String`,
-`__clone_Box_String` — and a declared `type Box_String` derives *its* symbols from the identical
-string. **There is one namespace, and two producers wrote into it with nothing comparing them.**
+the backend emits is derived from that string — `__destruct_Box_String`, `__layout_Box_String` — and a
+declared `type Box_String` derives *its* symbols from the identical string. **There was one namespace,
+and two producers wrote into it with nothing comparing them.**
 
 The consequence is not a resolution ambiguity, which the author might at least see: both claimants are
 installed as functions of the same name, and the last one linked wins.
@@ -87,34 +87,56 @@ installed as functions of the same name, and the last one linked wins.
   *plausible* for the type it was never written for — a `Holder`-field struct destroyed through
   `__str_decref` — and the program returns the right answer. Nothing is ever reported, and the
   type confusion is invisible until a field moves.
-- **Worse again, two INSTANTIATIONS can collide with each other**, because the join is not injective:
-  `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`. One
-  pair is then destroyed through the other's per-field callees — measured: **SIGSEGV**, from a build
-  that exited 0.
 
-**The rule: one compiled type name, one claimant.** A `type` / `enum` / `union` / `interface` whose
-name is what some instantiation compiles to is **E3006**, reported at that declaration — the name the
-author chose, and the one they can change; the instantiation is named in the message, because it is
-the half that is invisible from the line being reported. Two instantiations that compile to one name
-are the same E3006, reported at the `typealias` that names the later of them.
+**The rule: the two halves of that namespace are DISJOINT, so there is nothing to compare.** `__` is
+already reserved — a declaration whose name starts with it is `E2051` — so when the string an
+instantiation would compile to is already a declared `type` / `enum` / `union`, the instantiation is
+minted **behind that prefix instead**: `Box with String` beside a `type Box_String` compiles to
+`__Box_String`, and its cascade is `__destruct___Box_String`. Both types exist, both run, and neither
+can reach the other's symbols.
 
-The claimant that SETTLES a name is the first one, and a rejected claimant never displaces it — so a
-THIRD instantiation of one compiled name is reported against the same incumbent the second was, at its
-own line, rather than against a claimant that was itself refused.
+The prefix is applied **on contest only** — a name nothing else claims is spelled bare, exactly as it
+always was — and it is applied where the name is BUILT rather than at a later check, because the
+compiled name is baked into emitted code (a scope-exit drop calls `__destruct_<mangled>` directly).
+Re-prefixing repeats until the candidate is free, since `__Box_String` may itself be taken.
+
+Rejecting the contest instead is what shv2 used to do, and it was wrong in a way that reached programs
+nobody would call unusual: an `[Foo, Foo]` array literal interns `Array with Foo` without naming it, so
+a program whose only crime was declaring `type Array_Foo` — a perfectly legal type name — was refused
+with an error naming an instantiation that appears **nowhere in its source**. The element type did not
+even have to match: the sweep cannot see a local's type, so a `[Bar, Bar]` literal interns
+`Array with Foo` too, for every declared aggregate in the file.
+
+⚠ **A `typealias` claims nothing, and neither does an `interface`.** An alias mints no symbol of its
+own — a generic instance's methods are emitted under its BASE's name — so `typealias Box_Integer = Box
+with Integer`, whose alias name is exactly what the instance it names compiles to, is legal and never
+displaces anything. An `interface`'s only emitted artifact is `__witness_<conformer>_<interface>`,
+whose head is the *conformer*, so it shares no symbol with an instance either. Only the declarations
+that mint `__destruct_<name>` — `type`, `enum`, `union` — can contest.
+
+## Two INSTANTIATIONS that compile to one name are still E3006
+
+A prefix cures a contest with a declaration, because there is a declaration to move out of the way.
+Two instantiations that build the same string have no such asymmetry, and the join makes it possible on
+its own: `_` is a legal character in a type name, so the join is **not injective** — `Pair with
+(Box_Int, Str)` and `Pair with (Box, Int_Str)` both compile to `Pair_Box_Int_Str`. One
+`__destruct_Pair_Box_Int_Str` survives and each pair's fields are released through the OTHER pair's
+per-field callees. Measured on the compiler before this rule: build exit 0, no diagnostic, **SIGSEGV**.
+
+**That is E3006**, reported at the `typealias` that names the later of the two — the line the author
+wrote last, the same choice every collision in this file makes. The claimant that SETTLES a name is the
+first one, and a rejected claimant never displaces it, so a THIRD instantiation of one compiled name is
+reported against the same incumbent the second was, at its own line, rather than against a claimant
+that was itself refused.
 
 Only a top-level `typealias` records a source anchor, so an instantiation NESTED inside another
 (`Wrap with (Pair with …)`) has none: the report falls back to the other claimant's alias, and when
 neither has one it is whole-program (`line == 0`, the anchorless form E3001 uses). Blaming the
 enclosing alias instead would name a line whose own instantiation is fine.
 
-It is decided in the FRONT END, over the interned instantiations and the same whole-program type-name
-registry the rule above uses, **not** at symbol-emission time: a diagnostic raised where the symbol is
-minted has no user span to land on, and would blame a file the author never opened.
-
-⚠ **A `typealias` is NOT a claimant, and that is load-bearing.** An alias mints no symbol of its own —
-a generic instance's methods are emitted under its BASE's name — so `typealias Box_Integer = Box with
-Integer`, whose alias name is exactly what the instance it names compiles to, is perfectly legal and
-stays legal. Only the four NOMINAL keywords claim a compiled name.
+It is decided in the FRONT END, over the interned instantiations, **not** at symbol-emission time: a
+diagnostic raised where the symbol is minted has no user span to land on, and would blame a file the
+author never opened.
 
 ## Tests
 
@@ -477,17 +499,24 @@ end 'main'
 ```
 
 
-<!-- test: error.instantiation-compiles-onto-declared-type -->
-The LEAK. `Box with String` compiles to `Box_String`, and so does the `type Box_String` below —
-`installGenericInstanceDestructors` and `installStructDestructors` each emit a `__destruct_Box_String`
-and the later install wins. The struct's SECOND `String` is then never released: the build exited 0
-with no diagnostic whatever and the program exited **101**, the leak-check code.
+<!-- test: instantiation-compiles-onto-declared-type -->
+The LEAK, now legal. `Box with String` would compile to `Box_String`, and so does the `type Box_String`
+below — `installGenericInstanceDestructors` and `installStructDestructors` each emitted a
+`__destruct_Box_String` and the later install won. The struct's SECOND `String` was then never
+released: the build exited 0 with no diagnostic whatever and the program exited **101**, the leak-check
+code. Under the reserved prefix the instance is `__Box_String` instead, so the two cascades are
+different functions; both objects are built, both are dropped, and each answers for itself.
 ```maxon
+typealias Num = int(0 to 100)
+
 type Box uses T
 	export var v as T
 	export static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
+	export function tag() returns Num
+		return 1
+	end 'tag'
 end 'Box'
 
 typealias SBox = Box with String
@@ -498,27 +527,33 @@ type Box_String
 	export static function make() returns Self
 		return Self{a: "x", b: "y"}
 	end 'make'
+	export function tag() returns Num
+		return 2
+	end 'tag'
 end 'Box_String'
 
 function main() returns ExitCode
 	let s = SBox.create("hello")
 	let t = Box_String.make()
-	return 4
+	return s.tag() + t.tag()
 end 'main'
 ```
-```maxoncstderr
-error E3006: <fragment>:11:6: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name
+```exitcode
+3
 ```
 
 
-<!-- test: error.instantiation-compiles-onto-declared-type-matching-layout -->
-The SILENT SUCCESS, which is the more dangerous half. The two claimants now have the SAME layout — one
-pointer field — so the surviving cascade is *plausible* for the type it was never written for: the
-struct's `Holder` box is released through the instance's `__str_decref`, which lands on a refcount
-header that is really there. The program returned **4** and leaked nothing. Nothing was reported, and
-nothing would be until a field moved. The rule does not look at layouts, so it catches this shape and
-the leaking one identically.
+<!-- test: instantiation-compiles-onto-declared-type-matching-layout -->
+The SILENT SUCCESS, which was the more dangerous half. The two claimants have the SAME layout — one
+pointer field — so the surviving cascade was *plausible* for the type it was never written for: the
+struct's `Holder` box was released through the instance's `__str_decref`, which lands on a refcount
+header that is really there. The program returned the right answer and leaked nothing, nothing was
+reported, and nothing would be until a field moved. Disjointness does not look at layouts, so this
+shape and the leaking one are cured identically — and the leak check still runs, so a cascade servicing
+the wrong type would show up here as an exit **101** rather than as a plausible answer.
 ```maxon
+typealias Num = int(0 to 100)
+
 type Holder
 	export var s as String
 	export static function make() returns Self
@@ -531,6 +566,9 @@ type Box uses T
 	export static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
+	export function tag() returns Num
+		return 3
+	end 'tag'
 end 'Box'
 
 typealias SBox = Box with String
@@ -540,16 +578,19 @@ type Box_String
 	export static function make() returns Self
 		return Self{h: Holder.make()}
 	end 'make'
+	export function tag() returns Num
+		return 4
+	end 'tag'
 end 'Box_String'
 
 function main() returns ExitCode
 	let s = SBox.create("hello")
 	let t = Box_String.make()
-	return 4
+	return s.tag() + t.tag()
 end 'main'
 ```
-```maxoncstderr
-error E3006: <fragment>:18:6: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name
+```exitcode
+7
 ```
 
 
@@ -790,37 +831,328 @@ error E3006: <fragment>:35:11: duplicate definition of 'Pair_A_B_C_D' — the ge
 ```
 
 
-<!-- test: error.crossfile-instantiation-compiles-onto-declared-type -->
+<!-- test: error.two-instantiations-compile-to-one-name-a-declaration-also-holds -->
+Both mechanisms at once, and the pair check has to survive the prefix. `type Pair_Box_Int_Str` is
+declared, so BOTH instantiations are moved into the reserved space — and they land on the *same*
+reserved name, because the prefix is a function of the string and the string is what was ambiguous.
+The declaration is legal and stays legal; the pair still collides and is still reported, at the later
+`typealias`. The name in the message is the name they actually compile to, `__`-prefix and all: saying
+`Pair_Box_Int_Str` would name the declared struct, which is not what collided.
+```maxon
+typealias Small = int(0 to 100)
+
+type Str
+	export var v as Small
+end 'Str'
+
+type Box
+	export var v as Small
+end 'Box'
+
+type Box_Int
+	export var v as Small
+end 'Box_Int'
+
+type Int_Str
+	export var v as Small
+end 'Int_Str'
+
+type Pair_Box_Int_Str
+	export var v as Small
+end 'Pair_Box_Int_Str'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+typealias P1 = Pair with (Box_Int, Str)
+typealias P2 = Pair with (Box, Int_Str)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:30:11: duplicate definition of '__Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+```
+
+
+<!-- test: crossfile-instantiation-compiles-onto-declared-type -->
 The compiled namespace is whole-program, like the declared one: the instantiation is written in
-`a.maxon` and the colliding declaration is in `b.maxon`, and neither file names the other. That is why
-the rule is applied after the merge rather than per file — nothing `b.maxon` can see tells it that
-`Box_String` is taken.
+`a.maxon` and the contesting declaration is in `b.maxon`, and neither file names the other. That is why
+the prefix is decided over the whole-program declaration sweep rather than per file — nothing `a.maxon`
+can see tells it that `Box_String` is taken, and nothing `b.maxon` can see tells it that an
+instantiation wants the name.
 ```maxon
 // --- file: a.maxon
+typealias Num = int(0 to 100)
+
 export type Box uses T
 	export var v as T
 	export static function create(v T) returns Self
 		return Self{v: v}
 	end 'create'
+	export function tag() returns Num
+		return 7
+	end 'tag'
 end 'Box'
 
 export typealias SBox = Box with String
 
 // --- file: b.maxon
+typealias Num = int(0 to 100)
+
 export type Box_String
 	export var a as String
 	export static function make() returns Self
 		return Self{a: "x"}
 	end 'make'
+	export function tag() returns Num
+		return 8
+	end 'tag'
 end 'Box_String'
 
 // --- file: main.maxon
 function main() returns ExitCode
 	let s = SBox.create("hello")
 	let t = Box_String.make()
-	return 4
+	return s.tag() + t.tag()
+end 'main'
+```
+```exitcode
+15
+```
+
+
+<!-- test: array-literal-instance-onto-declared-type -->
+The shape that made this a defect rather than a corner. Nothing here writes a generic instantiation at
+all: `[Foo.create(1), Foo.create(2)]` is an array literal, and the declaration sweep interns
+`Array with Foo` behind it because that is the only way the parser can name the literal's type. So a
+program whose author wrote one perfectly ordinary type name — `Array_Foo` — was refused with an error
+naming `Array with Foo`, an instantiation that appears **nowhere in its source**. The bootstrap accepts
+it and returns 9, because its instance was `__Array_Foo` all along.
+```maxon
+typealias Num = int(0 to 100)
+
+type Foo
+	export var n as Num
+
+	export static function create(v Num) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Foo'
+
+type Array_Foo
+	export var tag as Num
+
+	export static function create(v Num) returns Self
+		return Self{tag: v}
+	end 'create'
+end 'Array_Foo'
+
+function main() returns ExitCode
+	let xs = [Foo.create(1), Foo.create(2)]
+	let m = Array_Foo.create(7)
+
+	return (xs.count() + m.tag) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: array-literal-managed-element-instance-onto-declared-type -->
+The same shape with a MANAGED element, which is what reaches the destructor machinery: `Foo` owns a
+`String`, so the array's elements are released through a real per-element walk rather than freed
+wholesale. The declared `Array_Foo` is dropped in the same scope. If the two ever shared a symbol the
+leak check would say so — this case exits 9 or it exits 101, and there is no third answer.
+```maxon
+typealias Num = int(0 to 100)
+
+type Foo
+	export var s as String
+
+	export static function create(v String) returns Self
+		return Self{s: v}
+	end 'create'
+end 'Foo'
+
+type Array_Foo
+	export var tag as Num
+
+	export static function create(v Num) returns Self
+		return Self{tag: v}
+	end 'create'
+end 'Array_Foo'
+
+function main() returns ExitCode
+	let xs = [Foo.create("a"), Foo.create("b")]
+	let m = Array_Foo.create(7)
+
+	return (xs.count() + m.tag) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: array-literal-of-unrelated-type-onto-declared-type -->
+The sharpest one: the literal is of `Bar`, and `Array with Foo` is interned anyway. A local's type is
+invisible to the token sweep, so a `[<identifier>…]` literal anywhere in a file over-interns
+`Array with T` for **every** declared struct and union in the program — the parser then reads back
+whichever one the first element resolves to, and the rest are registry entries nothing ever emits. A
+rule that rejected a declaration contest therefore rejected `type Array_Foo` on account of a literal
+that has nothing to do with `Foo`. Under disjointness the over-interning is harmless, which is why it
+stays: an unreferenced instance mints no symbol at all.
+```maxon
+typealias Num = int(0 to 100)
+
+type Bar
+	export var n as Num
+
+	export static function create(v Num) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Bar'
+
+type Foo
+	export var n as Num
+
+	export static function create(v Num) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Foo'
+
+type Array_Foo
+	export var tag as Num
+
+	export static function create(v Num) returns Self
+		return Self{tag: v}
+	end 'create'
+end 'Array_Foo'
+
+function main() returns ExitCode
+	let xs = [Bar.create(1), Bar.create(2)]
+	let m = Array_Foo.create(7)
+
+	return (xs.count() + m.tag) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: declared-type-owning-a-string-named-like-an-array-instance -->
+The declared type is the one that OWNS the `String` here, and that is a different question from the
+case above: a managed struct puts `__destruct_Array_Foo` into the needed-destructor set, and that set
+is keyed by NAME. Before disjointness the name pulled the base-less `Array with Foo` instance in behind
+it and the compiler died — `panic ProgramSignatures.baseLayoutOf: base struct 'Array' is not declared`,
+a stack trace with no diagnostic, on the very program the collision check had already recorded an E3006
+for. The crash came first, so that E3006 could never be printed. The instance is `__Array_Foo` now, so
+the struct's cascade names only itself and nothing is pulled in.
+```maxon
+typealias Num = int(0 to 100)
+
+type Foo
+	export var n as Num
+
+	export static function create(v Num) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Foo'
+
+type Array_Foo
+	export var s as String
+	export var tag as Num
+
+	export static function create(v Num) returns Self
+		return Self{s: "held", tag: v}
+	end 'create'
+end 'Array_Foo'
+
+function main() returns ExitCode
+	let xs = [Foo.create(1), Foo.create(2)]
+	let m = Array_Foo.create(7)
+
+	return (xs.count() + m.tag) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: declared-type-and-instance-both-cascade -->
+Both cascades are REAL and both run. `type Box_String` owns three `String`s and the `Box with String`
+instance owns one, so a build that emitted a single `__destruct_Box_String` for the two of them either
+leaks two strings or frees one box twice depending on which install won. Two instances are constructed
+so the instance cascade runs more than once, and the leak check fails the case on exit **101** if a
+single `String` survives it.
+```maxon
+typealias Num = int(0 to 100)
+
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+	export function tag() returns Num
+		return 5
+	end 'tag'
+end 'Box'
+
+typealias SBox = Box with String
+
+type Box_String
+	export var a as String
+	export var b as String
+	export var c as String
+	export static function make() returns Self
+		return Self{a: "aa", b: "bb", c: "cc"}
+	end 'make'
+	export function tag() returns Num
+		return 6
+	end 'tag'
+end 'Box_String'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let t = Box_String.make()
+	let u = SBox.create("world")
+	return s.tag() + t.tag() + u.tag()
+end 'main'
+```
+```exitcode
+16
+```
+
+
+<!-- test: error.declaring-a-reserved-instance-name -->
+The guard on the reserved space itself, which is the whole reason the prefix is safe to mint into. A
+declaration may not take a `__` name, so the space a contested instance is moved into is one no source
+declaration can ever reach — and if that stopped being true, the disjointness above would quietly stop
+being disjointness. The message is byte-identical to the bootstrap's.
+```maxon
+typealias Num = int(0 to 100)
+
+type __Array_Foo
+	export var n as Num
+
+	export static function create(v Num) returns Self
+		return Self{n: v}
+	end 'create'
+end '__Array_Foo'
+
+function main() returns ExitCode
+	let b = __Array_Foo.create(3)
+
+	return b.n as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:13:13: duplicate definition of 'Box_String' — the generic instantiation `Box with String` already compiles to that name
+error E2051: <fragment>:4:6: identifier '__Array_Foo' is reserved: declarations starting with '__' are reserved for compiler internals
 ```

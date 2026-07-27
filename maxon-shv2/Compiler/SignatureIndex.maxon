@@ -1441,6 +1441,18 @@ end 'directCloneCalleeOf'
 
 // --- Generic instances (P1.6-A) ---
 
+// The prefix a compiled instance name is minted behind when a declaration already claims the bare one
+// (`reservedIfDeclared`). It is the SAME `__` the language reserves — `E2051` refuses to declare a name
+// starting with it — which is exactly what makes the reserved space safe to mint into.
+//
+// It is a third module-local copy of that one language rule, beside `Parser.ReservedNamePrefix` (which
+// FORBIDS a user declaration from taking it) and `MmRuntime.CompilerInternalPrefix` (which RECOGNIZES an
+// emitted callee by it), and for the reason Parser's own comment states: the three answer different
+// questions at different tiers — forbidding, recognizing, and here MINTING — and a signature index owning
+// the parser's reservation, or the reverse, would be the worse coupling. The language rule binds them,
+// not a shared symbol.
+let ReservedTypeNamePrefix = b"__"
+
 // The name of the builtin `Array` generic type (`Array with Integer`). Shared by the parser's
 // `Base with Args` check (which treats `Array` as a one-parameter generic without a `type` declaration)
 // and every `Array`-instance query — one speller, so the two cannot drift. See `isArrayBaseName`.
@@ -3880,6 +3892,12 @@ export type ProgramSignatures
 	// handle, so an ask costs a retain rather than a rebuild — safe because every consumer either READS it
 	// (a map key, a `Set.contains` probe) or builds a NEW string around it (`destructorSymbol`,
 	// `String.from`), and none writes through it.
+	//
+	// ⭐⭐ **AND IT IS WHERE A CONTESTED NAME IS MOVED INTO THE RESERVED SPACE — AT THE SOLE PRODUCER, NOT
+	// AT A LATER CHECK.** See `reservedIfDeclared`. Deriving the final name HERE is what lets every
+	// consumer be a pure read: the PARSER is one of them (`decrefCalleeFor` bakes
+	// `__destruct_<mangled>` into an emitted drop call), so a name revised after the parse would leave
+	// `main` calling a symbol the destructor synthesis no longer emits.
 	export function mangleGenericInstance(id GenericInstanceId) returns ByteArray
 		if let derived = try self.compiledInstanceNames.get(id) 'alreadyDerived'
 			return derived
@@ -3891,10 +3909,72 @@ export type ProgramSignatures
 			out.append(self.mangleTypeArg(arg))
 		end 'eachArg'
 
-		let name = out.toByteArray()
+		let name = self.reservedIfDeclared(out.toByteArray())
 		self.compiledInstanceNames.upsert(id, value: name)
 		return name
 	end 'mangleGenericInstance'
+
+	// ⭐⭐ **RESERVED-SPACE DISJOINTNESS: A COMPILED INSTANCE NAME A DECLARATION ALSO CLAIMS IS MINTED
+	// BEHIND `__` INSTEAD (P1.7).**
+	//
+	// An instantiation has no source name, so the compiler builds one, and every per-type symbol the
+	// backend emits is derived from that string — `__destruct_<name>`, `__layout_<name>`. A declared
+	// `type Box_String` derives ITS symbols from the identical string, so `Box with String` and
+	// `type Box_String` minted one `__destruct_Box_String` twice and the later install won: a LEAK when
+	// the loser owned a field the winner does not drop, a SILENT SUCCESS when the two layouts happened to
+	// agree. That was reported as E3006 — which made a program the language permits (a legal type name,
+	// plus an instantiation the author may never have written: a bare `[Foo…]` literal interns
+	// `Array with Foo`) fail to compile, naming an instantiation that appears nowhere in the source.
+	//
+	// `__` is ALREADY reserved — `E2051` refuses to DECLARE a name that starts with it — so a compiled
+	// name minted behind it is one no declaration can hold, and the two halves of the namespace are
+	// disjoint BY CONSTRUCTION rather than by a check. That is how the bootstrap has always spelled a
+	// synthesized instance name (`__Array_Foo`, `maxon-sharp/Compiler/2-Parser.cs`), and why it needs no
+	// declaration-vs-instance check at all.
+	//
+	// ⚠ **ON CONTEST ONLY, WHICH IS A COST DECISION.** Prefixing unconditionally would move the mangled
+	// symbol in 108 committed goldens across four targets, 45 of them on hosts that cannot be regenerated
+	// here. Renaming only what was previously an ERROR moves no name that ever compiled, so every golden
+	// stays byte-identical.
+	//
+	// ⚠ **RE-PROBED, NOT PREFIXED ONCE.** `__Box_String` could itself be declared, and the loop
+	// TERMINATES because each pass makes the candidate strictly longer while the declaration set is
+	// finite and fixed (the sweep is complete before any name is derived).
+	//
+	// Two instantiations that compile to ONE name are NOT cured by this and are not meant to be — `_` is a
+	// legal name character, so the join is not injective (`Box with A_B` and `Box_A with B` both give
+	// `Box_A_B`) and there is no declaration to move out of the way. That stays E3006, in
+	// `checkTypeSymbolNamespace`.
+	function reservedIfDeclared(bare ByteArray) returns ByteArray
+		var name = bare
+		while self.claimsCompiledTypeName(name) 'contested'
+			name = "{String.from(ReservedTypeNamePrefix)}{String.from(name)}".toByteArray()
+		end 'contested'
+		return name
+	end 'reservedIfDeclared'
+
+	// ⭐ **DOES A DECLARATION ALREADY CLAIM THE COMPILED TYPE NAME `name`?** The declared half of the
+	// compiled-name namespace, asked in ONE place: a `type` and an `enum`/`union` each mint
+	// `__destruct_<name>` from their bare name (`installStructDestructors` / `installUnionDestructors`),
+	// which is the identical string an instance's `__destruct_<mangled>` / `__layout_<mangled>` are built
+	// from.
+	//
+	// ⚠ **AN `interface` AND A `typealias` ARE ABSENT, AND NEITHER IS AN OVERSIGHT.** Neither mints a
+	// per-type symbol, so neither can collide with an instance and neither may displace one. An alias
+	// mints nothing at all — an instance's methods are emitted under its BASE's name, which is why
+	// `typealias Box_Integer = Box with Integer` is legal. An interface's only emitted artifact is
+	// `__witness_<conformer>_<interface>`, whose head is the CONFORMER, so an `interface Box_String`
+	// beside a `Box with String` shares no symbol with it (measured against the bootstrap oracle: it
+	// builds and runs; shv2 used to refuse it with E3006).
+	//
+	// It reads THIS index's own registries and not `project.typeNameDecls`, because it is asked during
+	// the signature sweep — before any file is parsed, which is the whole point (see
+	// `mangleGenericInstance`). The two agree by construction for the kinds above: both are folded from
+	// the same declarations, and a program whose sweep and parse disagree has a parse diagnostic and
+	// fails the build regardless.
+	function claimsCompiledTypeName(name ByteArray) returns bool
+		return self.containsStruct(name) or self.containsEnum(name)
+	end 'claimsCompiledTypeName'
 
 	// ⭐⭐ **THE ONE CANONICAL TYPE IDENTITY OF A GENERIC INSTANCE (P1.7).** `mangleGenericInstance` names
 	// the instance as it was INTERNED, and one type can be interned twice — `Box with N0` and

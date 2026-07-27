@@ -126,6 +126,17 @@ is the index.
 - **Source spans live in a table, not on the op** — `SourceRangeTable`'s four dense
   scalar columns, appended in lockstep with ops through a single choke point.
   *(→ Maxon dialect)*
+- **A generic instance's COMPILED NAME and the user's declared type names are DISJOINT NAMESPACES** —
+  and disjoint *by construction*, not by a check. Every per-type symbol the backend emits is derived
+  from one string (`__destruct_<name>`, `__layout_<name>`), and a declared `type Box_String` derives
+  its own from the identical one; so when the name an instantiation would compile to is already a
+  declared `type`/`enum`/`union`, `ProgramSignatures.mangleGenericInstance` mints it behind the
+  reserved `__` prefix instead — a space E2051 bars every declaration from. The prefix is applied at
+  the SOLE PRODUCER of the name and not at a later check, because the compiled name is *baked into
+  emitted code*: the parser's `decrefCalleeFor` writes `__destruct_<mangled>` into a scope-exit drop
+  call, so a name revised after the parse would leave `main` calling a symbol nothing emits. It is
+  applied ON CONTEST ONLY, so no name that ever compiled moves and no golden does either. *(→
+  Parse-staging)*
 - **The parser writes only into a `FileParseArtifact`** — never into `Project`.
   `mergeArtifact` is the single writer of every shared registry. A file's parse is a
   pure function of `(tokens, filePath, namespace)`, which is what makes the per-file
@@ -394,6 +405,29 @@ only thing Maxon's reference semantics make a clone necessary for.
 The `Project` registry set today is small: `funcReturnTypes`, `funcSignatures`
 (param names + types), `typeNames`, `opRanges`, plus `diagnostics`, `globalData`, `db`,
 `rootPath`, `target`. It grows toward v1's ~28 as the language does.
+
+#### The compiled type-name namespace (`checkTypeSymbolNamespace`)
+
+`ParseStaging` also owns the whole-program check over the names generic instantiations compile
+to. It has **one** job left, because the other half is now impossible:
+
+- **A declaration contesting an instance cannot happen** — `mangleGenericInstance` mints a
+  contested name behind `__` (the Core invariant above). Reporting it was a defect, not a rule:
+  an `[Foo…]` array literal interns `Array with Foo` without naming it, so a legal `type Array_Foo`
+  was rejected with a diagnostic naming an instantiation absent from the program's source. The
+  bootstrap has never had the contest to diagnose (its instances are `__Array_Foo`); v1 has it and
+  tolerates the duplicate label silently, first-write-wins, which is the wild free the check
+  existed to stop.
+- **Two INSTANTIATIONS compiling to one name is still `E3006`**, and a prefix cannot cure it —
+  there is no declaration to move aside. `_` is a legal name character and the join has no
+  escaping, so `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` both give
+  `Pair_Box_Int_Str` (measured before the check existed: exit 0, no diagnostic, **SIGSEGV**).
+  **Neither reference compiler diagnoses this**; it is shv2's own.
+
+The walk is in gid order — intern order, hence source-path order — so which of a colliding pair is
+the newcomer is a property of the program, not of a map's iteration; and a rejected newcomer never
+displaces the incumbent, so a third instantiation is reported against the claimant that *settled*
+the name rather than one already refused.
 
 ## Maxon dialect
 
