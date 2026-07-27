@@ -154,6 +154,12 @@ internal static class TestCommand {
       return Fail($"not a directory: {settings.ProjectPath}");
 
     var projectDir = Path.GetFullPath(settings.ProjectPath);
+
+    // Every path this command prints is spelled by ReportPath — the same rule the coverage, profile
+    // and launcher reports use — so a transcript of a run is the same bytes on every machine.
+    // `projectDir` in particular is ABSOLUTE by construction, and printing it raw is exactly the
+    // machine-specific output that rule exists to prevent.
+    var displayDir = Debug.ReportPath.Display(projectDir);
     var color = Ansi.Enabled(settings.Color);
 
     // Two process-globals, set and deliberately NOT restored — unlike the compiler flags below,
@@ -169,7 +175,7 @@ internal static class TestCommand {
     // so a `maxon build` does not ship them.
     var sources = SourceCollector.FromDirectory(projectDir, editorOverrides: null,
       SourceSelection.ProductionAndTests);
-    if (sources.Length == 0) return Fail($"no .maxon files found in: {projectDir}");
+    if (sources.Length == 0) return Fail($"no .maxon files found in: {displayDir}");
 
     // Discovery is also where a name collision surfaces. Within one file the parser refuses it
     // (E3107, naming both prose names); ACROSS files in one directory — which share a namespace, so
@@ -193,7 +199,7 @@ internal static class TestCommand {
     }
 
     if (tests.Count == 0)
-      return FailNoTests($"no `test` declarations found under {projectDir}", settings, color);
+      return FailNoTests($"no `test` declarations found under {displayDir}", settings, color);
 
     if (selected.Count == 0) {
       return FailNoTests(

@@ -1,0 +1,192 @@
+UNIT-TEST-RUNNER gate — `maxon test` discovers every `test` declaration in a project by PARSING it,
+compiles them all into ONE binary with a generated entry point, runs them, and reports. Reproducible
+transcript over DebugSamples/testsample (a project holding a pass, an assertion failure, a foreign
+throw, and a panic followed by another test in the same file) and DebugSamples/notestsample (a
+project with real source and no tests at all).
+
+⭐ WHAT THIS GOLDEN IS FOR — THE ATTRIBUTION NO TEST BINARY CAN PERFORM ON ITSELF. `panic` is
+uncatchable (specs/safety.md), so a test that panics takes the whole process down and CANNOT report
+its own death; the test after it in the same shard never writes a begin marker at all. Those are two
+different facts and the only evidence for either is a GAP in the marker stream: a BEGIN with no END
+is the test that killed the process, and no BEGIN AT ALL is absence, not failure. Block 1 shows the
+pair — `panics on purpose` CRASHED and `runs after the panicking test` ✓ — and no single process
+produced those two lines. The second one's ✓ came from a SECOND process, spawned because absence was
+classified as absence first and re-queued rather than blamed. Invert that re-queue and the ✓ becomes
+DID NOT RUN, which is how the ordering was checked; report it as a pass on the strength of nothing
+having observed it, and the runner is lying in the one direction that matters.
+
+⭐⭐ AND WHY THE ASSERTION BLOCK IS PRINTED AT THE ASSERTION SITE, WHICH IS WHY THIS FIXTURE CHANGED.
+A caught error in Maxon is an enum you `match`: no message, no payload, nothing that could carry two
+values of arbitrary type. So a failure that does not print at the site can never be reconstructed
+afterwards — the runner would have the verdict and nothing else. `Expect` (stdlib/Testing.maxon)
+prints `expected:` / `received:` at the call site, while both values are still in hand and still
+fully typed, and only then throws. That is the whole difference between the `fails its own
+assertion` block below and what this same fixture used to print, which is in the RED section.
+
+Note also that the three non-passing outcomes in block 1 are found by THREE different kinds of
+evidence, and none could have produced another's text: `threw ApiError.notFound / at
+api.test.maxon:24` is structured, emitted by the handler the compiler substitutes for an uncaught
+foreign error; the `Expect.equal` block is stderr the test wrote about itself; the panic block is
+stderr the RUNTIME wrote as the process died. A runner that reported one shape for all three would
+be guessing.
+
+HOW TO REPRODUCE (from a checkout that has built the C# compiler, run from the repository root):
+  maxon test maxon-sharp/DebugSamples/testsample --workers=1 --no-timing; echo "exit=$?"
+  maxon test maxon-sharp/DebugSamples/testsample --workers=1 --no-timing --json; echo "exit=$?"
+  maxon test maxon-sharp/DebugSamples/testsample --list; echo "exit=$?"
+  maxon test maxon-sharp/DebugSamples/testsample --workers=1 --no-timing -t 'adds two,slow'; echo "exit=$?"
+  maxon test maxon-sharp/DebugSamples/notestsample --workers=1 --no-timing; echo "exit=$?"
+
+RED — three of them, and #2 and #3 were watched happening rather than remembered:
+
+  1. THE COMMAND. `maxon test` was not a command at all before this rung, and an unrecognized
+     subcommand falls through to the usage text and exit 1 — measured against this binary with a
+     nonsense subcommand, since the dispatcher is what decides it. So every line above got the usage
+     text. There was no discovery, no generated dispatcher and no runner.
+
+  2. THE ASSERTION. testsample was written before stdlib/Testing.maxon had `Expect`, so its failing
+     test threw `TestFailure.assertion` bare, and the whole report block 1 could give for it was:
+
+       FAIL  maxon-sharp/DebugSamples/testsample/api.test.maxon > fails its own assertion
+         an assertion failed, and the test wrote nothing to stderr saying which
+
+     That sentence is honest — the runner really did have nothing else — and it is exactly the
+     product this rung exists to replace. It is still the report for a test that rolls its own
+     `throw TestFailure.assertion`, which is why the wording stays.
+
+  3. REPRODUCIBILITY, twice. Writing this file measured two defects in the command it gates, both
+     fixed in the same change, and neither visible without diffing two runs against each other:
+       * `--json` wrote `compiled` OUTSIDE the `--no-timing` guard, so identical code reported
+         `"compiled":true` on a cold build cache and `"compiled":false` on a warm one. It is the same
+         fact the text face spells `compile 123ms` / `compile cached` and suppresses as one unit, and
+         it made the JSON face the one place `--no-timing` did not deliver the byte-reproducible
+         stdout that both its own usage line and docs/CLI_REFERENCE.md promise.
+       * The zero-tests message printed the project directory ABSOLUTE, so block 5 read
+         "no `test` declarations found under C:\Users\<someone>\...\<checkout>\..." and named the
+         tree it happened to run in — red on every other checkout and every other machine. Every
+         other path this command prints already went through Debug.ReportPath; this one and the
+         "no .maxon files found in" beside it did not, which is precisely the second copy that class
+         exists to prevent.
+
+WHAT EACH BLOCK PROVES (asserted by the output below):
+  * BLOCK 1 — THE HEADLINE. Files appear in DISCOVERY order and tests within a file in declaration
+    order, then one detail block per failure, then the counts. Note the status column: a passing or
+    failing line carries a DURATION there, which `--no-timing` removes entirely, but `CRASHED` is
+    still printed — a label is a VERDICT, not a measurement, and an outcome that never produced a
+    duration must not be silent about itself just because timings were suppressed.
+  * The run exits 1. Six tests were selected, three did not pass, and `exit=1` is asserted here
+    rather than described: an exit code nothing checks is a comment.
+  * BLOCK 2 — THE SAME REPORT AS JSON, from the same model through the second renderer. There is no
+    second aggregation and no second outcome vocabulary: `state` is the machine spelling of the same
+    map block 1's labels come from. `nanos`, `compileMs`, `runMs` and `compiled` are all ABSENT,
+    because `--no-timing` means this document is byte-reproducible and every one of them describes
+    the machine rather than the tests. A crashed test carries no `nanos` even with timings on — it
+    did not take 0.00ms, it was never measured — and its `output` holds the panic and its stack trace
+    with `\n` escapes: the same bytes block 1 indents.
+  * BLOCK 3 — `--list` COMPILES NOTHING and exits 0. Measured on a cold cache: the only file it
+    leaves behind is the discovery manifest, and no test binary appears. It reads the same discovery
+    a run does, so a listed test and a run test cannot come from different answers to "what is a
+    test". Same six tests, same three files, same order as block 1, with no marks and no status
+    column.
+  * BLOCK 4 — FILTERING, and both of its rules at once. A pattern matches a test whose NAME contains
+    it OR whose FILE's displayed path does, and comma-separated patterns UNION rather than intersect.
+    `adds two` selects by name out of api.test.maxon; `slow` selects by FILE out of slow.test.maxon;
+    two tests of six, across two files of three. The run exits 0 — the exit code answers for what
+    RAN, not for what the project contains, which is what makes `-t` usable while fixing something.
+  * BLOCK 5 — A PROJECT WITH SOURCE AND NO TESTS EXITS 1, and says so in the report's own voice
+    rather than as an error: nothing went wrong with the harness, there is simply nothing green to
+    claim. This is the case the whole exit-code scheme is built around. A zero-test run that exited 0
+    would be the classic CI lie — a renamed directory or a broken glob reading for months as a green
+    suite, because nobody investigates a green light.
+
+WHAT IS STABLE vs ENVIRONMENT-SPECIFIC — measured by re-running and diffing, not assumed:
+  * Five consecutive full runs are BYTE-IDENTICAL, and so are runs at the DEFAULT worker count.
+    Results are flushed in discovery order behind a low-water mark, never in completion order, so
+    parallelism moves nothing in the transcript. `--workers=1` is passed anyway: a golden must not
+    depend on how many cores the machine that runs it has.
+  * `--no-timing` is what removes the durations, and nothing else in these five blocks prints one.
+  * COLOUR DISABLES ITSELF. `--color=auto` is the default and resolves through
+    `Console.IsOutputRedirected`, which is true whenever this gate captures stdout to a file — so no
+    `--color=` flag is needed and none is passed. Measured: zero ESC bytes in the captured stdout.
+  * Every path is printed relative to the working directory by Debug.ReportPath, so run these from
+    the repository root as the gate does. Measured: no drive letter, no absolute path and no
+    checkout name in any captured byte of any block.
+  * THE PANIC STACK TRACE IS PINNABLE, which is worth stating because most are not. It carries
+    SYMBOL NAMES and no addresses, and it survived deleting testsample/.maxon whole and recompiling
+    from cold: that transcript is byte-identical to the warm one. `__maxon_test_file_1` is generated,
+    and its `1` is crash.test.maxon's position in DISCOVERY order — so adding a test FILE ahead of it
+    moves that line, which is a real change to the run and should move the golden.
+  * The build cache is NOT in the transcript: block 1 is identical cold and warm, because
+    `--no-timing` removes the compile report in both faces.
+  * The one wall-clock dependency in the whole file is slow.test.maxon, which sleeps 300ms against
+    the DEFAULT 5000ms `--timeout` — a 16x margin, and the only thing here a sufficiently loaded
+    machine could turn into a different outcome. No `--timeout` is passed on purpose: pinning a
+    non-default deadline would gate a run the product does not actually perform.
+
+--- EXPECTED `maxon test` STDOUT, BLOCK 1: the full run ---
+maxon-sharp/DebugSamples/testsample/api.test.maxon:
+  ✓ adds two numbers
+  ✗ returns 404 when the user is missing
+  ✗ fails its own assertion
+maxon-sharp/DebugSamples/testsample/crash.test.maxon:
+  ✗ panics on purpose                               CRASHED
+  ✓ runs after the panicking test
+maxon-sharp/DebugSamples/testsample/slow.test.maxon:
+  ✓ takes its time
+
+FAIL  maxon-sharp/DebugSamples/testsample/api.test.maxon > returns 404 when the user is missing
+  threw ApiError.notFound
+  at api.test.maxon:24
+
+FAIL  maxon-sharp/DebugSamples/testsample/api.test.maxon > fails its own assertion
+  FAIL api.test.maxon:29: Expect.equal
+    expected: 5
+    received: 4
+
+CRASHED  maxon-sharp/DebugSamples/testsample/crash.test.maxon > panics on purpose
+  panic at crash.test.maxon:19: this test takes the process down
+  Stack trace:
+    in __test_panics_on_purpose
+    in __maxon_test_file_1
+    in __maxon_test_main
+    in mrt_start
+
+ 3 pass
+ 3 fail
+
+ 6 tests across 3 files.
+exit=1
+
+--- EXPECTED `maxon test --json` STDOUT, BLOCK 2: the same report as JSON ---
+{"total":6,"passed":3,"failed":3,"files":3,"results":[{"file":"maxon-sharp/DebugSamples/testsample/api.test.maxon","name":"adds two numbers","symbol":"__test_adds_two_numbers","line":19,"state":"passed"},{"file":"maxon-sharp/DebugSamples/testsample/api.test.maxon","name":"returns 404 when the user is missing","symbol":"__test_returns_404_when_the_user_is_missing","line":23,"state":"failed","threw":{"errorType":"ApiError","errorCase":"notFound","file":"api.test.maxon","line":24}},{"file":"maxon-sharp/DebugSamples/testsample/api.test.maxon","name":"fails its own assertion","symbol":"__test_fails_its_own_assertion","line":28,"state":"failed","output":"FAIL api.test.maxon:29: Expect.equal\n  expected: 5\n  received: 4"},{"file":"maxon-sharp/DebugSamples/testsample/crash.test.maxon","name":"panics on purpose","symbol":"__test_panics_on_purpose","line":18,"state":"crashed","output":"panic at crash.test.maxon:19: this test takes the process down\nStack trace:\n  in __test_panics_on_purpose\n  in __maxon_test_file_1\n  in __maxon_test_main\n  in mrt_start"},{"file":"maxon-sharp/DebugSamples/testsample/crash.test.maxon","name":"runs after the panicking test","symbol":"__test_runs_after_the_panicking_test","line":22,"state":"passed"},{"file":"maxon-sharp/DebugSamples/testsample/slow.test.maxon","name":"takes its time","symbol":"__test_takes_its_time","line":8,"state":"passed"}]}
+exit=1
+
+--- EXPECTED `maxon test --list` STDOUT, BLOCK 3: what would run, compiling nothing ---
+maxon-sharp/DebugSamples/testsample/api.test.maxon:
+  adds two numbers
+  returns 404 when the user is missing
+  fails its own assertion
+maxon-sharp/DebugSamples/testsample/crash.test.maxon:
+  panics on purpose
+  runs after the panicking test
+maxon-sharp/DebugSamples/testsample/slow.test.maxon:
+  takes its time
+
+ 6 tests across 3 files.
+exit=0
+
+--- EXPECTED `maxon test -t` STDOUT, BLOCK 4: filtering by name and by file, as a union ---
+maxon-sharp/DebugSamples/testsample/api.test.maxon:
+  ✓ adds two numbers
+maxon-sharp/DebugSamples/testsample/slow.test.maxon:
+  ✓ takes its time
+
+ 2 pass
+ 0 fail
+
+ 2 tests across 2 files.
+exit=0
+
+--- EXPECTED `maxon test` STDOUT, BLOCK 5: a project with source and no tests ---
+no `test` declarations found under maxon-sharp/DebugSamples/notestsample
+exit=1

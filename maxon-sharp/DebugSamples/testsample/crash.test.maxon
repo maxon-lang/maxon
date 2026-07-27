@@ -10,11 +10,15 @@
 // reported by whatever it really does there — a pass, here. The two steps are the point: absence is
 // classified as absence FIRST, and only an actual run can turn it into a verdict. Disable the
 // re-queue and this test reports DID NOT RUN, which is how that ordering was checked.
+//
+// The second test ASSERTS rather than prints, so its ✓ is evidence that its body really executed in
+// the re-queued process. A test binary's stdout is captured and never read — attribution is the
+// stderr marker stream — so a `print` here would prove nothing to anyone.
 
 test 'panics on purpose'
 	panic("this test takes the process down")
 end 'panics on purpose'
 
 test 'runs after the panicking test'
-	print("this line must not be reached\n")
+	try Expect.equal(add(2, b: 3), expected: 5)
 end 'runs after the panicking test'

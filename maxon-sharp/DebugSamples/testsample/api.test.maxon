@@ -1,25 +1,30 @@
 // The three outcomes a test can report from inside the binary: a pass, its own failed assertion,
 // and a foreign error that reached the end of the body unhandled.
 //
-// `assertTrue` is deliberately NOT exported. It is a fixture private to this file, and the
+// Assertions are written with `Expect` (stdlib/Testing.maxon) rather than a hand-rolled
+// `throw TestFailure.assertion`, and that is the whole difference between a report a reader can
+// act on and one they cannot. Both fail the test; only `Expect` still has BOTH VALUES in hand at
+// the assertion site, so only `Expect` can say `expected: 5` / `received: 4`. A caught error in
+// Maxon is an enum with no payload, so a failure that does not print at the site can never be
+// reconstructed afterwards — the runner would have nothing to print but the headline.
+//
+// `missingUser` is deliberately NOT exported. It is a fixture private to this file, and the
 // generated dispatcher is appended to this file precisely so that neither it nor the test symbols
 // it calls have to be exported to be reachable.
 
-function assertTrue(ok bool) throws TestFailure
-	if not ok 'bad'
-		throw TestFailure.assertion
-	end 'bad'
-end 'assertTrue'
+function missingUser() returns String
+	return "nobody"
+end 'missingUser'
 
 test 'adds two numbers'
-	try assertTrue(add(2, b: 2) == 4)
+	try Expect.equal(add(2, b: 2), expected: 4)
 end 'adds two numbers'
 
 test 'returns 404 when the user is missing'
-	let found = try lookup("nobody")
-	try assertTrue(found == 1)
+	let found = try lookup(missingUser())
+	try Expect.equal(found, expected: 1)
 end 'returns 404 when the user is missing'
 
 test 'fails its own assertion'
-	try assertTrue(add(2, b: 2) == 5)
+	try Expect.equal(add(2, b: 2), expected: 5)
 end 'fails its own assertion'

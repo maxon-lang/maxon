@@ -203,8 +203,9 @@ internal static class TestRender {
   /// The whole run as JSON, emitted once at the end rather than streamed.
   /// </summary>
   /// <param name="showTiming">
-  /// False under <c>--no-timing</c>, which drops every duration here too. The flag is about making
-  /// stdout REPRODUCIBLE, and a JSON consumer diffing two runs needs that as much as a golden does —
+  /// False under <c>--no-timing</c>, which drops every duration here too — and <c>compiled</c> with
+  /// them, since it is the same report of what the build cost. The flag is about making stdout
+  /// REPRODUCIBLE, and a JSON consumer diffing two runs needs that as much as a golden does —
   /// honouring it in one face only would make the flag mean different things by output format.
   /// </param>
   /// <param name="emptyReason">
@@ -221,8 +222,14 @@ internal static class TestRender {
       w.WriteNumber("passed", report.Passed);
       w.WriteNumber("failed", report.Failed);
       w.WriteNumber("files", report.FileCount);
-      w.WriteBoolean("compiled", report.Compiled);
+      // `compiled` belongs INSIDE the timing block, with the durations it is reported beside. It is
+      // the same fact the text face spells as `compile 123ms` / `compile cached` — one string
+      // carrying both the duration and whether a build was paid for, suppressed as a unit — and it
+      // describes the BUILD CACHE rather than the tests, so two runs of identical code disagree
+      // about it. Emitted unconditionally it made the JSON face the one place `--no-timing` did not
+      // deliver the byte-reproducible stdout both its usage line and CLI_REFERENCE.md promise.
       if (showTiming) {
+        w.WriteBoolean("compiled", report.Compiled);
         w.WriteNumber("compileMs", report.CompileMs);
         w.WriteNumber("runMs", report.RunMs);
       }
