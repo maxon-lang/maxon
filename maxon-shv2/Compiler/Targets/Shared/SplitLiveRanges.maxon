@@ -1045,7 +1045,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 		let freshFrom = nextValueId
 		match choice 'act'
 			none then panic("splitLiveRanges: `victimAtPeak` returned for a `none` choice — it must throw")
-			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch)
+			remat(v, scope) then nextValueId = rematerializeConstant(module, index: index, topo: cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch, opFacts: liveness.opFacts)
 			spill(v, scope) then nextValueId = spillOneValue(module, index: index, cfg: cfg, liveness: liveness, valueId: v, peak: peak, scope: scope, slot: slotForSpillOf(index, valueId: v, nextSlot: nextSlot), pool: pool, nextValueId: nextValueId, stats: stats, lineage: lineage, scratch: scratch)
 		end 'act'
 		// Only a spill of a value memory does NOT already hold consumes a slot: a value relieved again
@@ -1224,7 +1224,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	// Re-derive the index facts of the values the split touched, from the dirty region alone. It must be
 	// walked in ASCENDING block order — a use thread is held ascending by sequence.
 	dirty.sortAscending()
-	reindexSplitValues(module, cfg: cfg, index: index, dirty: dirty, split: split, scratch: scratch.sweep)
+	reindexSplitValues(module, cfg: cfg, index: index, dirty: dirty, split: split, scratch: scratch.sweep, opFacts: liveness.opFacts)
 
 	// Re-mark their liveness (the victim's OLD marks came off before the mutation), and zero the masks
 	// that must be REBUILT rather than added to. Every other value's mask is left exactly as it is: the
@@ -1262,7 +1262,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	let rebuildFor = ScannedValues.split(split)
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		let blockLocal = dirty.at(k)
-		sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, rebuildFor: rebuildFor, classes: liveness.valueClass, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep, demandOut: demand)
+		sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, rebuildFor: rebuildFor, classes: liveness.valueClass, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep, demandOut: demand, opFacts: liveness.opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			liveness.setBlockPressure(blockLocal, class: class, demand: classRowGet(demand, class: class))
@@ -1714,7 +1714,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		// FIRST. That ordering is what makes `storeFitsPool` sound at a confined peak: by the time
 		// one is reached, no program point exceeds the full pool, so every value's def-point
 		// pressure fits and a store anchor is always available.
-		let atFixedRegisterOp = opIsFixedRegisterPoint(op)
+		let atFixedRegisterOp = opIsFixedRegisterPoint(op, opFacts: liveness.opFacts)
 
 		// THE FULL-POOL PIGEONHOLE, PER FILE. Each file is checked against ITS OWN pool, and its
 		// witness is ITS OWN pool — every value of that class is confined to it, so the overflow is
@@ -1884,9 +1884,10 @@ end 'betterPeak'
 
 // Is `op` itself a FIXED-REGISTER point — does it clobber registers implicitly (a call's 9
 // caller-saved, an `idiv`'s RAX/RDX)? Read off the operand model's metadata, so a new fixed-register
-// op needs no edit here.
-function opIsFixedRegisterPoint(op TargetOp) returns bool
-	return op.rawValue.implicitDefs != 0
+// op needs no edit here — through the per-variant memo, because this is asked at EVERY op of every
+// re-swept block and the metadata read is a select chain over the whole union (`OpVariantFacts`).
+function opIsFixedRegisterPoint(op TargetOp, opFacts OpVariantFacts) returns bool
+	return opFacts.implicitDefsOf(op) != 0
 end 'opIsFixedRegisterPoint'
 
 // Does a candidate overflow outrank the best peak so far?
@@ -2703,7 +2704,7 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 	// WHERE THE RUNS MUST BREAK, decided BEFORE a single op moves — see `markRunStarts`. It reads the
 	// block's op list at the PRE-SPLIT positions the use records carry, so it must run before anything
 	// is recorded; what it produces is a flag per USE ORDINAL, which no insertion can invalidate.
-	markRunStarts(module, index: index, topo: cfg.topo, valueId: valueId, class: liveness.classOf(valueId), pool: pool, file: liveness.registerFile, runStarts: scratch.runStarts, buf: buf)
+	markRunStarts(module, index: index, topo: cfg.topo, valueId: valueId, class: liveness.classOf(valueId), pool: pool, file: liveness.registerFile, runStarts: scratch.runStarts, buf: buf, opFacts: liveness.opFacts)
 
 	// STORE: at the def, which dominates every reload below — and ONLY when memory does not already
 	// hold this value. It does when an earlier split stored it, AND when this id IS a reload (its
@@ -2746,7 +2747,7 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 			let runStart = j
 			while j < useSites and useContinuesRun(scratch.runStarts, useOrdinal: j, runStart: runStart) and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) 'sameRun'
 				match index.useKindAt(record) 'kind'
-					op then rewriteOpAt(module, opIdx: index.useOpAt(record), from: valueId, to: freshId, buf: buf)
+					op then rewriteOpAt(module, opIdx: index.useOpAt(record), from: valueId, to: freshId, buf: buf, opFacts: liveness.opFacts)
 					edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
 				end 'kind'
 				j = j + 1
@@ -2836,7 +2837,7 @@ end 'spillOneValue'
 // all read after one call, ~M × 2M `opStrandsClass` calls whose results were all discarded. It
 // allocates nothing, so `scale-test` cannot see it and neither can the memory column of
 // `--metrics`; it was found by reading, and removing it left both of those columns unmoved.
-function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList)
+function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList, opFacts OpVariantFacts)
 	let useSites = index.useCount(valueId)
 	runStarts.refill(useSites, value: false)
 	if useSites == 0 'neverUsed'
@@ -2879,7 +2880,7 @@ function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, v
 			let firstBetween = previousPos + 1
 			for scan in firstBetween upto pos 'between'
 				let scanned = try block.opRefs.get(scan) otherwise panic("markRunStarts: opRefs.get OOB at {scan} of block {blockLocal}, scanning between uses {k - 1} and {k} of value {valueId}")
-				if opStrandsClass(module, opIdx: scanned, classPool: classPool, buf: buf) 'noRegisterLeft'
+				if opStrandsClass(module, opIdx: scanned, classPool: classPool, buf: buf, opFacts: opFacts) 'noRegisterLeft'
 					try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
 					break
 				end 'noRegisterLeft'
@@ -2898,9 +2899,9 @@ end 'markRunStarts'
 // drift: written twice, this would decide a run boundary from one notion of "clobber" while the
 // sweep forbade registers by another, and a reload the splitter believed was free would come back
 // as the next victim for ever.
-function opStrandsClass(module TargetModule, opIdx OpIndex, classPool RegMask, buf OperandList) returns bool
+function opStrandsClass(module TargetModule, opIdx OpIndex, classPool RegMask, buf OperandList, opFacts OpVariantFacts) returns bool
 	let op = try module.ops.get(opIdx) otherwise panic("opStrandsClass: opIdx not in module.ops")
-	return (classPool and not opClobberMask(op, buf: buf)) == 0
+	return (classPool and not opClobberMask(op, buf: buf, opFacts: opFacts)) == 0
 end 'opStrandsClass'
 
 // Does the use at ordinal `useOrdinal` CONTINUE the run that opened at `runStart`? The run's first use
@@ -3126,7 +3127,7 @@ end 'spliceOp'
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
 // exactly when nothing reads it any more.
-function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 	// The immediate AND which ISA's const op the original def is, read ONCE: the re-emit at each use
 	// must be the SAME KIND (x64 `mov`, arm64 `movz`/`movk`) so it is byte-identical to what ISel wrote.
@@ -3169,7 +3170,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 			// size choice that can drift from it), or arm64's uniform `arm64MovImm` — selected by the
 			// original def's own kind (`freshConstOp`).
 			spliceOp(module, at: usePos, op: freshConstOp(isArm64Const, freshId: freshId, value: constValue), blockLocal: useBlockLocal, edits: edits)
-			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
+			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf, opFacts: opFacts)
 			// The re-emitted copy derives from the original constant — record it so a
 			// rematerialized id in an E5001 blocking set chases back to the constant's source
 			// span (the `let`/literal the author wrote), not a Rule-3 panic (see SplitLineage).
@@ -3250,12 +3251,11 @@ end 'dropOriginalDef'
 // make it read a value defined later (a use-before-def). Since a `storeSlotReg`'s source is
 // ALWAYS an original spilled value (never a reload), skipping every spill store is exactly right
 // and touches no genuine use. A no-op when the op does not use `from` at all.
-function rewriteOpAt(module TargetModule, opIdx OpIndex, from ValueId, to ValueId, buf OperandList)
+function rewriteOpAt(module TargetModule, opIdx OpIndex, from ValueId, to ValueId, buf OperandList, opFacts OpVariantFacts)
 	let op = try module.ops.get(opIdx) otherwise panic("rewriteOpAt: opIdx not in module.ops")
-	match spillStoreSlotOf(op) 'spillStore'
-		slot then return
-		none then break 'spillStore'
-	end 'spillStore'
+	if opFacts.slotRoleOf(op) == OpSlotRole.spillStore 'readsTheOriginalDeliberately'
+		return
+	end 'readsTheOriginalDeliberately'
 	if not opUsesValue(op, valueId: from, buf: buf) 'noUse'
 		return
 	end 'noUse'

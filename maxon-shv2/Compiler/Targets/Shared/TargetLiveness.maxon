@@ -677,9 +677,14 @@ export type LivenessResult
 	// numbering. The liveness walk builds it (it needs the use lists), and the cold-spill splitter
 	// answers EVERY per-value question from it rather than re-walking the function per candidate.
 	export var useIndex as UseIndex
+	// The per-VARIANT static op facts, memoized (see `OpVariantFacts`). It rides here for the reason
+	// `registerFile` does: every walk that asks one of those questions — the pressure sweep, the
+	// splitter's peak-finder, its use-rewriter, the index rebuild — already holds a `LivenessResult`,
+	// and the memo must be the SAME object across all of them or each pays the derivation again.
+	export var opFacts as OpVariantFacts
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex, opFacts OpVariantFacts) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts}
 	end 'create'
 
 	// The dead block-arg count of local block `local`, for ONE register file.
@@ -924,7 +929,10 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 		panic("computeLivenessOn: '{String.from(func.name)}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
 	end 'cfgStale'
 
-	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount)
+	// ONE memo for the whole function — every walk below shares it, so a variant's facts are derived on
+	// the first op of that case the index build meets and read from then on (see `OpVariantFacts`).
+	var opFacts = OpVariantFacts.create()
+	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount, opFacts: opFacts)
 	var marks = LivenessMarkScratch.create()
 	marks.begin(numBlocks)
 	var touched = BlockSet.create()
@@ -948,7 +956,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	// `scannedValuesHold` on the first function compiled).
 	let rebuildFor = ScannedValues.all
 	for i in 0 upto numBlocks 'eachBlock'
-		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, rebuildFor: rebuildFor, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand)
+		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, rebuildFor: rebuildFor, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			try blockPressure.set(classRowIndex(i, class: class), value: classRowGet(demand, class: class)) otherwise panic("computeLivenessOn: blockPressure.set OOB for block {i}")
@@ -959,7 +967,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
 	paramCross.applyTo(forbidden)
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex, opFacts: opFacts)
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
@@ -2166,22 +2174,23 @@ export type UseIndex
 		try self.spillSlot.set(valueId, value: slot) otherwise panic("UseIndex.setSlotResidency: spillSlot.set OOB for value {valueId}")
 	end 'setSlotResidency'
 
-	// The op-level answer: `slotResidencyOf` says the op puts its virtual operand's value in a slot (a
-	// store writes it there; a reload reads it OUT of there and leaves it there). Resolved ONCE per op
-	// rather than per operand.
-	function recordSlotResidency(residency ValueSpillSlot, valueId ValueId)
-		match residency 'inASlot'
-			none then break 'inASlot'
-			slot(s) then self.setSlotResidency(valueId, slot: s)
-		end 'inASlot'
+	// The op-level answer: a `spillStore` wrote the value into its slot and a `slotReload` read it out of
+	// one, and BOTH leave it sitting there afterwards — so either role makes the operand's value
+	// resident. The slot is read out of the op only here, where the role has already said there is one.
+	function recordSlotResidency(role OpSlotRole, op TargetOp, valueId ValueId)
+		if role == OpSlotRole.touchesNoSlot 'noSlotInvolved'
+			return
+		end 'noSlotInvolved'
+		self.setSlotResidency(valueId, slot: slotOfSlotOp(op))
 	end 'recordSlotResidency'
 
-	// `setSpillStore` for the op-level answer: a `storeSlotReg`'s source, and nothing else.
-	function recordSpillStore(storeSlot ValueSpillSlot, valueId ValueId)
-		match storeSlot 'store'
-			none then break 'store'
-			slot then self.setSpillStore(valueId)
-		end 'store'
+	// `setSpillStore` for the op-level answer: a `storeSlotReg`'s source, and nothing else. A RELOAD
+	// leaves its value resident (above) without the function ever having STORED it.
+	function recordSpillStore(role OpSlotRole, valueId ValueId)
+		if role != OpSlotRole.spillStore 'didNotStoreIt'
+			return
+		end 'didNotStoreIt'
+		self.setSpillStore(valueId)
 	end 'recordSpillStore'
 
 	// Record `valueId` as a block-arg (phi) of `blockLocal`.
@@ -2286,7 +2295,7 @@ end 'scannedValuesHold'
 // rests on: `addUseRecord` appends at the tail, so recording them in order IS keeping them in order.
 // A caller that walks several blocks must therefore walk them in ASCENDING block index — a sequence
 // number leads with its block.
-function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, which ScannedValues, buf OperandList, ordered OpIndexArray) returns OpSeq
+function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, which ScannedValues, buf OperandList, ordered OpIndexArray, opFacts OpVariantFacts) returns OpSeq
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockFacts: loopDepth.get OOB")) != 0
 
@@ -2304,8 +2313,9 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 
 		let op = try module.ops.get(opIdx) otherwise panic("indexBlockFacts: opIdx not in module.ops")
 		targetOpOperands(op, buf: buf)
-		let storeSlot = spillStoreSlotOf(op)
-		let residency = slotResidencyOf(op)
+		// ONE question now, where there used to be two: the wider "is the value resident in a slot after
+		// this op?" and the narrower "did this op STORE it there?" are two readings of one role.
+		let slotRole = opFacts.slotRoleOf(op)
 
 		for k in 0 upto buf.count() 'eachOperand'
 			let o = try buf.get(k) otherwise panic("indexBlockFacts: buf.get OOB")
@@ -2323,15 +2333,15 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 
 			// Residency is recorded for the op's ONE virtual operand whichever side it is on: a
 			// `storeSlotReg`'s source (a use) and a `loadRegSlot`'s destination (a def) both end with
-			// the value sitting in that slot. Every other op answers `none`.
-			index.recordSlotResidency(residency, valueId: v)
+			// the value sitting in that slot. Every other op touches no slot.
+			index.recordSlotResidency(slotRole, op: op, valueId: v)
 
 			if operandIsDef(o) 'def'
 				index.setOpDef(v, opIdx: opIdx, blockLocal: blockLocal)
 				continue
 			end 'def'
 
-			index.recordSpillStore(storeSlot, valueId: v)
+			index.recordSpillStore(slotRole, valueId: v)
 
 			if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
 				index.addUseRecord(v, blockLocal: blockLocal, opIdx: opIdx, seq: seqAt(blockLocal, pos: pos), onEdge: false)
@@ -2365,7 +2375,7 @@ end 'indexBlockFacts'
 // Build the index in ONE pass over the function: create it empty, then record every def, flag and use
 // site on the way through — through the index's own mutators, which are the ones a SPLIT edits it with
 // (see "EDITS" above).
-export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId) returns UseIndex
+export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId, opFacts OpVariantFacts) returns UseIndex
 	var index = UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks)
 
 	var buf = OperandList.create()
@@ -2375,7 +2385,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	// built inside this loop is one allocation per block of every function the allocator sees.
 	let everyValue = ScannedValues.all
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
-		index.addOps(indexBlockFacts(module, cfg: cfg, index: index, blockLocal: i, which: everyValue, buf: buf, ordered: ordered))
+		index.addOps(indexBlockFacts(module, cfg: cfg, index: index, blockLocal: i, which: everyValue, buf: buf, ordered: ordered, opFacts: opFacts))
 	end 'eachBlock'
 
 	return index
@@ -2397,7 +2407,7 @@ end 'buildUseIndex'
 //
 // `dirty` MUST be in ASCENDING block order: a value's use thread is held ascending by sequence, and
 // `addUseRecord` refuses outright a record that would land out of order.
-export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIndex, dirty BlockSet, split SplitValues, scratch PressureSweepScratch)
+export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIndex, dirty BlockSet, split SplitValues, scratch PressureSweepScratch, opFacts OpVariantFacts)
 	index.resetValue(split.victim)
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
 		index.resetValue(f)
@@ -2405,7 +2415,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 
 	let which = ScannedValues.split(split)
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
-		_ = indexBlockFacts(module, cfg: cfg, index: index, blockLocal: dirty.at(k), which: which, buf: scratch.buf, ordered: scratch.ordered)
+		_ = indexBlockFacts(module, cfg: cfg, index: index, blockLocal: dirty.at(k), which: which, buf: scratch.buf, ordered: scratch.ordered, opFacts: opFacts)
 	end 'eachDirtyBlock'
 end 'reindexSplitValues'
 
@@ -2743,7 +2753,7 @@ end 'PressureSweepScratch'
 // exact χ the colorer needs, so the "coloring cannot fail when maxPressure <= pool" invariant — and the
 // E5001 deficit count — stay sound. The count is RECORDED per block, not just folded into the max: the
 // splitter's peak-finder needs the same number at every op of the block.
-export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, rebuildFor ScannedValues, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn)
+export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, rebuildFor ScannedValues, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -2770,7 +2780,7 @@ export function sweepBlockPressure(module TargetModule, topo FuncTopology, block
 	collectBlockOps(block, out: ordered)
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, rebuildFor: rebuildFor, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure)
+		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, rebuildFor: rebuildFor, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(blockMax, class: class, value: maxOf(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
@@ -2959,10 +2969,10 @@ end 'ParamCrossForbid'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, rebuildFor ScannedValues, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn)
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, rebuildFor ScannedValues, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	// This also fills `buf` with the op's operands, which everything below reads.
-	let clobberMask = opClobberMask(op, buf: buf)
+	let clobberMask = opClobberMask(op, buf: buf, opFacts: opFacts)
 
 	// Read the reuse-copy transient BEFORE the backward step mutates `liveRow` — it still
 	// holds the live-AFTER set here, which is where "does the reuse input outlive the op?"
@@ -2983,7 +2993,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	// be RAX (holds the dividend) or RDX (the cqo sign-extension, then the remainder), so
 	// it must avoid implicitUses ∪ implicitDefs = {RAX, RDX}. This mask is 0 for every op
 	// without implicit registers, so the loop is a no-op except at `idiv`.
-	let implicitTouch = op.rawValue.implicitUses or op.rawValue.implicitDefs
+	let implicitTouch = opFacts.implicitUsesOf(op) or opFacts.implicitDefsOf(op)
 	if implicitTouch != 0 'hasImplicit'
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
@@ -3010,9 +3020,9 @@ end 'stepBackwardOverOp'
 // them — which is a value the driver re-picks for ever, not a wrong answer any test would notice.
 //
 // `buf` is filled with `op`'s operands as a side effect, which every caller wants anyway.
-export function opClobberMask(op TargetOp, buf OperandList) returns RegMask
+export function opClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFacts) returns RegMask
 	targetOpOperands(op, buf: buf)
-	var mask = op.rawValue.implicitDefs
+	var mask = opFacts.implicitDefsOf(op)
 	for o in buf 'physDefs'
 		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
 			// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this
@@ -3203,64 +3213,233 @@ function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, im
 	end 'each'
 end 'forbidOperandsFromImplicit'
 
-// The slot a spill STORE writes, or `none` for every other op — the ONE place "is this op a spill
-// store?" is decided, so its two consumers cannot drift on it. `buildUseIndex` records the value the
-// store reads as already-spilled AND the slot it went to (the splitter reloads out of that same slot
-// when it relieves the value again at a second peak). The splitter's use-rewriter uses the same
-// answer to leave a store ALONE — a store deliberately reads the ORIGINAL value, so repointing it at
-// the reload would make it read a value defined later.
-export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
-	return match op 'k'
-		storeSlotReg(slot, _) gives ValueSpillSlot.slot(slot)
-		prologue to popReg gives ValueSpillSlot.none
-		loadRegSlot gives ValueSpillSlot.none
-		// ⚠ `storeBaseDispReg` is a STORE and is deliberately NOT a spill store. This predicate asks
-		// "did the splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it
-		// writes a global at a link-time address, not a `SpillSlot` this function's frame owns.
-		// Claiming a slot for it would hand the allocator a spill record for a value it never spilled.
-		andRegReg to leaRegRdata gives ValueSpillSlot.none
-		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
-		// carries a spill store — `none` is unreachable this rung AND correct. `gives` cannot host a
-		// `panic`.
-		arm64Ret to arm64Syscall gives ValueSpillSlot.none
-		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` write no stack slot — a `lea`, a
-		// call and a syscall are not spill stores, so `none`, exactly like the `.data` store above.
-		leaRegFunc to x64Syscall gives ValueSpillSlot.none
-		// The jump tables write no stack slot — a multiway terminator is not a spill store.
-		x64JumpTable to arm64JumpTable gives ValueSpillSlot.none
-		// The witness call writes no stack slot — a call is not a spill store.
-		callMem gives ValueSpillSlot.none
-		// ⚠ `arm64StoreOutgoingArg` writes a frame slot but is NOT a SPILL store, exactly as `storeBaseDispReg`
-		// is not: this predicate asks "did this op save a VALUE to its spill slot?", and the argument region is a
-		// different area with a different index space. Answering `slot(k)` would let the splitter treat an
-		// argument store as a spill and elide a real one.
-		arm64StoreOutgoingArg to arm64LoadIncomingArg gives ValueSpillSlot.none
-	end 'k'
-end 'spillStoreSlotOf'
+// ==========================================================================
+// THE PER-VARIANT OP FACTS — asked at every op of every re-swept block, derived ONCE
+// ==========================================================================
 
-// The slot an op leaves its ONE virtual operand's value sitting in: a spill STORE's slot (it just
-// wrote the value there) or a spill RELOAD's slot (it just read the value out of there, and a read
-// does not vacate a stack slot). `none` for every other op.
+// What role an op plays in the SPILL-SLOT model — the ONE place "did the splitter put a value in a
+// stack slot here, and did this op WRITE it there?" is decided, so no consumer can drift on it.
 //
-// It is the wider twin of `spillStoreSlotOf`, which answers the NARROWER question `rewriteOpAt` and
-// the tier-2 discriminator ask — "is this op a spill STORE?" — and it is written as a refinement of
-// it rather than as a second copy of the same forty-arm band walk, so a new op cannot be classified
-// one way here and the other way there.
-export function slotResidencyOf(op TargetOp) returns ValueSpillSlot
-	match op 'reload'
-		loadRegSlot(_, slot) then return ValueSpillSlot.slot(slot)
-		prologue to storeSlotReg then break 'reload'
-		andRegReg to leaRegRdata then break 'reload'
-		arm64Ret to arm64Syscall then break 'reload'
-		leaRegFunc to x64Syscall then break 'reload'
-		x64JumpTable to arm64JumpTable then break 'reload'
-		callMem then break 'reload'
-		// An incoming-argument load reads the CALLER's frame, not a spill slot — not a reload (see the
-		// spill-store twin above for why conflating the two areas would elide real spill code).
-		arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'reload'
-	end 'reload'
-	return spillStoreSlotOf(op)
-end 'slotResidencyOf'
+// It replaces a pair of `ValueSpillSlot`-returning classifiers (`spillStoreSlotOf` and its wider twin
+// `slotResidencyOf`) that answered the two halves of this question separately. THREE cases is what
+// they were between them, and stating it as three has two consequences neither had:
+//
+//  • THE SLOT LEAVES THE ANSWER. A `ValueSpillSlot` is a payload-carrying union, so Maxon heap-boxes
+//    EVERY value of it — `ValueSpillSlot.none` included (measured: a payload-free case of such a union
+//    lowers to `mm_alloc` + `mm_incref`). `indexBlockFacts` asked both questions of every op of every
+//    DIRTY block of every split, so the two `none`s were TWO HEAP ALLOCATIONS PER OP PER SPLIT, for the
+//    ~98% of ops that touch no slot at all. An enum allocates nothing, and the SLOT — the only part
+//    that needs the op's payload — is now read only where there is one (`slotOfSlotOp`).
+//  • IT IS A FUNCTION OF THE VARIANT ALONE, so it memoizes (see `OpVariantFacts`).
+export enum OpSlotRole
+	// Neither writes a value into a spill slot nor reads one out of one. Every op but the two below.
+	touchesNoSlot
+	// `storeSlotReg`: the splitter spilled a value to a stack SLOT here. `buildUseIndex` records the
+	// value the store reads as already-spilled AND the slot it went to (the splitter reloads out of that
+	// same slot when it relieves the value again at a second peak). The use-rewriter reads the same
+	// answer to leave a store ALONE — a store deliberately reads the ORIGINAL value, so repointing it at
+	// the reload would make it read a value defined later.
+	spillStore
+	// `loadRegSlot`: the value was read OUT of its slot here — and a read does not vacate a stack slot,
+	// so the value is still resident in it afterwards.
+	slotReload
+end 'OpSlotRole'
+
+typealias OpSlotRoleColumn = Array with OpSlotRole
+
+// A `TargetOp` case's zero-based DECLARATION POSITION (`op.ordinal`) — the key `OpVariantFacts` is
+// indexed by. Dense over the union's own cases, and the space is the case count, so a column over it is
+// a constant however large the module is. Wide because the case count has no literal to bound it with.
+typealias TargetOpVariant = int(0 to u64.max)
+
+// THE STATIC FACTS OF A `TargetOp` VARIANT, derived on first sight of that variant and then read.
+//
+// ⚠ IT IS KEYED BY THE VARIANT, NOT BY THE OP, AND THAT IS THE WHOLE DESIGN. Every fact here is
+// `op.rawValue.<field>` or a `match` over the op's case with no payload read — i.e. a pure function of
+// which CASE the op is. So the key is `op.ordinal`, the memo is the size of the union (112 cases today)
+// rather than the size of the program, and there is no staleness class to reason about: an op's case
+// cannot change (the splitter's `substituteValueInOp` rebuilds each op as the IDENTICAL case), and even
+// if one somehow did, the answer would be re-derived under its own key rather than served stale.
+//
+// ⚠⚠ AN OP-KEYED CACHE WOULD HAVE BEEN THE WRONG SHAPE, and not by a little: `OpIndex` indexes
+// `module.ops`, which is the WHOLE MODULE's flat op array, while every buffer the allocator owns is
+// per FUNCTION. A dense column over that index space, built per function, is Θ(module ops) per
+// function — Θ(functions × module ops) over a compile — and there is no cheaper sizing available,
+// because a function's op indices are NOT contiguous: `splitCriticalEdges` appends one terminator per
+// split edge of EVERY function before the allocator's per-function loop starts, so a function whose own
+// ops begin at index 0 still names an op near the end of the array.
+//
+// ⭐ WHY IT CANNOT COST MORE THAN NOT HAVING IT. The fill IS the computation the caller would have made
+// anyway — the first op of a given case pays exactly the derivation it always paid, and every later op
+// of that case pays an array read. There is no eager pass, no warm-up, and nothing to invalidate.
+//
+// ⚠ IT IS BUILT PER FUNCTION AND ITS CONTENTS ARE PROGRAM-WIDE, which is a lifetime the allocator's
+// SHAPE imposes rather than one this type wants: `computeLivenessOn` is the first place both consumers
+// (the index build and the pressure sweep) can share one, and it is entered once per function. So every
+// function re-derives the ~30 cases its own ops name and pays a handful of column reallocations to hold
+// them. Hoisting it to the module — one memo for the whole compile, four allocations in total, each
+// case derived once ever — is a strictly better lifetime and needs the object created in
+// `allocateRegisters` and threaded through `allocateFunction`, i.e. a change in RegisterAllocator.maxon.
+//
+// WHAT IT REPLACES, and why it is worth a type: `op.rawValue.<field>` on a struct-backed union lowers
+// to a SELECT CHAIN over every case — the bootstrap emits `const`/`cmp`/`const`/`select` per case, and
+// the chain is branchless, so ALL of it runs on every read. At 112 cases that is ~450 instructions to
+// fetch one integer, and the allocator's hot walks fetch it at every op of every dirty block of every
+// split. (`opClobberMask` 7.7% / `opIsFixedRegisterPoint` 2.7% / `slotResidencyOf` 2.8% of a whole
+// compile, measured on `Testing/ladders/genwidelive.sh 400 sum`.)
+export type OpVariantFacts
+	// Registers the variant WRITES without naming them as an explicit operand (a call's caller-saved
+	// set, an `idiv`'s RAX/RDX), and those it READS the same way (`ret`'s R8).
+	var implicitDefs as RegMaskColumn
+	var implicitUses as RegMaskColumn
+	var slotRole as OpSlotRoleColumn
+	// Has this variant been seen? A parallel flag rather than an out-of-band value in the columns
+	// above: 0 is a legitimate implicit mask (every op but a call and `idiv` has one), so no mask can
+	// mean "not derived yet".
+	var known as BoolArray
+
+	export static function create() returns OpVariantFacts
+		return Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), known: BoolArray.create()}
+	end 'create'
+
+	// Registers `op` clobbers implicitly — a call's caller-saved set, an `idiv`'s RAX/RDX; 0 for every
+	// other op.
+	export function implicitDefsOf(op TargetOp) returns RegMask
+		return try self.implicitDefs.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitDefsOf: implicitDefs.get OOB — `learn` grows every column to the variant it returns")
+	end 'implicitDefsOf'
+
+	// Registers `op` READS without naming them as an explicit operand — `ret`'s R8, an `idiv`'s
+	// RAX/RDX; 0 for every other op.
+	export function implicitUsesOf(op TargetOp) returns RegMask
+		return try self.implicitUses.get(self.learn(op)) otherwise panic("OpVariantFacts.implicitUsesOf: implicitUses.get OOB — `learn` grows every column to the variant it returns")
+	end 'implicitUsesOf'
+
+	// What `op` does to a spill slot — see `OpSlotRole`.
+	export function slotRoleOf(op TargetOp) returns OpSlotRole
+		return try self.slotRole.get(self.learn(op)) otherwise panic("OpVariantFacts.slotRoleOf: slotRole.get OOB — `learn` grows every column to the variant it returns")
+	end 'slotRoleOf'
+
+	// `op`'s variant, with every column holding that variant's answers. The ONE derivation site, so a
+	// fact cannot be memoized under one rule and read under another.
+	function learn(op TargetOp) returns TargetOpVariant
+		let variant = op.ordinal as TargetOpVariant
+		if variant >= self.known.count() 'aWiderVariantSpaceThanSeenSoFar'
+			// TIGHT, to the highest variant this function has actually met — not to a chunk covering the
+			// whole union. MEASURED both ways on the scale corpus's rung 0 (78 functions): growing in
+			// 128-slot chunks saves ~16 reallocations per function and costs ~2.6 KB per function,
+			// because a real function names only 30-40 of the 112 cases and the rest of the chunk is
+			// never read. It is a wash in allocations and a loss in bytes, so the columns stay tight.
+			//
+			// The reallocations it does cost are a per-FUNCTION term, and they exist only because this
+			// memo is built per function while its CONTENTS are a property of the DIALECT — see the type
+			// header's note on lifetime.
+			self.implicitDefs.growFilled(variant + 1, value: 0)
+			self.implicitUses.growFilled(variant + 1, value: 0)
+			self.slotRole.growFilled(variant + 1, value: OpSlotRole.touchesNoSlot)
+			self.known.growFilled(variant + 1, value: false)
+		end 'aWiderVariantSpaceThanSeenSoFar'
+
+		let derived = try self.known.get(variant) otherwise panic("OpVariantFacts.learn: known.get OOB at variant {variant}, which the growth above covers")
+		if derived 'alreadyDerived'
+			if VerifyOpVariantFacts 'checkAgainstTheOpItself'
+				self.verifyAgainst(op, variant: variant)
+			end 'checkAgainstTheOpItself'
+			return variant
+		end 'alreadyDerived'
+
+		try self.implicitDefs.set(variant, value: op.rawValue.implicitDefs) otherwise panic("OpVariantFacts.learn: implicitDefs.set OOB at variant {variant}")
+		try self.implicitUses.set(variant, value: op.rawValue.implicitUses) otherwise panic("OpVariantFacts.learn: implicitUses.set OOB at variant {variant}")
+		try self.slotRole.set(variant, value: deriveSlotRole(op)) otherwise panic("OpVariantFacts.learn: slotRole.set OOB at variant {variant}")
+		try self.known.set(variant, value: true) otherwise panic("OpVariantFacts.learn: known.set OOB at variant {variant}")
+		return variant
+	end 'learn'
+
+	// VERIFY MODE's whole body: re-derive all three facts from the op in hand and compare them against
+	// what this variant's entry holds. See `VerifyOpVariantFacts`.
+	function verifyAgainst(op TargetOp, variant TargetOpVariant)
+		requireMaskUnchanged(try self.implicitDefs.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: implicitDefs.get OOB at variant {variant}"), reread: op.rawValue.implicitDefs, field: "implicitDefs", variant: variant)
+		requireMaskUnchanged(try self.implicitUses.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: implicitUses.get OOB at variant {variant}"), reread: op.rawValue.implicitUses, field: "implicitUses", variant: variant)
+
+		let memoRole = try self.slotRole.get(variant) otherwise panic("OpVariantFacts.verifyAgainst: slotRole.get OOB at variant {variant}")
+		let rederivedRole = deriveSlotRole(op)
+		if memoRole != rederivedRole 'roleDiverged'
+			panic("OpVariantFacts: variant {variant} memoized slot role {memoRole.name} but this op classifies as {rederivedRole.name} — `deriveSlotRole` must read the op's CASE and never its payload")
+		end 'roleDiverged'
+	end 'verifyAgainst'
+end 'OpVariantFacts'
+
+// One VERIFY-MODE mask comparison. The two implicit-register masks are checked identically and the
+// failure is one sentence with one word changed, so the sentence is written once — a second copy is the
+// shape that lets a later edit improve one message and leave the other saying something else.
+function requireMaskUnchanged(memoized RegMask, reread RegMask, field String, variant TargetOpVariant)
+	if memoized != reread 'diverged'
+		panic("OpVariantFacts: variant {variant} memoized {field} {memoized} but this op reads {reread} — the memo's premise is that a variant's metadata is a property of the CASE, and it is not")
+	end 'diverged'
+end 'requireMaskUnchanged'
+
+// VERIFY MODE for the variant memo. Flip to `true`, rebuild, and every memoized answer is re-derived
+// from the op it was asked about and compared, on every lookup; a divergence PANICS at the op that
+// caused it.
+//
+// It exists because the memo rests on ONE premise — that these three facts depend on an op's CASE and
+// on nothing else — and a premise that fails does not fail a test. A variant whose real clobber mask
+// differed from the first instance's would hand a value a caller-saved register across a call, and the
+// program would miscompile silently, in a way no spec test is obliged to notice. The premise is
+// STRUCTURAL today (`op.rawValue.<field>` is per-case metadata by the language's own construction, and
+// `deriveSlotRole` matches on the case without reading a payload), which is exactly why this ships off:
+// with the premise structural, the check can only fire if someone rewrites one of those into something
+// that reads an op's operands.
+//
+// Off in a shipping compiler because it re-derives the very select chain the memo exists to skip, on
+// every lookup — i.e. it makes the memo strictly slower than not having one.
+let VerifyOpVariantFacts = false
+
+// The role `op`'s CASE plays in the spill-slot model. Reads the case and never a payload, which is what
+// makes it memoizable by variant.
+function deriveSlotRole(op TargetOp) returns OpSlotRole
+	return match op 'k'
+		storeSlotReg gives OpSlotRole.spillStore
+		prologue to popReg gives OpSlotRole.touchesNoSlot
+		loadRegSlot gives OpSlotRole.slotReload
+		// ⚠ `storeBaseDispReg` is a STORE and is deliberately NOT a spill store. This asks "did the
+		// splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it writes a
+		// global at a link-time address, not a `SpillSlot` this function's frame owns. Claiming a slot
+		// for it would hand the allocator a spill record for a value it never spilled.
+		andRegReg to leaRegRdata gives OpSlotRole.touchesNoSlot
+		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
+		// carries a spill store — `touchesNoSlot` is unreachable this rung AND correct.
+		arm64Ret to arm64Syscall gives OpSlotRole.touchesNoSlot
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` write no stack slot — a `lea`, a
+		// call and a syscall are not spill stores, exactly like the `.data` store above.
+		leaRegFunc to x64Syscall gives OpSlotRole.touchesNoSlot
+		// The jump tables write no stack slot — a multiway terminator is not a spill store.
+		x64JumpTable to arm64JumpTable gives OpSlotRole.touchesNoSlot
+		// The witness call writes no stack slot — a call is not a spill store.
+		callMem gives OpSlotRole.touchesNoSlot
+		// ⚠ `arm64StoreOutgoingArg` writes a frame slot but is NOT a SPILL store, exactly as
+		// `storeBaseDispReg` is not: this asks "did this op save a VALUE to its spill slot?", and the
+		// argument region is a different area with a different index space. Answering `spillStore` would
+		// let the splitter treat an argument store as a spill and elide a real one. An incoming-argument
+		// load reads the CALLER's frame for the same reason, so it is no reload either.
+		arm64StoreOutgoingArg to arm64LoadIncomingArg gives OpSlotRole.touchesNoSlot
+	end 'k'
+end 'deriveSlotRole'
+
+// The stack slot of an op whose ROLE says it has one — the ONE place the payload is read, reached only
+// behind `slotRoleOf`, which is why every other case is a panic rather than a `none` nobody can act on.
+//
+// ⚠ IT NAMES THE SAME TWO CASES `deriveSlotRole` SINGLES OUT, and the two must gain a case together.
+// The pairing is not a comment alone: a new spill-slot op forces an arm in `deriveSlotRole` at COMPILE
+// time (appending to the union leaves its last range arm stale), and if that arm says `spillStore` or
+// `slotReload` while this function was not extended, the FIRST op of that case to reach the index build
+// lands here and panics by name. Loud on both halves, and a wrong slot is unreachable either way.
+function slotOfSlotOp(op TargetOp) returns SpillSlot
+	match op 'slot'
+		storeSlotReg(slot, _) then return slot
+		loadRegSlot(_, slot) then return slot
+		default panic("slotOfSlotOp: this op has no spill slot — only `storeSlotReg` and `loadRegSlot` do. Either the caller reached here without asking `OpVariantFacts.slotRoleOf` first, or a new slot-touching op was classified in `deriveSlotRole` and this match was not extended with the arm that reads its slot")
+	end 'slot'
+end 'slotOfSlotOp'
 
 // The block's ops in execution order: body `opRefs` then the terminator op.
 export function collectBlockOps(block IrBlock, out OpIndexArray)
