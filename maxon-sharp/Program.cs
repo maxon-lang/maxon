@@ -1110,7 +1110,7 @@ class Program {
   static (string? irOutputPath, string? dumpStagesBasePath) GetOutputPaths(string mainFile, bool emitIr, bool dumpStages) {
     string? irOutputPath = null;
     if (emitIr) {
-      irOutputPath = Path.ChangeExtension(mainFile, ".ir");
+      irOutputPath = Path.ChangeExtension(mainFile, Compiler.IrPipeline.SidecarExtension);
     }
 
     string? dumpStagesBasePath = null;

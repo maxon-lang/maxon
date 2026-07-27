@@ -69,8 +69,10 @@
       ContinueOnError="true" />
     <Move SourceFiles="$(_BinExe)" DestinationFiles="$(_BinExeOld)"
       Condition="Exists('$(_BinExe)')" ContinueOnError="true" />
+    <!-- The MSB3061/MSB3677 warnings above this line name the process holding it, so the message does
+         not guess: a build that both diagnoses and misdiagnoses is worse than one that just stops. -->
     <Error Condition="Exists('$(_BinExe)')"
-      Text="$(_BinExe) could neither be deleted nor renamed out of the way. It is running (and so is a previous build's copy, parked at $(_BinExeOld)). Stop them, then rebuild — a build that cannot remove the old compiler must not leave one behind." />
+      Text="$(_BinExe) could neither be deleted nor renamed out of the way — the warnings above name what is holding it (a running compiler, plus a previous build's copy parked at $(_BinExeOld) if the rename was blocked too). Stop them, then rebuild: a build that cannot remove the old compiler must not go on to publish over it." />
   </Target>
 
   <Target Name="CopyToBin" AfterTargets="Publish">
@@ -89,9 +91,12 @@
       Retries="0" Condition="!$(_IsWindows)">
       <Output TaskParameter="CopiedFiles" ItemName="_CopiedFiles" />
     </Copy>
-    <!-- If direct copy failed (exe locked), rename the locked file out of the way and copy again -->
+    <!-- If direct copy failed, rename a LOCKED exe out of the way and copy again. The copy also fails
+         when `bin/` itself does not exist (a fresh worktree), and there is nothing to park in that
+         case — without the Exists test the Move warns MSB3680 about a source file that was never
+         supposed to be there, on exactly the build that has no previous compiler to preserve. -->
     <Move SourceFiles="$(_BinExe)" DestinationFiles="$(_BinExeOld)"
-      Condition="('$(_CopyExitCode)' != '0' AND '$(_CopyExitCode)' != '') OR ('@(_CopiedFiles)' == '' AND '$(_CopyExitCode)' == '')"
+      Condition="Exists('$(_BinExe)') AND (('$(_CopyExitCode)' != '0' AND '$(_CopyExitCode)' != '') OR ('@(_CopiedFiles)' == '' AND '$(_CopyExitCode)' == ''))"
       ContinueOnError="true" />
     <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_ExeExt)"
       DestinationFolder="$(ProjectDir)../bin" SkipUnchangedFiles="false"

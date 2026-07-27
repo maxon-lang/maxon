@@ -13,6 +13,16 @@ public record IrPipelineResult {
 }
 
 public class IrPipeline {
+  /// <summary>
+  /// Extension of the `--emit-ir` sidecar this class writes beside the binary. Named here, next to
+  /// the only thing that produces one, because TWO places have to agree about it and they are not
+  /// adjacent: the flag decides where to WRITE it, and <see cref="Compiler.DiscardPreviousOutput"/>
+  /// decides where to REMOVE it — and the removal is unconditional, so it cannot borrow the flag's
+  /// answer. Two spellings of ".ir" would leave a build silently preserving the previous build's
+  /// sidecar under a name nothing swept.
+  /// </summary>
+  public const string SidecarExtension = ".ir";
+
   public static IrPipelineResult Run(IrModule<MaxonOp> module, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null) {
     target ??= CompileTarget.Default;
     Logger.Debug(LogCategory.Ir, "Starting IR pipeline");

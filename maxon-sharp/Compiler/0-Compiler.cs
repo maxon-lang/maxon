@@ -256,8 +256,8 @@ public class Compiler {
   }
 
   /// <summary>
-  /// Removes every artifact this compile would publish — the executable, its `.mxdbg` debug-info
-  /// sidecar, and the `--emit-ir` sidecar — BEFORE the first step that can fail.
+  /// Removes every artifact a compile of this output can publish — the executable, its `.mxdbg`
+  /// debug-info sidecar, and its `.ir` sidecar — BEFORE the first step that can fail.
   ///
   /// <para>`FileMode.Create` truncates, but only when the WRITER opens the file, and the writer is
   /// the LAST step of a SUCCESSFUL compile. A lex, parse, semantic or emitter failure never reaches
@@ -267,13 +267,34 @@ public class Compiler {
   /// code. Anything that checks the BINARY rather than the build's exit code then gets a confident
   /// wrong answer from stale code.</para>
   ///
-  /// <para>Deleting a path that is not there is the ordinary first-build case and not a failure, so
-  /// absent paths are skipped rather than caught. A delete that genuinely FAILS is a build error and
-  /// not a warning: the write that follows would fail for the same reason (a running or read-only
-  /// exe), and a build that cannot remove the old binary must not go on to claim it replaced it.</para>
+  /// <para>⭐ **THE `.ir` SIDECAR GOES UNCONDITIONALLY, NOT ONLY UNDER `--emit-ir`** — the same rule
+  /// shv2's `Compiler.discardPreviousOutput` states, and the two must not disagree about it. A build
+  /// that produces no sidecar must not leave the PREVIOUS one behind either, or dropping the flag
+  /// silently preserves a stale answer beside a fresh exe: a mismatched pair that reads as a matched
+  /// one. Measured before this was unconditional: `build --emit-ir` then a FAILING plain `build` left
+  /// the first build's `.ir` sitting beside no exe at all. That is why the sidecar path is derived
+  /// here from <paramref name="outputPath"/> rather than borrowed from <paramref name="irOutputPath"/>,
+  /// which is null whenever the flag is off. Both are listed because they are not always the same
+  /// file: `maxon run --emit-ir` writes the sidecar beside `build.maxon` while its binary goes to the
+  /// cache directory.</para>
+  ///
+  /// <para>Absent paths are skipped, and the guard is load-bearing in a way `File.Delete`'s own
+  /// tolerance is not: a missing FILE is already a silent no-op, but a missing parent DIRECTORY
+  /// raises `DirectoryNotFoundException`, which the catch below would report as a locked artifact and
+  /// fail a build that should have succeeded. (shv2 needs no such guard — it ignores the delete
+  /// outright and re-reads existence instead, and an `exists` probe there was MEASURED to cost more
+  /// than the failing delete it would save. See `maxon-shv2/Testing/ladders/README.md`.) A delete
+  /// that genuinely FAILS is a build error and not a warning: the write that follows would fail for
+  /// the same reason (a running or read-only exe), and a build that cannot remove the old binary must
+  /// not go on to claim it replaced it.</para>
   /// </summary>
   private static void DiscardPreviousOutput(string outputPath, string? irOutputPath) {
-    string?[] published = [outputPath, outputPath + Debug.MxdbgFormat.SidecarExtension, irOutputPath];
+    string?[] published = [
+      outputPath,
+      outputPath + Debug.MxdbgFormat.SidecarExtension,
+      Path.ChangeExtension(outputPath, IrPipeline.SidecarExtension),
+      irOutputPath,
+    ];
 
     foreach (var path in published) {
       if (path == null || !File.Exists(path)) continue;

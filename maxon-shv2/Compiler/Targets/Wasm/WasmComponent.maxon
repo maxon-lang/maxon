@@ -187,8 +187,18 @@ export function writeWasm(outputPath FilePath, coreModule ByteArray)
 	end 'newFailed'
 
 	// THE PUBLICATION. Everything above wrote scratch files; this one step makes the output exist.
+	//
+	// A rename can fail from EITHER end and the two want opposite investigations, so the message says
+	// which end rather than asserting one. MEASURED: with a `wasm-tools` stand-in that exits 0 and
+	// writes nothing, `component new` "succeeded" and the rename then failed — reported as
+	// "it is locked or read-only", which sent the reader hunting for a lock on a file the toolchain
+	// had simply never produced.
 	try File.rename(componentPath, to: outputPath) otherwise 'publishFailed'
-		panic("writeWasm: could not publish the finished component as {outputPath} — it is locked or read-only")
+		if not File.exists(componentPath) 'noComponent'
+			panic("writeWasm: wasm-tools component new exited 0 but produced no component at {componentPath}, so there is nothing to publish as {outputPath}")
+		end 'noComponent'
+
+		panic("writeWasm: could not publish the finished component {componentPath} as {outputPath} — the output path is locked or read-only")
 	end 'publishFailed'
 
 	// The two intermediates have served their purpose — remove them rather than leave a `.core.wasm`
