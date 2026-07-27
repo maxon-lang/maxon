@@ -52,7 +52,13 @@ set -euo pipefail
 GATE_RESULT="FAIL"
 trap 'echo "remote-mac: RESULT=$GATE_RESULT"' EXIT
 
-HOST="${MAXON_MAC_HOST:-}"
+# The Mac this checkout is normally paired with. A FALLBACK, not a policy: $MAXON_MAC_HOST and
+# --host= both still win, so another machine needs no edit here. It exists because the arm64 lanes
+# are the two this host cannot run natively, and a gate that skips them by DEFAULT — merely because
+# nobody exported a variable — reports "unverified" on the exact targets most likely to rot.
+DEFAULT_MAC_HOST="estern@Joyces-Macbook-Pro.local"
+
+HOST="${MAXON_MAC_HOST:-$DEFAULT_MAC_HOST}"
 REPO="${MAXON_MAC_REPO:-~/Dev/maxon}"
 PORT="${MAXON_MAC_PORT:-22}"
 FILTER=""

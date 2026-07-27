@@ -41,7 +41,10 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 FILTER=""
-MAC_HOST="${MAXON_MAC_HOST:-}"
+# Same fallback `remote-mac.sh` carries, and for the same reason: without it the two arm64 targets
+# SKIP by default, and a skip reads as "unverified" on precisely the targets this host cannot check
+# for itself. $MAXON_MAC_HOST and --mac-host= both override it.
+MAC_HOST="${MAXON_MAC_HOST:-estern@Joyces-Macbook-Pro.local}"
 REQUIRE_MAC=0
 RUN_MAC=1
 RUN_CSHARP=0
