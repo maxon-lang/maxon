@@ -523,7 +523,7 @@ end 'main'
 ```
 
 <!-- disabled-test: get-empty-module-level-array -->
-<!-- P1.7 module-level: a top-level var initialized by IntArray.create() needs module-level array init -->
+<!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
 Get on an empty module-level array throws error and is caught by otherwise.
 
 ```maxon
@@ -655,7 +655,7 @@ firstsecond
 ```
 
 <!-- disabled-test: string-array-iteration -->
-<!-- P1.8 for-in + P1.7-s3 String element -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 Iterate over an array of strings.
 
 ```maxon

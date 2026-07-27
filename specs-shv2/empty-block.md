@@ -64,7 +64,7 @@ error E3082: specs/fragments/empty-block/empty-while.test:5:2: empty block: 'loo
 ```
 
 <!-- disabled-test: empty-for-in -->
-<!-- P1.7 Array + P1.8 for-in (and E3082) -->
+<!-- P1.8 for-in — the case pins a `for`-binding scope/emptiness error, but shv2 rejects the `for` statement itself first (E2015) -->
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3]

@@ -77,7 +77,7 @@ error E3106: <fragment>:6:6: 'resize' cannot grow an array of 'String': a grown 
 ```
 
 <!-- disabled-test: grow-filled-managed-element -->
-<!-- P1.7 growFilled — shv2 SYNTHESIZES `Array` rather than compiling stdlib/Array.maxon, and its roster (create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/remove/clear/insert/slice/clone/append) has no `growFilled` runtime entry -->
+<!-- `Array.growFilled` — not in shv2's synthesized Array roster (E2015 names the roster it does have) -->
 ### growFilled is the grow that supplies the element
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -156,7 +156,7 @@ end 'main'
 ```
 
 <!-- disabled-test: raw-open-slot-reports-empty-slot -->
-<!-- P1.7 the Array record's raw buffer + enum-case match pattern — shv2's synthesized `Array` exposes no `managed` field (its 48-byte record is the runtime's, not a declared struct), so there is no way to open an unwritten slot; and its error channel is a single i64 flag with no `ArrayError` enum to bind and match -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ### An empty slot opened through the raw buffer reports emptySlot
 `__ManagedMemory.setLength` is the layer where an unwritten slot is a defined state. Read back
 through `Array.get` it is `emptySlot` — NOT `indexOutOfBounds`, which would blame an index that
@@ -188,7 +188,7 @@ end 'main'
 ```
 
 <!-- disabled-test: past-the-end-reports-index-out-of-bounds -->
-<!-- P1.7 the Array record's raw buffer + enum-case match pattern — same two gaps as its emptySlot twin above -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ### An index past the end still reports indexOutOfBounds
 The other half of the same distinction: this one really IS out of bounds.
 ```maxon
@@ -218,7 +218,7 @@ end 'main'
 ```
 
 <!-- disabled-test: first-empty-slot -->
-<!-- P1.7 the Array record's raw buffer — shv2's synthesized `Array` exposes no `managed` field, so an unwritten slot inside the live range cannot be opened -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ### first() on an array whose slot 0 is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -246,7 +246,7 @@ end 'main'
 ```
 
 <!-- disabled-test: last-empty-slot -->
-<!-- P1.7 the Array record's raw buffer — same gap as its first() twin above -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ### last() on an array whose last slot is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)

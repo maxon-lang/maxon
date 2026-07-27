@@ -47,7 +47,7 @@ both fail them.
 ## Tests
 
 <!-- disabled-test: consumed-arg-scalar-borrow-survives-throwing-call -->
-<!-- P1.1 enums/structs + P1.4 errors + P1.6 generics + P1.7 Array/`for-in`. It is a REFCOUNT-lifetime test and shv2 has no heap, no refcounts and no drops yet -->
+<!-- consume analysis (E3102) — a value handed to a consuming throwing call is dead afterwards in shv2, so the scalar `.id` read after it is "use of moved value 'b'"; a consume-analysis divergence from the bootstrap -->
 A managed `Blk` owned by a `blocks` array, aliased into a `currentBlock` cursor
 field, then handed to a THROWING recursive method (`parseExpressionBP`) that
 consumes it. Its scalar `.id`, loaded before the call and used AFTER it, keeps the

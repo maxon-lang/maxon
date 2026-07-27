@@ -89,7 +89,7 @@ end 'main'
 ```
 
 <!-- disabled-test: managed-array-grow-then-reassign -->
-<!-- P1.7 array-push transitive-consume (push a BORROWED struct param into an array) + E2013 param-field reassign — pre-existing ownership limitations (the consume-by-use fixpoint does not yet treat array-push as consuming), orthogonal to the element-destroy crux -->
+<!-- array-push transitive-consume — pushing a BORROWED struct parameter into an array is refused as "moving a borrowed struct/union value into durable storage" (E2015); the call-graph consume fixpoint does not yet treat `push` as consuming -->
 ### Array grows past initial capacity, then field is reassigned
 Push enough managed elements to trigger multiple buffer reallocations,
 then reassign the array field so the old array's destructor must clean up all elements.

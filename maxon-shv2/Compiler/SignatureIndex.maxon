@@ -4262,6 +4262,47 @@ export type ProgramSignatures
 		return try self.genericAliasDecls.get(index) otherwise panic("genericAliasDeclAt: genericAliasDecls.get OOB at {index}")
 	end 'genericAliasDeclAt'
 
+	// --- Bases without a `StructLayout`: the ONE predicate, and the ONE reason there are two of them ---
+	//
+	// ⭐⭐ **"IS THIS BASE SYNTHESIZED?" AND "IS THERE A LAYOUT TO WALK?" ARE DIFFERENT QUESTIONS, AND
+	// CONFLATING THEM IS WHAT CRASHED THE COMPILER.** A generic instance's base has no `StructLayout` for
+	// exactly two reasons, and they are not the same reason:
+	//
+	//   • **SYNTHESIZED** — `Array` / `Set`. shv2 reads no stdlib and emits their runtime records itself, so
+	//     no `type Array uses Element` declaration exists to carry a layout. The type is LEGAL and the
+	//     program is fine; it simply has no fields.
+	//   • **UNDECLARED** — `Map with (K, V)`, `Foo with Int`, `Int with Int`. Nothing declares the base at
+	//     all. The program is MALFORMED, and `Parser.checkGenericInstance` has already recorded E2055
+	//     against the `with` that wrote it.
+	//
+	// Every walk over an instance's fields must stop for BOTH, because in both cases there are no fields to
+	// read. Four such walks spelled the stop condition as `isArrayInstance(id) or isSetInstance(id)` — the
+	// SYNTHESIZED half, four times over, each blind to the UNDECLARED half — so an undeclared base fell
+	// through into `baseLayoutOf` and the compiler died with a stack trace on a program whose real
+	// diagnostic was already written and never printed (measured on `typealias IntMap = Map with (Int, Int)`
+	// and on a bare `Foo with Int`: `panic ProgramSignatures.baseLayoutOf`, exit 1, no `error E….`).
+	//
+	// So the stop condition is `not genericInstanceHasBaseLayout(id)`, written once, and it is exactly
+	// `baseLayoutOf`'s precondition. The synthesized half keeps its own name because two callers genuinely
+	// need to tell the reasons apart rather than merely stop: `Parser.structLayoutOfBinding`, whose
+	// diagnostic must say "a builtin with no fields YET" for one and "no such type" for the other, and the
+	// per-builtin routers below (`genericInstanceBoxSize`, `genericInstanceBoxDropCallee`), which do not stop
+	// at all — they answer `Array` and `Set` differently from each other.
+
+	// Is `name` a BUILTIN generic base — one shv2 synthesizes rather than reads a declaration for, so no
+	// `StructLayout` exists for it and none is missing. The one home of the `Array`-or-`Set` disjunction.
+	export function isBuiltinGenericBaseName(name ByteArray) returns bool
+		return self.isArrayBaseName(name) or self.isSetBaseName(name)
+	end 'isBuiltinGenericBaseName'
+
+	// Does instance `id`'s base struct have a declared `StructLayout` to read fields out of — the exact
+	// precondition of `baseLayoutOf`, and the gate every instance FIELD WALK opens with. False for a
+	// synthesized builtin (no declaration to carry one) and for an undeclared base (E2055 already reported).
+	export function genericInstanceHasBaseLayout(id GenericInstanceId) returns bool
+		let baseName = self.genericInstanceBaseName(id)
+		return not self.isBuiltinGenericBaseName(baseName) and self.containsStruct(baseName)
+	end 'genericInstanceHasBaseLayout'
+
 	// --- Generic-instance managed drop (P1.6-B2) ---
 	//
 	// A generic instance is a monomorphized base struct: its box is `Box`'s box, and a managed type
@@ -4271,11 +4312,12 @@ export type ProgramSignatures
 	// managed, what drops it, at what offset — over THIS index's own interner (the args and the base
 	// layout's field types both live in `self.typeNames`), so a caller never has to choose the interner.
 
-	// The `StructLayout` of instance `id`'s base struct. Precondition: `id` is an interned instance, whose
-	// base is a declared generic type.
+	// The `StructLayout` of instance `id`'s base struct. Precondition: `genericInstanceHasBaseLayout(id)` —
+	// an instance is interned for ANY base a `with` names, declared or not, so the caller opens the walk with
+	// that gate. See its header for the two ways a base has no layout and why they are one stop condition.
 	function baseLayoutOf(id GenericInstanceId) returns StructLayout
 		let baseName = self.genericInstanceBaseName(id)
-		return try self.structTypes.get(baseName) otherwise panic("ProgramSignatures.baseLayoutOf: generic instance {id}'s base struct '{String.from(baseName)}' is not declared — an instance is only interned for a declared generic type")
+		return try self.structTypes.get(baseName) otherwise panic("ProgramSignatures.baseLayoutOf: generic instance {id}'s base struct '{String.from(baseName)}' has no declared layout — every field walk opens with genericInstanceHasBaseLayout")
 	end 'baseLayoutOf'
 
 	// The base struct's field `index` type with the instance's args substituted for the type parameters —
@@ -4507,15 +4549,14 @@ export type ProgramSignatures
 	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
-		// An `Array` or `Set` instance has NO base struct to iterate and is dropped through its own box-drop
-		// callee (`__arr_decref` / `__set_decref`, routed by `genericInstanceBoxDropCallee`), NOT a synthesized
-		// per-instance `__destruct_<mangled>`. Answering `false` keeps both out of the destructor-synthesis
-		// instance loop (`installGenericInstanceDestructors` / `noteDestructorUsage`), which would call
-		// `baseLayoutOf` and panic on a base-less builtin — the same two-collection merge
-		// `managedOpaqueArrayElementOf` already makes.
-		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
+		// A base-layout-less instance owns no field this cascade could drop. An `Array`/`Set` instance is
+		// dropped through its own box-drop callee (`__arr_decref` / `__set_decref`, routed by
+		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`, so `false`
+		// is the ANSWER and not a dodge; an UNDECLARED base has no fields at all. Either way the walk below
+		// would read a layout that does not exist — see `genericInstanceHasBaseLayout`.
+		if not self.genericInstanceHasBaseLayout(id) 'noFields'
 			return false
-		end 'notStruct'
+		end 'noFields'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
@@ -4529,11 +4570,11 @@ export type ProgramSignatures
 	// destructor. A String inside a nested struct/instance field is dropped by that nested destructor, not
 	// this one, so only a directly-substituted String counts (the struct/union `structHasStringField` twin).
 	export function genericInstanceHasStringField(id GenericInstanceId) returns bool
-		// ⚠ **THE SAME BUILTIN EARLY-OUT `genericInstanceHasManagedField` MAKES, AND FOR THE SAME REASON.**
+		// ⚠ **THE SAME NO-LAYOUT EARLY-OUT `genericInstanceHasManagedField` MAKES, AND FOR THE SAME REASON.**
 		// These two are read as a pair by the destructor passes, and only one of them had the guard — so the
 		// pair agreed exactly until something asked this one on its own. `noteDestructorUsage` does: it
-		// reaches this for any instance whose `__destruct_<mangled>` is in the needed set, and a base-less
-		// builtin walked into the field loop below reads a base struct that does not exist. Measured, on the
+		// reaches this for any instance whose `__destruct_<mangled>` is in the needed set, and an instance
+		// walked into the field loop below reads a base struct that does not exist. Measured, on the
 		// compiler that had the guard on only one of the pair: `panic ProgramSignatures.baseLayoutOf: generic
 		// instance 3's base struct 'Array' is not declared` — a stack trace with no diagnostic at all.
 		//
@@ -4548,9 +4589,9 @@ export type ProgramSignatures
 		// `false` is the ANSWER, not a dodge: an `Array`/`Set` instance owns no substituted String field. Its
 		// elements are released by `__arr_decref`/`__set_decref` walking the record, never by a synthesized
 		// per-instance cascade — which is exactly why it has no `__destruct_<mangled>` to gate.
-		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
+		if not self.genericInstanceHasBaseLayout(id) 'noFields'
 			return false
-		end 'notStruct'
+		end 'noFields'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if tagIsText(maxonTypeTag(self.substituteInstanceFieldType(id, index: i))) 'string'
@@ -4818,13 +4859,16 @@ export type ProgramSignatures
 	// public predicates keep their "Array" names for their out-of-tree call sites; the mechanism now spans array
 	// elements AND bare fields.)
 	function managedOpaqueArrayElementOf(id GenericInstanceId) returns ManagedOpaqueArrayElement
-		// An `Array` or `Set` instance has no base struct to iterate (both are synthesized builtins), so reading
-		// `baseLayoutOf` below would panic. `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls
-		// this over EVERY interned instance, so a `Set with Int` in the program reaches here — it holds no
-		// managed opaque `T` field (its keys are scalar, its buffers freed by `__set_decref`), so it is absent.
-		if self.isArrayInstance(id) or self.isSetInstance(id) 'notStruct'
+		// ⚠ **THIS IS THE SITE THE UNDECLARED HALF OF THE GATE WAS MEASURED ON.**
+		// `noteDestructorUsage`'s `rootManagedOpaqueArrayElementDrops` calls this over EVERY interned
+		// instance, so it meets whatever a `with` named: a `Set with Int` (synthesized — no base struct to
+		// iterate) and equally a `Map with (Int, Int)` or a misspelled `Foo with Int` (undeclared — E2055
+		// already recorded, the build already doomed). Both hold no managed opaque `T` field, and both used
+		// to reach `baseLayoutOf` below; the second killed the compiler with a stack trace instead of
+		// printing the diagnostic it had already written. See `genericInstanceHasBaseLayout`.
+		if not self.genericInstanceHasBaseLayout(id) 'noFields'
 			return ManagedOpaqueArrayElement.absent
-		end 'notStruct'
+		end 'noFields'
 		let layout = self.baseLayoutOf(id)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.managedOpaqueArrayElementOf: fieldTypes.get OOB at {i}")

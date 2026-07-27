@@ -123,7 +123,7 @@ end 'main'
 ```
 
 <!-- disabled-test: nested-struct-enum-array-grow -->
-<!-- P1.7 nested union payload (union-in-union) — pre-existing union feature, orthogonal to arrays -->
+<!-- nested union payload (union-in-union) — a payload field of `union CfOp` on `union IrOp` needs its own destructor cascade (E2015); a union feature, orthogonal to arrays -->
 Deeply nested struct with enum field and multiple arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -225,7 +225,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shared-nested-struct-in-literal -->
-<!-- P1.7 move-only sharing: the same owned struct (with an array field) passed to TWO consuming fields — shv2 is move-only (no incref), so it cannot share; a pre-existing consume-analysis divergence (call-arg double-consume, the call analog of rejectDoubleOwningStore) -->
+<!-- move-only sharing (E3102) — the same owned value reaches TWO consuming argument positions and shv2 has no incref, so the second is "use of moved value"; a consume-analysis divergence from the bootstrap -->
 Same nested struct reference used for two fields of another struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -268,7 +268,7 @@ end 'main'
 ```
 
 <!-- disabled-test: large-returned-struct-many-arrays -->
-<!-- P1.7 move-only sharing — the SAME reason its sibling `shared-nested-struct-in-literal` is disabled, and NOT the >6-parameter cap this case used to name (stack arguments landed; its 11-parameter `create`s now compile). `createProject` passes ONE `emptyModuleMemo` to TWO consuming parameters (`allModuleCache:` and `allMidCache:`); shv2 is move-only with no incref, so the second use is E3102. Reproduces with a TWO-parameter function, so it is independent of argument count -->
+<!-- move-only sharing (E3102) — the same owned value reaches TWO consuming argument positions and shv2 has no incref, so the second is "use of moved value"; a consume-analysis divergence from the bootstrap -->
 Large returned struct with many array fields and nested structs with enum fields.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -568,7 +568,7 @@ end 'main'
 ```
 
 <!-- disabled-test: returned-struct-with-enum-and-arrays -->
-<!-- P1.7 nested union payload (union-in-union) — pre-existing union feature, orthogonal to arrays -->
+<!-- nested union payload (union-in-union) — a payload field of `union CfOp` on `union IrOp` needs its own destructor cascade (E2015); a union feature, orthogonal to arrays -->
 Returned struct with enum field and arrays that grow.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -434,8 +434,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: param-mutating-method-is-impure -->
-<!-- P1.7 Array + purity analysis -->
+<!-- test: param-mutating-method-is-impure -->
 A function that mutates a parameter through a mutating method (`arr.remove(i)`)
 is IMPURE — even though it neither writes a global nor calls a known impure
 builtin directly. Its `bool` result is therefore `_=`-discardable (E3065-style),

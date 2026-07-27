@@ -399,8 +399,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-container-push-incref -->
-<!-- P1.7: Array -->
+<!-- test: rc-container-push-incref -->
 Pushing a struct into an array increfs it; after the local var leaves scope the element still lives.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -429,8 +428,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: rc-container-pop-decrefs -->
-<!-- P1.7: Array -->
+<!-- test: rc-container-pop-decrefs -->
 Popping the last element and discarding the result frees the element at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -459,8 +457,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-container-overwrite-decrefs-old -->
-<!-- P1.7: Array -->
+<!-- test: rc-container-overwrite-decrefs-old -->
 Setting an element at an existing index must decref the old element and incref the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -487,8 +484,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: rc-container-clear-decrefs-all -->
-<!-- P1.7: Array -->
+<!-- test: rc-container-clear-decrefs-all -->
 Clearing an array decrefs every element; all elements freed when rc hits 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -516,8 +512,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: rc-container-scope-exit-decrefs-elements -->
-<!-- P1.7: Array -->
+<!-- test: rc-container-scope-exit-decrefs-elements -->
 When a container holding struct elements goes out of scope, all elements are decref'd.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -549,8 +544,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-insert-then-remove-no-leak -->
-<!-- P1.7: Array -->
+<!-- test: rc-insert-then-remove-no-leak -->
 Insert many structs then remove them all; zero elements remain in memory.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -586,8 +580,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: rc-insert-in-middle-no-leak -->
-<!-- P1.7: Array -->
+<!-- test: rc-insert-in-middle-no-leak -->
 Insert at index 0 into an existing array; shiftRight zeroes the gap so no double-free occurs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -617,8 +610,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: rc-remove-middle-no-double-free -->
-<!-- P1.7: Array -->
+<!-- test: rc-remove-middle-no-double-free -->
 Removing the middle element from an array; shiftLeft zeroes the trailing slot so setLength does not double-decref.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -648,8 +640,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: rc-nested-container-freed -->
-<!-- P1.7: Array -->
+<!-- test: rc-nested-container-freed -->
 An array whose element type itself contains a struct field; freeing the outer array frees all nested objects.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -714,8 +705,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-return-container-element -->
-<!-- P1.7: Array -->
+<!-- test: rc-return-container-element -->
 Getting an element from a container and returning it; element rc stays above 0 while container is freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -920,8 +910,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-error-path-cleanup -->
-<!-- P1.7: Array -->
+<!-- test: rc-error-path-cleanup -->
 On the error path of a try expression the locally allocated struct must still be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1057,7 +1046,7 @@ end 'main'
 ```
 
 <!-- disabled-test: rc-for-in-elem-decrefed -->
-<!-- P1.7: Array -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 In a for-in loop over a struct array each element reference is decref'd at the end of the loop body.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1113,8 +1102,7 @@ end 'main'
 21
 ```
 
-<!-- disabled-test: rc-deep-container-of-containers -->
-<!-- P1.7: Array -->
+<!-- test: rc-deep-container-of-containers -->
 An array of arrays of structs; freeing the outer array cascades through all levels.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1146,8 +1134,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-struct-with-array-field-freed -->
-<!-- P1.7: Array -->
+<!-- test: rc-struct-with-array-field-freed -->
 A struct that owns an array field; when the struct is freed the array (and its elements) are freed too.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1927,8 +1914,7 @@ end 'main'
 done
 ```
 
-<!-- disabled-test: rc-array-of-structs-get-no-leak -->
-<!-- P1.7: Array -->
+<!-- test: rc-array-of-structs-get-no-leak -->
 Getting a struct from an array via try/otherwise must not leak. When the array is freed, its element destructors must decref all contained structs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1953,8 +1939,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-array-of-structs-literal-no-leak -->
-<!-- P1.7: Array -->
+<!-- test: rc-array-of-structs-literal-no-leak -->
 Creating an array literal of structs must not leak. All struct elements must be decreffed when the array is freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1982,7 +1967,7 @@ end 'main'
 ```
 
 <!-- disabled-test: rc-global-array-push-local-no-leak -->
-<!-- P1.7: Array -->
+<!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
 Pushing a local struct into a global array must not leak. When the global array is cleaned up, all elements (including those pushed from other function scopes) must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2015,7 +2000,7 @@ end 'main'
 ```
 
 <!-- disabled-test: rc-global-array-push-remove-loop-no-leak -->
-<!-- P1.7: Array -->
+<!-- module-level array global initialized by a CALL — a top-level `var arr = IntArray.create()`; shv2's module-scope initializers are constant-only, so the parser reads `IntArray.` as a ranged-alias bound (E2010 "Expected 'min' or 'max' but got 'create'") -->
 Pushing many structs into a global array and then removing them all must not leak. Each removed element must be properly decreffed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2054,7 +2039,7 @@ end 'main'
 ```
 
 <!-- disabled-test: rc-struct-field-overwrite-in-if-no-leak -->
-<!-- P1.7: Array -->
+<!-- E2013 param-field mutation — assigning to a field of a struct-typed PARAMETER (`state.deps = …`, `o.inner = …`) is rejected as immutable; a by-reference divergence from the bootstrap -->
 Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2212,8 +2197,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: rc-top-level-array-literal-no-leak -->
-<!-- P1.7: Array -->
+<!-- test: rc-top-level-array-literal-no-leak -->
 A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
 ```maxon
 var items = [10, 20, 30]
@@ -2229,8 +2213,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: rc-array-append-no-leak -->
-<!-- P1.7: Array -->
+<!-- test: rc-array-append-no-leak -->
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
@@ -2250,8 +2233,7 @@ end 'main'
 21
 ```
 
-<!-- disabled-test: rc-struct-with-string-enum-in-array -->
-<!-- P1.7: Array -->
+<!-- test: rc-struct-with-string-enum-in-array -->
 Pushing structs that contain enums with string payloads into an array must not leak. The enum destructors must handle string payload cleanup during array destruction.
 ```maxon
 export union QueryKey

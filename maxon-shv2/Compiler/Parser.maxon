@@ -19605,14 +19605,55 @@ export type Parser
 	// The `StructLayout` a struct-typed binding names — the guarded layout half of `requireStructBase`,
 	// factored out so a CAPTURED struct base (whose box is the value read out of the env, not
 	// `binding.boundValue`) can resolve its layout the identical way (`resolveCapturedFieldChain`). The
-	// binding's `structRef` name keys the layout registry. Assumes the `structRef` gate above already held.
+	// binding's `structRef` name keys the layout registry. Assumes the `structRef`/`genericInstance` gate
+	// above already held.
+	//
+	// ⭐ **THE TWO TAGS THAT GATE REACH HERE DIFFER IN WHETHER A MISSING LAYOUT IS POSSIBLE, AND THAT IS THE
+	// WHOLE OF THIS FUNCTION.** A `structRef` was interned by the parser itself from a name the declaration
+	// sweep had already recorded, so its layout cannot be absent and an absence is an invariant break — it
+	// panics. A `genericInstance`'s base is whatever a `with` NAMED, and the instance is interned for it
+	// either way, so a missing layout is an ordinary property of a program a user can write and must be a
+	// positioned diagnostic. Both were one panic, and both were reachable: `arr.managed` on an `Array with
+	// Int` and `t.foo` on a parameter typed `Nonexistent with Int` each died with a stack trace and no
+	// `error E….` at all.
 	function structLayoutOfBinding(binding VarInfo, baseTok Token) returns StructLayout throws ParseError
 		let typeName = self.baseStructNameOfBinding(binding, baseTok: baseTok)
 		match self.signatures.structOf(typeName) 'declared'
 			declared(layout) then return layout
-			undeclared then panic("structLayoutOfBinding: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference / a generic instance's base)")
+			undeclared then throw self.missingBaseLayout(binding, typeName: typeName, baseTok: baseTok)
 		end 'declared'
 	end 'structLayoutOfBinding'
+
+	// What a MISSING base layout means, by the tag that reached it. A `structRef`'s absence is an invariant
+	// break and panics (see `structLayoutOfBinding`); a `genericInstance`'s is a program property and gets a
+	// positioned E2015, worded by the two reasons `ProgramSignatures.genericInstanceHasBaseLayout`
+	// distinguishes — a reader needs opposite things from them.
+	function missingBaseLayout(binding VarInfo, typeName ByteArray, baseTok Token) returns ParseError
+		if maxonTypeTag(binding.varType) != ValueTypeTag.genericInstance 'structRef'
+			panic("structLayoutOfBinding: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
+		end 'structRef'
+
+		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** `stdlib/Array.maxon:106` declares
+		// `export var managed as ElementMemory`, so `arr.managed` is a real language feature and reporting it
+		// as an unknown field would be a false statement about Maxon (12 committed spec cases write exactly
+		// that access). What is true is narrower and is what this says: shv2 reads no stdlib and SYNTHESIZES
+		// the `Array`/`Set` runtime record instead of compiling the declaration, so no `type` exists here to
+		// carry a field table at all. E2015 — a construct this compiler does not implement YET — is exactly
+		// the register that carries, and it is the same one the sibling `n.x` guard above reports in.
+		//
+		// The wording names the stdlib file rather than a field, because the two builtins declare DIFFERENT
+		// fields (`Array` its `managed`, `Set` its `elements`/`states`/`hashes`) and a message that named one
+		// of them would be false about the other.
+		if self.signatures.isBuiltinGenericBaseName(typeName) 'synthesizedBuiltin'
+			return ParseError.unsupported("a field access on '{String.from(baseTok.value)}': `{String.from(typeName)}` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/{String.from(typeName)}.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods", line: baseTok.line, column: baseTok.column)
+		end 'synthesizedBuiltin'
+
+		// The base is not declared AT ALL, so it has no fields and never will under this spelling. The
+		// `with` that named it is the actual error and `checkGenericInstance` records E2055 against it — but
+		// a thrown ParseError discards this file's artifact diagnostics (`abortedParseArtifact`), so this
+		// message has to carry the cause on its own rather than defer to one the user will never see.
+		return ParseError.unsupported("a field access on '{String.from(baseTok.value)}': its type instantiates '{String.from(typeName)}', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error", line: baseTok.line, column: baseTok.column)
+	end 'missingBaseLayout'
 
 	// The BASE struct name a method/field base resolves to: the struct itself for a `structRef`, or the
 	// generic instance's base struct for a `genericInstance` (`Sizer with bool` ⇒ `Sizer`, P1.6-B1) — the

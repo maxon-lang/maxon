@@ -700,8 +700,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: shr-in-method-call-arg -->
-<!-- P1.7 Array - array literals and `.push()`/`.get()` -->
+<!-- test: shr-in-method-call-arg -->
 ```maxon
 function main() returns ExitCode
 	var buf = [0, 0]
@@ -715,8 +714,7 @@ end 'main'
 85
 ```
 
-<!-- disabled-test: shr-consecutive-method-calls -->
-<!-- P1.7 Array - array literals and `.push()`/`.get()` -->
+<!-- test: shr-consecutive-method-calls -->
 ```maxon
 function main() returns ExitCode
 	var buf = [0]

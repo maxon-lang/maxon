@@ -188,8 +188,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: export-typealias-basic -->
-<!-- P1.7 Array (generics) -->
+<!-- test: export-typealias-basic -->
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -208,7 +207,7 @@ end 'main'
 ```
 
 <!-- disabled-test: export-typealias-in-type-field -->
-<!-- P1.1 structs + P1.7 Array -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -247,8 +246,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: export-typealias-as-return-type -->
-<!-- P1.7 Array (generics) -->
+<!-- test: export-typealias-as-return-type -->
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -271,8 +269,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: non-export-typealias-in-same-file -->
-<!-- P1.7 Array (generics) -->
+<!-- test: non-export-typealias-in-same-file -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -345,7 +342,7 @@ error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-fi
 ```
 
 <!-- disabled-test: error.typealias-with-unknown-element-type -->
-<!-- P1.7 Array (generics) — and E2003 for an unknown element type -->
+<!-- generic type ARGUMENT existence is unchecked — `Array with UnknownType` compiles CLEAN in shv2, so the E2003 this case pins never fires (`checkGenericInstance` validates the base and the arity, never the arguments) -->
 ```maxon
 typealias BadArray = Array with UnknownType
 

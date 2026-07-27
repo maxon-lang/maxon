@@ -982,17 +982,18 @@ end 'addNestedUnionDestructors'
 // field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
 // every fact is answered inside `signatures`, over its own interner.
 function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
-	// ⚠ The third site needing the builtin early-out `genericInstanceHasManagedField` and
+	// ⚠ The third site needing the no-layout early-out `genericInstanceHasManagedField` and
 	// `genericInstanceHasStringField` make: a node is expanded as soon as its SYMBOL is needed, and the field
-	// walk below reads a base struct a builtin `Array`/`Set` instance does not have. Measured before the
+	// walk below reads a base struct a layout-less instance does not have. Measured before the
 	// guard existed: `panic ProgramSignatures.baseLayoutOf`, no diagnostic. (The route that reached it — a
 	// declared `type Array_Foo` expanding the base-less `Array with Foo` node registered under the identical
 	// string — is closed by P1.7's `reservedIfDeclared`; the guard is the walk's precondition either way.)
 	//
 	// Nothing is lost by returning: an `Array`/`Set` instance synthesizes no cascade for its nesting to
-	// close over. Its elements are dropped by `__arr_decref`/`__set_decref`, whose own element destructor is
-	// rooted separately (`rootManagedOpaqueArrayElementDrops`).
-	if signatures.isArrayInstance(id) or signatures.isSetInstance(id) 'noSynthesizedCascade'
+	// close over — its elements are dropped by `__arr_decref`/`__set_decref`, whose own element destructor is
+	// rooted separately (`rootManagedOpaqueArrayElementDrops`) — and an UNDECLARED base has no fields to
+	// nest through at all. See `ProgramSignatures.genericInstanceHasBaseLayout` for why those are one gate.
+	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
 		return
 	end 'noSynthesizedCascade'
 

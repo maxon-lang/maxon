@@ -1,0 +1,78 @@
+// Test: array-literal-with-dependency
+let FIRST = 10
+let SECOND = 20
+let values = [FIRST, SECOND, 30]
+
+function main() returns ExitCode
+	let v0 = try values.get(0) otherwise 0
+	let v1 = try values.get(1) otherwise 0
+	let v2 = try values.get(2) otherwise 0
+	return v0 + v1 + v2
+end 'main'
+---
+ExitCode: 60
+---
+data {
+  __data_values@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_values
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegGlobal rax, __data_values
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r12, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegGlobal rax, __data_values
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.movRegImm32 rdx, 2
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegReg rcx, rbx, r12
+    x64.leaRegRegReg r8, rcx, rax
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

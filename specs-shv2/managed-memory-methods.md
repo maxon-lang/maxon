@@ -36,8 +36,7 @@ category: dev
 
 ## Tests
 
-<!-- disabled-test: array-via-methods -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: array-via-methods -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -56,8 +55,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: array-get-set -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: array-get-set -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -78,8 +76,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: array-slice -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: array-slice -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -99,8 +96,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: array-insert-remove -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: array-insert-remove -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -144,7 +140,7 @@ end 'main'
 ```
 
 <!-- disabled-test: cstring-round-trip -->
-<!-- P1.7+: ManagedMemory intrinsics (.cstr()/String.init/fromCString) -->
+<!-- `String.cstr()` — the cstring intrinsics are not built (E2015) -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -157,8 +153,7 @@ end 'main'
 11
 ```
 
-<!-- disabled-test: empty-bstring-push -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: empty-bstring-push -->
 ```maxon
 function main() returns ExitCode
 	var v = b""
@@ -172,7 +167,7 @@ end 'main'
 ```
 
 <!-- disabled-test: empty-string-bytes-push -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `String.toByteArray()` — P1.2 wave D provides only `append`/`byteLength` (E2015) -->
 ```maxon
 function main() returns ExitCode
 	let s = ""
@@ -185,8 +180,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-literal -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: array-literal -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40]
@@ -200,8 +194,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: array-growth -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: array-growth -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -223,7 +216,7 @@ end 'main'
 ### Bounds checking
 
 <!-- disabled-test: bounds-get-oob -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -243,7 +236,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bounds-set-oob -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -265,7 +258,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bounds-setlength-exceeds-capacity -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -284,7 +277,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bounds-byte-oob -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -302,7 +295,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bounds-slice-oob -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -324,7 +317,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bounds-valid-operations -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -350,7 +343,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bounds-negative-index -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -377,7 +370,7 @@ below runs under the leak gate (no compiler stderr expected → leak-checked), s
 dropped element that is not freed fails the test.
 
 <!-- disabled-test: shrink-managed-elements-no-leak -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `resize()` on a managed-element array is refused outright, SHRINK included: the check cannot see that the new length is smaller, and a grown slot would hold no element -->
 Push three heap strings, then `resize(1)`. The two dropped strings must be freed.
 ```maxon
 typealias StrArray = Array with String
@@ -396,7 +389,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shrink-struct-elements-no-leak -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `resize()` on a managed-element array is refused outright, SHRINK included: the check cannot see that the new length is smaller, and a grown slot would hold no element -->
 Elements are structs carrying a heap `String` field; shrinking must cascade the
 teardown into each dropped struct's field.
 ```maxon
@@ -425,7 +418,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shrink-setlength-direct-no-leak -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `__ManagedMemory` builtin, the `arr.managed` door — shv2 SYNTHESIZES `Array`'s 48-byte record instead of compiling stdlib/Array.maxon, so the record exposes no fields at all (clean E2015). The feature is specs/managed-memory-builtin.md, never ported -->
 Shrink directly through the `__ManagedMemory.setLength` builtin (the path
 `Array.resize` lowers to). Dropping the tail must free those elements.
 ```maxon
@@ -445,7 +438,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shrink-to-zero-no-leak -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `resize()` on a managed-element array is refused outright, SHRINK included: the check cannot see that the new length is smaller, and a grown slot would hold no element -->
 Shrinking all the way to zero frees every element (equivalent to `clear`).
 ```maxon
 typealias StrArray = Array with String
@@ -463,7 +456,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shrink-then-regrow-empty-slots -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `resize()` on a managed-element array is refused outright, SHRINK included: the check cannot see that the new length is smaller, and a grown slot would hold no element -->
 After shrinking and regrowing over the same slots, the regrown slots read as empty
 (the stale, already-freed pointers must not reappear). Pushing a fresh element after
 the regrow must not double-free or leak.
@@ -501,8 +494,7 @@ The tests below drive each vacate site and then grow back over it. The managed o
 also run under the leak gate, so a slot that is erased without releasing its element
 fails just as loudly as one released without being erased.
 
-<!-- disabled-test: clear-then-resize-scalar-reads-zeros -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: clear-then-resize-scalar-reads-zeros -->
 `clear()` then `resize()` back over the SAME slots. Every slot must read 0, not the
 value it held before the clear.
 ```maxon
@@ -547,7 +539,7 @@ end 'main'
 ```
 
 <!-- disabled-test: clear-then-resize-managed-no-double-free -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 `clear()` RELEASES the elements; `resize()` back over those slots must not restore the
 length over the dead pointers, or the array's destructor decrefs each of them a second
 time. Every regrown slot must read as EMPTY.
@@ -577,7 +569,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shrink-then-resize-managed-no-double-free -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `resize()` on a managed-element array is refused outright, SHRINK included: the check cannot see that the new length is smaller, and a grown slot would hold no element -->
 The same shape through the SHRINK path rather than `clear`: `resize(1)` releases the
 two dropped strings, `resize(3)` grows back over their slots. The dropped pointers must
 not reappear.
@@ -612,7 +604,7 @@ kept=56 empties=2
 ```
 
 <!-- disabled-test: pop-then-resize-managed-no-double-free -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `resize()` on a managed-element array is refused outright, SHRINK included: the check cannot see that the new length is smaller, and a grown slot would hold no element -->
 `pop()` hands its element to the caller — the array no longer owns it — but the slot
 still holds the pointer. Growing back over that slot must not re-adopt an element the
 caller now owns, or it is freed twice.
@@ -638,8 +630,7 @@ end 'main'
 popped=54 regrown=0
 ```
 
-<!-- disabled-test: remove-then-resize-scalar-reads-zero -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- test: remove-then-resize-scalar-reads-zero -->
 `remove()` shifts the tail down, which leaves the old last slot holding a stale
 duplicate of the element now one position lower. Growing back over it must read 0.
 ```maxon
@@ -673,7 +664,7 @@ end 'main'
 ```
 
 <!-- disabled-test: clear-then-resize-bool-reads-false -->
-<!-- P1.7: Array / ManagedMemory -->
+<!-- `Array with bool` element-type fidelity — `try b.get(i) otherwise true` comes back typed `int`, so `if v` is E3005 "'if' requires a bool condition, got 'int'" -->
 Sub-byte-packed elements take the same invariant: a `bool` array's vacated bits are
 cleared, so regrown slots read `false`.
 ```maxon

@@ -1322,3 +1322,66 @@ end 'main'
 ```maxoncstderr
 error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'
 ```
+
+<!-- test: error.field-access-on-builtin-array-base -->
+`Array` and `Set` are BUILTIN generic bases: shv2 synthesizes their runtime records
+rather than compiling `stdlib/Array.maxon`, so no `type` declaration carries a field
+table and no field of an instance is reachable. The field is missing from the
+COMPILER, not from the language — `stdlib/Array.maxon` really does declare
+`export var managed as ElementMemory` — so this reports a not-implemented-yet
+construct, never an unknown field. It used to be a `panic` with no diagnostic at all.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	return arr.managed
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:9: Unsupported: a field access on 'arr': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+```
+
+<!-- test: error.field-access-on-undeclared-generic-base -->
+The other way a generic base has no `StructLayout`: nothing declares it. A parameter
+typed by such an alias reaches the same field-access door, and must say what is
+actually wrong — the `with` — rather than crash. (`checkGenericInstance` records E2055
+against that `with`, but a thrown parse error discards this file's artifact
+diagnostics, so the message carries the cause itself.)
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntThing = Nonexistent with Int
+
+function readIt(t IntThing) returns Int
+	return t.foo
+end 'readIt'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:9: Unsupported: a field access on 't': its type instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error
+```
+
+<!-- test: error.undeclared-generic-base-reaches-no-layout-query -->
+An instance is interned for whatever base a `with` names, declared or not, so the
+whole-program instance walks (`noteDestructorUsage`'s managed-opaque-element rooting
+among them) meet an undeclared base with no fields to read. They must answer "no
+fields" and let the E2055 already recorded at the `with` be the verdict — this
+program used to die inside `ProgramSignatures.baseLayoutOf` before any diagnostic
+was printed. `Map` is the reachable spelling: it is a real stdlib generic that shv2
+has not built.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntMap = Map with (Int, Int)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2055: <fragment>:3:20: Type 'Map' has no associated types
+```

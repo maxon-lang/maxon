@@ -197,7 +197,7 @@ end 'main'
 ```
 
 <!-- disabled-test: reassign-empty-array-field -->
-<!-- P1.7 E2013 param-field mutation (state.deps = …) — a pre-existing shv2 borrow divergence from the bootstrap, not an array issue (Slice 1 residual d) -->
+<!-- E2013 param-field mutation — assigning to a field of a struct-typed PARAMETER (`state.deps = …`, `o.inner = …`) is rejected as immutable; a by-reference divergence from the bootstrap -->
 ### Reassign to Empty Array
 Replace a populated array with an empty one — all elements must be cleaned up.
 ```maxon

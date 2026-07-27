@@ -499,7 +499,7 @@ end 'main'
 ```
 
 <!-- disabled-test: enum-map-key-still-works -->
-<!-- P1.7 Map / generics -->
+<!-- P2 `Map` — shv2 has no `Map` builtin and no `type Map` declaration, so `Map with (Color, Int)` names an undeclared generic base (E2055 at the `with`); `ColorMap.create()` then resolves to nothing and `m.insert(…)` reports first, on an 'unknown'-typed binding (E2015) -->
 ```maxon
 enum Color
 	red

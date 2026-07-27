@@ -710,7 +710,7 @@ hello world
 ```
 
 <!-- disabled-test: for-in-string -->
-<!-- P1.7: string iteration (for-in / grapheme clusters) -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -730,7 +730,7 @@ c
 ```
 
 <!-- disabled-test: byteview-iteration -->
-<!-- P1.7: string iteration (for-in / grapheme clusters) -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"

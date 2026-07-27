@@ -101,7 +101,7 @@ end 'main'
 ```
 
 <!-- disabled-test: closure-capture.map-with-capture -->
-<!-- P1.7 (Array) -->
+<!-- `Array.map` — not in shv2's synthesized Array method roster, so `map(…)` resolves to no function (E2004 "Function 'map' does not return a value") -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -234,7 +234,7 @@ end 'main'
 ```
 
 <!-- disabled-test: closure-capture.block-local-overload-arg -->
-<!-- P1.7 (Array) -->
+<!-- function overloading — shv2 keys a function by its bare NAME, so the two `earliest` declarations collide (E3006 duplicate definition) -->
 A `let` declared inside a `while`-loop body — a NESTED block scope — captured
 into a closure whose body passes it as an argument to an OVERLOADED function
 (`earliest(LiveRange)` vs `earliest(SlotRange)`). The block frame is popped

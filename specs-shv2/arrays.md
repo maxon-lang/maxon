@@ -450,8 +450,7 @@ end 'main'
 15
 ```
 
-<!-- disabled-test: array-literal-with-dependency -->
-<!-- P1.7 module-level: a top-level array literal needs module-level array init (no __module_init in shv2) -->
+<!-- test: array-literal-with-dependency -->
 ```maxon
 let FIRST = 10
 let SECOND = 20

@@ -13,7 +13,7 @@ When an array grows, its backing buffer may be reallocated to a new address. Any
 ## Tests
 
 <!-- disabled-test: string-ref-survives-array-growth -->
-<!-- P1.7 E3070 borrow-across-mutation (shv2 has no borrow-liveness pass) -->
+<!-- E3070 borrow-across-mutation — shv2 has no borrow-liveness (NLL) pass, so `arr.push(…)` while an element is borrowed compiles clean and the compile error this case pins never fires -->
 ### String reference borrow conflict detected
 Get a string from an array, then push elements. The borrow checker must reject this.
 ```maxon
@@ -42,7 +42,7 @@ error E3070: specs/fragments/array-realloc-dangling-ref/string-ref-survives-arra
 ```
 
 <!-- disabled-test: struct-ref-survives-array-growth -->
-<!-- P1.7 E3070 borrow-across-mutation (shv2 has no borrow-liveness pass) -->
+<!-- E3070 borrow-across-mutation — shv2 has no borrow-liveness (NLL) pass, so `arr.push(…)` while an element is borrowed compiles clean and the compile error this case pins never fires -->
 ### Struct with string field borrow conflict detected
 Get a struct from an array, then grow the array. The borrow checker must reject this.
 ```maxon
@@ -88,7 +88,7 @@ error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-arra
 ```
 
 <!-- disabled-test: multiple-refs-survive-array-growth -->
-<!-- P1.7 E3070 borrow-across-mutation (shv2 has no borrow-liveness pass) -->
+<!-- a MULTI-LINE array literal — shv2's expression parser stops at the newline after the first element's comma (E2004); behind it sits the same missing E3070 borrow-liveness pass as its two siblings -->
 ### Multiple references borrow conflict detected
 Get references to multiple elements, then grow the array. The borrow checker must reject this.
 ```maxon

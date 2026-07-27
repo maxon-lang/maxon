@@ -47,7 +47,7 @@ end 'loop'
 ## Tests
 
 <!-- disabled-test: for-iterator-immutable -->
-<!-- P1.7 Array + P1.8 for-in -->
+<!-- P1.8 for-in — the case pins a `for`-binding scope/emptiness error, but shv2 rejects the `for` statement itself first (E2015) -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -62,7 +62,7 @@ error E2013: specs/fragments/block-scoping/for-iterator-immutable.test:5:3: cann
 ```
 
 <!-- disabled-test: for-iterator-not-accessible-after -->
-<!-- P1.7 Array + P1.8 for-in -->
+<!-- P1.8 for-in — the case pins a `for`-binding scope/emptiness error, but shv2 rejects the `for` statement itself first (E2015) -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -77,7 +77,7 @@ error E2004: specs/fragments/block-scoping/for-iterator-not-accessible-after.tes
 ```
 
 <!-- disabled-test: for-body-var-not-accessible-after -->
-<!-- P1.7 Array + P1.8 for-in -->
+<!-- P1.8 for-in — the case pins a `for`-binding scope/emptiness error, but shv2 rejects the `for` statement itself first (E2015) -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -92,7 +92,7 @@ error E2004: specs/fragments/block-scoping/for-body-var-not-accessible-after.tes
 ```
 
 <!-- disabled-test: for-destructured-immutable -->
-<!-- P1.7 Map + P1.8 for-in + tuple destructuring -->
+<!-- P1.8 for-in + `[key: value]` destructuring — shv2's parser stops at the `:` inside the pattern (E2010 "Expected ']' but got ':'") -->
 ```maxon
 function main() returns ExitCode
 	let m = [1: 10, 2: 32]
@@ -107,7 +107,7 @@ error E2013: specs/fragments/block-scoping/for-destructured-immutable.test:5:3: 
 ```
 
 <!-- disabled-test: for-destructured-not-accessible-after -->
-<!-- P1.7 Map + P1.8 for-in + tuple destructuring -->
+<!-- P1.8 for-in + `[key: value]` destructuring — shv2's parser stops at the `:` inside the pattern (E2010 "Expected ']' but got ':'") -->
 ```maxon
 function main() returns ExitCode
 	let m = [1: 10, 2: 32]
@@ -165,7 +165,7 @@ error E2004: specs/fragments/block-scoping/while-body-var-not-accessible-after.t
 ```
 
 <!-- disabled-test: outer-var-accessible-in-block -->
-<!-- P1.7 Array + P1.8 for-in -->
+<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
 ```maxon
 function main() returns ExitCode
 	var sum = 0
@@ -180,8 +180,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: if-scope-cleanup -->
-<!-- P1.7 Array -->
+<!-- test: if-scope-cleanup -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
