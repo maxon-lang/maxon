@@ -1228,3 +1228,99 @@ end 'main'
 ```exitcode
 45
 ```
+
+<!-- test: two-pressure-humps-exhaust-a-positional-gap -->
+THE RE-SPACE REGRESSION, and the one shape in the suite that reaches it.
+
+The splitter indexes each block's ops by a gap-labelled SLOT rather than a position, so a
+splice takes a free slot between its neighbours and no existing entry moves. `SlotGap` is 4
+and `freeSlotAt` subdivides at the MIDPOINT, so ONE gap absorbs `log2(4) == 2` insertions
+before it is used up and `PressureIndex.makeRoom` has to re-space.
+
+Getting three into one gap takes exactly this shape. A gap takes both the store anchored
+after an op's def (`insertStoreAfter`: anchorPos + 1) and every reload anchored before the
+NEXT op (`bodyPositionOfUse`: that op's own position, which is the same number). So an add
+reading two already-spilled values, sitting immediately after an add whose own result is
+spilled, puts a store and two reloads in one gap. It takes TWO pressure humps to arrange:
+every reload of a peak's victims lands AFTER that peak and every store at a def BEFORE it,
+so within one hump the two never share a gap — it is the second hump's rise that makes the
+first hump's `q` values spillable, and their stores land in the first hump's fall.
+
+WHAT IT CAUGHT. `SplitEdits` records the slot of each op it splices as that op is seated,
+and `reindexSplitValues` reads them back after the batch. A re-space MOVES those ops, and
+nothing repaired the recorded slots — `appendInsertedSlots` merely asserted in a comment
+that the re-space "re-derived" them. This program panicked the compiler outright:
+
+  panic: PressureIndex.opAtSlot: slot 166 holds no op — only a slot the layout seated one in names one
+    in Compiler.Targets.Shared.reindexSplitValues
+
+⚠ THE WIDTH IS LOAD-BEARING AND ITS WINDOW IS NARROW. At TWELVE values per hump this fires
+two re-spaces. MEASURED at this size, two humps: eight splits nine values but never exhausts
+a gap, so it would pass against the broken compiler; ten fires one re-space, twelve two,
+fourteen three, twenty five; twenty-eight is a legitimate E5001. So twelve sits in the middle
+of the window rather than on its edge — which is the point, since the pool size is what both
+edges are measured against and arm64 has a larger one. Re-check the width against any change
+to a register file, and re-confirm it still RE-SPACES rather than merely still passing.
+`Testing/ladders/genrespace.sh` is the same shape with N humps, for measuring rather than
+gating.
+
+Each hump pairs `(0,1) (2,3) (4,5) (6,7) (8,9) (10,11)` into `1 + 5 + 9 + 13 + 17 + 21 = 66`,
+and there are two of them, so `humps(7)` is `7 + 132` = 139.
+```maxon
+typealias WideNum = int(0 to 100000000)
+
+function scaleOpaque(x WideNum) returns WideNum
+	return x
+end 'scaleOpaque'
+
+function humps(g WideNum) returns WideNum
+	let a0 = scaleOpaque(0)
+	let a1 = scaleOpaque(1)
+	let a2 = scaleOpaque(2)
+	let a3 = scaleOpaque(3)
+	let a4 = scaleOpaque(4)
+	let a5 = scaleOpaque(5)
+	let a6 = scaleOpaque(6)
+	let a7 = scaleOpaque(7)
+	let a8 = scaleOpaque(8)
+	let a9 = scaleOpaque(9)
+	let a10 = scaleOpaque(10)
+	let a11 = scaleOpaque(11)
+	let p0 = a0 + a1
+	let p1 = a2 + a3
+	let p2 = a4 + a5
+	let p3 = a6 + a7
+	let p4 = a8 + a9
+	let p5 = a10 + a11
+	let b0 = scaleOpaque(0)
+	let b1 = scaleOpaque(1)
+	let b2 = scaleOpaque(2)
+	let b3 = scaleOpaque(3)
+	let b4 = scaleOpaque(4)
+	let b5 = scaleOpaque(5)
+	let b6 = scaleOpaque(6)
+	let b7 = scaleOpaque(7)
+	let b8 = scaleOpaque(8)
+	let b9 = scaleOpaque(9)
+	let b10 = scaleOpaque(10)
+	let b11 = scaleOpaque(11)
+	let q0 = b0 + b1
+	let q1 = b2 + b3
+	let q2 = b4 + b5
+	let q3 = b6 + b7
+	let q4 = b8 + b9
+	let q5 = b10 + b11
+	return g + p0 + p1 + p2 + p3 + p4 + p5 + q0 + q1 + q2 + q3 + q4 + q5
+end 'humps'
+
+function main() returns ExitCode
+	let r = humps(7)
+	if r == 139 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
+```

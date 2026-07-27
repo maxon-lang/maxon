@@ -23,15 +23,26 @@
 # `PressureIndex.opAtSlot: slot 166 holds no op` out of `reindexSplitValues`. It now compiles and
 # returns 7 at every rung, doing only LOCAL re-spaces (8-64 slots) and no function-wide one.
 #
-# ⚠ WIDE IS A CLIFF, NOT A DIAL. Below ~10 the humps do not overflow the 14-register integer file
-# often enough to fire anything (WIDE=8 measures zero re-spaces at any N); above ~14 every value of
-# every hump is live at once and the program is a legitimate E5001 instead of a ladder. 12 is the
-# window. Both the shape and its knob must be re-checked against any change to the register file size.
+# ⚠ WIDE HAS A NARROW WINDOW, AND BOTH EDGES MOVE WITH N. Too low and the humps never exhaust a gap
+# however many of them there are; too high and every hump's values are live at once, which is a
+# legitimate E5001 rather than a ladder. MEASURED at N=24: WIDE=8 fires ZERO re-spaces (it still
+# splits 141 values — it is the GAP it never exhausts, not the splitter it fails to reach), 10 fires
+# 23, 12 fires 46, 14 fires 63, and 16 is E5001. The upper edge falls as N rises, because every
+# hump's `q` values stay live to the end: at N=2, WIDE=16 still compiles and only 28 reaches E5001.
+# Re-check both edges against any change to the register file size.
 set -euo pipefail
 N="$1"; OUT="$2"
 
-# Values per hump. See the cliff warning above before changing it.
+# Values per hump. See the window warning above before changing it.
 WIDE=${WIDE:-12}
+
+# The fall pairs values two at a time, so an odd width would emit `v(WIDE-1) + v(WIDE)` and name a
+# value the rise never defined — `error E2004: Undefined variable`, which reads like a compiler bug
+# rather than a bad argument.
+if [ $(( WIDE % 2 )) -ne 0 ]; then
+  echo "genrespace.sh: WIDE must be EVEN (the fall consumes the rise in pairs), got $WIDE" >&2
+  exit 2
+fi
 
 {
   echo "// ladder: $N pressure humps of $WIDE, each fall taking one store and two reloads per gap"
