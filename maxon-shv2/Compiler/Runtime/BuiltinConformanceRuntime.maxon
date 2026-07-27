@@ -10,7 +10,7 @@
 // user `int.hash` / `float.compare` / `String.equals` to point a witness slot at — these are hand-built Std
 // bodies, exactly like `__str_eq` / the array runtime, installed after the pipeline so they are never
 // re-optimized. They are NOT `__`-prefixed, so they carry a real `.text` symbol the witness-table reloc
-// (`recordFuncAbs64InRdata`) can name — the SAME funcAbs64 reloc that stamps `__witness_<Struct>_Digest`, only
+// (`recordFuncAbs64InRdata`) can name — the SAME funcAbs64 reloc that stamps `__witness_<Struct>.Digest`, only
 // here the target is synthesized rather than user-written. (`String` is a MANAGED concrete type, not a
 // primitive — hence the neutral "builtin" spelling over the older "primitive".)
 //
@@ -21,7 +21,7 @@
 // There are exactly TWO ways a program can name one, and the question covers both because both are read off
 // what was actually emitted rather than off a parallel record of intent:
 //
-//   • **A WITNESS-TABLE SLOT.** A slot of `__witness_int_Hashable` / `__witness_String_Equatable` / … is
+//   • **A WITNESS-TABLE SLOT.** A slot of `__witness_int.Hashable` / `__witness_String.Equatable` / … is
 //     stamped with a `funcAbs64` reloc naming `int.hash` / `String.equals` / … iff the program dispatches
 //     through it (`ensureWitnessTable`, during lowering). The reference is the RELOC.
 //   • **A DIRECT DISPATCH.** `i.compare(j)` on a concrete value is an ordinary `call int.compare`
@@ -122,7 +122,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// (`stdlib/PrimitiveExtensions.maxon:73-90`) only because the SOURCE language has no bool→int cast; a
 	// Std `i1` already IS 0 or 1 in its machine word, so the mapping is the identity and the cascade is
 	// literally the same ops. One builder, two symbols — the symbol must still be `bool.compare`, because
-	// that is what the parser mints and what a `__witness_bool_Comparable` slot would name.
+	// that is what the parser mints and what a `__witness_bool.Comparable` slot would name.
 	if referenced.contains(boolCompare) 'boolCompare'
 		buildOrderingCompare(module, name: boolCompare, operandType: StdType.i64)
 	end 'boolCompare'

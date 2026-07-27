@@ -72,27 +72,70 @@ end 'witnessMethodSlotOffset'
 // BECAME it, and every method slot dispatched to the other conformer's impl with the other conformer's
 // `self`. MEASURED: exit 0, no diagnostic, the program returned 33 where the answer is 43.
 //
-// A `.` cannot occur in EITHER half, and that is the whole proof. The lexer admits only `[A-Za-z0-9_]`
-// inside an identifier, and every name reaching this join is one of: a source identifier, a compiled
-// instance name (`_`-joined source identifiers behind an optional `__`), or one of the compiler's own
-// conformer names (`int`/`String`/`float`/`bool`). So the join admits exactly ONE split, and injectivity
-// is a property of the LEXER rather than of a decoding algorithm a later reader has to get right.
-// Escaping by DOUBLING the separator would not even have worked: with a one-byte separator, a run of
-// five underscores between two components admits three valid splits.
+// ⚠ **IT IS THE *SECOND* HALF THAT CARRIES THE PROOF, AND ONLY THE SECOND.** The split is exact as soon as
+// `interfaceName` holds no separator: the LAST separator after `__witness_` is then always the join, whatever
+// the conformer half holds. Stating it of BOTH halves would be stating it of the half that cannot promise it
+// — `ProgramSignatures.mangleTypeArg`'s `named` arm hands back a raw interned type name, and interned type
+// names include the QUALIFIED per-instance spellings `joinQualifiedName` builds (`IntWrapper.Idx`), which are
+// joined with a `.` of their own (`SignatureIndex.QualifiedAliasSeparator`). Nothing keeps those out of a
+// conformer position by CHARACTER CLASS; today they are kept out by E3017/E2015 refusing them a conformance
+// at all, which is a front-end gate and not a property of the lexer. **They are also harmless**, which is the
+// point: a conformer may carry a separator and the split still lands in one place.
 //
-// ⚠ **DELIBERATELY NOT `Parser.MethodNameSeparator`, which holds the same byte.** That one is the
-// separator the AUTHOR writes at a call site (`Point.create`) and which the mangled method name carries
-// verbatim; this one spells a symbol no source can name. One constant would couple a `.rdata` label to a
-// piece of surface syntax so that a change to either silently moved the other. What the two genuinely
-// share is the lexer property above — which is why each states it where its own value lives.
+// The interface half CAN promise it, and does so where a name is admitted rather than where it is used: an
+// interface name is a single `identifier` token — `where T is <ident>` (`Parser.readWhereClause`) and
+// `implements <ident>, …` (`Parser.parseTypeImplementsClause`) — or one of the compiler's own synthesized
+// protocol names below, and the lexer admits only `[A-Za-z0-9_]` inside an identifier. So injectivity is a
+// property of the LEXER rather than of a decoding algorithm a later reader has to get right — but of the lexer
+// acting on ONE half, which is why `requireSeparatorFreeInterfaceName` asks that half and not the other.
+//
+// Escaping by DOUBLING the separator would not even have worked: with a one-byte separator, a run of five
+// underscores between two components admits three valid splits.
+//
+// ⚠ **DELIBERATELY NOT `Parser.MethodNameSeparator`, which holds the same byte, and the two have different
+// ADMISSIBLE SETS — which is what makes them two facts rather than one written twice.** That one is pinned to
+// exactly `.`: it is the separator the AUTHOR writes at a call site (`Point.create`), the mangled method name
+// carries it verbatim, and both reference compilers emit that spelling. This one is pinned only to *some* byte
+// outside the identifier alphabet — any of ~30 would do. A constant with a singleton admissible set and a
+// constant with a thirty-member one cannot be the same fact, and MEASURED: rebuilt with this separator alone
+// moved to `#`, the whole suite still returns every correct answer (60 goldens move, 0 wrong answers), so
+// nothing anywhere requires the two to agree. One constant would couple a `.rdata` label to a piece of surface
+// syntax so that a change to either silently moved the other. What the two genuinely share is only the lexer
+// property above — which is why each states it where its own value lives.
 let WitnessLabelSeparator = "."
 
 // The `.rdata` label of the witness table for `typeName` conforming to `interfaceName` (P1.7a slice 2a) —
 // `__witness_<Type>.<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
 // registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
 export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
+	requireSeparatorFreeInterfaceName(interfaceName)
+
 	return "__witness_{String.from(typeName)}{WitnessLabelSeparator}{String.from(interfaceName)}"
 end 'witnessTableLabel'
+
+// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT INSTEAD OF ONLY ARGUED ABOVE IT.**
+// The property lives three files away — an interface name is an `identifier` token, so the lexer keeps the
+// separator out of it — and a join whose correctness rests on a fact stated only in someone else's file is
+// the shape that already bit this label once. This is that fact, asked where it is spent.
+//
+// It is UNREACHABLE today and that is exactly what it is for: what it catches is a LATER widening of what
+// may name an interface — a namespaced `where T is Foo.Bar` is the obvious one — which would otherwise
+// silently restore the very bug the separator was introduced to fix, with no diagnostic and a wrong answer
+// at runtime. A PANIC and not a diagnostic, because the broken invariant would be the COMPILER's (two
+// conformances quietly sharing one dictionary), not anything the author could be told to write differently.
+//
+// The separator byte is read OUT of `WitnessLabelSeparator` rather than restated as a literal: a second
+// spelling would be free to drift from the join it is supposed to be checking, which is the whole failure
+// mode this function exists to prevent.
+function requireSeparatorFreeInterfaceName(interfaceName ByteArray)
+	let separator = try WitnessLabelSeparator.toByteArray().get(0) otherwise panic("requireSeparatorFreeInterfaceName: WitnessLabelSeparator is a one-byte literal")
+
+	for i in 0 upto interfaceName.count() 'scan'
+		if (try interfaceName.get(i) otherwise panic("requireSeparatorFreeInterfaceName: index {i} is below count {interfaceName.count()}, but get failed")) == separator 'contains'
+			panic("witnessTableLabel: interface name '{String.from(interfaceName)}' contains the label separator '{WitnessLabelSeparator}', so `__witness_<Type>{WitnessLabelSeparator}<Iface>` no longer identifies ONE (conformer, interface) pair — two pairs would spell one label and the second would silently take the first's dictionary. An interface name is an `identifier` token today; whatever widened that has to pick a separator neither half can hold")
+		end 'contains'
+	end 'scan'
+end 'requireSeparatorFreeInterfaceName'
 
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
 let StringableInterfaceName = b"Stringable"
