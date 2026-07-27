@@ -21015,6 +21015,13 @@ export type Parser
 	// The source text of a token range, as the diagnostic prints it. Space-joined rather than
 	// reconstructed from byte offsets: this is a COLD path (a rejected program), and the tokens are
 	// what the evaluator actually choked on.
+	//
+	// ⚠ **A TOKEN'S `value` IS ITS LEXEME ONLY WHERE THE KIND DOES NOT ALREADY IMPLY ONE.** The lexer
+	// fills it for identifiers and literals and leaves it EMPTY for punctuation and keywords, whose
+	// spelling is `TokenKind.rawValue` (the same text `consume` puts in a mismatch). Reading `value`
+	// alone therefore printed NOTHING for a leftover made of punctuation — `var xs = [1]]` and
+	// `var a = 1)` both reported `''`, a diagnostic that promises to name the text it could not
+	// evaluate and then names nothing at all.
 	function tokenTextFrom(start TokenIndex, endIndex TokenIndex) returns String
 		var text = ""
 		for i in start upto endIndex 'each'
@@ -21022,7 +21029,9 @@ export type Parser
 			if i > start 'separator'
 				text = "{text} "
 			end 'separator'
-			text = "{text}{String.from(tok.value)}"
+
+			let spelling = tok.kind.rawValue if tok.value.isEmpty() else String.from(tok.value)
+			text = "{text}{spelling}"
 		end 'each'
 
 		return text
@@ -23057,16 +23066,20 @@ export type Parser
 		return tok
 	end 'consume'
 
+	// Advance the cursor past any newlines — `indexPastNewlines` applied to the cursor, so the MOVER and the
+	// LOOKAHEAD read one definition of "which tokens are layout" rather than two copies of it. Two copies
+	// would not fail loudly if they drifted: a lookahead that disagreed with the mover would silently route
+	// `[10\n]` down a different path from `[10]` (the int fast path settles an element's type off exactly
+	// that question), and a wrong element type is a wrong answer, not a compile error.
 	function skipNewlines()
-		while self.at(TokenKind.newline) 'skip'
-			self.advance()
-		end 'skip'
+		self.pos = self.indexPastNewlines(self.pos)
 	end 'skipNewlines'
 
-	// The first index at or after `index` that is not a newline — `skipNewlines` as a LOOKAHEAD, moving no
-	// cursor. A lookahead that counted newlines as tokens would answer a question about the source's LAYOUT
-	// where the asker meant one about its shape: `[10]` and `[10\n]` are the same literal, and the two must
-	// not take different paths through the parser. `tokenAt` answers `eof` past the end, so this terminates.
+	// The first index at or after `index` that is not a newline — the LOOKAHEAD form, moving no cursor, and
+	// the one definition `skipNewlines` above is derived from. A lookahead that counted newlines as tokens
+	// would answer a question about the source's LAYOUT where the asker meant one about its shape: `[10]` and
+	// `[10\n]` are the same literal, and the two must not take different paths through the parser. `tokenAt`
+	// answers `eof` past the end, so this terminates.
 	function indexPastNewlines(index TokenIndex) returns TokenIndex
 		var scan = index
 		while self.kindAt(scan) == TokenKind.newline 'skip'
