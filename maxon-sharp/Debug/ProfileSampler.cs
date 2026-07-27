@@ -190,6 +190,15 @@ internal sealed class ProfileSampler : IDisposable {
       ? $"`maxon profile` samples by suspending the target's threads, which on {RuntimeInformation.OSDescription}"
         + " needs task_for_pid — a privileged Mach call requiring root or a signed entitlement. Only the"
         + " Windows sampler is implemented, so there is nothing here that could measure this program."
+    : RuntimeInformation.ProcessArchitecture != Architecture.X64
+      // The CONTEXT offsets below are x64's, and GetThreadContext fills whatever record the CALLING
+      // process's architecture selects. On a native arm64 build they would name three unrelated words
+      // as Rip/Rsp/Rbp — and nothing downstream could tell: the walk would simply symbolize garbage
+      // into a confident, wrong profile. Unreachable from the win-x64 publish this ships as, which is
+      // exactly why it needs to be a refusal rather than a comment.
+      ? $"`maxon profile` reads the target's registers through the x64 CONTEXT record, and this build of"
+        + $" maxon is {RuntimeInformation.ProcessArchitecture}. No register layout for that architecture"
+        + " is implemented, and reading it with x64 offsets would produce a profile rather than an error."
     : !HasThreadWalk
       ? "`maxon profile` enumerates the target's threads through ntdll's NtGetNextThread, which this"
         + " system's ntdll.dll does not export. The documented alternative snapshots every thread on the"
@@ -502,14 +511,28 @@ internal sealed class ProfileSampler : IDisposable {
   /// instructions per call, and it does not accumulate.
   /// </summary>
   private int WalkCopiedStack(ulong framePointer, ulong stackPointer, int windowBytes) {
-    ulong windowEnd = stackPointer + (ulong)windowBytes;
     int count = 1;
     ulong fp = framePointer;
+
+    if (windowBytes < GtLayout.FrameLinkBytes) return count;
+
+    // The largest offset into the copy at which BOTH words of a frame link still fit. Computed once, by
+    // SUBTRACTING the link size from the bound rather than adding it to the pointer — see the guard.
+    ulong lastFrameLinkOffset = (ulong)(windowBytes - GtLayout.FrameLinkBytes);
 
     while (count < MaxWalkFrames) {
       // The frame link is TWO words — the saved frame pointer and the return address — so the bound has
       // to leave room for both, read from the ONE constant the in-process walk states it with.
-      if (fp < stackPointer || fp + GtLayout.FrameLinkBytes > windowEnd) break;
+      //
+      // ⚠ Compared in the WINDOW's own coordinates, and never as `fp + FrameLinkBytes > windowEnd`.
+      // That form WRAPS, and the value that wraps it is not exotic: RBP is only a frame pointer by
+      // CONVENTION, so a sample landing in foreign code that uses it as an ordinary callee-saved
+      // register — holding −1, or an all-ones mask — arrives here as 0xFFFF_FFFF_FFFF_FFFF, whose sum
+      // with 16 is 15. That passes an upper bound written the other way and then indexes the window at
+      // a truncated, possibly negative, offset. MEASURED by forcing exactly that frame pointer: the
+      // walk threw, and because the throw leaves the sampling thread the runner discards the ENTIRE
+      // run as "the sampler stopped early" — one stray register value costing a whole profile.
+      if (fp < stackPointer || fp - stackPointer > lastFrameLinkOffset) break;
 
       int offset = (int)(fp - stackPointer);
       ulong savedFp = BitConverter.ToUInt64(_stackWindow, offset);

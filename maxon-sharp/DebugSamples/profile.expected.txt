@@ -27,6 +27,19 @@ The masking is the whole method, so it is worth being precise about what survive
 only the two NUMERIC COLUMNS of a row and leaves the indentation and the name, so the tree's structure
 is asserted exactly while its measurements are not.
 
+⚠ MASKING A NUMBER IS NOT ENOUGH FOR THE `--folded` BLOCKS, and the difference is worth stating because
+it caught this golden's sibling out. The PRINTED tables carry `--min-percent`, so a one-sample path is
+already summarized into the "not shown" count and the report's SHAPE does not move. `--folded` carries
+no such floor, deliberately — a flamegraph tool wants every path and does its own thresholding — so
+there the long tail is a row, and a masked count is still a LINE that either exists or does not. A
+stray sample caught in a syscall entry therefore ADDS a line to an otherwise identical report, and the
+golden fails on a run that measured the program perfectly. (Measured: it did, on profilegt block 2 —
+`[unnamed .text];spinB;stdlib.sleep;[unnamed .text]`, one sample.) So the `--folded` blocks do their
+own thresholding — `awk '$NF >= 10'` — which is exactly what the format's consumers are expected to do,
+applied BEFORE the mask because the mask destroys the number it needs. The floor sits two orders of
+magnitude below every asserted row (hundreds of samples) and an order above the tail (one or two), so
+it removes what varies and nothing else.
+
 ⭐ NO INSTRUMENTATION, NO REBUILD, NO FLAG. Unlike `--coverage`, nothing is emitted into the program to
 make this work: `profile.exe` here is built by a plain `maxon build`, and the only thing read besides
 the running process is the `.mxdbg` sidecar that build already writes and that leaves the executable
@@ -111,7 +124,7 @@ stacks: N truncated, N unreadable
   P%      N  main
   (N stacks below 5% not shown)
 
---- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --folded 2>/dev/null | sed -E 's/ [0-9]+$/ N/' | grep ';' ---
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --folded 2>/dev/null | awk '$NF >= 10' | sed -E 's/ [0-9]+$/ N/' | grep ';' ---
 [unnamed .text];main;work;hot N
 [unnamed .text];main;work;warm N
 

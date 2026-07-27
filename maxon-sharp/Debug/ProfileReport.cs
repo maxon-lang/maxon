@@ -32,8 +32,8 @@ public sealed record ProfileStack(string RootFunction, long Samples);
 /// What a sampling run measured — the ONE model both faces render.
 ///
 /// The honesty fields are not decoration; each answers a question a percentage cannot.
-/// <see cref="Samples"/> with <see cref="RateHz"/> and <see cref="DurationSeconds"/> is the difference
-/// between 3 samples and 30,000, which look identical once divided.
+/// <see cref="Samples"/> with <see cref="AchievedRateHz"/> and <see cref="DurationSeconds"/> is the
+/// difference between 3 samples and 30,000, which look identical once divided.
 /// <see cref="SamplesUnsymbolized"/> is how much of the profile landed in code this binary's sidecar
 /// cannot name, so a reader knows how much of the rest to trust.
 /// <see cref="StacksTruncated"/> matters more than its size suggests: a walk runs leaf-to-ROOT, so a
@@ -117,10 +117,10 @@ public sealed record ProfileReport(
 /// </summary>
 public static class ProfileRender {
 
-  /// The rule between sections. Deliberately NOT `---`: the DebugSamples golden format ends an expected
-  /// block at the first line starting with `--- `, so a report that ruled its sections that way would be
-  /// silently TRUNCATED at its first section when a transcript of it is committed.
-  private const string SectionRule = "===";
+  /// The rule between sections — <see cref="ReportFormat.SectionRule"/>, which states once why it may
+  /// not be `---`. It was a second copy of that constant and of its warning, written because this
+  /// report arrived after the coverage one had already paid for the lesson.
+  private const string SectionRule = ReportFormat.SectionRule;
 
   /// <summary>
   /// ⭐ THE ONE CONVENTION FOR A FRAME THE PROFILE COULD NOT NAME: it is written in BRACKETS.

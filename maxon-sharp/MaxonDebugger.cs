@@ -1466,13 +1466,21 @@ internal sealed class MaxonDebugger : IDisposable {
     /// from the per-thread backtrace, which applies the same bias for itself — so nothing renders this
     /// number and nothing has to remember it is off by one.
     ///
+    /// ⚠ Which is exactly why the bias is TAKEN FROM <see cref="MxdbgReader.CallSiteLookup"/> and not
+    /// written here: this and the backtrace must land in the same function or `print` resolves a name
+    /// against a different frame than the one on screen, and neither copy would fail to compile if one
+    /// drifted. It was a hand-written `- 1` — agreeing by luck, and not even exactly: the shared rule
+    /// floors at 0 and this did not.
+    ///
     /// Sp is deliberately 0: it is only meaningful to the step runners, and stepping a thread that is
     /// not the stopped one is refused outright rather than approximated.
     /// </summary>
     public StopInfo? InspectionFrame => TopKind == GtTopFrame.None || TopFramePointer == 0
       ? null
       : new StopInfo(RuntimeEmitter.DbgStopReasonBreakpoint,
-        TopKind == GtTopFrame.ReturnAddress ? TopLocation.CodeOffset - 1 : TopLocation.CodeOffset,
+        TopKind == GtTopFrame.ReturnAddress
+          ? MxdbgReader.CallSiteLookup((uint)TopLocation.CodeOffset)
+          : (uint)TopLocation.CodeOffset,
         0, (long)TopFramePointer);
   }
 

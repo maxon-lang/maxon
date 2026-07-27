@@ -184,11 +184,10 @@ public static class CoverageRender {
   private const string EliminatedMarker = "-----";
   private const int CountColumnWidth = 7;
 
-  /// The rule between a report's sections. Deliberately NOT `---`: the DebugSamples golden format ends
-  /// an expected block at the first line starting with `--- `, so a report that ruled its sections
-  /// that way is silently TRUNCATED at its first file header when a transcript of it is committed —
-  /// as this one was, until the gate caught it.
-  private const string SectionRule = "===";
+  /// This report was the one BITTEN by the `---` truncation, which is why the rule it uses is now
+  /// <see cref="ReportFormat.SectionRule"/> — the constraint belongs to the transcript format, not to
+  /// this renderer, and the profile report re-derived it independently before it was stated once.
+  private const string SectionRule = ReportFormat.SectionRule;
 
   public static string Text(CoverageReport report) {
     var sb = new StringBuilder();

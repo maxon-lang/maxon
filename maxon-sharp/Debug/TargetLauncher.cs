@@ -80,22 +80,41 @@ public static class TargetLauncher {
         lock (outputGate) onOutput(line);
       }
 
-      using var observer = observe?.Invoke(process);
-
       // TargetStdio owns the ONE statement of how a session with a spawned target ends: wait out the
       // grace period, kill what is left — the whole process TREE, since a target's children are as
       // much this run's orphans as the target — wait for the kill to settle so the exit status is
       // readable, and only THEN join the forwarding tasks. Joining before the kill blocks forever on
       // a pipe that never closes, which is the other half of the same defect.
+      //
+      // ⚠ Armed BEFORE the observer, and both halves of that matter. A target is already running the
+      // instant Process.Start returns, so until this exists its pipes are undrained — and the profiler's
+      // observer spends real time attaching (it waits on the loader's module list), during which a
+      // chatty program would block on a full stdout buffer and be MEASURED while stalled by its own
+      // instrument. It also makes the kill path exist before anything can throw into it: see below.
       var stdio = TargetStdio.Forward(process, Deliver, Deliver);
-      if (stdio.EndAndJoin(PositiveSeconds.ToWaitMilliseconds(timeout))) {
-        // The FACT only — each face appends the recourse its own caller can act on.
-        return new TargetRun(null, TimedOut: true,
-          $"{ReportPath.Display(exePath)} did not finish within {PositiveSeconds.Text(timeout)}s"
-          + " and was killed.");
+
+      IDisposable? observer;
+      try {
+        observer = observe?.Invoke(process);
+      } catch (Exception ex) {
+        // A watcher that cannot start must not strand a process this method launched. The claim below
+        // — that nothing leaves here without ending the run — is only true if THIS path ends it too:
+        // `using var process` merely releases a handle, it does not kill, so an escaping exception
+        // would leave an orphan running with nobody left holding its pipes.
+        stdio.EndAndJoin(0);
+        return Failed($"could not start measuring {ReportPath.Display(exePath)}: {ex.Message}");
       }
 
-      return new TargetRun(process.ExitCode, TimedOut: false, "");
+      using (observer) {
+        if (stdio.EndAndJoin(PositiveSeconds.ToWaitMilliseconds(timeout))) {
+          // The FACT only — each face appends the recourse its own caller can act on.
+          return new TargetRun(null, TimedOut: true,
+            $"{ReportPath.Display(exePath)} did not finish within {PositiveSeconds.Text(timeout)}s"
+            + " and was killed.");
+        }
+
+        return new TargetRun(process.ExitCode, TimedOut: false, "");
+      }
     } catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception) {
       return Failed($"could not run {ReportPath.Display(exePath)}: {ex.Message}");
     }

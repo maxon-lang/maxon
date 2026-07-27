@@ -60,6 +60,17 @@ internal static class ProfileTools {
           "How long to let the program run before stopping it and reporting what was sampled "
           + $"(default {DefaultRunTimeout.TotalSeconds}). Unlike coverage this still yields a report, "
           + "marked `runCompleted:false`."), Required: false),
+        // The same knob, the same spelling and the same reason as `debug_start`'s. It is not optional
+        // decoration for THIS tool: the answer it advertises above is a green-thread breakdown, and the
+        // scheduler fixes its worker count at startup, so an unpinned green-thread profile measures the
+        // machine as much as the program. `maxon profile --target-env=` has had it since the rung
+        // landed; a control present on one face and absent on the other is how two faces of one
+        // instrument come to give different answers to the same question.
+        new("env", McpSchema.StringMap(
+          "Environment variables set in the PROFILED program. MAXON_MAX_PROCS=N pins its green-thread "
+          + "scheduler to N processors, which is what makes a concurrent program's profile reproducible "
+          + "rather than machine-dependent.",
+          "The variable's value."), Required: false),
       ],
       RunAndReport),
   ];
@@ -79,6 +90,7 @@ internal static class ProfileTools {
     var options = ProfileRunner.Defaults with {
       Timeout = McpArgs.OptionalTimeoutSeconds(args, "timeoutSeconds", DefaultRunTimeout),
       RateHz = rateHz,
+      TargetEnv = McpArgs.OptionalStringMap(args, "env"),
     };
 
     var output = new StringBuilder();

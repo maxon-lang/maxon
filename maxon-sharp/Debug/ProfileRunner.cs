@@ -109,11 +109,20 @@ public static class ProfileRunner {
   /// this tree is: a rate the caller did not ask for, reported back as though they had, is a
   /// measurement setting that silently is not in force.
   /// </summary>
+  /// <remarks>
+  /// ⚠ The wording is the one <see cref="MaxRateHz"/> documents, and that is not a style point. This
+  /// sentence used to blame the suspend/resume pair — the reason the constant was FIRST given and that
+  /// the optimizing pass then MEASURED to be false (the per-tick work is 48-57 us, good for ~18 kHz).
+  /// The measurement corrected the constant's own comment and left this copy standing, so the only
+  /// statement a USER ever saw was the one the code already knew was wrong. Two spellings of one fact,
+  /// and the wrong one was the one that shipped.
+  /// </remarks>
   public static string? RateRefusal(double rateHz) =>
     double.IsNaN(rateHz) || rateHz <= 0 ? "needs a positive number of samples per second"
-    : rateHz > MaxRateHz ? $"cannot exceed {MaxRateHz} samples per second — past that the suspend/resume"
-      + " pair is a significant share of the interval being measured, so the profiler would mostly be"
-      + " reporting its own cost"
+    : rateHz > MaxRateHz ? $"cannot exceed {MaxRateHz} samples per second. Note that asking for anything"
+      + " near it is already an over-ask: the loop ticks on an OS waitable timer whose granularity caps"
+      + " it near 1750 Hz on a typical host, and the report states the rate it ACHIEVED beside the one"
+      + " requested so you can see what you got"
     : null;
 
   /// Why a reporting floor is not usable, or null. 100% would hide everything including the root, which
@@ -227,30 +236,40 @@ public static class ProfileRunner {
         uint textSize, double rateHz) {
       if (!TryResolveTextBase(process, textImageOffset, out ulong textBase)) return null;
 
+      // From here the sampler owns an event handle and a native CONTEXT allocation, and only Dispose
+      // returns them. Nothing between the attach and the successful Start is expected to throw — but
+      // "expected" is not a release policy, and the one thing that WOULD throw here is running out of
+      // the very resources this holds.
       var sampler = ProfileSampler.Attach(process);
-      // Snapshotted here, while the target is certainly alive and before a single sample is taken, so
-      // every foreign frame the run produces can be attributed to the module that owns it.
-      var collector = new ProfileCollector(sidecar, textBase, textSize, ProfileModuleMap.Snapshot(process));
+      try {
+        // Snapshotted here, while the target is certainly alive and before a single sample is taken, so
+        // every foreign frame the run produces can be attributed to the module that owns it.
+        var collector = new ProfileCollector(sidecar, textBase, textSize, ProfileModuleMap.Snapshot(process));
 
-      // A dedicated thread rather than the thread pool: this one runs for the whole program and spends
-      // its life in a timed wait, which is precisely what a pool thread must not do. Background, so a
-      // sampler cannot by itself keep this process alive.
-      SamplingSession? session = null;
-      var thread = new Thread(() => {
-        try {
-          sampler.Run(TimeSpan.FromSeconds(1.0 / rateHz), collector.Accept);
-        } catch (Exception ex) {
-          session!.RecordFault($"{ex.GetType().Name}: {ex.Message}");
-        }
-      }) {
-        IsBackground = true,
-        Name = "maxon-profile-sampler",
-      };
+        // A dedicated thread rather than the thread pool: this one runs for the whole program and spends
+        // its life in a timed wait, which is precisely what a pool thread must not do. Background, so a
+        // sampler cannot by itself keep this process alive.
+        SamplingSession? session = null;
+        var thread = new Thread(() => {
+          try {
+            sampler.Run(TimeSpan.FromSeconds(1.0 / rateHz), collector.Accept);
+          } catch (Exception ex) {
+            session!.RecordFault($"{ex.GetType().Name}: {ex.Message}");
+          }
+        }) {
+          IsBackground = true,
+          Name = "maxon-profile-sampler",
+        };
 
-      // Constructed BEFORE the thread starts, so the delegate above can never observe a null session.
-      session = new SamplingSession(sampler, thread, collector);
-      thread.Start();
-      return session;
+        // Constructed BEFORE the thread starts, so the delegate above can never observe a null session.
+        session = new SamplingSession(sampler, thread, collector);
+        thread.Start();
+        return session;
+      } catch {
+        // Ownership has not reached the session yet, so nothing else will ever dispose this.
+        sampler.Dispose();
+        throw;
+      }
     }
 
     public void Dispose() {

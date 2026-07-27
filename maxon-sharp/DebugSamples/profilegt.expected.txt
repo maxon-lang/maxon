@@ -30,8 +30,16 @@ measures the machine as much as the program. Two and not more — at 3+ a nested
 deterministically on the unchanged compiler (a filed pre-existing scheduler defect, `34c3df909`).
 
 Numbers are masked exactly as in profile.expected.txt, and for the same reason: a sampling profiler is
-nondeterministic, so this golden pins structure and never a measurement. Both blocks were run four times
-while it was written and produced byte-identical masked output every time.
+nondeterministic, so this golden pins structure and never a measurement.
+
+⚠ BLOCK 2 ALSO CARRIES A FLOOR (`awk '$NF >= 10'`), and it is there because this block is where masking
+alone was MEASURED to be insufficient — see profile.expected.txt for the full statement of why. `--folded`
+is deliberately unfiltered by `--min-percent`, so its long tail is real rows: an independent review run
+of this gate caught `spinB` one single time inside its final `sleep(1)` and got a third line,
+`[unnamed .text];spinB;stdlib.sleep;[unnamed .text] N`, from a run that had measured the program
+correctly. Masking the count does not help — the failure is a LINE that exists, not a number that moved.
+Both blocks were run four times while this golden was written, and block 2 twenty-five more times when
+the floor was added, producing byte-identical output every time.
 
 HOW TO REPRODUCE (from a checkout that has built the C# compiler):
   maxon build maxon-sharp/DebugSamples/profilegt.maxon
@@ -69,6 +77,6 @@ stacks: N truncated, N unreadable
   P%      N  spinB
   (N stacks below 5% not shown)
 
---- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profilegt.exe --target-env=MAXON_MAX_PROCS=2 --folded 2>/dev/null | sed -E 's/ [0-9]+$/ N/' | grep -E 'spin' ---
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profilegt.exe --target-env=MAXON_MAX_PROCS=2 --folded 2>/dev/null | awk '$NF >= 10' | sed -E 's/ [0-9]+$/ N/' | grep -E 'spin' ---
 [unnamed .text];spinA N
 [unnamed .text];spinB N
