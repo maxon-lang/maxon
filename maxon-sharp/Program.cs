@@ -922,14 +922,51 @@ class Program {
     return RunExecutable(outputPath, forwardedArgs);
   }
 
+  /// Enumerates the .maxon files under `root`, never crossing into a SEPARATE CHECKOUT.
+  ///
+  /// A directory holding `.git` is its own checkout — a nested clone, or (as under
+  /// `.claude/worktrees/`) a git worktree carrying its own uncommitted state. `fmt` rewrites in
+  /// place, so descending through that boundary edits files the caller never named and cannot see
+  /// in their own `git status`: one accidental whole-tree run rewrote 92 files across two agent
+  /// worktrees. The traversal ROOT is deliberately exempt — every checkout contains `.git`, so
+  /// pruning it there would make `maxon fmt` inside a repo format nothing at all.
+  static IEnumerable<string> EnumerateFormattableFiles(string root) {
+    var pending = new Stack<string>();
+    pending.Push(root);
+    while (pending.Count > 0) {
+      var dir = pending.Pop();
+      foreach (var sub in Directory.GetDirectories(dir).OrderByDescending(d => d)) {
+        var dotGit = Path.Combine(sub, ".git");
+        if (Directory.Exists(dotGit) || File.Exists(dotGit)) continue;
+        pending.Push(sub);
+      }
+      foreach (var file in Directory.GetFiles(dir, "*.maxon").OrderBy(f => f)) yield return file;
+    }
+  }
+
   static int RunFmt(string[] args) {
-    var path = args.FirstOrDefault(a => !a.StartsWith('-')) ?? Directory.GetCurrentDirectory();
+    // `fmt` takes no flags. Silently DROPPING an unrecognized one is the most destructive thing it
+    // could do: `maxon fmt --check` would find no path, fall back to the current directory, and
+    // rewrite the whole tree in place — the opposite of what the flag asked for. Reject instead.
+    var unknownFlag = args.FirstOrDefault(a => a.StartsWith('-'));
+    if (unknownFlag != null) {
+      Console.Error.WriteLine($"fmt: unrecognized option: {unknownFlag}");
+      Console.Error.WriteLine("usage: maxon fmt [<file|directory>]   (formats in place; no options)");
+      return 1;
+    }
+
+    if (args.Length > 1) {
+      Console.Error.WriteLine($"fmt: expected at most one path, got {args.Length}: {string.Join(", ", args)}");
+      return 1;
+    }
+
+    var path = args.FirstOrDefault() ?? Directory.GetCurrentDirectory();
 
     List<string> files;
     if (File.Exists(path)) {
       files = [path];
     } else if (Directory.Exists(path)) {
-      files = [.. Directory.GetFiles(path, "*.maxon", SearchOption.AllDirectories)
+      files = [.. EnumerateFormattableFiles(path)
         .Where(f => !Path.GetFileName(f).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
         .Where(f => !MaxonIgnore.IsIgnored(f))];
     } else {

@@ -32,6 +32,47 @@ public static class MaxonFormatter {
     TokenType.Comma, TokenType.Dot,
   ];
 
+  // Tokens that unconditionally PRODUCE A VALUE — an operand precedes anything that follows one.
+  private static bool IsValueToken(TokenType t) => t switch {
+    TokenType.Identifier or TokenType.IntegerLiteral or TokenType.FloatLiteral or
+    TokenType.StringLiteral or TokenType.StringInterp or TokenType.ByteStringLiteral or
+    TokenType.CharacterLiteral or TokenType.RightParen or TokenType.RightBracket or TokenType.RightBrace or
+    TokenType.Self or TokenType.SelfType or TokenType.True or TokenType.False => true,
+    _ => false,
+  };
+
+  // Every keyword token, DERIVED from the lexer's one keyword table rather than restated here —
+  // a second copy would silently stop matching the day a keyword is added. `mod` lives in the
+  // operator map instead, and is name-usable too: the same exemption the parser's
+  // `IsIdentifierLikeToken` makes.
+  private static readonly HashSet<TokenType> KeywordTokens =
+    [.. Lexer.KeywordMap.Values.Select(k => k.Type), TokenType.Mod];
+
+  // Keywords that are PREFIX operators or statement heads. Where an operand is expected these are
+  // always the operator and never a name, so the operand belongs to THEM: `return -1`, `not -x`.
+  private static readonly HashSet<TokenType> PrefixOperandKeywords = [
+    TokenType.Not, TokenType.Return, TokenType.Throw, TokenType.Panic,
+    TokenType.Await, TokenType.Async, TokenType.Try,
+  ];
+
+  // Does this token produce a value — i.e. is a '-' or '+' after it BINARY rather than unary?
+  //
+  // The hard part is that EVERY keyword can also be an ordinary name in Maxon (see the parser's
+  // `IsIdentifierLikeToken`), so `to` and `end` are an operand in one line and an operator in the
+  // next. Position decides, and one bit of position is enough: an infix keyword operator ALWAYS
+  // has its left operand before it, so a keyword with no operand behind it is being used as a NAME.
+  //
+  // That is what tells `let pending = to - from` — where `to` is the parameter it is, so the '-'
+  // is binary — from `int(0 to -5)`, where `to` is the range operator and the '-' is unary.
+  // Getting it wrong is not cosmetic in one direction: rendering a binary '-' as unary is what
+  // rewrote `to - from` to `to -from` across four files on a whole-tree `maxon fmt`.
+  private static bool ProducesValue(TokenType t, bool operandBefore) {
+    if (IsValueToken(t)) return true;
+    if (!KeywordTokens.Contains(t)) return false;
+    if (PrefixOperandKeywords.Contains(t)) return false;
+    return !operandBefore;
+  }
+
 private record SourceComment(string Text, bool WholeLine);
 
   // Extract `//` line comments AND `/* ... */` block comments from `source`,
@@ -209,6 +250,7 @@ private record SourceComment(string Text, bool WholeLine);
     string? prevNonNewlineValue = null;
     bool prevWasDot = false;
     bool prevWasUnary = false; // true when prev '-' or '+' was unary (no space after)
+    bool prevProducedValue = false; // true when the prev token was an operand (see ProducesValue)
     bool prevBeganLine = false; // true when the previous token was the FIRST on its line (see ModIsCasePattern)
     int braceDepth = 0;
     int lastEmittedSourceLine = -1;
@@ -547,6 +589,7 @@ private record SourceComment(string Text, bool WholeLine);
           i = scan; // skip past ')'
           prevNonNewline = TokenType.Identifier;
           prevNonNewlineValue = null;
+          prevProducedValue = true; // the rewritten pattern is an operand, same as the ')' it replaced
           continue;
         }
       }
@@ -582,6 +625,7 @@ private record SourceComment(string Text, bool WholeLine);
           i = j - 1;
           prevNonNewline = tok.Type;
           prevNonNewlineValue = tok.Value;
+          prevProducedValue = true; // mirrors prevNonNewline: a CharacterLiteral is a value token
           lineStartedWithEnd = false;
           lineHasLabeledOpener = true; // else/otherwise is a labeled opener on the new line
           continue;
@@ -589,17 +633,13 @@ private record SourceComment(string Text, bool WholeLine);
       }
 
       prevWasDot = prevNonNewline == TokenType.Dot;
-      // Unary minus/plus: '-' or '+' is unary when preceded by an operator, open bracket, comma, or line start.
-      // NOT unary after literals, identifiers, or closing brackets (those end an expression).
-      static bool IsExpressionEnder(TokenType t) => t switch {
-        TokenType.Identifier or TokenType.IntegerLiteral or TokenType.FloatLiteral or
-        TokenType.StringLiteral or TokenType.StringInterp or TokenType.ByteStringLiteral or
-        TokenType.CharacterLiteral or TokenType.RightParen or TokenType.RightBracket or TokenType.RightBrace or
-        TokenType.Self or TokenType.SelfType or TokenType.True or TokenType.False => true,
-        _ => false,
-      };
-      prevWasUnary = (tok.Type == TokenType.Minus || tok.Type == TokenType.Plus) &&
-        (wasAtLineStart || (!IsExpressionEnder(prevNonNewline) && prevNonNewline != TokenType.Eof));
+      // Unary minus/plus: '-' or '+' is unary exactly when NO OPERAND precedes it — after an
+      // operator, an open bracket, a comma, or at line start. A line begins with nothing behind
+      // it, so the running operand state resets there rather than carrying over the last line's
+      // final token (which is what makes a match arm's `default then -1` come out unary).
+      bool operandBefore = !wasAtLineStart && prevProducedValue;
+      prevWasUnary = (tok.Type == TokenType.Minus || tok.Type == TokenType.Plus) && !operandBefore;
+      prevProducedValue = ProducesValue(tok.Type, operandBefore);
       var prevToken = prevNonNewline;
       var prevTokenValue = prevNonNewlineValue;
       prevNonNewline = tok.Type;
@@ -614,9 +654,11 @@ private record SourceComment(string Text, bool WholeLine);
       // raw-value cases). When the keyword is just a case name, skip the rest of this iteration
       // entirely — block-opening logic doesn't apply.
       if (InDataBlock() && (LabellessBlockOpeners.Contains(tok.Type) || LabeledBlockOpeners.Contains(tok.Type))) {
-        int la = i + 1;
-        while (la < tokens.Count && tokens[la].Type == TokenType.Newline) la++;
-        bool isRealDecl = la < tokens.Count && tokens[la].Type == TokenType.Identifier;
+        // The declared name sits on the SAME line as the keyword, so the lookahead must NOT skip
+        // newlines: skipping them makes a bare case named `function` borrow the NEXT case's name
+        // and read as a declaration, which then opens a block that never closes and indents the
+        // rest of the file — 2,189 lines across TypeRules.maxon and MaxonDialect.maxon.
+        bool isRealDecl = i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier;
         if (!isRealDecl) continue;
       } else if (InDataBlock()) {
         // Non-keyword tokens inside a data block (case names, args, raw values) never affect

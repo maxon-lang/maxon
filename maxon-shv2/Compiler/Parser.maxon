@@ -13559,7 +13559,7 @@ export type Parser
 	// in the left half and every one at or above it in the right (sorted + disjoint), so both halves are
 	// non-empty (the count is at least `MinIntervalsForDispatch`) and the recursion terminates.
 	function emitDispatchRange(func IrFunction, from ElementCount, to ElementCount, block IrBlock, subject ValueId, intervals DispatchIntervalArray, missTarget BlockId, missArgs ValueIdArray, opTok Token) throws ParseError
-		let count = to -from
+		let count = to - from
 		if count < MinIntervalsForDispatch 'chain'
 			try self.emitDispatchChain(func, from: from, to: to, block: block, subject: subject, intervals: intervals, missTarget: missTarget, missArgs: missArgs, opTok: opTok)
 			return
@@ -13574,7 +13574,7 @@ export type Parser
 			return
 		end 'dense'
 
-		let mid = from +count / 2
+		let mid = from + count / 2
 		let pivot = (try intervals.get(mid) otherwise panic("emitDispatchRange: intervals.get OOB at pivot {mid}")).lo
 		self.currentBlock = block
 		let cond = self.emitDispatchCompare(subject, tag: pivot, op: MaxonCmpOp.lt, opTok: opTok)
@@ -13599,7 +13599,7 @@ export type Parser
 	// forming a difference that would overflow `i64` — see `spanExceedsCap`.
 	function planDispatchTable(from ElementCount, to ElementCount, intervals DispatchIntervalArray) returns DispatchTablePlan
 		let bias = (try intervals.get(from) otherwise panic("planDispatchTable: intervals.get OOB at from {from}")).lo
-		let maxHi = (try intervals.get(to -1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
+		let maxHi = (try intervals.get(to - 1) otherwise panic("planDispatchTable: intervals.get OOB at to-1 {to - 1}")).hi
 
 		// Reject on the covered WIDTH exceeding the cap WITHOUT forming `maxHi - bias`, which overflows i64
 		// when the span crosses far into both halves (e.g. `i64.min`..`i64.max`). `maxHi >= bias` always
@@ -13615,7 +13615,7 @@ export type Parser
 		// The table must earn its slots against the compares it removes, not merely against the values it
 		// covers (`MaxTableSlotsPerInterval`). `to - from` is the interval count; the product fits i64
 		// (span <= 4096, the count is bounded by the arm count).
-		if span > ((to -from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
+		if span > ((to - from) as ParsedInt) * MaxTableSlotsPerInterval 'sparse'
 			return DispatchTablePlan.notTable()
 		end 'sparse'
 
@@ -13737,7 +13737,7 @@ export type Parser
 			self.currentBlock = current
 			let cond = try self.emitIntervalHitTest(subject, lo: interval.lo, hi: interval.hi, opTok: opTok)
 
-			let isLast = i == to -1
+			let isLast = i == to - 1
 			var elseTarget = missTarget
 			var elseArgs = missArgs
 			var nextBlock = current

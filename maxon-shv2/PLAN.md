@@ -853,11 +853,27 @@ unnecessary**, and all four bugs above are unrepresentable rather than fixed.
 > is their gate): **(a)** the bootstrap MISCOMPILES an inline cast-then-shift — `let w = x as Word;
 > w shr 63` gives **1** but `(x as Word) shr 63` gives **−1** in the same program; shv2 answers 1 in all
 > three forms and is the self-consistent one. It cannot bite the tree the bootstrap compiles (no inline
-> `(… as Alias) shr` exists in `stdlib/` or `maxon-shv2/`). **(b)** `maxon fmt` MIS-LEXES A BARE ENUM
-> MEMBER NAMED `function` as opening a function body and indents everything after it one tab deeper to
-> EOF, including the top-level `end` — 2,189 lines across `TypeRules.maxon` and `MaxonDialect.maxon`.
-> Its output is refused for those two files until this is fixed, so **a whole-tree `maxon fmt` is not
-> currently idempotent** and the next person to run it must refuse the same two files.
+> `(… as Alias) shr` exists in `stdlib/` or `maxon-shv2/`). **✅ (b) FIXED 2026-07-26** — `maxon fmt`
+> MIS-LEXED A BARE ENUM MEMBER NAMED `function` as opening a function body and indented everything
+> after it one tab deeper to EOF, including the top-level `end` — 2,189 lines across
+> `TypeRules.maxon` and `MaxonDialect.maxon`. **Its output no longer needs refusing for those two
+> files, and a whole-tree `maxon fmt` is idempotent again** (345 files, 0 changed on the second
+> pass). Cause: the data-block lookahead in `MaxonFormatter.FormatCore` SKIPPED NEWLINES before
+> testing whether an Identifier followed, so a bare case borrowed the NEXT case's name and read as a
+> real declaration — the loop defeated the exact rule its own comment stated ("bare cases are
+> followed by a Newline"). A declared name is on the SAME line as its keyword, so the lookahead no
+> longer skips.
+>
+> **A SECOND fmt bug fell out of the same audit, and it had ALREADY committed its damage:** every
+> keyword can also be an ordinary name in Maxon (the parser's `IsIdentifierLikeToken`), but the
+> formatter's unary-minus test recognized only literals and identifiers as operands — so `to`, used
+> as the PARAMETER it is, looked like the range operator and `to - from` was rewritten to `to -from`.
+> **8 sites across 4 files were already mangled in-tree** (`IrBlock.maxon`, `Parser.maxon` ×5,
+> `SplitLiveRanges.maxon`, `stdlib/Internals.maxon`'s `end - start`), repaired by this change. The
+> cure is contextual rather than a second keyword list: an infix keyword operator always has its left
+> operand before it, so a keyword with no operand behind it is a NAME. The keyword set is DERIVED
+> from `Lexer.KeywordMap` rather than restated — a second copy would stop matching the day a keyword
+> is added.
 >
 > **✅ arm64-linux IS DONE, NOT DEBT — 1589/0** (`1de8d480a`, 119 new + 38 refreshed goldens). This was
 > filed as "needs its own hardware"; that was WRONG, and the correction is worth keeping because the
