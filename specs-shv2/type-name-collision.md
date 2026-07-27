@@ -98,7 +98,18 @@ can reach the other's symbols.
 The prefix is applied **on contest only** — a name nothing else claims is spelled bare, exactly as it
 always was — and it is applied where the name is BUILT rather than at a later check, because the
 compiled name is baked into emitted code (a scope-exit drop calls `__destruct_<mangled>` directly).
-Re-prefixing repeats until the candidate is free, since `__Box_String` may itself be taken.
+
+Two properties make one re-mint enough, and they are different properties:
+
+- **A minted name is free of the DECLARED half** because the mint re-probes until it is. That is a loop,
+  not the prefix, and it would hold for any prefix; on a program that *compiles* it runs once, because a
+  declared `__Box_String` is E2051 and the build is already failing.
+- **A minted name is free of every OTHER INSTANCE's** because of the prefix, and nothing probes for it: a
+  compiled name always BEGINS with its base name, and no base may start with `__`, so no *bare* compiled
+  name ever does. Two minted names are therefore equal only when the bare names behind them are — which
+  is the instantiation pair below, reported over the FINAL names. A prefix the language did **not**
+  reserve would break exactly this half in silence: `XBox_String` is a name `XBox with String` compiles
+  to on its own, and a legal program would earn a spurious E3006.
 
 Rejecting the contest instead is what shv2 used to do, and it was wrong in a way that reached programs
 nobody would call unusual: an `[Foo, Foo]` array literal interns `Array with Foo` without naming it, so
@@ -659,8 +670,9 @@ error E3006: <fragment>:43:11: duplicate definition of 'Pair_Box_Int_Str' — th
 <!-- test: alias-named-like-its-own-compiled-name -->
 The guard against overreach. A `typealias` claims no compiled name — a generic instance's methods are
 emitted under its BASE's name, and nothing is named after the alias — so an alias spelled exactly like
-what the instance it names compiles to is legal, and the rule must leave it alone. Only the four
-NOMINAL keywords claim.
+what the instance it names compiles to is legal, and the rule must leave it alone. Only the three
+keywords that MINT `__destruct_<name>` claim (`type`, `enum`, `union`) — the roster the section above
+states and the two tests below pin.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1048,12 +1060,19 @@ end 'main'
 
 <!-- test: declared-type-owning-a-string-named-like-an-array-instance -->
 The declared type is the one that OWNS the `String` here, and that is a different question from the
-case above: a managed struct puts `__destruct_Array_Foo` into the needed-destructor set, and that set
-is keyed by NAME. Before disjointness the name pulled the base-less `Array with Foo` instance in behind
-it and the compiler died — `panic ProgramSignatures.baseLayoutOf: base struct 'Array' is not declared`,
-a stack trace with no diagnostic, on the very program the collision check had already recorded an E3006
-for. The crash came first, so that E3006 could never be printed. The instance is `__Array_Foo` now, so
-the struct's cascade names only itself and nothing is pulled in.
+case above: a managed struct puts `__destruct_Array_Foo` into the needed-destructor set, and that set is
+keyed by NAME, so the name once pulled the base-less `Array with Foo` instance in behind it and the
+compiler died — `panic ProgramSignatures.baseLayoutOf: base struct 'Array' is not declared`, a stack
+trace with no diagnostic at all.
+
+⚠ **THIS CASE PINS THE BUILTIN GUARD, NOT DISJOINTNESS**, and the difference is measured rather than
+argued: the guard (`genericInstanceHasStringField` / `genericInstanceHasManagedField` /
+`addNestedInstanceDestructors` returning early for an `Array`/`Set` instance) landed before the reserved
+prefix did, and with `claimsCompiledTypeName` forced to answer *no* — every other declaration-contest
+case in this file failing — **this one still passes.** Disjointness is the OUTER defence: the instance
+is `__Array_Foo`, so the struct's cascade names only itself and the guard is never reached. Both are
+real and neither is a substitute for the other; a case that credited the wrong one would go on passing
+after the one doing the work was deleted.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1128,6 +1147,200 @@ end 'main'
 ```
 ```exitcode
 16
+```
+
+
+<!-- test: nested-contest-mints-onto-a-second-contested-name -->
+Both contests at once, one nested inside the other, and it is the case that pins why the probe never
+asks the INSTANCE set. `Box with String` is contested and becomes `__Box_String`, so the enclosing
+`Box with (Box with String)` compiles to `Box___Box_String` — a bare name that already CONTAINS the
+prefix — and `type Box___Box_String` contests that in turn, sending it to `__Box___Box_String`. Four
+managed cascades, four distinct symbols, every object dropped exactly once (a shared symbol is a leak at
+**101** or a wild free). It works because a compiled name always BEGINS with its base name and no base
+may start with `__`, so a minted name can never be some *other* instance's bare one — the property that
+lets `claimsCompiledTypeName` probe declarations only.
+```maxon
+typealias Num = int(0 to 100)
+
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+	export function tag() returns Num
+		return 1
+	end 'tag'
+end 'Box'
+
+typealias Inner = Box with String
+typealias Outer = Box with (Box with String)
+
+type Box_String
+	export var a as String
+	export static function make() returns Self
+		return Self{a: "aa"}
+	end 'make'
+	export function tag() returns Num
+		return 2
+	end 'tag'
+end 'Box_String'
+
+type Box___Box_String
+	export var a as String
+	export var b as String
+	export static function make() returns Self
+		return Self{a: "bb", b: "cc"}
+	end 'make'
+	export function tag() returns Num
+		return 4
+	end 'tag'
+end 'Box___Box_String'
+
+function main() returns ExitCode
+	let i = Inner.create("hello")
+	let o = Outer.create(Inner.create("world"))
+	let d = Box_String.make()
+	let e = Box___Box_String.make()
+	return i.tag() + o.tag() + d.tag() + e.tag()
+end 'main'
+```
+```exitcode
+8
+```
+
+
+<!-- test: union-named-like-a-compiled-instance-name -->
+The `union` half of the claimant roster, and the ONLY shape that makes it load-bearing: a managed-payload
+union mints `__destruct_Box_String` from its bare name exactly as a `type` does, so without it in the
+roster the instance would keep the bare name and the two cascades would be one symbol — a TAG-dispatching
+union destructor reading the instance's `String` pointer as its tag, or a flat field cascade reading the
+union's i64 tag as a `String`. Neither is a leak; both are a wild free. Both objects are built and both
+are dropped, and the leak check fails the case on **101** if either cascade services the wrong one.
+```maxon
+typealias Num = int(0 to 100)
+
+type Held
+	export var s as String
+	export var n as Num
+	export static function create(n Num) returns Self
+		return Self{s: "held", n: n}
+	end 'create'
+end 'Held'
+
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+	export function tag() returns Num
+		return 5
+	end 'tag'
+end 'Box'
+
+typealias SBox = Box with String
+
+union Box_String
+	silent
+	held(h Held)
+end 'Box_String'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let m = Box_String.held(Held.create(4))
+	match m 'k'
+		silent then return s.tag()
+		held(h) then return s.tag() + h.n
+	end 'k'
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: enum-named-like-a-compiled-instance-name -->
+The `enum` half, written as a PAYLOAD-FREE enum on purpose: it mints no per-type symbol at all, so
+nothing about this program would break if the roster dropped it — which is precisely why it needs a case
+rather than an argument. The roster is one predicate over one registry (`enum` and `union` share it), and
+this pins that the payload-free spelling reaches the same answer as the managed one above rather than
+some third path. The bootstrap accepts it and returns 9.
+```maxon
+typealias Num = int(0 to 100)
+
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+	export function tag() returns Num
+		return 5
+	end 'tag'
+end 'Box'
+
+typealias SBox = Box with String
+
+enum Box_String
+	circle
+	square
+end 'Box_String'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let e = Box_String.square
+	match e 'k'
+		circle then return s.tag()
+		square then return s.tag() + 4
+	end 'k'
+end 'main'
+```
+```exitcode
+9
+```
+
+
+<!-- test: interface-named-like-a-compiled-instance-name -->
+The other side of the roster: an `interface` is NOT a claimant, and it used to be one. Its only emitted
+artifact is `__witness_<conformer>_<interface>`, whose head is the CONFORMER, so it shares no symbol with
+an instance and there is nothing to move out of the way — the instance keeps the bare `Box_String` and
+the interface keeps its name. shv2 rejected this program with E3006 before the roster shrank; the
+bootstrap has always built it and returned 9.
+```maxon
+typealias Num = int(0 to 100)
+
+type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+	export function tag() returns Num
+		return 5
+	end 'tag'
+end 'Box'
+
+typealias SBox = Box with String
+
+interface Box_String
+	function draw() returns Num
+end 'Box_String'
+
+type Pen implements Box_String
+	export var ink as Num
+	export static function create(ink Num) returns Self
+		return Self{ink: ink}
+	end 'create'
+	export function draw() returns Num
+		return self.ink
+	end 'draw'
+end 'Pen'
+
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let p = Pen.create(4)
+	return s.tag() + p.draw()
+end 'main'
+```
+```exitcode
+9
 ```
 
 

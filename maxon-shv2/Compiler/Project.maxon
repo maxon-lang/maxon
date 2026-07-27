@@ -598,11 +598,14 @@ end 'TypeNameRecordOutcome'
 // resolve last-wins. That is cross-file name resolution (the rung that also owns E3063); the ranged
 // form's half of it is already enforced as E3105.
 //
-// ⚠ **THIS REGISTRY HOLDS ONLY THE NAMES A DECLARATION SPELLS.** A generic instantiation claims a name
-// in the SAME namespace without spelling one — it COMPILES to `Box_String`, and every per-type symbol
-// the backend emits is derived from that string — and the claim is not knowable until every file's
-// instantiations are interned. That half is `ParseStaging.checkTypeSymbolNamespace`, whole-program and
-// after the merge, and it reads this registry through `declarationOf`.
+// ⚠ **THIS REGISTRY HOLDS ONLY THE NAMES A DECLARATION SPELLS, AND THAT IS NOW THE WHOLE NAMESPACE.** A
+// generic instantiation spells no name: it COMPILES to a string every per-type symbol is derived from
+// (`Box_String` ⇒ `__destruct_Box_String`), and when that string is one a declaration already holds,
+// `ProgramSignatures.mangleGenericInstance` mints it behind the reserved `__` prefix instead
+// (`reservedIfDeclared`, P1.7). The compiled half is therefore DISJOINT from this one by construction,
+// so nothing here is contestable and this registry has no instantiation reader at all — which is why it
+// answers only `record`. `ParseStaging.checkTypeSymbolNamespace` still owns the compiled half, but it is
+// now a check between two INSTANTIATIONS and never consults a declaration.
 export type TypeNameRegistry
 	// ⚠ **THE MOST RECENT *ACCEPTED* DECLARATION OF EACH NAME — NOT THE FIRST, AND THE DIFFERENCE IS
 	// THE WHOLE SAME-FILE CHECK.** A file's declarations are contiguous in the record stream (one
@@ -643,18 +646,6 @@ export type TypeNameRegistry
 
 		return TypeNameRecordOutcome.collides(winner)
 	end 'record'
-
-	// The accepted declaration of `name`, for a reader that only ASKS. `record` cannot serve one: it
-	// FILES as it asks, so probing through it would make the prober an incumbent and change the answer
-	// every later declaration is measured against. The one reader is `checkTypeSymbolNamespace`, which
-	// asks whether a generic instantiation's COMPILED name is already a declared type's — a question
-	// about this registry that claims nothing in it.
-	//
-	// Throws for an unclaimed name: `Map.get`'s own channel, so the miss — which is the answer for
-	// nearly every name asked — allocates nothing and needs no option type.
-	export function declarationOf(name ByteArray) returns TypeNameDecl throws MapError
-		return try self.winners.get(name)
-	end 'declarationOf'
 end 'TypeNameRegistry'
 
 // The ONE exception to "a type name is declared exactly once": the SAME alias form, in a DIFFERENT

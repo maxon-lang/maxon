@@ -1443,14 +1443,26 @@ end 'directCloneCalleeOf'
 
 // The prefix a compiled instance name is minted behind when a declaration already claims the bare one
 // (`reservedIfDeclared`). It is the SAME `__` the language reserves — `E2051` refuses to declare a name
-// starting with it — which is exactly what makes the reserved space safe to mint into.
+// starting with it.
+//
+// ⚠ **BE PRECISE ABOUT WHAT THAT RESERVATION BUYS, BECAUSE IT IS NOT THE OBVIOUS HALF.** Disjointness
+// from the DECLARED names is bought by `reservedIfDeclared`'s loop, which re-probes until the candidate
+// is unclaimed and would hold for any prefix at all. What only `__` buys is disjointness from every
+// OTHER INSTANCE's compiled name — the half nothing probes — and it buys it because a compiled name
+// always BEGINS with its base name and E2051 bars a `__` base: no bare compiled name can start with the
+// prefix, so a minted one is never some other instantiation's bare one. Pick a prefix the language does
+// NOT reserve and that fails silently: `XBox_String` is a name `XBox with String` compiles to on its
+// own, and the pair check would report E3006 against a legal program. (E2051 also bounds the loop at one
+// re-mint on anything that compiles, which is a cost property, not a safety one.)
 //
 // It is a third module-local copy of that one language rule, beside `Parser.ReservedNamePrefix` (which
 // FORBIDS a user declaration from taking it) and `MmRuntime.CompilerInternalPrefix` (which RECOGNIZES an
 // emitted callee by it), and for the reason Parser's own comment states: the three answer different
 // questions at different tiers — forbidding, recognizing, and here MINTING — and a signature index owning
 // the parser's reservation, or the reverse, would be the worse coupling. The language rule binds them,
-// not a shared symbol.
+// not a shared symbol. A drift between the three is LOUD rather than silent: this one's value reaches
+// every emitted per-type symbol of a contested instance, so changing it alone moves goldens, and
+// emptying it hangs the loop.
 let ReservedTypeNamePrefix = b"__"
 
 // The name of the builtin `Array` generic type (`Array with Integer`). Shared by the parser's
@@ -3932,6 +3944,14 @@ export type ProgramSignatures
 	// synthesized instance name (`__Array_Foo`, `maxon-sharp/Compiler/2-Parser.cs`), and why it needs no
 	// declaration-vs-instance check at all.
 	//
+	// ⚠ **AND IT IS WHY NOTHING HERE PROBES THE INSTANCE SET.** A minted name has to be disjoint from
+	// every OTHER instance's compiled name too, and that falls out of the same reservation instead of a
+	// second probe: `mangleGenericInstance` joins BASE-FIRST, no base may start with `__`, so no BARE
+	// compiled name ever does — and two minted names are equal only when the bare names behind them are,
+	// which is the pair collision `checkTypeSymbolNamespace` already reports over the FINAL names. See
+	// `ReservedTypeNamePrefix` for why a non-reserved prefix would break exactly this, and
+	// `nested-contest-mints-onto-a-second-contested-name` for the case that pins it.
+	//
 	// ⚠ **ON CONTEST ONLY, WHICH IS A COST DECISION.** Prefixing unconditionally would move the mangled
 	// symbol in 108 committed goldens across four targets, 45 of them on hosts that cannot be regenerated
 	// here. Renaming only what was previously an ERROR moves no name that ever compiled, so every golden
@@ -4503,13 +4523,19 @@ export type ProgramSignatures
 	export function genericInstanceHasStringField(id GenericInstanceId) returns bool
 		// ⚠ **THE SAME BUILTIN EARLY-OUT `genericInstanceHasManagedField` MAKES, AND FOR THE SAME REASON.**
 		// These two are read as a pair by the destructor passes, and only one of them had the guard — so the
-		// pair agreed exactly until something asked this one on its own. Something does: `noteDestructorUsage`
-		// reaches it for any instance whose `__destruct_<mangled>` is in the needed set, and that set is keyed
-		// by NAME, so a declared `type Array_Foo` owning a String puts `__destruct_Array_Foo` there and pulls
-		// the base-less `Array with Foo` instance in behind it. Measured, on this compiler and on its base:
-		// `panic ProgramSignatures.baseLayoutOf: generic instance 3's base struct 'Array' is not declared` —
-		// a compiler stack trace with no diagnostic, on the very program `checkTypeSymbolNamespace` had
-		// already recorded an E3006 for. The crash came first, so that E3006 could never be printed.
+		// pair agreed exactly until something asked this one on its own. `noteDestructorUsage` does: it
+		// reaches this for any instance whose `__destruct_<mangled>` is in the needed set, and a base-less
+		// builtin walked into the field loop below reads a base struct that does not exist. Measured, on the
+		// compiler that had the guard on only one of the pair: `panic ProgramSignatures.baseLayoutOf: generic
+		// instance 3's base struct 'Array' is not declared` — a stack trace with no diagnostic at all.
+		//
+		// ⚠ The ROUTE that reached it is closed as of P1.7's reserved-space disjointness, and the guard stays
+		// anyway. It used to be a NAME collision: the needed set is keyed by symbol, so a declared
+		// `type Array_Foo` owning a String put `__destruct_Array_Foo` there and pulled the base-less
+		// `Array with Foo` instance in behind it. That instance is `__Array_Foo` now (`reservedIfDeclared`),
+		// so the two names cannot meet — but the guard is this walk's STRUCTURAL precondition, not a patch on
+		// that one route, and `declared-type-owning-a-string-named-like-an-array-instance` is the case that
+		// re-measures it.
 		//
 		// `false` is the ANSWER, not a dodge: an `Array`/`Set` instance owns no substituted String field. Its
 		// elements are released by `__arr_decref`/`__set_decref` walking the record, never by a synthesized
