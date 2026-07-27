@@ -82,6 +82,26 @@ let HashMixWidthMask = 0xFFFFFFFF as HashMixWord
 // ⚠ It deliberately does NOT change `hash()` itself, and it is NOT what the containers cache in
 // their `hashes` arrays. Those hold the key's true `hash()`, which is what the probe's
 // skip-the-full-`equals()` guard compares; spreading is purely how a hash becomes an INDEX.
+//
+// ⚠ **IT IS INSURANCE, AND THE PREMIUM IS ~3x PROBES ON THE ONE KEY SHAPE THE IDENTITY HASH GETS
+// PERFECT.** A DENSE ASCENDING int run — `0, 1, 2, …` inserted in increasing order — puts every key
+// at its own home slot under the identity hash: **1.000 probes per insert, zero collisions.**
+// Spreading trades that for the ordinary open-addressing average at a 3/4 load factor. Replaying
+// real key sequences through this exact algorithm (shv2 review, 2026-07-26; 601 functions of up to
+// 49 blocks, ascending in 601/601):
+//
+//        identity hash      1.000 probes/insert
+//        spreadHash         2.449 probes/insert
+//
+// and the same replay over a synthetic ladder reads **1.25x at 4 keys, 2.09x at 32, 3.05x at 256,
+// 3.22x at 19,201** — so the premium GROWS with the table and settles near 3x. It buys the
+// guarantee above, which is worth it for a container that cannot know its callers' key order: the
+// alternative is a 150x cliff nobody sees coming.
+//
+// ⇒ **A `Map`/`Set` whose keys ARE a dense index space wants an ARRAY, not a hash table** — the key
+// is already the index, so both operations become one bounds-checked array access with no hash, no
+// rehash chain and two columns instead of four. That is what shv2's `BlockKeyedTable` is, and why
+// it exists even though this function had already made the quadratic above unreachable.
 export function spreadHash(hash HashValue) returns HashValue
 	var h = hash as HashMixWord
 	h = h xor (h shr 16)

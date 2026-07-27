@@ -103,8 +103,18 @@ export type BlockKeyedTable uses Value
 		return table
 	end 'forBlockCount'
 
-	// Record `value` for block `id`. Re-placing an id overwrites, which is what the runtime chunk
-	// builders' label reuse relies on.
+	// Record `value` for block `id`.
+	//
+	// ⚠ Re-placing an id OVERWRITES rather than refusing, and NO CALLER DEPENDS ON THAT — every one of
+	// the seventeen `place` sites writes each id exactly once. The encoders walk `func.blockRefs`,
+	// whose ids are unique because `IrModule.addBlock` mints them from a per-function counter; the
+	// hand-assembled runtime chunks mint each label from `X64RuntimeAsm.newLabel` into a table created
+	// fresh per chunk, so a label CONSTANT like `ShimDoneLabel` is reused ACROSS chunks and never twice
+	// within one. What the overwrite therefore absorbs is a DUPLICATE BlockId — which re-points every
+	// branch to the first block at the second, exactly the failure
+	// `TargetLiveness.buildFuncTopology` asserts against at length. That assertion runs only on the
+	// NATIVE path: wasm and the front end reach this table without it. Refusing a re-place here would
+	// close that gap for all three users, and is a contract change rather than a comment.
 	export function place(id BlockId, value Value)
 		let needed = id + 1
 		self.values.growFilled(needed, value: value)
@@ -118,9 +128,11 @@ export type BlockKeyedTable uses Value
 	// caller turns that into a panic naming its own fixup or branch, which is more use than one
 	// message here could be.
 	export function get(id BlockId) returns Value throws BlockTableLookupError
-		let known = try self.present.get(id) otherwise 'past'
-			throw BlockTableLookupError.absent
-		end 'past'
+		// An id PAST the column and an id inside it that nothing placed are the same answer, so they
+		// share the one `throw`: `forBlockCount` sizes `present` to the function's id space while the
+		// value column fills as ids arrive, which makes "past the end" an ordinary way to be absent
+		// rather than a second condition.
+		let known = try self.present.get(id) otherwise false
 
 		if not known 'notPlaced'
 			throw BlockTableLookupError.absent

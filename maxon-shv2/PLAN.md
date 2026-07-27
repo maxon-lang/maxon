@@ -2951,7 +2951,7 @@ trigger, not chased (a superlinearity you can *trigger* today is fixed, not file
   header calls the ordering load-bearing). `matchingEndOf` from `4110c7d00` is the piece it builds on.
   **Re-measure trigger:** any corpus knob that raises mutable-vars-in-scope, or an inliner that fuses functions.
 
-- **✅ #123 — THE `Map` PROBE TRAP — CLOSED 2026-07-27. Instance, class AND every named site are done; nothing is
+- **✅ #123 — THE `Map` PROBE TRAP — CLOSED 2026-07-26. Instance, class AND every named site are done; nothing is
   left as debt, and the five maps' verdicts were MEASURED rather than assumed.** The trap: `stdlib` `Map` is
   open-addressed with linear probing and `int.hash()` is the **identity**
   (`stdlib/PrimitiveExtensions.maxon:3-5`), so a key's home slot was `id and (capacity-1)`. Insert two contiguous id
@@ -2961,12 +2961,12 @@ trigger, not chased (a superlinearity you can *trigger* today is fixed, not file
   exceeded the id range — 171.44 probes/insert against 1.00 for the same keys sorted. Three things closed it:
   - **The INSTANCE** — `a78d17c35` made the encoder's table two pre-sized arrays (the key WAS the index).
   - **The CLASS** — ⚠ **the mixer this entry used to say was "DELIBERATELY NOT DONE" HAS BEEN DONE**, in
-    `4def53ced`: `spreadHash` (MurmurHash3 `fmix32`, `stdlib/Interfaces.maxon:85`) now avalanches a hash at all six
+    `4def53ced`: `spreadHash` (MurmurHash3 `fmix32`, `stdlib/Interfaces.maxon:105`) now avalanches a hash at all six
     slot derivations in `Map`/`Set`, so **no key ORDER can cluster and the trap is unreachable for any key shape**.
     The iteration-order risk this entry declined it on was *measured*, not reasoned about, and is zero:
     `specs-shv2/fragments/` empty on two targets, the bootstrap's fragment diff byte-identical, all 16 `Map`/`Set`
     iteration sites swept, `verify-warm-rebuild` PASS.
-  - **The SITES** — the two remaining `BlockId`-keyed maps became dense tables (2026-07-27).
+  - **The SITES** — the two remaining `BlockId`-keyed maps became dense tables (2026-07-26).
     `SemanticCheck.buildBlockByIdMap` and `StdToWasm.BlockDispatchMap` are gone; both now read one
     `BlockIndexById` from `IrModule.blockIndexById` (the inverse of `func.blockRefs`), an instantiation of the new
     generic `BlockKeyedTable` (`Compiler/IR/`) that `BlockOffsetTable` also instantiates — **one array-pair-with-
