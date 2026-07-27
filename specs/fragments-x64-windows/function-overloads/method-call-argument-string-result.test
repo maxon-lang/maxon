@@ -1,0 +1,127 @@
+// Test: method-call-argument-string-result
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	export function label() returns String
+		return "leaf"
+	end 'label'
+end 'Leaf'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function main() returns ExitCode
+	let leaf = Leaf.make(7)
+	return over(leaf.label())
+end 'main'
+---
+ExitCode: 204
+---
+// CompiledIR
+module {
+  func @Leaf.make(tally: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 10
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Leaf.label(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rax, [rip+__static_lit_5]
+    x64.mov rdx, rax
+    x64.mov rax, 32
+    x64.add rdx, rax
+    x64.mov [rbp-8], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @over$x_String(x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.String.count
+    x64.mov rcx, 200
+    x64.add rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 7
+    x64.call Leaf.make
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Leaf.label
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.call over$x_String
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Leaf(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Leaf.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -218,6 +218,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private const int MaxErrorsPerFile = 20;
   public IReadOnlyList<CompileError> Errors => _errors;
 
+  /// The name `Self` carries in a type position — always "the enclosing/receiving type". It is a
+  /// keyword (TokenType.SelfType), so no user type can collide with it. Named here because the
+  /// parser tests for it in four unrelated places and each spelling is the same one fact.
+  private const string SelfTypeName = "Self";
+
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
@@ -4945,7 +4950,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Build full substitution including self-reference: ListNode → IntNode
     var fullSubstitution = new Dictionary<string, IrType>(substitution) {
       [sourceName] = concreteAliasType,
-      ["Self"] = concreteAliasType
+      [SelfTypeName] = concreteAliasType
     };
 
     var concreteCases = new List<IrEnumCase>();
@@ -12011,7 +12016,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       "f32" => MaxonValueKind.Float32,
       "bool" => MaxonValueKind.Bool,
       "byte" => MaxonValueKind.Byte,
-      "Self" => MaxonValueKind.Struct,
+      SelfTypeName => MaxonValueKind.Struct,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrInterfaceType => MaxonValueKind.Struct,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrStructType => MaxonValueKind.Struct,
       { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is IrEnumType => MaxonValueKind.Enum,
@@ -12020,7 +12025,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       { } n => throw new CompileError(ErrorCode.IrInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
     };
     string? resultStructTypeName = null;
-    if (ifaceMethod.ReturnTypeName == "Self") {
+    if (ifaceMethod.ReturnTypeName == SelfTypeName) {
       resultStructTypeName = userTypeName;
     } else if (ifaceMethod.ReturnTypeName != null
         && _typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName, out var retType)
@@ -20290,20 +20295,138 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
   }
 
-  /// Infer the type of an identifier-starting argument, including dotted field access (e.g., nameToken.value).
+  /// Infer the type of an identifier-rooted argument by walking its whole postfix chain —
+  /// `x`, `x.field`, `x.method()`, and any mix of those, to any depth.
+  ///
+  /// Every step must land on a concrete type or the entire walk gives up. That asymmetry is the
+  /// point: null means "no information" and leaves the caller's remaining filters in charge,
+  /// whereas a WRONG type actively mis-scores — it can rule the only correct overload
+  /// incompatible and drop the call into "no overload matches — pick first", which resolves by
+  /// DECLARATION ORDER and then reports the mismatch against an overload nobody asked for.
+  ///
+  /// A partially walked chain is a wrong type, not a partial one: it is the type of a DIFFERENT
+  /// expression than the one written. That is exactly how a method call used to be scored — the
+  /// walk stopped at the receiver and handed back the receiver's type, so `a.count()` was scored
+  /// as an `Array`. Stopping early is never the safe direction here; stopping at null is.
   private IrType? InferIdentifierArgType(string name) {
-    // Check for dotted field access: identifier.field
-    if (_pos + 2 < _tokens.Count
-        && _tokens[_pos + 1].Type == TokenType.Dot
-        && _tokens[_pos + 2].Type == TokenType.Identifier) {
-      var baseType = InferIdentifierType(name);
-      if (baseType is IrStructType st) {
-        var fieldName = _tokens[_pos + 2].Value;
-        var field = st.Fields.FirstOrDefault(f => f.Name == fieldName);
-        if (field != null) return field.Type;
+    var type = InferIdentifierType(name);
+
+    // `_pos` addresses the root identifier, so the chain starts one token later. The walk uses a
+    // local cursor because this peek must leave `_pos` where it found it — the caller resumes
+    // from the argument's first token to find the next argument boundary.
+    int cursor = _pos + 1;
+
+    while (type != null
+           && cursor + 1 < _tokens.Count
+           && _tokens[cursor].Type == TokenType.Dot
+           && _tokens[cursor + 1].Type == TokenType.Identifier) {
+      var memberName = _tokens[cursor + 1].Value;
+      bool isCall = cursor + 2 < _tokens.Count && _tokens[cursor + 2].Type == TokenType.LeftParen;
+
+      if (!isCall) {
+        type = InferMemberFieldType(type, memberName);
+        cursor += 2;
+        continue;
+      }
+
+      type = InferMethodCallResultType(type, memberName);
+      cursor = IndexAfterMatchingParen(cursor + 2);
+      if (cursor < 0) return null; // unterminated argument list — not the shape this walk assumes
+    }
+
+    return type;
+  }
+
+  /// The type of `<receiver>.<fieldName>`, or null when the receiver has no such field or the
+  /// field's type does not pin down to something concrete.
+  private IrType? InferMemberFieldType(IrType receiver, string fieldName) {
+    if (receiver is not IrStructType receiverStruct) return null;
+
+    var field = receiverStruct.Fields.FirstOrDefault(f => f.Name == fieldName);
+    if (field == null) return null;
+
+    return ConcreteTypeThroughReceiver(field.Type, receiverStruct);
+  }
+
+  /// The result type of `<receiver>.<methodName>(...)`, or null when it cannot be pinned down.
+  ///
+  /// Overloads of the method are deliberately NOT resolved here. Picking among them needs the
+  /// inner call's own argument types, which is the very question being answered one level up, so
+  /// a method whose overloads disagree about their return type yields "no information" rather
+  /// than a guess. When they all agree, which one runs cannot change the answer.
+  private IrType? InferMethodCallResultType(IrType receiver, string methodName) {
+    var receiverTypeName = receiver switch {
+      IrStructType structType => structType.Name,
+      IrEnumType enumType => enumType.Name,
+      _ => null
+    };
+    if (receiverTypeName == null) return null;
+
+    var resolvedName = ResolveMethodName($"{receiverTypeName}.{methodName}");
+    if (resolvedName == null) return null;
+
+    IrType? agreed = null;
+    foreach (var candidate in ResolveFunctionOverloads(resolvedName)) {
+      if (candidate.ReturnType == null) return null; // void — there is no argument type to score
+
+      var returnType = ConcreteTypeThroughReceiver(candidate.ReturnType, receiver as IrStructType);
+      if (returnType == null) return null;
+
+      if (agreed == null) {
+        agreed = returnType;
+      } else if (agreed.Name != returnType.Name
+                 || TypeMangledSuffix(agreed) != TypeMangledSuffix(returnType)) {
+        return null;
       }
     }
-    return InferIdentifierType(name);
+
+    // Also null when the name resolved but no candidate survived visibility filtering.
+    return agreed;
+  }
+
+  /// Substitutes the receiver's type-parameter bindings into <paramref name="type"/> and hands it
+  /// back only if the result is fully concrete.
+  ///
+  /// The substitution is what makes a generic receiver work at all: `Array.count()` is declared
+  /// against the template, so a method returning `Element` means "the receiver's element type",
+  /// which only `WideArray`'s own bindings can say. A type still carrying a type parameter must
+  /// not be returned — `TypeMangledSuffix` would compare the PARAMETER's name ("Element") against
+  /// a real type's, which never matches and would wrongly rule the candidate out.
+  private IrType? ConcreteTypeThroughReceiver(IrType type, IrStructType? receiver) {
+    // `returns Self` means "the receiver's own type". Every route I could construct resolves the
+    // keyword while PARSING the signature (a method in a concrete type gets that type; one in an
+    // interface gets the interface), so the bare name should never survive into a ReturnType —
+    // measured, not assumed: an explicit `returns Self` method scores correctly without this
+    // branch. It is kept because the failure it prevents is silent and one-directional:
+    // `IsFullyConcreteType` waves through a type literally named "Self", which then matches no
+    // parameter and rules out a candidate that was fine. Since `Self` is a keyword no user type
+    // can be named it, so this can only ever turn a wrong answer into a right one.
+    if (type.Name == SelfTypeName)
+      return receiver != null && IsFullyConcreteType(receiver) ? receiver : null;
+
+    var resolved = receiver != null && receiver.TypeParams.Count > 0
+      ? ResolveTypeParam(type, BuildFullTypeParams(receiver.Name, receiver))
+      : type;
+
+    return IsFullyConcreteType(resolved) ? resolved : null;
+  }
+
+  /// Index of the token just past the `)` closing the `(` at <paramref name="openIndex"/>, or -1
+  /// if the stream ends first. Only parentheses can move that closing token — brackets and braces
+  /// nest strictly inside it — so they need no counting.
+  private int IndexAfterMatchingParen(int openIndex) {
+    int depth = 0;
+
+    for (int i = openIndex; i < _tokens.Count; i++) {
+      if (_tokens[i].Type == TokenType.LeftParen) {
+        depth++;
+      } else if (_tokens[i].Type == TokenType.RightParen) {
+        depth--;
+        if (depth == 0) return i + 1;
+      }
+    }
+
+    return -1;
   }
 
   private IrType? InferIdentifierType(string name) {
@@ -21479,7 +21602,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     foreach (var (paramName, paramType) in returnStruct.TypeParams) {
       if (paramType is IrTypeParameterType tp) {
         // Self type parameter resolves to the concrete self type
-        if (tp.ParameterName == "Self") {
+        if (tp.ParameterName == SelfTypeName) {
           resolvedReturnParams[paramName] = selfStruct;
           continue;
         }

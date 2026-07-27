@@ -306,3 +306,287 @@ end 'main'
 ```exitcode
 16
 ```
+
+<!-- test: method-call-argument -->
+An argument that is itself a METHOD CALL is scored by the METHOD'S RETURN TYPE,
+not by the receiver's type. `a.count()` is an integer however `a` is declared,
+so it selects `over(x Wide)` even though the `String` overload is declared
+first. Declaration order is the whole point of this test: with the matching
+overload written first, picking the first candidate would look correct by luck.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+typealias WideArray = Array with Wide
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	var a = WideArray.create()
+	a.push(7)
+	return over(a.count())
+end 'main'
+```
+```exitcode
+101
+```
+
+<!-- test: method-call-argument-via-variable -->
+The same call routed through a local binding. Binding the result first has
+always worked; it is the control that says the method-call form must agree
+with it rather than resolving to something else.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+typealias WideArray = Array with Wide
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	var a = WideArray.create()
+	a.push(7)
+	let n = a.count()
+	return over(n)
+end 'main'
+```
+```exitcode
+101
+```
+
+<!-- test: method-call-argument-receiver-type-is-wrong -->
+The receiver's type is not merely unhelpful here, it is the WRONG answer:
+`s` is a `String` and `s.count()` is an integer, so scoring the argument as
+the receiver would match the `String` overload — which is declared first —
+and then fail the call-site check on a parameter that never fitted.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let s = "hello"
+	return over(s.count())
+end 'main'
+```
+```exitcode
+105
+```
+
+<!-- test: method-call-argument-chained -->
+A chain resolves left to right: `t.branch()` yields a `Leaf`, and `size()` is
+looked up on THAT type rather than on `t`.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	export function size() returns Wide
+		return self.tally
+	end 'size'
+end 'Leaf'
+
+type Trunk
+	export var leaf as Leaf
+
+	export static function make(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'make'
+
+	export function branch() returns Leaf
+		return self.leaf
+	end 'branch'
+end 'Trunk'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let t = Trunk.make(Leaf.make(7))
+	return over(t.branch().size())
+end 'main'
+```
+```exitcode
+107
+```
+
+<!-- test: method-call-argument-on-field -->
+A method call whose receiver is a FIELD, not a bare variable. The field's
+declared type owns the method, so `t.leaf.size()` must resolve through `Leaf`.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	export function size() returns Wide
+		return self.tally
+	end 'size'
+end 'Leaf'
+
+type Trunk
+	export var leaf as Leaf
+
+	export static function make(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'make'
+end 'Trunk'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let t = Trunk.make(Leaf.make(7))
+	return over(t.leaf.size())
+end 'main'
+```
+```exitcode
+107
+```
+
+<!-- test: method-call-argument-string-result -->
+The mirror of the integer cases, with the overloads written in the opposite
+order: a method call returning `String` must select the `String` overload even
+though the `Wide` one comes first, and even though the receiver is a struct
+that is neither.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	export function label() returns String
+		return "leaf"
+	end 'label'
+end 'Leaf'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function main() returns ExitCode
+	let leaf = Leaf.make(7)
+	return over(leaf.label())
+end 'main'
+```
+```exitcode
+204
+```
+
+<!-- test: method-call-argument-generic-element -->
+The method's declared return type is the type PARAMETER `T`, which carries no
+information on its own. It is resolved through the receiver alias's binding
+(`WideCell` binds `T` to `Wide`) before it is scored; without that
+substitution the only sound answer would be "unknown".
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+type Cell uses T
+	export var value as T
+
+	export static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+
+	export function unwrap() returns T
+		return self.value
+	end 'unwrap'
+end 'Cell'
+
+typealias WideCell = Cell with Wide
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let c = WideCell.create(7)
+	return over(c.unwrap())
+end 'main'
+```
+```exitcode
+107
+```
+
+<!-- test: method-call-argument-returns-self -->
+A chainable method declared `returns Self` yields the RECEIVER's type, so it
+must keep selecting the `Widget` overload however long the chain gets. This is
+the one shape the old receiver-typed guess got right by accident — scoring
+`w.bump()` as `w` happens to be correct exactly when the method returns `Self`
+— so it is the case most at risk of quietly regressing.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+type Widget
+	export var id as Wide
+
+	export static function make(id Wide) returns Self
+		return Self{id: id}
+	end 'make'
+
+	export function bump() returns Self
+		return Widget{id: self.id + 1}
+	end 'bump'
+end 'Widget'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Widget) returns Wide
+	return x.id + 100
+end 'over'
+
+function main() returns ExitCode
+	let w = Widget.make(7)
+	return over(w.bump().bump())
+end 'main'
+```
+```exitcode
+109
+```
