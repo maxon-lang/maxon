@@ -1,0 +1,165 @@
+// Test: crossfile-instantiation-compiles-onto-declared-type
+// --- file: a.maxon
+typealias Num = int(0 to 100)
+
+export type Box uses T
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+	export function tag() returns Num
+		return 7
+	end 'tag'
+end 'Box'
+
+export typealias SBox = Box with String
+
+// --- file: b.maxon
+typealias Num = int(0 to 100)
+
+export type Box_String
+	export var a as String
+	export static function make() returns Self
+		return Self{a: "x"}
+	end 'make'
+	export function tag() returns Num
+		return 8
+	end 'tag'
+end 'Box_String'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = SBox.create("hello")
+	let t = Box_String.make()
+	return s.tag() + t.tag()
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
+    arm64.add x0, x20, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.add x22, x21, 48
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x0, x22, x20
+    arm64.storeBaseDispReg.word64 [x21 + 0], x22
+    arm64.storeBaseDispReg.word64 [x21 + 8], x20
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x21 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x21 + 24], x0
+    arm64.movRegReg x0, x21
+    arm64.bl Box.create
+    arm64.movRegReg x19, x0
+    arm64.bl Box_String.make
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Box.tag
+    arm64.movRegReg x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl Box_String.tag
+    arm64.add x21, x21, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Box_String
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct___Box_String
+    arm64.movRegReg x0, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Box.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Box.tag {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Box_String.make {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x19, __str_rec_3
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
+    arm64.add x0, x19, 49
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x22, x0
+    arm64.add x23, x22, 48
+    arm64.movRegReg x0, x23
+    arm64.movRegReg x1, x21
+    arm64.movRegReg x2, x19
+    arm64.bl __str_copy
+    arm64.add x0, x23, x19
+    arm64.storeBaseDispReg.word64 [x22 + 0], x23
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.movImm x0, -3
+    arm64.storeBaseDispReg.word64 [x22 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x22 + 24], x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x22
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @Box_String.tag {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 8
+    arm64.epilogue 16
+    arm64.ret
+}

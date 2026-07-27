@@ -1,0 +1,37 @@
+// Test: error.two-instantiations-compile-to-one-name-a-declaration-also-holds
+typealias Small = int(0 to 100)
+
+type Str
+	export var v as Small
+end 'Str'
+
+type Box
+	export var v as Small
+end 'Box'
+
+type Box_Int
+	export var v as Small
+end 'Box_Int'
+
+type Int_Str
+	export var v as Small
+end 'Int_Str'
+
+type Pair_Box_Int_Str
+	export var v as Small
+end 'Pair_Box_Int_Str'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+typealias P1 = Pair with (Box_Int, Str)
+typealias P2 = Pair with (Box, Int_Str)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:30:11: duplicate definition of '__Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
