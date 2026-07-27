@@ -606,7 +606,9 @@ export type SplitEdits
 			let entry = from + j
 			let opIdx = try self.opIdxs.get(entry) otherwise panic("SplitEdits.commitBlock: opIdxs.get OOB at {entry}")
 			let at = (try self.positions.get(entry) otherwise panic("SplitEdits.commitBlock: positions.get OOB at {entry}")) + j
-			self.insertedSlots.push(pressure.insertOp(module, topo: topo, scratch: relayout, opFacts: opFacts, blockLocal: blockLocal, pos: at, opIdx: opIdx, buf: buf))
+			// The slots already recorded are handed down, because a re-space MOVES the ops they name — see
+			// `PressureRelayoutScratch.applyMoves`, which is the repair that keeps them valid.
+			self.insertedSlots.push(pressure.insertOp(module, topo: topo, scratch: relayout, opFacts: opFacts, blockLocal: blockLocal, pos: at, opIdx: opIdx, buf: buf, pending: self.insertedSlots))
 		end 'eachSplice'
 
 		if withRemoval 'dropTheDeadDef'
@@ -670,10 +672,11 @@ export type SplitEdits
 
 	// The slots this batch's spliced ops were seated at, appended to `out`.
 	//
-	// ⚠ A RE-SPACE INVALIDATES THEM, and cannot happen between the seat and this read: `commit` runs to
-	// completion before anything asks, and the only thing that re-spaces is `insertOp` — which does so
-	// BEFORE it seats, so every slot it has already returned in this batch is re-derived by the same
-	// re-space. That is why they are read back here rather than carried across the split.
+	// ⚠ A RE-SPACE INVALIDATES THEM, and one CAN happen between the seat and this read: `insertOp`
+	// re-spaces whenever the gap it wants is used up, which is mid-batch as soon as a batch puts a second
+	// op into one gap. So the column is handed to every re-space and REPAIRED there
+	// (`PressureRelayoutScratch.applyMoves`). It used to say instead that a re-space "re-derived" them,
+	// which nothing did — see that function for what the missing repair actually cost.
 	export function appendInsertedSlots(out DenseColumn)
 		out.append(self.insertedSlots)
 	end 'appendInsertedSlots'
@@ -947,6 +950,25 @@ typealias PressureDeltaColumn = Array with PressureDelta
 // used up and the whole layout is re-spaced (`PressureIndex.relayout`). It is a power of two so a
 // block's run stays one.
 let SlotGap = 4 as PressureSlot
+
+// The smallest stride a re-space may leave between neighbouring ops. `freeSlotAt` takes the MIDPOINT of
+// two neighbours, so two slots apart is exactly the point at which one free slot separates them and a
+// further splice has somewhere to go; anything less is a range that cannot absorb the splice at all.
+let MinRespaceStride = 2 as PressureSlot
+
+// The distance between neighbouring ops when `count` of them are spread EVENLY over `len` slots — what
+// a RE-SPACE places by, as against `evenSlot`, which places by a fixed gap into a run the layout has
+// just sized for exactly that. A run of `count` ops has `count + 1` gaps, one ahead of each op and one
+// after the last, so the divisor cannot be zero.
+//
+// BOTH ENDS OF THE RANGE STAY FREE by construction: op 0 lands a whole stride in, and op `count - 1`
+// lands at most `len - stride` in. That is precisely what `freeSlotAt` needs at each end of a block — a
+// free slot ahead of the first op for a position-0 splice, and the exit leaf clear of the last.
+function spreadStride(len PressureSlot, count BlockOpPos) returns PressureSlot
+	let gaps = count + 1
+	let stride = try (len / gaps) otherwise panic("spreadStride: a run of {count} op(s) was said to have {gaps} gaps")
+	return stride
+end 'spreadStride'
 
 // `best` for a subtree holding no op at all — it must lose every comparison against a real op and stay
 // negative after the O(log slots) `sum` additions the combines fold into it, so it sits far below any
@@ -1222,31 +1244,51 @@ export type PressureIndex
 		return try self.nodeBest.get(classRowIndex(node, class: class)) otherwise panic("PressureIndex.bestOf: nodeBest.get OOB at node {node}")
 	end 'bestOf'
 
-	// Every internal node, bottom-up — O(slots), once per layout.
-	function buildAll()
-		for s in 0 upto self.slotCount 'eachLeaf'
-			self.refreshLeaf(s)
+	// Every leaf of `node`'s subtree and then every internal node of it, bottom-up — O(the subtree's
+	// slots). `node` covers `[first, first + len)`, and `len` is a power of two.
+	//
+	// THE ONE REBUILD. The whole tree is the case `node == 1, first == 0, len == slotCount`, and a local
+	// re-space is the same walk over one subtree. A second copy of the level walk for the small case
+	// would be a second chance to fold a level the wrong way while every leaf stays right — the one
+	// error `verifyPressureIndex` cannot see and `blockPeakByScan` exists to catch.
+	function rebuildRange(node ColumnLength, first PressureSlot, len PressureSlot)
+		for k in 0 upto len 'eachLeaf'
+			self.refreshLeaf(first + k)
 		end 'eachLeaf'
-		for ri in 0 upto self.slotCount - 1 'eachInternal'
-			self.combine(self.slotCount - 1 - ri)
-		end 'eachInternal'
-	end 'buildAll'
+		// The subtree's internal nodes DEEPEST FIRST. The level `w` levels below `node` holds exactly `w`
+		// nodes starting at `node * w` — so `w == 1` is `node` itself, and halving `w` down from `len / 2`
+		// walks the levels bottom-up.
+		var width = len / 2
+		while width >= 1 'eachLevel'
+			let base = node * width
+			for i in 0 upto width 'eachNodeAtLevel'
+				self.combine(base + i)
+			end 'eachNodeAtLevel'
+			width = width / 2
+		end 'eachLevel'
+	end 'rebuildRange'
 
-	// Re-publish ONE leaf up to its BLOCK's node — O(log slots in the block). It stops there because
-	// nothing above a block's node is ever read: a node spanning two blocks aggregates two suffix sums
-	// that no query joins, so maintaining it would be work with no reader.
+	// Re-publish ONE leaf up to its BLOCK's node — O(log slots in the block).
 	function promote(blockLocal CfgIndex, slot PressureSlot)
 		self.refreshLeaf(slot)
+		self.promoteFrom(blockLocal, node: self.slotCount + slot)
+	end 'promote'
+
+	// Re-publish every parent of `node` up to its BLOCK's node — the parents a subtree rebuild did not
+	// reach. It stops at the block node because nothing above one is ever read: a node spanning two
+	// blocks aggregates two suffix sums that no query joins, so maintaining it would be work with no
+	// reader.
+	function promoteFrom(blockLocal CfgIndex, node ColumnLength)
 		let top = self.nodeOf(blockLocal)
-		var node = (self.slotCount + slot) / 2
-		while node >= top 'upToTheBlockNode'
-			self.combine(node)
-			if node == top 'atTheBlockNode'
+		var parent = node / 2
+		while parent >= top 'upToTheBlockNode'
+			self.combine(parent)
+			if parent == top 'atTheBlockNode'
 				return
 			end 'atTheBlockNode'
-			node = node / 2
+			parent = parent / 2
 		end 'upToTheBlockNode'
-	end 'promote'
+	end 'promoteFrom'
 
 	// ----------------------------------------------------------------------
 	// QUERIES
@@ -1419,12 +1461,12 @@ export type PressureIndex
 	// Seat a newly spliced op at forward position `pos` of `blockLocal` and return its slot. The slot is
 	// a FREE one strictly between the ops now at `pos - 1` and `pos`, so nothing already in the tree
 	// moves; when the gap between them is used up the whole layout is re-spaced first.
-	export function insertOp(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts, blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex, buf OperandList) returns PressureSlot
+	export function insertOp(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts, blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex, buf OperandList, pending DenseColumn) returns PressureSlot
 		var slot = self.freeSlotAt(blockLocal, pos: pos)
 		if slot == self.exitSlotOf(blockLocal) 'gapUsedUp'
-			// The one place the gap labelling can fail — see `relayout` for why its worst case is the very
-			// cost this index removes, and therefore never a reason not to have it.
-			self.relayout(module, topo: topo, scratch: scratch, opFacts: opFacts)
+			// The one place the gap labelling can fail — see `makeRoom` for the scope it re-spaces and why
+			// that is the block's business and not the function's.
+			self.makeRoom(module, topo: topo, scratch: scratch, opFacts: opFacts, blockLocal: blockLocal, pos: pos, pending: pending)
 			slot = self.freeSlotAt(blockLocal, pos: pos)
 			if slot == self.exitSlotOf(blockLocal) 'stillUsedUp'
 				panic("PressureIndex.insertOp: block {blockLocal} still has no free slot before position {pos} after a re-space that gave it {self.runLengthOf(blockLocal)} slots — the layout's gap arithmetic and `freeSlotAt`'s bounds have come apart")
@@ -1448,7 +1490,7 @@ export type PressureIndex
 	// exactly this reason; the upper bound at the end of the body is the exit leaf, which it also never
 	// seats one in. So both ends of a block have room and neither needs a special case beyond the bound.
 	function freeSlotAt(blockLocal CfgIndex, pos BlockOpPos) returns PressureSlot
-		let low = self.firstSlotOf(blockLocal) if pos == 0 else self.slotOfPosition(blockLocal, pos: pos - 1)
+		let low = self.spliceLowBound(blockLocal, pos: pos)
 		let high = self.slotOfPosition(blockLocal, pos: pos)
 		if high <= low + 1 'noRoom'
 			return self.exitSlotOf(blockLocal)
@@ -1456,16 +1498,29 @@ export type PressureIndex
 		return low + (high - low) / 2
 	end 'freeSlotAt'
 
-	// Vacate `slot` — the op there left the function (a fully rematerialized constant's def). Its leaf
-	// returns to the empty state so nothing it carried survives as a phantom program point.
-	export function removeOp(blockLocal CfgIndex, slot PressureSlot)
-		try self.holdsOp.set(slot, value: false) otherwise panic("PressureIndex.removeOp: holdsOp.set OOB at slot {slot}")
-		try self.nodeClobber.set(self.slotCount + slot, value: 0) otherwise panic("PressureIndex.removeOp: nodeClobber.set OOB at slot {slot}")
+	// The lower bound of the free stretch a splice at `pos` may take: the slot of the op it will follow,
+	// or the run's FIRST slot at position 0 — which the layout never seats an op in, so a splice at the
+	// top of a block needs no special case beyond this bound.
+	function spliceLowBound(blockLocal CfgIndex, pos BlockOpPos) returns PressureSlot
+		return self.firstSlotOf(blockLocal) if pos == 0 else self.slotOfPosition(blockLocal, pos: pos - 1)
+	end 'spliceLowBound'
+
+	// Return `slot` to the EMPTY state — no op, no clobber, no population numbers — so nothing it carried
+	// survives as a phantom program point. The tree is NOT republished here: `removeOp` does that for its
+	// one slot, `respaceRange` does it once for a whole subtree.
+	function vacateLeaf(slot PressureSlot)
+		try self.holdsOp.set(slot, value: false) otherwise panic("PressureIndex.vacateLeaf: holdsOp.set OOB at slot {slot}")
+		try self.nodeClobber.set(self.slotCount + slot, value: 0) otherwise panic("PressureIndex.vacateLeaf: nodeClobber.set OOB at slot {slot}")
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			self.setDelta(slot, class: class, value: 0)
 			self.setTransient(slot, class: class, value: 0)
 		end 'eachClass'
+	end 'vacateLeaf'
+
+	// Vacate `slot` — the op there left the function (a fully rematerialized constant's def).
+	export function removeOp(blockLocal CfgIndex, slot PressureSlot)
+		self.vacateLeaf(slot)
 		self.promote(blockLocal, slot: slot)
 	end 'removeOp'
 
@@ -1538,33 +1593,98 @@ export type PressureIndex
 			liveness.clearRowAfterSweep(b, block: block, row: liveRow, scratch: seedBuf)
 		end 'eachBlock'
 
-		self.buildAll()
+		self.rebuildRange(1, first: 0, len: self.slotCount)
 	end 'rebuild'
 
+	// Make room for a splice at `pos` of `blockLocal`, whose gap is used up. THE ONE PLACE the gap
+	// labelling can fail, and the only cost in the index that is not proportional to what a split changed
+	// — so what it re-spaces, and how rarely, is the whole question.
+	//
+	// ⭐ THE SCOPE IS THE SMALLEST SUBTREE THAT CAN ABSORB IT, NOT THE FUNCTION. Climbing from the
+	// exhausted gap, the first ancestor whose ops still fit its own slots with a free slot between each
+	// neighbouring pair is re-spaced, and nothing outside it moves. A block's run is exactly one node, so
+	// every ancestor up to it lies inside the block — and the climb stops there, because a node spanning
+	// two blocks is not this block's to re-space.
+	//
+	// ⭐⭐ WHY THE FALLBACK IS AMORTIZED, which is what makes this a BOUND and not a hope. Only when the
+	// block's WHOLE RUN can no longer hold its ops two slots apart is the FUNCTION re-spaced. A run is
+	// laid out at `(k + 1) * SlotGap + 1` slots rounded up to a power of two, so a block laid out with `k`
+	// ops has room for about `k * SlotGap / 2` before that test fails: with `SlotGap` at 4 the block must
+	// roughly DOUBLE its op count to force one. And `relayout` re-sizes every run from its current count,
+	// so the doubling starts over. A block can therefore force at most O(log(final ops / initial ops))
+	// function-wide re-spaces however many ops are spliced into it.
+	//
+	// A LOCAL re-space is Θ(the subtree), which for an ordinary collision is a few dozen slots.
+	function makeRoom(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts, blockLocal CfgIndex, pos BlockOpPos, pending DenseColumn)
+		let top = self.nodeOf(blockLocal)
+		// From the exhausted gap's LOWER neighbour, so every node the climb tests contains it: re-spacing a
+		// range that holds only the upper neighbour could leave the two still adjacent.
+		var node = (self.slotCount + self.spliceLowBound(blockLocal, pos: pos)) / 2
+		var len = 2 as PressureSlot
+		while node >= top 'climb'
+			let count = try self.nodeOps.get(node) otherwise panic("PressureIndex.makeRoom: nodeOps.get OOB at node {node}")
+			let stride = spreadStride(len, count: count)
+			if stride >= MinRespaceStride 'thisSubtreeAbsorbsIt'
+				// A node covering `len` leaves from `first` IS leaf `slotCount + first` divided by `len`, so
+				// the node index and its width state the range without a second column to keep current.
+				self.respaceRange(module, node: node, first: node * len - self.slotCount, len: len, count: count, stride: stride, blockLocal: blockLocal, opFacts: opFacts, scratch: scratch, pending: pending)
+				return
+			end 'thisSubtreeAbsorbsIt'
+			node = node / 2
+			len = len + len
+		end 'climb'
+
+		self.relayout(module, topo: topo, scratch: scratch, opFacts: opFacts, pending: pending)
+	end 'makeRoom'
+
+	// Re-space ONE subtree — `node`, covering `[first, first + len)` and holding `count` ops — evenly
+	// across its own slots, and republish it. Θ(len), and nothing outside the range moves.
+	//
+	// It reads the LEAVES, so every op's population numbers travel with it: a COPY of the index, never a
+	// re-derivation from the IR.
+	function respaceRange(module TargetModule, node ColumnLength, first PressureSlot, len PressureSlot, count BlockOpPos, stride PressureSlot, blockLocal CfgIndex, opFacts OpVariantFacts, scratch PressureRelayoutScratch, pending DenseColumn)
+		scratch.captureWindow(self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient, from: first, count: len)
+
+		// VACATE EVERY OLD SEAT BEFORE TAKING ANY NEW ONE. The two sets of slots overlap — a re-space that
+		// moves an op only a little may seat it where it already sat — so a single pass would clear a leaf
+		// this same re-space had already filled.
+		for k in 0 upto len 'eachOldSlot'
+			if scratch.holdsOpAt(first + k) 'anOp'
+				self.vacateLeaf(first + k)
+			end 'anOp'
+		end 'eachOldSlot'
+
+		var j = 0 as BlockOpPos
+		for k in 0 upto len 'eachMove'
+			let oldSlot = first + k
+			if not scratch.holdsOpAt(oldSlot) 'notAnOp'
+				continue
+			end 'notAnOp'
+			self.reseat(module, oldSlot: oldSlot, newSlot: first + (j + 1) * stride, opIdx: scratch.opAtSlot(oldSlot), opFacts: opFacts, scratch: scratch)
+			j = j + 1
+		end 'eachMove'
+
+		if j != count 'countDisagreesWithTheTree'
+			panic("PressureIndex.respaceRange: node {node} covering slots [{first}, {first + len}) claims {count} op(s) but its leaves hold {j} — the occupancy count `slotOfPosition` descends on has drifted from the `holdsOp` flags it summarises")
+		end 'countDisagreesWithTheTree'
+
+		scratch.applyMoves(pending)
+		self.rebuildRange(node, first: first, len: len)
+		self.promoteFrom(blockLocal, node: node)
+		logDebug(LogCategory.codegen, message: function() gives "PressureIndex: re-spaced {count} op(s) of block {blockLocal} across {len} slot(s)")
+	end 'respaceRange'
+
 	// Re-space every block's run so each op has its full gap again, GROWING the space of a block that has
-	// taken on more ops than its run was sized for. It reads the LEAVES — every op's number travels with
-	// it — so it is a COPY of the index, never a re-derivation from the IR, and it is the only thing that
-	// can fail in the gap labelling.
+	// taken on more ops than its run was sized for. Θ(THE FUNCTION'S SLOTS) — the last resort `makeRoom`
+	// falls back to, and see there for why a block must roughly double its op count to force one.
 	//
-	// ⚠ IT IS Θ(THE FUNCTION'S SLOTS), NOT Θ(ONE BLOCK'S, so its FREQUENCY is what has to stay near
-	// zero — this is the one thing in the index that is not proportional to what a split changed. A run
-	// of `k` ops holds `k * SlotGap` slots, and MIDPOINT insertion at one place halves the room each
-	// time, so a run tolerates `log2(SlotGap)` insertions nested at one spot and `SlotGap - 1` spread
-	// across each of its gaps before it re-spaces. `SlotGap` is chosen to make that unreached rather than
-	// rare: MEASURED at ZERO re-spaces on `genwidelive 400 sum` (396 splits into one block) and on the
-	// whole scale corpus. It is a COLUMN COPY, so even when it does fire it is far cheaper per slot than
-	// the operand-model walk the index replaces.
-	//
-	// ⚠ THE PRICE IS MEMORY, AND IT IS THE INDEX'S ONLY REGRESSION. `SlotGap` multiplies every column,
-	// and each block's run is additionally rounded up to a power of two and aligned to its own length
-	// (which is what makes a whole-block query one node read). MEASURED on the scale corpus: whole-compile
-	// bytes +8.9%, all of it linear. Halving `SlotGap` takes that to +3.5% with the CPU columns unmoved
-	// and no re-space on either instrument — it is left at 4 because the headroom is what keeps this
-	// function off the normal path, and the change that would make a tighter gap safe is a re-space of
-	// ONE BLOCK'S run (possible whenever the run is still large enough for its ops, which is the common
-	// case) rather than the function's.
-	function relayout(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts)
-		scratch.capture(self.blockFirst, runLen: self.blockLen, runHoldsOp: self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient)
+	// ⚠ THE PRICE OF THE GAP IS MEMORY, AND IT IS THE INDEX'S ONLY REGRESSION. `SlotGap` multiplies every
+	// column, and each block's run is additionally rounded up to a power of two and aligned to its own
+	// length (which is what makes a whole-block query one node read). MEASURED on the scale corpus:
+	// whole-compile bytes +8.9%, all of it linear.
+	function relayout(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts, pending DenseColumn)
+		scratch.captureRuns(self.blockFirst, runLen: self.blockLen)
+		scratch.captureWindow(self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient, from: 0, count: self.slotCount)
 
 		scratch.opCounts.refill(topo.numBlocks, value: 0)
 		for b in 0 upto topo.numBlocks 'countEachBlock'
@@ -1579,25 +1699,32 @@ export type PressureIndex
 				if not scratch.holdsOpAt(oldSlot) 'notAnOp'
 					continue
 				end 'notAnOp'
-				let newSlot = self.evenSlot(b, pos: pos)
-				let movedOpIdx = scratch.opAtSlot(oldSlot)
-				// ⚠ THE SCRATCH'S OWN OPERAND BUFFER, NOT THE CALLER'S. A re-space happens INSIDE `insertOp`,
-				// which is mid-way through seating an op of its own and still holding that op's operands —
-				// so borrowing the caller's list here leaves the interrupted seat recording the LAST moved
-				// op's defs instead of its own, and the fresh id's def slot then points at whatever the
-				// layout put in slot 0. (Measured, with the gap tightened to force a re-space on every
-				// insertion: `opAtSlot: slot 0 holds no op` on four spill tests.)
-				self.seatOp(newSlot, op: try module.ops.get(movedOpIdx) otherwise panic("PressureIndex.relayout: op {movedOpIdx} not in module.ops"), opIdx: movedOpIdx, opFacts: opFacts, buf: scratch.operands)
-				self.copyLeafNumbers(scratch, oldSlot: oldSlot, newSlot: newSlot)
+				self.reseat(module, oldSlot: oldSlot, newSlot: self.evenSlot(b, pos: pos), opIdx: scratch.opAtSlot(oldSlot), opFacts: opFacts, scratch: scratch)
 				pos = pos + 1
 			end 'eachOldSlot'
 			// The exit leaf's population travels too — it is a fact about the BLOCK, not about a slot.
 			self.copyLeafNumbers(scratch, oldSlot: scratch.exitOf(b), newSlot: self.exitSlotOf(b))
 		end 'eachBlock'
 
-		self.buildAll()
+		scratch.applyMoves(pending)
+		self.rebuildRange(1, first: 0, len: self.slotCount)
 		logDebug(LogCategory.codegen, message: function() gives "PressureIndex: re-spaced {topo.numBlocks} block(s) into {self.slotCount} slots")
 	end 'relayout'
+
+	// Move one op from `oldSlot` to `newSlot`: seat it, carry its population numbers across, and record
+	// the move so `applyMoves` can repair the slots the caller is holding.
+	//
+	// ⚠ THE SCRATCH'S OWN OPERAND BUFFER, NOT THE CALLER'S. A re-space happens INSIDE `insertOp`, which is
+	// mid-way through seating an op of its own and still holding that op's operands — so borrowing the
+	// caller's list here leaves the interrupted seat recording the LAST moved op's defs instead of its
+	// own, and the fresh id's def slot then points at whatever the layout put in slot 0. (Measured, with
+	// the gap tightened to force a re-space on every insertion: `opAtSlot: slot 0 holds no op` on four
+	// spill tests.)
+	function reseat(module TargetModule, oldSlot PressureSlot, newSlot PressureSlot, opIdx OpIndex, opFacts OpVariantFacts, scratch PressureRelayoutScratch)
+		self.seatOp(newSlot, op: try module.ops.get(opIdx) otherwise panic("PressureIndex.reseat: op {opIdx} not in module.ops"), opIdx: opIdx, opFacts: opFacts, buf: scratch.operands)
+		self.copyLeafNumbers(scratch, oldSlot: oldSlot, newSlot: newSlot)
+		scratch.recordMove(oldSlot, newSlot: newSlot)
+	end 'reseat'
 
 	function copyLeafNumbers(scratch PressureRelayoutScratch, oldSlot PressureSlot, newSlot PressureSlot)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
@@ -1608,41 +1735,88 @@ export type PressureIndex
 	end 'copyLeafNumbers'
 end 'PressureIndex'
 
-// The index's own state, taken aside so `relayout` can lay the runs out fresh and then read the old
-// ones back. It lives on `SplitScratch` rather than being built per re-space for the reason every other
+// The index's own leaves, taken aside so a re-space can lay slots out fresh and then read the old ones
+// back. It lives on `SplitScratch` rather than being built per re-space for the reason every other
 // buffer there does: a re-space allocating six function-sized columns would put the cost back where the
 // gap labelling exists to keep it away from.
+//
+// IT IS A WINDOW, NOT NECESSARILY THE WHOLE INDEX. A local re-space (`respaceRange`) copies aside only
+// the subtree it is about to re-space, which is what makes it Θ(that subtree); the function-wide
+// `relayout` is simply the case where the window is every slot. The per-BLOCK run columns are captured
+// separately, because only `relayout` re-sizes runs.
 export type PressureRelayoutScratch
 	export var opCounts as DenseColumn
 	// The re-space's OWN operand list — see the note at its one use.
 	export var operands as OperandList
 	var first as DenseColumn
 	var len as DenseColumn
+	// The captured slots are `[windowFirst, windowFirst + holdsOp.count())` of the index, and `moved`
+	// holds, per captured slot, where the op that sat there ENDED UP. A slot holding no op maps to
+	// itself and is never read.
+	var windowFirst as PressureSlot
 	var holdsOp as BoolArray
 	var opAt as OpIndexArray
 	var delta as PressureDeltaColumn
 	var transient as PressureDeltaColumn
+	var moved as DenseColumn
 
 	export static function create() returns PressureRelayoutScratch
-		return Self{opCounts: DenseColumn.create(), operands: OperandList.create(), first: DenseColumn.create(), len: DenseColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), delta: PressureDeltaColumn.create(), transient: PressureDeltaColumn.create()}
+		return Self{opCounts: DenseColumn.create(), operands: OperandList.create(), first: DenseColumn.create(), len: DenseColumn.create(), windowFirst: 0, holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), delta: PressureDeltaColumn.create(), transient: PressureDeltaColumn.create(), moved: DenseColumn.create()}
 	end 'create'
 
-	// Copy the index's current layout and leaves aside. `refill(0)` first, so a re-space never reads a
-	// stale tail from the previous one.
-	export function capture(runFirst DenseColumn, runLen DenseColumn, runHoldsOp BoolArray, runOpAt OpIndexArray, runDelta PressureDeltaColumn, runTransient PressureDeltaColumn)
+	// Copy the index's per-BLOCK run layout aside — `relayout` only, which is the one thing that moves a
+	// run. `refill(0)` first, so it never reads a stale tail from a previous re-space.
+	export function captureRuns(runFirst DenseColumn, runLen DenseColumn)
 		self.first.refill(0, value: 0)
 		self.len.refill(0, value: 0)
-		self.holdsOp.refill(0, value: false)
-		self.opAt.refill(0, value: 0)
-		self.delta.refill(0, value: 0)
-		self.transient.refill(0, value: 0)
 		self.first.append(runFirst)
 		self.len.append(runLen)
-		self.holdsOp.append(runHoldsOp)
-		self.opAt.append(runOpAt)
-		self.delta.append(runDelta)
-		self.transient.append(runTransient)
-	end 'capture'
+	end 'captureRuns'
+
+	// Copy the leaves of `[from, from + count)` aside. Sized by `refill` rather than grown by `append`,
+	// so a window smaller than the last one neither reads a stale tail nor reallocates.
+	export function captureWindow(runHoldsOp BoolArray, runOpAt OpIndexArray, runDelta PressureDeltaColumn, runTransient PressureDeltaColumn, from PressureSlot, count PressureSlot)
+		self.windowFirst = from
+		self.holdsOp.refill(count, value: false)
+		self.opAt.refill(count, value: 0)
+		self.delta.refill(count * RegClassCount, value: 0)
+		self.transient.refill(count * RegClassCount, value: 0)
+		self.moved.refill(count, value: 0)
+		for k in 0 upto count 'eachSlot'
+			try self.holdsOp.set(k, value: try runHoldsOp.get(from + k) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.set OOB at {k}")
+			try self.opAt.set(k, value: try runOpAt.get(from + k) otherwise panic("PressureRelayoutScratch.captureWindow: opAt.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: opAt.set OOB at {k}")
+			try self.moved.set(k, value: from + k) otherwise panic("PressureRelayoutScratch.captureWindow: moved.set OOB at {k}")
+			for classOrdinal in 0 upto RegClassCount 'eachClass'
+				let class = regClassAt(classOrdinal)
+				try self.delta.set(classRowIndex(k, class: class), value: try runDelta.get(classRowIndex(from + k, class: class)) otherwise panic("PressureRelayoutScratch.captureWindow: leafDelta.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: delta.set OOB at {k}")
+				try self.transient.set(classRowIndex(k, class: class), value: try runTransient.get(classRowIndex(from + k, class: class)) otherwise panic("PressureRelayoutScratch.captureWindow: leafTransient.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: transient.set OOB at {k}")
+			end 'eachClass'
+		end 'eachSlot'
+	end 'captureWindow'
+
+	// Record that the op at `oldSlot` now sits at `newSlot`.
+	export function recordMove(oldSlot PressureSlot, newSlot PressureSlot)
+		try self.moved.set(oldSlot - self.windowFirst, value: newSlot) otherwise panic("PressureRelayoutScratch.recordMove: slot {oldSlot} is outside the captured window at {self.windowFirst}")
+	end 'recordMove'
+
+	// Rewrite every slot in `pending` this re-space MOVED — the slots `SplitEdits` has already recorded
+	// for the ops it seated earlier in the same batch. A slot outside the window is left alone.
+	//
+	// ⚠ THIS REPAIR USED TO BE A COMMENT INSTEAD OF A FUNCTION. `appendInsertedSlots` asserted that a
+	// re-space "re-derived" the slots already returned in the batch; nothing did, and the second op of any
+	// batch whose first op had triggered a re-space was read back from a slot the re-space had emptied.
+	// (Measured with `SlotGap` at 2, which brings the gap's tolerance down to one nested insertion:
+	// `PressureIndex.opAtSlot: slot 315 holds no op` out of `reindexSplitValues`.)
+	export function applyMoves(pending DenseColumn)
+		let count = self.holdsOp.count()
+		for i in 0 upto pending.count() 'eachPending'
+			let slot = try pending.get(i) otherwise panic("PressureRelayoutScratch.applyMoves: pending.get OOB at {i}")
+			if slot < self.windowFirst or slot >= self.windowFirst + count 'outsideTheWindow'
+				continue
+			end 'outsideTheWindow'
+			try pending.set(i, value: try self.moved.get(slot - self.windowFirst) otherwise panic("PressureRelayoutScratch.applyMoves: moved.get OOB at {slot - self.windowFirst}")) otherwise panic("PressureRelayoutScratch.applyMoves: pending.set OOB at {i}")
+		end 'eachPending'
+	end 'applyMoves'
 
 	export function firstOf(blockLocal CfgIndex) returns PressureSlot
 		return try self.first.get(blockLocal) otherwise panic("PressureRelayoutScratch.firstOf: block {blockLocal} out of range")
@@ -1656,20 +1830,29 @@ export type PressureRelayoutScratch
 		return self.firstOf(blockLocal) + self.runLengthOf(blockLocal) - 1
 	end 'exitOf'
 
+	// Every accessor below takes an ABSOLUTE slot and resolves it against the window here, so a caller
+	// re-spacing a subtree states the same coordinates as one re-spacing the whole index.
+	function windowIndexOf(slot PressureSlot) returns PressureSlot
+		if slot < self.windowFirst or slot >= self.windowFirst + self.holdsOp.count() 'outsideTheWindow'
+			panic("PressureRelayoutScratch: slot {slot} is outside the captured window [{self.windowFirst}, {self.windowFirst + self.holdsOp.count()})")
+		end 'outsideTheWindow'
+		return slot - self.windowFirst
+	end 'windowIndexOf'
+
 	export function holdsOpAt(slot PressureSlot) returns bool
-		return try self.holdsOp.get(slot) otherwise panic("PressureRelayoutScratch.holdsOpAt: slot {slot} out of range")
+		return try self.holdsOp.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.holdsOpAt: slot {slot} out of range")
 	end 'holdsOpAt'
 
 	export function opAtSlot(slot PressureSlot) returns OpIndex
-		return try self.opAt.get(slot) otherwise panic("PressureRelayoutScratch.opAtSlot: slot {slot} out of range")
+		return try self.opAt.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.opAtSlot: slot {slot} out of range")
 	end 'opAtSlot'
 
 	export function deltaAt(slot PressureSlot, class RegClass) returns PressureDelta
-		return try self.delta.get(classRowIndex(slot, class: class)) otherwise panic("PressureRelayoutScratch.deltaAt: slot {slot} out of range")
+		return try self.delta.get(classRowIndex(self.windowIndexOf(slot), class: class)) otherwise panic("PressureRelayoutScratch.deltaAt: slot {slot} out of range")
 	end 'deltaAt'
 
 	export function transientAt(slot PressureSlot, class RegClass) returns PressureDelta
-		return try self.transient.get(classRowIndex(slot, class: class)) otherwise panic("PressureRelayoutScratch.transientAt: slot {slot} out of range")
+		return try self.transient.get(classRowIndex(self.windowIndexOf(slot), class: class)) otherwise panic("PressureRelayoutScratch.transientAt: slot {slot} out of range")
 	end 'transientAt'
 
 	// How many op slots block `blockLocal` held in the layout this holds — the count its new run is

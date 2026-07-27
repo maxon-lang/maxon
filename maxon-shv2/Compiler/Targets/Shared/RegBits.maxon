@@ -51,9 +51,6 @@ let PopcountByteMask = 0x0F0F0F0F0F0F0F0F
 // The final fold leaves the whole count in byte 0 (it is at most 64, so it cannot carry out of a byte).
 let PopcountByteSelect = 0xFF
 
-// Every bit of a word — the identity mask a range trim starts from (`bitsetAppendRange`).
-let AllBitsSet = 0xFFFFFFFFFFFFFFFF
-
 // Words needed to hold `bitCount` bits (ceil-divide, min 1 so an empty row still
 // occupies a word and row arithmetic never touches a zero-width slice).
 export function bitsetWordsFor(bitCount BitIndex) returns BitWordCount
@@ -110,60 +107,7 @@ export function bitsetCollectRow(words BitWordArray, base BitWordIndex, wordsPer
 	end 'eachWord'
 end 'bitsetCollectRow'
 
-// The set bits of the row starting at `base` that lie in the HALF-OPEN BIT RANGE `[fromBit, toBit)`,
-// APPENDED to `out` in ascending order — `bitsetCollectRow` restricted to a stretch of the value
-// space, and the same word-parallel walk, so an empty stretch still costs one compare per 64 ids.
-//
-// It does NOT clear `out`: a caller collects a bit and a range into one list (see
-// `collectLiveSplitValues`), and the clear is its own to own.
-//
-// ⚠ THIS IS THE ANSWER TO "WHICH OF THIS CONTIGUOUS ID RANGE IS SET", AND THE ALTERNATIVE IS NOT
-// EQUIVALENT. Testing each id of the range is O(range) whatever the row holds; this is
-// O(range/64 + set bits found), which is the same performance contract `bitsetCollectRow`'s header
-// states for the whole row. A caller that knows the range is small may still test each id — but
-// "small" has to be a property of the RANGE, not an observation about today's inputs.
-export function bitsetAppendRange(words BitWordArray, base BitWordIndex, fromBit BitIndex, toBit BitIndex, out ValueIdArray)
-	if toBit <= fromBit 'emptyRange'
-		return
-	end 'emptyRange'
-
-	let firstWord = fromBit shr BitWordShift
-	let lastWord = (toBit - 1) shr BitWordShift
-	// The FIRST and LAST words are the only ones that can hold bits outside the range. Both shift
-	// counts are masked into 0..63 by construction; `highRemainder == 0` means `toBit` lands on a word
-	// boundary, so the last word is whole.
-	let lowTrim = AllBitsSet shl (fromBit and BitIndexMask)
-	let highRemainder = toBit and BitIndexMask
-	let highTrim = AllBitsSet if highRemainder == 0 else not (AllBitsSet shl highRemainder)
-
-	// ⚠ ONE LOOP CARRYING BOTH TRIMS, NOT A HEAD / INTERIOR / TAIL SPLIT, and the reason is TESTABILITY
-	// rather than brevity. A peeled version has an interior arm that only ever runs for a range
-	// STRADDLING a 64-bit boundary, and the shv2 suite does not reach it: with the tail arm deliberately
-	// deleted, all 1789 tests still passed — including under `VerifyIncrementalSplit`, which recomputes
-	// every `forbidden` mask from scratch after every split. (Deleting the whole range's contribution
-	// DOES go red there, three tests naming a lost clobber bit, so the caller is covered; it is only the
-	// straddle that is not.) Written this way there is no arm a straddle reaches that a single-word range
-	// does not, so what the suite exercises is what ships. Two compares per word buy that, and they cost
-	// nothing here: this walk only ever covers a split's fresh-id RANGE — the whole-row walk is
-	// `bitsetCollectRow`, which keeps its own untrimmed loop.
-	//
-	// Hoisted because `a upto b + 1` parses as `(a upto b) + 1`.
-	let pastLastWord = lastWord + 1
-	for w in firstWord upto pastLastWord 'eachWord'
-		var word = try words.get(base + w) otherwise panic("bitsetAppendRange: word {w} of [{fromBit}, {toBit}) is outside the row (base={base}, count={words.count()})")
-		if w == firstWord 'trimBelowTheRange'
-			word = word and lowTrim
-		end 'trimBelowTheRange'
-		if w == lastWord 'trimAboveTheRange'
-			word = word and highTrim
-		end 'trimAboveTheRange'
-
-		appendSetBitsOfWord(word, bitBase: w shl BitWordShift, out: out)
-	end 'eachWord'
-end 'bitsetAppendRange'
-
-// The set bits of ONE word, emitted as `bitBase + position` — the inner loop BOTH collectors share,
-// so a whole-row walk and a range walk cannot come to differ about what a set bit's id is.
+// The set bits of ONE word, emitted as `bitBase + position` — the inner loop of the row walk above.
 function appendSetBitsOfWord(word MachineWord, bitBase BitIndex, out ValueIdArray)
 	var remaining = word
 	while remaining != 0 'eachSetBit'
