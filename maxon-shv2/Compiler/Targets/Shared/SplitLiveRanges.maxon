@@ -330,6 +330,54 @@ type PeakRank
 	static function create(found bool, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, witnessClass RegClass, atFixedRegisterOp bool) returns PeakRank
 		return Self{found: found, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, witnessClass: witnessClass, atFixedRegisterOp: atFixedRegisterOp}
 	end 'create'
+
+	// ⚠ THE RUNNING BEST IS MUTATED, NOT RE-MINTED, and the reason is the same one `PeakTree` gives for
+	// holding its leaves as flat columns one level up: A `PeakRank` IS A HEAP OBJECT. `peakOutranks`
+	// replaces on an exact TIE, so on the shape that splits — a block where nearly every op overflows —
+	// `betterPeak` won at a large fraction of the ops, and minting there is Θ(block) allocations per
+	// block sweep, hence Θ(block × splits) per function. The three methods below are what let ONE object
+	// carry the argmax across a whole block sweep, with exactly one `create` at the end of it.
+
+	// Back to "nothing offered yet", which is what the sweep's `best` starts each block as and what an
+	// unpublished tournament leaf reads back as.
+	//
+	// `witness` IS THE CALLER'S TO NAME AND NOTHING READS IT HERE: while `found` is false no ranking
+	// looks at it (`rankOutranks` rejects an unfound candidate outright; `peakOutranks` takes its
+	// `firstPeak` exit against an unfound incumbent), so the block sweep passes the pool it is measuring
+	// against and the tournament passes the empty set its own empty rank has always carried — and the
+	// two stay byte-identical to what each used to mint by hand.
+	export function clear(atBlock CfgIndex, pool RegMask)
+		self.found = false
+		self.pressure = 0
+		self.blockLocal = atBlock
+		self.forwardPos = 0
+		self.peakSeq = 0
+		self.clobberOnly = false
+		self.witness = pool
+		self.witnessClass = RegClass.gpr
+		self.atFixedRegisterOp = false
+	end 'clear'
+
+	// Become this candidate. The caller has already decided it outranks what is here (`betterPeak`).
+	export function takeOver(demand RegCount, atBlock CfgIndex, atPos BlockOpPos, seq OpSeq, confined bool, tightSet RegMask, tightClass RegClass, atClobber bool)
+		self.found = true
+		self.pressure = demand
+		self.blockLocal = atBlock
+		self.forwardPos = atPos
+		self.peakSeq = seq
+		self.clobberOnly = confined
+		self.witness = tightSet
+		self.witnessClass = tightClass
+		self.atFixedRegisterOp = atClobber
+	end 'takeOver'
+
+	// An INDEPENDENT copy, which a block sweep's result must be: its caller compares one block's rank
+	// against the running best of the blocks before it, and if both were the one scratch object that
+	// comparison would be an object against itself — an exact tie, which `peakOutranks` resolves in the
+	// candidate's favour, so the fold would silently return the LAST block every time.
+	export function snapshot() returns PeakRank
+		return PeakRank.create(self.found, pressure: self.pressure, blockLocal: self.blockLocal, forwardPos: self.forwardPos, peakSeq: self.peakSeq, clobberOnly: self.clobberOnly, witness: self.witness, witnessClass: self.witnessClass, atFixedRegisterOp: self.atFixedRegisterOp)
+	end 'snapshot'
 end 'PeakRank'
 
 // How a spill's store/reload placement is constrained — the amended Rule 2 in one type.
@@ -654,11 +702,18 @@ type PeakTree
 	// `winner[node]` — the BLOCK whose rank wins that subtree, or `numBlocks` for "no peak in it". Node
 	// 1 is the root; leaf `b` is at `leafBase + b`.
 	var winner as CfgIndexArray
+	// The two ranks ONE combine compares, refilled from the columns above at every combine and never
+	// re-minted. `betterBlock` used to materialize a fresh `PeakRank` for each side — two 72-byte heap
+	// objects to read four fields — and `promote` runs O(log blocks) combines for every dirty block of
+	// every split, so that was a per-split allocation term proportional to the FUNCTION rather than to
+	// what the split changed. Two objects per tree instead, for the same reason the leaves are columns.
+	var leftRank as PeakRank
+	var rightRank as PeakRank
 	// A power of two >= numBlocks, so the tree is complete and a node's children are `2n` and `2n+1`.
 	var leafBase as ColumnLength
 
 	static function create() returns PeakTree
-		return Self{numBlocks: 0, found: BoolArray.create(), pressure: RegCountColumn.create(), forwardPos: BlockOpPosArray.create(), peakSeq: OpSeqArray.create(), clobberOnly: BoolArray.create(), witness: RegMaskColumn.create(), witnessClass: ValueClassColumn.create(), atFixedRegisterOp: BoolArray.create(), winner: CfgIndexArray.create(), leafBase: 1}
+		return Self{numBlocks: 0, found: BoolArray.create(), pressure: RegCountColumn.create(), forwardPos: BlockOpPosArray.create(), peakSeq: OpSeqArray.create(), clobberOnly: BoolArray.create(), witness: RegMaskColumn.create(), witnessClass: ValueClassColumn.create(), atFixedRegisterOp: BoolArray.create(), winner: CfgIndexArray.create(), leftRank: emptyRank(), rightRank: emptyRank(), leafBase: 1}
 	end 'create'
 
 	// Size the tree for a function, with every leaf empty. The full sweep then sets each leaf and calls
@@ -735,33 +790,51 @@ type PeakTree
 			return right
 		end 'leftEmpty'
 
-		if rankOutranks(self.rankOf(right), best: self.rankOf(left)) 'rightWins'
+		self.fillRank(right, into: self.rightRank)
+		self.fillRank(left, into: self.leftRank)
+		if rankOutranks(self.rightRank, best: self.leftRank) 'rightWins'
 			return right
 		end 'rightWins'
 		return left
 	end 'betterBlock'
 
-	function rankOf(blockLocal CfgIndex) returns PeakRank
-		let isPeak = try self.found.get(blockLocal) otherwise panic("PeakTree.rankOf: found.get OOB for block {blockLocal}")
-		let demand = try self.pressure.get(blockLocal) otherwise panic("PeakTree.rankOf: pressure.get OOB for block {blockLocal}")
-		let pos = try self.forwardPos.get(blockLocal) otherwise panic("PeakTree.rankOf: forwardPos.get OOB for block {blockLocal}")
-		let seq = try self.peakSeq.get(blockLocal) otherwise panic("PeakTree.rankOf: peakSeq.get OOB for block {blockLocal}")
-		let confined = try self.clobberOnly.get(blockLocal) otherwise panic("PeakTree.rankOf: clobberOnly.get OOB for block {blockLocal}")
-		let tightSet = try self.witness.get(blockLocal) otherwise panic("PeakTree.rankOf: witness.get OOB for block {blockLocal}")
-		let tightClass = try self.witnessClass.get(blockLocal) otherwise panic("PeakTree.rankOf: witnessClass.get OOB for block {blockLocal}")
-		let atClobber = try self.atFixedRegisterOp.get(blockLocal) otherwise panic("PeakTree.rankOf: atFixedRegisterOp.get OOB for block {blockLocal}")
-		return PeakRank.create(isPeak, pressure: demand, blockLocal: blockLocal, forwardPos: pos, peakSeq: seq, clobberOnly: confined, witness: tightSet, witnessClass: tightClass, atFixedRegisterOp: atClobber)
-	end 'rankOf'
+	// One leaf's columns, gathered into `into`. THE one place a leaf is read back, so a combine (which
+	// fills a reused slot) and the root query (which fills a fresh object) cannot disagree about what a
+	// leaf says. A leaf nothing has been published to yet is a real state, and it comes back EMPTY.
+	function fillRank(blockLocal CfgIndex, into PeakRank)
+		into.clear(blockLocal, pool: 0)
+		if not (try self.found.get(blockLocal) otherwise panic("PeakTree.fillRank: found.get OOB for block {blockLocal}")) 'noPeakInThisBlock'
+			return
+		end 'noPeakInThisBlock'
 
-	// The function's peak — the root of the tournament.
+		let demand = try self.pressure.get(blockLocal) otherwise panic("PeakTree.fillRank: pressure.get OOB for block {blockLocal}")
+		let pos = try self.forwardPos.get(blockLocal) otherwise panic("PeakTree.fillRank: forwardPos.get OOB for block {blockLocal}")
+		let seq = try self.peakSeq.get(blockLocal) otherwise panic("PeakTree.fillRank: peakSeq.get OOB for block {blockLocal}")
+		let confined = try self.clobberOnly.get(blockLocal) otherwise panic("PeakTree.fillRank: clobberOnly.get OOB for block {blockLocal}")
+		let tightSet = try self.witness.get(blockLocal) otherwise panic("PeakTree.fillRank: witness.get OOB for block {blockLocal}")
+		let tightClass = try self.witnessClass.get(blockLocal) otherwise panic("PeakTree.fillRank: witnessClass.get OOB for block {blockLocal}")
+		let atClobber = try self.atFixedRegisterOp.get(blockLocal) otherwise panic("PeakTree.fillRank: atFixedRegisterOp.get OOB for block {blockLocal}")
+		into.takeOver(demand, atBlock: blockLocal, atPos: pos, seq: seq, confined: confined, tightSet: tightSet, tightClass: tightClass, atClobber: atClobber)
+	end 'fillRank'
+
+	// The function's peak — the root of the tournament. A FRESH object, because it outlives the next
+	// combine: the driver holds the analysis it becomes across the whole split that follows.
 	export function best() returns PeakRank
+		var out = emptyRank()
 		let champion = try self.winner.get(1) otherwise panic("PeakTree.best: the tree has no root — `reset` must run before any query")
 		if champion == self.numBlocks 'noPeak'
-			return PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: 0, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
+			return out
 		end 'noPeak'
-		return self.rankOf(champion)
+		self.fillRank(champion, into: out)
+		return out
 	end 'best'
 end 'PeakTree'
+
+// A rank offering nothing — what a tournament slot holds before anything is published to it, and the
+// state `PeakRank.clear` returns one to.
+function emptyRank() returns PeakRank
+	return PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: 0, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
+end 'emptyRank'
 
 // Every buffer the per-split pressure sweep and victim choice need, allocated ONCE per FUNCTION and
 // reused by every iteration of the driver's loop. See the file header for why per-iteration
@@ -822,6 +895,10 @@ type SplitScratch
 	// sweeps write into, allocated once per function like every other buffer here.
 	export var blockDemand as RegCountColumn
 	export var opEffective as RegCountColumn
+	// ONE block sweep's running argmax, mutated in place at every op that outranks it and copied out
+	// once at the end (`PeakRank.snapshot`). A fresh `PeakRank` per winning op was Θ(block) heap objects
+	// per block sweep — see the note on `PeakRank`'s mutators.
+	export var rank as PeakRank
 	// THE MUTATORS' buffers: one flag per use site of the victim (does that use start a fresh reload —
 	// `markRunStarts`), and the operand list the use-rewriter fills. Both used to be allocated per
 	// SPLIT (`OperandList.create()` inside `spillOneValue` / `rematerializeConstant`), which is the same
@@ -834,7 +911,7 @@ type SplitScratch
 	export var confinedMode as bool
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), confinedMode: false}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), confinedMode: false}
 	end 'create'
 
 	// Size the two block-keyed memos the incremental update needs. Deferred until the function turns out
@@ -1492,7 +1569,10 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	var liveAtOp = scratch.liveAtOp
 	var defLiveAfter = scratch.defLiveAfter
 
-	var best = PeakRank.create(false, pressure: 0, blockLocal: blockLocal, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
+	// The FUNCTION's one running rank, reset for this block and mutated by every op that outranks it —
+	// `snapshot`ted into a fresh object once, at the return.
+	var best = scratch.rank
+	best.clear(blockLocal, pool: pool)
 
 	let i = blockLocal
 	let block = blockAt(module, topo: topo, local: i)
@@ -1590,7 +1670,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 			let class = regClassAt(classOrdinal)
 			if classRowGet(effective, class: class) > classPoolSizeOf(pool, class: class, file: liveness.registerFile) 'fullPoolOverflow'
 				anyFullPoolOverflow = true
-				best = betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class, file: liveness.registerFile), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
+				betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class, file: liveness.registerFile), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
 			end 'fullPoolOverflow'
 		end 'eachClass'
 
@@ -1600,7 +1680,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		if not anyFullPoolOverflow 'maybeConfined'
 			if censusNeeded and census.screenViolates(maxClassPoolSize(pool, file: liveness.registerFile)) 'screenFired'
 				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
-				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
+				confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
 			end 'screenFired'
 		end 'maybeConfined'
 	end 'eachOpRev'
@@ -1620,7 +1700,10 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// Return the working row to zero for the next block, in O(live) — see clearRowAfterSweep.
 	liveness.clearRowAfterSweep(i, block: block, row: liveRow, scratch: seedBuf)
 
-	return best
+	// ONE object per block sweep, not one per winning op — and it must be a COPY of the scratch rank
+	// rather than the scratch rank itself, because `analyzePressure` folds this block's result against
+	// the running best of the blocks before it. See `PeakRank.snapshot`.
+	return best.snapshot()
 end 'analyzeBlockPressure'
 
 // The winning rank, with its live-before row attached — the `PressurePeak` the driver, `chooseVictim`
@@ -1707,8 +1790,7 @@ end 'fillLiveBeforeOp'
 // Running it once per file, over that file's values alone, makes every figure it returns a fact about
 // one register file: the witness is a subset of that file, the deficit is that file's, and the
 // victims `chooseVictim` may offer are exactly the values that can relieve it.
-function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PeakRank, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, atFixedRegisterOp bool, hall HallScratch) returns PeakRank
-	var winner = best
+function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PeakRank, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, atFixedRegisterOp bool, hall HallScratch)
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		classFilterLive(liveness, live: live, class: class, out: hall.classLive)
@@ -1718,10 +1800,9 @@ function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask
 
 		match hallVerdictAt(liveness, live: hall.classLive, pool: poolOfClass(pool, class: class, file: liveness.registerFile), scratch: hall) 'verdict'
 			feasible then continue
-			overflow(witness, tight) then winner = betterPeak(winner, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
+			overflow(witness, tight) then betterPeak(best, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
 		end 'verdict'
 	end 'eachClass'
-	return winner
 end 'confinedPeakAt'
 
 // The live values of ONE file, in the ascending id order `bitsetCollectRow` produced — so the
@@ -1736,13 +1817,16 @@ function classFilterLive(liveness LivenessResult, live ValueIdArray, class RegCl
 	end 'eachLive'
 end 'classFilterLive'
 
-// `best`, replaced by the candidate peak iff the candidate outranks it. The ONE place a `PeakRank` is
-// minted from a candidate, so both overflow kinds agree on the ranking.
-function betterPeak(best PeakRank, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, witnessClass RegClass, atFixedRegisterOp bool) returns PeakRank
+// `best` OVERWRITTEN by the candidate peak iff the candidate outranks it. The ONE place a candidate
+// enters the ranking, so both overflow kinds agree on it.
+//
+// It mutates rather than returning a replacement because `best` is the sweep's ONE scratch rank — see
+// `PeakRank`'s mutators for why a fresh object per winning op was Θ(block) allocations per block sweep.
+function betterPeak(best PeakRank, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, witnessClass RegClass, atFixedRegisterOp bool)
 	if not peakOutranks(not clobberOnly, atFixedRegisterOp: atFixedRegisterOp, pressure: pressure, best: best) 'keepBest'
-		return best
+		return
 	end 'keepBest'
-	return PeakRank.create(true, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, witnessClass: witnessClass, atFixedRegisterOp: atFixedRegisterOp)
+	best.takeOver(pressure, atBlock: blockLocal, atPos: forwardPos, seq: peakSeq, confined: clobberOnly, tightSet: witness, tightClass: witnessClass, atClobber: atFixedRegisterOp)
 end 'betterPeak'
 
 // Is `op` itself a FIXED-REGISTER point — does it clobber registers implicitly (a call's 9

@@ -2169,6 +2169,30 @@ rate the program does.
 > positions, which must survive op INSERTION shifting those positions) feeding all four consumers, plus
 > a maintained victim priority for `chooseVictim`'s Θ(candidates) scan. That is a redesign of the pass,
 > not a patch to it, and it is not done.
+>
+> > **Two of those four walks were also ALLOCATING, and that part was not a redesign.** A `PeakRank` is
+> > a 72-byte heap object — which `PeakTree` already knew, being flat columns for exactly that reason —
+> > and the argmax was minting one at every step that won. `peakOutranks` REPLACES on an exact tie, so
+> > on a block where nearly every op overflows, `betterPeak` won at a large share of the ops:
+> > **Θ(block) objects per block sweep**, Θ(block × splits) per function. `betterBlock` did the same one
+> > level up, materializing **two** ranks per combine to read four fields, and `promote` runs
+> > O(log blocks) combines for every dirty block of every split. Both now mutate a reused rank —
+> > `analyzeBlockPressure` copies its scratch out exactly once (`PeakRank.snapshot`, and the copy is
+> > load-bearing: return the scratch itself and the whole-function fold compares an object with itself,
+> > reads a tie, and returns the LAST block — 15 `register-*` failures when tried).
+> >
+> > The two are complementary, and the shapes say which is which. **Ladder (ONE block, Θ(N) splits):**
+> > `regalloc:splitting` allocations 137,687 / 544,949 / 2,169,459 → **130,053 / 510,015 / 2,019,925**,
+> > bytes **−19.5% / −22.5% / −24.2%** — nearly all of it the per-op mint. **`scale-test` corpus (many
+> > small blocks):** allocations 43,060 / 75,141 / 140,137 / 271,549 → **41,668 / 71,512 / 131,178 /
+> > 250,430** (**−3.2% / −4.8% / −6.4% / −7.8%**, a share that GROWS with the rung because the combine
+> > term is O(log blocks)), bytes −96,072 / −255,096 / −634,776 / −1,502,136. Every removed allocation
+> > divides out at 72 bytes: the attribution is exact, not inferred. **The CPU column did not move
+> > outside its noise band on either** (ladder ×3.22/×3.44 before, ×3.23/×3.41 after) and it should not
+> > be claimed to have: this is an allocation term, and the allocation columns are the ones that are
+> > exact. Decisions untouched — `valuesSplit` 96/196/396, every committed IR golden byte-identical
+> > (`git status --short specs-shv2/` empty after a suite run), 1789/0 with `VerifyIncrementalSplit`
+> > OFF and ON, wasm32-wasi 1597/0.
 
 Three enabling changes made it possible, and each landed on its own with the byte-exact IR goldens
 unmoved: an op's sequence number became **block-relative** (so inserting one op renumbers only its own
