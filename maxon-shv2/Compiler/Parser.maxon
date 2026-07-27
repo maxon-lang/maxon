@@ -5748,12 +5748,21 @@ export type Parser
 	// ⚠ **THE CHECK RECORDS A DIAGNOSTIC, IT DOES NOT THROW, AND THAT IS WHAT MAKES THE SWEEP TOLERANT
 	// FOR FREE.** A malformed instantiation (a non-generic base, wrong arity, a managed argument) is a
 	// WHOLE-PROGRAM SEMANTIC error, not a syntax error — it does not abort the file's parse, it gates the
-	// build like `SemanticCheck`'s errors do. The check reads the whole-program index, which is COMPLETE
-	// in the real parse but still BUILDING during the sweep, so during the sweep it may record a spurious
-	// diagnostic — but the SWEEP'S artifact is never merged (`queryProgramSignatures` uses a throwaway
-	// `Parser` whose diagnostics are discarded), so that spurious diagnostic costs nothing and the REAL
-	// parse — index complete — records the genuine one. This is why the diagnostic path, not a throw, is
-	// the correct tool: a throw would need the sweep to swallow it, and this needs no swallowing at all.
+	// build like `SemanticCheck`'s errors do. This is why the diagnostic path, not a throw, is the correct
+	// tool: a throw would need the sweep to swallow it, and this needs no swallowing at all.
+	//
+	// ⭐ **AND IT DOES NOT RUN AT ALL DURING THE SWEEP — `signatures.allFilesFolded` IS THE GATE, read by
+	// both this check and `checkGenericArgType`.** The verdict is a function of the whole-program index,
+	// which is COMPLETE in the real parse and still BUILDING during the sweep, so the sweep's answer is a
+	// fact about how far the sweep has got and not about the program. It was previously computed anyway
+	// and discarded, on the argument that the SWEEP'S artifact is never merged (`queryProgramSignatures`
+	// uses a throwaway `Parser`) — true, and it is still what makes SKIPPING it invisible: the real parse
+	// re-reads every one of these declarations with the index complete, so every diagnostic a program
+	// earns is still recorded exactly once, at the same position, by the same check. What the discard
+	// argument got wrong is that a diagnostic nothing reads is not free: building one is a positioned
+	// `Diagnostic` plus an interpolated message, MEASURED at ~6 allocations per generic type ARGUMENT and
+	// again per malformed-looking INSTANCE, linear in the program's generic declarations. Spending it to
+	// produce an answer that is thrown away — and would be wrong if it were not — is the whole of the cost.
 	//
 	// ⚠ **It also sidesteps the bootstrap's 64-managed-case union limit** (`ParseError` sits at exactly 64
 	// String-carrying arms — a 65th overflows the C# runtime's u64 droppable-case bitmask and corrupts the
@@ -5839,12 +5848,12 @@ export type Parser
 	// `typeParameter`/`genericInstance`/`structRef` argument is exactly the legal case that must not be
 	// refused.
 	//
-	// ⚠ **RECORDED, NOT THROWN — the TOLERANT SWEEP is what makes that mandatory**, exactly as for
-	// `checkGenericInstance` beside it. The sweep reads this while the whole-program index is still BUILDING,
-	// so a generic-instance or function alias declared later in the program legitimately answers "undeclared"
-	// there; the sweep's artifact is discarded (`queryProgramSignatures` uses a throwaway `Parser`), and the
-	// REAL parse — index complete — records the genuine verdict. A throw would abort a file's whole parse
-	// over a whole-program semantic error, which is not what one is.
+	// ⚠ **RECORDED, NOT THROWN, AND NOT COMPUTED AT ALL UNTIL THE INDEX IS WHOLE-PROGRAM** — the same two
+	// rules `checkGenericInstance` states beside it, for the same reason and off the same gate
+	// (`signatures.allFilesFolded`); its header carries the argument. This check is the sharper case of it:
+	// a generic-instance or function alias declared later in the program — or anywhere in this file, whose
+	// own declarations fold only after its whole token walk — legitimately reads "undeclared" during the
+	// sweep, so the sweep's verdict is not merely discarded, it is systematically wrong.
 	//
 	// ⚠ **A `b"…"` BYTE-STRING NEEDS NO EXEMPTION, and that is a property of where its instance comes from.**
 	// The compiler MINTS `Array with Byte` for a byte-string literal (`internArrayByteInstance`) rather than
@@ -5853,6 +5862,10 @@ export type Parser
 	// cascade resolves — which is exactly what `undeclaredNamedElementStorageBytes` means when it says no user
 	// type can name the literal's own instance.
 	function checkGenericArgType(argType MaxonType, argTok Token)
+		if not self.signatures.allFilesFolded 'indexStillBuilding'
+			return
+		end 'indexStillBuilding'
+
 		if maxonTypeTag(argType) != ValueTypeTag.named 'alreadyConcrete'
 			return
 		end 'alreadyConcrete'
@@ -5874,6 +5887,10 @@ export type Parser
 	// String / managed-struct / nested-instance argument is now legal. A nested instance validates itself at
 	// its own `with` (`parseGenericArgNode`), so this checks ONE level.
 	function checkGenericInstance(baseTok Token, argCount FieldIndex)
+		if not self.signatures.allFilesFolded 'indexStillBuilding'
+			return
+		end 'indexStillBuilding'
+
 		// `Array` is a BUILTIN generic with one type parameter `Element` — there is no `type Array uses
 		// Element` declaration (its runtime is synthesized, P1.7), so `structOf` finds nothing. Validate its
 		// arity here instead; the managed-element rejection (slice 1 is trivial elements only) is done where

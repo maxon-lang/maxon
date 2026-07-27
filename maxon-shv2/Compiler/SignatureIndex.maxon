@@ -2057,9 +2057,21 @@ export type ProgramSignatures
 	// because "how many slots does this program declare?" is the honest fact; the caller's question
 	// ("any at all?") is one comparison away and does not need its own field.
 	export var storedGlobalCount as StoredGlobalCount
+	// ⭐ **HAS EVERY FILE BEEN FOLDED IN YET?** False while `queryProgramSignatures` is still sweeping
+	// files into this index, true from the moment the last one lands. It is the index's own answer to
+	// "can an absence be trusted?" — during the sweep a name that is genuinely declared reads as
+	// undeclared simply because its file has not been folded yet (and a file's OWN declarations are
+	// folded only after its whole token walk), so a `not declared` verdict there is a fact about the
+	// sweep's progress, not about the program.
+	//
+	// It lives HERE and not on the `Parser` because it is a property of the INDEX, not of the reader:
+	// three parsers read this index (the sweeper, the real parse, the constant evaluator) and only the
+	// index knows which side of the fold each of them is on. A flag threaded through `Parser.create`
+	// would be the same fact written down at three call sites, free to be passed wrongly at any of them.
+	export var allFilesFolded as bool
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A

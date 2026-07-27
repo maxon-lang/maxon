@@ -132,6 +132,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 	end 'eachFile'
 
+	// ⭐ **THE INDEX IS NOW WHOLE-PROGRAM, AND IT SAYS SO.** Every reader below this line — the constant
+	// evaluator, the real parse — gets an index in which an absence MEANS the program does not declare
+	// the name. Above it, inside the loop, an absence means only that the declaring file has not been
+	// swept yet, which is why the parser's whole-program semantic checks read this flag before spending
+	// anything on a verdict they would have to throw away. See `ProgramSignatures.allFilesFolded`.
+	signatures.allFilesFolded = true
+
 	// ⭐ EVERY FILE IS FOLDED IN; NOW the top-level constants can be evaluated — and not one moment
 	// earlier. A constant's initializer may name a constant declared LATER in its own file or in a file
 	// not yet swept, so evaluation has to wait until every declaration in the program is known. This is
