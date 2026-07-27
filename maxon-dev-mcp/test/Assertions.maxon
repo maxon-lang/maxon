@@ -1,0 +1,390 @@
+// The structural JSON assertion walker the fixtures are written against.
+//
+// An assertion file describes the SHAPE a response must have rather than its exact bytes, so a
+// fixture can pin the fields it is about and stay silent on the rest. Recognised leaves:
+//
+//   {"equals": <any>}, {"isString": true}, {"isNumber": true}, {"isBool": true},
+//   {"present": true}, {"absent": true}, {"contains": "..."}, {"length": N},
+//   {"length": N, "items": [...]}, {"parseJsonText": <inner>}
+//
+// plus a bare object, which recurses by key, and a bare array, which recurses positionally.
+//
+// Every failure leaves through `Expect`. Before the suite moved to `maxon test` each check printed
+// its own `FAIL at $.path: ...` line and returned `false`, and every caller had to remember to
+// propagate it; a walker that throws cannot forget, and the expected/received block is now the
+// library's rather than seven hand-built copies of it.
+
+// WHERE a failure is reported: the `try` in the test body that started the walk, never a line in
+// this file. `Expect`'s `file` and `line` default to `__file__` / `__line__`, which expand at the
+// CALL SITE — so a walker several frames deep has to carry the site down with it or every report
+// in the suite would name this library instead of the test that ran.
+export type AssertSite
+	export var file as String
+	export var line as SourceLineNumber
+
+	export static function create(file String, line SourceLineNumber) returns AssertSite
+		return AssertSite{file: file, line: line}
+	end 'create'
+end 'AssertSite'
+
+export typealias JsonDocArray = Array with JsonDoc
+
+// Split captured stdout into one JsonDoc per non-blank line — the JSON-RPC framing the server
+// speaks. Blank lines are skipped so a trailing newline does not produce a spurious empty doc.
+//
+// A line that is not JSON FAILS the test. It used to print a warning and carry on, which made the
+// response-count assertion downstream fail for a reason that was no longer on screen.
+export function splitJsonLines(s String, site AssertSite) returns JsonDocArray throws TestFailure
+	var out = JsonDocArray.create()
+	for line in s.split("\n") 'each'
+		let trimmed = line.trim()
+		if trimmed.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let doc = try Json.parse(trimmed) otherwise (err) 'parseErr'
+			try Expect.fail("the server wrote a line that is not JSON ({err.name}): {trimmed}", file: site.file, line: site.line)
+			continue
+		end 'parseErr'
+
+		out.push(doc)
+	end 'each'
+
+	return out
+end 'splitJsonLines'
+
+// =============================================================================
+// The walker
+// =============================================================================
+
+/// Walk the assertion subtree at `assertId` against the actual subtree at `actualId`, throwing
+/// `TestFailure` at the first thing that does not hold. `path` is the JSON path reached so far and
+/// is what a failure names.
+export function walkAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	match assertDoc.get(assertId).kind 'k'
+		jsonObject then try walkObjectAssertion(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+		jsonArray then try walkArrayAssertion(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+		jsonNull or jsonBool or jsonNumber or jsonString then try requireSameValue(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+	end 'k'
+end 'walkAssertion'
+
+function walkObjectAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	match detectOperator(assertDoc, assertId: assertId) 'op'
+		none then try walkRecursiveObject(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+		equals then try checkEquals(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+		isString then try requireKind(actualDoc.get(actualId), expected: JsonKind.jsonString, what: "`isString` requires a string", path: path, site: site)
+		isNumber then try requireKind(actualDoc.get(actualId), expected: JsonKind.jsonNumber, what: "`isNumber` requires a number", path: path, site: site)
+		isBool then try requireKind(actualDoc.get(actualId), expected: JsonKind.jsonBool, what: "`isBool` requires a bool", path: path, site: site)
+
+		// Reaching this arm at all IS the assertion: the key or index was resolved before the walk
+		// descended here, so there is nothing left to check. (A key that is MISSING never reaches
+		// the leaf — `walkRecursiveObject` fails on it first.)
+		present then return
+
+		// The mirror image: the successful, key-missing case is short-circuited in
+		// `walkRecursiveObject`, so arriving here means the key WAS found. This arm also catches a
+		// stray `{"absent": true}` written against an array element or a top-level value, where
+		// there is no parent object to resolve it against, rather than passing it silently.
+		absent then try Expect.fail("{path}: expected to be absent, but it is present", file: site.file, line: site.line)
+
+		contains then try checkContains(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+		length then try checkLengthThenMaybeItems(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+		parseJsonText then try checkParseJsonText(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: assertId, path: path, site: site)
+	end 'op'
+end 'walkObjectAssertion'
+
+enum AssertOp
+	none
+	equals
+	isString
+	isNumber
+	isBool
+	present
+	absent
+	contains
+	length
+	parseJsonText
+end 'AssertOp'
+
+// The JSON key that names each operator. Written down ONCE, so the word a fixture spells and the
+// arm `walkObjectAssertion` dispatches to cannot drift apart — they used to be two parallel lists,
+// a nine-branch `if` chain and a nine-arm `match`.
+function operatorKeyword(op AssertOp) returns String
+	return match op 'k'
+		none gives ""
+		equals gives "equals"
+		isString gives "isString"
+		isNumber gives "isNumber"
+		isBool gives "isBool"
+		present gives "present"
+		absent gives "absent"
+		contains gives "contains"
+		length gives "length"
+		parseJsonText gives "parseJsonText"
+	end 'k'
+end 'operatorKeyword'
+
+// An object is an operator LEAF iff its first key is an operator name; anything else is a
+// sub-object to recurse into. An operator object carries exactly one key, or two for
+// `length` + `items`.
+function detectOperator(assertDoc JsonDoc, assertId JsonNodeId) returns AssertOp
+	let first = try assertDoc.get(assertId).keys.get(0) otherwise 'empty'
+		return AssertOp.none
+	end 'empty'
+
+	for op in AssertOp.allCases 'each'
+		// `none` is the absence of an operator and keys on the empty string, which no fixture key
+		// can equal by accident — skipped so it can never be MATCHED, only fallen through to.
+		if op != AssertOp.none and first.equals(operatorKeyword(op)) 'hit'
+			return op
+		end 'hit'
+	end 'each'
+
+	return AssertOp.none
+end 'detectOperator'
+
+function walkRecursiveObject(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	try requireKind(actualDoc.get(actualId), expected: JsonKind.jsonObject, what: "an object was expected here", path: path, site: site)
+
+	let assertNode = assertDoc.get(assertId)
+	let keyCount = assertNode.keys.count()
+	for i in 0 upto keyCount 'eachKey'
+		let key = try assertNode.keys.get(i) otherwise panic("walkRecursiveObject: keys.get OOB — i bounded by keyCount")
+		let childAssertId = try assertNode.children.get(i) otherwise panic("walkRecursiveObject: children.get OOB — keys and children are parallel")
+		let subPath = "{path}.{key}"
+
+		// `{"absent": true}` asserts the key is NOT in actual, and is resolved HERE rather than at
+		// the leaf: a missing key would otherwise short-circuit as a generic "missing key" failure
+		// before the operator was ever looked at.
+		let expectAbsent = detectOperator(assertDoc, assertId: childAssertId) == AssertOp.absent
+
+		let childActualId = try actualDoc.getChild(actualId, key: key) otherwise 'noKey'
+			if not expectAbsent 'unexpectedlyMissing'
+				try Expect.fail("{subPath}: missing key in actual", file: site.file, line: site.line)
+			end 'unexpectedlyMissing'
+
+			continue
+		end 'noKey'
+
+		if expectAbsent 'unexpectedlyPresent'
+			try Expect.fail("{subPath}: expected key to be absent, but it is present", file: site.file, line: site.line)
+		end 'unexpectedlyPresent' else 'walk'
+			try walkAssertion(actualDoc, actualId: childActualId, assertDoc: assertDoc, assertId: childAssertId, path: subPath, site: site)
+		end 'walk'
+	end 'eachKey'
+end 'walkRecursiveObject'
+
+function walkArrayAssertion(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	let actualNode = actualDoc.get(actualId)
+	try requireKind(actualNode, expected: JsonKind.jsonArray, what: "an array was expected here", path: path, site: site)
+
+	let assertNode = assertDoc.get(assertId)
+	try Expect.equal(actualNode.children.count(), expected: assertNode.children.count(), message: "{path}: element count", file: site.file, line: site.line)
+	try walkChildren(actualDoc, actualNode: actualNode, assertDoc: assertDoc, assertNode: assertNode, path: path, site: site)
+end 'walkArrayAssertion'
+
+// Positional recursion over two nodes' children. Shared by a bare array assertion and by the
+// `items` sibling of `length`, which walk identically and used to hold one copy of this loop each.
+//
+// The caller has already made the two counts agree, which is why the actual-side `get` cannot miss.
+function walkChildren(actualDoc JsonDoc, actualNode JsonNode, assertDoc JsonDoc, assertNode JsonNode, path String, site AssertSite) throws TestFailure
+	let n = assertNode.children.count()
+	for i in 0 upto n 'each'
+		let assertChild = try assertNode.children.get(i) otherwise panic("walkChildren: assert children.get OOB — i bounded by n")
+		let actualChild = try actualNode.children.get(i) otherwise panic("walkChildren: actual children.get OOB — the counts were checked first")
+		try walkAssertion(actualDoc, actualId: actualChild, assertDoc: assertDoc, assertId: assertChild, path: "{path}[{i}]", site: site)
+	end 'each'
+end 'walkChildren'
+
+// =============================================================================
+// Leaf checks
+// =============================================================================
+
+// The node-kind precondition every operator with a type requirement funnels through. `what` says
+// WHY the kind was required; the expected/received pair is `Expect`'s, so a kind mismatch reads
+// like every other mismatch in the suite instead of like a hand-formatted one.
+function requireKind(node JsonNode, expected JsonKind, what String, path String, site AssertSite) throws TestFailure
+	try Expect.equal(node.kind.name, expected: expected.name, message: "{path}: {what}", file: site.file, line: site.line)
+end 'requireKind'
+
+function requireSameValue(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	if jsonValuesEqual(actualDoc, aId: actualId, b: assertDoc, bId: assertId) 'eq'
+		return
+	end 'eq'
+
+	// Rendered only AFTER the structural comparison has said no, so the two renderings describe the
+	// mismatch and are never the test for it. They are not the same question: object key ORDER is
+	// part of equality here, and a number is compared as a float, so two documents can differ and
+	// still print alike — which the second throw below refuses to let pass as agreement.
+	let actualText = Json.stringify(subDoc(actualDoc, root: actualId))
+	let expectedText = Json.stringify(subDoc(assertDoc, root: assertId))
+	try Expect.equal(actualText, expected: expectedText, message: path, file: site.file, line: site.line)
+
+	try Expect.fail("{path}: the values differ but render identically as {actualText}", file: site.file, line: site.line)
+end 'requireSameValue'
+
+function checkEquals(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	let expectedId = try assertDoc.getChild(assertId, key: operatorKeyword(AssertOp.equals)) otherwise panic("checkEquals: the `equals` key is promised by detectOperator")
+	try requireSameValue(actualDoc, actualId: actualId, assertDoc: assertDoc, assertId: expectedId, path: path, site: site)
+end 'checkEquals'
+
+function checkContains(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	let actualNode = actualDoc.get(actualId)
+	try requireKind(actualNode, expected: JsonKind.jsonString, what: "`contains` requires a string", path: path, site: site)
+
+	let needle = try assertDoc.getString(assertId, key: operatorKeyword(AssertOp.contains)) otherwise panic("checkContains: the `contains` value must be a string")
+	try Expect.contains(actualNode.stringValue, needle: needle, message: path, file: site.file, line: site.line)
+end 'checkContains'
+
+function checkLengthThenMaybeItems(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	let actualNode = actualDoc.get(actualId)
+	try requireKind(actualNode, expected: JsonKind.jsonArray, what: "`length` requires an array", path: path, site: site)
+
+	let expected = try assertDoc.getInt(assertId, key: operatorKeyword(AssertOp.length)) otherwise panic("checkLengthThenMaybeItems: the `length` value must be a number")
+	try Expect.equal(actualNode.children.count(), expected: expected, message: "{path}: element count", file: site.file, line: site.line)
+
+	// The optional `items` sibling: a positional array of per-element assertions.
+	let itemsId = try assertDoc.getChild(assertId, key: ItemsKey) otherwise 'noItems'
+		return
+	end 'noItems'
+
+	let itemsNode = assertDoc.get(itemsId)
+	try Expect.equal(itemsNode.children.count(), expected: actualNode.children.count(), message: "{path}: `items` entries must match the asserted `length`", file: site.file, line: site.line)
+	try walkChildren(actualDoc, actualNode: actualNode, assertDoc: assertDoc, assertNode: itemsNode, path: path, site: site)
+end 'checkLengthThenMaybeItems'
+
+// `items` is a SIBLING of `length`, never an operator in its own right — it is only ever reached
+// through `length`, which is what fixes the element count before the walk descends.
+let ItemsKey = "items"
+
+function checkParseJsonText(actualDoc JsonDoc, actualId JsonNodeId, assertDoc JsonDoc, assertId JsonNodeId, path String, site AssertSite) throws TestFailure
+	let actualNode = actualDoc.get(actualId)
+	try requireKind(actualNode, expected: JsonKind.jsonString, what: "`parseJsonText` requires a string", path: path, site: site)
+
+	let parsed = try Json.parse(actualNode.stringValue) otherwise (err) 'parseErr'
+		try Expect.fail("{path}: the text is not valid JSON ({err.name}). Raw: {actualNode.stringValue}", file: site.file, line: site.line)
+		return
+	end 'parseErr'
+
+	let innerAssertId = try assertDoc.getChild(assertId, key: operatorKeyword(AssertOp.parseJsonText)) otherwise panic("checkParseJsonText: the inner assertion is promised by detectOperator")
+	try walkAssertion(parsed, actualId: parsed.root, assertDoc: assertDoc, assertId: innerAssertId, path: "{path}(parsed)", site: site)
+end 'checkParseJsonText'
+
+// =============================================================================
+// JSON value helpers
+// =============================================================================
+
+// Whether the assertion document has `key` at `parent`. Used where a key is OPTIONAL, so its
+// absence is a setting rather than a failure and `getChild` throwing would say the wrong thing.
+export function assertHasKey(doc JsonDoc, parent JsonNodeId, key String) returns bool
+	for k in doc.get(parent).keys 'each'
+		if k.equals(key) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+
+	return false
+end 'assertHasKey'
+
+function jsonValuesEqual(a JsonDoc, aId JsonNodeId, b JsonDoc, bId JsonNodeId) returns bool
+	let an = a.get(aId)
+	let bn = b.get(bId)
+	if an.kind != bn.kind 'kindMismatch'
+		return false
+	end 'kindMismatch'
+
+	return match an.kind 'k'
+		jsonNull gives true
+		jsonBool gives an.boolValue == bn.boolValue
+		jsonNumber gives an.numberValue == bn.numberValue
+		jsonString gives an.stringValue.equals(bn.stringValue)
+		jsonArray gives jsonArraysEqual(a, an: an, b: b, bn: bn)
+		jsonObject gives jsonObjectsEqual(a, an: an, b: b, bn: bn)
+	end 'k'
+end 'jsonValuesEqual'
+
+function jsonArraysEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns bool
+	let n = an.children.count()
+	if n != bn.children.count() 'lenMismatch'
+		return false
+	end 'lenMismatch'
+
+	for i in 0 upto n 'each'
+		let aChild = try an.children.get(i) otherwise panic("jsonArraysEqual: an.children.get OOB — i bounded by n")
+		let bChild = try bn.children.get(i) otherwise panic("jsonArraysEqual: bn.children.get OOB — the counts match")
+		if not jsonValuesEqual(a, aId: aChild, b: b, bId: bChild) 'mismatch'
+			return false
+		end 'mismatch'
+	end 'each'
+
+	return true
+end 'jsonArraysEqual'
+
+// Key ORDER is part of equality: the walker compares objects positionally, so two documents with
+// the same pairs in a different order are not equal here. Fixtures are written against a server
+// that emits its keys in a fixed order, and pinning the order is what makes a reordering visible.
+function jsonObjectsEqual(a JsonDoc, an JsonNode, b JsonDoc, bn JsonNode) returns bool
+	let n = an.keys.count()
+	if n != bn.keys.count() 'lenMismatch'
+		return false
+	end 'lenMismatch'
+
+	for i in 0 upto n 'each'
+		let aKey = try an.keys.get(i) otherwise panic("jsonObjectsEqual: an.keys.get OOB — i bounded by n")
+		let bKey = try bn.keys.get(i) otherwise panic("jsonObjectsEqual: bn.keys.get OOB — the counts match")
+		if not aKey.equals(bKey) 'keyMismatch'
+			return false
+		end 'keyMismatch'
+
+		let aChild = try an.children.get(i) otherwise panic("jsonObjectsEqual: an.children.get OOB — keys and children are parallel")
+		let bChild = try bn.children.get(i) otherwise panic("jsonObjectsEqual: bn.children.get OOB — keys and children are parallel")
+		if not jsonValuesEqual(a, aId: aChild, b: b, bId: bChild) 'valMismatch'
+			return false
+		end 'valMismatch'
+	end 'each'
+
+	return true
+end 'jsonObjectsEqual'
+
+// A freshly-rooted JsonDoc holding a deep copy of one subtree. Lets a single value be stringified
+// for a failure report without dragging the surrounding arena's root along with it.
+function subDoc(src JsonDoc, root JsonNodeId) returns JsonDoc
+	var out = JsonDoc.create()
+	out.root = copyNode(src, srcId: root, dst: out)
+	return out
+end 'subDoc'
+
+function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
+	let node = src.get(srcId)
+	match node.kind 'k'
+		jsonNull then return dst.add(JsonNode.nullNode())
+		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
+		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
+		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
+		jsonArray then return copyArray(src, node: node, dst: dst)
+		jsonObject then return copyObject(src, node: node, dst: dst)
+	end 'k'
+end 'copyNode'
+
+function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var ids = JsonNodeIdArray.create()
+	for childId in node.children 'each'
+		ids.push(copyNode(src, srcId: childId, dst: dst))
+	end 'each'
+
+	return dst.add(JsonNode.arrayNode(ids))
+end 'copyArray'
+
+function copyObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	let n = node.keys.count()
+	for i in 0 upto n 'each'
+		let key = try node.keys.get(i) otherwise panic("copyObject: keys.get OOB — i bounded by n")
+		let childId = try node.children.get(i) otherwise panic("copyObject: children.get OOB — keys and children are parallel")
+		keys.push(key)
+		children.push(copyNode(src, srcId: childId, dst: dst))
+	end 'each'
+
+	return dst.add(JsonNode.objectNode(keys, children: children))
+end 'copyObject'

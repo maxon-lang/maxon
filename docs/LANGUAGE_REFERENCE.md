@@ -28,6 +28,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Function Types and Function-Typed Values](#function-types-and-function-typed-values)
    - [Closures](#closures)
    - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
+   - [Test Declarations](#test-declarations)
 10. [Expressions](#expressions)
     - [Conditional (Ternary) Expression](#conditional-ternary-expression)
 11. [Statements](#statements)
@@ -2677,6 +2678,72 @@ extern function ExitProcess(uExitCode Integer) returns Integer
 - Assumes C calling convention
 - Must exist at link time
 
+### Test Declarations
+
+A `test` is a top-level declaration parallel to `function`, named with a quoted prose name
+rather than an identifier:
+
+```maxon
+test 'adds two numbers'
+	try Expect.equal(add(2, 2), expected: 4)
+end 'adds two numbers'
+```
+
+The name may contain anything except a `'`, and the `end` label must repeat it verbatim.
+
+A test takes **no parameters** and **no `returns`**. There is nothing to get wrong, which is
+the point: a malformed test is a parse error rather than a test that silently passes.
+
+**Implied `throws TestFailure`.** Every test implicitly declares `throws TestFailure`
+(`stdlib/Testing.maxon`); nobody writes the clause, and it cannot be written. That is what makes
+a forgotten `try` on an assertion **E3057 at compile time** rather than an assertion whose
+failure nothing observes, and it is what lets a test body use a bare `try` with no `otherwise` —
+outside a throwing function that is an error.
+
+**Tests live in `*.test.maxon` files.** A `test` declaration in any other file is **E2058**. One
+rule in one place: which declarations a build carries is answerable from the file list alone.
+
+**Two names.** A prose name cannot be a symbol — it reaches name mangling, the executable's
+symbol table, the `.mxdbg` sidecar and panic stack traces. So a test compiles to an ordinary
+function whose `Name` is `<namespace>.__test_<sanitized>` (every character outside `[A-Za-z0-9_]`
+becomes `_`) while its prose is kept verbatim as the function's display name. Two tests in one
+file whose names sanitize alike are **E3107**, which names both — a collision between
+`adds two` and `adds-two` is invisible in either name alone. Nothing calls a test, so tests are
+roots for dead-function elimination rather than something it reaches.
+
+**Any uncaught throw fails the test.** Outside a test, a bare `try` propagates, so the callee's
+`throws` type must be the enclosing function's own and anything else is **E3059**. Inside a test
+body that requirement is dropped: a bare `try` on **any** error type compiles, and an error that
+reaches it fails that test rather than escaping it.
+
+```maxon
+test 'returns 404 when the user is missing'
+	let response = try Api.lookup("nobody")     // throws ApiError — uncaught, FAILS the test
+	try Expect.equal(response.status(), expected: 404)
+end 'returns 404 when the user is missing'
+```
+
+The compiler substitutes the handler the author would otherwise have had to write: it reports the
+error's type, its case and the `try`'s own file and line through `__TestReport.threw`, then throws
+`TestFailure.assertion`. So a test still throws exactly `TestFailure` — the foreign error is
+reported and dropped, never propagated — and a failure caused by an unexpected error says which
+error it was.
+
+The relaxation is a narrowing of the propagation check itself, so it reaches nowhere else: an
+ordinary `function` holding the identical `try` still gets E3059, and a closure written inside a
+test body is a separate function that cannot express `throws` at all (**E3101**), so a bare `try`
+inside one is refused unchanged. An `otherwise` the author wrote always wins — the substitution
+only ever happens where there is none. See `specs/test-uncaught-throw.md`.
+
+`test` is a [contextual keyword](#contextual-keywords) and is not reserved.
+
+**Running them** is `maxon test [directory]`, which discovers every `test` in the project's
+`*.test.maxon` files, compiles them into one binary with a generated entry point, and runs them.
+The project's own `main` needs no change — it simply stops being reachable and is dropped. See
+[`docs/CLI_REFERENCE.md`](CLI_REFERENCE.md#maxon-test) for the flags, the five ways a test can
+fail, and a worked example; the matcher roster is in
+[`docs/STDLIB_REFERENCE.md`](STDLIB_REFERENCE.md#testing-expect).
+
 ---
 
 ## Expressions
@@ -4097,65 +4164,6 @@ end 'deepCaller'
 `module` and `export` are mutually exclusive — combining them is a parse error. The keyword applies in every position where `export` does: top-level functions, types, enums, unions, typealiases, top-level vars/lets, and per-method or per-field modifiers inside types. A code outside the declarer's directory subtree that tries to use a `module` symbol gets error `E3088: function 'X' is module-scoped and not visible from this directory`.
 
 In Maxon, "module" in this context means a directory subtree — useful for sharing helpers across a feature folder without leaking them to the rest of the program.
-
-### Test Declarations
-
-A `test` is a top-level declaration parallel to `function`, named with a quoted prose name
-rather than an identifier:
-
-```maxon
-test 'adds two numbers'
-	try Expect.equal(add(2, 2), expected: 4)
-end 'adds two numbers'
-```
-
-The name may contain anything except a `'`, and the `end` label must repeat it verbatim.
-
-A test takes **no parameters** and **no `returns`**. There is nothing to get wrong, which is
-the point: a malformed test is a parse error rather than a test that silently passes.
-
-**Implied `throws TestFailure`.** Every test implicitly declares `throws TestFailure`
-(`stdlib/Testing.maxon`); nobody writes the clause, and it cannot be written. That is what makes
-a forgotten `try` on an assertion **E3057 at compile time** rather than an assertion whose
-failure nothing observes, and it is what lets a test body use a bare `try` with no `otherwise` —
-outside a throwing function that is an error.
-
-**Tests live in `*.test.maxon` files.** A `test` declaration in any other file is **E2058**. One
-rule in one place: which declarations a build carries is answerable from the file list alone.
-
-**Two names.** A prose name cannot be a symbol — it reaches name mangling, the executable's
-symbol table, the `.mxdbg` sidecar and panic stack traces. So a test compiles to an ordinary
-function whose `Name` is `<namespace>.__test_<sanitized>` (every character outside `[A-Za-z0-9_]`
-becomes `_`) while its prose is kept verbatim as the function's display name. Two tests in one
-file whose names sanitize alike are **E3107**, which names both — a collision between
-`adds two` and `adds-two` is invisible in either name alone. Nothing calls a test, so tests are
-roots for dead-function elimination rather than something it reaches.
-
-**Any uncaught throw fails the test.** Outside a test, a bare `try` propagates, so the callee's
-`throws` type must be the enclosing function's own and anything else is **E3059**. Inside a test
-body that requirement is dropped: a bare `try` on **any** error type compiles, and an error that
-reaches it fails that test rather than escaping it.
-
-```maxon
-test 'returns 404 when the user is missing'
-	let response = try Api.lookup("nobody")     // throws ApiError — uncaught, FAILS the test
-	try Expect.equal(response.status(), expected: 404)
-end 'returns 404 when the user is missing'
-```
-
-The compiler substitutes the handler the author would otherwise have had to write: it reports the
-error's type, its case and the `try`'s own file and line through `__TestReport.threw`, then throws
-`TestFailure.assertion`. So a test still throws exactly `TestFailure` — the foreign error is
-reported and dropped, never propagated — and a failure caused by an unexpected error says which
-error it was.
-
-The relaxation is a narrowing of the propagation check itself, so it reaches nowhere else: an
-ordinary `function` holding the identical `try` still gets E3059, and a closure written inside a
-test body is a separate function that cannot express `throws` at all (**E3101**), so a bare `try`
-inside one is refused unchanged. An `otherwise` the author wrote always wins — the substitution
-only ever happens where there is none. See `specs/test-uncaught-throw.md`.
-
-`test` is a [contextual keyword](#contextual-keywords) and is not reserved.
 
 ### Qualified Names
 Call functions with full namespace:

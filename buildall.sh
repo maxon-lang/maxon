@@ -29,12 +29,15 @@ pkill -f maxon-dev-mcp 2>/dev/null || true
 bin/maxon build maxon-dev-mcp/mcp
 
 echo ""
-echo "=== Building maxon-dev MCP Test Runner ==="
-bin/maxon build maxon-dev-mcp/test
-
-echo ""
 echo "=== Running maxon-dev MCP Tests ==="
-maxon-dev-mcp/test/.maxon/maxon-dev-mcp-test
+# `maxon test` discovers the `test` declarations under maxon-dev-mcp/test/, compiles them into one
+# binary with a generated entry point, and runs them — there is no separate runner to build.
+#
+# --timeout bounds a test PROCESS, and a whole test file shares one, so this budget covers all of
+# protocol.test.maxon at once. It is deliberately far larger than the wall time the suite actually
+# takes (single-digit seconds): two of those fixtures shell out to a whole spec-test / scale-test
+# run, so the number has to be a ceiling on the slowest machine rather than a snug fit on this one.
+bin/maxon test maxon-dev-mcp/test --timeout=1200000
 
 echo ""
 echo "=== All steps completed successfully ==="

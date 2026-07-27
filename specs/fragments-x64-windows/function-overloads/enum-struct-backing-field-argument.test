@@ -1,0 +1,128 @@
+// Test: enum-struct-backing-field-argument
+typealias Wide = int(i64.min to i64.max)
+
+type Spec
+	export var width as Wide
+	export var height as Wide
+
+	export static function make(width Wide, height Wide) returns Spec
+		return Spec{width: width, height: height}
+	end 'make'
+end 'Spec'
+
+enum Preset
+	small = Spec{width: 3, height: 2}
+	large = Spec{width: 9, height: 4}
+end 'Preset'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let p = Preset.large
+	return over(p.width)
+end 'main'
+---
+ExitCode: 109
+---
+// CompiledIR
+module {
+  func @over$x_i64(x: i64) -> i64 {
+  entry:
+    x64.mov rax, 100
+    x64.lea rax, [rcx + rax]
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 12
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.xor edx, edx
+    x64.xor ebx, ebx
+    x64.mov rsi, [rbp-8]
+    x64.cmp rsi, rbx
+    x64.sete rdi
+    x64.movzx rdi, rdib
+    x64.mov r8, 3
+    x64.test rdi, rdi
+    x64.mov r9, rdx
+    x64.cmovne r9, r8
+    x64.mov rcx, 1
+    x64.cmp rsi, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 9
+    x64.test rcx, rcx
+    x64.mov rbx, r9
+    x64.cmovne rbx, rdx
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rbx
+    x64.xor ecx, ecx
+    x64.xor edx, edx
+    x64.cmp rsi, rdx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, 2
+    x64.test rdx, rdx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rbx
+    x64.mov rcx, 1
+    x64.cmp rsi, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 4
+    x64.test rcx, rcx
+    x64.mov rbx, rdi
+    x64.cmovne rbx, rdx
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+8], rbx
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+0]
+    x64.call over$x_i64
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Spec(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Spec.done
+  done:
+    x64.ret
+  }
+}
+---

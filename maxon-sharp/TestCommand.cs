@@ -354,38 +354,56 @@ internal static class TestCommand {
   /// <summary>
   /// How wide the flag column in the usage text is. One number, so the listing cannot go ragged the
   /// way a hand-padded one does the moment a flag's name changes length.
+  ///
+  /// 27 because this block is printed BOTH by <see cref="Usage"/> and, verbatim, inside
+  /// <c>maxon</c>'s top-level usage, whose other sections align their descriptions there.
   /// </summary>
-  private const int UsageFlagColumnWidth = 24;
+  private const int UsageFlagColumnWidth = 27;
 
   /// <summary>One usage line. An empty <paramref name="flag"/> continues the previous one.</summary>
-  private static void Option(string flag, string description) {
+  private static void Option(TextWriter output, string flag, string description) {
     var left = flag.Length == 0 ? new string(' ', UsageFlagColumnWidth) : ("  " + flag).PadRight(UsageFlagColumnWidth);
-    Console.Error.WriteLine((left + description).TrimEnd());
+    output.WriteLine((left + description).TrimEnd());
+  }
+
+  /// <summary>
+  /// The flags this command accepts and the codes it exits with.
+  /// </summary>
+  /// <remarks>
+  /// ONE copy, printed by <see cref="Usage"/> on a bad flag and by <c>maxon</c>'s top-level usage,
+  /// rather than written out again in the second place. The EXIT CODES are the part that must not
+  /// be allowed to drift: CI branches on them, so a stale second listing would route a pipeline by
+  /// a number this command had stopped using — and both texts would look equally authoritative.
+  ///
+  /// Every default it quotes is read from the constant that supplies it, for the same reason.
+  /// </remarks>
+  public static void WriteOptions(TextWriter output) {
+    Option(output, $"{FilterFlagShort}, {FilterFlagLong}P", "run only tests whose NAME or FILE contains P");
+    Option(output, "", "(case-insensitive; comma-separated patterns are a union)");
+    Option(output, ListFlag, "print the tests that would run and compile nothing");
+    Option(output, JsonFlag, "emit the report as JSON instead of text");
+    Option(output, IsolateFlag, "run every test in its own process");
+    Option(output, $"{BailFlag}[=N]", $"stop after N failures (default {DefaultBailAfter})");
+    Option(output, $"{WorkersFlag}N", $"run N test processes at once (default {TestExecutor.DefaultWorkers} here)");
+    Option(output, $"{TimeoutFlag}MS", $"kill a test process after MS milliseconds (default {DefaultTimeoutMs});");
+    Option(output, "", $"a whole file shares one process, so {IsolateFlag} gives each test its own budget");
+    Option(output, NoTimingFlag, "omit durations, making stdout byte-reproducible");
+    Option(output, $"{ColorFlag}{Ansi.Choices}", "");
+    Option(output, "", "colour; auto means only when stdout is a terminal");
+    Option(output, $"{TargetFlag}ARCH-OS", "compile the test binary for a specific target");
+    output.WriteLine();
+    output.WriteLine("Exit codes:");
+    output.WriteLine($"  {ExitAllPassed}  every test passed.");
+    output.WriteLine($"  {ExitTestsFailed}  a test failed, crashed, timed out, leaked, or did not run —");
+    output.WriteLine("     or NO TESTS WERE FOUND, which is never reported as success.");
+    output.WriteLine($"  {ExitCouldNotRun}  the run could not happen: a bad flag, a compile error, no such project.");
   }
 
   private static int Usage(string problem) {
     Console.Error.WriteLine($"test: {problem}");
     Console.Error.WriteLine($"Usage: maxon test [<directory>] [{FilterFlagShort}|{FilterFlagLong}PATTERN]"
       + $" [{ListFlag}] [{JsonFlag}] [options]");
-    Option($"{FilterFlagShort}, {FilterFlagLong}P", "run only tests whose NAME or FILE contains P");
-    Option("", "(case-insensitive; comma-separated patterns are a union)");
-    Option(ListFlag, "print the tests that would run and compile nothing");
-    Option(JsonFlag, "emit the report as JSON instead of text");
-    Option(IsolateFlag, "run every test in its own process");
-    Option($"{BailFlag}[=N]", $"stop after N failures (default {DefaultBailAfter})");
-    Option($"{WorkersFlag}N", $"run N test processes at once (default {TestExecutor.DefaultWorkers} here)");
-    Option($"{TimeoutFlag}MS", $"kill a test process after MS milliseconds (default {DefaultTimeoutMs});");
-    Option("", $"a whole file shares one process, so {IsolateFlag} gives each test its own budget");
-    Option(NoTimingFlag, "omit durations, making stdout byte-reproducible");
-    Option($"{ColorFlag}{Ansi.Choices}", "");
-    Option("", "colour; auto means only when stdout is a terminal");
-    Option($"{TargetFlag}ARCH-OS", "compile the test binary for a specific target");
-    Console.Error.WriteLine();
-    Console.Error.WriteLine("Exit codes:");
-    Console.Error.WriteLine($"  {ExitAllPassed}  every test passed.");
-    Console.Error.WriteLine($"  {ExitTestsFailed}  a test failed, crashed, timed out, leaked, or did not run —");
-    Console.Error.WriteLine("     or NO TESTS WERE FOUND, which is never reported as success.");
-    Console.Error.WriteLine($"  {ExitCouldNotRun}  the run could not happen: a bad flag, a compile error, no such project.");
+    WriteOptions(Console.Error);
     return ExitCouldNotRun;
   }
 }

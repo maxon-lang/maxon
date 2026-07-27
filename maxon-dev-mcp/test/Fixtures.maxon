@@ -1,0 +1,252 @@
+// Running one JSON-RPC fixture against the maxon-dev MCP server.
+//
+// A fixture is a pair: `<name>.in.json` is piped into a freshly spawned server on stdin, and
+// `<name>.assert.json` is walked over the newline-delimited JSON-RPC responses it wrote back
+// (see `Assertions.maxon` for the assertion grammar).
+
+let InputSuffix = ".in.json"
+let AssertSuffix = ".assert.json"
+let FixtureDirRelativePath = "maxon-dev-mcp/test/fixtures"
+
+// The JSON path a walk starts from. Reported at the head of every failure, so a reader can paste
+// the rest of the path straight into the assertion file.
+let RootPath = "$"
+
+// `.assert.json`'s wrapper form and its optional siblings.
+let ResponsesKey = "responses"
+let ExitCodeKey = "exitCode"
+let StderrContainsKey = "stderrContains"
+
+// A subprocess exit code as it crosses into an assertion. Deliberately the full signed range: the
+// value comes from a process this suite does not control.
+typealias ProcessExitCode = int(i64.min to i64.max)
+
+// Fixtures are static JSON, but some of them must name an ABSOLUTE path — a `repoRoot` argument to
+// send, or the root a response is expected to echo back — and the absolute path of the checkout is
+// not knowable when the fixture is written. So `<REPO_ROOT>` is substituted, in the request AND in
+// the assertion, with the root this suite resolved.
+let RepoRootPlaceholder = "<REPO_ROOT>"
+
+// A SECOND, DISTINCT checkout — and it exists because `<REPO_ROOT>` alone cannot test the one thing
+// `repoRoot` is for.
+//
+// The default root the server derives IS `<REPO_ROOT>`. So a fixture that passes
+// `repoRoot: "<REPO_ROOT>"` and asserts the echo is `<REPO_ROOT>` holds whether the argument was
+// honoured or ignored — it was, and it passed, and it proved nothing. **The property is "the tool
+// acts on the tree I NAMED, not the one it would have picked", and a single tree cannot express it:
+// the two answers have to be able to differ.**
+let ScratchRootPlaceholder = "<SCRATCH_ROOT>"
+
+// Where that second tree lives. Gitignored build output, never a real tree — and note what it
+// deliberately does NOT contain: `docs/error-codes.txt`. That absence is the teeth. A
+// `lookup_error_code` aimed here must FAIL to find a registry, which a server that quietly used its
+// own root could not do — it would find the real one and answer. So the fixture fails in two
+// independent ways if the argument is dropped: the wrong root is echoed, AND a call that must
+// refuse instead succeeds.
+let FixtureScratchDir = "maxon-dev-mcp/test/.maxon/fixture-scratch"
+
+export type Fixture
+	/// Run the fixture called `name` and assert its responses. Throws `TestFailure` at the first
+	/// thing that does not hold, having already printed the expected/received block.
+	///
+	/// `file` and `line` default to the CALL SITE, so every failure names the `test` declaration
+	/// that asked for this fixture rather than a line in this library.
+	export static function check(name String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+		let site = AssertSite.create(file, line: line)
+		let repoRoot = resolveRepoRoot()
+		let dir = joinPath(repoRoot, segment: FixtureDirRelativePath)
+
+		let inputPath = joinPath(dir, segment: "{name}{InputSuffix}")
+		let rawInput = try File.readText(inputPath) otherwise 'readErr'
+			try Expect.fail("cannot read the fixture request {inputPath.path}", file: file, line: line)
+			return
+		end 'readErr'
+
+		// A fixture whose `.assert.json` is missing FAILS. The hand-rolled runner printed
+		// `WARN: skipping <name>` and moved on, so a fixture could lose its assertions and the suite
+		// would stay green while asserting nothing about it — which is the precise failure
+		// `maxon test` exists to make impossible.
+		let assertPath = joinPath(dir, segment: "{name}{AssertSuffix}")
+		let rawAssert = try File.readText(assertPath) otherwise 'assertReadErr'
+			try Expect.fail("cannot read the fixture assertions {assertPath.path}", file: file, line: line)
+			return
+		end 'assertReadErr'
+
+		let scratchRoot = materializeFixtureScratchRoot(repoRoot)
+		let assertText = expandPlaceholders(rawAssert, repoRoot: repoRoot, scratchRoot: scratchRoot)
+		let assertDoc = try Json.parse(assertText) otherwise (err) 'parseErr'
+			try Expect.fail("{assertPath.path} is not valid JSON ({err.name})", file: file, line: line)
+			return
+		end 'parseErr'
+
+		let binary = locateBinary(repoRoot)
+		var c = Configuration.create(Executable.path(binary))
+		c.standardInput = InputSource.bytes(expandPlaceholders(rawInput, repoRoot: repoRoot, scratchRoot: scratchRoot))
+		c.standardOutput = OutputDestination.collect(transcriptCaptureBytes)
+		c.standardError = OutputDestination.collect(diagnosticCaptureBytes)
+		c.timeoutMs = subprocessTimeoutMs
+
+		let collected = try c.run() otherwise (err) 'runErr'
+			try Expect.fail("could not run the server at {binary.path}: {err.displayReason()}", file: file, line: line)
+			return
+		end 'runErr'
+
+		try assertResponses(collected.stdout, actualStderr: collected.stderr, exitCode: collected.exitCode(), assertDoc: assertDoc, site: site)
+	end 'check'
+
+	/// Assert that every JSON-RPC fixture on disk is named by a test in the CALLING file.
+	///
+	/// The file is `__file__` by default, which expands at the call site — so the check reads the
+	/// very file the tests are declared in, and no test has to spell its own name.
+	export static function requireEveryFixtureHasATest(file String = __file__, line SourceLineNumber = __line__) throws TestFailure
+		let dir = joinPath(resolveRepoRoot(), segment: FixtureDirRelativePath)
+		try requireEveryFixtureIsNamed(dir, suffix: InputSuffix, skipping: StringArray.create(), site: AssertSite.create(file, line: line))
+	end 'requireEveryFixtureHasATest'
+end 'Fixture'
+
+// =============================================================================
+// Response assertions
+// =============================================================================
+
+// `.assert.json` is either:
+//   - a bare object that asserts against the single response line, OR
+//   - `{ "responses": [<obj>, <obj>, ...] }` asserting one entry per line.
+// The wrapper form also accepts optional `exitCode` and `stderrContains` siblings, for the fixtures
+// that are about how the PROCESS ended rather than about what it answered.
+function assertResponses(actualStdout String, actualStderr String, exitCode ProcessExitCode, assertDoc JsonDoc, site AssertSite) throws TestFailure
+	let responses = try splitJsonLines(actualStdout, site: site)
+	let isWrapper = assertDoc.rootKind() == JsonKind.jsonObject and assertHasKey(assertDoc, parent: assertDoc.root, key: ResponsesKey)
+
+	if not isWrapper 'singleResponse'
+		try Expect.greaterThan(responses.count(), than: 0, message: "the server produced no JSON response. stderr: {actualStderr.trim()}", file: site.file, line: site.line)
+
+		let first = try responses.get(0) otherwise panic("assertResponses: responses.get(0) OOB — a non-zero count was just asserted")
+		try walkAssertion(first, actualId: first.root, assertDoc: assertDoc, assertId: assertDoc.root, path: RootPath, site: site)
+		return
+	end 'singleResponse'
+
+	if assertHasKey(assertDoc, parent: assertDoc.root, key: ExitCodeKey) 'assertsExitCode'
+		let expected = try assertDoc.getInt(assertDoc.root, key: ExitCodeKey) otherwise panic("assertResponses: `{ExitCodeKey}` is present but is not a number")
+		try Expect.equal(exitCode, expected: expected, message: "process exit code", file: site.file, line: site.line)
+	end 'assertsExitCode'
+
+	if assertHasKey(assertDoc, parent: assertDoc.root, key: StderrContainsKey) 'assertsStderr'
+		let needle = try assertDoc.getString(assertDoc.root, key: StderrContainsKey) otherwise panic("assertResponses: `{StderrContainsKey}` is present but is not a string")
+		try Expect.contains(actualStderr, needle: needle, message: "process stderr", file: site.file, line: site.line)
+	end 'assertsStderr'
+
+	let responsesAssertId = try assertDoc.getChild(assertDoc.root, key: ResponsesKey) otherwise panic("assertResponses: the wrapper form was just detected, so `{ResponsesKey}` resolves")
+	let respNode = assertDoc.get(responsesAssertId)
+	let expectedCount = respNode.children.count()
+	try Expect.equal(responses.count(), expected: expectedCount, message: "JSON-RPC responses on stdout. stderr: {actualStderr.trim()}", file: site.file, line: site.line)
+
+	for i in 0 upto expectedCount 'each'
+		let respAssertId = try respNode.children.get(i) otherwise panic("assertResponses: children.get OOB — i bounded by expectedCount")
+		let resp = try responses.get(i) otherwise panic("assertResponses: responses.get OOB — the counts were asserted equal first")
+		try walkAssertion(resp, actualId: resp.root, assertDoc: assertDoc, assertId: respAssertId, path: "{RootPath}.{ResponsesKey}[{i}]", site: site)
+	end 'each'
+end 'assertResponses'
+
+// =============================================================================
+// Fixture discovery and the coverage check
+// =============================================================================
+
+/// The fixture names in `dir`, taken from the files ending in `suffix`, minus any whose name also
+/// ends in one of `skipping` — a longer suffix marking a file that is PART of a fixture rather than
+/// a fixture of its own.
+export function fixtureNamesIn(dir FilePath, suffix String, skipping StringArray) returns StringArray
+	var out = StringArray.create()
+	let entries = try Directory.list(dir) otherwise 'listErr'
+		return out
+	end 'listErr'
+
+	for entry in entries 'each'
+		if not entry.path.endsWith(suffix) 'notAFixture'
+			continue
+		end 'notAFixture'
+
+		if endsWithAny(entry.path, suffixes: skipping) 'partOfAnother'
+			continue
+		end 'partOfAnother'
+
+		out.push(stripSuffix(lastSegment(entry.path), suffix: suffix))
+	end 'each'
+
+	return out
+end 'fixtureNamesIn'
+
+function endsWithAny(path String, suffixes StringArray) returns bool
+	for suffix in suffixes 'each'
+		if path.endsWith(suffix) 'hit'
+			return true
+		end 'hit'
+	end 'each'
+
+	return false
+end 'endsWithAny'
+
+/// Assert that every fixture in `dir` is named somewhere in the test file `site` came from.
+///
+/// A `test` declaration is STATIC, so a fixture list ends up written down twice: once as files on
+/// disk, once as the declarations that run them. The hand-rolled runner had only ONE copy — it
+/// walked the directory at run time — and the price was that no fixture had a name, a verdict or a
+/// duration of its own, and a fixture whose assertions went missing was skipped with a warning and
+/// still counted towards a green run.
+///
+/// This is the check between the two copies, and it is what buys back the discovery the runtime
+/// walk used to provide: it reads the test file's own source — the only place the second copy
+/// exists — and NAMES every fixture that nothing runs.
+export function requireEveryFixtureIsNamed(dir FilePath, suffix String, skipping StringArray, site AssertSite) throws TestFailure
+	let names = fixtureNamesIn(dir, suffix: suffix, skipping: skipping)
+	try Expect.greaterThan(names.count(), than: 0, message: "no fixtures found under {dir.path} — a suite with nothing to run is not a passing suite", file: site.file, line: site.line)
+
+	// `site.file` is the CALLER's `__file__`. Only its base name is used, joined to this project's
+	// one directory, so the check does not depend on what a `__file__` string is rooted at.
+	let sourceName = lastSegment(site.file)
+	let sourcePath = joinPath(joinPath(resolveRepoRoot(), segment: TestSourceDirRelativePath), segment: sourceName)
+	let source = try File.readText(sourcePath) otherwise 'readErr'
+		try Expect.fail("cannot read {sourcePath.path}, so which fixtures have tests cannot be established", file: site.file, line: site.line)
+		return
+	end 'readErr'
+
+	var orphans = ""
+	for name in names 'each'
+		if source.contains(name) 'named'
+			continue
+		end 'named'
+
+		orphans.append(" {name}")
+	end 'each'
+
+	try Expect.isEmpty(orphans, message: "these fixtures exist under {dir.path} but no test in {sourceName} names them, so nothing runs them", file: site.file, line: site.line)
+end 'requireEveryFixtureIsNamed'
+
+let TestSourceDirRelativePath = "maxon-dev-mcp/test"
+
+// =============================================================================
+// Placeholder expansion and the scratch checkout
+// =============================================================================
+
+// A scratch root must look like a Maxon checkout or the server refuses `repoRoot` outright.
+function materializeFixtureScratchRoot(repoRoot FilePath) returns FilePath
+	let scratch = joinPath(repoRoot, segment: FixtureScratchDir)
+	for marker in checkoutMarkerDirs() 'eachMarker'
+		if not Directory.create(joinPath(scratch, segment: marker)) 'mkFailed'
+			panic("materializeFixtureScratchRoot: could not create {marker} under {scratch.path}")
+		end 'mkFailed'
+	end 'eachMarker'
+
+	return scratch
+end 'materializeFixtureScratchRoot'
+
+// The substituted value is JSON-string-escaped. On Windows the path is `C:\Users\…`, and a lone
+// backslash inside a JSON string is the start of an escape sequence — so pasting the path in raw
+// would produce a fixture that either fails to parse or, worse, parses into a DIFFERENT path than
+// the one intended.
+function jsonEscapedPath(path FilePath) returns String
+	return path.path.replace("\\", with: "\\\\").replace("\"", with: "\\\"")
+end 'jsonEscapedPath'
+
+function expandPlaceholders(text String, repoRoot FilePath, scratchRoot FilePath) returns String
+	return text.replace(RepoRootPlaceholder, with: jsonEscapedPath(repoRoot)).replace(ScratchRootPlaceholder, with: jsonEscapedPath(scratchRoot))
+end 'expandPlaceholders'

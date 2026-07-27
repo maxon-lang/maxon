@@ -1,0 +1,216 @@
+// Path, checkout-detection and binary-location helpers shared by every test in this project.
+//
+// It is a file of its own because of how `maxon test` compiles a suite: a `test` declaration is not
+// exported and its file's generated dispatcher is appended to that same file, so anything more than
+// one `*.test.maxon` needs has to live in a third file that exports it. Before the suite moved to
+// `maxon test` all of this sat in a hand-rolled `runner.maxon` alongside its own main loop.
+
+// The host's executable-file suffix: `.exe` on Windows, empty elsewhere. The server and compiler
+// binaries located here carry it only on Windows; hardcoding `.exe` made every path probe miss on
+// macOS/Linux.
+export function exeSuffix() returns String
+	#if os(Windows)
+		return ".exe"
+	#else
+		return ""
+	#endif
+end 'exeSuffix'
+
+// How long a subprocess a test spawns may run. Generous: most finish in under a second, but the
+// `build` / `run_spec_test` / `run_scale_test` tools shell out further and can take minutes.
+//
+// ⚠ It must stay BELOW `maxon test --timeout`, which bounds the whole test PROCESS. If the process
+// deadline were the tighter of the two, a hung child would be reported as the harness killing the
+// test rather than as the child overrunning, and the diagnosis would name the wrong party.
+export let subprocessTimeoutMs = 600000
+
+// How much of a spawned process's streams to keep, by what the stream CARRIES rather than by which
+// process it came from. A tool RESULT is a whole transcript — `tools/list` alone runs to tens of
+// kilobytes and a spec-test result far past that — while a diagnostic is a line or two.
+export let transcriptCaptureBytes = 16 * 1024 * 1024
+export let diagnosticCaptureBytes = 1024 * 1024
+
+// Deep enough for `<repo>/maxon-dev-mcp/test/.maxon/cache/<binary>` plus room to spare, shallow
+// enough that a runner started outside a checkout fails fast. Mirrors `MaxRepoRootWalkDepth` in
+// mcp/Util.maxon.
+let MaxRepoRootWalkDepth = 16
+
+// The `--mcp-binary=PATH` override: which server binary the fixtures drive. It exists for the case
+// where the canonical binary is locked — an MCP host holding it open — and a side-built copy has to
+// be exercised instead.
+//
+// A NAMED option, and not argv[1] as it was before the port, because `maxon test` OWNS the test
+// binary's argv: it passes its own selection flag there. A positional override would read that flag
+// as a path and panic on it. Reachable by running the compiled test binary directly, which is
+// exactly the situation the override was written for.
+let BinaryOverrideOption = "mcp-binary"
+
+// The runner binary lives under `<repo>/maxon-dev-mcp/test/.maxon/`. Walk up until we find a
+// checkout — the repo root.
+//
+// The markers mirror `isMaxonCheckout` in mcp/Util.maxon, which is the canonical definition. They
+// cannot literally be shared: `mcp/` and `test/` are separate Maxon projects, so this binary cannot
+// link that one's code. They must not DIVERGE either, and they agree on the point that matters — a
+// checkout is a checkout because of what was checked out into it, never because of what has been
+// BUILT in it. This probe used to look for `bin/maxon`, a gitignored build artifact, which made a
+// freshly-created worktree look like "not a repo".
+export function resolveRepoRoot() returns FilePath
+	let exe = try Process.executablePath() otherwise panic("resolveRepoRoot: Process.executablePath threw — runtime introspection unavailable")
+	var dir = try parentDirOrThrow(exe) otherwise panic("resolveRepoRoot: the executable path {exe.path} has no directory part")
+
+	for _ in 0 upto MaxRepoRootWalkDepth 'walk'
+		if isMaxonCheckout(dir) 'found'
+			return dir
+		end 'found'
+
+		// Ends on the THROW, exactly as `mcp/Util.maxon`'s walk does — the path grammar says there is
+		// nothing above, rather than a sentinel comparing equal to itself. The mirror is only worth
+		// having if both halves stop for the same reason.
+		dir = try parentDirOrThrow(dir) otherwise 'atFilesystemRoot'
+			break
+		end 'atFilesystemRoot'
+	end 'walk'
+
+	panic("resolveRepoRoot: could not locate a Maxon checkout above {exe.path}")
+end 'resolveRepoRoot'
+
+// A scratch root must look like a Maxon checkout or the server refuses `repoRoot` outright. These
+// are SOURCE directories, never build output, which is why an empty pair of them is enough to make
+// a root real.
+//
+// One list, read by both halves: what this project RECOGNIZES as a checkout and what it CREATES as
+// one cannot disagree. They were two hardcoded literals and a list, which made adding a marker a
+// three-place edit and, if the detector half were missed, would stage `RootWalk`'s probe INSIDE a
+// tree.
+export function checkoutMarkerDirs() returns StringArray
+	var out = StringArray.create()
+	out.push("stdlib")
+	out.push("maxon-sharp")
+	return out
+end 'checkoutMarkerDirs'
+
+export function isMaxonCheckout(dir FilePath) returns bool
+	for marker in checkoutMarkerDirs() 'each'
+		if not Directory.exists(joinPath(dir, segment: marker)) 'missing'
+			return false
+		end 'missing'
+	end 'each'
+
+	return true
+end 'isMaxonCheckout'
+
+export function locateBinary(repoRoot FilePath) returns FilePath
+	let overrideArg = try CommandLine.getOptionValue(BinaryOverrideOption) otherwise 'noOverride'
+		let path = joinPath(repoRoot, segment: "maxon-dev-mcp/mcp/.maxon/maxon-dev-mcp{exeSuffix()}")
+		if not File.exists(path) 'missing'
+			panic("locateBinary: server binary not found at {path.path}. Build it with `maxon build maxon-dev-mcp/mcp` first.")
+		end 'missing'
+
+		return path
+	end 'noOverride'
+
+	let overridePath = try FilePath.from(overrideArg) otherwise panic("locateBinary: --{BinaryOverrideOption}='{overrideArg}' is not a valid path")
+	if not File.exists(overridePath) 'missingOverride'
+		panic("locateBinary: --{BinaryOverrideOption}='{overridePath.path}' does not exist")
+	end 'missingOverride'
+
+	return overridePath
+end 'locateBinary'
+
+// =============================================================================
+// Path helpers
+// =============================================================================
+
+// The parent of `path`, or `NotFound` when it HAS none — a filesystem root, or a bare name.
+//
+// A MIRROR of `mcp/Util.maxon`'s `parentDirOrThrow`, down to saying no by THROWING rather than by
+// handing back a sentinel: `.` there let the SERVER's walk run off a drive root and adopt its CWD
+// as a repo root, and `path`-unchanged here would only relocate that decision into every caller.
+//
+// Mirrored rather than shared because `mcp/` and `test/` are separate Maxon PROJECTS — a project
+// is one directory tree (`SourceCollector` globs `*.maxon` under it), so this binary cannot link
+// that one's code.
+export function parentDirOrThrow(path FilePath) returns FilePath throws NotFound
+	let bytes = path.path.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("parentDirOrThrow: bytes.get OOB — i bounded by n")
+		if b != SlashByte and b != BackslashByte 'notSep'
+			continue
+		end 'notSep'
+
+		// A separator at index 0 is a POSIX absolute path's leading `/`. The parent of `/usr` is
+		// `/` — not the empty string, which `FilePath.from` rejects, and which this used to hand
+		// it: `parentDir("/home")` panicked outright on macOS and Linux. `/` itself has no parent.
+		if i == 0 'leadingSep'
+			if n == 1 'isPosixRoot'
+				throw NotFound.notFound
+			end 'isPosixRoot'
+
+			let root = sliceBytesAsString(bytes, from: 0, until: 1)
+			return try FilePath.from(root) otherwise panic("parentDirOrThrow: a lone separator '{root}' is always a valid path")
+		end 'leadingSep'
+
+		let parentStr = sliceBytesAsString(bytes, from: 0, until: i)
+		return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: derived parent '{parentStr}' is invalid")
+	end 'scan'
+
+	// No separator: a bare name, or a Windows drive spec (`C:`). Neither has a parent.
+	throw NotFound.notFound
+end 'parentDirOrThrow'
+
+// The final component of `path`. Takes the path as TEXT rather than as a `FilePath` because one
+// caller has only text: `__file__` expands to a string, and the coverage check needs its base name.
+export function lastSegment(path String) returns String
+	let bytes = path.toByteArray()
+	let n = bytes.count()
+	var i = n
+	while i > 0 'scan'
+		i = i - 1
+		let b = try bytes.get(i) otherwise panic("lastSegment: bytes.get OOB — i bounded by n")
+		if b == SlashByte or b == BackslashByte 'sep'
+			return sliceBytesAsString(bytes, from: i + 1, until: n)
+		end 'sep'
+	end 'scan'
+
+	return path
+end 'lastSegment'
+
+export function joinPath(parent FilePath, segment String) returns FilePath
+	let joined = "{parent.path}/{segment}"
+	return try FilePath.from(joined) otherwise panic("joinPath: derived '{joined}' is invalid")
+end 'joinPath'
+
+export function stripSuffix(s String, suffix String) returns String
+	if not s.endsWith(suffix) 'noMatch'
+		return s
+	end 'noMatch'
+
+	let bytes = s.toByteArray()
+	let cut = bytes.count() - suffix.byteLength()
+	return sliceBytesAsString(bytes, from: 0, until: cut)
+end 'stripSuffix'
+
+function sliceBytesAsString(bytes ByteArray, from BytePos, until BytePos) returns String
+	var out = ByteArray.create()
+	for i in from upto until 'copy'
+		let b = try bytes.get(i) otherwise panic("sliceBytesAsString: get OOB — i bounded by until")
+		out.push(b)
+	end 'copy'
+
+	return String.from(out)
+end 'sliceBytesAsString'
+
+// The bytes the path scanners here look for. Both count wherever one does: Windows accepts
+// either and normalizes to `\`, POSIX takes `/` and treats `\` as an ordinary character.
+let SlashByte = 0x2F as Byte
+let BackslashByte = 0x5C as Byte
+
+typealias BytePos = int(0 to i64.max)
+
+// `Byte` / `ByteArray` come from `File.maxon`'s exported aliases — see the note in
+// `maxon-dev-mcp/mcp/Util.maxon`. A file-private copy would not unify with
+// `String.toByteArray()`, and its mere presence in the unit breaks the
+// `File.readBinary` → `File.writeBinary` unification in `RootWalk.maxon`.

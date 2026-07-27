@@ -590,3 +590,170 @@ end 'main'
 ```exitcode
 109
 ```
+
+<!-- test: enum-property-argument -->
+An ENUM PROPERTY is a member access that is not a struct field, and it scores by
+what the property yields. `.name` is a `String` for every enum, so it selects the
+`String` overload even though the `Wide` one is declared first. Reaching this
+needed the member step of the argument peek to know an enum receiver at all: it
+recognised struct fields only, so `k.name` produced no type, both overloads
+survived, and the call was rejected as ambiguous rather than resolved.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function main() returns ExitCode
+	let k = Kind.alpha
+	return over(k.name)
+end 'main'
+```
+```exitcode
+205
+```
+
+<!-- test: enum-property-argument-via-variable -->
+The same property routed through a local binding. Binding first has always
+worked; it is the control that says the direct form must agree with it rather
+than failing where it succeeds.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function main() returns ExitCode
+	let k = Kind.alpha
+	let name = k.name
+	return over(name)
+end 'main'
+```
+```exitcode
+205
+```
+
+<!-- test: enum-ordinal-argument -->
+`.ordinal` is an integer, so the same shape of access on the same value selects
+the OTHER overload. Declared with `String` first, so a resolver that fell back to
+declaration order would pick the wrong one and be caught here.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let k = Kind.beta
+	return over(k.ordinal)
+end 'main'
+```
+```exitcode
+101
+```
+
+<!-- test: enum-raw-value-argument -->
+`.rawValue` scores by the enum's BACKING rather than by one fixed type: a
+string-backed enum yields a `String` here, while the integer-backed default
+yields an integer. Both spellings appear in one program so neither can be
+satisfied by a constant answer.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+enum Label
+	greeting = "hi"
+	farewell = "bye"
+end 'Label'
+
+enum Status
+	ok = 7
+	bad = 9
+end 'Status'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function main() returns ExitCode
+	let l = Label.greeting
+	let s = Status.ok
+	return over(l.rawValue) + over(s.rawValue)
+end 'main'
+```
+```exitcode
+309
+```
+
+<!-- test: enum-struct-backing-field-argument -->
+A struct-backed enum exposes its backing struct's fields directly — `e.field` is
+`e.rawValue.field` — so the peek has to take both steps to score one access.
+Stopping after the enum hands back no type and leaves the call ambiguous;
+stopping after `rawValue` would hand back the backing STRUCT, which is a wrong
+type rather than a missing one.
+```maxon
+typealias Wide = int(i64.min to i64.max)
+
+type Spec
+	export var width as Wide
+	export var height as Wide
+
+	export static function make(width Wide, height Wide) returns Spec
+		return Spec{width: width, height: height}
+	end 'make'
+end 'Spec'
+
+enum Preset
+	small = Spec{width: 3, height: 2}
+	large = Spec{width: 9, height: 4}
+end 'Preset'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let p = Preset.large
+	return over(p.width)
+end 'main'
+```
+```exitcode
+109
+```

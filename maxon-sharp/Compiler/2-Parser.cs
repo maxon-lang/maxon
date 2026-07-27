@@ -17889,7 +17889,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (registeredType is IrEnumType enumType) {
 
         // .name access - returns case name as String
-        if (fieldName == "name") {
+        if (fieldName == EnumNameProperty) {
           var enumVal = ResolveExprValue(result);
           var nameOp = new MaxonEnumNameOp(enumVal, userTypeName);
           _currentBlock!.AddOp(nameOp);
@@ -17899,7 +17899,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         // .rawValue access
-        if (fieldName == "rawValue") {
+        if (fieldName == EnumRawValueProperty) {
           var enumVal = ResolveExprValue(result);
           if (enumType.BackingType is IrFunctionBackingType fbt) {
             var fnRawOp = new MaxonEnumFunctionRawValueOp(enumVal, userTypeName, fbt.Signature);
@@ -17945,7 +17945,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         // .ordinal access - returns zero-based declaration position as int
-        if (fieldName == "ordinal") {
+        if (fieldName == EnumOrdinalProperty) {
           var enumVal = ResolveExprValue(result);
           var ordinalOp = new MaxonEnumOrdinalOp(enumVal, userTypeName);
           _currentBlock!.AddOp(ordinalOp);
@@ -20618,11 +20618,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return token.Type switch {
       TokenType.IntegerLiteral => IrType.I64,
       TokenType.FloatLiteral => IrType.F64,
-      TokenType.StringLiteral or TokenType.StringInterp =>
-        _typeRegistry.TryGetValue("String", out var strType) ? strType : null,
+      TokenType.StringLiteral or TokenType.StringInterp => LookupRegisteredType("String"),
       TokenType.ByteStringLiteral => _typeRegistry[FindByteArrayTypeAlias(token)],
-      TokenType.CharacterLiteral =>
-        _typeRegistry.TryGetValue("Character", out var charType) ? charType : null,
+      TokenType.CharacterLiteral => LookupRegisteredType("Character"),
       TokenType.True or TokenType.False => IrType.I1,
       TokenType.LeftBracket => null, // collection — handled by legacy fallback
       TokenType.LeftParen => null, // closure — handled by legacy fallback
@@ -20737,16 +20735,73 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return type;
   }
 
-  /// The type of `<receiver>.<fieldName>`, or null when the receiver has no such field or the
-  /// field's type does not pin down to something concrete.
-  private IrType? InferMemberFieldType(IrType receiver, string fieldName) {
+  /// The properties every enum value carries. Named here and used BOTH by the emitter that lowers
+  /// them and by the peek below that scores them, so a property cannot be renamed in one place and
+  /// go on being recognised in the other under its old spelling.
+  private const string EnumNameProperty = "name";
+  private const string EnumRawValueProperty = "rawValue";
+  private const string EnumOrdinalProperty = "ordinal";
+
+  /// The type of `<receiver>.<memberName>`, or null when the receiver has no such member or the
+  /// member's type does not pin down to something concrete.
+  ///
+  /// A member is not always a struct field. An ENUM value carries `name`, `rawValue` and `ordinal`,
+  /// and a struct-backed one also exposes its backing struct's fields directly — none of which is a
+  /// field of the receiver. Recognising struct fields alone left every one of them scoring as "no
+  /// information", so `k.name` kept both an `int` and a `String` overload alive and the call was
+  /// rejected as AMBIGUOUS, while the identical access bound to a local first resolved.
+  private IrType? InferMemberFieldType(IrType receiver, string memberName) {
+    if (receiver is IrEnumType receiverEnum) return InferEnumMemberType(receiverEnum, memberName);
     if (receiver is not IrStructType receiverStruct) return null;
 
-    var field = receiverStruct.Fields.FirstOrDefault(f => f.Name == fieldName);
+    var field = receiverStruct.Fields.FirstOrDefault(f => f.Name == memberName);
     if (field == null) return null;
 
     return ConcreteTypeThroughReceiver(field.Type, receiverStruct);
   }
+
+  /// The type of a member access on an ENUM value.
+  ///
+  /// The types restate what the emitter's ops declare — `MaxonEnumNameOp` results in a `String`,
+  /// `MaxonEnumOrdinalOp` in an i64 — because a peek cannot run the emitter to ask. `rawValue` has
+  /// no single answer: it is whatever the enum is BACKED BY, so it is read off the backing.
+  ///
+  /// Two shapes deliberately yield null rather than a guess, which is the trade every helper on
+  /// this path makes — null leaves the caller's remaining filters in charge, a wrong type actively
+  /// rules out the only correct overload:
+  ///
+  ///  - a FUNCTION-backed enum's `rawValue`, which is a callable described by a signature rather
+  ///    than by an `IrType`; and
+  ///  - an integer backing whose kind is not primitive, which `KindToIrType` already answers null
+  ///    for.
+  private IrType? InferEnumMemberType(IrEnumType enumType, string memberName) {
+    if (memberName == EnumNameProperty) return LookupRegisteredType("String");
+    if (memberName == EnumOrdinalProperty) return IrType.I64;
+
+    if (memberName == EnumRawValueProperty) {
+      return enumType.BackingType switch {
+        IrFunctionBackingType => null,
+        IrStructBackingType structBacking => LookupRegisteredType(structBacking.StructTypeName),
+        IrStringBackingType => LookupRegisteredType("String"),
+        IrCharBackingType => LookupRegisteredType("Character"),
+        _ => KindToIrType(GetEnumBackingKind(enumType))
+      };
+    }
+
+    // Not a property, so the one remaining member a plain access can name is a field of the
+    // backing struct: `e.field` is `e.rawValue.field`, and the emitter takes exactly these two
+    // steps. Stopping after the first hands back no type; stopping after the second would hand
+    // back the backing STRUCT, which is a wrong type rather than a missing one.
+    if (enumType.BackingType is not IrStructBackingType backing) return null;
+
+    return LookupRegisteredType(backing.StructTypeName) is IrStructType backingStruct
+      ? InferMemberFieldType(backingStruct, memberName)
+      : null;
+  }
+
+  /// A registered type by name, or null when nothing is registered under it.
+  private IrType? LookupRegisteredType(string name) =>
+    _typeRegistry.TryGetValue(name, out var type) ? type : null;
 
   /// The result type of `<receiver>.<methodName>(...)`, or null when it cannot be pinned down.
   ///

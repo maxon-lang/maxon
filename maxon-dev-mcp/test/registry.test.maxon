@@ -1,0 +1,40 @@
+// REGISTRY CONFORMANCE — one format, both readers, and they must never disagree.
+//
+// Each test runs BOTH readers of `docs/error-codes.txt` over the same bytes in a scratch checkout —
+// the build gate, which parses and generates, and `lookup_error_code`, which reads what the gate
+// generated — and asserts the safety property: THE TOOL ANSWERS ONLY WHAT THE GATE SANCTIONED, FOR
+// THE BYTES ON DISK NOW. `Conformance.maxon` carries the full account of why.
+//
+// Each of these ran the real bootstrap once, in its own scratch tree under
+// `maxon-dev-mcp/test/.maxon/conformance/<name>/` — never a real checkout, because
+// `error-codes generate` WRITES into whatever root it is pointed at.
+
+test 'a blank line inside an entry is read the same way by both readers'
+	try Conformance.check("blank-line-in-entry")
+end 'a blank line inside an entry is read the same way by both readers'
+
+test 'an indented comment is read the same way by both readers'
+	try Conformance.check("indented-comment")
+end 'an indented comment is read the same way by both readers'
+
+test 'a tab separated key is read the same way by both readers'
+	try Conformance.check("tab-separated-key")
+end 'a tab separated key is read the same way by both readers'
+
+test 'a duplicate key is rejected by the gate and the tool then refuses'
+	try Conformance.check("duplicate-key")
+end 'a duplicate key is rejected by the gate and the tool then refuses'
+
+test 'an entry with no doc is rejected by the gate and the tool then refuses'
+	try Conformance.check("missing-doc")
+end 'an entry with no doc is rejected by the gate and the tool then refuses'
+
+test 'a registry changed under its generated artifact makes the tool refuse'
+	try Conformance.check("stale-after-generate")
+end 'a registry changed under its generated artifact makes the tool refuse'
+
+// See the note on the same check in `protocol.test.maxon`: a `test` declaration is static, so the
+// fixture list is written down twice and this is the check between the copies.
+test 'every registry conformance fixture on disk is named by a test in this file'
+	try Conformance.requireEveryFixtureHasATest()
+end 'every registry conformance fixture on disk is named by a test in this file'

@@ -218,6 +218,80 @@ are found by different evidence and call for different action:
 A zero-test run exits 1 on purpose: a silently-green suite that stopped containing tests is the
 failure this command exists to prevent.
 
+**A worked example — write a test, run it, read the failure.**
+
+Two files in a directory. `pricing.maxon` is ordinary source; the tests go in a sibling whose name
+ends `.test.maxon`, which is the only place a `test` declaration is allowed:
+
+```maxon
+// pricing/pricing.maxon
+export typealias Cents = int(0 to i64.max)
+
+/// What `quantity` items cost at `unitPrice`, with a tenth off from 10 items up.
+export function totalCost(unitPrice Cents, quantity Cents) returns Cents
+	let gross = unitPrice * quantity
+	if quantity < 10 'noDiscount'
+		return gross
+	end 'noDiscount'
+
+	return gross - gross / 10
+end 'totalCost'
+```
+
+```maxon
+// pricing/pricing.test.maxon
+test 'a small order pays full price'
+	try Expect.equal(totalCost(250, quantity: 4), expected: 1000)
+end 'a small order pays full price'
+
+test 'ten items take the bulk discount'
+	try Expect.equal(totalCost(250, quantity: 10), expected: 2500)
+end 'ten items take the bulk discount'
+```
+
+The `try` is not optional: a `test` implicitly declares `throws TestFailure`, so an assertion
+without it is a compile error rather than an assertion whose failure nothing observes. There is no
+`main` here and none is needed — `maxon test` compiles a generated entry point instead.
+
+The second expectation is wrong: it forgot the discount. Run it:
+
+```text
+$ maxon test pricing
+pricing/pricing.test.maxon:
+  ✓ a small order pays full price                    0.00ms
+  ✗ ten items take the bulk discount                 0.00ms
+
+FAIL  pricing/pricing.test.maxon > ten items take the bulk discount
+  FAIL pricing.test.maxon:6: Expect.equal
+    expected: 2500
+    received: 2250
+
+ 1 pass
+ 1 fail
+
+ 2 tests across 1 file.   compile 947ms, run 38ms
+```
+
+The `file:line` on the `FAIL` line is the **assertion's own**, not a line inside `Testing.maxon` —
+`Expect`'s `file` and `line` parameters default to `__file__` / `__line__`, which expand at the
+call site. Correct the expectation to `2250` and the same command exits 0:
+
+```text
+$ maxon test pricing
+pricing/pricing.test.maxon:
+  ✓ a small order pays full price                    0.00ms
+  ✓ ten items take the bulk discount                 0.00ms
+
+ 2 pass
+ 0 fail
+
+ 2 tests across 1 file.   compile 966ms, run 138ms
+```
+
+The second run still says `compile` rather than `cached` because the source changed. Editing only
+the `--filter` between runs recompiles nothing: every discovered test is built into the binary and
+which ones run is an argument.
+
 **Examples:**
 ```bash
 # Run every test in the current directory

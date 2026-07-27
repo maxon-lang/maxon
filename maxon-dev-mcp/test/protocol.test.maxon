@@ -1,0 +1,116 @@
+// The maxon-dev MCP server's JSON-RPC surface, one test per fixture.
+//
+// Each test pipes `fixtures/<name>.in.json` into a freshly spawned server and walks
+// `fixtures/<name>.assert.json` over what came back. `Fixtures.maxon` does the work; the value of
+// declaring one `test` per fixture rather than looping over the directory is that every fixture now
+// has a NAME, a verdict and a duration of its own, is selectable with `maxon test -t`, and reports
+// its own failure instead of one counter at the end.
+//
+// ⚠ ORDER AND ISOLATION ARE LOAD-BEARING HERE, and both are properties of this file.
+//
+// `maxon test` runs one PROCESS per test file and the tests in it in declaration order, so
+// everything below is serial with respect to everything else below. Two of these fixtures drive a
+// whole suite in this checkout — `spec_test_outcome` runs the bootstrap's spec tests and
+// `run_scale_test` runs shv2's ladder — and two suites must never run in one tree at once. Keeping
+// them in ONE file is what guarantees they do not. Splitting this file, or running it under
+// `--isolate`, would let them overlap.
+
+test 'initialize answers with the server handshake'
+	try Fixture.check("01-initialize")
+end 'initialize answers with the server handshake'
+
+test 'tools list names every tool after the initialized notification'
+	try Fixture.check("02-tools-list")
+end 'tools list names every tool after the initialized notification'
+
+test 'lookup error code answers for a number the registry declares'
+	try Fixture.check("03-lookup-3014")
+end 'lookup error code answers for a number the registry declares'
+
+test 'lookup error code refuses an argument that is not a code'
+	try Fixture.check("04-lookup-bad-arg")
+end 'lookup error code refuses an argument that is not a code'
+
+test 'an unknown JSON-RPC method is refused as method not found'
+	try Fixture.check("05-unknown-method")
+end 'an unknown JSON-RPC method is refused as method not found'
+
+test 'every listed tool carries a repoRoot in its input schema'
+	try Fixture.check("06-tools-list-schemas")
+end 'every listed tool carries a repoRoot in its input schema'
+
+test 'fmt reformats a snippet'
+	try Fixture.check("07-fmt-snippet")
+end 'fmt reformats a snippet'
+
+test 'run program compiles and runs a snippet'
+	try Fixture.check("08-run-program-snippet")
+end 'run program compiles and runs a snippet'
+
+test 'spec test outcome reports one filtered spec test'
+	try Fixture.check("09-spec-outcome-single")
+end 'spec test outcome reports one filtered spec test'
+
+test 'fmt refuses a call carrying no source'
+	try Fixture.check("10-fmt-missing-source")
+end 'fmt refuses a call carrying no source'
+
+test 'spec test outcome refuses a call carrying no filter'
+	try Fixture.check("11-spec-outcome-missing-filter")
+end 'spec test outcome refuses a call carrying no filter'
+
+test 'run program refuses a call that names no compiler'
+	try Fixture.check("12-run-program-missing-compiler")
+end 'run program refuses a call that names no compiler'
+
+test 'fmt reports an already formatted file as unchanged and sends back no text'
+	try Fixture.check("13-fmt-file-no-formatted")
+end 'fmt reports an already formatted file as unchanged and sends back no text'
+
+test 'run scale test walks a two rung ladder'
+	try Fixture.check("14-scale-test")
+end 'run scale test walks a two rung ladder'
+
+test 'lookup error code reports each compiler own spelling of one code'
+	try Fixture.check("15-lookup-3030-per-compiler")
+end 'lookup error code reports each compiler own spelling of one code'
+
+test 'a call naming no tree echoes the root the server derived'
+	try Fixture.check("15-repo-root-default-echo")
+end 'a call naming no tree echoes the root the server derived'
+
+test 'lookup error code names shv2 as the only emitter of a shv2 only code'
+	try Fixture.check("16-lookup-5001-shv2-only")
+end 'lookup error code names shv2 as the only emitter of a shv2 only code'
+
+test 'an explicit repoRoot is honoured over the one the server would have derived'
+	try Fixture.check("16-repo-root-explicit-honored")
+end 'an explicit repoRoot is honoured over the one the server would have derived'
+
+test 'lookup error code names the bootstrap as the only emitter of a bootstrap only code'
+	try Fixture.check("17-lookup-3099-csharp-only")
+end 'lookup error code names the bootstrap as the only emitter of a bootstrap only code'
+
+test 'a repoRoot that is not a checkout is refused rather than swapped'
+	try Fixture.check("17-repo-root-not-a-checkout")
+end 'a repoRoot that is not a checkout is refused rather than swapped'
+
+test 'lookup error code says a number is free when no code claims it'
+	try Fixture.check("18-lookup-free-number")
+end 'lookup error code says a number is free when no code claims it'
+
+test 'a relative repoRoot is refused because it would resolve against the server'
+	try Fixture.check("18-repo-root-relative-refused")
+end 'a relative repoRoot is refused because it would resolve against the server'
+
+test 'a refusal echoes the repoRoot it was judged against'
+	try Fixture.check("19-repo-root-echoed-on-error")
+end 'a refusal echoes the repoRoot it was judged against'
+
+// The check that replaces the runtime directory walk the hand-rolled runner used to do. A `test`
+// declaration is static, so the fixture list now lives in two places — the files above and the
+// directory — and this is what keeps them equal. Without it a fixture added to `fixtures/` would
+// simply never run, and the suite would stay green while covering less than it did the day before.
+test 'every JSON-RPC fixture on disk is named by a test in this file'
+	try Fixture.requireEveryFixtureHasATest()
+end 'every JSON-RPC fixture on disk is named by a test in this file'

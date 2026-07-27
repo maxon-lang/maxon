@@ -1062,9 +1062,27 @@ info.isReadOnly        // bool
 maxon build [file|dir]       # Compile file, directory, or project → .exe
 maxon run <function>         # Run exported function from build.maxon (dashes → underscores)
 maxon run                    # List available commands in build.maxon (shown with dashes)
-maxon spec-test              # Run spec fragment tests
+maxon test [dir]             # Run a PROJECT's unit tests (its *.test.maxon files)
+maxon spec-test              # Run spec fragment tests (the COMPILER's own suite)
 maxon lsp-server             # Start LSP server for IDE integration
 ```
+
+### Unit tests
+A `test` is a top-level declaration, legal only in a `*.test.maxon` file. It implicitly
+`throws TestFailure`, which is why the assertion needs `try` — omitting it is a compile error.
+
+```maxon
+test 'ten items take the bulk discount'
+	try Expect.equal(totalCost(250, quantity: 10), expected: 2250)
+end 'ten items take the bulk discount'
+```
+
+Matchers: `equal` `notEqual` `greaterThan` `lessThan` `atLeast` `atMost` `close` `isTrue`
+`isFalse` `contains` `startsWith` `endsWith` `isEmpty` `fail`. Every one takes an optional
+`message:`. Floats have no `equal` — use `close(…, within:)`.
+
+Exit codes: `0` all passed · `1` a failure **or no tests found** · `2` the run could not happen.
+Full flags and a worked example: `docs/CLI_REFERENCE.md`.
 
 ### Options (compile/build)
 | Option | Description |

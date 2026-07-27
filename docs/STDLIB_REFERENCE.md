@@ -1298,8 +1298,10 @@ inside `Testing.maxon`.
 | `fail(message)` | -- | never — the escape hatch |
 
 `equal` is **one overloaded name**, selected by argument type, and resolution sees through a
-method call, so `Expect.equal(parts.count(), expected: 3)` works. `String` values are rendered
-quoted in the report so an empty or space-padded value stays visible.
+method call, so `Expect.equal(parts.count(), expected: 3)` works. It sees through an enum's
+`name`, `ordinal` and `rawValue` too, so `Expect.equal(status.name, expected: "ready")` picks the
+`String` arm and `Expect.equal(status.ordinal, expected: 0)` picks the integer one. `String`
+values are rendered quoted in the report so an empty or space-padded value stays visible.
 
 **Floats deliberately have no `equal`** — a float `==` matcher passes on one target and fails on
 another, so `Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. The

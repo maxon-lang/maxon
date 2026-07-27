@@ -50,8 +50,7 @@ class Program {
     Console.WriteLine($"                           Run a {CoverageFlag} binary and report line + branch coverage");
     Console.WriteLine("  profile run <exe>        Sample a running program and report where its CPU time went.");
     Console.WriteLine("                           Needs no instrumentation and no rebuild — only the .mxdbg sidecar");
-    Console.WriteLine("  test [directory]         Run the project's *.test.maxon unit tests");
-    Console.WriteLine("                           Exit 0 all passed, 1 a failure OR no tests found, 2 could not run");
+    Console.WriteLine("  test [directory]         Run the project's *.test.maxon unit tests; see 'Unit test options'");
     Console.WriteLine("  spec-test [options]      Run spec tests (the COMPILER's own suite, not a project's)");
     Console.WriteLine("  error-codes <check|generate>");
     Console.WriteLine("                           Verify or regenerate the error-code registry");
@@ -111,6 +110,11 @@ class Program {
     Console.WriteLine("  The listener binds LOOPBACK ONLY and validates the Origin header on every request:");
     Console.WriteLine("  this server compiles and runs programs, so an exposed port is remote code execution.");
     Console.WriteLine("  There is deliberately no flag to widen either.");
+    Console.WriteLine();
+    // Printed by TestCommand rather than restated here — one listing, and in particular one
+    // statement of the exit codes, which CI branches on.
+    Console.WriteLine("Unit test options (test) — a PROJECT's own tests, not the compiler's suite:");
+    TestCommand.WriteOptions(Console.Out);
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
