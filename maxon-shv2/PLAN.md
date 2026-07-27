@@ -1364,36 +1364,85 @@ tests shv2 — which is what `maxon-selfhosted` does, and is the Phase-1 goal.
 Distinct front-end / IR features the corpus surfaced that do NOT ride an existing rung; each gets a ladder
 number when it is sequenced (each also has a `disabled-test:` or oracle-divergence pinning it):
 
-- **⬜ THE SPLITTER'S POSITIONAL STRUCTURE — the residual of the 2026-07-27 splitting rung, sanctioned as its own
-  rung by the coordinator when the fix landed at ×1.50–1.71 instead of flat.** Four O(block)-per-split walks remain
-  (`analyzeBlockPressure` 45% of a split, `sweepBlockPressure` 32%, `reindexSplitValues` 14%, `fillLiveBeforeOp` 5%),
-  and on a SINGLE BASIC BLOCK the dirty region is the whole function, so block-granular incrementality buys nothing —
-  `dirty` is a `BlockSet` and `PeakTree` has one leaf. **Narrowing the dirty region to a sub-block op RANGE is NOT the
-  fix and must not be shipped as one:** a victim is live from its def to the final use, an interval of Θ(N−i), and
-  Σ(N−i) is still Θ(N²). What changes the exponent is to stop RE-DERIVING and start UPDATING — a lazy range-add /
-  range-max structure over op positions, storing `overflow(op) = effectivePressure(op) − poolAt(op)` (the pool is
-  static per op, including the REDUCED pool at fixed-register points; pressure is range-additive). ⚠ **Two things make
-  it a rung and not a patch.** (1) A split INSERTS ops mid-block, so dense positions shift — it needs order maintenance
-  (an implicit treap or equivalent), which is why the 2026-07-27 rung did not attempt it. (2) The peak is not
-  `max(pressure)`: it is a max under a total order carrying `clobberOnly` / `witness` / `witnessClass` /
-  `atFixedRegisterOp`, and `peakOutranks` returns TRUE on an exact tie so the tree's combine reproduces "rightmost
-  maximal rank" (`SplitLiveRanges.maxon` `PeakTree.combineAt`/`betterBlock`). **Reproduce that ordering exactly or the
-  same program picks a different victim** — the acceptance gate is the 243 byte-identical goldens and `valuesSplit`
-  unchanged, not a suite pass. Once it lands, `chooseVictim`'s Θ(candidates) and `SplitEdits.commit`'s O(block) splice
-  become the leading terms. Ladder: `Testing/ladders/genwidelive.sh <N> sum`; oracle: `VerifyIncrementalSplit`.
-- **⬜ THE x64-linux GOLDEN ROT — 288 stale fragments, and the lane nobody runs.** Found 2026-07-27 by the
-  cross-target gate's first run on this box. `spec-test --target=x64-linux` reports **1395 passed / 288 failed**, every
-  failure `codegen changed — golden fragment mismatch`. **PROVEN PRE-EXISTING by an exact A/B** — base and head fail the
-  IDENTICAL 288 (zero tests failing only at head, zero only at base, the three `register-*`/`float-register-pressure`
-  ones present in both) — so it predates the splitting rung by an unknown number of commits. ⚠ **Do NOT blind-regenerate:**
-  288 fragments is 288 codegen diffs to READ, and a real x64-linux defect could be hiding among the drift; the lane also
-  has 172 tests with no golden at all, and 7 `register-spill` fragments the other targets have. ⚠ **A finding this rung
-  made while measuring it, and the reason the rot went unnoticed: a PLAIN `spec-test` run REWRITES fragment files** —
-  1242 x64-linux fragments took a fresh mtime on a run with no `--update-required`, while git reported only 110 as
-  content-changed. So "run the lane" and "dirty the tree" are not separable operations, which is its own thing to fix.
-  Same disease as the documented x64-windows/arm64 staleness, third target: the parallel repo works arm64-macOS, this
-  box runs x64-windows, and x64-linux drifted between them.
+- **◑ THE SPLITTER'S POSITIONAL STRUCTURE — LARGELY PAID 2026-07-27 (merged `e40405890`), AND STILL OPEN.**
+  **Allocations went QUADRATIC → LINEAR (×3.96 → ×1.98 per doubling); CPU went N^1.83 → N^1.25 (×3.57 → ×2.48).**
+  At `genwidelive` N=400: allocations 2,019,538 → **25,905** (−98.7%), CPU 6,243M → **1,670M** (−72.7%).
+  ⭐ **On the many-function scale corpus `regalloc:splitting` is now LINEAR IN BOTH COLUMNS** (allocations ×1.96,
+  CPU ×2.12) — the residual N^1.25 is specific to ONE function carrying Θ(N) simultaneously-live values.
+  Gates: suite 1794/0; 243 goldens byte-identical; `valuesSplit` 96/196/396 unchanged; x64-windows / x64-linux /
+  wasm32-wasi / arm64-macos all PASS; **arm64-linux SKIP** (see the cross-target gate defects below).
 
+  **⚠ THREE THINGS THIS ENTRY USED TO SAY WERE WRONG, and each cost design time:**
+  1. **"a lazy range-add / range-max over op positions"** — the per-INTERVAL form is the obvious shape and the wrong
+     one. A split cuts one value's range over a stretch Θ(function) wide, so it needs interval endpoints in every block
+     of that range **including the pass-through blocks**, re-derived from live sets that are mid-edit. What shipped is
+     a **per-op MAX-SUFFIX-SUM**: the backward sweep is a running population `L(p) = L(p+1) + e(p)`, so a block's peak
+     is a max-suffix-sum of ONE PER-OP number, and `e(p)` separates per value —
+     `contrib(w,p) = (w is a USE operand of p) − (w is live AFTER p)` — so a split's repair is
+     **O(uses of one value), never O(blocks in its range)**.
+  2. **"the pool is static per op, including the REDUCED pool at fixed-register points"** — there is NO reduced pool at
+     a fixed-register point. `classPoolSizeOf(pool, class, file)` is a pure function of three FUNCTION-level constants.
+     What a call imposes is `forbidden[v]`, a PER-VALUE mask feeding Hall's condition (`allowedRegistersOf`). So the
+     full-pool test is a range-max against ONE constant per class and needs no per-op offset.
+  3. **"it needs order maintenance (an implicit treap or equivalent)"** — overstated. **Gap-labelled SLOTS** suffice
+     (`SlotGap = 4`), which is what shv2 already does BETWEEN blocks via `SeqStride`. (`SplitEdits.resequence`'s binary
+     search is NOT the alternative: it repairs coordinates of records that already exist and says nothing about where a
+     NEW op goes, which is the whole question a splice asks.)
+
+  **⚠ AND THE PRESCRIPTION WAS INCOMPLETE — the tree ALONE does not move the exponent.** Measured: 2a alone read
+  ×2.81/×3.14, barely moved; 2a+2b read ×2.25/×2.45. Only ONE of the four walks was a range problem. The other three
+  were **"walk the whole block to service an O(1) value set"** — `sweepBlockPressure` rebuilt `forbidden` for just the
+  victim + its fresh ids, and `reindexSplitValues` re-indexed the same handful. Those are **EDIT-PROPORTIONAL**
+  problems (walk the values' USE LISTS), not range-structural ones.
+
+  ⭐ **`chooseVictim` — this entry's own prediction was RIGHT, and the coordinator wrongly overruled it.** Profiled
+  BEFORE the fix it was **below 2%** and was struck off as disproved; with the terms burying it removed it is **7.0%**.
+  A term measured small behind a dominant one is not a term disproved.
+
+  **⛔ RESIDUALS — why this is ◑ and not ✅** (~31% of the pass, all measured LINEAR-per-split, so debt not defect):
+  `confinedPeakAt`/`hallVerdictAt` **49.5%** of the splitter and linear (×2.03/×2.07) — the exact Hall bipartite
+  matching, and **a matching is not a suffix sum**, so making it incremental is a genuinely different problem;
+  `fillLiveBeforeOp` 15.8% — the peak's live-before SET is Θ(pressure) data no count-tree can carry;
+  `SplitEdits.resequence`/`commit` 8.6%; `chooseVictim` 7.0%. Also `refreshSplitTransients` is O(uses(victim)²) worst
+  case, measured ×1.98 per doubling. **Re-measure trigger: a single block's PRESSURE growing — an inliner, or
+  machine-generated wide types.**
+  Ladders: `Testing/ladders/genwidelive.sh <N> sum|dead <out>` and `genrespace.sh <N> <out>`; oracle:
+  `VerifyIncrementalSplit` (`SplitLiveRanges.maxon`, compile-time `let`, ships `false`) — it caught two real bugs this
+  rung and no committed test enables it.
+- **✅ THE x64-linux GOLDEN ROT — CLOSED, AND THIS ENTRY WAS ALREADY STALE WHEN IT WAS READ (2026-07-27).**
+  It described **1395 passed / 288 failed**, 288 stale + ~489 absent fragments. **Commit `339c2cf07` had already fixed
+  it** — regenerating all 777 and verifying 1687/0 — *three commits before the entry was next read.* Confirmed by
+  MEASUREMENT, not archaeology: a full `spec-test --target=x64-linux` under WSL2 on `main@d28583442` reports
+  **1687 passed / 0 failed**, zero FAIL markers, zero fragment content churn; and
+  `git diff --stat 339c2cf07..HEAD -- 'maxon-shv2/Compiler/**' 'specs-shv2/**'` is EMPTY.
+  ⚠ **The lesson is the FILING, not the bug** — the same one PLAN.md:2731 states in its own words: *"a ⛔ that is
+  already fixed costs the next reader the same hour every time. Re-run a filed repro before planning against it."*
+  This is the **second** entry in this file to do it. The splitter rung budgeted its cross-target gate against a lane
+  it expected to be dirty; the lane was clean, which is what made "any x64-linux failure is MINE" a usable statement.
+  ✅ Still true and worth keeping: **a PLAIN `spec-test` run rewrites fragment MTIMES with zero content change**, so
+  use `git status --short` / `git diff --stat` to decide what moved, never timestamps. And **a MISSING golden NEVER
+  FAILS** — the runner writes one for a brand-new test and reports PASS, which looks identical to real coverage.
+
+- **⬜ THE CROSS-TARGET GATE HANGS INSTEAD OF SKIPPING, AND THEN MISATTRIBUTES WHY — two defects, found 2026-07-27
+  by the splitter positional-structure rung, which they cost ~95 minutes.** `scripts/cross-target-gate.sh` /
+  `scripts/remote-mac.sh`. The gate's own contract is *"Unreachable ⇒ SKIP, and the gate still passes… but a SKIP is
+  reported, never folded into the green."* Both defects break it.
+  **(1) `orb run` HAS NO TIMEOUT.** The arm64-linux preflight is `orb run -m maxon-linux true` — a trivial `true`
+  inside the OrbStack guest. With a WEDGED guest it blocks **forever**: measured **82 minutes at 0.0% CPU**, while
+  `orb list` cheerfully reported `maxon-linux  running`. A capped re-probe never returned inside 60 s either, so the
+  block is uninterruptible. **A gate that hangs is strictly worse than one that fails** — it produces no verdict at all.
+  **(2) ITS FALLBACK MESSAGE THEN BLAMES THE WRONG THING.** After the hung run was killed, the script reported
+  *"INCOMPLETE — the Mac went away mid-run (ssh exit 255)… Most likely it went to sleep."* **The Mac never went away** —
+  it answered `ssh` throughout, and the 255 came from the kill. A wrong diagnosis in a gate is worse than none: the
+  next reader retries at a different time of day instead of looking at the VM.
+  **(3) A PREFLIGHT FOR ONE LANE TAKES DOWN A DIFFERENT LANE.** `arm64-macos` is NATIVE and needs no OrbStack at all,
+  yet it was lost to the linux lane's probe — the matrix reported BOTH arm64 rows as SKIP.
+  ✅ **Workaround, rehearsed and used for this rung's step 10:**
+  `bash scripts/remote-mac.sh --host=<user@mac> --shv2` (NO `--linux`) runs the arm64-macos lane natively and bypasses
+  the wedged preflight entirely — RESULT=PASS, 1603/0. `remote-mac.sh` does **not** auto-apply the golden patch; it
+  prints `git apply --stat` and the command, so it is safe to run against a clean tree.
+  ⇒ Fix wants: a timeout on every remote probe, per-lane preflight isolation, and a fallback message that reports what
+  was actually observed rather than guessing.
 - **✅ THE WITNESS LABEL JOIN IS INJECTIVE — CLOSED 2026-07-27 (main `55053c207`; x64 1793/0, wasm 1597/0).**
   Filed 2026-07-26 by the P1.7 disjointness rung's independent review, which went looking for whether the newly
   reserved instance names could collide with a witness label and found **the same defect one namespace over, needing
@@ -1532,6 +1581,17 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
 
 - **🔴 BOOTSTRAP ORACLE BUGS — top-level constants** (found while surveying for the rung above; the **"Bootstrap oracle bugs"** list is their home). **(1) An immortal constant is MUTATED IN PLACE, and it leaks.** `let name = "Ada"` ; `var s = name` ; `s.append("!")` ; `print(name)` prints **`Ada!`** and exits **101** (`MM raw leak: 1 allocation(s) remain`). **shv2 gets this right** (`promoteBorrowedToOwned` copies). **(2) Dead-global elimination decides side-effect removal by a NAMING HEURISTIC** — see Slice 3 above; renaming a method changes whether its side effects run, silently, with no warning. **(3) A top-level constant's member access is broken outside interpolation:** `print(X.toString())` where `let X = 5` is `E2010 Expected ')' but got '.'` while `print("{X.toString()}")` works — the top-level-constant branch of `ParsePrimary` (`2-Parser.cs:17129-17131`) is the only one that skips `ParseFieldAccessChain`. **(4)** For a String-backed enum, a top-level `let CT = ContentType.json` then `"{CT.name}"` prints the **raw value**, not the case name; the same access on a *local* correctly prints the case name.
 
+- **🔴 BOOTSTRAP ORACLE BUGS — two LOWERING failures, both found by the splitter positional-structure rung
+  (2026-07-27, merged `e40405890`); the "Bootstrap oracle bugs" list is their home, each needs the full C# suite as its
+  gate.** Both are `E9001` out of `MaxonToStandardConversion`, both were hit while writing ordinary Maxon, and both were
+  worked around by reshaping the source rather than chased — the rung is not a bootstrap rung.
+  **(1) `try (a / b) otherwise panic(...)` inside a METHOD fails to lower** — `E9001 … Index was out of range`. The
+  IDENTICAL expression as a **free function** compiles, which is how `spreadStride` ended up a free function.
+  **(2) A `match` arm whose `then` body is a method call carrying a NESTED call, in a function holding a mutated
+  `var`** — `E9001: Lowering function 'applyValueToPressure' failed: assign value %177052 (kind=MaxonInteger) not in
+  valueMap; assigning to '__arg_pin_10'`. Worked around by hoisting the nested call into locals.
+  ⚠ **Neither is MINIMIZED** — both are "the shape that failed", not a reduced repro, so budget minimization time
+  before planning against them.
 - **✅ GENERIC TYPE-ARGUMENT IDENTITY — CLOSED 2026-07-25 (main `f372bbdef`; x64 1674/0, wasm 1480/0, C# 3103/0).** A generic type-argument mismatch **SEGFAULTED**; it is now a clean **E3005**. A **CYCLIC** alias (`typealias A = Box with A`, and the mutual form) also segfaulted on base and is now **E3091** — *claimed*, not minted, on the existing `SemanticTypeResolutionCycle` entry, and it fires on the **declare-only** cycle too, which base accepted silently. Seven commits, three of them agent-found defects a green suite never reached: a **CUBIC** cycle check (12.5 s on a 3,200-alias program that **compiles clean** — one Tarjan SCC now, 197 ms), a **630× superlinear** namer that consulted its memo only at the outermost ask, and `try … otherwise return` three lines above two `panic`s on the **same** invariant, which silently deleted the whole type-parameter check for that call. ⭐ The rung's own thesis: **ONE canonical comparison door.** Four extractors derived type identity from the compiled name and **three of them did not canonicalize** — the review found three, the implementer found a **fourth** that agreed at depth 1 and diverged at depth 2. Two producers are deliberately left non-canonical **with reasons**: `paramAggregateNamesOf` (gated `tag == named`), and the per-instance-alias join, which is keyed on the alias **spelling on purpose** — `WrapperA`/`WrapperB` share one gid, so canonicalizing there would have collapsed both to one string and **deleted the P1.6-C check green**. Also pinned: the **bare** generic constructor (`Box.create(…)`, `T` unbound) is rejected — it **exits 101 on base**, and the bootstrap corroborates by resolving the field as bare `int` (E4006).
 
 - **⭐ THE SWEEP STORES *DERIVATIVES* OF A TYPE REFERENCE, NOT JUST THE REFERENCE — and FOUR designs each died on a different one (filed 2026-07-25).** ONE type still compiles to TWO names: `typealias N1 = Box with N0` mints `Box_N0` where the inline spelling mints `Box_Box_S0`. **Confirmed in BASE IR — pre-existing, not introduced.** Every attempt to unify at intern time was killed by a stored derivative the design did not know about: **(1)** fix at `resolveArgNode` ⇒ **declaration-order-dependent identity** (measured: swapping two adjacent `typealias` lines flips compile↔reject); **(2)** plain defer-intern ⇒ the swept **tag** feeds the managed-drop cascade (`baseLayoutOf(id).fieldTypes` → `substituteInstanceFieldType`/`genericInstanceFieldIsManaged`), so a field could flip *managed → not-managed* = **a silent missed drop**; **(3)** canonicalize after the sweep ⇒ **gid holders DO exist** in swept layouts (`structTypes[*].fieldTypes`), so re-interning strands them; **(4)** defer + rewrite swept types ⇒ `readFunctionTypeAlias` stores `returnTag` (a bare tag **enum**) and `returnTypeName` (a **`ByteArray`**), which **no `MaxonType` rewrite can reach**, and both are mixed into `ProgramSignatures.hash`. ⇒ **The rung must first ENUMERATE every derivative the sweep stores from `parseTypeReference` — types, tags, names, hash contributions — and design against that complete list**, and must move `isFunctionAlias` (`Parser.maxon:7107`) at the same time, since it carries the identical shape in the adjacent arm and half-correcting the mechanism is worse than not touching it. ✅ **Deferring is SAFE, and this is why:** the sweep is **structurally blind** to previously-swept declarations' member types — nothing in the window reads `layout.fieldTypes`, `casePayloads` or swept parameter types (`skipParamType` is a paren-balanced `kindAt` walk), and **no layout geometry derives from a field's tag** (`offsetOfField` is `index * FieldSlotBytes`). ⚠ **Correction to an earlier coordinator claim: the file-order byte-difference was FUNCTION EMISSION ORDER, not the alias mechanism** — holding the code file fixed and moving only the `typealias` line between a first- and last-sorting file is **byte-identical**. Verified; do not carry the stronger claim forward.
@@ -2782,6 +2842,19 @@ diagnostic**; branch = clean **E3006**. **Cause: ONE FACT WRITTEN THREE TIMES WI
   Measured LINEAR (×2.00 at three sizes) ⇒ debt, not defect. **Re-measure trigger: generic-heavy code once P1.7
   Array lands.** ⚠ This is the FOURTH rung in which "a Maxon union value is a HEAP OBJECT" has been the cost —
   check it first when a per-call term appears.
+  ⭐ **SHARPENED 2026-07-27 by the splitter positional-structure rung, and the sharper form is the counter-intuitive
+  one: A PAYLOAD-FREE CASE OF A PAYLOAD-CARRYING UNION STILL HEAP-ALLOCATES.** Constructing `.none` of a
+  `union { none, slot(x) }` emits `x64.call mm_alloc` (16 bytes) + `mm_incref` — verified by dumping the bootstrap's IR
+  for a minimal case. You would expect `.none` to be free. It is not, and it is **invisible to reading**.
+  Two instances in ONE rung, both pre-existing, together the larger half of a −98.7% allocation win:
+  `ValueSpillSlot.none` — asked TWICE PER OP by `indexBlockFacts` (via `spillStoreSlotOf` + `slotResidencyOf`) on every
+  dirty block of every split, i.e. **two heap objects per op per split just to say "this op touches no slot"**, and
+  **94.7% of all allocations in `regalloc:splitting`**; and `ValueDefSite`, asked of every value crossing the peak at
+  every split — Θ(N²) heap allocations to read a THREE-WAY TAG. **Cure both times: DELETE the union, use an `enum`**
+  (shv2 erases an enum to `integer`), which is why `OpSlotRole` replaced two classifiers whose answers were always
+  three cases between them. **Attribution was exact: bytes-removed ÷ allocations-removed = 16.0 at all three ladder
+  rungs, to the digit.** ⇒ **When a per-op or per-call allocation term appears, grep the hot path for `.none` / any
+  payload-free case construction BEFORE looking anywhere else.**
 
 ### ⬜ FILED BY THE TYPEALIAS RUNG — three, none of them its to fix
 - **⭐ `5 as MadeUpName` COMPILES SILENTLY** and returns 5 (oracle: `E2003`). Identical on base and branch. **It is
