@@ -11,10 +11,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private readonly string _targetOs = targetOs;
   private readonly string _targetArch = targetArch;
   private readonly bool _testing = testing;
-  // Per-file compile root used to derive the file's module namespace via
-  // rel(Path, RootPath).parent. Plumbed in by Phase 1; not yet consumed.
+  // Per-file compile root. Every project-relative spelling of this file's path is measured
+  // against it: the module namespace is rel(Path, RootPath).parent, and `__file__` is that
+  // same relative path whole. See ProjectRelativePath.
   private readonly string? _rootPath = rootPath;
   private int _pos;
+
+  // The call whose parameter defaults are being expanded right now, or null when no default
+  // is being expanded. This is what `__line__` / `__file__` resolve against, and its nullness
+  // IS the "only legal as a parameter default" rule: outside an expansion there is no call
+  // site to name. Saved and restored around each fill so a default that itself contains a
+  // call (whose callee has its own defaults) cannot leak its site to the outer one.
+  private Token? _defaultArgCallSite;
 
   private IrModule<MaxonOp>? _currentModule;
   private IrFunction<MaxonOp>? _currentFunction;
@@ -962,22 +970,39 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (_sourceFilePath == null) return "";
     if (_rootPath == null) return "";
 
+    return NamespaceFromProjectRelativePath(_rootPath, _sourceFilePath);
+  }
+
+  /// A file's identity WITHIN its compile root: its path relative to that root, `/`-separated.
+  /// Null when the file does not lie under the root — `Path.GetRelativePath` answers a
+  /// `..`-prefixed path there (or, across Windows drives, an absolute one), and neither is a
+  /// project-relative name.
+  ///
+  /// Computed in exactly one place because three callers ask the same question of it: a
+  /// module's namespace is this path's PARENT, the E3063 candidate list renders another
+  /// file's namespace the same way, and `__file__` reports this path WHOLE. Spelled with
+  /// forward slashes on every host for the same reason <see cref="CompileError.Format"/>
+  /// spells its paths that way — a path that changes shape with the build machine is not a
+  /// property of the program.
+  private static string? ProjectRelativePath(string rootPath, string sourceFilePath) {
     string rel;
     try {
-      rel = Path.GetRelativePath(_rootPath, _sourceFilePath);
+      rel = Path.GetRelativePath(rootPath, sourceFilePath);
     } catch {
-      // Misconfigured caller: fall back to the immediate parent dir name so
-      // we never produce ".." segments in qualified names.
-      return Path.GetFileName(Path.GetDirectoryName(_sourceFilePath)) ?? "";
+      return null;
     }
 
-    // If `_sourceFilePath` lies OUTSIDE `_rootPath`, `Path.GetRelativePath`
-    // returns a path starting with `..` (or, on Windows when the drives
-    // differ, an absolute path). Either way, that's a misconfigured caller —
-    // fall back to the immediate parent dir name.
-    if (rel.StartsWith("..") || Path.IsPathRooted(rel)) {
-      return Path.GetFileName(Path.GetDirectoryName(_sourceFilePath)) ?? "";
-    }
+    if (rel.StartsWith("..") || Path.IsPathRooted(rel)) return null;
+
+    return rel.Replace('\\', '/');
+  }
+
+  /// The dotted directory namespace for a file under `rootPath`. Falls back to the immediate
+  /// parent directory's name when the file lies outside the root, so a misconfigured caller
+  /// never produces ".." segments in qualified names.
+  private static string NamespaceFromProjectRelativePath(string rootPath, string sourceFilePath) {
+    var rel = ProjectRelativePath(rootPath, sourceFilePath);
+    if (rel == null) return Path.GetFileName(Path.GetDirectoryName(sourceFilePath)) ?? "";
 
     var dir = Path.GetDirectoryName(rel) ?? "";
     if (string.IsNullOrEmpty(dir)) return "";
@@ -993,18 +1018,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private string TypeAliasNamespaceForCandidate(string sourceFilePath) {
     if (_rootPath == null) return "";
-    string rel;
-    try {
-      rel = Path.GetRelativePath(_rootPath, sourceFilePath);
-    } catch {
-      return Path.GetFileName(Path.GetDirectoryName(sourceFilePath)) ?? "";
-    }
-    if (rel.StartsWith("..") || Path.IsPathRooted(rel)) {
-      return Path.GetFileName(Path.GetDirectoryName(sourceFilePath)) ?? "";
-    }
-    var dir = Path.GetDirectoryName(rel) ?? "";
-    if (string.IsNullOrEmpty(dir)) return "";
-    return dir.Replace('\\', '.').Replace('/', '.');
+
+    return NamespaceFromProjectRelativePath(_rootPath, sourceFilePath);
   }
 
   public IrModule<MaxonOp> Parse() {
@@ -3077,7 +3092,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             // captured as tokens and re-evaluated at each struct literal that
             // omits this field (mirrors parameter default behavior).
             Advance();
-            defaultValue = CaptureDefaultValueTokens();
+            defaultValue = CaptureDefaultValueTokens(CallerLocationInDefault.Rejected);
           }
         }
 
@@ -6016,7 +6031,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
           if (Check(TokenType.Equals)) {
             Advance();
-            CaptureDefaultValueTokens();
+            CaptureDefaultValueTokens(CallerLocationInDefault.Rejected);
           }
         }
 
@@ -7384,10 +7399,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       Current().Line, Current().Column);
   }
 
+  /// Whether a captured default-value expression may name `__line__` / `__file__`.
+  ///
+  /// Only a PARAMETER default may: it is the only default with a call site to expand against.
+  /// A struct FIELD default shares the `= <expr>` spelling but expands at a struct literal,
+  /// which is not a call, so it is rejected here — at the declaration, where the token was
+  /// written. Rejecting at capture is not merely a better error location than rejecting at
+  /// expansion: a field default that no literal ever omits is never expanded at all, so an
+  /// expansion-only check would let the misuse through undiagnosed.
+  private enum CallerLocationInDefault { Allowed, Rejected }
+
   /// Captures the tokens of a default value expression without evaluating it.
   /// The tokens are stored and re-parsed via ParseExpression() at each call site.
   /// This supports any literal expression as a default value.
-  private TokenRangeAttr CaptureDefaultValueTokens() {
+  private TokenRangeAttr CaptureDefaultValueTokens(CallerLocationInDefault callerLocation) {
     var startPos = _pos;
     // Skip over the expression by tracking bracket/brace/paren nesting.
     // The expression ends at an unmatched ',' or ')' at depth 0.
@@ -7404,6 +7429,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } else if (type == TokenType.Newline && depth == 0) {
         break;
       }
+
+      // Asked of every token the capture ACCEPTS, inside the loop that decides the range, so
+      // the guard cannot drift out of step with what actually gets stored.
+      if (callerLocation == CallerLocationInDefault.Rejected && IsCallerLocationToken(type))
+        throw CallerLocationOutsideDefaultError(Current());
+
       _pos++;
     }
     if (_pos == startPos) {
@@ -7476,7 +7507,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var paramType = ParseTypeRef();
         if (Check(TokenType.Equals)) {
           Advance(); // consume '='
-          defaults[paramIndex] = CaptureDefaultValueTokens();
+          defaults[paramIndex] = CaptureDefaultValueTokens(CallerLocationInDefault.Allowed);
         }
         names.Add(paramToken.Value);
         types.Add(paramType);
@@ -16977,6 +17008,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return first;
     }
 
+    // A caller-location keyword is a LITERAL whose value the call site supplies, so it is
+    // minted through the same constant path as any other — an integer for `__line__`, a
+    // string for `__file__`. Reaching here with no call site being expanded is the misuse
+    // this feature must refuse, and ResolveCallerLocationValue refuses it.
+    if (IsCallerLocationToken(Current().Type))
+      return EmitConstantLiteral(ResolveCallerLocationValue(Advance()));
+
     if (Check(TokenType.IntegerLiteral))
       return EmitConstantLiteral(ParseIntegerLiteral(Advance()));
 
@@ -21118,17 +21156,29 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Fill in defaults for missing arguments
     _functionDefaults.TryGetValue(callee.Name, out var defaults);
 
-    for (int i = 0; i < args.Length; i++) {
-      if (args[i] == null) {
-        if (defaults != null && defaults.TryGetValue(i, out var defaultAttr)) {
-          args[i] = EmitDefaultLiteral(defaultAttr, callee.ParamTypes[i], functionNameToken,
-            $"Missing argument for parameter '{callee.ParamNames[i]}' in call to '{callee.Name}'");
-        } else {
-          throw new CompileError(ErrorCode.SemanticWrongArgCount,
-            $"missing argument for parameter '{callee.ParamNames[i]}'",
-            functionNameToken.Line, functionNameToken.Column);
+    // Only a slot the caller left empty is filled, so an explicitly passed argument is never
+    // reached by a default and wins by construction — including over `__line__`/`__file__`,
+    // which is what lets one assertion helper forward the location it was itself handed.
+    //
+    // A default may itself contain a call whose own callee has defaults, so the site is saved
+    // and restored rather than assigned: the inner expansion must name the inner call.
+    var enclosingCallSite = _defaultArgCallSite;
+    _defaultArgCallSite = functionNameToken;
+    try {
+      for (int i = 0; i < args.Length; i++) {
+        if (args[i] == null) {
+          if (defaults != null && defaults.TryGetValue(i, out var defaultAttr)) {
+            args[i] = EmitDefaultLiteral(defaultAttr, callee.ParamTypes[i], functionNameToken,
+              $"Missing argument for parameter '{callee.ParamNames[i]}' in call to '{callee.Name}'");
+          } else {
+            throw new CompileError(ErrorCode.SemanticWrongArgCount,
+              $"missing argument for parameter '{callee.ParamNames[i]}'",
+              functionNameToken.Line, functionNameToken.Column);
+          }
         }
       }
+    } finally {
+      _defaultArgCallSite = enclosingCallSite;
     }
 
     // Resolve type parameters from the self arg's concrete struct type
@@ -22889,6 +22939,67 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return EmitDefaultFromTokens(tokenRange);
     }
     throw new CompileError(ErrorCode.ParserExpectedExpression, context, errorToken.Line, errorToken.Column);
+  }
+
+  private static bool IsCallerLocationToken(TokenType type) =>
+    type is TokenType.CallerLine or TokenType.CallerFile;
+
+  /// The one place the "`__line__` / `__file__` live only in a parameter default" rule is
+  /// worded. Two grammar positions raise it — an ordinary expression evaluating the token
+  /// (<see cref="ParsePrimary"/>) and a non-parameter default capturing it
+  /// (<see cref="CaptureDefaultValueTokens"/>) — and both must say the same thing, because
+  /// they are the same rule seen from two sides.
+  private static CompileError CallerLocationOutsideDefaultError(Token locationToken) =>
+    new(ErrorCode.ParserCallerLocationOutsideDefault,
+      $"'{locationToken.Value}' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.",
+      locationToken.Line, locationToken.Column);
+
+  /// The value `__line__` / `__file__` stand for at the call site currently being expanded:
+  /// a `long` line number or a `string` path, ready for <see cref="EmitConstantLiteral"/>.
+  ///
+  /// The LINE comes from the token naming the callee, so two calls to one function on two
+  /// lines get two values — that is the whole point, and it is why the site is threaded down
+  /// here rather than read off the default's own tokens, which carry the DECLARATION's line.
+  /// The FILE comes from this parser, which is the calling file's: a callee's defaults are
+  /// seeded into every file that calls it, and each expands them through its own parser.
+  private object ResolveCallerLocationValue(Token locationToken) {
+    var callSite = _defaultArgCallSite ?? throw CallerLocationOutsideDefaultError(locationToken);
+
+    return locationToken.Type switch {
+      TokenType.CallerLine => (long)callSite.Line,
+      TokenType.CallerFile => CallerFilePath(locationToken),
+      // Unreachable while every caller gates on IsCallerLocationToken, which is the same set
+      // this switch covers. It throws rather than defaulting so that adding a third keyword
+      // to that predicate and forgetting this arm is a loud failure, not a wrong value.
+      _ => throw new CompileError(ErrorCode.InternalError,
+        $"caller-location keyword '{locationToken.Value}' has no value mapping",
+        locationToken.Line, locationToken.Column)
+    };
+  }
+
+  /// The calling file's path as `__file__` reports it: relative to the compile root, `/`-separated.
+  ///
+  /// Relative and not absolute BY CHOICE. An absolute path is a fact about the machine that ran
+  /// the compiler, not about the program, so embedding one would make two builds of the same
+  /// commit on two machines produce different bytes — which is exactly what the byte-parity gate
+  /// and the golden transcripts exist to detect.
+  ///
+  /// Without a compile root there is nothing to be relative TO, and the bare file name is the
+  /// most identity the compiler actually holds — so that is what it reports, rather than
+  /// silently promoting a machine-specific absolute path into the binary.
+  private string CallerFilePath(Token locationToken) {
+    // Every Parser the compiler and the LSP construct is given its file's path, so this is an
+    // invariant rather than a user-reachable condition — but `__file__` has no honest answer
+    // without it, and inventing one ("", "<unknown>") would embed a lie in the binary.
+    if (_sourceFilePath == null)
+      throw new CompileError(ErrorCode.InternalError,
+        "'__file__' cannot be resolved: this translation unit was parsed without a source file path",
+        locationToken.Line, locationToken.Column);
+
+    if (_rootPath != null && ProjectRelativePath(_rootPath, _sourceFilePath) is string relative)
+      return relative;
+
+    return Path.GetFileName(_sourceFilePath);
   }
 
   /// Re-parses stored default value tokens via ParseExpression(), so any literal

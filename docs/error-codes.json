@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "208ef77bd043c507",
+  "sourceHash": "b2f7ea4b54deb695",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -442,6 +442,15 @@
       "stage": "parser",
       "doc": "A `test` declaration's name is the empty character literal (`test ''`). The name is the\ntest's whole identity -- it is what the reporter prints and what `end ''` must match -- and\nan empty one names nothing. Refused at the declaration rather than at the report, where an\nunnamed failure would be the least useful place to discover it.",
       "emittedBy": {"csharp": "ParserTestEmptyName"},
+      "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 2060,
+      "tag": "E2060",
+      "name": "ParserCallerLocationOutsideDefault",
+      "stage": "parser",
+      "doc": "'__line__' or '__file__' appeared somewhere other than a function parameter's default\nvalue -- in an ordinary expression, or as a struct FIELD default, which is a different\nthing despite the shared '= <expr>' spelling.\nThese two are a CALLING CONVENTION, not a reflection facility: each expands at the CALL\nSITE, and a parameter default is the only position that has a call site to expand\nagainst. A field default expands at a struct literal and an ordinary expression expands\nnowhere, so neither has an answer to give.\nRaised at TWO grammar positions, from one rule: the expression position catches it when\nthe token is evaluated, and the field-default position catches it when the tokens are\nCAPTURED. The capture-side check is not merely a better error location -- without it a\nfield default nobody triggers is never expanded, and the misuse would go undiagnosed.",
+      "emittedBy": {"csharp": "ParserCallerLocationOutsideDefault"},
       "notEmittedBy": ["selfhosted", "shv2"]
     },
     {

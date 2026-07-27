@@ -75,6 +75,14 @@ public static partial class FragmentGenerator {
     // batching is combinatorially complex — defer.
     if (test.SourceFiles != null) return false;
 
+    // A caller-location default reports the position of the call in the compiled unit, and
+    // batching changes both halves of that position: the tests are concatenated, so every
+    // line shifts by however much precedes this one, and the unit is renamed to
+    // `<spec>.maxon` instead of `<test>.test`. A batched test asserting either value would
+    // then depend on its NEIGHBOURS — editing an unrelated test in the same spec would move
+    // it — which is a test that reports the batching, not the feature.
+    if (test.Source.Contains("__line__") || test.Source.Contains("__file__")) return false;
+
     return true;
   }
 

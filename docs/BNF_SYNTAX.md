@@ -41,7 +41,8 @@ IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 ### 1.3 Keywords
 
 ```
-KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
+KEYWORD       = '__file__' | '__line__'
+              | 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
               | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
@@ -226,6 +227,16 @@ default_value = [ '-' ] INTEGER                              (* integer literal 
               | IDENTIFIER '.' IDENTIFIER                    (* enum case, e.g. Priority.medium *)
               | array_literal                                (* array literal, e.g. [10, 20, 12] *)
               | struct_literal                               (* struct constructor, e.g. Point{x: 0, y: 0} *)
+              | caller_location                              (* caller-location default, see below *)
+
+caller_location
+              = '__line__'                                   (* line of the call site *)
+              | '__file__'                                   (* calling file, relative to the compile root *)
+
+                (* caller_location is legal ONLY inside a parameter's default_value, and it is
+                   expanded at the CALL SITE, so each caller supplies its own. Anywhere else --
+                   an ordinary expression, or a field_default, which shares the `= expr`
+                   spelling but expands at a struct literal rather than a call -- is E2060. *)
 
 throws_clause = 'throws' type_ref
 ```

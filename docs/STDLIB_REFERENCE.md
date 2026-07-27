@@ -92,6 +92,31 @@ sizeof(TypeName) int            // Size of a type in bytes (compile-time constan
 
 `sizeof` accepts a type name and returns its storage size in bytes as a compile-time integer constant. No runtime cost. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
 
+**Caller-Location Defaults**
+```maxon
+export typealias SourceLineNumber = int(1 to i32.max)   // type for a __line__ parameter
+```
+
+`__line__` and `__file__` are legal only as a function parameter's default value, and each
+expands at the **call site**, so a helper reports its caller's location rather than its own:
+
+```maxon
+function expectTrue(ok bool, from String = __file__, at SourceLineNumber = __line__) returns bool
+	if not ok 'bad'
+		printError("{from}:{at}: expected true\n")
+	end 'bad'
+	return ok
+end 'expectTrue'
+```
+
+`SourceLineNumber` is the type to declare a `__line__` parameter as — lines are 1-based and
+the compiler counts them in a 32-bit counter. A `__file__` parameter is declared `String`
+(Maxon has no typealias over a struct type); its value is the calling file's path relative to
+the compile root, `/`-separated on every host, never absolute. Use both or neither: a line
+number whose file is unknown names a line in no particular file. Anywhere other than a
+parameter default — including a struct field default — is error E2060. See
+`specs/source-location-defaults.md`.
+
 **Concurrency Functions**
 ```maxon
 sleep(milliseconds int)         // Suspend current green thread for given duration

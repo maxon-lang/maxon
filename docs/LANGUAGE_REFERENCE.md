@@ -2283,6 +2283,51 @@ end 'send'
 - Arguments may be omitted if they have defaults
 - Any literal expression is supported as a default value
 
+### Caller-Location Defaults (`__line__`, `__file__`)
+
+Two keywords are legal **only** as a parameter's default value, and each expands at the call
+site rather than the declaration, so every caller supplies its own location without writing
+anything. They exist so a helper — an assertion library, a logger — can report the line in
+the *caller's* file instead of a line inside itself.
+
+| Keyword | Value | Declare the parameter as |
+|---------|-------|--------------------------|
+| `__line__` | Line of the token naming the callee at the call site | `SourceLineNumber` |
+| `__file__` | Calling file's path, relative to the compile root, `/`-separated | `String` |
+
+```maxon
+function expectPositive(value Tally, from String = __file__, at SourceLineNumber = __line__) returns bool
+		if value <= 0 'bad'
+				printError("{from}:{at}: expected a positive value\n")
+				return false
+		end 'bad'
+		return true
+end 'expectPositive'
+```
+
+`SourceLineNumber` is a stdlib typealias for `int(1 to i32.max)`. There is no matching alias
+for `__file__` because Maxon has no typealias over a struct type; declare the parameter
+`String`.
+
+**Rules:**
+- Use both or neither. A failure inside a shared helper resolves `__line__` against *that
+	helper's* file, so a line number without a file names a line in no particular file.
+- Expansion is per call site: two calls to the same function on two lines receive two values.
+- An explicitly passed argument wins — the default is not expanded at all. This is how one
+	helper forwards a location it was itself given: `fail("...", from: from, at: at)`.
+- `__file__` is relative, never absolute. An absolute path is a fact about the build machine,
+	not about the program; embedding one would make the same commit produce different bytes on
+	two checkouts.
+- Anywhere other than a parameter default is error E2060 — including an ordinary expression
+	and a struct field default, which shares the `= expr` spelling but expands at a struct
+	literal rather than a call.
+- Both names are reserved words, so no program can declare or shadow them.
+
+Because Maxon expressions are newline-delimited, a call always occupies one line, so
+`__line__` has only one line to name. The rule is nevertheless stated against the token
+naming the callee — the function name, or the method name after the final `.` — so it stays
+unambiguous if the grammar ever admits a call that spans lines.
+
 ### Function Overloads
 
 Maxon supports function overloading — multiple functions with the same name but different signatures.

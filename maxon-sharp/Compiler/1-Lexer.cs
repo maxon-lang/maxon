@@ -63,6 +63,10 @@ public enum TokenType {
   // Concurrency keywords
   Async,
   Await,
+  // Caller-location keywords. Legal only as a function parameter's default value,
+  // where each expands against the CALL SITE rather than the declaration.
+  CallerLine,
+  CallerFile,
   // Types
   Int,
   Float,
@@ -247,6 +251,8 @@ public class Lexer(string source) {
     { "is", new(TokenType.Is, "Reference identity operator. Returns true if two variables refer to the same object. Use 'is not' for inequality.", false) },
     { "async", new(TokenType.Async, "Spawns a green thread for a function call.", false) },
     { "await", new(TokenType.Await, "Waits for a green thread to complete and returns its result.", false) },
+    { "__line__", new(TokenType.CallerLine, "Caller-location default: expands to the line of the call site. Legal only as a function parameter's default value.\n\nExample:\n```maxon\nfunction check(ok bool, at SourceLineNumber = __line__) returns bool\n    return ok\nend 'check'\n```", false) },
+    { "__file__", new(TokenType.CallerFile, "Caller-location default: expands to the calling file's path, relative to the compile root. Legal only as a function parameter's default value. Pair it with `__line__` -- a line number whose file is unknown names a line in no particular file.\n\nExample:\n```maxon\nfunction check(ok bool, from String = __file__, at SourceLineNumber = __line__) returns bool\n    return ok\nend 'check'\n```", false) },
   };
 
   // Operator map: { operator_text, TokenType, OperatorCategory, help_text }

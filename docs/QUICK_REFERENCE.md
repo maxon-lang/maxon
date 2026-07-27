@@ -204,6 +204,18 @@ end 'process'
 // integers, floats, bools, strings, arrays, enum cases,
 // struct construction, character literals, byte string literals
 
+// Caller-location defaults: legal ONLY as a parameter default, expanded at
+// the CALL SITE, so each caller supplies its own. Use both or neither --
+// a line number whose file is unknown names a line in no particular file.
+function check(ok bool, from String = __file__, at SourceLineNumber = __line__) returns bool
+		printError("{from}:{at}\n")   // the CALLER's file and line
+		return ok
+end 'check'
+// __line__ -> SourceLineNumber (stdlib: int(1 to i32.max))
+// __file__ -> String, relative to the compile root, '/'-separated (never absolute)
+// An explicitly passed argument wins; the default is not expanded at all.
+// Anywhere but a parameter default -- including a struct field default -- is E2060.
+
 // Calling: first arg positional, rest named.
 // Labeling the first arg is rejected as E2052; omitting a
 // label on the second-or-later arg is rejected as E3005.
@@ -951,6 +963,8 @@ max(a, b: b)   // maximum of two values
 
 // Compile-time
 sizeof(TypeName)   // size of a type in bytes (compile-time constant)
+__line__           // caller's line   -- ONLY as a parameter default (E2060 elsewhere)
+__file__           // caller's file   -- ONLY as a parameter default (E2060 elsewhere)
 ```
 
 ### Standard Library

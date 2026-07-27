@@ -167,6 +167,20 @@ public enum ErrorCode {
   /// unnamed failure would be the least useful place to discover it.
   /// </summary>
   ParserTestEmptyName = 2059,
+  /// <summary>
+  /// '__line__' or '__file__' appeared somewhere other than a function parameter's default
+  /// value -- in an ordinary expression, or as a struct FIELD default, which is a different
+  /// thing despite the shared '= &lt;expr&gt;' spelling.
+  /// These two are a CALLING CONVENTION, not a reflection facility: each expands at the CALL
+  /// SITE, and a parameter default is the only position that has a call site to expand
+  /// against. A field default expands at a struct literal and an ordinary expression expands
+  /// nowhere, so neither has an answer to give.
+  /// Raised at TWO grammar positions, from one rule: the expression position catches it when
+  /// the token is evaluated, and the field-default position catches it when the tokens are
+  /// CAPTURED. The capture-side check is not merely a better error location -- without it a
+  /// field default nobody triggers is never expanded, and the misuse would go undiagnosed.
+  /// </summary>
+  ParserCallerLocationOutsideDefault = 2060,
 
   /// <summary>
   /// The program declares no 'main' function.
