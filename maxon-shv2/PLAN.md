@@ -1481,6 +1481,55 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   📌 **The measuring scaffold was deliberately NOT committed** (a compile-time `let MeasureInvalidationWidth`
   plus interval/symmetric-difference width helpers, ~110 lines in `SplitLiveRanges.maxon`): it is O(function)
   per split and must never ship enabled. Its shape is recorded here so it can be rebuilt.
+
+  ### ⛔ DO NOT BUILD R2 YET — THE EXPOSURE WAS MEASURED, AND NOTHING REAL COMES NEAR THE SHAPE (2026-07-27)
+
+  Before designing the fix I asked the cheaper question: **does any real workload put the allocator into
+  confined mode with a LARGE block?** The quadratic needs BOTH factors large *in the same function*
+  (Θ(N) confined splits over a Θ(N) block). **They never co-occur outside a ladder built to make them.**
+  Predictor = `confinedSplits × maxBlockOps`:
+
+  | corpus | largest product | that row's block | its confined splits |
+  |---|---|---|---|
+  | `gen12i 64 8` (synthetic, known-bad) | **920,315** | 2,885 | 319 |
+  | spec suite, ORDINARY specs | **5,193** | 577 | 9 |
+  | spec suite incl. deliberate regalloc stress specs | 44,880 | 5,610 | **8** |
+  | scale corpus rung5 | 87,040 | **85** | 1,024 |
+  | `genwidelive 200 sum` (known full-pool) | 11,280 | 1,410 | 8 |
+
+  - **Ordinary real code is 177× below the synthetic shape.** In aggregate the confined half walks
+    **330,146 ops across ALL 1,840 spec programs put together**; ONE `gen12i 64 8` compile walks
+    **823,072** — a single synthetic file is **2.5× the entire real corpus**.
+  - **802 of 803 confined-splitting functions take FEWER THAN 16 confined splits** (max 19, in a 217-op block).
+  - **The scale corpus's 87,040 is not a near-miss**: its block is CONSTANT at 85 ops across all six rungs
+    while the split count doubles — total confined-walk ops 8,564 → … → 255,634, ratios 1.93 … **2.00**.
+    Only ONE factor grows, so it is exactly linear and always was.
+  - **`x64-large-frame-arg7` has the block and not the mode**: 5,610 ops, 796 splits, **8 confined**. The
+    size is there; the confined half is not. That is `genwidelive`'s shape pinned as a spec.
+  - **Mechanism, and it looks structural:** confined mode is entered by almost everything that splits
+    (803 of 826) — what is rare is a large block, and what does not occur is a large block that ALSO splits
+    many times while confined. Reaching it needs N call sites in one straight-line block *each* carrying its
+    own cross-call live set. Real large blocks (interpolation chains, byte-literal detach, `__gt_subp_spawn`)
+    are large because of SEQUENTIAL work, so their live sets stay small and their split counts stay single-digit.
+  - Secondary, for whenever R2 is revisited: distinct `allowedRegistersOf` masks in real code are **2–6, mode 2**.
+    `gen12i` = 2 and `genwidelive` = 8, so **the ladders BRACKET the real range rather than sitting inside it.**
+
+  ⇒ **VERDICT: the fix is speculative and has NO TRIGGER TODAY.** ⭐ **The trigger, now nameable instead of the
+  vague "pressure growing" that let this go unmeasured twice: a GENERATED or MACRO-EXPANDED straight-line
+  block with many call sites, or SELF-HOST (P2) — the compiler's own long straight-line dispatch functions are
+  the first plausible candidate, and cannot be measured until shv2 compiles itself.**
+  ⚠ **Two corpus facts this probe corrected, both of which had been assumed:**
+  **(1) shv2 does NOT compile `stdlib/*.maxon` through its own register allocator at all** — every
+  stdlib-shaped name reaching the splitter is a SYNTHESIZED runtime function (`__arr_*`, `__destruct_*`,
+  `__gt_*`, `__mm_*`, `__set_*`, `__str_*`), so stdlib exposure is fully contained in the spec run.
+  **(2) THERE IS NO THIRD REAL-CODE CORPUS — none of the checked-in examples compile under shv2**
+  (verified: `examples/fannkuch-redux.maxon` E2015 `for` statement; `examples/nbody.maxon` E3009 float→int
+  narrowing; `bench/sortbench.maxon` E2015 `String.toByteArray`). **Self-host is not the only gap**, and any
+  future claim about "real Maxon code" has exactly the spec suite behind it and nothing else.
+  📌 The exposure probe was also NOT committed (a compile-time `let ProbeConfinedExposure` + one walk counter
+  + a per-function `CONFPROBE` line, plus a `ProbeKeepStagedSources` flag in `SpecTestRunner.maxon` because the
+  spec runner swallows its compiles' stderr). It allocates per function, so **no `scale-test` memory reading
+  from such a tree is valid.**
   **Ladder + knob are the deliverable here: `Testing/ladders/gen12i.sh <N> 8 <out>`, doubling N.**
   ⭐ **The old "re-measure trigger: a single block's PRESSURE growing" was too vague and is why this went
   unmeasured — the trigger is specifically a LARGE BLOCK ENTERING CONFINED MODE EARLY.**
@@ -1670,9 +1719,33 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   it**, which is how it surfaced:
   `error E9001: … op 'maxon.closure_create @_$closure_30' … reads %179270, which is defined in block
   'eachFresh_13' — and 'eachFresh_13' does not dominate 'eachFresh_13.exit'`.
-  Reproduced with both a `while`-carried and a `for`-carried var. **Workaround: a `let` snapshot before the
-  closure.** Not minimized. ⭐ Note the shape of the evidence — the BOOTSTRAP miscompiles and **shv2's verifier
-  is the thing that noticed**, which is the oracle relationship running backwards and worth keeping.
+  Reproduced with both a `while`-carried and a `for`-carried var, conditional and unconditional assignment
+  alike. **Workaround: a `let` snapshot before the closure.** ⭐ Note the shape of the evidence — the BOOTSTRAP
+  miscompiles and **shv2's verifier is the thing that noticed**, which is the oracle relationship running
+  backwards and worth keeping. ✅ **MINIMIZED and coordinator-verified 2026-07-27** — 16 lines, `maxon build`:
+  ```maxon
+  typealias Thunk = function() returns String
+  typealias Small = int(0 to 100)
+  function emit(f Thunk)
+  	print("{f()}\n")
+  end 'emit'
+  function probe(n Small)
+  	var biggest = 0
+  	var i = 0
+  	while i < n 'loop'
+  		biggest = biggest + i
+  		i = i + 1
+  	end 'loop'
+  	emit(function() gives "biggest={biggest}")
+  end 'probe'
+  function main() returns ExitCode
+  	probe(4)
+  	return 0
+  end 'main'
+  ```
+  ⇒ `error E9001: … in 'probe', op 'maxon.closure_create @_$closure_0' in block 'loop_0.exit' reads %11, which
+  is defined in block 'loop_0' — and 'loop_0' does not dominate 'loop_0.exit'.` The bootstrap's own SSA
+  construction fails to thread the loop-exit block arg to the `closure_create`.
 - **🔴 BOOTSTRAP ORACLE BUGS — two LOWERING failures, both found by the splitter positional-structure rung
   (2026-07-27, merged `e40405890`); the "Bootstrap oracle bugs" list is their home, each needs the full C# suite as its
   gate.** Both are `E9001` out of `MaxonToStandardConversion`, both were hit while writing ordinary Maxon, and both were
