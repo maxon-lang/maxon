@@ -31,6 +31,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genclosure.sh <closures> <captures> <reads> <ranged\|plain> <out>` | `closures` functions, each with one closure capturing `captures` bindings read `reads` times each | **the only way to measure the capture path at all** — `ScaleCorpus` states outright that it generates no closures, so every `scale-test` column reads Δ0 for a change to it. Its three knobs are independent for `genmutchain.sh`'s reason; see below. |
 | `geninstances.sh <instances> <chain> <plain\|contested\|control> <out>` | `instances` generic instantiations, each with its own type argument; optionally a `chain` of `__`-prefixed declarations planted against instance 0 | the COMPILED-NAME path — `ProgramSignatures.mangleGenericInstance` and the `reservedIfDeclared` re-probe. Unlike closures the corpus *does* generate generics, so `scale-test` sees the per-instance cost; what it cannot express is a compiled name a DECLARATION also claims, or a re-probe deeper than one. See below. |
 | `genawait.sh <funcs> <ifs> <out>` | `funcs` await-bearing functions of `ifs` two-way branches each, the promise spawned before the thicket and awaited after it | the AWAIT-LINEARITY walk (`SemanticCheck.checkLinearAwaitInFunction`) and its per-function block table. `ScaleCorpus` lists async under **NOT GENERATED**, so this is the only way to measure it — see below. |
+| `genfsprobe.sh <iterations> <out>` | ⚠ **the odd one out: a program to RUN, not one to compile** | what one `File.delete` / `File.exists` / `FilePath.changeExtension` COSTS, in nanoseconds and in allocations — so a per-compile cost paid in SYSCALLS can be priced at all. See below. |
 
 ### `geninstances.sh` — the two things the corpus cannot claim a Δ0 about
 
@@ -116,6 +117,43 @@ sit still — which is exactly what `phase:encode` did (29.2M → 76.0M CPU tick
 source), and what it stopped doing once the per-function `BlockId → offset` map became a dense array.
 A ladder that grows the program cannot make that distinction: everything doubles there, including the
 thing you are trying to hold still.
+
+### `genfsprobe.sh` — pricing a cost that is paid in SYSCALLS
+
+⚠ **Build this one with the BOOTSTRAP** (`./bin/maxon.exe build <out>`), not with shv2 — shv2 cannot
+yet compile `stdlib/File.maxon`. That is not a weaker measurement: the shv2 compiler *binary* is
+emitted by the bootstrap, from this same `stdlib/File.maxon` and this same emitted runtime, so a
+bootstrap-built program calling `File.delete` runs the identical machine code shv2's own
+`Compiler.discardPreviousOutput` runs.
+
+**Why it cannot be a compile ladder.** `scale-test`'s memory columns cannot price a syscall: a
+`File.delete` allocates **exactly one 40-byte record whatever it costs in time**, so the compile that
+does four of them reads +4 allocations and tells you nothing about the microseconds. And that 40 bytes
+is not the path — it is the green-thread runtime's `SyncRequest`. `__io_submit_sync`
+(`X86CodeEmitter.Runtime.cs`) `mm_raw_alloc`s one, enqueues it, `SetEvent`s a **sync worker thread**
+and parks the caller until the worker completes it. **Every `__ManagedFile` call is a cross-thread
+round trip**, which is why one costs tens of MICROseconds on a box where the kernel call itself is a
+couple. Measured here at 20,000 iterations: a failing `File.delete` **52.8 µs**, `File.exists` **48.2 µs**
+absent / **62.9 µs** present, `File.writeBinary` of 64 bytes **449 µs**.
+
+**⭐ The reading it exists to make re-runnable: `changeExtension` charges by what the String is a
+PRODUCT OF, not by what it says.** `change_extension` and `change_extension_forward_spelt` build the
+same final path text, both the way `Compiler.resolveOutputPath` does — by interpolating the platform
+extension onto the raw `-o` value — and differ only in the separator that went in. On Windows
+`FilePath.create` normalizes `/` to `\` through `String.replace`, so the forward-spelt one arrives as
+a `replace()` result and the native-spelt one arrives as the interpolation's own buffer:
+**8 allocations / 343 bytes against 10 / 368**, for two `FilePath`s that compare EQUAL. Build them
+from literals instead and the difference vanishes, which is how you can tell it is the buffer and not
+the bytes. ⚠ **This makes a per-compile allocation figure depend on how the DRIVER spelt its paths**:
+`scale-test` spells them with `FilePath.join` (`\`), so its numbers carry the 10-allocation form,
+while the same compile driven by hand with `/` arguments reads 2 allocations and 26 bytes lighter.
+
+**`discard_plus_require`** is the composite — one `changeExtension`, two failing `File.delete`, two
+`File.exists` — i.e. exactly what `Compiler.discardPreviousOutput` + `Compiler.requireOutputWritten`
+add to a compile whose output is absent. **`guarded_delete_absent`** is the standing question about
+them: is `if exists then delete` cheaper than a bare failing `delete`? Measured, it is not enough to
+matter — 48.2 µs against 52.8 µs when the file is absent, and a whole extra 62.9 µs `exists` on top of
+the delete when it is present.
 
 ## Reading one
 
