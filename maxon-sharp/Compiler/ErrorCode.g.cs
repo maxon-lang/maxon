@@ -715,6 +715,19 @@ public enum ErrorCode {
   /// identical-prose case for its own reason, not merely as a symbol-table accident.
   /// </summary>
   SemanticDuplicateTestName = 3107,
+  /// <summary>
+  /// A `test` declaration needs something from `stdlib/Testing.maxon` that this compile cannot
+  /// see. Two symbols there are reachable WITHOUT the author naming them: `TestFailure`, which
+  /// every `test` implicitly throws, and `__TestReport`, which the handler the compiler
+  /// synthesizes for an uncaught foreign error reports through.
+  /// Because neither name is written by the program, neither can be a misspelling -- so the
+  /// message names the missing symbol AND the file that has to supply it, rather than reporting
+  /// an unknown type or an unknown function at a line whose source mentions neither.
+  /// ONE code for both, because it is one condition seen from two sides: a compile whose Testing
+  /// module is absent or truncated. Two codes would let a reader fix half the cause and meet the
+  /// other half on the next build.
+  /// </summary>
+  SemanticTestingStdlibUnavailable = 3108,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.

@@ -4131,6 +4131,30 @@ file whose names sanitize alike are **E3107**, which names both — a collision 
 `adds two` and `adds-two` is invisible in either name alone. Nothing calls a test, so tests are
 roots for dead-function elimination rather than something it reaches.
 
+**Any uncaught throw fails the test.** Outside a test, a bare `try` propagates, so the callee's
+`throws` type must be the enclosing function's own and anything else is **E3059**. Inside a test
+body that requirement is dropped: a bare `try` on **any** error type compiles, and an error that
+reaches it fails that test rather than escaping it.
+
+```maxon
+test 'returns 404 when the user is missing'
+	let response = try Api.lookup("nobody")     // throws ApiError — uncaught, FAILS the test
+	try Expect.equal(response.status(), expected: 404)
+end 'returns 404 when the user is missing'
+```
+
+The compiler substitutes the handler the author would otherwise have had to write: it reports the
+error's type, its case and the `try`'s own file and line through `__TestReport.threw`, then throws
+`TestFailure.assertion`. So a test still throws exactly `TestFailure` — the foreign error is
+reported and dropped, never propagated — and a failure caused by an unexpected error says which
+error it was.
+
+The relaxation is a narrowing of the propagation check itself, so it reaches nowhere else: an
+ordinary `function` holding the identical `try` still gets E3059, and a closure written inside a
+test body is a separate function that cannot express `throws` at all (**E3101**), so a bare `try`
+inside one is refused unchanged. An `otherwise` the author wrote always wins — the substitution
+only ever happens where there is none. See `specs/test-uncaught-throw.md`.
+
 `test` is a [contextual keyword](#contextual-keywords) and is not reserved.
 
 ### Qualified Names

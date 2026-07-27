@@ -96,6 +96,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // Single-statement try forms are unaffected.
   private bool _inMatchArmBody;
 
+  /// True while <see cref="ParseSynthesizedSource"/> is feeding the parser text the compiler wrote
+  /// rather than text a program did. Only <see cref="CoverageActive"/> consults it, and the reason
+  /// is recorded there.
+  private bool _inSynthesizedSource;
+
   /// Active try-block contexts (for the new `try 'label' ... end 'label' otherwise (e) ...` form).
   /// While the stack is non-empty, bare calls to throwing functions inside the body do not require
   /// the `try` keyword — the parser implicitly promotes them to `MaxonTryCallOp` and routes their
@@ -2572,6 +2577,29 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private const string MaxonFileSuffix = ".maxon";
   private const string TestFileSuffix = ".test" + MaxonFileSuffix;
 
+  /// The pieces of `stdlib/Testing.maxon` the COMPILER names on the author's behalf. Spelled here
+  /// rather than inside the synthesized source that uses them, so the emitter and the stdlib
+  /// cannot disagree about a name no program ever writes.
+  private const string TestFailureAssertionCase = "assertion";
+  private const string TestReportTypeName = "__TestReport";
+  private const string TestReportThrewMethodName = "threw";
+
+  /// The block label of the handler <see cref="EmitTestUncaughtThrowHandler"/> synthesizes. No
+  /// program can see it — an `otherwise` label names a SOURCE block and this block has none — but
+  /// it is worded as prose anyway, because a compiler bug inside the synthesized body reports
+  /// against it and `'__synth'` would tell a reader nothing about what they were looking at.
+  private const string TestUncaughtHandlerLabel = "uncaught throw in test";
+
+  /// The one sentence for "stdlib/Testing.maxon is not on this compile path". Two of its symbols
+  /// are reachable without the author naming them — <see cref="TestFailureTypeName"/>, which every
+  /// `test` implicitly throws, and <see cref="TestReportTypeName"/>, which a synthesized
+  /// uncaught-throw handler reports through — so a reader who meets either is looking at the same
+  /// missing file. One message, because two would drift and each would name half the cause.
+  private static CompileError TestingStdlibUnavailable(string missingSymbol, string whyItIsNeeded, Token at) =>
+    new(ErrorCode.SemanticTestingStdlibUnavailable,
+      $"'{missingSymbol}' is not available: {whyItIsNeeded}, so stdlib/Testing.maxon must be on the compile path",
+      at.Line, at.Column);
+
   /// Everything a `test` header determines, read once. `IrFunction.ThrowsType` is INIT-ONLY, so
   /// it can only be supplied to the constructor — and there are two constructor sites for a test
   /// (PreScanTest's stub and ParseTest's real function). SetupFunctionParsing copies IsExported /
@@ -2634,10 +2662,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // fixed — there is nothing to parse — and the registry is the same map ParseTypeRef consults
     // for a written `throws TestFailure`.
     if (!_typeRegistry.TryGetValue(TestFailureTypeName, out var throwsType)) {
-      throw new CompileError(ErrorCode.SemanticUnknownType,
-        $"'{TestFailureTypeName}' is not available; a 'test' declaration throws it implicitly, "
-        + "so stdlib/Testing.maxon must be on the compile path",
-        nameToken.Line, nameToken.Column);
+      throw TestingStdlibUnavailable(TestFailureTypeName,
+        "a 'test' declaration throws it implicitly", nameToken);
     }
 
     var namespace_ = NamespaceOf();
@@ -7913,9 +7939,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// basic block later would report a never-taken bounds-check arm on a line the user covers fully.
   ///
   /// The stdlib is excluded for the same reason `--debug-info` excludes it: a coverage report is
-  /// about the program under test, not about the library it links.
+  /// about the program under test, not about the library it links. Compiler-SYNTHESIZED source
+  /// (<see cref="ParseSynthesizedSource"/>) is excluded for that same reason once more, and it is
+  /// the reason above stated at a third scale: those statements carry the position of the construct
+  /// that generated them, so instrumenting them would put extra never-taken counters on a line the
+  /// user wrote and fully exercised — the report would call it partly uncovered and name no
+  /// statement a reader could go and cover.
+  ///
+  /// Debug SPANS are deliberately still captured for synthesized statements. The two answer
+  /// different questions: a span says "the op at this address came from this line", which stays
+  /// true and is what lets a debugger stop there; a counter says "the program under test has a
+  /// statement here", which is false.
   /// </summary>
-  private bool CoverageActive => Compiler.Coverage && !_isStdlib && _currentFunction != null && seedModule != null;
+  private bool CoverageActive => Compiler.Coverage && !_isStdlib && !_inSynthesizedSource
+    && _currentFunction != null && seedModule != null;
 
   /// <summary>
   /// Mint one coverage counter for a source position and insert its increment at
@@ -9329,6 +9366,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // error flag. If the two error types differ, the caller decodes bits of one enum
       // as tags of another — a silent correctness bug. Require exact name match.
       if (calleeThrowsType != null && calleeThrowsType.Name != _currentFunction.ThrowsType.Name) {
+        // …unless this IS a test body, where a foreign error is not propagated at all: it is
+        // reported and converted into the test's own failure. The relaxation is stated as a
+        // narrowing of THIS check rather than as a rule of its own, so a `function` cannot
+        // reach it — there is no second place where a mismatched propagation is decided.
+        if (InTestBody)
+          return EmitTestUncaughtThrowHandler(tryInfo, calleeThrowsType, tryToken);
+
         throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
           $"try propagates '{calleeThrowsType.Name}' but enclosing function throws '{_currentFunction.ThrowsType.Name}' — add 'otherwise' to convert",
           tryToken.Line, tryToken.Column);
@@ -9544,6 +9588,77 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _currentBlock!.AddOp(new MaxonReturnOp(loadErrorOp.Result, isErrorPropagation: true));
 
     return EmitTryContinueBlock(continueBlock, resultVar, tryInfo);
+  }
+
+  /// Whether the function currently being parsed is a `test` body.
+  ///
+  /// `DisplayName` is the single fact "is a test" (see <see cref="IrFunction{TOp}.DisplayName"/>),
+  /// so this asks that field rather than carrying a parser flag beside it — a second copy is a
+  /// second thing to keep in step, and a `test` whose two markers disagreed would silently be
+  /// half a test.
+  ///
+  /// It answers for the INNERMOST function, which is what makes a closure behave: parsing a
+  /// closure body swaps `_currentFunction` for the closure's own function, and a closure is not
+  /// a test. Its errors go to whoever calls it — which may be nobody, and may be later — so the
+  /// test has nothing to fail on its behalf.
+  private bool InTestBody => _currentFunction?.DisplayName != null;
+
+  /// <summary>
+  /// The `test`-body rule, which is bun's: a bare `try` on ANY error type is legal, and an error
+  /// that reaches it FAILS THIS TEST instead of escaping to whoever ran it.
+  ///
+  /// The handler is written as SOURCE and handed to the ordinary
+  /// `otherwise (e) 'label' … end 'label'` path, so the typed error binding, the heap-payload
+  /// cleanup, the per-arm scope and the continue block are the same code that serves a
+  /// hand-written handler — not a second implementation that would have to be kept in step with
+  /// it. Emitting the IR directly would additionally have meant a second copy of enum-to-string
+  /// interpolation, and a second copy is exactly how the two would come to disagree about what a
+  /// union prints.
+  ///
+  /// `"{e}"` renders the thrown value by the language's own interpolation rule — the live case
+  /// name for a union and for a plain enum, the declared raw value for an enum that has one.
+  /// Deliberately the same rule a reader gets from writing `otherwise (e) … print("{e}")`
+  /// themselves: a report that spelled errors its own way would be a second definition of what an
+  /// error value looks like, and the two would answer differently for the same program.
+  ///
+  /// The handler ends in `throw TestFailure.assertion`, so the test's OWN error type is the only
+  /// one that ever leaves it. That is what keeps the relaxation from widening the signature: a
+  /// `test` still throws exactly `TestFailure`, and the dispatcher still has one type to handle.
+  /// </summary>
+  private ExprResult.Direct EmitTestUncaughtThrowHandler(TryResultInfo tryInfo, IrType errorType, Token tryToken) {
+    // Checked before the source is synthesized so the message names the missing stdlib symbol,
+    // rather than reporting an unknown function whose name appears nowhere in the user's file.
+    if (!_typeRegistry.ContainsKey(TestReportTypeName)) {
+      throw TestingStdlibUnavailable(TestReportTypeName,
+        "an uncaught throw inside a 'test' body is reported through it", tryToken);
+    }
+
+    // `__`-prefixed and counter-suffixed so it can collide with neither a program's own name nor a
+    // sibling handler's. `CheckReservedDeclName` guards DECLARATIONS the author wrote and is not
+    // on this path; the prefix is doing its documented job here, marking a compiler-owned name.
+    var thrownBinding = $"__test_thrown_{_blockCounter++}";
+    var bindingToken = new Token(TokenType.Identifier, thrownBinding, tryToken.Line, tryToken.Column);
+
+    // The report's file and line locate the `try` that threw, which is the line a reader has to
+    // open. `SourceFileDisplayPath` is the same spelling `__file__` produces, so one file is
+    // named one way however it reached the binary.
+    var reportedFile = StringUtils.EscapeForStringLiteral(SourceFileDisplayPath(tryToken));
+    var reportedType = StringUtils.EscapeForStringLiteral(errorType.Name);
+
+    // Arguments after the first must be named (E3005), so the synthesized call names them — and
+    // the labels are the stdlib's parameter names, which is what makes a rename over there a
+    // compile error here rather than a silently mismatched report.
+    var handlerSource =
+      $"'{TestUncaughtHandlerLabel}'\n"
+      + $"{TestReportTypeName}.{TestReportThrewMethodName}(\"{reportedType}\""
+      + $", errorCase: \"{{{thrownBinding}}}\""
+      + $", file: \"{reportedFile}\""
+      + $", line: {tryToken.Line})\n"
+      + $"throw {TestFailureTypeName}.{TestFailureAssertionCase}\n"
+      + $"end '{TestUncaughtHandlerLabel}'\n";
+
+    return ParseSynthesizedSource(handlerSource, tryToken,
+      () => EmitTryOtherwiseBlock(tryInfo, bindingToken, errorType));
   }
 
   private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null) {
@@ -22967,7 +23082,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     return locationToken.Type switch {
       TokenType.CallerLine => (long)callSite.Line,
-      TokenType.CallerFile => CallerFilePath(locationToken),
+      TokenType.CallerFile => SourceFileDisplayPath(locationToken),
       // Unreachable while every caller gates on IsCallerLocationToken, which is the same set
       // this switch covers. It throws rather than defaulting so that adding a third keyword
       // to that predicate and forgetting this arm is a loud failure, not a wrong value.
@@ -22977,7 +23092,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
   }
 
-  /// The calling file's path as `__file__` reports it: relative to the compile root, `/`-separated.
+  /// How the file being parsed NAMES ITSELF inside emitted code: relative to the compile root,
+  /// `/`-separated. Two features embed it — `__file__`, which reports the calling file, and the
+  /// uncaught-throw report a `test` body emits, which reports the file holding the `try` — and
+  /// they must spell one file one way, so there is one answer here rather than one each.
   ///
   /// Relative and not absolute BY CHOICE. An absolute path is a fact about the machine that ran
   /// the compiler, not about the program, so embedding one would make two builds of the same
@@ -22987,19 +23105,61 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Without a compile root there is nothing to be relative TO, and the bare file name is the
   /// most identity the compiler actually holds — so that is what it reports, rather than
   /// silently promoting a machine-specific absolute path into the binary.
-  private string CallerFilePath(Token locationToken) {
+  ///
+  /// <paramref name="at"/> is only ever used to place the diagnostic below.
+  private string SourceFileDisplayPath(Token at) {
     // Every Parser the compiler and the LSP construct is given its file's path, so this is an
-    // invariant rather than a user-reachable condition — but `__file__` has no honest answer
-    // without it, and inventing one ("", "<unknown>") would embed a lie in the binary.
+    // invariant rather than a user-reachable condition — but a file cannot name itself without
+    // it, and inventing one ("", "<unknown>") would embed a lie in the binary.
     if (_sourceFilePath == null)
       throw new CompileError(ErrorCode.InternalError,
-        "'__file__' cannot be resolved: this translation unit was parsed without a source file path",
-        locationToken.Line, locationToken.Column);
+        "the source file's own path cannot be resolved: this translation unit was parsed without one",
+        at.Line, at.Column);
 
     if (_rootPath != null && ProjectRelativePath(_rootPath, _sourceFilePath) is string relative)
       return relative;
 
     return Path.GetFileName(_sourceFilePath);
+  }
+
+  /// Parse a stretch of COMPILER-SYNTHESIZED Maxon source as if it had been written at
+  /// <paramref name="at"/>, then put the real token stream back.
+  ///
+  /// Every synthesized token carries <paramref name="at"/>'s position, so a diagnostic raised
+  /// inside points at the construct that generated the source rather than at line 1 of text the
+  /// user cannot open.
+  ///
+  /// Two pieces of parser state say "what the source did", and synthesized text did not do it:
+  ///
+  ///   - `_inMatchArmBody` answers "did the SOURCE open a multi-line block inside a match arm",
+  ///     which a match arm cannot hold. Synthesized text occupies no lines of the arm, so leaving
+  ///     the flag set would make a generated construct illegal in exactly the position a match arm
+  ///     puts it.
+  ///   - `_inSynthesizedSource` suppresses `--coverage` counters; see <see cref="CoverageActive"/>.
+  ///
+  /// Both are saved and restored rather than cleared, so a nested synthesis — or a synthesis
+  /// reached from inside a match arm — leaves the caller exactly as it found it.
+  private T ParseSynthesizedSource<T>(string source, Token at, Func<T> parse) {
+    var synthesized = new Lexer(source).Tokenize();
+    for (int i = 0; i < synthesized.Count; i++)
+      synthesized[i] = synthesized[i] with { Line = at.Line, Column = at.Column };
+
+    var savedTokens = _tokens;
+    var savedPos = _pos;
+    var savedInMatchArmBody = _inMatchArmBody;
+    var savedInSynthesizedSource = _inSynthesizedSource;
+    _tokens = synthesized;
+    _pos = 0;
+    _inMatchArmBody = false;
+    _inSynthesizedSource = true;
+    try {
+      return parse();
+    } finally {
+      _tokens = savedTokens;
+      _pos = savedPos;
+      _inMatchArmBody = savedInMatchArmBody;
+      _inSynthesizedSource = savedInSynthesizedSource;
+    }
   }
 
   /// Re-parses stored default value tokens via ParseExpression(), so any literal
@@ -24145,17 +24305,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return Advance();
   }
 
+  /// The stdlib files permitted to DECLARE a `__`-prefixed name. A `__` name is one the
+  /// COMPILER knows by construction — it emits references to it without any program naming
+  /// it — so the exemption tracks exactly that: Builtins and Internals declare the
+  /// type-system bridge to runtime intrinsics, and Testing declares `__TestReport`, which
+  /// the synthesized uncaught-throw handler inside a `test` body calls.
+  ///
+  /// A SET rather than a chain of equality tests. The chain had already grown to two copies
+  /// of one condition differing only in a literal, and the doc comment beside it still said
+  /// "sole exemption" — the second copy had arrived without the sentence noticing.
+  private static readonly HashSet<string> ReservedPrefixDeclaringStdlibFiles =
+    ["Builtins.maxon", "Internals.maxon", "Testing.maxon"];
+
   /// Rejects declarations whose name starts with `__`. That prefix is reserved for
   /// compiler-internal symbols (runtime intrinsics, builtin types like __ManagedMemory).
-  /// stdlib/Builtins.maxon is the sole exemption — it's the type-system bridge that
-  /// exposes those internal names. Call this at every site that introduces a NEW binding
+  /// <see cref="ReservedPrefixDeclaringStdlibFiles"/> names the stdlib files exempted, and
+  /// why. Call this at every site that introduces a NEW binding
   /// (function/type/typealias/field/param/let/var/enum-case/match-binding). Pure
   /// references to existing __ names are fine.
   private void CheckReservedDeclName(Token nameToken, bool isEnumCase = false) {
     if (_isStdlib && _sourceFilePath != null
-        && Path.GetFileName(_sourceFilePath) == "Builtins.maxon") return;
-    if (_isStdlib && _sourceFilePath != null
-        && Path.GetFileName(_sourceFilePath) == "Internals.maxon") return;
+        && ReservedPrefixDeclaringStdlibFiles.Contains(Path.GetFileName(_sourceFilePath))) return;
     // `self` rejection applies to bindings in the value namespace (locals, params,
     // functions, types). Enum cases live in `EnumName.case` namespace and cannot
     // shadow the implicit receiver, so naming an enum case `self` is allowed.

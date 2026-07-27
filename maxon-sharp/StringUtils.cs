@@ -52,6 +52,25 @@ static class StringUtils {
     return sb.ToString();
   }
 
+  /// The inverse of the pair that READS a Maxon string literal: renders <paramref name="text"/> so
+  /// that embedding it in <c>"…"</c> yields those exact characters again. Only compiler-synthesized
+  /// source needs it — a program's own literals were escaped by whoever wrote them.
+  ///
+  /// Braces are on the list even though <see cref="ResolveEscapes"/> knows nothing about them,
+  /// because reading a literal takes TWO steps: the interpolation splitter consumes `\{` and `\}`
+  /// first (Parser.ParseStringInterpParts) and this function hands text to whichever step runs.
+  /// An unescaped brace would not merely print wrong, it would open an interpolation — so a
+  /// directory named <c>{x}</c> on the compile path would turn an emitted path into a reference to
+  /// a variable `x`, and fail to compile inside code the user never wrote.
+  public static string EscapeForStringLiteral(string text) {
+    var escaped = new StringBuilder(text.Length);
+    foreach (var ch in text) {
+      if (ch is '\\' or '"' or '{' or '}') escaped.Append('\\');
+      escaped.Append(ch);
+    }
+    return escaped.ToString();
+  }
+
   private static bool IsHexDigit(char c) =>
     c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F');
 

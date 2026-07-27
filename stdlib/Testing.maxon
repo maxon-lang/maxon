@@ -8,3 +8,48 @@
 export enum TestFailure implements Error
 	assertion
 end 'TestFailure'
+
+// ─── __TestReport ───────────────────────────────────────────────────────────────
+// The reporting surface a test binary speaks to its runner through, and the only
+// thing in this file the COMPILER writes calls to. Kept in its own section because
+// nothing here is written by a test author: `TestFailure` above and the assertions
+// beside it are an author's vocabulary, this is machinery.
+//
+// Every byte the runner MATCHES ON arrives here as an argument. The generated
+// dispatcher installs the wire format before it runs anything, so the protocol is
+// written down exactly once -- in the code that both emits the dispatcher and parses
+// what the test binary printed. A marker spelled here as well would be that protocol
+// written down twice, and the two would drift the first time either side moved.
+
+// File-private, and deliberately not exported: `useWireFormat` is the only writer and
+// `threw` the only reader, so the pair cannot be set from one place and read in a
+// spelling nobody updated.
+//
+// Empty is a real setting, not an unconfigured one — it is what a runner that wants bare
+// fields asks for — so there is no "nobody called useWireFormat yet" state to detect and
+// nothing here guesses a marker on a caller's behalf.
+var wireWrapper = ""
+var wireSeparator = ""
+
+export type __TestReport
+	/// Install the runner's wire format. Called once by the generated dispatcher,
+	/// before the first test runs. `wrapper` brackets a report line on both sides so
+	/// the runner can find it among whatever the test itself printed; `separator`
+	/// divides the fields within one.
+	export static function useWireFormat(wrapper String, separator String)
+		wireWrapper = wrapper
+		wireSeparator = separator
+	end 'useWireFormat'
+
+	/// An error reached the end of a `test` body without being handled. The compiler
+	/// emits this call; no program writes it.
+	///
+	/// `errorType` is the callee's declared `throws` type. `errorCase` is the thrown
+	/// value rendered by the language's own interpolation rule -- the live case name
+	/// for a union and for a plain enum, the raw value for an enum that declared one --
+	/// so a report never spells an error differently from the program that printed it.
+	/// `file` and `line` locate the `try` that threw, not this function.
+	export static function threw(errorType String, errorCase String, file String, line SourceLineNumber)
+		printError("{wireWrapper}{errorType}{wireSeparator}{errorCase}{wireSeparator}{file}{wireSeparator}{line}{wireWrapper}\n")
+	end 'threw'
+end '__TestReport'

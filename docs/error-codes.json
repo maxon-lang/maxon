@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "b2f7ea4b54deb695",
+  "sourceHash": "0ae76558f670379a",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1173,6 +1173,15 @@
       "stage": "semantic",
       "doc": "Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has\ntwo names -- the prose one the reporter prints, and the mangled `__test_<sanitized>` one that\nreaches the symbol table -- and the sanitizer maps every character outside [A-Za-z0-9_] to\n`_`, so `adds two` and `adds-two` collide even though they read differently.\nThe message names BOTH prose names and the symbol they share, because the collision is\ninvisible in either name alone.\nRefusing it is independently worth doing: two tests with the same DISPLAY name are\nunreportable -- a reader of the report cannot tell which one failed -- so this rejects the\nidentical-prose case for its own reason, not merely as a symbol-table accident.",
       "emittedBy": {"csharp": "SemanticDuplicateTestName"},
+      "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 3108,
+      "tag": "E3108",
+      "name": "SemanticTestingStdlibUnavailable",
+      "stage": "semantic",
+      "doc": "A `test` declaration needs something from `stdlib/Testing.maxon` that this compile cannot\nsee. Two symbols there are reachable WITHOUT the author naming them: `TestFailure`, which\nevery `test` implicitly throws, and `__TestReport`, which the handler the compiler\nsynthesizes for an uncaught foreign error reports through.\nBecause neither name is written by the program, neither can be a misspelling -- so the\nmessage names the missing symbol AND the file that has to supply it, rather than reporting\nan unknown type or an unknown function at a line whose source mentions neither.\nONE code for both, because it is one condition seen from two sides: a compile whose Testing\nmodule is absent or truncated. Two codes would let a reader fix half the cause and meet the\nother half on the next build.",
+      "emittedBy": {"csharp": "SemanticTestingStdlibUnavailable"},
       "notEmittedBy": ["selfhosted", "shv2"]
     },
     {
