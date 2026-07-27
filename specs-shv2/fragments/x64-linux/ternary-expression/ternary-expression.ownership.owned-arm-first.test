@@ -58,7 +58,7 @@ func @remapKind {
   matchnext:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.leaRegRegImm32 rbx, rax, 1
@@ -74,7 +74,7 @@ func @remapKind {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchdead:
 }
 
 func @record {
@@ -92,7 +92,7 @@ func @record {
   matchnext:
     x64.cmpRegImm32 rax, 1
     x64.jcc equal, matcharm
-    x64.jmp matchnext
+    x64.jmp matchdead
   matcharm:
     x64.loadRegBaseDisp.word64 r8, [rcx + 8]
     x64.jmp matchcont
@@ -115,7 +115,7 @@ func @record {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchdead:
 }
 
 func @main {
@@ -175,11 +175,10 @@ func @main {
     x64.leaRegRegReg rax, r14, r12
     x64.storeBaseDispReg.word64 [r13 + 0], r14
     x64.storeBaseDispReg.word64 [r13 + 8], r12
-    x64.storeBaseDispReg.word64 [r13 + 16], r12
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r13 + 32], rax
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r13

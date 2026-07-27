@@ -1,0 +1,105 @@
+// Test: two-floats-across-a-call-with-a-ranged-typealias
+typealias Num = int(-1000000000 to 1000000000)
+
+function work(x Num) returns Num
+	return x + 1
+end 'work'
+
+function probe(k Num) returns Num
+	let f0 = 1.5
+	let f2 = 3.625
+	var acc = k
+	acc = work(acc)
+	acc = acc + trunc(f2 * f0 * 64.0)
+	return acc
+end 'probe'
+
+function main() returns ExitCode
+	return (probe(1) - probe(0) + 41) as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @work {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, -1000000000
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000000000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @probe {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.storeSlotReg slot1, xmm7
+    x64.movsdRegRip xmm6, [rip + __fconst_2]
+    x64.movsdRegRip xmm7, [rip + __fconst_3]
+    x64.callDirect work
+    x64.mulsdRegReg xmm7, xmm7, xmm6
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.mulsdRegReg xmm7, xmm7, xmm0
+    x64.cvttsd2siRegReg rax, xmm7
+    x64.leaRegRegReg r8, r8, rax
+    x64.cmpRegImm32 r8, -1000000000
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000000000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect probe
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.callDirect probe
+    x64.subRegReg rbx, rbx, r8
+    x64.leaRegRegImm32 r8, rbx, 41
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

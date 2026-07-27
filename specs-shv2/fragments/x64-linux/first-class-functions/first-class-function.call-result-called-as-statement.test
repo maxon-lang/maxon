@@ -1,0 +1,68 @@
+// Test: first-class-function.call-result-called-as-statement
+var sideEffect = 0
+
+typealias Task = function()
+
+function bump()
+	sideEffect = sideEffect + 6
+end 'bump'
+
+function pickBump() returns Task
+	return bump
+end 'pickBump'
+
+function main() returns ExitCode
+	pickBump()()
+	pickBump()()
+	return sideEffect as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+data {
+  __data_sideEffect@0 = i64 0
+}
+
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_sideEffect
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 6
+    x64.leaRegGlobal rcx, __data_sideEffect
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pickBump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegFunc r8, [rip + __fnref_bump]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect pickBump
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.callReg rbx
+    x64.callDirect pickBump
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.callReg rbx
+    x64.leaRegGlobal rax, __data_sideEffect
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

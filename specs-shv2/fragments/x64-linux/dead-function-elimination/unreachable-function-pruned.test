@@ -1,0 +1,21 @@
+// Test: unreachable-function-pruned
+typealias Integer = int(i64.min to i64.max)
+
+function unusedHelper(x Integer) returns Integer
+	return x * 3
+end 'unusedHelper'
+
+function main() returns ExitCode
+	return 7
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}

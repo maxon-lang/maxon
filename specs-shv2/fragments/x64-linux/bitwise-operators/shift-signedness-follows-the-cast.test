@@ -1,0 +1,99 @@
+// Test: shift-signedness-follows-the-cast
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function viaCast(p Num) returns Wide
+	let w = p as Wide
+	return w shr 60
+end 'viaCast'
+
+function viaParam(w Wide) returns Wide
+	return w shr 60
+end 'viaParam'
+
+function main() returns ExitCode
+	if viaParam(u64.max) != 15 'declaredParam'
+		return 1
+	end 'declaredParam'
+	if viaCast(u64.max) != 15 'castLocal'
+		return 2
+	end 'castLocal'
+	if viaCast(u64.max) != viaParam(u64.max) 'twoRoutesOneType'
+		return 3
+	end 'twoRoutesOneType'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @viaCast {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 0
+    x64.shrRegImm8 r8, r8, 60
+    x64.popReg rbp
+    x64.ret
+}
+
+func @viaParam {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.shrRegImm8 r8, rcx, 60
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm rcx, -1
+    x64.callDirect viaParam
+    x64.cmpRegImm32 r8, 15
+    x64.jcc notEqual, declaredParam
+    x64.jmp ifcont
+  declaredParam:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.callDirect viaCast
+    x64.cmpRegImm32 r8, 15
+    x64.jcc notEqual, castLocal
+    x64.jmp ifcont
+  castLocal:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm rcx, -1
+    x64.callDirect viaCast
+    x64.movRegReg rbx, r8
+    x64.movRegImm rcx, -1
+    x64.callDirect viaParam
+    x64.cmpRegReg rbx, r8
+    x64.jcc notEqual, twoRoutesOneType
+    x64.jmp ifcont
+  twoRoutesOneType:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,58 @@
+// Test: recursion-through-stack-arguments
+typealias Integer = int(i64.min to i64.max)
+
+function countdown(n Integer, b Integer, c Integer, d Integer, e Integer, f Integer, acc Integer) returns Integer
+	if n == 0 'done'
+		return acc
+	end 'done'
+	return countdown(n - 1, b: b, c: c, d: d, e: e, f: f, acc: acc + n)
+end 'countdown'
+
+function main() returns ExitCode
+	return countdown(10, b: 0, c: 0, d: 0, e: 0, f: 0, acc: 0)
+end 'main'
+---
+ExitCode: 55
+---
+func @countdown {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.loadRegBaseDisp.word64 r8, [rbp + 48]
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, done
+    x64.jmp ifcont
+  done:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 r10, rcx, -1
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.storeBaseDispReg.word64 [rsp + 32], rcx
+    x64.movRegReg rcx, r10
+    x64.callDirect countdown
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r9, 0
+    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdi, 0
+    x64.movRegImm32 r8, 0
+    x64.storeBaseDispReg.word64 [rsp + 32], r8
+    x64.callDirect countdown
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

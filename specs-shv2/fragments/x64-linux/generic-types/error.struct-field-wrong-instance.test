@@ -1,0 +1,34 @@
+// Test: error.struct-field-wrong-instance
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+type Holder
+	export var b as LeafBox
+	export static function create(v OtherBox) returns Self
+		return Self{b: v}
+	end 'create'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.create(OtherBox.create(Other.make("x")))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:15: cannot assign 'Box_Other' to variable 'Holder.b' of type 'Box_Leaf'

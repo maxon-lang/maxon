@@ -1,0 +1,69 @@
+// Test: closure-capture.top-level-binding-after-a-closure
+
+typealias Integer = int(i64.min to i64.max)
+
+function bumped(n Integer) returns Integer
+	let step = function(k Integer) gives k + 1
+	return step(n)
+end 'bumped'
+
+let Base = 20
+var offset = 21
+
+function main() returns ExitCode
+	offset = offset + 1
+	return Base + offset + bumped(-1)
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_offset@0 = i64 21
+}
+
+func @bumped {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rbx, [rip + bumped$closure_0]
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @bumped$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegGlobal rax, __data_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rcx, __data_offset
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rbx, rax, 20
+    x64.movRegImm rcx, -1
+    x64.callDirect bumped
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

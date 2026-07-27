@@ -1,0 +1,33 @@
+// Test: primitive-conformance.error.eq-cross-type-param
+typealias Coord = int(0 to 1000)
+typealias Integer = int(0 to u32.max)
+
+type Point implements Equatable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function equals(other Point) returns bool
+		return self.x == other.x
+	end 'equals'
+end 'Point'
+
+type Mix uses A, B where A is Equatable, B is Equatable
+	export var a as A
+	export var b as B
+	export static function create(a A, b B) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function cross() returns bool
+		return self.a == self.b
+	end 'cross'
+end 'Mix'
+
+typealias PointIntMix = Mix with (Point, Integer)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:17: '==' on type parameter 'A' requires an argument of type 'A' (the `Self` its constraint provides), not a value of type parameter 'B'

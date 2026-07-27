@@ -1,0 +1,225 @@
+// Test: comparable.compare-in-loop-no-leak
+typealias Counter = int(0 to 1000)
+
+type Pair uses T where T is Comparable
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function isLess() returns bool
+		let o = self.a.compare(self.b)
+		let r = match o 'check'
+			lessThan gives true
+			equalTo gives false
+			greaterThan gives false
+		end 'check'
+		return r
+	end 'isLess'
+	export function opLess() returns bool
+		return self.a < self.b
+	end 'opLess'
+end 'Pair'
+
+typealias CountPair = Pair with Counter
+
+function main() returns ExitCode
+	var i = 0 as Counter
+	var acc = 0 as Counter
+	while i < 100 'loop'
+		let p = CountPair.create(3, b: 9)
+		if p.isLess() 'ok'
+			acc = acc + 1
+		end 'ok'
+		if p.opLess() 'ok2'
+			acc = acc + 1
+		end 'ok2'
+		i = i + 1
+	end 'loop'
+	if acc == 200 'all'
+		return 0
+	end 'all'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Pair.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.isLess {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.movRegReg rcx, rax
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @Pair.opLess {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.movRegReg rcx, rax
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rbx, 100
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 9
+    x64.callDirect Pair.create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Pair.isLess
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ok
+    x64.jmp critsplit
+  ok:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Pair.opLess
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ok2
+    x64.jmp critsplit
+  ok2:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r12, 200
+    x64.jcc equal, all
+    x64.jmp ifcont
+  all:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.compare {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, less
+    x64.jmp notLess
+  less:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  notLess:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greater, greater
+    x64.jmp equal
+  greater:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

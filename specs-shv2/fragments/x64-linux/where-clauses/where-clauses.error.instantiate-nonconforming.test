@@ -1,0 +1,29 @@
+// Test: where-clauses.error.instantiate-nonconforming
+typealias Code = int(0 to u32.max)
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Plain
+	export var v as Code
+	export static function create(v Code) returns Self
+		return Self{ v: v }
+	end 'create'
+end 'Plain'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+end 'Box'
+
+typealias PlainBox = Box with Plain
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:22:11: type 'Plain' does not implement 'Digest', which the `where` clause on generic type 'Box' requires of its type parameter

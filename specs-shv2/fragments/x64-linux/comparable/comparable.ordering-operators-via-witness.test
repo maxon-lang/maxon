@@ -1,0 +1,374 @@
+// Test: comparable.ordering-operators-via-witness
+typealias Integer = int(0 to u32.max)
+
+type Pair uses T where T is Comparable
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function lt() returns bool
+		return self.a < self.b
+	end 'lt'
+	export function le() returns bool
+		return self.a <= self.b
+	end 'le'
+	export function gt() returns bool
+		return self.a > self.b
+	end 'gt'
+	export function ge() returns bool
+		return self.a >= self.b
+	end 'ge'
+	export function mask() returns Integer
+		var m = 0 as Integer
+		if self.lt() 'a1'
+			m = m + 1
+		end 'a1'
+		if self.le() 'a2'
+			m = m + 2
+		end 'a2'
+		if self.gt() 'a3'
+			m = m + 4
+		end 'a3'
+		if self.ge() 'a4'
+			m = m + 8
+		end 'a4'
+		return m
+	end 'mask'
+end 'Pair'
+
+typealias IntPair = Pair with Integer
+
+function main() returns ExitCode
+	let low = IntPair.create(3, b: 9)
+	if low.mask() != 3 'p1'
+		return 1
+	end 'p1'
+	let same = IntPair.create(7, b: 7)
+	if same.mask() != 10 'p2'
+		return 2
+	end 'p2'
+	let high = IntPair.create(9, b: 3)
+	if high.mask() != 12 'p3'
+		return 3
+	end 'p3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Pair.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.lt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.movRegReg rcx, rax
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.le {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.movRegReg rcx, rax
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg notEqual, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.gt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.movRegReg rcx, rax
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 2
+    x64.setccReg equal, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.ge {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.movRegReg rcx, rax
+    x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg notEqual, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Pair.mask {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Pair.lt
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, a1
+    x64.jmp critsplit
+  a1:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Pair.le
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, a2
+    x64.jmp critsplit
+  a2:
+    x64.leaRegRegImm32 r13, r13, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Pair.gt
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, a3
+    x64.jmp critsplit
+  a3:
+    x64.leaRegRegImm32 r13, r13, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Pair.ge
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, a4
+    x64.jmp critsplit
+  a4:
+    x64.leaRegRegImm32 r8, r13, 8
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, r13
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 9
+    x64.callDirect Pair.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Pair.mask
+    x64.cmpRegImm32 r8, 3
+    x64.jcc notEqual, p1
+    x64.jmp ifcont
+  p1:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rdx, 7
+    x64.callDirect Pair.create
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, r12
+    x64.callDirect Pair.mask
+    x64.cmpRegImm32 r8, 10
+    x64.jcc notEqual, p2
+    x64.jmp ifcont
+  p2:
+    x64.movRegImm32 r13, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 9
+    x64.movRegImm32 rdx, 3
+    x64.callDirect Pair.create
+    x64.movRegReg r13, r8
+    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.movRegReg rcx, r13
+    x64.callDirect Pair.mask
+    x64.cmpRegImm32 r8, 12
+    x64.jcc notEqual, p3
+    x64.jmp ifcont
+  p3:
+    x64.movRegImm32 r14, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.compare {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc less, less
+    x64.jmp notLess
+  less:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  notLess:
+    x64.cmpRegReg rcx, rdx
+    x64.jcc greater, greater
+    x64.jmp equal
+  greater:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

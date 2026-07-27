@@ -1,0 +1,31 @@
+// Test: primitive-conformance.error.eq-concrete-self-arg
+typealias Coord = int(0 to 1000)
+
+type Point implements Equatable
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function equals(other Point) returns bool
+		return self.x == other.x
+	end 'equals'
+end 'Point'
+
+type Box uses T where T is Equatable
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function matchesLiteral() returns bool
+		return self.item == 42
+	end 'matchesLiteral'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:20: '==' on type parameter 'T' requires an argument of type 'T' (the `Self` its constraint provides), not a concrete value

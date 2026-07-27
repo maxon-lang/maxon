@@ -1,0 +1,58 @@
+// Test: wide-file-cast-still-accepted
+// --- file: narrow.maxon
+typealias Unit = int(1 to 2)
+
+export function unitVal() returns ExitCode
+	let u = 2 as Unit
+	return u
+end 'unitVal'
+
+// --- file: wide.maxon
+typealias Unit = int(0 to u64.max)
+
+export function wideVal() returns ExitCode
+	let w = 40 as Unit
+	return w
+end 'wideVal'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return unitVal() + wideVal()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect unitVal
+    x64.movRegReg rbx, r8
+    x64.callDirect wideVal
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @unitVal {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @wideVal {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 40
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.popReg rbp
+    x64.ret
+}

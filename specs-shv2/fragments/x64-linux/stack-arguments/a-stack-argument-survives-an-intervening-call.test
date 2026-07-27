@@ -1,0 +1,69 @@
+// Test: a-stack-argument-survives-an-intervening-call
+typealias Integer = int(i64.min to i64.max)
+
+function noise(x Integer) returns Integer
+	return x + 1
+end 'noise'
+
+function tail(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer) returns Integer
+	let churn = noise(noise(noise(a + b + c + d + e + f)))
+	return g + churn
+end 'tail'
+
+function main() returns ExitCode
+	return tail(1, b: 1, c: 1, d: 1, e: 1, f: 1, g: 60)
+end 'main'
+---
+ExitCode: 69
+---
+func @noise {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rbx, [rbp + 48]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rcx, rax, rdi
+    x64.callDirect noise
+    x64.movRegReg rcx, r8
+    x64.callDirect noise
+    x64.movRegReg rcx, r8
+    x64.callDirect noise
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 r9, 1
+    x64.movRegImm32 rsi, 1
+    x64.movRegImm32 rdi, 1
+    x64.movRegImm32 r8, 60
+    x64.storeBaseDispReg.word64 [rsp + 32], r8
+    x64.callDirect tail
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

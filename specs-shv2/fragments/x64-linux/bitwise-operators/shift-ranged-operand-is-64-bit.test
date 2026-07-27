@@ -1,0 +1,247 @@
+// Test: shift-ranged-operand-is-64-bit
+typealias I32 = int(-2147483648 to 2147483647)
+typealias U32 = int(0 to 4294967295)
+typealias Num = int(i64.min to i64.max)
+
+function shlBy(v Num, d Num) returns Num
+	return v shl d
+end 'shlBy'
+
+function shrBy(v Num, d Num) returns Num
+	return v shr d
+end 'shrBy'
+
+function main() returns ExitCode
+	// NARROW SIGNED. The shift moves bits out of the declared type's width; that is legal, and the
+	// answer needs all 64.
+	let narrow = 0 - 8 as I32
+	if narrow shl 29 != shlBy(0 - 8, d: 29) 'signedFoldVsEmitted'
+		return 1
+	end 'signedFoldVsEmitted'
+	if narrow shl 29 != 0 - 4294967296 'signedValue'
+		return 2
+	end 'signedValue'
+
+	// A count above the narrow type's width. A 32-bit shift instruction takes its count mod 32, so
+	// `shr 33` would have quietly become `shr 1`.
+	if narrow shr 33 != shrBy(0 - 8, d: 33) 'signedCountFoldVsEmitted'
+		return 3
+	end 'signedCountFoldVsEmitted'
+	if narrow shr 33 != 0 - 1 'signedCountValue'
+		return 4
+	end 'signedCountValue'
+
+	// NARROW UNSIGNED. Zero-filling, and still 64 bits wide.
+	let wide = 4294967295 as U32
+	if wide shl 33 != shlBy(4294967295, d: 33) 'unsignedFoldVsEmitted'
+		return 5
+	end 'unsignedFoldVsEmitted'
+	if wide shr 4 != shrBy(4294967295, d: 4) 'unsignedShrFoldVsEmitted'
+		return 6
+	end 'unsignedShrFoldVsEmitted'
+	if wide shr 4 != 268435455 'unsignedShrValue'
+		return 7
+	end 'unsignedShrValue'
+
+	// A bare `int`, which never narrowed and so was always right. Here to show the ranged cases now
+	// agree with it rather than merely with each other.
+	let plain = 0 - 8 as Num
+	if plain shl 29 != narrow shl 29 'rangedAgreesWithPlain'
+		return 8
+	end 'rangedAgreesWithPlain'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shlBy {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg rax, rcx
+    x64.movRegReg rcx, rdx
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.popReg rbp
+    x64.ret
+}
+
+func @shrBy {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, -64
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.orRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 63
+    x64.movRegReg rcx, rdx
+    x64.orRegReg rcx, rdx, rax
+    x64.sarRegCl r8, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rbx, rax, -8
+    x64.movRegReg r12, rbx
+    x64.shlRegImm8 r12, rbx, 29
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -8
+    x64.movRegImm32 rdx, 29
+    x64.callDirect shlBy
+    x64.cmpRegReg r12, r8
+    x64.jcc notEqual, signedFoldVsEmitted
+    x64.jmp ifcont
+  signedFoldVsEmitted:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rax, rbx
+    x64.shlRegImm8 rax, rbx, 29
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm rdx, 4294967296
+    x64.subRegReg rcx, rcx, rdx
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, signedValue
+    x64.jmp ifcont
+  signedValue:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg r12, rbx
+    x64.sarRegImm8 r12, rbx, 33
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -8
+    x64.movRegImm32 rdx, 33
+    x64.callDirect shrBy
+    x64.cmpRegReg r12, r8
+    x64.jcc notEqual, signedCountFoldVsEmitted
+    x64.jmp ifcont
+  signedCountFoldVsEmitted:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rax, rbx
+    x64.sarRegImm8 rax, rbx, 33
+    x64.movRegImm32 rcx, 0
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, signedCountValue
+    x64.jmp ifcont
+  signedCountValue:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 4294967295
+    x64.movRegReg r13, r12
+    x64.shlRegImm8 r13, r12, 33
+    x64.movRegImm32 rcx, 4294967295
+    x64.movRegImm32 rdx, 33
+    x64.callDirect shlBy
+    x64.cmpRegReg r13, r8
+    x64.jcc notEqual, unsignedFoldVsEmitted
+    x64.jmp ifcont
+  unsignedFoldVsEmitted:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg r13, r12
+    x64.sarRegImm8 r13, r12, 4
+    x64.movRegImm32 rcx, 4294967295
+    x64.movRegImm32 rdx, 4
+    x64.callDirect shrBy
+    x64.cmpRegReg r13, r8
+    x64.jcc notEqual, unsignedShrFoldVsEmitted
+    x64.jmp ifcont
+  unsignedShrFoldVsEmitted:
+    x64.movRegImm32 r8, 6
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.sarRegImm8 r12, r12, 4
+    x64.cmpRegImm32 r12, 268435455
+    x64.jcc notEqual, unsignedShrValue
+    x64.jmp ifcont
+  unsignedShrValue:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -8
+    x64.shlRegImm8 rax, rax, 29
+    x64.shlRegImm8 rbx, rbx, 29
+    x64.cmpRegReg rax, rbx
+    x64.jcc notEqual, rangedAgreesWithPlain
+    x64.jmp ifcont
+  rangedAgreesWithPlain:
+    x64.movRegImm32 r8, 8
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

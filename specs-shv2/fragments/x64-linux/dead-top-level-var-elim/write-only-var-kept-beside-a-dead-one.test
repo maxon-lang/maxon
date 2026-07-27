@@ -1,0 +1,29 @@
+// Test: write-only-var-kept-beside-a-dead-one
+var dead = 1
+var writeOnly = 0
+var live = 5
+
+function main() returns ExitCode
+	writeOnly = 99
+	return live
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __data_writeOnly@0 = i64 0
+  __data_live@8 = i64 5
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 99
+    x64.leaRegGlobal rcx, __data_writeOnly
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_live
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}

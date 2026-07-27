@@ -1,0 +1,130 @@
+// Test: dispatch.carried-var-merge-tree
+typealias N = int(0 to 1000)
+
+function pick(x N) returns N
+	var r = 0 as N
+	match x 'c'
+		1 then r = 10
+		2 then r = 20
+		3 then r = 30
+		4 then r = 40
+		5 then r = 50
+		default then r = 99
+	end 'c'
+	return r
+end 'pick'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if pick(1) == 10 'a' n = n + 1 end 'a'
+	if pick(3) == 30 'b' n = n + 1 end 'b'
+	if pick(5) == 50 'c' n = n + 1 end 'c'
+	if pick(99) == 99 'd' n = n + 1 end 'd'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRegImm32 rax, rcx, -1
+    x64.jumpTable rax, default=matchdefault [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm] @__jumptable_1
+  matchdefault:
+    x64.movRegImm32 r8, 99
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 10
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 20
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 30
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 40
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 50
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 10
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 30
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 50
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 99
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 99
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

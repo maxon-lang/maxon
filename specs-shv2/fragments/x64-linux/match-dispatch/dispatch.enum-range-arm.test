@@ -1,0 +1,151 @@
+// Test: dispatch.enum-range-arm
+enum Day
+	mon
+	tue
+	wed
+	thu
+	fri
+	sat
+	sun
+end 'Day'
+
+function kind(d Day) returns ExitCode
+	return match d 'm'
+		mon gives 1
+		tue gives 2
+		wed to fri gives 3
+		sat gives 4
+		sun gives 5
+	end 'm'
+end 'kind'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	if kind(Day.mon) == 1 'a' n = n + 1 end 'a'
+	if kind(Day.tue) == 2 'b' n = n + 1 end 'b'
+	if kind(Day.wed) == 3 'c' n = n + 1 end 'c'
+	if kind(Day.thu) == 3 'd' n = n + 1 end 'd'
+	if kind(Day.fri) == 3 'e' n = n + 1 end 'e'
+	if kind(Day.sat) == 4 'f' n = n + 1 end 'f'
+	if kind(Day.sun) == 5 'g' n = n + 1 end 'g'
+	return n
+end 'main'
+---
+ExitCode: 7
+---
+func @kind {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm, [1]=matcharm, [2..4]=matcharm, [5]=matcharm, [6]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 5
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 0
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 2
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 4
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, e
+    x64.jmp critsplit
+  e:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 4
+    x64.jcc equal, f
+    x64.jmp critsplit
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 6
+    x64.callDirect kind
+    x64.cmpRegImm32 r8, 5
+    x64.jcc equal, g
+    x64.jmp critsplit
+  g:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

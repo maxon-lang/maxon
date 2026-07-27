@@ -1,0 +1,172 @@
+// Test: boxed-union-field-throw-borrowed-self
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Lex
+	export var pendingError as OuterErr
+
+	static function create() returns Lex
+		return Self{pendingError: OuterErr.unterminatedString(7, column: 13)}
+	end 'create'
+
+	function run() returns N throws OuterErr
+		throw pendingError
+	end 'run'
+end 'Lex'
+
+function main() returns ExitCode
+	var lex = Lex.create()
+	var caught = 0
+	try lex.run() otherwise (e) 'fail'
+		match e 'k'
+			unterminatedString(line, column) then caught = (line + column)
+			unexpectedEof(line, column) then caught = 900
+		end 'k'
+	end 'fail'
+	let again = lex.pendingError
+	match again 'k2'
+		unterminatedString(line, column) then return (caught + line + column)
+		unexpectedEof(line, column) then return (caught + 500)
+	end 'k2'
+end 'main'
+---
+ExitCode: 40
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Lex.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 7
+    x64.movRegImm32 r12, 13
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.storeBaseDispReg.word64 [r13 + 16], r12
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Lex.run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect Lex.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect Lex.run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 8]
+    x64.loadRegBaseDisp.word64 rcx, [r10 + 16]
+    x64.leaRegRegReg r12, rax, rcx
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 8]
+    x64.loadRegBaseDisp.word64 rax, [r10 + 16]
+    x64.movRegImm32 r12, 900
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, r10
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r12
+    x64.jmp trycont
+  matchdead:
+  tryok:
+    x64.movRegReg rax, r12
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
+    x64.leaRegRegImm32 r12, rax, 500
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}

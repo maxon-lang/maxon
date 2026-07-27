@@ -1,0 +1,51 @@
+// Test: float-backed-negative
+enum FloatSigned
+	below = -2.2
+	zero = 0.0
+	above = 1.1
+end 'FloatSigned'
+
+function main() returns ExitCode
+	let f = FloatSigned.below
+	let result = match f 'check'
+		below gives 2
+		zero gives 0
+		above gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, -4611235658464650854
+    x64.movRegImm rcx, -4611235658464650854
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm rcx, 4607632778762754458
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

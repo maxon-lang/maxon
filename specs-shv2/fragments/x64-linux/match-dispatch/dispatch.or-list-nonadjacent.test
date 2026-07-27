@@ -1,0 +1,139 @@
+// Test: dispatch.or-list-nonadjacent
+typealias N = int(i64.min to i64.max)
+
+function ored(x N) returns N
+	return match x 'c'
+		1 or 9 gives 1
+		3 or 7 gives 2
+		5 gives 3
+		default gives 9
+	end 'c'
+end 'ored'
+
+function main() returns ExitCode
+	var n = 0 as N
+	if ored(1) == 1 'a' n = n + 1 end 'a'
+	if ored(9) == 1 'b' n = n + 1 end 'b'
+	if ored(3) == 2 'c' n = n + 1 end 'c'
+	if ored(7) == 2 'd' n = n + 1 end 'd'
+	if ored(5) == 3 'e' n = n + 1 end 'e'
+	if ored(4) == 9 'f' n = n + 1 end 'f'
+	if ored(2) == 9 'g' n = n + 1 end 'g'
+	return n as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+func @ored {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 rax, rcx, -1
+    x64.jumpTable rax, default=matchdefault [[0]=matcharm, [1]=matchdefault, [2]=matcharm, [3]=matchdefault, [4]=matcharm, [5]=matchdefault, [6]=matcharm, [7]=matchdefault, [8]=matcharm] @__jumptable_0
+  matchdefault:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 1
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 9
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 7
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, d
+    x64.jmp critsplit
+  d:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, e
+    x64.jmp critsplit
+  e:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 4
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 9
+    x64.jcc equal, f
+    x64.jmp critsplit
+  f:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 2
+    x64.callDirect ored
+    x64.cmpRegImm32 r8, 9
+    x64.jcc equal, g
+    x64.jmp critsplit
+  g:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

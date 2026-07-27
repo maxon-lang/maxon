@@ -1,0 +1,24 @@
+// Test: dead-scalar-var-leaves-no-data-slot
+var unused = 99
+var used = 42
+
+function main() returns ExitCode
+	return used - 42
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_used@0 = i64 42
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_used
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 r8, rax, -42
+    x64.popReg rbp
+    x64.ret
+}

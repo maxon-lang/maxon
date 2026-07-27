@@ -1,0 +1,77 @@
+// Test: callee-saved-double-survives-a-callee
+function leaf(x int) returns int
+	return x + 1
+end 'leaf'
+
+function inner(k int) returns int
+	let p = 2.0
+	var acc = k
+	acc = leaf(acc)
+	return acc + trunc(p)
+end 'inner'
+
+function outer(k int) returns int
+	let a = 42.5
+	var acc = k
+	acc = inner(acc)
+	return acc + trunc(a)
+end 'outer'
+
+function main() returns ExitCode
+	return outer(0) as ExitCode
+end 'main'
+---
+ExitCode: 45
+---
+func @leaf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.callDirect leaf
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.leaRegRegReg r8, r8, rax
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.storeSlotReg slot0, xmm6
+    x64.movsdRegRip xmm6, [rip + __fconst_1]
+    x64.callDirect inner
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.leaRegRegReg r8, r8, rax
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect outer
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

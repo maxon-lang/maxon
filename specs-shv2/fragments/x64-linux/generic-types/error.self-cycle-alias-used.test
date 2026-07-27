@@ -1,0 +1,21 @@
+// Test: error.self-cycle-alias-used
+type S0
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'S0'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias A = Box with A
+function main() returns ExitCode
+	let x = A.create(S0.make("q"))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3091: <fragment>:14:11: typealias 'A' forms a type cycle: its type arguments refer back to 'A'

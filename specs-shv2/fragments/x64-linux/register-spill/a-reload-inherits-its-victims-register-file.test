@@ -1,0 +1,166 @@
+// Test: a-reload-inherits-its-victims-register-file
+typealias Num = int(-1000000000 to 1000000000)
+
+function bump(x Num) returns Num
+	return x + 1
+end 'bump'
+
+function pressure(k Num) returns Num
+	let a = 1.0
+	let b = 2.0
+	let c = 3.0
+	let d = 4.0
+	let e = 5.0
+	let f = 6.0
+	let g = 7.0
+	let h = 8.0
+	let i = 9.0
+	let j = 10.0
+	let l = 11.0
+	let m = 12.0
+	var acc = k
+	acc = bump(acc)
+	acc = acc + trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
+	acc = acc + trunc(g) + trunc(h) + trunc(i) + trunc(j) + trunc(l) + trunc(m)
+	return acc
+end 'pressure'
+
+function main() returns ExitCode
+	return pressure(0) as ExitCode
+end 'main'
+---
+ExitCode: 79
+---
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.cmpRegImm32 r8, -1000000000
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000000000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pressure {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 128
+    x64.storeSlotReg slot2, xmm6
+    x64.storeSlotReg slot3, xmm7
+    x64.storeSlotReg slot4, xmm8
+    x64.storeSlotReg slot5, xmm9
+    x64.storeSlotReg slot6, xmm10
+    x64.storeSlotReg slot7, xmm11
+    x64.storeSlotReg slot8, xmm12
+    x64.storeSlotReg slot9, xmm13
+    x64.storeSlotReg slot10, xmm14
+    x64.storeSlotReg slot11, xmm15
+    x64.movsdRegRip xmm6, [rip + __fconst_2]
+    x64.movsdRegRip xmm7, [rip + __fconst_3]
+    x64.movsdRegRip xmm8, [rip + __fconst_4]
+    x64.movsdRegRip xmm9, [rip + __fconst_5]
+    x64.movsdRegRip xmm10, [rip + __fconst_6]
+    x64.movsdRegRip xmm11, [rip + __fconst_7]
+    x64.movsdRegRip xmm12, [rip + __fconst_8]
+    x64.movsdRegRip xmm13, [rip + __fconst_9]
+    x64.movsdRegRip xmm14, [rip + __fconst_10]
+    x64.movsdRegRip xmm15, [rip + __fconst_11]
+    x64.movsdRegRip xmm0, [rip + __fconst_12]
+    x64.storeSlotReg slot1, xmm0
+    x64.movsdRegRip xmm0, [rip + __fconst_13]
+    x64.storeSlotReg slot0, xmm0
+    x64.callDirect bump
+    x64.cvttsd2siRegReg rax, xmm6
+    x64.leaRegRegReg rax, r8, rax
+    x64.cvttsd2siRegReg rcx, xmm7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm12
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm13
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm14
+    x64.leaRegRegReg rax, rax, rcx
+    x64.cvttsd2siRegReg rcx, xmm15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot xmm0, slot1
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot xmm0, slot0
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, -1000000000
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000000000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot2
+    x64.loadRegSlot xmm7, slot3
+    x64.loadRegSlot xmm8, slot4
+    x64.loadRegSlot xmm9, slot5
+    x64.loadRegSlot xmm10, slot6
+    x64.loadRegSlot xmm11, slot7
+    x64.loadRegSlot xmm12, slot8
+    x64.loadRegSlot xmm13, slot9
+    x64.loadRegSlot xmm14, slot10
+    x64.loadRegSlot xmm15, slot11
+    x64.epilogue 128
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.loadRegSlot xmm6, slot2
+    x64.loadRegSlot xmm7, slot3
+    x64.loadRegSlot xmm8, slot4
+    x64.loadRegSlot xmm9, slot5
+    x64.loadRegSlot xmm10, slot6
+    x64.loadRegSlot xmm11, slot7
+    x64.loadRegSlot xmm12, slot8
+    x64.loadRegSlot xmm13, slot9
+    x64.loadRegSlot xmm14, slot10
+    x64.loadRegSlot xmm15, slot11
+    x64.epilogue 128
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect pressure
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

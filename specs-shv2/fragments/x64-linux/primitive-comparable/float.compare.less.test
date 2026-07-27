@@ -1,0 +1,97 @@
+// Test: float.compare.less
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	let result = a.compare(b)
+	match result 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 1
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.callDirect float.compare
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 r8, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @float.compare {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.jcc parity, selfIsNan
+    x64.jmp fordered
+  fordered:
+    x64.jcc notEqual, selfIsNan
+    x64.jmp selfNotNan
+  selfIsNan:
+    x64.ucomisdRegReg xmm1, xmm1
+    x64.jcc parity, equal
+    x64.jmp fordered
+  fordered:
+    x64.jcc notEqual, equal
+    x64.jmp less
+  selfNotNan:
+    x64.ucomisdRegReg xmm1, xmm1
+    x64.jcc parity, greater
+    x64.jmp fordered
+  fordered:
+    x64.jcc notEqual, greater
+    x64.jmp ordered
+  ordered:
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, less
+    x64.jmp notLess
+  less:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  notLess:
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, greater
+    x64.jmp equal
+  greater:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

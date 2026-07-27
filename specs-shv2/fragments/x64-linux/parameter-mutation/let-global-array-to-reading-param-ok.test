@@ -1,0 +1,35 @@
+// Test: let-global-array-to-reading-param-ok
+typealias Integer = int(i64.min to i64.max)
+
+function size(s String) returns Integer
+	return s.byteLength()
+end 'size'
+
+let GREETING = "hi"
+
+function main() returns ExitCode
+	return size(GREETING) as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+func @size {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 8]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect size
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

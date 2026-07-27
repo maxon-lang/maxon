@@ -1,0 +1,78 @@
+// Test: a-function-typed-parameter-costs-two-argument-slots
+typealias Integer = int(i64.min to i64.max)
+typealias IntFn = function(x Integer) returns Integer
+
+function twice(x Integer) returns Integer
+	return x * 2
+end 'twice'
+
+function apply(fn IntFn, a Integer, b Integer, c Integer, d Integer, e Integer) returns Integer
+	return fn(a) + b + c + d + e
+end 'apply'
+
+function main() returns ExitCode
+	return apply(twice, a: 10, b: 1, c: 2, d: 4, e: 8)
+end 'main'
+---
+ExitCode: 35
+---
+func @twice {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.movRegReg r14, rsi
+    x64.movRegReg r15, rdi
+    x64.loadRegBaseDisp.word64 rax, [rbp + 48]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.leaRegRegReg rax, r8, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg r8, rax, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.leaRegFunc rcx, [rip + __fnref_twice]
+    x64.movRegImm32 rdx, 10
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 r9, 2
+    x64.movRegImm32 rsi, 4
+    x64.movRegImm32 rdi, 8
+    x64.movRegImm32 r8, 0
+    x64.storeBaseDispReg.word64 [rsp + 32], r8
+    x64.callDirect apply
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,118 @@
+// Test: dispatch.dense-zero-based-enum
+enum Color
+	c0
+	c1
+	c2
+	c3
+	c4
+	c5
+	c6
+	c7
+end 'Color'
+
+function classify(c Color) returns ExitCode
+	return match c 'k'
+		c0 gives 10
+		c1 gives 11
+		c2 gives 12
+		c3 gives 13
+		c4 gives 14
+		c5 gives 15
+		c6 gives 16
+		c7 gives 17
+	end 'k'
+end 'classify'
+
+function main() returns ExitCode
+	// A zero-based dense enum (span 8, covered 8/8) lowers to an O(1) jump table with NO bias subtract --
+	// the enum value IS the index. Every ordinal routes to its own arm.
+	var n = 0 as ExitCode
+	if classify(Color.c0) == 10 'a' n = n + 1 end 'a'
+	if classify(Color.c5) == 15 'b' n = n + 1 end 'b'
+	if classify(Color.c7) == 17 'c' n = n + 1 end 'c'
+	return n
+end 'main'
+---
+ExitCode: 3
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm, [1]=matcharm, [2]=matcharm, [3]=matcharm, [4]=matcharm, [5]=matcharm, [6]=matcharm, [7]=matcharm] @__jumptable_0
+  matchdead:
+  matcharm:
+    x64.movRegImm32 r8, 10
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 11
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 12
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 13
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 14
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 15
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 16
+    x64.jmp matchcont
+  matcharm:
+    x64.movRegImm32 r8, 17
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 0
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 10
+    x64.jcc equal, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 15
+    x64.jcc equal, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 7
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 17
+    x64.jcc equal, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 r8, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

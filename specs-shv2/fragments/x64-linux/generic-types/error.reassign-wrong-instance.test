@@ -1,0 +1,29 @@
+// Test: error.reassign-wrong-instance
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+function main() returns ExitCode
+	var b = LeafBox.create(Leaf.make("a"))
+	b = OtherBox.create(Other.make("x"))
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:24:2: cannot assign 'Box_Other' to variable 'b' of type 'Box_Leaf'
