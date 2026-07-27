@@ -147,7 +147,10 @@ start_mcp() {
 	eval "exec $(compiler_cmd "$1")" > "$WORK/mcp.log" 2>&1 &
 	MCP_PID=$!
 	for _ in $(seq 1 100); do
-		grep -q 'listening on' "$WORK/mcp.log" && return 0
+		# 2>/dev/null: the first iterations race the server's own creation of the log file, and a
+		# "No such file or directory" on the way to a PASS is noise that reads like a failure —
+		# which matters more now the gate runs as part of buildall.sh.
+		grep -q 'listening on' "$WORK/mcp.log" 2>/dev/null && return 0
 		kill -0 "$MCP_PID" 2>/dev/null || break
 		sleep 0.1
 	done

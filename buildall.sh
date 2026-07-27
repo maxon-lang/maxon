@@ -9,6 +9,13 @@ echo "=== Running C# Spec Tests ==="
 bin/maxon spec-test
 
 echo ""
+echo "=== Checking Debugger Goldens ==="
+# Gates the debugger/profiler/coverage sample transcripts, which the spec suite does not cover:
+# their acceptance is a golden transcript, not a spec test. Runs here because it needs only the
+# bootstrap — placing it before the (long) shv2 build means a drifted transcript fails fast.
+bash scripts/check-debug-goldens.sh
+
+echo ""
 echo "=== Building shv2 Compiler ==="
 bin/maxon build maxon-shv2
 

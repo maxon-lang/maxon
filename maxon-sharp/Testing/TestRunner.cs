@@ -30,25 +30,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private static long _totalCompileMs;
 
   /// <summary>
-  /// Runner-lifetime job object. Every test binary we spawn is enrolled here
-  /// so that if the test runner dies for any reason (Ctrl-C, crash, debugger
-  /// detach, OS forcibly terminating the process), the OS closes our handle
-  /// to the job, which — because of `KILL_ON_JOB_CLOSE` — terminates every
-  /// child still in the job. This is what prevents zombie test binaries from
-  /// surviving a runner crash and holding file locks on their cached .exe
-  /// (which would then fail the next compile with `E9001: The process cannot
-  /// access the file ... because it is being used by another process`).
-  ///
-  /// Lazy-initialized so non-Windows hosts (where the job is a no-op) and
-  /// non-test commands don't allocate it. Process-wide because multiple
-  /// TestRunner instances in the same process should share the safety net,
-  /// and because static lifetime matches "runner crash → handle freed" most
-  /// cleanly: the field is reachable until the process ends.
-  /// </summary>
-  private static readonly Lazy<WindowsJobObject> _runnerJobLazy = new(() => new WindowsJobObject());
-  private static WindowsJobObject RunnerJob => _runnerJobLazy.Value;
-
-  /// <summary>
   /// Run all tests and return summary.
   /// Uses Zig-style worker threads with atomic work-stealing for maximum parallelism.
   /// Each worker handles the full pipeline: regenerate fragment → compile → run → check.
@@ -364,7 +345,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // semantics callers would expect from running the tests one at a time.
     var batchTimeoutMs = item.Tests.Sum(t => t.TimeoutMs ?? DefaultTestTimeoutMs);
     var batchSw = Stopwatch.StartNew();
-    var (batchExitCode, batchStdout, _) = RunExecutable(item.BatchExePath, _tempDir, args: null, timeoutMs: batchTimeoutMs);
+    var batchRun = RunExecutable(item.BatchExePath, _tempDir, args: null, timeoutMs: batchTimeoutMs);
     batchSw.Stop();
 
     // Parse the markers out of stdout. If ANY batched test fails its slice
@@ -372,7 +353,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // re-run via the per-fragment path so the user sees real individual
     // pass/fail with the per-test fragment file path — batching is an
     // implementation detail that must not leak into reports.
-    var perTest = ParseBatchOutput(batchStdout);
+    var perTest = ParseBatchOutput(batchRun.Stdout);
 
     // First pass: gather batched results without committing them. If any
     // batched test fails, we discard the whole set and re-run via the
@@ -390,11 +371,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // behind a green suite. The leak counter is process-global, so the batch cannot say
     // WHICH test leaked; invalidating the batch re-runs each test in its own binary,
     // where its own leak check attributes it.
-    var allBatchablePassed = batchExitCode == 0;
-    if (batchExitCode != 0) {
+    var allBatchablePassed = batchRun.ExitCode == 0;
+    if (batchRun.ExitCode != 0) {
       Logger.Debug(LogCategory.Testing,
-        $"[BATCH EXIT {batchExitCode}] {item.SpecName}: batched binary exited non-zero "
-        + $"({(batchExitCode == MemoryLeakExitCode ? "memory leak" : "crash or runtime error")}) — "
+        $"[BATCH EXIT {batchRun.ExitCode}] {item.SpecName}: batched binary exited non-zero "
+        + $"({(batchRun.IsMemoryLeak ? "memory leak" : "crash or runtime error")}) — "
         + "re-running individually to attribute it");
     }
 
@@ -825,8 +806,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // child's own stdout, so a plain Stdout block (if present) is checked via
       // a separate untraced run rather than against the monitor output.
       if (fragment.MmTrace) {
-        var (monitorExit, monitorStdout, monitorStderr) =
-          CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
+        var monitorRun = CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
+        var monitorStderr = monitorRun.Stderr;
 
         // THE EXIT CODE COMES FIRST. It is the monitor's, and so the child's —
         // but only if the monitor got as far as running one. A monitor that died
@@ -836,7 +817,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         // how a monitor exiting 134 against `ExitCode: 0` was read for as long as
         // it was as a program that allocated nothing.
         if (successExpectation.ExitCode.HasValue) {
-          var exitError = CheckExitCode(successExpectation.ExitCode.Value, monitorExit);
+          var exitError = CheckExitCode(successExpectation.ExitCode.Value, monitorRun.ExitCode);
           if (exitError != null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -849,7 +830,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
 
         var expectedTrace = NormalizeMmTrace(successExpectation.MmTraceExpected ?? "");
-        var actualTrace = NormalizeMmTrace(monitorStdout);
+        var actualTrace = NormalizeMmTrace(monitorRun.Stdout);
         if (expectedTrace != actualTrace) {
           return new TestResult {
             TestName = fragment.TestName,
@@ -862,8 +843,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
 
         if (successExpectation.Stdout != null) {
-          var (_, plainStdout, _) = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
-          var stdoutError = CheckStdout(successExpectation.Stdout, plainStdout);
+          var plainRun = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
+          var stdoutError = CheckStdout(successExpectation.Stdout, plainRun.Stdout);
           if (stdoutError != null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -885,10 +866,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
       // Run the executable if we have runtime expectations
       if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
-        var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
+        var run = RunExecutable(exePath, _tempDir, fragment.Args, fragment.TimeoutMs);
 
         if (successExpectation.ExitCode.HasValue) {
-          var exitError = CheckExitCode(successExpectation.ExitCode.Value, ExitCode);
+          var exitError = CheckExitCode(successExpectation.ExitCode.Value, run.ExitCode);
           if (exitError != null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -901,7 +882,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         }
 
         if (successExpectation.Stdout != null) {
-          var stdoutError = CheckStdout(successExpectation.Stdout, Stdout);
+          var stdoutError = CheckStdout(successExpectation.Stdout, run.Stdout);
           if (stdoutError != null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -916,7 +897,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         if (successExpectation.Stderr != null) {
           var normalize = fragment.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
           var expectedStderr = normalize(successExpectation.Stderr);
-          var actualStderr = normalize(StripFaultRipSuffix(Stderr));
+          var actualStderr = normalize(StripFaultRipSuffix(run.Stderr));
           if (expectedStderr != actualStderr) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -926,11 +907,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
               FilePath = fragment.FilePath
             };
           }
-        } else if (!string.IsNullOrWhiteSpace(Stderr)) {
+        } else if (!string.IsNullOrWhiteSpace(run.Stderr)) {
           return new TestResult {
             TestName = fragment.TestName,
             Passed = false,
-            ErrorMessage = $"Unexpected stderr output:\n{Stderr.Trim()}",
+            ErrorMessage = $"Unexpected stderr output:\n{run.Stderr.Trim()}",
             Duration = sw.Elapsed,
             FilePath = fragment.FilePath
           };
@@ -1057,12 +1038,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private const int DefaultTestTimeoutMs = 2000;
 
   /// <summary>
-  /// Exit code mm_leak_check substitutes for the program's own when any managed or raw
-  /// allocation is still live at process exit (see RuntimeEmitter.EmitMmLeakCheck).
-  /// </summary>
-  private const int MemoryLeakExitCode = 101;
-
-  /// <summary>
   /// Environment variable that pins the runtime scheduler to a single OS
   /// worker so green-thread event ordering is deterministic. Set defensively
   /// for mm-trace captures; a harmless no-op until Foundation 1 wires it into
@@ -1090,34 +1065,20 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// </summary>
   private const string MmTraceEventPrefix = "mm_";
 
-  private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
-    var effectiveTimeoutMs = timeoutMs ?? DefaultTestTimeoutMs;
-    // Code signing and executable permissions are now handled by MachOWriter at compile time
-
-    var psi = CreateRedirectedStartInfo(exePath);
-    psi.Arguments = args ?? "";
-    psi.WorkingDirectory = workingDirectory;
-
-    return RunProcessCaptured(psi, effectiveTimeoutMs);
-  }
-
   /// <summary>
-  /// Build a <see cref="ProcessStartInfo"/> with stdout/stderr redirected and
-  /// UTF-8-decoded and no console window — the shared base for the plain
-  /// test-run (<see cref="RunExecutable"/>) and mm-trace-monitor
-  /// (<see cref="CaptureMmTrace"/>) launches. Callers add the arguments,
-  /// working directory, and environment they need.
+  /// Run a compiled test binary and capture it. This is where the spec suite's own
+  /// policy lives — a test with no stated timeout gets <see cref="DefaultTestTimeoutMs"/>,
+  /// and a spec's `Args:` line is a command line its author already quoted, so it is
+  /// passed through verbatim rather than re-split into argv.
   /// </summary>
-  private static ProcessStartInfo CreateRedirectedStartInfo(string fileName) {
-    return new ProcessStartInfo {
-      FileName = fileName,
-      RedirectStandardOutput = true,
-      RedirectStandardError = true,
-      UseShellExecute = false,
-      CreateNoWindow = true,
-      StandardOutputEncoding = Encoding.UTF8,
-      StandardErrorEncoding = Encoding.UTF8,
-    };
+  private static ProcessRunResult RunExecutable(string exePath, string workingDirectory, string? args = null, int? timeoutMs = null) {
+    // Code signing and executable permissions are now handled by MachOWriter at compile time
+    return ProcessLauncher.Run(new ProcessLaunchRequest {
+      ExecutablePath = exePath,
+      Arguments = ProcessArguments.Verbatim(args),
+      WorkingDirectory = workingDirectory,
+      TimeoutMs = timeoutMs ?? DefaultTestTimeoutMs,
+    });
   }
 
   /// <summary>
@@ -1137,19 +1098,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// an empty trace while the `PlatformNotSupportedException` explaining it was
   /// thrown away by this very call.
   /// </summary>
-  private static (int ExitCode, string Stdout, string Stderr) CaptureMmTrace(string exePath, int timeoutMs) {
+  private static ProcessRunResult CaptureMmTrace(string exePath, int timeoutMs) {
     // Self-invoke the running maxon.exe as the monitor: ProcessPath is the
     // host compiler binary, which carries the DebugStreamMonitor CLI.
     var monitorExe = Environment.ProcessPath
       ?? throw new InvalidOperationException("Environment.ProcessPath is null; cannot self-invoke as the mm-trace monitor.");
 
-    var psi = CreateRedirectedStartInfo(monitorExe);
-    psi.ArgumentList.Add(MonitorSubcommand);
-    psi.ArgumentList.Add(MmOnlyFilterArg);
-    psi.ArgumentList.Add(exePath);
-    psi.EnvironmentVariables[MaxProcsEnvVar] = SingleWorkerProcCount;
-
-    return RunProcessCaptured(psi, timeoutMs);
+    return ProcessLauncher.Run(new ProcessLaunchRequest {
+      ExecutablePath = monitorExe,
+      Arguments = ProcessArguments.Of(MonitorSubcommand, MmOnlyFilterArg, exePath),
+      EnvironmentOverrides = new Dictionary<string, string> { [MaxProcsEnvVar] = SingleWorkerProcCount },
+      TimeoutMs = timeoutMs,
+    });
   }
 
   /// <summary>
@@ -1161,55 +1121,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     string.IsNullOrWhiteSpace(monitorStderr)
       ? message
       : $"{message}\nMonitor stderr:\n{monitorStderr.TrimEnd()}";
-
-  /// <summary>
-  /// Start a redirected child process, enroll it in the runner-lifetime job,
-  /// read stdout/stderr asynchronously (to avoid pipe-buffer deadlocks), and
-  /// wait with a timeout. On timeout the child (and its tree) is killed and
-  /// the streams are abandoned after a short drain. Shared by the plain
-  /// test-run path (<see cref="RunExecutable"/>) and the mm-trace monitor
-  /// path (<see cref="CaptureMmTrace"/>).
-  /// </summary>
-  private static (int ExitCode, string Stdout, string Stderr) RunProcessCaptured(ProcessStartInfo psi, int timeoutMs) {
-    // Enroll the child in the runner-lifetime job (Windows only, no-op
-    // elsewhere). The job is configured with KILL_ON_JOB_CLOSE: when the
-    // last handle to the job is closed — including by the OS on parent-
-    // process termination — every assigned child is killed too. This is
-    // what guarantees that a Ctrl-C / crash / debugger-detach of the test
-    // runner doesn't leave zombie test binaries holding file locks on
-    // their cached .exe.
-    using var process = Process.Start(psi)!;
-    if (!RunnerJob.AssignProcess(process.Handle)) {
-      Logger.Debug(LogCategory.Testing, $"AssignProcessToJobObject failed for {psi.FileName} (errno {Marshal.GetLastWin32Error()})");
-    }
-
-    // Read stdout/stderr asynchronously to avoid deadlocks
-    var stdoutTask = process.StandardOutput.ReadToEndAsync();
-    var stderrTask = process.StandardError.ReadToEndAsync();
-
-    bool exited = process.WaitForExit(timeoutMs);
-    if (!exited) {
-      // Process timed out - kill it and drain streams
-      try { process.Kill(entireProcessTree: true); } catch { }
-      try { process.Kill(); } catch { }
-      // Wait briefly for async reads to complete after kill, then abandon
-#pragma warning disable VSTHRD002
-      Task.WaitAll([stdoutTask, stderrTask], 1000);
-#pragma warning restore VSTHRD002
-      return (-1, "", "Process timed out");
-    }
-
-    // Process exited normally - wait for async reads to complete with a timeout
-    // to guard against edge cases where streams aren't fully drained
-#pragma warning disable VSTHRD002
-    if (!Task.WaitAll([stdoutTask, stderrTask], 3000))
-      return (process.ExitCode, "", "Stream read timed out");
-    var stdout = stdoutTask.GetAwaiter().GetResult();
-    var stderr = stderrTask.GetAwaiter().GetResult();
-#pragma warning restore VSTHRD002
-
-    return (process.ExitCode, stdout, stderr);
-  }
 
   /// <summary>
   /// Normalize raw `monitor --filter=mm` stdout into a stable, comparable
@@ -1877,7 +1788,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
-              var (_, _, actualStderr) = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs);
+              var actualStderr = RunExecutable(exePath, _tempDir, test.Args, test.TimeoutMs).Stderr;
               var normalize = test.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
               var oldStderr = normalize(success.Stderr);
               var newStderr = normalize(StripFaultRipSuffix(actualStderr));
@@ -1915,7 +1826,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
-              var (_, monitorStdout, _) = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs);
+              var monitorStdout = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs).Stdout;
               var newTrace = NormalizeMmTrace(monitorStdout);
               var oldTrace = NormalizeMmTrace(success.MmTraceExpected ?? "");
               if (oldTrace != newTrace || success.MmTraceExpected == null) {
