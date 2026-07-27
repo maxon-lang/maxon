@@ -27,6 +27,29 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genemit.sh <funcs> <stmts> <ifs> <out>` | `funcs` functions of `stmts` straight-line statements and `ifs` two-way branches each | the ENCODE phase's shape. **Its three knobs are INDEPENDENT**: function COUNT, ops per function, and BLOCKS per function. This is the ladder that found the `chunkLabelOffsets` quadratic — funcs-doubling and stmts-doubling both read a flat ×2.00 while ifs-doubling read ×3.17, which located the term in blocks-per-function and nowhere else. |
 | `genblocks.sh <n> <blocks\|funcs\|straight> <out>` | the same block count as ONE big function, as `n` small ones, or as one straight-line block | separates **blocks per FUNCTION** from **functions per module** — two axes `ScaleCorpus` doubles together and so cannot tell apart. It reached the SAME `phase:encode` quadratic as `genemit.sh` from the other side (×3.21 ×3.37 ×3.69 on `blocks`, ×2.0 flat on both controls), which is why both survive: one varies the branch count that mints blocks, the other holds a block count fixed and RESHAPES where those blocks live. |
 | `genclosure.sh <closures> <captures> <reads> <ranged\|plain> <out>` | `closures` functions, each with one closure capturing `captures` bindings read `reads` times each | **the only way to measure the capture path at all** — `ScaleCorpus` states outright that it generates no closures, so every `scale-test` column reads Δ0 for a change to it. Its three knobs are independent for `genmutchain.sh`'s reason; see below. |
+| `geninstances.sh <instances> <chain> <plain\|contested\|control> <out>` | `instances` generic instantiations, each with its own type argument; optionally a `chain` of `__`-prefixed declarations planted against instance 0 | the COMPILED-NAME path — `ProgramSignatures.mangleGenericInstance` and the `reservedIfDeclared` re-probe. Unlike closures the corpus *does* generate generics, so `scale-test` sees the per-instance cost; what it cannot express is a compiled name a DECLARATION also claims, or a re-probe deeper than one. See below. |
+
+### `geninstances.sh` — the two things the corpus cannot claim a Δ0 about
+
+`ScaleCorpus` generates generics (its instance count is `3 + 12×2^rung`), so a per-instance cost is
+visible on the standing ladder and a Δ0 there means something. **Two neighbouring costs on the same
+path are still structurally invisible to it, and always will be:**
+
+- **A CONTEST** — an instance whose compiled name is also a declared `type`/`enum`/`union`, the only
+  thing that makes `reservedIfDeclared` mint anything. `contested` declares `type Box_A<i>`, exactly the
+  string instance `i` compiles to; `control` declares `type Zed_A<i>`, the same bytes claiming nothing.
+  **Their difference is the contest and nothing else** — the extra declarations' own sweep cost cancels.
+  Measured 2026-07-26, 64…2048 instances: `phase:signatures` **+4 allocations and +198 bytes per
+  contested instance**, flat per instance across the whole 32× span, both columns ×1.98.
+- **A RE-PROBE DEEPER THAN ONE**, which needs a declaration whose own name starts with `__` — E2051. So
+  `<chain>` above 0 emits a program that **cannot compile**, and that is the point rather than a defect:
+  it is the only shape in which the loop iterates more than twice, which is what makes *"at most two
+  probes on anything that compiles"* a property and not a hope. `--metrics` is not written for a failed
+  build, so time `contested` against the byte-identical `control` at the same `<chain>` with a wall clock
+  (min of 5) and read the DIFFERENCE. Measured at chain 128…2048 (40 KB…8.5 MB of source): **−1 / 0 /
+  +4 / +14 / +64 ms**, i.e. ~7×10⁻⁶ ms per source byte and FLAT — the re-probe is linear in program size
+  even on the shape built to break it, because each extra probe costs a declaration that is itself two
+  characters longer.
 
 ### `genclosure.sh` — why the capture path needs its own ladder
 
