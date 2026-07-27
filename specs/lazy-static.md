@@ -349,3 +349,75 @@ end 'main'
 ```stdout
 11 22
 ```
+
+<!-- test: lazy-static.two-loads-in-one-function -->
+### Two loads of one lazy static in the same function
+
+Each load emits a guard whose "already initialized" edge is a **fall-through** to its own merge
+block, so nothing may sit between the two. The init block is therefore emitted at the end of the
+function rather than next to its merge block: placed next to it, the second guard — which is
+emitted *into* the first merge block — would fall through into the first init block, which ends by
+branching back to the first merge block. That is an endless loop. Every other test in this file
+reads its static through a one-load accessor, which is why one load was enough to look correct.
+
+```maxon
+type Vocab
+	static let indent = "  "
+
+	export static function describe(a String, b String) returns String
+		var s = "{Vocab.indent}{a}\n"
+		s.append("{Vocab.indent}{b}\n")
+		return s
+	end 'describe'
+end 'Vocab'
+
+function main() returns ExitCode
+	let text = Vocab.describe("x", b: "y")
+	print("{text}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+  x
+  y
+```
+
+<!-- test: lazy-static.repeated-loads-across-a-branch -->
+### Several lazy statics loaded repeatedly, including inside a branch
+
+Three loads of two different statics in one function, one of them on a conditional path, so the
+deferred init blocks are a chain rather than a single pair and one guard sits inside a branch.
+
+```maxon
+type Vocab
+	static let first = "A"
+	static let second = "B"
+
+	export static function mix(flag bool) returns String
+		var s = "{Vocab.first}1"
+
+		if flag 'withSecond'
+			s.append("{Vocab.second}2")
+		end 'withSecond'
+
+		s.append("{Vocab.first}3")
+		return s
+	end 'mix'
+end 'Vocab'
+
+function main() returns ExitCode
+	let on = Vocab.mix(true)
+	let off = Vocab.mix(false)
+	print("{on} {off}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A1B2A3 A1A3
+```

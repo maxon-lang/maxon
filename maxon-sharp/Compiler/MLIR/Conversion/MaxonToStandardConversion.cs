@@ -303,6 +303,10 @@ public static partial class MaxonToStandardConversion {
       // When a sibling method call may mutate self-fields, these temps must also be reloaded.
       var selfFieldTempVars = new Dictionary<string, string>();
 
+      // Lazy-static init blocks, collected here and emitted after every source block is converted.
+      // They cannot be emitted where they are discovered — see the emit site for why.
+      var pendingLazyInits = new List<(string InitLabel, string InitFuncName, string MergeLabel)>();
+
       foreach (var block in func.Body.Blocks) {
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
@@ -2263,13 +2267,19 @@ public static partial class MaxonToStandardConversion {
 
                 newBlock.AddOp(new StdCondBrOp(guardLoad.Result, mergeBlockLabel, initBlockLabel));
 
-                // Merge block follows immediately (fall-through when guard is true)
+                // The guard's "already initialized" edge is a FALL-THROUGH — the lowered form is
+                // `je <init>` with no jump for the taken case — so the merge block must be the
+                // physically next block.
                 newBlock = newFunc.Body.AddBlock(mergeBlockLabel);
 
-                // Init block: call the lazy init function, then branch to merge
-                var initBlock = newFunc.Body.AddBlock(initBlockLabel);
-                initBlock.AddOp(new StdCallOp(globalLoad.LazyInitFuncName, []));
-                initBlock.AddOp(new StdBrOp(mergeBlockLabel));
+                // The init block is DEFERRED to the end of the function instead of being added
+                // here. Added here it lands immediately after this merge block, and this merge
+                // block is exactly where the NEXT lazy guard's cond_br gets emitted — so that
+                // guard's fall-through would run into THIS init block, which ends by branching
+                // back to THIS merge block. That is an infinite loop, and it needs two loads of
+                // one lazy static to show up, which is why one load always looked fine.
+                // Measured: `var s = "{V.k}x"` followed by `s.append("{V.k}y")` never terminated.
+                pendingLazyInits.Add((initBlockLabel, globalLoad.LazyInitFuncName, mergeBlockLabel));
               }
 
               StandardOp loadOp = globalLoad.ValueKind switch {
@@ -2644,6 +2654,16 @@ public static partial class MaxonToStandardConversion {
         foreach (var (key, originalValue) in selfFieldTempVarsSnapshot) {
           selfFieldTempVars[key] = originalValue;
         }
+      }
+
+      // The deferred lazy-static init blocks. Each is entered only by an explicit branch from its
+      // guard and left only by an explicit branch to its merge, so it has no fall-through edge in
+      // either direction and the end of the function is a safe home for it. Putting them all here
+      // is what keeps every guard physically adjacent to its own merge block.
+      foreach (var (initLabel, initFuncName, mergeLabel) in pendingLazyInits) {
+        var initBlock = newFunc.Body.AddBlock(initLabel);
+        initBlock.AddOp(new StdCallOp(initFuncName, []));
+        initBlock.AddOp(new StdBrOp(mergeLabel));
       }
 
       // Zero-initialize stack slots for all vars that scope_end will decref,

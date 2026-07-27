@@ -20570,7 +20570,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
       }
 
-      var argType = InferArgTypeFromToken();
+      // A comparison is the one shape whose type is fixed by the OPERATOR rather than by the
+      // operand the per-token inference below would read, so it has to be asked about first.
+      var argType = ArgumentIsComparison() ? IrType.I1 : InferArgTypeFromToken();
       types.Add(argType);
 
       // Skip to next comma at depth 1 or closing paren
@@ -20600,6 +20602,68 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       TokenType.Identifier => InferIdentifierArgType(token.Value),
       _ => null
     };
+  }
+
+  /// The comparison operators, as TOKEN types. Derived from the lexer's own operator table rather
+  /// than listed again, so a comparison added there cannot silently go unrecognised here. `is`
+  /// (and `is not`, which begins with the same token) is a keyword rather than a symbolic
+  /// operator, so it is absent from that table and named explicitly.
+  private static readonly HashSet<TokenType> ComparisonTokenTypes =
+    [.. Lexer.OperatorMap.Values
+         .Where(op => op.Category == OperatorCategory.Comparison)
+         .Select(op => op.Type)
+         .Append(TokenType.Is)];
+
+  /// True when the argument beginning at `_pos` is a top-level comparison — `a < b`, `x == y`,
+  /// `p is q` — which in Maxon yields `bool` no matter what its operands are.
+  ///
+  /// Every other inference in this peek reads the argument's FIRST OPERAND. For a comparison that
+  /// is the type of a different expression than the one written: `f(a < b)` scored as `typeof(a)`.
+  /// Because the peek only runs when two or more candidates survive, the damage is exactly the
+  /// damage the postfix walk below was written to avoid — a wrong type rules out the only correct
+  /// overload and drops the call into "no overload matches — pick first", which then reports a
+  /// mismatch against an overload nobody asked for. Measured before the fix: with `equal(int)` and
+  /// `equal(bool)` both declared, `equal(a < b, expected: true)` failed E3005 "expected 'int', got
+  /// 'bool'", while binding the same comparison to a local first compiled and ran correctly.
+  ///
+  /// The scan stops at any token that opens a sub-expression carrying its OWN result type, since a
+  /// comparison after one of those belongs to that sub-expression and not to the argument:
+  ///
+  ///  - `if` — a conditional takes its type from its ARMS, not its condition, so `x if a &lt; b else y`
+  ///    is a `typeof(x)`. A comparison seen BEFORE the `if` is still the answer, because both arms
+  ///    of `a &lt; b if flag else c` are bool.
+  ///  - `otherwise` — `try g() otherwise x &lt; 1` has `g`'s return type; the `&lt;` is in the fallback.
+  ///  - a leading `function` — the whole argument is a closure literal, and `function(x) gives x &gt; 3`
+  ///    is a function value however its body compares.
+  ///
+  /// Each of those would otherwise hand back a WRONG type, which this peek treats as strictly worse
+  /// than no type: null leaves the caller's other filters in charge, while a wrong type can rule out
+  /// the only correct overload.
+  ///
+  /// `and`/`or`/`xor` deliberately do not appear here: they are bitwise on int operands and
+  /// logical on bool ones, so they PRESERVE the operand type and the first-operand reading is
+  /// already right for them.
+  private bool ArgumentIsComparison() {
+    // A closure literal can only be the entire argument, so one look at the first token settles it.
+    if (_pos < _tokens.Count && _tokens[_pos].Type == TokenType.Function) return false;
+
+    int depth = 0;
+
+    for (int cursor = _pos; cursor < _tokens.Count; cursor++) {
+      var t = _tokens[cursor].Type;
+
+      if (t == TokenType.LeftParen || t == TokenType.LeftBracket || t == TokenType.LeftBrace) {
+        depth++;
+      } else if (t == TokenType.RightParen || t == TokenType.RightBracket || t == TokenType.RightBrace) {
+        if (depth == 0) return false; // the call's own closing paren — this argument ended
+        depth--;
+      } else if (depth == 0) {
+        if (t == TokenType.Comma || t == TokenType.If || t == TokenType.Otherwise) return false;
+        if (ComparisonTokenTypes.Contains(t)) return true;
+      }
+    }
+
+    return false;
   }
 
   /// Infer the type of an identifier-rooted argument by walking its whole postfix chain —

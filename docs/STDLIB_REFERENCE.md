@@ -19,6 +19,7 @@
 15. [Range / OpenRange](#range--openrange)
 16. [ArrayIterator](#arrayiterator)
 17. [Builtin Managed Types](#builtin-managed-types)
+18. [Testing (Expect)](#testing-expect)
 
 ---
 
@@ -1245,3 +1246,71 @@ Provides a cursor into a `__ManagedMemory` buffer. Increfs the source on creatio
 | `retreat()` | -- | `CursorError` | Move backward by 1 position. |
 | `seek(index)` | -- | `CursorError` | Jump to `index`. Throws when out of bounds. |
 | `peek(ahead)` | `Element` | `CursorError` | Read element at `position + ahead`. |
+
+---
+
+## Testing (Expect)
+
+`stdlib/Testing.maxon`. The assertion library a `test` body calls.
+
+Every matcher is a `static` function that **throws `TestFailure.assertion`** when it does not
+hold, so a test stops at its first bad assertion and a forgotten `try` is E3057 at compile time.
+The human-readable report is **printed to stderr at the assertion site** just before the throw —
+a caught error in Maxon is an enum you `match`, with no message field to carry two values of
+arbitrary type, and the assertion site is the one place both values are still fully typed.
+
+```maxon
+test 'splits on commas'
+	try Expect.equal("a,b,c".split(",").count(), expected: 3)
+end 'splits on commas'
+```
+
+A failure prints:
+
+```text
+FAIL main.maxon:12: Expect.equal
+  expected: 4
+  received: 5
+  message: two plus two
+```
+
+The `message:` line appears only when a message was given. The file and line are the
+**caller's**, from the `__file__` / `__line__` parameter defaults, so a report never names a line
+inside `Testing.maxon`.
+
+**Every matcher** takes an optional `message String` plus `file String = __file__` and
+`line SourceLineNumber = __line__`; only `fail` requires its message.
+
+| Matcher | Argument types | Holds when |
+|---------|----------------|------------|
+| `equal(actual, expected:)` | integer, `String`, `bool` | `actual == expected` |
+| `notEqual(actual, expected:)` | integer, `String`, `bool` | `actual != expected` |
+| `greaterThan(actual, than:)` | integer, float | `actual > than` |
+| `lessThan(actual, than:)` | integer, float | `actual < than` |
+| `atLeast(actual, than:)` | integer, float | `actual >= than` |
+| `atMost(actual, than:)` | integer, float | `actual <= than` |
+| `close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+| `isTrue(actual)` / `isFalse(actual)` | `bool` | the value is `true` / `false` |
+| `contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
+| `startsWith(haystack, needle:)` | `String` | prefix match |
+| `endsWith(haystack, needle:)` | `String` | suffix match |
+| `isEmpty(haystack)` | `String` | no characters |
+| `fail(message)` | -- | never — the escape hatch |
+
+`equal` is **one overloaded name**, selected by argument type, and resolution sees through a
+method call, so `Expect.equal(parts.count(), expected: 3)` works. `String` values are rendered
+quoted in the report so an empty or space-padded value stays visible.
+
+**Floats deliberately have no `equal`** — a float `==` matcher passes on one target and fails on
+another, so `Expect.equal(1.5, expected: 1.5)` does not compile. Use `close(…, within:)`. The
+ordering matchers *do* have float arms: comparing against a threshold is stable, and it is exact
+bit-equality that is not.
+
+For a type the table does not name, `isTrue` is the escape hatch — `==` supplies the predicate
+and interpolation supplies the rendering, so one line reports both values:
+
+```maxon
+try Expect.isTrue(a == b, message: "expected {b}, got {a}")
+```
+
+That works for any `Equatable` + `Stringable` type. See `specs/testing-assertions.md`.
