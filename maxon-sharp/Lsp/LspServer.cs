@@ -72,7 +72,7 @@ public class LspServer {
     _documents[uri] = content;
     var filePath = uri.GetFileSystemPath()!;
     // build.maxon is a project metadata file, not a source file — don't compile it
-    if (Path.GetFileName(filePath).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+    if (Path.GetFileName(filePath).Equals(Compiler.SourceCollector.BuildManifestFileName, StringComparison.OrdinalIgnoreCase))
       return;
     if (Compiler.MaxonIgnore.IsIgnored(filePath))
       return;
@@ -88,7 +88,7 @@ public class LspServer {
     // and the editor itself will have sent a didChange already.
     if (_documents.ContainsKey(uri)) return;
     var filePath = uri.GetFileSystemPath()!;
-    if (Path.GetFileName(filePath).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+    if (Path.GetFileName(filePath).Equals(Compiler.SourceCollector.BuildManifestFileName, StringComparison.OrdinalIgnoreCase))
       return;
     if (Compiler.MaxonIgnore.IsIgnored(filePath))
       return;

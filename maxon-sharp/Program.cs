@@ -651,7 +651,7 @@ class Program {
     }
 
     // Directory: check for build.maxon with a build() function
-    var buildFile = Path.Combine(path, "build.maxon");
+    var buildFile = Path.Combine(path, Compiler.SourceCollector.BuildManifestFileName);
     if (File.Exists(buildFile)) {
       var buildContent = ReadFileContentUntilSeparator(buildFile);
       if (HasMainFunction(buildContent)) {
@@ -709,12 +709,12 @@ class Program {
         Compiler.Compiler.DebugInfo = false;
         Compiler.Compiler.Coverage = false;
         try {
-          if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
+          if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, cacheName: "build-runner"))) {
             // Don't emit IR/dump-stages for the internal build-runner — those flags are for the user's project.
             var compileResult = CompileAndReportResult(buildSources, runPath, irOutputPath: null,
                 dumpStagesBasePath: null, target, entryFunction: "build");
             if (compileResult != 0) return compileResult;
-            if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, name: "build-runner");
+            if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, cacheName: "build-runner");
           }
         } finally {
           Compiler.Compiler.MmTrace = savedMmTrace;
@@ -855,7 +855,7 @@ class Program {
     var functionName = cliName?.Replace('-', '_');
 
     var directory = Directory.GetCurrentDirectory();
-    var buildFile = Path.Combine(directory, "build.maxon");
+    var buildFile = Path.Combine(directory, Compiler.SourceCollector.BuildManifestFileName);
     if (!File.Exists(buildFile)) {
       Console.Error.WriteLine("No build.maxon found in current directory.");
       return 1;
@@ -909,14 +909,14 @@ class Program {
     var outputPath = Path.Combine(BuildCache.GetCacheDir(directory), $".maxon-run-{functionName}{ext}");
     var cacheName = $"run-{functionName}";
 
-    if (useCache && BuildCache.IsCacheValid(directory, sources, outputPath, target, name: cacheName)) {
+    if (useCache && BuildCache.IsCacheValid(directory, sources, outputPath, target, cacheName: cacheName)) {
       Console.WriteLine($"Using cached build runner for '{cliName}'");
     } else {
       var (irOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
       var compileResult = CompileAndReportResult(sources, outputPath, irOutputPath,
           dumpStagesBasePath, target, entryFunction: functionName);
       if (compileResult != 0) return compileResult;
-      if (useCache) BuildCache.WriteCache(directory, sources, outputPath, target, name: cacheName);
+      if (useCache) BuildCache.WriteCache(directory, sources, outputPath, target, cacheName: cacheName);
     }
 
     return RunExecutable(outputPath, forwardedArgs);
@@ -967,7 +967,7 @@ class Program {
       files = [path];
     } else if (Directory.Exists(path)) {
       files = [.. EnumerateFormattableFiles(path)
-        .Where(f => !Path.GetFileName(f).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+        .Where(f => !Path.GetFileName(f).Equals(Compiler.SourceCollector.BuildManifestFileName, StringComparison.OrdinalIgnoreCase))
         .Where(f => !MaxonIgnore.IsIgnored(f))];
     } else {
       Console.Error.WriteLine($"fmt: path not found: {path}");

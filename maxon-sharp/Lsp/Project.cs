@@ -149,10 +149,16 @@ public class Project(
   }
 
   /// <summary>
-  /// Build the source array for this project exactly like <c>maxon build</c>
-  /// would: delegate to the shared <see cref="SourceCollector"/>. Editor
-  /// buffers in <c>_fileContents</c> override disk content so unsaved edits
-  /// are what get compiled. Single-file projects skip the directory walk.
+  /// Build the source array for this project through the shared
+  /// <see cref="SourceCollector"/>, so the editor and <c>maxon build</c> cannot disagree about
+  /// what a source file is. Editor buffers in <c>_fileContents</c> override disk content so
+  /// unsaved edits are what get compiled. Single-file projects skip the directory walk.
+  ///
+  /// This is the ONE caller that opts IN to <c>*.test.maxon</c>, and it is deliberate rather than
+  /// incidental: <c>maxon build</c> leaves test files out of the shipped program, but a test file
+  /// is source somebody is editing. Excluded here it would be absent from the compiled module, so
+  /// every symbol in it would resolve to nothing — no diagnostics, no completions, no hover, in
+  /// precisely the file being written.
   /// </summary>
   private SourceFile[] CollectSources() {
     if (IsSingleFile) {
@@ -162,7 +168,7 @@ public class Project(
       return [.. _fileContents.Select(kv => new SourceFile(kv.Key, kv.Value, Path.GetDirectoryName(kv.Key)))];
     }
     try {
-      return SourceCollector.FromDirectory(RootPath, _fileContents);
+      return SourceCollector.FromDirectory(RootPath, _fileContents, SourceSelection.ProductionAndTests);
     } catch {
       // Directory may have been removed mid-compile.
       return [];

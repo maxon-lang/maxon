@@ -106,7 +106,7 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
   private static string? FindProjectRoot(string filePath) {
     var dir = Path.GetDirectoryName(Path.GetFullPath(filePath));
     while (dir != null) {
-      var buildFile = Path.Combine(dir, "build.maxon");
+      var buildFile = Path.Combine(dir, Compiler.SourceCollector.BuildManifestFileName);
       if (File.Exists(buildFile))
         return HasExportedBuildFunction(buildFile) ? dir : null;
       var parent = Path.GetDirectoryName(dir);
