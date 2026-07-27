@@ -154,21 +154,101 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-
 # fails the suite is a DIFFERENT thing entirely: it needs a human, and swallowing it would be the
 # false green this project keeps refusing.
 #
-# The split is drawn at the TCP connection, which is the last point where the two are still
-# distinguishable. `ssh` itself collapses them — it exits 255 for a DNS failure, a refused port, a
-# timeout AND a rejected key alike — so asking ssh "was it available?" cannot be answered. A bare
-# socket open can: it succeeds or it does not, and it knows nothing about credentials.
+# The split is drawn from `ssh`'s OWN STDERR, in ONE connection attempt.
+#
+# ⚠ THIS USED TO BE A SEPARATE `/dev/tcp` SOCKET PROBE, AND IT MISATTRIBUTED A WHOLE CLASS OF
+# FAILURE TO THE KEY. The old shape was: open a bare socket; if that worked, treat ANY later `ssh`
+# failure as "answers on port 22 but key auth failed". Two independent things then went wrong on
+# 2026-07-27:
+#   * `exec 3<>/dev/tcp/<host>/22` is not dependable from Git Bash on Windows AND the default host
+#     is an **mDNS `.local` name**, whose resolution here is genuinely intermittent — measured
+#     6/6 FAILING in one minute and 6/6 SUCCEEDING the next, with no change to either machine.
+#   * Because the probe and the `ssh` each resolve the name SEPARATELY, the probe could succeed and
+#     `ssh` could then fail to resolve — at which point the script blamed the key. It printed
+#     "key auth failed … is this host's public key in authorized_keys?" for a key that
+#     authenticated perfectly on the very next command, and RED-flagged arm64 twice in one session.
+# A wrong diagnosis is worse than no diagnosis: it sends the reader to the wrong machine.
+#
+# `ssh` exits 255 for a DNS failure, a refused port, a timeout AND a rejected key alike — so the
+# EXIT CODE cannot answer "was it available?". Its STDERR can, and it is the only party that has
+# already resolved the name, opened the socket and spoken the protocol. So: ask ONCE, and classify
+# what it says. One resolution, one verdict, no second opinion to disagree with.
+#
+# ⚠ And RETRY the unreachable class, because on an mDNS name it is genuinely flaky. A rejected key
+# is NOT retried — that verdict is deterministic and repeating it only wastes a lockout budget.
 #
 # ⚠ Whatever is skipped is announced in a banner, never inferred from silence. "The arm64 goldens
 # were not regenerated" has to be READABLE in the log, or a skipped run is indistinguishable from a
 # clean one — which is precisely how a gate stops being evidence.
-host_reachable() {
-	local target="${HOST##*@}"
-	timeout 8 bash -c "exec 3<>/dev/tcp/${target}/${PORT}" 2>/dev/null
+
+# 0 = authenticated · 1 = unreachable (SKIP) · 2 = answered but refused us (FAIL).
+# Sets PROBE_ERR to ssh's own words, so the caller reports the cause rather than guessing it.
+# ⚠ `set -e` IS ON (line 41). Every failing command here is therefore written in a CONDITION —
+# `if cmd; then` or `x || y` — never as a bare statement and never as `test && return`, both of
+# which abort the script before the caller can read the verdict. A probe whose whole job is to
+# survive a failure must not be written so that failing kills it.
+# How many times to re-ask an UNREACHABLE verdict. The default host is an mDNS `.local` name and
+# its resolution here is measurably intermittent, so one "no" is not an answer.
+PROBE_ATTEMPTS="${MAXON_MAC_PROBE_ATTEMPTS:-3}"
+PROBE_ERR=""
+probe_host_once() {
+	local err="" rc=0
+	if err="$(ssh "${SSH_OPTS[@]}" "$HOST" true 2>&1)"; then
+		rc=0
+	else
+		rc=$?
+	fi
+	PROBE_ERR="$err"
+	if [ "$rc" = 0 ]; then
+		return 0
+	fi
+	# Anything the SERVER said about US is a real verdict; everything else is "did not get there".
+	case "$err" in
+		*"Permission denied"*|*"Too many authentication failures"*|*"Host key verification failed"*|\
+		*"no matching host key"*|*"no matching key exchange"*|*"REMOTE HOST IDENTIFICATION HAS CHANGED"*)
+			return 2 ;;
+	esac
+	return 1
+}
+
+# Retries only the unreachable class; an auth verdict returns immediately.
+probe_host() {
+	local attempt=1 rc=0
+	while : ; do
+		if probe_host_once; then
+			return 0
+		else
+			rc=$?
+		fi
+		if [ "$rc" != 1 ]; then
+			return "$rc"
+		fi
+		if [ "$attempt" -ge "$PROBE_ATTEMPTS" ]; then
+			return 1
+		fi
+		echo "remote-mac: $HOST did not answer (attempt $attempt/$PROBE_ATTEMPTS) — ${PROBE_ERR:-no message}; retrying."
+		attempt=$((attempt + 1))
+		sleep 3
+	done
 }
 
 echo "=== Preflight: $HOST ==="
-if ! host_reachable; then
+if probe_host; then
+	PROBE_RC=0
+else
+	PROBE_RC=$?
+fi
+
+if [ "$PROBE_RC" = 2 ]; then
+	echo "remote-mac: $HOST answered, and refused this host. ssh said:" >&2
+	echo "    ${PROBE_ERR:-(no message)}" >&2
+	echo "  * Is this host's public key in the Mac's ~/.ssh/authorized_keys?" >&2
+	echo "  * ~/.ssh/id_ed25519.pub here is the key being offered." >&2
+	echo "  * sshd also refuses a valid key when ~, ~/.ssh or authorized_keys are group-writable." >&2
+	exit 1
+fi
+
+if [ "$PROBE_RC" != 0 ]; then
 	echo
 	echo "################################################################"
 	echo "#  SKIPPED — the Mac ($HOST) is not reachable on port $PORT."
@@ -178,6 +258,9 @@ if ! host_reachable; then
 	echo "#"
 	echo "#  Asleep, off the network, or Remote Login off. Pass"
 	echo "#  --require-host to make this a hard failure instead."
+	echo "#"
+	echo "#  ssh said, after $PROBE_ATTEMPTS attempts:"
+	echo "#    ${PROBE_ERR:-(no message)}"
 	echo "################################################################"
 	echo
 	GATE_RESULT="SKIP"
@@ -187,15 +270,6 @@ if ! host_reachable; then
 		exit 1
 	fi
 	exit 0
-fi
-
-# Reachable but unauthenticated is MISCONFIGURATION, and stays fatal under every flag: the machine
-# is right there, so carrying on would hide a broken setup rather than tolerate an absent laptop.
-if ! ssh "${SSH_OPTS[@]}" "$HOST" true 2>/dev/null; then
-	echo "remote-mac: $HOST answers on port $PORT but key auth failed." >&2
-	echo "  * Is this host's public key in the Mac's ~/.ssh/authorized_keys?" >&2
-	echo "  * ~/.ssh/id_ed25519.pub here is the key being offered." >&2
-	exit 1
 fi
 
 if [ -n "$FILTER" ]; then
