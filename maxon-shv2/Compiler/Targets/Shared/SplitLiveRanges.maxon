@@ -828,9 +828,13 @@ type SplitScratch
 	// per-split allocation term the rest of this type exists to remove.
 	export var runStarts as BoolArray
 	export var splitOperands as OperandList
+	// Has this FUNCTION left full-pool mode? Set from the whole-function analysis and flipped at most
+	// once, by `refreshPeak`, which is where the whole story lives. Like `ReachCache`'s rows and unlike
+	// every buffer above, it CARRIES ACROSS splits — it is a fact about the function, not scratch.
+	export var confinedMode as bool
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), runStarts: BoolArray.create(), splitOperands: OperandList.create()}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), confinedMode: false}
 	end 'create'
 
 	// Size the two block-keyed memos the incremental update needs. Deferred until the function turns out
@@ -915,6 +919,10 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// stop right here — no point overflows, nothing is split, and the incremental machinery is never
 	// needed. Only a function that turns out to split pays the second pass that seeds it.
 	var analysis = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch, intoTree: false)
+	// Has the function left FULL-POOL mode? The whole-function analysis above swept BOTH halves, so the
+	// answer is readable straight off its peak: anything but a full-pool overflow means no op in the
+	// function exceeds its own pool, and by the no-pressure-rise premise none ever will (`refreshPeak`).
+	scratch.confinedMode = not (analysis.peak.found and not analysis.peak.clobberOnly)
 	if analysis.peak.found 'willSplit'
 		scratch.beginSplitting(cfg.topo.numBlocks)
 		analysis = analyzePressure(module, liveness: liveness, pool: pool, scratch: scratch, intoTree: true)
@@ -1155,9 +1163,12 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 
 	// Re-sweep the dirty blocks: `forbidden`, the dead-phi counts, and the per-block register demand.
 	var demand = scratch.blockDemand
+	// Hoisted for the reason `computeLivenessOn` hoists its own: a union value is a heap object, and
+	// this one is the same object for every dirty block of this split.
+	let rebuildFor = ScannedValues.split(split)
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		let blockLocal = dirty.at(k)
-		sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, classes: liveness.valueClass, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep, demandOut: demand)
+		sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, rebuildFor: rebuildFor, classes: liveness.valueClass, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep, demandOut: demand)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			liveness.setBlockPressure(blockLocal, class: class, demand: classRowGet(demand, class: class))
@@ -1174,16 +1185,77 @@ end 'refreshAfterSplit'
 
 // Re-run the pressure sweep on the DIRTY BLOCKS ONLY, re-publish their leaves, and read the function's
 // peak off the tournament's root — the incremental half of `analyzePressure`.
+//
+// ==========================================================================
+// THE CONFINED HALF IS DEFERRED UNTIL IT CAN WIN
+// ==========================================================================
+//
+// A FULL-POOL overflow outranks EVERY confined one unconditionally (`peakOutranks`), so a confined rank
+// is only ever the function's peak when NO op anywhere overflows its full pool. The exact Hall
+// confirmation that produces one is a maximum bipartite matching — MEASURED at ~80,000 CPU ticks a call
+// against ~2,900 for the entire rest of an op's step — and the screen that gates it fires at roughly
+// half the ops of a call-heavy block. Computed eagerly it was 86% of `analyzeBlockPressure` and 75% of
+// the whole per-split cost on a block carrying Θ(block) splits, and the tournament DISCARDED every one
+// of those calls in the same iteration that paid for them.
+//
+// So the function runs in one of two MODES, and `SplitScratch.confinedMode` is the whole state. It sits
+// on the scratch because it is a fact about the FUNCTION rather than about one split — the same place
+// and for the same reason `ReachCache`'s rows outlive the split that filled them:
+//
+//  • FULL-POOL MODE. Dirty blocks are swept for the full-pool half alone. If the tournament then names
+//    a full-pool peak, that peak outranks every confined rank in the function and no Hall matching runs
+//    at all. If it does NOT, the function has just left full-pool mode: every leaf may be holding a
+//    full-pool-only rank, so ALL blocks are re-swept once with the confined half on, and the mode flips.
+//  • CONFINED MODE. Dirty blocks are swept with the confined half on, exactly as they always were.
+//
+// ⚠ THE FULL-POOL TEST IS `found AND NOT clobberOnly`, NOT `found`. A CONFINED best can be a rank a
+// CLEAN block still holds from before the mode began, and a dirty block's un-computed confined rank
+// might outrank it — so anything short of a full-pool win must re-derive. (A clean block's confined rank
+// is otherwise still VALID: the only values whose effective pools a split moves are the victim and the
+// ids it minted, and both are live only inside the dirty region.)
+//
+// ⚠ THE MODE FLIP HAPPENS AT MOST ONCE PER FUNCTION, which is what bounds the one whole-function
+// re-sweep it costs: a split never RAISES any op's pressure (the termination argument's premise), so
+// once no op overflows its full pool none ever does again. CORRECTNESS DOES NOT REST ON THAT — a
+// function that somehow re-entered full-pool mode would sweep both halves from then on, which is merely
+// the old cost — only the bound does.
 function refreshPeak(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch) returns PressureAnalysis
 	let dirty = scratch.dirty
+	// Snapshotted: the mode flip at the bottom must not change what the tests above it decided.
+	let confinedModeOnEntry = scratch.confinedMode
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		let blockLocal = dirty.at(k)
-		scratch.tree.setLeaf(blockLocal, rank: analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: blockLocal))
-		scratch.tree.promote(blockLocal)
+		resweepBlock(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: blockLocal, wantConfined: confinedModeOnEntry)
 	end 'eachDirtyBlock'
 
-	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: scratch.tree.best(), scratch: scratch), defLiveAfter: scratch.defLiveAfter)
+	if confinedModeOnEntry 'bothHalvesAreCurrent'
+		return analysisOf(module, liveness: liveness, scratch: scratch)
+	end 'bothHalvesAreCurrent'
+
+	let fullPoolBest = scratch.tree.best()
+	if fullPoolBest.found and not fullPoolBest.clobberOnly 'aFullPoolPeakOutranksEveryConfinedOne'
+		return analysisOf(module, liveness: liveness, scratch: scratch)
+	end 'aFullPoolPeakOutranksEveryConfinedOne'
+
+	// THE MODE FLIP. Every leaf swept since the mode began holds a full-pool-only rank, so the confined
+	// half of the whole function is re-derived once, here.
+	for blockLocal in 0 upto liveness.cfg.topo.numBlocks 'eachBlock'
+		resweepBlock(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: blockLocal, wantConfined: true)
+	end 'eachBlock'
+	scratch.confinedMode = true
+	return analysisOf(module, liveness: liveness, scratch: scratch)
 end 'refreshPeak'
+
+// One block's leaf, re-derived and published to the root.
+function resweepBlock(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, blockLocal CfgIndex, wantConfined bool)
+	scratch.tree.setLeaf(blockLocal, rank: analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: blockLocal, wantConfined: wantConfined))
+	scratch.tree.promote(blockLocal)
+end 'resweepBlock'
+
+// The tournament's current champion, materialized — the same pairing `analyzePressure` returns.
+function analysisOf(module TargetModule, liveness LivenessResult, scratch SplitScratch) returns PressureAnalysis
+	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: scratch.tree.best(), scratch: scratch), defLiveAfter: scratch.defLiveAfter)
+end 'analysisOf'
 
 // Nothing crossing the peak can be relieved. What that MEANS depends on which overflow it is —
 // and keeping the two apart is the whole point of the amended Rule 2.
@@ -1311,7 +1383,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// maximal rank offered. The tournament reproduces exactly that (see `PeakTree`).
 	var best = PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
 	for i in 0 upto topo.numBlocks 'eachBlock'
-		let rank = analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: i)
+		let rank = analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: i, wantConfined: true)
 		best = betterRank(best, candidate: rank)
 		if intoTree 'recordTheLeaf'
 			scratch.tree.setLeaf(i, rank: rank)
@@ -1374,17 +1446,23 @@ end 'betterRank'
 //     `HallCondition`'s header.
 //
 //  3. The census the screen reads is maintained INCREMENTALLY (`stepCensusBackwardOverOp`), like the
-//     live count, so no op walks its live set. It is skipped ENTIRELY — not merely screened out —
-//     when no value in the function is confined (`EffectivePools.anyConstrained`): with no call, no
-//     idiv and no argument pre-move, every allowed set IS the pool, so no subset can be tight and the
-//     census would be tracking a distribution that provably cannot violate anything. That gate has to
-//     be on the STEP, not just on the screen: the screen is per-op, but the census is stepped over
-//     every OPERAND of every op, and a compiler's leaf functions are mostly call-free.
+//     live count, so no op walks its live set — and it is skipped ENTIRELY, not merely screened out,
+//     whenever nothing will read it. `censusNeeded` below lists the three ways that happens and why
+//     the gate has to be on the STEP rather than on the screen.
 //
 // Every quantity comes from the operand model + the liveness `forbidden` column, never a hardcoded
 // opcode, so calls, `idiv`, `cqo` and argument pre-moves are handled uniformly. Mirrors
 // TargetLiveness's pressure sweep.
-function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, blockLocal CfgIndex) returns PeakRank
+//
+// ⚠ `wantConfined` IS A COST GATE, NOT A CORRECTNESS ONE, and it is the whole reason the confined half
+// is separable. A FULL-POOL overflow outranks EVERY confined one unconditionally (`peakOutranks`), so a
+// confined rank can only ever BE the peak when no op in the WHOLE FUNCTION overflows its full pool.
+// While one does, every exact Hall confirmation this sweep runs is computed and then discarded by the
+// tournament — and the exact confirmation is a bipartite matching, three orders of magnitude dearer
+// than the rest of the per-op step. `refreshPeak` therefore sweeps with `wantConfined: false` first and
+// only re-sweeps for the confined half when the full-pool half comes back empty. Passing `false` when
+// a confined rank COULD have won would silently lose a peak, so the caller owns that argument.
+function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, blockLocal CfgIndex, wantConfined bool) returns PeakRank
 	let topo = liveness.cfg.topo
 	let wordsPerRow = liveness.wordsPerRow
 	// Every buffer below is the FUNCTION's, not this call's (see `SplitScratch`). `liveRow` is zero on
@@ -1396,15 +1474,18 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	var seedBuf = scratch.seedBuf
 
 	let effPoolSizes = scratch.effPools.sizes
-	// Nothing in this function is confined to a register subset (no call, no idiv, no argument
-	// pre-move), so Hall's condition cannot fail against a proper subset of the pool and the census
-	// would be bookkeeping for a question whose answer is already known. Skipping it takes the census
-	// off the per-operand path entirely — see `EffectivePools`.
-	// ALSO when the function holds a float: the census is what maintains the per-file live tally the
-	// per-class pigeonhole reads, so it must run whenever the two files can disagree — not only when
-	// something is confined. With no float and nothing constrained, the XMM half of every figure is
-	// identically zero and this stays off, exactly as it was when there was one register file.
-	let censusNeeded = scratch.effPools.anyConstrained() or scratch.effPools.anyXmm()
+	// THREE ways the census is unnecessary, and it is skipped ENTIRELY — not merely screened out — under
+	// any of them, because the gate has to be on the STEP and not just on the screen: the screen is
+	// per-op, but the census is stepped over every OPERAND of every op.
+	//
+	//  • THIS SWEEP IS NOT ASKING THE CONFINED QUESTION (`wantConfined`). `screenViolates` is the
+	//    census's only reader, so a full-pool-only sweep maintains a distribution nothing will look at.
+	//  • NOTHING IN THIS FUNCTION IS CONFINED to a register subset (no call, no idiv, no argument
+	//    pre-move — `EffectivePools.anyConstrained`), so Hall's condition cannot fail against a proper
+	//    subset of the pool and the answer is already known.
+	//  • AND THE FUNCTION HOLDS NO FLOAT (`anyXmm`), so the XMM half of every figure is identically
+	//    zero and the two files cannot disagree — exactly as it was when there was one register file.
+	let censusNeeded = wantConfined and (scratch.effPools.anyConstrained() or scratch.effPools.anyXmm())
 	var census = scratch.census
 	var censusIds = scratch.censusIds
 	var censusWasLive = scratch.censusWasLive
@@ -1554,7 +1635,7 @@ function materializePeak(module TargetModule, liveness LivenessResult, rank Peak
 	var peakOpIdx = 0 as OpIndex
 	if rank.found 'derivePeakRow'
 		fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
-		peakOpIdx = opAtBlockPos(module, topo: liveness.cfg.topo, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, scratch: scratch)
+		peakOpIdx = opAtBlockPos(module, topo: liveness.cfg.topo, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos)
 	end 'derivePeakRow'
 	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, peakOpIdx: peakOpIdx, clobberOnly: rank.clobberOnly, witness: rank.witness, witnessClass: rank.witnessClass, atFixedRegisterOp: rank.atFixedRegisterOp)
 end 'materializePeak'
@@ -1562,12 +1643,21 @@ end 'materializePeak'
 // The `module.ops` index of the op at forward layout position `forwardPos` of local block
 // `blockLocal` — the block's body ops then its terminator, which is the same `collectBlockOps`
 // numbering the sweep walks and the `UseIndex` records.
-function opAtBlockPos(module TargetModule, topo FuncTopology, blockLocal CfgIndex, forwardPos BlockOpPos, scratch SplitScratch) returns OpIndex
+//
+// INDEXED, NOT REBUILT. This used to `collectBlockOps` the WHOLE block into a scratch list and then
+// take one element out of it — an O(block) copy to answer an O(1) question, paid once per split. The
+// numbering is `opRefs` in order followed by the terminator, so it IS an index; spelling it out here
+// keeps the one place that knows that layout next to `collectBlockOps`, which is the other.
+function opAtBlockPos(module TargetModule, topo FuncTopology, blockLocal CfgIndex, forwardPos BlockOpPos) returns OpIndex
 	let block = blockAt(module, topo: topo, local: blockLocal)
-	var ordered = scratch.sweep.ordered
-	ordered.clear()
-	collectBlockOps(block, out: ordered)
-	return try ordered.get(forwardPos) otherwise panic("opAtBlockPos: position {forwardPos} past the end of block {blockLocal}")
+	let bodyCount = block.opRefs.count()
+	if forwardPos < bodyCount 'bodyOp'
+		return try block.opRefs.get(forwardPos) otherwise panic("opAtBlockPos: opRefs.get OOB at {forwardPos} of block {blockLocal}")
+	end 'bodyOp'
+	if forwardPos == bodyCount and block.hasTerminatorOp() 'terminatorOp'
+		return block.terminatorIndex()
+	end 'terminatorOp'
+	panic("opAtBlockPos: position {forwardPos} past the end of block {blockLocal} ({bodyCount} body op(s){", terminated" if block.hasTerminatorOp() else ", unterminated"})")
 end 'opAtBlockPos'
 
 // The live-BEFORE set at ONE op, re-derived by re-walking its block backward from the block's live-out

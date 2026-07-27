@@ -941,8 +941,14 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	var maxPressure = zeroClassRow()
 	var demand = zeroClassRow()
+	// HOISTED, and it must be a LOCAL. A union value is a heap object, so building it inside the loop was
+	// one allocation per BLOCK of every function the allocator sees. A module-level `let` would hoist it
+	// further still — and must not be used: a global holding a MANAGED value is consumed by its first
+	// pass to a consuming parameter and every later read is a nil dereference (verified: it panics in
+	// `scannedValuesHold` on the first function compiled).
+	let rebuildFor = ScannedValues.all
 	for i in 0 upto numBlocks 'eachBlock'
-		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand)
+		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, rebuildFor: rebuildFor, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			try blockPressure.set(classRowIndex(i, class: class), value: classRowGet(demand, class: class)) otherwise panic("computeLivenessOn: blockPressure.set OOB for block {i}")
@@ -2252,20 +2258,26 @@ export type SplitValues
 	end 'holds'
 end 'SplitValues'
 
-// WHICH values a block scan records index facts for — the one difference between building the index
-// and REBUILDING the part of it a split invalidated, so the scan itself is one implementation rather
-// than two that can drift on what a use site is.
-union IndexedValues
+// WHICH values a block scan concerns — the one difference between building a per-value structure over
+// the whole function and REBUILDING the part of it a split invalidated, so each scan is one
+// implementation rather than two that can drift on what a use site (or a clobber) is.
+//
+// TWO scans take it, and they take it for the same reason. `indexBlockFacts` records use/def facts for
+// these values; `sweepBlockPressure` re-ORs each clobber mask into these values' `forbidden` entries.
+// A split CLEARS exactly the victim's and the fresh ids' entries in both structures and leaves every
+// other value's alone, so a rebuild that covers more than these is not merely wasted work — it is the
+// same work, done again, on data that already holds the answer.
+export union ScannedValues
 	all
 	split(values SplitValues)
-end 'IndexedValues'
+end 'ScannedValues'
 
-function indexedValuesHold(which IndexedValues, valueId ValueId) returns bool
+export function scannedValuesHold(which ScannedValues, valueId ValueId) returns bool
 	return match which 'w'
 		all gives true
 		split(values) gives values.holds(valueId)
 	end 'w'
-end 'indexedValuesHold'
+end 'scannedValuesHold'
 
 // Record ONE block's index facts — its phi defs, every op def/use of a `which` value, its edge args —
 // and return the block's op count.
@@ -2274,12 +2286,12 @@ end 'indexedValuesHold'
 // rests on: `addUseRecord` appends at the tail, so recording them in order IS keeping them in order.
 // A caller that walks several blocks must therefore walk them in ASCENDING block index — a sequence
 // number leads with its block.
-function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, which IndexedValues, buf OperandList, ordered OpIndexArray) returns OpSeq
+function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, which ScannedValues, buf OperandList, ordered OpIndexArray) returns OpSeq
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockFacts: loopDepth.get OOB")) != 0
 
 	for arg in block.blockArgs 'eachPhi'
-		if indexedValuesHold(which, valueId: arg.valueId) 'recorded'
+		if scannedValuesHold(which, valueId: arg.valueId) 'recorded'
 			index.setPhiDef(arg.valueId, blockLocal: blockLocal)
 		end 'recorded'
 	end 'eachPhi'
@@ -2301,7 +2313,7 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 				continue
 			end 'physical'
 			let v = operandValueId(o)
-			if not indexedValuesHold(which, valueId: v) 'notRecorded'
+			if not scannedValuesHold(which, valueId: v) 'notRecorded'
 				continue
 			end 'notRecorded'
 
@@ -2332,7 +2344,7 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 	// before the block's first after-peak use dominate the edge too.
 	for edge in block.branchEdges 'eachEdge'
 		for argId in edge.argIds 'eachArg'
-			if not indexedValuesHold(which, valueId: argId) 'notRecorded'
+			if not scannedValuesHold(which, valueId: argId) 'notRecorded'
 				continue
 			end 'notRecorded'
 			index.setEdgePassed(argId)
@@ -2359,8 +2371,11 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	var buf = OperandList.create()
 	var ordered = OpIndexArray.create()
 
+	// Hoisted for the reason `computeLivenessOn` hoists its own: a union value is a heap object, and one
+	// built inside this loop is one allocation per block of every function the allocator sees.
+	let everyValue = ScannedValues.all
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
-		index.addOps(indexBlockFacts(module, cfg: cfg, index: index, blockLocal: i, which: IndexedValues.all, buf: buf, ordered: ordered))
+		index.addOps(indexBlockFacts(module, cfg: cfg, index: index, blockLocal: i, which: everyValue, buf: buf, ordered: ordered))
 	end 'eachBlock'
 
 	return index
@@ -2388,7 +2403,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 		index.resetValue(f)
 	end 'eachFresh'
 
-	let which = IndexedValues.split(split)
+	let which = ScannedValues.split(split)
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		_ = indexBlockFacts(module, cfg: cfg, index: index, blockLocal: dirty.at(k), which: which, buf: scratch.buf, ordered: scratch.ordered)
 	end 'eachDirtyBlock'
@@ -2722,7 +2737,7 @@ end 'PressureSweepScratch'
 // exact χ the colorer needs, so the "coloring cannot fail when maxPressure <= pool" invariant — and the
 // E5001 deficit count — stay sound. The count is RECORDED per block, not just folded into the max: the
 // splitter's peak-finder needs the same number at every op of the block.
-export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn)
+export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, rebuildFor ScannedValues, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -2749,7 +2764,7 @@ export function sweepBlockPressure(module TargetModule, topo FuncTopology, block
 	collectBlockOps(block, out: ordered)
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure)
+		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, rebuildFor: rebuildFor, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(blockMax, class: class, value: maxOf(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
@@ -2938,7 +2953,7 @@ end 'ParamCrossForbid'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn)
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, rebuildFor ScannedValues, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	// This also fills `buf` with the op's operands, which everything below reads.
 	let clobberMask = opClobberMask(op, buf: buf)
@@ -2951,7 +2966,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	addReuseTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
 	if clobberMask != 0 'hasClobber'
-		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+		applyForbidden(liveRow, forbidden: forbidden, rebuildFor: rebuildFor, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 	end 'hasClobber'
 
 	// An op's EXPLICIT virtual operands must additionally avoid the op's IMPLICIT
@@ -3084,23 +3099,54 @@ export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex,
 	end 'addUses'
 end 'stepRowBackwardOverOperands'
 
-// For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own
-// defs), add `clobberMask` to its forbidden registers.
+// For each `rebuildFor` value LIVE ACROSS this op (in `liveRow`, and not one of the op's own defs),
+// add `clobberMask` to its forbidden registers.
 //
-// Walks the SET BITS of the live row, not the value space. This runs at every CLOBBER op — every
-// call, every `idiv` — so testing each value id here would be O(clobber-ops × values), which on a
-// call-heavy function (this compiler's own) is a quadratic and measurably the dominant cost of the
-// liveness pass. A live set is sparse; the walk is O(live). `liveBuf` is scratch reused across ops.
-function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
-	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
-	for v in liveBuf 'eachLive'
+// ⚠ THE SCOPE IS WHAT KEEPS THIS OFF THE SPLITTER'S QUADRATIC. `forbidden` only ever ORs, so re-ORing
+// a mask a value ALREADY carries changes nothing — and after a split every value except the victim and
+// the ids it minted already carries every bit it will ever have (`refreshAfterSplit` clears exactly
+// those entries, and the ops a split inserts have an empty clobber mask, so no other value can gain a
+// bit). Re-deriving the whole live set's masks was therefore O(clobber-ops × live) PER SPLIT — cubic on
+// a block where Theta(block) values are live across Theta(block) calls — to reproduce a column that was
+// already right. Under `split` the walk is over the two or three ids that were cleared.
+//
+// The `all` arm walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op,
+// so testing each value id would be O(clobber-ops × values) on the initial build too. `liveBuf` is
+// scratch reused across ops.
+function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, rebuildFor ScannedValues, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
+	collectForbidTargets(liveRow, rebuildFor: rebuildFor, wordsPerRow: wordsPerRow, out: liveBuf)
+	for v in liveBuf 'eachTarget'
 		if operandDefinesValue(buf, v: v) 'ownDef'
 			continue
 		end 'ownDef'
 		let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
 		try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
-	end 'eachLive'
+	end 'eachTarget'
 end 'applyForbidden'
+
+// The values live across this op whose `forbidden` entry it must OR into — the ONE place the scope
+// turns into a list, so the OR above stays a single implementation over both.
+function collectForbidTargets(liveRow BitWordArray, rebuildFor ScannedValues, wordsPerRow BitWordCount, out ValueIdArray)
+	match rebuildFor 'scope'
+		all then bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: out)
+		split(values) then collectLiveSplitValues(liveRow, values: values, out: out)
+	end 'scope'
+end 'collectForbidTargets'
+
+// The split's own ids that are live across this op. Its `all` counterpart walks the row's SET BITS
+// (never the value space); this one walks the two or three ids instead and tests each — the row is the
+// index either way, and neither ever iterates a value space.
+function collectLiveSplitValues(liveRow BitWordArray, values SplitValues, out ValueIdArray)
+	out.clear()
+	if bitsetTest(liveRow, base: 0, bit: values.victim) 'victimLiveHere'
+		out.push(values.victim)
+	end 'victimLiveHere'
+	for f in values.freshFrom upto values.freshTo 'eachFresh'
+		if bitsetTest(liveRow, base: 0, bit: f) 'freshLiveHere'
+			out.push(f)
+		end 'freshLiveHere'
+	end 'eachFresh'
+end 'collectLiveSplitValues'
 
 function operandDefinesValue(buf OperandList, v ValueId) returns bool
 	for o in buf 'each'

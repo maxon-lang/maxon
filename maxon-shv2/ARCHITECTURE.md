@@ -2118,6 +2118,58 @@ It used to rebuild liveness AND re-sweep the whole function for pressure after e
 everything outside the allocator. It is now **×2.0**, and so is `splitting`. The allocator grows at the
 rate the program does.
 
+> ### ⚠ THAT ×2.0 IS TRUE OF THE SHAPES IT WAS MEASURED ON, AND THEY ALL HAVE MANY BLOCKS
+>
+> **The incrementality above is per BLOCK.** `dirty` is a `BlockSet`, `refreshAfterSplit` and
+> `refreshPeak` loop over dirty BLOCKS, and the `PeakTree` has one leaf per block. Both shapes in the
+> table — *"400 functions, one pressured loop each"* and *"ONE function, 100 pressured loops"* — are
+> made of many small blocks, so a split's dirty region really is a small slice of the function and the
+> tournament really does have something to be a tournament over.
+>
+> **On ONE straight-line basic block the dirty region IS the function and the tree has ONE leaf.**
+> Every per-split "re-derive only what changed" then re-derives the whole block, and if that block also
+> takes Θ(block) splits — N call results all live to one N-term sum — the two Θ(N) terms multiply.
+> Measured on `Testing/ladders/genwidelive.sh <N> sum` (N = 100 / 200 / 400, 96 / 196 / 396 splits):
+> `regalloc:splitting` was **0.65 s / 2.73 s / 11.49 s** — **×4.19, ×4.22 per doubling, a clean
+> quadratic** — and the committed spec that is its N=800 rung
+> (`specs-shv2/x64-large-frame-arg7.md`) took **53.9 s to compile**, 99.8% of it in `splitting` and 93%
+> of the whole suite's wall time.
+>
+> **The dominant term was not the sweep. It was work the sweep computed and then THREW AWAY.** A
+> FULL-POOL overflow outranks every confined one unconditionally (`peakOutranks`), so a confined rank
+> can only ever be the peak when NO op in the whole function overflows its full pool — yet
+> `analyzeBlockPressure` ran the exact Hall confirmation eagerly at every op that fit its full pool, on
+> every split. Measured: the screen fired at **~44% of the ops**, each exact confirmation cost
+> **~80,000 CPU ticks** against **~2,900 for the entire rest of an op's step**, and the total was **86%
+> of `analyzeBlockPressure` and 75% of the whole per-split cost**. `refreshPeak` now sweeps for the
+> full-pool half alone and re-derives the confined half only when the full-pool half comes back empty
+> (`SplitScratch.confinedMode`); a split never RAISES an op's pressure, so a function leaves full-pool
+> mode at most once and the one whole-function re-sweep that costs is paid at most once.
+>
+> Two smaller wastes went with it. `applyForbidden` re-ORed each clobber mask into **every live value**,
+> when a split clears only the victim's and the fresh ids' masks and `forbidden` only ever ORs — so the
+> other N-2 were re-derived onto a column that already held the answer, O(clobber-ops × live) per split,
+> which on this shape is **past quadratic in its own right** (measured ×5.07 then ×5.70 per doubling).
+> And `opAtBlockPos` copied the block's whole op list into scratch to answer one indexed lookup.
+>
+> **New reading, same decisions** (`valuesSplit` 96 / 196 / 396 unchanged, all 243 committed IR goldens
+> byte-identical, suite 1789/0 with `VerifyIncrementalSplit` both off AND on): **0.14 s / 0.46 s /
+> 1.58 s**, ×3.2 and ×3.5 per doubling; the spec compiles in **6.09 s** (8.8×) and the suite fell
+> **56.3 s → 16.4 s**. On `scale-test`'s own corpus the CPU column does not move outside its noise band
+> (`regalloc:splitting` −2.2%..+0.9% across five rungs, exponent ×2.04 against ×2.08) — and it should
+> not: that corpus is pressured LOOPS, whose functions are in confined mode from their first analysis,
+> so the deferral never engages. Allocations there fall **−2,124 .. −32,858** whole-compile, from
+> hoisting the `ScannedValues` union out of two per-block loops.
+>
+> **It is still superlinear on this shape, and the reason is now four terms rather than one.** Per split
+> at N=400: `analyzeBlockPressure` 45%, `sweepBlockPressure` 32%, `reindexSplitValues` 14%,
+> `fillLiveBeforeOp` 5%, `SplitEdits.commit` 2.5%, `chooseVictim` 1.4% — and every one of the last five
+> still grows **×1.9–2.0 per split per doubling**, i.e. each is its own O(block)-per-split walk. Making
+> this shape LINEAR needs a per-OP incremental structure (a lazy range-add / range-max over op
+> positions, which must survive op INSERTION shifting those positions) feeding all four consumers, plus
+> a maintained victim priority for `chooseVictim`'s Θ(candidates) scan. That is a redesign of the pass,
+> not a patch to it, and it is not done.
+
 Three enabling changes made it possible, and each landed on its own with the byte-exact IR goldens
 unmoved: an op's sequence number became **block-relative** (so inserting one op renumbers only its own
 block), the live sets became **per-block editable lists** instead of CSR (so removing one value from one
@@ -2164,7 +2216,7 @@ exact confirmation's five columns) hold them now.
 
 | site | was | why it mattered |
 |---|---|---|
-| `hallVerdictAt` | heap-allocated 5 columns per call, **2 of them per live value** inside `augmentValue` | Confinement is a property of a value's **whole live range**, not of the clobber op. N accumulators live across a call in a loop are confined at **every op of that loop**, so for N=8 the screen's O(1) early-out (`constrained ≤ smallestPool` = `8 ≤ 5`) does **not** fire and the exact matching runs at every op, on every iteration. "Bounded by 16×16" bounds ONE call and says nothing about the call COUNT. |
+| `hallVerdictAt` | heap-allocated 5 columns per call, **2 of them per live value** inside `augmentValue` | Confinement is a property of a value's **whole live range**, not of the clobber op. N accumulators live across a call in a loop are confined at **every op of that loop**, so for N=8 the screen's O(1) early-out (`constrained ≤ smallestPool` = `8 ≤ 5`) does **not** fire and the exact matching runs at every op, on every iteration. "Bounded by 16×16" bounds ONE call and says nothing about the call COUNT. ⚠ **THE CALL COUNT WAS THE REAL BILL, AND THIS ROW ONLY TOOK THE ALLOCATIONS OUT OF IT.** Scratch made each call allocation-free; each still costs ~80,000 CPU ticks, and the count stayed at ops × splits. `refreshPeak` now defers the confined half until it can win, which is what finally bounds it — see the shape warning above. |
 | `betterPeak` | a fresh row + a `wordsPerRow` copy on every **tie** | `peakOutranks` **replaces on an exact tie** — that IS the tie-break. In a pressured loop every op carries the same confined pressure, so **every op is a tie**. The peak now carries scalars only (`PeakRank`); the row is re-derived once for the winner (`fillLiveBeforeOp`) from the same backward transfer the sweep steps with. |
 | `EffectivePools` / `defLiveAfter` | rebuilt over the whole **value space** per split — and the value space GROWS with every split | Θ(K × values) of allocation for columns whose contents are recomputed anyway. `popcountWord` was also Kernighan's clear-lowest-set loop, i.e. one iteration **per set bit** — its worst case on its commonest input (an unconstrained value's mask is the whole 14-register pool). It is SWAR now. |
 
