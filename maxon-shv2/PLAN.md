@@ -1364,6 +1364,36 @@ tests shv2 — which is what `maxon-selfhosted` does, and is the Phase-1 goal.
 Distinct front-end / IR features the corpus surfaced that do NOT ride an existing rung; each gets a ladder
 number when it is sequenced (each also has a `disabled-test:` or oracle-divergence pinning it):
 
+- **⬜ THE SPLITTER'S POSITIONAL STRUCTURE — the residual of the 2026-07-27 splitting rung, sanctioned as its own
+  rung by the coordinator when the fix landed at ×1.50–1.71 instead of flat.** Four O(block)-per-split walks remain
+  (`analyzeBlockPressure` 45% of a split, `sweepBlockPressure` 32%, `reindexSplitValues` 14%, `fillLiveBeforeOp` 5%),
+  and on a SINGLE BASIC BLOCK the dirty region is the whole function, so block-granular incrementality buys nothing —
+  `dirty` is a `BlockSet` and `PeakTree` has one leaf. **Narrowing the dirty region to a sub-block op RANGE is NOT the
+  fix and must not be shipped as one:** a victim is live from its def to the final use, an interval of Θ(N−i), and
+  Σ(N−i) is still Θ(N²). What changes the exponent is to stop RE-DERIVING and start UPDATING — a lazy range-add /
+  range-max structure over op positions, storing `overflow(op) = effectivePressure(op) − poolAt(op)` (the pool is
+  static per op, including the REDUCED pool at fixed-register points; pressure is range-additive). ⚠ **Two things make
+  it a rung and not a patch.** (1) A split INSERTS ops mid-block, so dense positions shift — it needs order maintenance
+  (an implicit treap or equivalent), which is why the 2026-07-27 rung did not attempt it. (2) The peak is not
+  `max(pressure)`: it is a max under a total order carrying `clobberOnly` / `witness` / `witnessClass` /
+  `atFixedRegisterOp`, and `peakOutranks` returns TRUE on an exact tie so the tree's combine reproduces "rightmost
+  maximal rank" (`SplitLiveRanges.maxon` `PeakTree.combineAt`/`betterBlock`). **Reproduce that ordering exactly or the
+  same program picks a different victim** — the acceptance gate is the 243 byte-identical goldens and `valuesSplit`
+  unchanged, not a suite pass. Once it lands, `chooseVictim`'s Θ(candidates) and `SplitEdits.commit`'s O(block) splice
+  become the leading terms. Ladder: `Testing/ladders/genwidelive.sh <N> sum`; oracle: `VerifyIncrementalSplit`.
+- **⬜ THE x64-linux GOLDEN ROT — 288 stale fragments, and the lane nobody runs.** Found 2026-07-27 by the
+  cross-target gate's first run on this box. `spec-test --target=x64-linux` reports **1395 passed / 288 failed**, every
+  failure `codegen changed — golden fragment mismatch`. **PROVEN PRE-EXISTING by an exact A/B** — base and head fail the
+  IDENTICAL 288 (zero tests failing only at head, zero only at base, the three `register-*`/`float-register-pressure`
+  ones present in both) — so it predates the splitting rung by an unknown number of commits. ⚠ **Do NOT blind-regenerate:**
+  288 fragments is 288 codegen diffs to READ, and a real x64-linux defect could be hiding among the drift; the lane also
+  has 172 tests with no golden at all, and 7 `register-spill` fragments the other targets have. ⚠ **A finding this rung
+  made while measuring it, and the reason the rot went unnoticed: a PLAIN `spec-test` run REWRITES fragment files** —
+  1242 x64-linux fragments took a fresh mtime on a run with no `--update-required`, while git reported only 110 as
+  content-changed. So "run the lane" and "dirty the tree" are not separable operations, which is its own thing to fix.
+  Same disease as the documented x64-windows/arm64 staleness, third target: the parallel repo works arm64-macOS, this
+  box runs x64-windows, and x64-linux drifted between them.
+
 - **✅ THE WITNESS LABEL JOIN IS INJECTIVE — CLOSED 2026-07-27 (main `55053c207`; x64 1793/0, wasm 1597/0).**
   Filed 2026-07-26 by the P1.7 disjointness rung's independent review, which went looking for whether the newly
   reserved instance names could collide with a witness label and found **the same defect one namespace over, needing
@@ -1442,6 +1472,17 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   half, which is a single `identifier` token — so closing this rung cannot silently reopen the witness collision.
   Verify that property still holds when it lands.
 
+- **🔴 BOOTSTRAP ORACLE BUG — a PAYLOAD-LESS union constant as a global SILENTLY MISCOMPILES.** Found 2026-07-27 by the
+  splitting rung's implementer (which hit it trying to hoist a `ScannedValues.all` to module scope) and **reproduced by
+  the coordinator before filing** — the "Bootstrap oracle bugs" list is its home; it needs the full C# suite as its gate.
+  `let TheShape = Shape.circle` on a `union Shape { circle, square(side Side) }` **passes the constant-expression gate,
+  builds exit 0 with no diagnostic, and leaves the global NULL** — the first read panics `nil pointer or invalid memory
+  access at addr=0x0` inside the reading function. ⭐ **The payload-BEARING form is correctly refused** (`Shape.square(5)`
+  ⇒ `E2045: Global initializer … is not a constant expression`), so the gate exists and the payload-less arm slips
+  through it while the global-data emitter never materializes the object. **A silent wrong answer, not a crash at the
+  right place** — the class this project treats as worst. Repro is five lines; run it through `run_program compiler=csharp`.
+  Workaround in shv2 sources until fixed: do not give a union constant module scope (a comment sits at the site in
+  `TargetLiveness.maxon`'s `computeLivenessOn` warning the next person off it).
 - **🔴 BOOTSTRAP ORACLE BUGS — witness/interface dispatch and its own symbol joins** (found by the witness-join rung
   while surveying for an oracle; the **"Bootstrap oracle bugs"** list is their home — each needs the full C# suite as
   its gate, which is why none rode that rung).
@@ -2701,6 +2742,30 @@ diagnostic**; branch = clean **E3006**. **Cause: ONE FACT WRITTEN THREE TIMES WI
   the one this unblocks** — the many-function question no longer needs a bespoke ladder, it needs a run and a read.
   **The 797 / 3,112 / 15,572 ms measurement is unchanged and still stands.** ⚠ Its ×3.9→×5.0 clears the CPU column's
   few-percent noise band by an enormous margin, so this is squarely the class the column is honest for.
+  ◑ **LARGELY PAID 2026-07-27 — 8.8× on the committed spec, but the pass is STILL SUPERLINEAR and this entry stays
+  OPEN.** The dominant term was **not** the pressure sweep everyone assumed: it was the **exact Hall/confined matching
+  computed and then DISCARDED**. `analyzeBlockPressure` ran `confinedPeakAt`/`hallVerdictAt` at **~44% of ops** at
+  ~**80,000 CPU ticks a call** against ~2,900 for the whole rest of an op's step — because a pressure profile RISES
+  and FALLS, so ops at both ends fit the full pool and take the `not anyFullPoolOverflow` branch. *(The coordinator's
+  brief asserted the opposite — "every op overflows, so it never runs" — and the implementer measured it false. The
+  instrument outranked the reasoning, which is the whole point of owning one.)* Cure: the confined half is **deferred
+  until it can win**, a one-way `SplitScratch.confinedMode` flip, sound because a full-pool overflow outranks every
+  confined one *and confined mode still sweeps BOTH halves* — the flip's correctness does not rest on "a split never
+  raises pressure", and neither does its bound. Plus `applyForbidden` scoped to the split's own ids (its total had
+  been growing **×5.07 then ×5.70 — past quadratic**), `opAtBlockPos` deleted (it restated `collectBlockOps`, and
+  `fillLiveBeforeOp` already ends on that op), `PeakRank` de-allocated (a heap object per winning op and twice per
+  tree combine), and the fresh-id walk made a **word-range** walk — that last one a **REAL unbounded defect the
+  review found**, Θ(clobber-ops × M) for a value read in M blocks, which the committed suite already reached at 6
+  (`streaming-subprocess/*`) while a probe set at 8 stayed silent. ⭐ **A bound established by probing is not a bound.**
+  MEASURED: `x64-large-frame-arg7` **53.9 s → ~6.1 s**; suite **56.3 s → ~18 s**; ladder N=400 `regalloc:splitting`
+  **11.49 s → 1.56 s**; whole-compile allocations **−3,598 … −177,023** across the six rungs. Decisions UNCHANGED —
+  243 goldens byte-identical on every target that ran, `valuesSplit` 96/196/396, verified with `VerifyIncrementalSplit`
+  on. ⚠ **RESIDUAL, and it is why this stays ⛔-adjacent rather than ✅:** per-split cost went ×2.05 → **×1.50–1.71**
+  per doubling, NOT flat. Four O(block)-per-split walks remain (`analyzeBlockPressure` 45%, `sweepBlockPressure` 32%,
+  `reindexSplitValues` 14%, `fillLiveBeforeOp` 5%) and on ONE basic block the dirty region IS the function. ⇒ **its own
+  rung: "the splitter's positional structure"** in Future rungs. ⚠ **And the corpus STILL cannot see this**: the ladder's
+  pressured functions are LOOPS, which are in confined mode from their first analysis, so the deferral reads a true Δ0
+  on the standing instrument — the ladder that CAN see it is committed at `Testing/ladders/genwidelive.sh`.
 
 ### ⬜ FILED BY THE UNDECLARED-CAST RUNG — four
 - **`5 as Color` (declared enum) is accepted.** shv2 erases an enum to `integer`, so it is `5 as int` and coherent;
