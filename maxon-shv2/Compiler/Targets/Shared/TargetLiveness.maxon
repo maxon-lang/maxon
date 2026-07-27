@@ -952,14 +952,8 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	var maxPressure = zeroClassRow()
 	var demand = zeroClassRow()
-	// HOISTED, and it must be a LOCAL. A union value is a heap object, so building it inside the loop was
-	// one allocation per BLOCK of every function the allocator sees. A module-level `let` would hoist it
-	// further still — and must not be used: a global holding a MANAGED value is consumed by its first
-	// pass to a consuming parameter and every later read is a nil dereference (verified: it panics in
-	// `scannedValuesHold` on the first function compiled).
-	let rebuildFor = ScannedValues.all
 	for i in 0 upto numBlocks 'eachBlock'
-		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, rebuildFor: rebuildFor, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
+		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand, opFacts: opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			try blockPressure.set(classRowIndex(i, class: class), value: classRowGet(demand, class: class)) otherwise panic("computeLivenessOn: blockPressure.set OOB for block {i}")
@@ -2278,11 +2272,11 @@ end 'SplitValues'
 // the whole function and REBUILDING the part of it a split invalidated, so each scan is one
 // implementation rather than two that can drift on what a use site (or a clobber) is.
 //
-// TWO scans take it, and they take it for the same reason. `indexBlockFacts` records use/def facts for
-// these values; `sweepBlockPressure` re-ORs each clobber mask into these values' `forbidden` entries.
-// A split CLEARS exactly the victim's and the fresh ids' entries in both structures and leaves every
-// other value's alone, so a rebuild that covers more than these is not merely wasted work — it is the
-// same work, done again, on data that already holds the answer.
+// ONE scan takes it — `indexBlockFacts`, which records use/def facts for these values. A split CLEARS
+// exactly the victim's and the fresh ids' entries and leaves every other value's alone, so a rebuild
+// that covers more than these is not merely wasted work: it is the same work, done again, on data that
+// already holds the answer. (`sweepBlockPressure` took it too, until the splitter stopped re-deriving
+// `forbidden` by walking a block at all — see `PressureIndex.clobberOr`.)
 export union ScannedValues
 	all
 	split(values SplitValues)
@@ -2304,61 +2298,80 @@ end 'scannedValuesHold'
 // number leads with its block.
 function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, which ScannedValues, buf OperandList, ordered OpIndexArray, opFacts OpVariantFacts) returns OpSeq
 	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexBlockFacts: loopDepth.get OOB")) != 0
-
-	for arg in block.blockArgs 'eachPhi'
-		if scannedValuesHold(which, valueId: arg.valueId) 'recorded'
-			index.setPhiDef(arg.valueId, blockLocal: blockLocal)
-		end 'recorded'
-	end 'eachPhi'
+	indexBlockArgDefs(index, block: block, blockLocal: blockLocal, which: which)
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
 	let opCount = ordered.count()
 	for pos in 0 upto opCount 'eachOp'
-		let opIdx = try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB")
-
-		let op = try module.ops.get(opIdx) otherwise panic("indexBlockFacts: opIdx not in module.ops")
-		targetOpOperands(op, buf: buf)
-		// ONE question now, where there used to be two: the wider "is the value resident in a slot after
-		// this op?" and the narrower "did this op STORE it there?" are two readings of one role.
-		let slotRole = opFacts.slotRoleOf(op)
-
-		for k in 0 upto buf.count() 'eachOperand'
-			let o = try buf.get(k) otherwise panic("indexBlockFacts: buf.get OOB")
-			if not operandIsVirtual(o) 'physical'
-				continue
-			end 'physical'
-			let v = operandValueId(o)
-			if not scannedValuesHold(which, valueId: v) 'notRecorded'
-				continue
-			end 'notRecorded'
-
-			if inLoop 'insideLoop'
-				index.setTouchesLoop(v)
-			end 'insideLoop'
-
-			// Residency is recorded for the op's ONE virtual operand whichever side it is on: a
-			// `storeSlotReg`'s source (a use) and a `loadRegSlot`'s destination (a def) both end with
-			// the value sitting in that slot. Every other op touches no slot.
-			index.recordSlotResidency(slotRole, op: op, valueId: v)
-
-			if operandIsDef(o) 'def'
-				index.setOpDef(v, opIdx: opIdx, blockLocal: blockLocal)
-				continue
-			end 'def'
-
-			index.recordSpillStore(slotRole, valueId: v)
-
-			if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
-				index.addUseRecord(v, blockLocal: blockLocal, opIdx: opIdx, seq: seqAt(blockLocal, pos: pos), onEdge: false)
-			end 'firstOccurrence'
-		end 'eachOperand'
+		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, pos: pos, opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
 	end 'eachOp'
 
-	// The EDGE uses go LAST for this block, at the terminator's sequence — where the edge is
-	// genuinely read (after every body op). That ordering is what lets the reload a split places
-	// before the block's first after-peak use dominate the edge too.
+	indexBlockEdgeUses(index, block: block, blockLocal: blockLocal, opCount: opCount, which: which)
+	return opCount
+end 'indexBlockFacts'
+
+// The block-arg DEFS of one block. A block-arg's def is its block's entry, so it carries no position and
+// no ordering constraint.
+function indexBlockArgDefs(index UseIndex, block IrBlock, blockLocal CfgIndex, which ScannedValues)
+	for arg in block.blockArgs 'eachPhi'
+		if scannedValuesHold(which, valueId: arg.valueId) 'recorded'
+			index.setPhiDef(arg.valueId, blockLocal: blockLocal)
+		end 'recorded'
+	end 'eachPhi'
+end 'indexBlockArgDefs'
+
+// ONE op's index facts — its defs, its uses and the per-value flags they imply. Factored out of the
+// whole-block walk so a SPLIT can run it over the handful of ops that can name a value it moved instead
+// of over every op of every block it dirtied (`reindexSplitValues`).
+//
+// ⚠ THE CALLER OWNS THE ORDER. `addUseRecord` appends at each value's tail and REFUSES a record that
+// would land out of sequence, so ops must be offered in ascending (block, position) — which the
+// whole-block walk gets from its own loop and the split gets by sorting its candidate positions.
+function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex, which ScannedValues, buf OperandList, opFacts OpVariantFacts)
+	let inLoop = (try cfg.loopDepth.get(blockLocal) otherwise panic("indexOneOpFacts: loopDepth.get OOB")) != 0
+	let op = try module.ops.get(opIdx) otherwise panic("indexOneOpFacts: opIdx not in module.ops")
+	targetOpOperands(op, buf: buf)
+	// ONE question now, where there used to be two: the wider "is the value resident in a slot after
+	// this op?" and the narrower "did this op STORE it there?" are two readings of one role.
+	let slotRole = opFacts.slotRoleOf(op)
+
+	for k in 0 upto buf.count() 'eachOperand'
+		let o = try buf.get(k) otherwise panic("indexOneOpFacts: buf.get OOB")
+		if not operandIsVirtual(o) 'physical'
+			continue
+		end 'physical'
+		let v = operandValueId(o)
+		if not scannedValuesHold(which, valueId: v) 'notRecorded'
+			continue
+		end 'notRecorded'
+
+		if inLoop 'insideLoop'
+			index.setTouchesLoop(v)
+		end 'insideLoop'
+
+		// Residency is recorded for the op's ONE virtual operand whichever side it is on: a
+		// `storeSlotReg`'s source (a use) and a `loadRegSlot`'s destination (a def) both end with
+		// the value sitting in that slot. Every other op touches no slot.
+		index.recordSlotResidency(slotRole, op: op, valueId: v)
+
+		if operandIsDef(o) 'def'
+			index.setOpDef(v, opIdx: opIdx, blockLocal: blockLocal)
+			continue
+		end 'def'
+
+		index.recordSpillStore(slotRole, valueId: v)
+
+		if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
+			index.addUseRecord(v, blockLocal: blockLocal, opIdx: opIdx, seq: seqAt(blockLocal, pos: pos), onEdge: false)
+		end 'firstOccurrence'
+	end 'eachOperand'
+end 'indexOneOpFacts'
+
+// The EDGE uses of one block, which go LAST for it, at the terminator's sequence — where the edge is
+// genuinely read (after every body op). That ordering is what lets the reload a split places before the
+// block's first after-peak use dominate the edge too.
+function indexBlockEdgeUses(index UseIndex, block IrBlock, blockLocal CfgIndex, opCount OpSeq, which ScannedValues)
 	for edge in block.branchEdges 'eachEdge'
 		for argId in edge.argIds 'eachArg'
 			if not scannedValuesHold(which, valueId: argId) 'notRecorded'
@@ -2369,15 +2382,21 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 				continue
 			end 'dedupe'
 			if opCount == 0 'noTerminator'
-				panic("indexBlockFacts: block local {blockLocal} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
+				panic("indexBlockEdgeUses: block local {blockLocal} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
 			end 'noTerminator'
-			let lastOpIdx = try ordered.get(opCount - 1) otherwise panic("indexBlockFacts: ordered.get OOB")
-			index.addUseRecord(argId, blockLocal: blockLocal, opIdx: lastOpIdx, seq: seqAt(blockLocal, pos: opCount - 1), onEdge: true)
+			index.addUseRecord(argId, blockLocal: blockLocal, opIdx: lastOpOf(block), seq: seqAt(blockLocal, pos: opCount - 1), onEdge: true)
 		end 'eachArg'
 	end 'eachEdge'
+end 'indexBlockEdgeUses'
 
-	return opCount
-end 'indexBlockFacts'
+// The block's LAST op in execution order — its terminator, or its last body op when it has none. The
+// sequence anchor every edge use of the block is recorded at.
+function lastOpOf(block IrBlock) returns OpIndex
+	if block.hasTerminatorOp() 'terminated'
+		return block.terminatorIndex()
+	end 'terminated'
+	return try block.opRefs.get(block.opRefs.count() - 1) otherwise panic("lastOpOf: block '{String.from(block.label)}' has neither a terminator nor a body op to anchor an edge use at")
+end 'lastOpOf'
 
 // Build the index in ONE pass over the function: create it empty, then record every def, flag and use
 // site on the way through — through the index's own mutators, which are the ones a SPLIT edits it with
@@ -2398,33 +2417,108 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	return index
 end 'buildUseIndex'
 
-// Re-derive every index fact about the values a split TOUCHED, by re-reading the DIRTY BLOCKS — and
-// nothing else. This is the `buildUseIndex` a split needs, restricted to what a split can change.
+// Re-derive every index fact about the values a split TOUCHED — from the ops that can NAME one, not
+// from the blocks that hold them. This is the `buildUseIndex` a split needs, restricted to what a split
+// can change.
 //
-// WHY THE DIRTY REGION IS ENOUGH — i.e. why it is a SUPERSET of the blocks that hold an op naming
-// these values after the split:
+// ⭐ THE CANDIDATE OPS ARE KNOWN, AND THERE ARE O(uses of ONE value) OF THEM. Re-reading whole blocks
+// was the third of the four O(block)-per-split walks, and on a function that is one basic block that is
+// the whole function once per split. The set is exactly:
 //
-//  • the VICTIM's uses can only have moved WITHIN the blocks that already held them (a split rewrites
-//    uses, it never relocates one), and its def is where it always was — and the caller seeds the
-//    region with the victim's whole pre-split live range, its use blocks and its def block, all read
-//    from the index BEFORE the mutation. The one op it GAINS is its spill store, which is anchored at
-//    its def.
-//  • every FRESH id is defined by an op the split inserted, and used only inside that op's own block,
-//    which the caller registers as dirty from the insertion record (`SplitEdits`).
+//  • every op that named the VICTIM before the split. Those are its use records — which are still on
+//    its thread at this point, with their sequence numbers already repaired by `SplitEdits.commit` —
+//    plus its defining op. After the split each of them names either the victim still (a before-peak
+//    use it kept) or the fresh id it was rewritten to, and BOTH need re-recording.
+//  • every op the split INSERTED (`SplitEdits.insertedSlots`): the spill store, which is a use of the
+//    victim, and each reload or re-emitted constant, which DEFINES a fresh id.
 //
-// `dirty` MUST be in ASCENDING block order: a value's use thread is held ascending by sequence, and
-// `addUseRecord` refuses outright a record that would land out of order.
-export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIndex, dirty BlockSet, split SplitValues, scratch PressureSweepScratch, opFacts OpVariantFacts)
+// There is no third case. A split rewrites operands and splices ops; it never makes an op it did not
+// touch name a value it minted, and `rewriteEdgeArgsIn` reaches only EDGES, which are re-scanned per
+// dirty block below (an edge arg list is bounded by the successor's phi count, not by the block).
+//
+// ⚠ ORDER IS THE CONTRACT. A value's thread is held ascending by sequence and `addUseRecord` REFUSES a
+// record that would land out of order, so the candidates are offered in ascending SLOT order — which is
+// ascending (block, position), because `PressureIndex` lays a block's run out after every earlier
+// block's and an op's slot rises with its position.
+export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIndex, dirty BlockSet, split SplitValues, pressure PressureIndex, edits SplitEdits, candidates DenseColumn, sortBuf DenseColumn, scratch PressureSweepScratch, opFacts OpVariantFacts)
+	collectReindexCandidates(index, pressure: pressure, edits: edits, victim: split.victim, out: candidates)
+	sortColumnAscending(candidates, scratch: sortBuf)
+
 	index.resetValue(split.victim)
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
 		index.resetValue(f)
 	end 'eachFresh'
 
 	let which = ScannedValues.split(split)
+	var next = 0 as ColumnLength
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
-		_ = indexBlockFacts(module, cfg: cfg, index: index, blockLocal: dirty.at(k), which: which, buf: scratch.buf, ordered: scratch.ordered, opFacts: opFacts)
+		let blockLocal = dirty.at(k)
+		let block = blockAt(module, topo: cfg.topo, local: blockLocal)
+		indexBlockArgDefs(index, block: block, blockLocal: blockLocal, which: which)
+
+		// The candidates sitting in THIS block. Both lists are ascending and every candidate is in some
+		// dirty block, so one cursor walks them together — no search, no per-block filter.
+		let runEnd = pressure.exitSlotOf(blockLocal)
+		while next < candidates.count() 'eachCandidateHere'
+			let slot = try candidates.get(next) otherwise panic("reindexSplitValues: candidates.get OOB at {next}")
+			if slot > runEnd 'inALaterBlock'
+				break
+			end 'inALaterBlock'
+			// A candidate BELOW this block's run belongs to an earlier block — and every earlier block that
+			// is dirty has already consumed its own. So one that survives to here sits in a block the caller
+			// never registered, and would be indexed against the wrong block's positions: a use record whose
+			// sequence number names a block it is not in.
+			if slot < pressure.firstSlotOf(blockLocal) 'inAnUnregisteredEarlierBlock'
+				panic("reindexSplitValues: a candidate op of value {split.victim}'s split sits at slot {slot}, below block {blockLocal}'s run — its own block is not in the dirty region")
+			end 'inAnUnregisteredEarlierBlock'
+			if next == 0 or slot != (try candidates.get(next - 1) otherwise panic("reindexSplitValues: candidates.get OOB at {next - 1}")) 'notAlreadyDone'
+				indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, pos: pressure.positionOfSlot(blockLocal, slot: slot), opIdx: pressure.opAtSlot(slot), which: which, buf: scratch.buf, opFacts: opFacts)
+			end 'notAlreadyDone'
+			next = next + 1
+		end 'eachCandidateHere'
+
+		indexBlockEdgeUses(index, block: block, blockLocal: blockLocal, opCount: pressure.opCountOf(blockLocal), which: which)
 	end 'eachDirtyBlock'
+
+	if next != candidates.count() 'candidatesOutsideTheDirtyRegion'
+		panic("reindexSplitValues: {candidates.count() - next} candidate op(s) of value {split.victim}'s split sit outside the dirty region, so the region is not the superset the incremental update rests on — a mutator has placed an op, or moved a use, into a block the caller never registered")
+	end 'candidatesOutsideTheDirtyRegion'
 end 'reindexSplitValues'
+
+// Every op the split can have made name the victim or one of the ids it minted, as SLOTS: the ops that
+// named the victim BEFORE it (still on its thread, with repaired sequence numbers), its defining op, and
+// the ops the split spliced in.
+//
+// ⚠ IT MUST RUN BEFORE `resetValue`, which is what detaches the victim's thread — the thread IS the
+// record of where it was named.
+function collectReindexCandidates(index UseIndex, pressure PressureIndex, edits SplitEdits, victim ValueId, out DenseColumn)
+	out.clear()
+
+	let useSites = index.useCount(victim)
+	if useSites > 0 'used'
+		var record = index.firstUseOf(victim)
+		for _ in 0 upto useSites 'eachUse'
+			// An EDGE use names no operand of the op it is anchored at; the per-block edge scan is what
+			// re-records it.
+			match index.useKindAt(record) 'kind'
+				edge then break 'kind'
+				op then out.push(pressure.slotOfPosition(index.useBlockAt(record), pos: index.usePosAt(record)))
+			end 'kind'
+			record = index.nextUseOf(record)
+		end 'eachUse'
+	end 'used'
+
+	// The DEF, unless the split dropped it — a constant every one of whose uses was rematerialized has no
+	// reader left, and `SplitEdits` removes it, vacating its slot.
+	if index.defKindOf(victim) == ValueDefKind.opDef 'definedByAnOp'
+		let defSlot = pressure.defSlotOf(victim)
+		if pressure.slotHoldsOp(defSlot) 'stillThere'
+			out.push(defSlot)
+		end 'stillThere'
+	end 'definedByAnOp'
+
+	edits.appendInsertedSlots(out)
+end 'collectReindexCandidates'
 
 // Is operand `k` the FIRST virtual USE of its value in this op? An op reading one value twice must
 // still yield ONE use site — the per-OP granularity a split's before/after-the-peak partition is
@@ -2734,23 +2828,15 @@ end 'PressureSweepScratch'
 // carrying the reuse-copy transient, plus its dead-phi reservations). `maxPressure` is the max of
 // these over the function — the χ = ω the feasibility decision needs.
 //
-// IT IS PER BLOCK BECAUSE THE SPLITTER RE-RUNS IT PER BLOCK. A live-range split changes the ops and
-// the live sets of only the blocks it touched, so the incremental update re-sweeps exactly those and
-// leaves the rest alone. Two things make that sound, and neither is an approximation:
+// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY. It used to be per block because the SPLITTER re-ran it per
+// dirty block — and on a function that is one basic block that is a walk of the whole function, once
+// per split. All three of its outputs are now restated against what a split actually moved:
+// `forbidden` from `PressureIndex.clobberOr` (a range OR per block of the value's range),
+// the dead-phi count only for the one block a block-arg's liveness can move in, and the demand off the
+// positional index in O(1). See `rebuildForbiddenOf`, `refreshDeadPhisFor` and `refreshBlockDemands`.
 //
-//  • `forbidden` only ever ORs. Re-sweeping a block the split did not change re-folds bits the values
-//    there already carry, so it is IDEMPOTENT; and the ops a split INSERTS (`storeSlotReg`,
-//    `loadRegSlot`, a constant materialization) all carry `implicitDefs == 0` and no physical def
-//    operand, so a value newly live across one is forbidden nothing. The one mask that must SHRINK is
-//    the victim's — its range is cut at the peak — and the caller ZEROES that one before re-sweeping
-//    (`LivenessResult.clearForbidden`).
-//  • the dead-phi count and the register demand are functions of THIS block's ops and live sets alone.
-//
-// ⚠ THE SPLITTER'S `analyzeBlockPressure` WALKS THE SAME BLOCK BACKWARD OVER THE SAME OPS, AND THE TWO
-// ARE ORDERED RATHER THAN REDUNDANT — this one WRITES the `forbidden` masks and the dead-phi count
-// that one READS (through `EffectivePools` and `deadPhiCountOf`), across ALL the dirty blocks before
-// any of it is read. Fusing them reads a value's effective pool partway through its own rebuild. The
-// argument in full, with the third reason the two block SETS differ, is in that function's header.
+// It stays per block because the build calls it per block, and because that is the granularity its
+// three outputs are keyed at.
 //
 // A DEAD block-arg phi (never used, not live-out — e.g. the continuation phi a merge mints for a value
 // nothing reads after an `if`) is never "live", so the op sweep counts it as zero. But the colorer
@@ -2760,7 +2846,7 @@ end 'PressureSweepScratch'
 // exact χ the colorer needs, so the "coloring cannot fail when maxPressure <= pool" invariant — and the
 // E5001 deficit count — stay sound. The count is RECORDED per block, not just folded into the max: the
 // splitter's peak-finder needs the same number at every op of the block.
-export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, rebuildFor ScannedValues, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
+export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn, opFacts OpVariantFacts)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
@@ -2787,7 +2873,7 @@ export function sweepBlockPressure(module TargetModule, topo FuncTopology, block
 	collectBlockOps(block, out: ordered)
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, rebuildFor: rebuildFor, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts)
+		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts)
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			classRowSet(blockMax, class: class, value: maxOf(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
@@ -2976,7 +3062,7 @@ end 'ParamCrossForbid'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, rebuildFor ScannedValues, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	// This also fills `buf` with the op's operands, which everything below reads.
 	let clobberMask = opClobberMask(op, buf: buf, opFacts: opFacts)
@@ -2989,7 +3075,7 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	addReuseTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
 	if clobberMask != 0 'hasClobber'
-		applyForbidden(liveRow, forbidden: forbidden, rebuildFor: rebuildFor, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
+		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
 	end 'hasClobber'
 
 	// An op's EXPLICIT virtual operands must additionally avoid the op's IMPLICIT
@@ -3122,22 +3208,18 @@ export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex,
 	end 'addUses'
 end 'stepRowBackwardOverOperands'
 
-// For each `rebuildFor` value LIVE ACROSS this op (in `liveRow`, and not one of the op's own defs),
-// add `clobberMask` to its forbidden registers.
+// For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own defs), add
+// `clobberMask` to its forbidden registers.
 //
-// ⚠ THE SCOPE IS WHAT KEEPS THIS OFF THE SPLITTER'S QUADRATIC. `forbidden` only ever ORs, so re-ORing
-// a mask a value ALREADY carries changes nothing — and after a split every value except the victim and
-// the ids it minted already carries every bit it will ever have (`refreshAfterSplit` clears exactly
-// those entries, and the ops a split inserts have an empty clobber mask, so no other value can gain a
-// bit). Re-deriving the whole live set's masks was therefore O(clobber-ops × live) PER SPLIT — cubic on
-// a block where Theta(block) values are live across Theta(block) calls — to reproduce a column that was
-// already right. Under `split` the walk is over the two or three ids that were cleared.
+// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY, and it used to take a SCOPE so a split could re-derive just
+// the handful of masks it invalidated by re-walking every op of every dirty block. That is what the
+// splitter now reads off `PressureIndex.clobberOr` — one RANGE OR per block of the value's live range
+// instead of a walk of each — so the narrow scope has no caller left and the parameter went with it.
 //
-// The `all` arm walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op,
-// so testing each value id would be O(clobber-ops × values) on the initial build too. `liveBuf` is
-// scratch reused across ops.
-function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, rebuildFor ScannedValues, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
-	collectForbidTargets(liveRow, rebuildFor: rebuildFor, wordsPerRow: wordsPerRow, out: liveBuf)
+// It walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op, so testing
+// each value id would be O(clobber-ops × values). `liveBuf` is scratch reused across ops.
+function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, wordsPerRow BitWordCount, liveBuf ValueIdArray)
+	bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveBuf)
 	for v in liveBuf 'eachTarget'
 		if operandDefinesValue(buf, v: v) 'ownDef'
 			continue
@@ -3146,40 +3228,6 @@ function applyForbidden(liveRow BitWordArray, forbidden RegMaskColumn, rebuildFo
 		try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
 	end 'eachTarget'
 end 'applyForbidden'
-
-// The values live across this op whose `forbidden` entry it must OR into — the ONE place the scope
-// turns into a list, so the OR above stays a single implementation over both.
-function collectForbidTargets(liveRow BitWordArray, rebuildFor ScannedValues, wordsPerRow BitWordCount, out ValueIdArray)
-	match rebuildFor 'scope'
-		all then bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: out)
-		split(values) then collectLiveSplitValues(liveRow, values: values, out: out)
-	end 'scope'
-end 'collectForbidTargets'
-
-// The split's own ids that are live across this op: the VICTIM's one bit, then the SET BITS of the
-// contiguous stretch its fresh ids occupy. Its `all` counterpart walks the row's set bits rather than
-// the value space, and so does this one — over a range instead of the whole row.
-//
-// ⚠ IT MUST NOT WALK THE FRESH IDS AND TEST EACH, WHICH IS WHAT IT USED TO DO, AND THE RANGE HAS NO
-// BOUND. A split mints one fresh id per RUN of the victim's uses (`spillOneValue` — a run breaks at
-// every block boundary) or one per USE (`rematerializeConstant`), so the count is a property of the
-// PROGRAM: MEASURED at 6 on the committed suite as it stands (`streaming-subprocess/*`), and at
-// exactly M for a value read in M separate blocks — 8 / 16 / 32 / 64 fresh ids at M = 8 / 16 / 32 /
-// 64. This runs at every CLOBBER op of every dirty block, and the dirty region of that split HOLDS
-// those M blocks, so a per-id test is Θ(clobber-ops × M) per split — the same shape of quadratic the
-// `all` arm walks set bits to avoid, reintroduced on the arm that exists to remove it. Over the row
-// it is Θ(range/64 + ids actually live there). "The probe never saw more than 8" is an observation
-// about a corpus, not a bound on a range the program picks.
-function collectLiveSplitValues(liveRow BitWordArray, values SplitValues, out ValueIdArray)
-	out.clear()
-	// The victim is a PRE-EXISTING id and the fresh ones are minted above the value space it lived in,
-	// so it always precedes them and the list stays ascending, exactly as the whole-row walk's is.
-	if bitsetTest(liveRow, base: 0, bit: values.victim) 'victimLiveHere'
-		out.push(values.victim)
-	end 'victimLiveHere'
-
-	bitsetAppendRange(liveRow, base: 0, fromBit: values.freshFrom, toBit: values.freshTo, out: out)
-end 'collectLiveSplitValues'
 
 function operandDefinesValue(buf OperandList, v ValueId) returns bool
 	for o in buf 'each'
@@ -3448,14 +3496,35 @@ function slotOfSlotOp(op TargetOp) returns SpillSlot
 	end 'slot'
 end 'slotOfSlotOp'
 
-// The block's ops in execution order: body `opRefs` then the terminator op.
+// How many ops a block lays out in execution order — its body plus its terminator.
+export function blockOpCount(block IrBlock) returns BlockOpPos
+	return block.opRefs.count() + (1 if block.hasTerminatorOp() else 0)
+end 'blockOpCount'
+
+// The op at forward position `pos` — THE one statement of a block's execution order, which is its body
+// `opRefs` followed by its terminator.
+//
+// ⚠ IT IS WHAT `collectBlockOps` IS BUILT FROM, and that is the point rather than a convenience. A
+// consumer that wants a SUFFIX of a block (the splitter's `fillLiveBeforeOp`, walking back from the end
+// to the peak) must not build the whole list to reach it, and must not spell the order out a second
+// time either: a positional accessor that put the terminator anywhere else would hand back an op the
+// list-building consumers never see there, and the two would disagree silently about which op the peak
+// is.
+export function blockOpAt(block IrBlock, pos BlockOpPos) returns OpIndex
+	if pos < block.opRefs.count() 'aBodyOp'
+		return try block.opRefs.get(pos) otherwise panic("blockOpAt: opRefs.get OOB at {pos} of block '{String.from(block.label)}'")
+	end 'aBodyOp'
+	if pos >= blockOpCount(block) 'pastTheEnd'
+		panic("blockOpAt: position {pos} is past the end of block '{String.from(block.label)}', which lays out {blockOpCount(block)} op(s)")
+	end 'pastTheEnd'
+	return block.terminatorIndex()
+end 'blockOpAt'
+
+// The block's ops in execution order.
 export function collectBlockOps(block IrBlock, out OpIndexArray)
-	for opIdx in block.opRefs 'eachOp'
-		out.push(opIdx)
+	for pos in 0 upto blockOpCount(block) 'eachOp'
+		out.push(blockOpAt(block, pos: pos))
 	end 'eachOp'
-	if block.hasTerminatorOp() 'hasTerm'
-		out.push(block.terminatorIndex())
-	end 'hasTerm'
 end 'collectBlockOps'
 
 // Larger of two non-negative integers. Stated in the shared REPRESENTATION (`DenseInt`) rather than

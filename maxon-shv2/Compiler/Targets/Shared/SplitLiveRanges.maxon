@@ -504,10 +504,14 @@ let NoStoreAnchorPressure = RegisterFileSize + 1
 // THE REMOVAL is a scalar rather than a list entry: a split removes at most ONE op — a fully
 // rematerialized constant's def, which nothing reads any more — and it is applied AFTER the splices,
 // exactly where it was applied when it was applied by hand.
-type SplitEdits
+export type SplitEdits
 	var blocks as CfgIndexArray
 	var positions as BlockOpPosArray
 	var opIdxs as OpIndexArray
+	// The SLOT each spliced op was seated at, filled as the batch is materialized. It is what
+	// `reindexSplitValues` re-reads them from: an op index is module-wide and a position moves under the
+	// next splice, while a slot is the coordinate that does not move (see `PressureIndex`).
+	var insertedSlots as DenseColumn
 	var hasRemoval as bool
 	var removalBlock as CfgIndex
 	var removalPos as BlockOpPos
@@ -517,13 +521,14 @@ type SplitEdits
 	var removalOpIdx as OpIndex
 
 	static function create() returns SplitEdits
-		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0}
+		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), insertedSlots: DenseColumn.create(), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0}
 	end 'create'
 
 	function clear()
 		self.blocks.clear()
 		self.positions.clear()
 		self.opIdxs.clear()
+		self.insertedSlots.clear()
 		self.hasRemoval = false
 	end 'clear'
 
@@ -564,7 +569,7 @@ type SplitEdits
 	// splice into one moves nothing in any other, which is the whole reason sequence numbers are
 	// block-relative — so the runs may be taken in any order, and the removal's block is picked up at
 	// the end when it took no splice of its own.
-	function commit(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet, pressure PressureIndex, relayout PressureRelayoutScratch, buf OperandList)
+	function commit(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet, pressure PressureIndex, relayout PressureRelayoutScratch, opFacts OpVariantFacts, buf OperandList)
 		var removalPending = self.hasRemoval
 		var k = 0 as SpliceBatchIndex
 		while k < self.blocks.count() 'eachBlockRun'
@@ -575,19 +580,19 @@ type SplitEdits
 			end 'sameBlock'
 
 			let withRemoval = removalPending and self.removalBlock == blockLocal
-			self.commitBlock(module, topo: topo, index: index, dirty: dirty, pressure: pressure, relayout: relayout, buf: buf, blockLocal: blockLocal, from: k, to: runEnd, withRemoval: withRemoval)
+			self.commitBlock(module, topo: topo, index: index, dirty: dirty, pressure: pressure, relayout: relayout, opFacts: opFacts, buf: buf, blockLocal: blockLocal, from: k, to: runEnd, withRemoval: withRemoval)
 			removalPending = removalPending and not withRemoval
 			k = runEnd
 		end 'eachBlockRun'
 
 		if removalPending 'removalBlockTookNoSplice'
-			self.commitBlock(module, topo: topo, index: index, dirty: dirty, pressure: pressure, relayout: relayout, buf: buf, blockLocal: self.removalBlock, from: 0, to: 0, withRemoval: true)
+			self.commitBlock(module, topo: topo, index: index, dirty: dirty, pressure: pressure, relayout: relayout, opFacts: opFacts, buf: buf, blockLocal: self.removalBlock, from: 0, to: 0, withRemoval: true)
 		end 'removalBlockTookNoSplice'
 	end 'commit'
 
 	// Materialize ONE block's edits: `[from, to)` of the recorded splices, plus the removal when it
 	// belongs to this block.
-	function commitBlock(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet, pressure PressureIndex, relayout PressureRelayoutScratch, buf OperandList, blockLocal CfgIndex, from SpliceBatchIndex, to SpliceBatchIndex, withRemoval bool)
+	function commitBlock(module TargetModule, topo FuncTopology, index UseIndex, dirty BlockSet, pressure PressureIndex, relayout PressureRelayoutScratch, opFacts OpVariantFacts, buf OperandList, blockLocal CfgIndex, from SpliceBatchIndex, to SpliceBatchIndex, withRemoval bool)
 		var block = blockAt(module, topo: topo, local: blockLocal)
 		spliceOpRefs(block, positions: self.positions, opIdxs: self.opIdxs, from: from, to: to)
 		index.addOps(to - from)
@@ -601,8 +606,7 @@ type SplitEdits
 			let entry = from + j
 			let opIdx = try self.opIdxs.get(entry) otherwise panic("SplitEdits.commitBlock: opIdxs.get OOB at {entry}")
 			let at = (try self.positions.get(entry) otherwise panic("SplitEdits.commitBlock: positions.get OOB at {entry}")) + j
-			targetOpOperands(try module.ops.get(opIdx) otherwise panic("SplitEdits.commitBlock: spliced op {opIdx} is not in module.ops"), buf: buf)
-			_ = pressure.insertOp(module, topo: topo, scratch: relayout, blockLocal: blockLocal, pos: at, opIdx: opIdx, buf: buf)
+			self.insertedSlots.push(pressure.insertOp(module, topo: topo, scratch: relayout, opFacts: opFacts, blockLocal: blockLocal, pos: at, opIdx: opIdx, buf: buf))
 		end 'eachSplice'
 
 		if withRemoval 'dropTheDeadDef'
@@ -663,6 +667,16 @@ type SplitEdits
 			record = index.nextUseInBlockOf(record)
 		end 'eachRecord'
 	end 'resequence'
+
+	// The slots this batch's spliced ops were seated at, appended to `out`.
+	//
+	// ⚠ A RE-SPACE INVALIDATES THEM, and cannot happen between the seat and this read: `commit` runs to
+	// completion before anything asks, and the only thing that re-spaces is `insertOp` — which does so
+	// BEFORE it seats, so every slot it has already returned in this batch is re-derived by the same
+	// re-space. That is why they are read back here rather than carried across the split.
+	export function appendInsertedSlots(out DenseColumn)
+		out.append(self.insertedSlots)
+	end 'appendInsertedSlots'
 
 	// How many of the splices in `[from, to)` — ascending by position — land at or before block position
 	// `pos`, and so shift whatever sat there. Binary search: a block can take as many splices as it has
@@ -971,6 +985,16 @@ export type PressureIndex
 	var nodeOps as DenseColumn
 	var nodeSum as PressureDeltaColumn
 	var nodeBest as PressureDeltaColumn
+	// The OR of every op's clobber mask in the subtree — the second aggregate over the same slots, and
+	// the one `forbidden` is rebuilt from. A value live across a stretch of a block must avoid every
+	// register any op in that stretch writes, which is a RANGE OR over exactly this, so the mask a split
+	// has to restate costs O(log ops) per block of the range instead of a walk of it.
+	//
+	// ⚠ IT IS STATIC, and that is what makes one column enough: every op a split INSERTS carries an empty
+	// clobber (a `storeSlotReg`, a `loadRegSlot` and a constant materialization each have `implicitDefs`
+	// of 0 and no physical def operand — the same fact `sweepBlockPressure`'s idempotence rests on), so a
+	// splice never changes any range's answer. It is set once, where the op is seated.
+	var nodeClobber as RegMaskColumn
 	// Where each value is DEFINED, as a slot. `UseIndex` records a value's def OP and BLOCK, and neither
 	// answers "which leaf is that?": a leaf is addressed by slot, an op index is module-wide (a column
 	// over it would be Theta(module ops) per function — the shape `OpVariantFacts` refuses), and a
@@ -979,7 +1003,7 @@ export type PressureIndex
 	var defSlot as DenseColumn
 
 	export static function create() returns PressureIndex
-		return Self{slotCount: 1, blockFirst: DenseColumn.create(), blockLen: DenseColumn.create(), blockNode: DenseColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: DenseColumn.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), defSlot: DenseColumn.create()}
+		return Self{slotCount: 1, blockFirst: DenseColumn.create(), blockLen: DenseColumn.create(), blockNode: DenseColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: DenseColumn.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: DenseColumn.create()}
 	end 'create'
 
 	// ----------------------------------------------------------------------
@@ -1026,6 +1050,7 @@ export type PressureIndex
 		self.nodeOps.refill(self.slotCount + self.slotCount, value: 0)
 		self.nodeSum.refill((self.slotCount + self.slotCount) * RegClassCount, value: 0)
 		self.nodeBest.refill((self.slotCount + self.slotCount) * RegClassCount, value: NoOpInSubtree)
+		self.nodeClobber.refill(self.slotCount + self.slotCount, value: 0)
 	end 'placeRuns'
 
 	// Size the index for a function, from the IR's own op counts.
@@ -1033,7 +1058,7 @@ export type PressureIndex
 		opCounts.refill(topo.numBlocks, value: 0)
 		for b in 0 upto topo.numBlocks 'eachBlock'
 			let block = blockAt(module, topo: topo, local: b)
-			try opCounts.set(b, value: block.opRefs.count() + (1 if block.hasTerminatorOp() else 0)) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
+			try opCounts.set(b, value: blockOpCount(block)) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
 		end 'eachBlock'
 		self.placeRuns(topo, opCounts: opCounts)
 	end 'layOut'
@@ -1063,14 +1088,15 @@ export type PressureIndex
 	// LEAVES
 	// ----------------------------------------------------------------------
 
-	// Seat `opIdx` at `slot`, and record that slot as the DEF slot of every value the op defines. `buf`
-	// must already hold the op's operands — every caller has just extracted them, and asking for them
-	// here rather than re-extracting is what keeps the seat O(operands).
+	// Seat `opIdx` at `slot`: record its CLOBBER mask, and record the slot as the DEF slot of every value
+	// the op defines. Both come out of one `opClobberMask`, which fills `buf` with the op's operands as
+	// its side effect — so the seat is O(operands) and the two facts are read from one extraction.
 	//
-	// The caller publishes the leaf's numbers and the change with `promote`.
-	function seatOp(slot PressureSlot, opIdx OpIndex, buf OperandList)
+	// The caller publishes the leaf's population numbers and the change with `promote`.
+	function seatOp(slot PressureSlot, op TargetOp, opIdx OpIndex, opFacts OpVariantFacts, buf OperandList)
 		try self.holdsOp.set(slot, value: true) otherwise panic("PressureIndex.seatOp: holdsOp.set OOB at slot {slot}")
 		try self.opAt.set(slot, value: opIdx) otherwise panic("PressureIndex.seatOp: opAt.set OOB at slot {slot}")
+		try self.nodeClobber.set(self.slotCount + slot, value: opClobberMask(op, buf: buf, opFacts: opFacts)) otherwise panic("PressureIndex.seatOp: nodeClobber.set OOB at slot {slot}")
 		for o in buf 'eachOperand'
 			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
 				try self.defSlot.set(operandValueId(o), value: slot) otherwise panic("PressureIndex.seatOp: value {operandValueId(o)} is defined at slot {slot} but is outside the index's value space")
@@ -1089,6 +1115,13 @@ export type PressureIndex
 	export function growValueSpace(newValueCount ValueId)
 		self.defSlot.growFilled(newValueCount, value: 0)
 	end 'growValueSpace'
+
+	// Does `slot` hold an op at all? The one question a caller holding a REMEMBERED slot has to ask: a
+	// split can drop the op that was there (a fully rematerialized constant's def), and the slot then
+	// names nothing.
+	export function slotHoldsOp(slot PressureSlot) returns bool
+		return try self.holdsOp.get(slot) otherwise panic("PressureIndex.slotHoldsOp: holdsOp.get OOB at slot {slot}")
+	end 'slotHoldsOp'
 
 	export function opAtSlot(slot PressureSlot) returns OpIndex
 		if not (try self.holdsOp.get(slot) otherwise panic("PressureIndex.opAtSlot: holdsOp.get OOB at slot {slot}")) 'notAnOp'
@@ -1144,6 +1177,8 @@ export type PressureIndex
 		let node = self.slotCount + slot
 		let isOp = try self.holdsOp.get(slot) otherwise panic("PressureIndex.refreshLeaf: holdsOp.get OOB at slot {slot}")
 		try self.nodeOps.set(node, value: 1 if isOp else 0) otherwise panic("PressureIndex.refreshLeaf: nodeOps.set OOB at leaf {node}")
+		// The clobber leaf is NOT restated here: it is a property of the op, written once by `seatOp`, and
+		// a leaf this vacates is zeroed by `removeOp` instead.
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			let delta = self.deltaAt(slot, class: class)
@@ -1159,6 +1194,7 @@ export type PressureIndex
 		let left = node + node
 		let right = left + 1
 		try self.nodeOps.set(node, value: (try self.nodeOps.get(left) otherwise panic("PressureIndex.combine: nodeOps.get OOB at {left}")) + (try self.nodeOps.get(right) otherwise panic("PressureIndex.combine: nodeOps.get OOB at {right}"))) otherwise panic("PressureIndex.combine: nodeOps.set OOB at {node}")
+		try self.nodeClobber.set(node, value: (try self.nodeClobber.get(left) otherwise panic("PressureIndex.combine: nodeClobber.get OOB at {left}")) or (try self.nodeClobber.get(right) otherwise panic("PressureIndex.combine: nodeClobber.get OOB at {right}"))) otherwise panic("PressureIndex.combine: nodeClobber.set OOB at {node}")
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			let leftSum = self.sumOf(left, class: class)
@@ -1286,6 +1322,38 @@ export type PressureIndex
 		return self.suffixFrom(blockLocal, slot: slot, class: class) - self.deltaAt(slot, class: class)
 	end 'liveAfterSlot'
 
+	// The OR of the clobber masks of every op in `[lo, hi]` — every register a value live ACROSS that
+	// stretch of `blockLocal` must avoid. Free slots carry 0, so a range stated in slots needs no
+	// rounding to the ops actually in it.
+	export function clobberOr(blockLocal CfgIndex, lo PressureSlot, hi PressureSlot) returns RegMask
+		if hi < lo 'emptyRange'
+			return 0
+		end 'emptyRange'
+		// The range is derived from a value's live interval IN THIS BLOCK, so a range reaching outside the
+		// block's run is a caller that mixed two blocks up — and the answer would silently carry another
+		// block's clobbers into this value's forbidden mask.
+		if lo < self.firstSlotOf(blockLocal) or hi > self.exitSlotOf(blockLocal) 'outsideTheBlock'
+			panic("PressureIndex.clobberOr: slots [{lo}, {hi}] are not inside block {blockLocal}'s run [{self.firstSlotOf(blockLocal)}, {self.exitSlotOf(blockLocal)}]")
+		end 'outsideTheBlock'
+
+		var mask = 0 as RegMask
+		var left = self.slotCount + lo
+		var right = self.slotCount + hi + 1
+		while left < right 'climb'
+			if left - (left / 2) * 2 == 1 'leftEdgeIsARightChild'
+				mask = mask or (try self.nodeClobber.get(left) otherwise panic("PressureIndex.clobberOr: nodeClobber.get OOB at node {left}"))
+				left = left + 1
+			end 'leftEdgeIsARightChild'
+			if right - (right / 2) * 2 == 1 'rightEdgeIsARightChild'
+				right = right - 1
+				mask = mask or (try self.nodeClobber.get(right) otherwise panic("PressureIndex.clobberOr: nodeClobber.get OOB at node {right}"))
+			end 'rightEdgeIsARightChild'
+			left = left / 2
+			right = right / 2
+		end 'climb'
+		return mask
+	end 'clobberOr'
+
 	// The sum of every leaf in `[slot, blockEnd]` — `liveBefore` at the op sitting in `slot`.
 	function suffixFrom(blockLocal CfgIndex, slot PressureSlot, class RegClass) returns PressureDelta
 		let top = self.nodeOf(blockLocal)
@@ -1351,19 +1419,19 @@ export type PressureIndex
 	// Seat a newly spliced op at forward position `pos` of `blockLocal` and return its slot. The slot is
 	// a FREE one strictly between the ops now at `pos - 1` and `pos`, so nothing already in the tree
 	// moves; when the gap between them is used up the whole layout is re-spaced first.
-	export function insertOp(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex, buf OperandList) returns PressureSlot
+	export function insertOp(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts, blockLocal CfgIndex, pos BlockOpPos, opIdx OpIndex, buf OperandList) returns PressureSlot
 		var slot = self.freeSlotAt(blockLocal, pos: pos)
 		if slot == self.exitSlotOf(blockLocal) 'gapUsedUp'
 			// The one place the gap labelling can fail — see `relayout` for why its worst case is the very
 			// cost this index removes, and therefore never a reason not to have it.
-			self.relayout(module, topo: topo, scratch: scratch)
+			self.relayout(module, topo: topo, scratch: scratch, opFacts: opFacts)
 			slot = self.freeSlotAt(blockLocal, pos: pos)
 			if slot == self.exitSlotOf(blockLocal) 'stillUsedUp'
 				panic("PressureIndex.insertOp: block {blockLocal} still has no free slot before position {pos} after a re-space that gave it {self.runLengthOf(blockLocal)} slots — the layout's gap arithmetic and `freeSlotAt`'s bounds have come apart")
 			end 'stillUsedUp'
 		end 'gapUsedUp'
 
-		self.seatOp(slot, opIdx: opIdx, buf: buf)
+		self.seatOp(slot, op: try module.ops.get(opIdx) otherwise panic("PressureIndex.insertOp: spliced op {opIdx} is not in module.ops"), opIdx: opIdx, opFacts: opFacts, buf: buf)
 		self.promote(blockLocal, slot: slot)
 		return slot
 	end 'insertOp'
@@ -1392,6 +1460,7 @@ export type PressureIndex
 	// returns to the empty state so nothing it carried survives as a phantom program point.
 	export function removeOp(blockLocal CfgIndex, slot PressureSlot)
 		try self.holdsOp.set(slot, value: false) otherwise panic("PressureIndex.removeOp: holdsOp.set OOB at slot {slot}")
+		try self.nodeClobber.set(self.slotCount + slot, value: 0) otherwise panic("PressureIndex.removeOp: nodeClobber.set OOB at slot {slot}")
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
 			self.setDelta(slot, class: class, value: 0)
@@ -1458,7 +1527,7 @@ export type PressureIndex
 				stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 
 				let slot = self.evenSlot(b, pos: forwardPos)
-				self.seatOp(slot, opIdx: opIdx, buf: buf)
+				self.seatOp(slot, op: op, opIdx: opIdx, opFacts: liveness.opFacts, buf: buf)
 				for classOrdinal in 0 upto RegClassCount 'eachClass'
 					let class = regClassAt(classOrdinal)
 					self.setDelta(slot, class: class, value: (classRowGet(liveByClass, class: class) as PressureDelta) - (classRowGet(before, class: class) as PressureDelta))
@@ -1477,14 +1546,24 @@ export type PressureIndex
 	// it — so it is a COPY of the index, never a re-derivation from the IR, and it is the only thing that
 	// can fail in the gap labelling.
 	//
-	// ⚠ ITS WORST CASE IS THE COST THIS INDEX REMOVES, WHICH IS WHY IT IS SOUND TO HAVE. A run of `k`
-	// ops holds `k * SlotGap` slots, and MIDPOINT insertion at one place halves the room each time, so a
-	// run tolerates `log2(SlotGap)` insertions nested at one spot and `SlotGap - 1` spread across each
-	// gap before it re-spaces. A pathological program that re-spaces on every insertion pays Θ(slots)
-	// per split — the block walk this replaces, with a far smaller constant (a column copy against an
-	// operand-model walk) — so the index is never WORSE than not having it, and on every shape measured
-	// it never re-spaces at all.
-	function relayout(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch)
+	// ⚠ IT IS Θ(THE FUNCTION'S SLOTS), NOT Θ(ONE BLOCK'S, so its FREQUENCY is what has to stay near
+	// zero — this is the one thing in the index that is not proportional to what a split changed. A run
+	// of `k` ops holds `k * SlotGap` slots, and MIDPOINT insertion at one place halves the room each
+	// time, so a run tolerates `log2(SlotGap)` insertions nested at one spot and `SlotGap - 1` spread
+	// across each of its gaps before it re-spaces. `SlotGap` is chosen to make that unreached rather than
+	// rare: MEASURED at ZERO re-spaces on `genwidelive 400 sum` (396 splits into one block) and on the
+	// whole scale corpus. It is a COLUMN COPY, so even when it does fire it is far cheaper per slot than
+	// the operand-model walk the index replaces.
+	//
+	// ⚠ THE PRICE IS MEMORY, AND IT IS THE INDEX'S ONLY REGRESSION. `SlotGap` multiplies every column,
+	// and each block's run is additionally rounded up to a power of two and aligned to its own length
+	// (which is what makes a whole-block query one node read). MEASURED on the scale corpus: whole-compile
+	// bytes +8.9%, all of it linear. Halving `SlotGap` takes that to +3.5% with the CPU columns unmoved
+	// and no re-space on either instrument — it is left at 4 because the headroom is what keeps this
+	// function off the normal path, and the change that would make a tighter gap safe is a re-space of
+	// ONE BLOCK'S run (possible whenever the run is still large enough for its ops, which is the common
+	// case) rather than the function's.
+	function relayout(module TargetModule, topo FuncTopology, scratch PressureRelayoutScratch, opFacts OpVariantFacts)
 		scratch.capture(self.blockFirst, runLen: self.blockLen, runHoldsOp: self.holdsOp, runOpAt: self.opAt, runDelta: self.leafDelta, runTransient: self.leafTransient)
 
 		scratch.opCounts.refill(topo.numBlocks, value: 0)
@@ -1508,8 +1587,7 @@ export type PressureIndex
 				// op's defs instead of its own, and the fresh id's def slot then points at whatever the
 				// layout put in slot 0. (Measured, with the gap tightened to force a re-space on every
 				// insertion: `opAtSlot: slot 0 holds no op` on four spill tests.)
-				targetOpOperands(try module.ops.get(movedOpIdx) otherwise panic("PressureIndex.relayout: op {movedOpIdx} not in module.ops"), buf: scratch.operands)
-				self.seatOp(newSlot, opIdx: movedOpIdx, buf: scratch.operands)
+				self.seatOp(newSlot, op: try module.ops.get(movedOpIdx) otherwise panic("PressureIndex.relayout: op {movedOpIdx} not in module.ops"), opIdx: movedOpIdx, opFacts: opFacts, buf: scratch.operands)
 				self.copyLeafNumbers(scratch, oldSlot: oldSlot, newSlot: newSlot)
 				pos = pos + 1
 			end 'eachOldSlot'
@@ -1838,6 +1916,203 @@ function refreshTransientsNaming(module TargetModule, liveness LivenessResult, p
 	refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: index.defBlockOf(v), slot: pressure.defSlotOf(v), which: which, buf: buf)
 end 'refreshTransientsNaming'
 
+// ==========================================================================
+// THE THREE THINGS THE DIRTY-BLOCK SWEEP USED TO PRODUCE
+// ==========================================================================
+//
+// `sweepBlockPressure` re-ran a whole block, op by op, to restate three facts about a split — and only
+// one of them was ever about the block: the other two are about the handful of values the split moved.
+//
+//  • `forbidden[w]` for the victim and the ids it minted. A value must avoid every register written by
+//    an op it is live ACROSS, which is a RANGE OR over the block's clobber masks — one `PressureIndex`
+//    query per block of the value's range, not a walk of each.
+//  • the block's DEAD-PHI count, which can only move for a block-arg whose liveness moved — i.e. only
+//    when the VICTIM is a block-arg, and then only in its own block.
+//  • the block's register DEMAND, which is `max(live-out, the block's peak) + its dead phis` and comes
+//    off the positional index in O(1).
+//
+// The whole-function build still sweeps (`computeLivenessOn`); what is gone is the per-SPLIT sweep, and
+// with it the `ScannedValues.split` scope the sweep took to narrow itself.
+
+// Rebuild `forbidden[w]` from scratch, reading the clobbers of the ops `w` is live across as RANGE ORs.
+//
+// The three sources are exactly the three the sweep had:
+//
+//  1. the CROSS-PARAMETER mask, which comes from no block at all (`ParamCrossForbid`);
+//  2. the IMPLICIT registers of every op `w` is an OPERAND of — `forbidOperandsFromImplicit`'s half,
+//     which is about the op's own operands and applies whether or not `w` outlives it (an `idiv`'s
+//     divisor dies at the op and must still stay out of RAX/RDX);
+//  3. the CLOBBERS of every op `w` is live ACROSS — `applyForbidden`'s half.
+function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, paramCross ParamCrossForbid, dirty BlockSet)
+	let index = liveness.useIndex
+	var mask = paramCross.maskFor(w)
+
+	let useSites = index.useCount(w)
+	if useSites > 0 'used'
+		var record = index.firstUseOf(w)
+		for _ in 0 upto useSites 'eachUse'
+			mask = mask or implicitTouchOf(module, opIdx: index.useOpAt(record), opFacts: liveness.opFacts)
+			record = index.nextUseOf(record)
+		end 'eachUse'
+	end 'used'
+	if index.defKindOf(w) == ValueDefKind.opDef 'definedByAnOp'
+		mask = mask or implicitTouchOf(module, opIdx: index.requireDefOp(w), opFacts: liveness.opFacts)
+	end 'definedByAnOp'
+
+	// The DIRTY REGION is a superset of the blocks `w` is live in — the victim's whole range seeds it and
+	// a fresh id lives only inside the block whose reload minted it — so walking it and skipping the
+	// blocks `w` is not live in reaches every block that can contribute and no others.
+	for k in 0 upto dirty.count() 'eachBlock'
+		mask = mask or liveAcrossClobbersIn(liveness, pressure: pressure, w: w, blockLocal: dirty.at(k))
+	end 'eachBlock'
+
+	liveness.clearForbidden(w)
+	liveness.addForbidden(w, mask: mask)
+end 'rebuildForbiddenOf'
+
+// The registers an op reads or writes WITHOUT naming them as an operand — what every explicit virtual
+// operand of that op must avoid (`forbidOperandsFromImplicit`, stated per value instead of per op).
+function implicitTouchOf(module TargetModule, opIdx OpIndex, opFacts OpVariantFacts) returns RegMask
+	let op = try module.ops.get(opIdx) otherwise panic("implicitTouchOf: op {opIdx} is not in module.ops")
+	return opFacts.implicitUsesOf(op) or opFacts.implicitDefsOf(op)
+end 'implicitTouchOf'
+
+// The OR of the clobbers of every op of `blockLocal` that `w` is live ACROSS — 0 when `w` is not live
+// there at all.
+//
+// THE INTERVAL, and every one of its four endpoints is the same rule the sweep applied op by op:
+//
+//  • it OPENS after `w`'s defining op (a value is not live across the op that creates it, which is the
+//    `operandDefinesValue` skip), or at the block's first slot when `w` arrives live — as a live-in
+//    value or as a block-arg, both of which are live from the entry;
+//  • it CLOSES at the block's exit when `w` is live-out, and otherwise one slot before `w`'s LAST use
+//    here, because a value is not live across the op that reads it last.
+//
+// Free slots carry an empty clobber, so stating the ends in SLOTS rather than positions needs no
+// rounding: an inserted op between two of them contributes nothing either way (see `nodeClobber`).
+function liveAcrossClobbersIn(liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal CfgIndex) returns RegMask
+	let index = liveness.useIndex
+	let live = liveness.live
+	let definedHere = index.defKindOf(w) != ValueDefKind.none and index.defBlockOf(w) == blockLocal
+	let liveOut = liveOutHolds(live, blockLocal: blockLocal, v: w)
+	let lastUse = lastUsePositionIn(index, w: w, blockLocal: blockLocal)
+
+	if not (definedHere or liveOut or lastUse.found or liveInHolds(live, blockLocal: blockLocal, v: w)) 'notLiveInThisBlockAtAll'
+		return 0
+	end 'notLiveInThisBlockAtAll'
+
+	// A block-arg's def is the block's ENTRY, so it opens where a live-in value does; only an OP def
+	// opens after itself.
+	var lo = pressure.firstSlotOf(blockLocal)
+	if definedHere and index.defKindOf(w) == ValueDefKind.opDef 'opensAfterItsOwnDef'
+		lo = pressure.defSlotOf(w) + 1
+	end 'opensAfterItsOwnDef'
+
+	if liveOut 'liveOnEveryExit'
+		return pressure.clobberOr(blockLocal, lo: lo, hi: pressure.exitSlotOf(blockLocal))
+	end 'liveOnEveryExit'
+	if not lastUse.found 'readNowhereHereAndNotLiveOut'
+		// Defined or live-in but never read here and not carried out: live across nothing.
+		return 0
+	end 'readNowhereHereAndNotLiveOut'
+
+	let lastUseSlot = pressure.slotOfPosition(blockLocal, pos: lastUse.position)
+	if lastUseSlot <= lo 'closesBeforeItOpens'
+		return 0
+	end 'closesBeforeItOpens'
+	return pressure.clobberOr(blockLocal, lo: lo, hi: lastUseSlot - 1)
+end 'liveAcrossClobbersIn'
+
+// The LAST position `w` is read at in `blockLocal`, or `found: false` when it is read there not at all.
+// A value's use thread is ascending by sequence, so the last record in the block is the last one before
+// it leaves — one walk, no search.
+type BlockLastUse
+	export var found as bool
+	export var position as BlockOpPos
+
+	static function create(found bool, position BlockOpPos) returns BlockLastUse
+		return Self{found: found, position: position}
+	end 'create'
+end 'BlockLastUse'
+
+function lastUsePositionIn(index UseIndex, w ValueId, blockLocal CfgIndex) returns BlockLastUse
+	let useSites = index.useCount(w)
+	var found = false
+	var position = 0 as BlockOpPos
+	if useSites == 0 'neverRead'
+		return BlockLastUse.create(false, position: 0)
+	end 'neverRead'
+
+	var record = index.firstUseOf(w)
+	for _ in 0 upto useSites 'eachUse'
+		if index.useBlockAt(record) == blockLocal 'readHere'
+			found = true
+			position = index.usePosAt(record)
+		end 'readHere'
+		record = index.nextUseOf(record)
+	end 'eachUse'
+	return BlockLastUse.create(found, position: position)
+end 'lastUsePositionIn'
+
+// Is `v` in `blockLocal`'s live-IN set? `liveOutHolds`'s twin, and the same O(live) scan the block sweep
+// paid to seed itself with.
+function liveInHolds(live LiveSets, blockLocal CfgIndex, v ValueId) returns bool
+	for u in live.liveIn(blockLocal) 'each'
+		if u == v 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'liveInHolds'
+
+// The DEAD block-arg count of the ONE block a split can move it in.
+//
+// A block-arg is dead iff nothing in its block reads it and it is not carried out — the same predicate
+// `countDeadPhis` applies to the live-IN view its backward walk leaves, restated against the index and
+// the live sets because there is no walk here to leave one. `verifyIncremental` compares the two counts
+// after every split, which is what keeps the two statements of one rule together.
+//
+// ⚠ ONLY THE VICTIM CAN MOVE ONE, so only its block is restated: a fresh id is never a block-arg, and no
+// other value's uses or liveness change.
+function refreshDeadPhisFor(module TargetModule, liveness LivenessResult, victim ValueId)
+	let index = liveness.useIndex
+	if not index.isPhiValue(victim) 'notABlockArg'
+		return
+	end 'notABlockArg'
+
+	let blockLocal = index.defBlockOf(victim)
+	let block = blockAt(module, topo: liveness.cfg.topo, local: blockLocal)
+	for classOrdinal in 0 upto RegClassCount 'zeroRow'
+		try liveness.deadPhis.set(classRowIndex(blockLocal, class: regClassAt(classOrdinal)), value: 0) otherwise panic("refreshDeadPhisFor: deadPhis.set OOB for block {blockLocal}")
+	end 'zeroRow'
+
+	for arg in block.blockArgs 'eachPhi'
+		if lastUsePositionIn(index, w: arg.valueId, blockLocal: blockLocal).found or liveOutHolds(liveness.live, blockLocal: blockLocal, v: arg.valueId) 'live'
+			continue
+		end 'live'
+		let idx = classRowIndex(blockLocal, class: liveness.classOf(arg.valueId))
+		try liveness.deadPhis.set(idx, value: (try liveness.deadPhis.get(idx) otherwise panic("refreshDeadPhisFor: deadPhis.get OOB")) + 1) otherwise panic("refreshDeadPhisFor: deadPhis.set OOB")
+	end 'eachPhi'
+end 'refreshDeadPhisFor'
+
+// Each dirty block's register DEMAND, off the positional index: its peak simultaneous count of that file
+// — which is `max(its live-out population, its peak op)`, the block-EXIT boundary being a program point
+// the peak-finder does not visit — plus that file's dead-phi reservations.
+function refreshBlockDemands(liveness LivenessResult, pressure PressureIndex, dirty BlockSet)
+	for k in 0 upto dirty.count() 'eachDirtyBlock'
+		let blockLocal = dirty.at(k)
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			var blockMax = pressure.blockLiveOut(blockLocal, class: class)
+			let peak = pressure.blockPeak(blockLocal, class: class)
+			if peak.found and peak.pressure > blockMax 'theOpsDemandMore'
+				blockMax = peak.pressure
+			end 'theOpsDemandMore'
+			liveness.setBlockPressure(blockLocal, class: class, demand: (blockMax as RegCount) + liveness.deadPhiCountOf(blockLocal, class: class))
+		end 'eachClass'
+	end 'eachDirtyBlock'
+end 'refreshBlockDemands'
+
 // The smallest power of two >= `n` (and 1 for 0) — the run length a block's aligned subtree needs.
 function roundUpToPowerOfTwo(n PressureSlot) returns PressureSlot
 	var p = 1 as PressureSlot
@@ -1913,12 +2188,17 @@ type SplitScratch
 	export var dirty as BlockSet
 	export var edits as SplitEdits
 	export var marks as LivenessMarkScratch
-	// One block's per-class demand, one op's per-class effective pressure, and one block's per-class
-	// LIVE-OUT population — caller-owned rows the sweeps and the positional index's repair write into,
-	// allocated once per function like every other buffer here.
-	export var blockDemand as RegCountColumn
+	// One op's per-class effective pressure, and one block's per-class LIVE-OUT population — caller-owned
+	// rows the confined sweep and the positional index's repair write into, allocated once per function
+	// like every other buffer here.
+	//
+	// (A third, one block's DEMAND, went with the per-split block sweep: the demand is now read off the
+	// index in O(1) and written straight into `LivenessResult.blockPressure`, with no row in between.)
 	export var opEffective as RegCountColumn
 	export var exitPopulation as RegCountColumn
+	// The ops one split's index rebuild has to re-read, as slots, and the merge buffer that sorts them.
+	export var reindexCandidates as DenseColumn
+	export var reindexSortBuf as DenseColumn
 	// ONE block sweep's running argmax, mutated in place at every op that outranks it and copied out
 	// once at the end (`PeakRank.snapshot`). A fresh `PeakRank` per winning op was Θ(block) heap objects
 	// per block sweep — see the note on `PeakRank`'s mutators.
@@ -1935,7 +2215,7 @@ type SplitScratch
 	export var confinedMode as bool
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), confinedMode: false}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), peakLiveBefore: BitWordArray.create(), tree: PeakTree.create(), pressure: PressureIndex.create(), relayout: PressureRelayoutScratch.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), opEffective: zeroClassRow(), exitPopulation: zeroClassRow(), reindexCandidates: DenseColumn.create(), reindexSortBuf: DenseColumn.create(), rank: emptyRank(), runStarts: BoolArray.create(), splitOperands: OperandList.create(), confinedMode: false}
 	end 'create'
 
 	// Size everything the incremental update needs and BUILD the positional pressure index. Deferred
@@ -2212,7 +2492,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 
 	// The split's op insertions and its one possible removal, spliced into their blocks — plus the
 	// sequence repair, the op count, and the blocks that took an edit.
-	scratch.edits.commit(module, topo: topo, index: index, dirty: dirty, pressure: scratch.pressure, relayout: scratch.relayout, buf: scratch.sweep.buf)
+	scratch.edits.commit(module, topo: topo, index: index, dirty: dirty, pressure: scratch.pressure, relayout: scratch.relayout, opFacts: liveness.opFacts, buf: scratch.sweep.buf)
 
 	// The value space grew by the ids the split minted; every column keyed by it follows.
 	//
@@ -2236,21 +2516,15 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	// Re-derive the index facts of the values the split touched, from the dirty region alone. It must be
 	// walked in ASCENDING block order — a use thread is held ascending by sequence.
 	dirty.sortAscending()
-	reindexSplitValues(module, cfg: cfg, index: index, dirty: dirty, split: split, scratch: scratch.sweep, opFacts: liveness.opFacts)
+	reindexSplitValues(module, cfg: cfg, index: index, dirty: dirty, split: split, pressure: scratch.pressure, edits: scratch.edits, candidates: scratch.reindexCandidates, sortBuf: scratch.reindexSortBuf, scratch: scratch.sweep, opFacts: liveness.opFacts)
 
-	// Re-mark their liveness (the victim's OLD marks came off before the mutation), and zero the masks
-	// that must be REBUILT rather than added to. Every other value's mask is left exactly as it is: the
-	// dirty-block sweep below re-ORs it with bits it already carries.
+	// Re-mark their liveness — the victim's OLD marks came off before the mutation. Every other value's
+	// mask is left exactly as it is: no other value's live range moved, so no other value can have gained
+	// or lost a clobber (the ops a split inserts clobber nothing).
 	let regionBeforeRemarking = dirty.count()
 	liveness.livenessMarkSteps = liveness.livenessMarkSteps + scratch.marks.walkValue(topo, index: index, v: split.victim, live: liveness.live, adding: true, touched: dirty)
-	liveness.clearForbidden(split.victim)
-	// The victim's cross-parameter forbidding does not come from any block, so re-apply it by hand. It
-	// is empty for every value that is not an entry parameter capture.
-	liveness.addForbidden(split.victim, mask: paramCross.maskFor(split.victim))
-
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
 		liveness.livenessMarkSteps = liveness.livenessMarkSteps + scratch.marks.walkValue(topo, index: index, v: f, live: liveness.live, adding: true, touched: dirty)
-		liveness.clearForbidden(f)
 	end 'eachFresh'
 
 	// THE INVARIANT THE ORDER ABOVE RESTS ON, ASSERTED. The re-marking walks may only revisit blocks the
@@ -2267,27 +2541,6 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 		panic("refreshAfterSplit: re-marking the liveness of value {split.victim} and the {split.freshTo - split.freshFrom} id(s) it minted reached {dirty.count() - regionBeforeRemarking} block(s) the index rebuild never read. A split may only move a value's liveness INSIDE the region it already touched — if a mutator now places a reload outside the block of the uses it serves, `reindexSplitValues` must run after these walks, not before.")
 	end 'regionGrewAfterTheRebuild'
 
-	// Re-sweep the dirty blocks: `forbidden`, the dead-phi counts, and the per-block register demand.
-	var demand = scratch.blockDemand
-	// Hoisted for the reason `computeLivenessOn` hoists its own: a union value is a heap object, and
-	// this one is the same object for every dirty block of this split.
-	let rebuildFor = ScannedValues.split(split)
-	for k in 0 upto dirty.count() 'eachDirtyBlock'
-		let blockLocal = dirty.at(k)
-		sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, rebuildFor: rebuildFor, classes: liveness.valueClass, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep, demandOut: demand, opFacts: liveness.opFacts)
-		for classOrdinal in 0 upto RegClassCount 'eachClass'
-			let class = regClassAt(classOrdinal)
-			liveness.setBlockPressure(blockLocal, class: class, demand: classRowGet(demand, class: class))
-		end 'eachClass'
-	end 'eachDirtyBlock'
-
-	// Their effective pools follow their new masks — and no other value's mask moved, so no other
-	// value's pool did.
-	scratch.effPools.refresh(liveness, valueId: split.victim, pool: pool)
-	for f in split.freshFrom upto split.freshTo 'eachFresh'
-		scratch.effPools.refresh(liveness, valueId: f, pool: pool)
-	end 'eachFresh'
-
 	// THE POSITIONAL INDEX, brought back into agreement — the other half of the withdrawal `unmarkVictim`
 	// made before the mutation. Everything it needs is now current: the ops are spliced and seated, the
 	// use threads are rebuilt, and the live sets are re-marked.
@@ -2297,6 +2550,21 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 		applyValueToPressure(liveness, pressure: scratch.pressure, v: f, adding: true)
 	end 'eachFresh'
 	refreshSplitTransients(module, liveness: liveness, pressure: scratch.pressure, split: split, buf: scratch.sweep.buf)
+
+	// The three things the dirty-block sweep used to produce, each restated against what actually moved.
+	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty)
+	for f in split.freshFrom upto split.freshTo 'eachFresh'
+		rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: f, paramCross: paramCross, dirty: dirty)
+	end 'eachFresh'
+	refreshDeadPhisFor(module, liveness: liveness, victim: split.victim)
+	refreshBlockDemands(liveness, pressure: scratch.pressure, dirty: dirty)
+
+	// Their effective pools follow their new masks — and no other value's mask moved, so no other
+	// value's pool did.
+	scratch.effPools.refresh(liveness, valueId: split.victim, pool: pool)
+	for f in split.freshFrom upto split.freshTo 'eachFresh'
+		scratch.effPools.refresh(liveness, valueId: f, pool: pool)
+	end 'eachFresh'
 end 'refreshAfterSplit'
 
 // Re-run the pressure sweep on the DIRTY BLOCKS ONLY, re-publish their leaves, and read the function's
@@ -2855,9 +3123,7 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 	// that tally panics on underflow — so seed it truthfully, as every other sweep does.
 	seedClassLive(scratch.sweep.liveByClass, classes: liveness.valueClass, values: scratch.seedBuf)
 
-	scratch.sweep.ordered.clear()
-	collectBlockOps(block, out: scratch.sweep.ordered)
-	let opCount = scratch.sweep.ordered.count()
+	let opCount = blockOpCount(block)
 	if forwardPos >= opCount 'positionPastTheEnd'
 		panic("fillLiveBeforeOp: position {forwardPos} past the end of block {blockLocal}, which lays out {opCount} op(s) — a `PeakRank`'s forward position always names an op the sweep that produced it visited")
 	end 'positionPastTheEnd'
@@ -2865,9 +3131,14 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 	// Step back over the ops at forward positions `opCount-1` down to `forwardPos` INCLUSIVE: after the
 	// step over the op AT `forwardPos`, the row is that op's live-BEFORE set — and the op it just
 	// stepped over is the one at `forwardPos`, which is what comes back.
+	//
+	// ⚠ READ POSITIONALLY, NOT FROM A LIST. `collectBlockOps` would be Θ(the block) before this walk even
+	// starts, which on a function that is one basic block is the whole function once per split — for a
+	// suffix that is usually a fraction of it. `blockOpAt` is the same statement of the block's order the
+	// list is built from, so the two cannot disagree about where the terminator sits.
 	var atForwardPos = 0 as OpIndex
 	for ri in 0 upto opCount - forwardPos 'stepBackToPeak'
-		let opIdx = try scratch.sweep.ordered.get(opCount - 1 - ri) otherwise panic("fillLiveBeforeOp: ordered.get OOB")
+		let opIdx = blockOpAt(block, pos: opCount - 1 - ri)
 		let op = try module.ops.get(opIdx) otherwise panic("fillLiveBeforeOp: opIdx not in module.ops")
 		targetOpOperands(op, buf: scratch.sweep.buf)
 		stepRowBackwardOverOperands(row, base: 0, buf: scratch.sweep.buf, liveByClass: scratch.sweep.liveByClass, classes: liveness.valueClass)
