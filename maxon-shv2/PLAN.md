@@ -2951,22 +2951,50 @@ trigger, not chased (a superlinearity you can *trigger* today is fixed, not file
   header calls the ordering load-bearing). `matchingEndOf` from `4110c7d00` is the piece it builds on.
   **Re-measure trigger:** any corpus knob that raises mutable-vars-in-scope, or an inliner that fuses functions.
 
-- **#123 — THE `Map` PROBE TRAP IS A CLASS, NOT AN INSTANCE: identity hash + linear probing is QUADRATIC for any
-  interleaved union of contiguous int runs.** `stdlib` `Map` is open-addressed with linear probing and `int.hash()` is
-  the **identity** (`stdlib/PrimitiveExtensions.maxon:3-5`), so a key's home slot is `id and (capacity-1)`. Insert two
-  contiguous id runs *interleaved* and the high run wraps onto the low run's slots, fusing them into one cluster every
-  insert walks. **Measured** on the encoder's per-function block-offset map before `a78d17c35` fixed it: probes per
-  insert were **exactly `capacity/4 + 2/3`** (3.33 at cap 16 … 512.67 at cap 2048), collapsing to **1.00** the instant
-  capacity first exceeded the id range — 171.44 probes/insert against 1.00 for the same keys sorted. That instance is
-  fixed (the key WAS the index, so it became two pre-sized arrays). **STILL LIVE:** `SemanticCheck.buildBlockByIdMap`
-  (`SemanticCheck.maxon:796`) is the IDENTICAL pattern — walks `func.blockRefs`, upserts `block.id` — and is cold today
-  only because it runs on await-bearing functions and Maxon-tier ids have no split run. Also
-  `StdToWasm.BlockDispatchMap` / `DependentLhsMap`, `StdToX64Conversion.CmpPredMap`, `Parser.ValueInstanceAliasMap`.
-  ⚠ **A hash mixer in `stdlib/Map.maxon` would kill the whole class in three lines and was DELIBERATELY NOT DONE:** it
-  changes every `Map`'s ITERATION ORDER, so any pass that emits in `Map` order could move bytes — putting the C# 3103
-  suite and every golden at risk for a "clever O(n)" where a "tidy O(n)" was available per site.
-  **Re-measure trigger:** an inliner (which would give Maxon-tier ids a second run and make `buildBlockByIdMap` hot),
-  or any new `Map` keyed by an id drawn from two allocation phases.
+- **✅ #123 — THE `Map` PROBE TRAP — CLOSED 2026-07-27. Instance, class AND every named site are done; nothing is
+  left as debt, and the five maps' verdicts were MEASURED rather than assumed.** The trap: `stdlib` `Map` is
+  open-addressed with linear probing and `int.hash()` is the **identity**
+  (`stdlib/PrimitiveExtensions.maxon:3-5`), so a key's home slot was `id and (capacity-1)`. Insert two contiguous id
+  runs *interleaved* and the high run wraps onto the low run's slots, fusing them into one cluster every insert
+  walks. **Measured** on the encoder's per-function block-offset map: probes per insert were **exactly
+  `capacity/4 + 2/3`** (3.33 at cap 16 … 512.67 at cap 2048), collapsing to **1.00** the instant capacity first
+  exceeded the id range — 171.44 probes/insert against 1.00 for the same keys sorted. Three things closed it:
+  - **The INSTANCE** — `a78d17c35` made the encoder's table two pre-sized arrays (the key WAS the index).
+  - **The CLASS** — ⚠ **the mixer this entry used to say was "DELIBERATELY NOT DONE" HAS BEEN DONE**, in
+    `4def53ced`: `spreadHash` (MurmurHash3 `fmix32`, `stdlib/Interfaces.maxon:85`) now avalanches a hash at all six
+    slot derivations in `Map`/`Set`, so **no key ORDER can cluster and the trap is unreachable for any key shape**.
+    The iteration-order risk this entry declined it on was *measured*, not reasoned about, and is zero:
+    `specs-shv2/fragments/` empty on two targets, the bootstrap's fragment diff byte-identical, all 16 `Map`/`Set`
+    iteration sites swept, `verify-warm-rebuild` PASS.
+  - **The SITES** — the two remaining `BlockId`-keyed maps became dense tables (2026-07-27).
+    `SemanticCheck.buildBlockByIdMap` and `StdToWasm.BlockDispatchMap` are gone; both now read one
+    `BlockIndexById` from `IrModule.blockIndexById` (the inverse of `func.blockRefs`), an instantiation of the new
+    generic `BlockKeyedTable` (`Compiler/IR/`) that `BlockOffsetTable` also instantiates — **one array-pair-with-
+    presence-column, not three copies**. −1,536 `semanticCheck` allocations (−68%) and −92% of its bytes on
+    `Testing/ladders/genawait.sh 24 400`; −6,864 `encode` allocations on the wasm rung3 corpus. `scale-test` sees
+    NEITHER (no `async` in the corpus, and `compileRung` always builds for the host) — its own Δ0 for them is the
+    corpus blind spot, and the ladder is committed so the numbers can be re-run.
+  ⭐ **AND THE MIXER DOES NOT MAKE A DENSE `Map` FINE — IT MAKES IT ~3× WORSE, WHICH IS WHY THE PER-SITE "TIDY
+  O(n)" WAS STILL WORTH TAKING.** Replaying the real key sequences of a 2,808-function corpus through `Map`'s exact
+  algorithm, both maps' keys arrive **perfectly ascending in 2,808/2,808 and 24/24 instances** — the interleaving
+  run comes from the register allocator's critical-edge split, which neither site sees — and that is the case an
+  identity hash gets perfect: **1.000 probes/insert, against 3.088 / 3.062 under `spreadHash`**.
+  **The three `ValueId`-keyed maps were MEASURED AND LEFT, and each is a closure rather than a residual** — the
+  trap needs an interleaved union of contiguous runs, not merely int keys, and replaying their real key sequences
+  says none of them has one. In every case the arrival order costs **exactly what the SORTED order costs**, which
+  is the definitive test, because the trap is order-induced:
+  - `StdToWasm.DependentLhsMap` — 1,065 instances, 39,137 keys, largest 16,902. **Ascending in 1,065/1,065.**
+    1.948 probes/insert under the identity hash, 1.948 sorted (3.212 under `spreadHash`, sparse keys).
+  - `StdToX64Conversion.CmpPredMap` — 1,101 instances, 20,222 keys. Ascending in 1,098/1,101; the three
+    exceptions cost nothing (2.583 arrival vs **2.583** sorted in aggregate; worst single instance 4.957, from
+    SPARSITY, not clustering). It is also a genuinely sparse subset of the value space that supports `remove`, so
+    a dense column would allocate per-function for a handful of entries.
+  - `Parser.ValueInstanceAliasMap` — ascending in 2/2 instances, 2.203 arrival vs 2.203 sorted. The parser mints
+    `ValueId`s monotonically in one forward pass and records the alias where the value is created, so ascending is
+    structural. ⚠ **It is also ITERATED** (`Parser.maxon:6925`, feeding `recordFunctionRangeChecks`), so converting
+    it would change an order that reaches a recorded artifact — a real hazard for no measured gain.
+  **Nothing to re-measure**: the mixer makes the class unreachable regardless of key order, so an inliner giving
+  Maxon-tier ids a second run can no longer trigger it, and the two sites that would have felt it most are arrays.
 
 - **#106 — the COW detach is an unconditional call on the ARRAY HOT PATH (a constant factor, deliberately taken).**
   Every `push`/`reserve`/`resize`/`insert`/`append` now pays a `__arr_cow_detach` call that no-ops for an ordinary

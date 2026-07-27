@@ -50,11 +50,9 @@
 
 // Wasm indices/counts are u32 in the format; this backend uses A1's exported `Wasm32Index`
 // (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
-// so the values flow into the `WasmBinary` seam's params with no cast. The one narrowing is at
-// the `ValueId → local index` boundary (`as Wasm32Index`), where a value id always fits u32.
-
-// Per-function block-id → dispatch-index map (position in `func.blockRefs`).
-typealias BlockDispatchMap = Map with (BlockId, Wasm32Index)
+// so the values flow into the `WasmBinary` seam's params with no cast. The narrowings are the two
+// places a value crosses in from an IR-tier id space: the `ValueId → local index` boundary, and
+// `dispatchIndexOf`'s read of the shared `BlockRefIndex` table. Both always fit u32.
 
 // The cycle-break scratch local reserved for each valtype that appears among a function's
 // block-args — the local a phi-copy cycle stages through (wasm has no register exchange).
@@ -893,8 +891,10 @@ type WasmFuncEmitter
 	// Valtype → its reserved cycle-break scratch local (only for valtypes present among
 	// block-args, only when `useDispatcher`).
 	var scratchLocalByValType as ScratchLocalMap
-	// Block id → dispatch index (position in `func.blockRefs`), for branch targets.
-	var blockDispatchById as BlockDispatchMap
+	// Block id → dispatch index, for branch targets. The dispatch index IS the block's position in
+	// `func.blockRefs`, so this is exactly `IrModule.blockIndexById` and not a second thing that
+	// happens to agree with it.
+	var blockDispatchById as BlockIndexById
 
 	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
 		let valtypes = buildValtypeTable(module, func: func, calleeReturnType: calleeReturnType)
@@ -916,10 +916,9 @@ type WasmFuncEmitter
 			useDispatcher: useDispatcher,
 			dispatchLocal: 0 as Wasm32Index,
 			scratchLocalByValType: ScratchLocalMap.create(),
-			blockDispatchById: BlockDispatchMap.create()
+			blockDispatchById: module.blockIndexById(func)
 		}
 
-		emitter.buildBlockDispatchMap()
 		emitter.buildLocalDeclarations()
 		return emitter
 	end 'create'
@@ -967,14 +966,6 @@ type WasmFuncEmitter
 		end 'eachBlock'
 		return present
 	end 'collectPhiValTypes'
-
-	function buildBlockDispatchMap()
-		for i in 0 upto self.func.blockRefs.count() 'eachBlock'
-			let blockRef = try self.func.blockRefs.get(i) otherwise panic("buildBlockDispatchMap: blockRefs.get OOB at {i}")
-			let block = try self.module.blocks.get(blockRef) otherwise panic("buildBlockDispatchMap: blockRef {blockRef} not in module.blocks")
-			self.blockDispatchById.upsert(block.id, value: i as Wasm32Index)
-		end 'eachBlock'
-	end 'buildBlockDispatchMap'
 
 	// ----------------------------------------------------------------------
 	// Body emission
@@ -1969,8 +1960,12 @@ type WasmFuncEmitter
 		return out
 	end 'slotLandingDepths'
 
+	// The narrowing to `Wasm32Index` is at the READ and not in the table because the table is the
+	// IR-tier `BlockRefIndex` column every backend shares; a `blockRefs` position always fits u32
+	// for the same reason a function's block count does.
 	function dispatchIndexOf(blockId BlockId) returns Wasm32Index
-		return try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")
+		let position = try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")
+		return position as Wasm32Index
 	end 'dispatchIndexOf'
 
 	// ----------------------------------------------------------------------

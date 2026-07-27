@@ -15,6 +15,10 @@ export typealias BlockIndex = int(0 to u64.max)
 export typealias FuncIndex = int(0 to u64.max)
 export typealias BlockRefIndex = int(0 to u64.max)
 
+// The result of `IrModule.blockIndexById`: a function's `BlockId` to its position in
+// `func.blockRefs`. Named here beside `BlockRefIndex`, which is what it holds.
+export typealias BlockIndexById = BlockKeyedTable with BlockRefIndex
+
 // Thrown by IrModule.findBlockRef when the given block isn't registered in
 // the function's block list — used by the parser's statement-line recorder
 // to silently skip detached sink blocks produced by newDetachedBlock.
@@ -92,6 +96,30 @@ export type IrModule uses Op
 		end 'eachBlock'
 		return indices
 	end 'liveOpIndices'
+
+	// THE INVERSE OF `func.blockRefs` — a block's `BlockId` to its POSITION in that array, dense and
+	// built in one walk. It answers the question every consumer of a TERMINATOR has: a terminator
+	// names its successors by `BlockId`, `blockRefs` is in LAYOUT order, and there is otherwise no
+	// route from the one to the other short of a linear scan per branch.
+	//
+	// The POSITION is what it stores, not the `BlockRef`, because that is the form both callers need
+	// and the one the other is recoverable from: the wasm backend's `loop`+`br_table` dispatcher
+	// indexes blocks by exactly this position (`StdToWasm.dispatchIndexOf`), and a caller that wants
+	// the block itself composes `func.blockRefs.get(position)` — one more array read, no second
+	// table. Storing `BlockRef` instead would have made the wasm side unserviceable.
+	//
+	// It is a dense `BlockKeyedTable` and not a `Map with (BlockId, …)` for the reason that type's
+	// header states at length: block ids ARE the index space, and the hash was measured to be a
+	// quadratic before `spreadHash` and a 3x probe tax after it.
+	export function blockIndexById(func IrFunction) returns BlockIndexById
+		var byId = BlockIndexById.forBlockCount(func.nextBlockId)
+		for i in 0 upto func.blockRefs.count() 'eachBlock'
+			let blockRef = try func.blockRefs.get(i) otherwise panic("blockIndexById: blockRefs.get OOB at {i} despite the upto bound")
+			let block = try self.blocks.get(blockRef) otherwise panic("blockIndexById: blockRef {blockRef} from func.blockRefs not in blocks")
+			byId.place(block.id, value: i)
+		end 'eachBlock'
+		return byId
+	end 'blockIndexById'
 
 	// Reclaim orphaned ops from `self.ops` in place.
 	//

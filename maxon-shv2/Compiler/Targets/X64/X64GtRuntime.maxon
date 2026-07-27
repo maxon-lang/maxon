@@ -416,11 +416,11 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	encodeJmp(code, rel32Fixups: shimFixups, targetBlockId: ShimDoneLabel)
 
 	// direct: the non-switched call (main thread / no scheduler).
-	shimLabels.place(ShimDirectLabel, offset: code.count())
+	shimLabels.place(ShimDirectLabel, value: code.count())
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
 	// done: patch the shim's own forward branches now that both labels' offsets are known.
-	shimLabels.place(ShimDoneLabel, offset: code.count())
+	shimLabels.place(ShimDoneLabel, value: code.count())
 	resolveChunkRel32Fixups(code, labelOffsets: shimLabels, rel32Fixups: shimFixups)
 end 'emitGtShimmedIatCall'
 
@@ -634,7 +634,7 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rbp, src: X64Register.rcx, wide: true)  // rbp - old_top
 	encodeJcc(code, rel32Fixups: rbpFixups, cond: X64CondCode.aboveEqual, targetBlockId: RbpAdjustSkipLabel)  // rbp >= old_top → skip
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rbp, src: GtMoreOffsetReg, wide: true)  // rbp += offset
-	rbpLabels.place(RbpAdjustSkipLabel, offset: code.count())
+	rbpLabels.place(RbpAdjustSkipLabel, value: code.count())
 	resolveChunkRel32Fixups(code, labelOffsets: rbpLabels, rel32Fixups: rbpFixups)
 	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: savedRbpDisp, srcReg: X64Register.rbp)  // [rsp+rbpSlot] = rbp
 
@@ -708,7 +708,7 @@ function emitGtMorestackChainWalk(code ByteArray)
 	var walkLabels = BlockOffsetTable.create()
 
 	// L_head: stop if the walker is null or outside the new stack; else load the saved rbp at [walker].
-	walkLabels.place(WalkHeadLabel, offset: code.count())
+	walkLabels.place(WalkHeadLabel, value: code.count())
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
 	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.equal, targetBlockId: WalkDoneLabel)  // jz done
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.r8, wide: true)  // walker - new_low
@@ -728,12 +728,12 @@ function emitGtMorestackChainWalk(code ByteArray)
 	encodeStoreBaseDispReg(code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r11)  // [walker] = adjusted saved
 
 	// L_next: advance to the next frame via the (possibly adjusted) link, then loop.
-	walkLabels.place(WalkNextLabel, offset: code.count())
+	walkLabels.place(WalkNextLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rcx, disp: 0, wide: true)  // walker = [walker]
 	encodeJmp(code, rel32Fixups: walkFixups, targetBlockId: WalkHeadLabel)  // jmp head
 
 	// L_done.
-	walkLabels.place(WalkDoneLabel, offset: code.count())
+	walkLabels.place(WalkDoneLabel, value: code.count())
 	resolveChunkRel32Fixups(code, labelOffsets: walkLabels, rel32Fixups: walkFixups)
 end 'emitGtMorestackChainWalk'
 
@@ -766,7 +766,7 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 
 	// skip:
-	guardLabels.place(GuardSkipLabel, offset: code.count())
+	guardLabels.place(GuardSkipLabel, value: code.count())
 	resolveChunkRel32Fixups(code, labelOffsets: guardLabels, rel32Fixups: guardFixups)
 end 'emitGtStackGuard'
 
@@ -839,7 +839,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rsp, imm: IoLoopFrameBytes as Imm32)
 
 	// loop_top:
-	loopLabels.place(IoLoopTopLabel, offset: code.count())
+	loopLabels.place(IoLoopTopLabel, value: code.count())
 	// Zero the bytes slot (GQCS writes only the low DWORD; the runtime reads a full i64).
 	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
 	encodeStoreBaseDispReg(code, base: X64Register.rbp, disp: IoLoopBytesLocalDisp, srcReg: X64Register.rax)
@@ -868,7 +868,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	// spin: wait until gt.ioParked != 0 — the reader committed to parking (state IoParkedInFlight, 1) or the drop
 	// arm abandoned it (IoParkedAbandoned, 2). Holding __io_lock does not block the reader (it sets ioParked without
 	// the lock), so this cannot deadlock; in practice ioParked is already set (the packet arrives long after park).
-	loopLabels.place(IoLoopSpinLabel, offset: code.count())
+	loopLabels.place(IoLoopSpinLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rax, disp: GtOffIoParked as Imm32, wide: true)
 	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
@@ -879,7 +879,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 
 	// spun: rax = gt, rcx = gt.ioParked. ABANDONED (2) → the drop arm cancelled this read: signal drain-done and
 	// touch the GT no further (the drop arm frees it). Else (1) → NORMAL completion.
-	loopLabels.place(IoLoopSpunLabel, offset: code.count())
+	loopLabels.place(IoLoopSpunLabel, value: code.count())
 	encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: IoParkedAbandoned as Imm32)
 	encodeJcc(code, rel32Fixups: loopFixups, cond: X64CondCode.equal, targetBlockId: IoLoopAbandonedLabel)
 	// NORMAL: gt.io_result = bytes ; gt.status = ready.
@@ -897,7 +897,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 
 	// signal (normal): gt.ioParked = IoParkedNormalDone(4) — so a drop RIGHT AFTER this completion reads 4 and
 	// unlinks the enqueued GT — then Leave __io_lock and SetEvent __io_done_event → loop_top.
-	loopLabels.place(IoLoopSignalLabel, offset: code.count())
+	loopLabels.place(IoLoopSignalLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedNormalDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
@@ -909,7 +909,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 
 	// abandoned: gt.ioParked = IoParkedDrainDone(3) (the drop arm's spin target), Leave __io_lock, loop. No enqueue,
 	// no SetEvent — the drop arm spins on ioParked==3 on the main thread and owns the free.
-	loopLabels.place(IoLoopAbandonedLabel, offset: code.count())
+	loopLabels.place(IoLoopAbandonedLabel, value: code.count())
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rbp, disp: IoLoopGtLocalDisp, wide: true)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: IoParkedDrainDone)
 	encodeStoreBaseDispReg(code, base: X64Register.rax, disp: GtOffIoParked as Imm32, srcReg: X64Register.rcx)
@@ -918,7 +918,7 @@ function buildIoCompletionLoopChunk() returns FunctionCodeChunk
 	encodeJmp(code, rel32Fixups: loopFixups, targetBlockId: IoLoopTopLabel)
 
 	// exit: return 0.
-	loopLabels.place(IoLoopExitLabel, offset: code.count())
+	loopLabels.place(IoLoopExitLabel, value: code.count())
 	encodeMovRegImm32(code, dest: X64Register.rax, value: 0)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: IoLoopFrameBytes as Imm32)
 	encodePopReg(code, reg: X64Register.rbp)

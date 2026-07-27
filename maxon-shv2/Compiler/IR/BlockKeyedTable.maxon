@@ -1,0 +1,136 @@
+// BlockKeyedTable — THE compiler's dense table keyed by `BlockId`, with a parallel presence column.
+// One implementation, TWO instantiations and three users: the encoder's chunk-local block offsets
+// (`BlockOffsetTable`, Targets/Shared, read by both native backends), and the inverse of a
+// function's `blockRefs` (`BlockIndexById`, built by `IrModule.blockIndexById`), which the wasm
+// dispatcher and the front end's await-linearity walk both read.
+//
+// ⭐ WHY A DENSE ARRAY AND NOT A `Map` — this is the fix for a MEASURED QUADRATIC, not a preference,
+// and it is the CLASS's rationale rather than any one instantiation's, which is why it is stated
+// here. `IrModule.addBlock` numbers blocks PER FUNCTION from `func.nextBlockId`, so a function's
+// block ids are exactly `0 .. nextBlockId-1`: a dense index space, which is the one shape a hash
+// adds nothing to. What it added instead was a quadratic, by a mechanism any int-keyed `Map` in
+// this compiler could fall into:
+//
+//   `int.hash()` is the IDENTITY (`self and 0xFFFFFFFF`) and `Map` is open-addressed with LINEAR
+//   PROBING, so a key's home slot was `id and (capacity - 1)`. A function's ids are two contiguous
+//   runs — the original blocks, then the blocks the register allocator's critical-edge split
+//   appended — and TARGET-tier `blockRefs` LAYOUT order interleaves them (`0 1 2049 2 3 2050 …`).
+//   Until the table's capacity EXCEEDED the id range, the high run WRAPPED onto the low run's slots
+//   and the two collapsed into one solid cluster that every insert had to walk to the end of.
+//
+//   Replaying a real 3,073-block function's id sequence through the `Map` algorithm, probes per
+//   insert broken down by the capacity in force at the time:
+//
+//        cap    16    32    64   128   256   512  1024  2048 | 4096  8192
+//        /ins  3.33  8.67 16.67 32.67 64.67 128.67 256.67 512.67 | 1.00  1.00
+//
+//   It was `capacity/4 + 2/3` exactly, and it fell to ONE the instant capacity (4096) first exceeded
+//   the id range (3,073). Capacity is proportional to the block count, so probes-per-insert was too,
+//   and the fill was O(blocks²): **171.44 probes per insert** averaged over the function, against
+//   1.00 for the same keys inserted in sorted order and 6.11 for the same total blocks split across
+//   64 small functions. It allocated nothing, so the memory-only instrument read it as flat for the
+//   whole history of the phase; the CPU column is what saw it.
+//
+//   The LOOKUPS were never the problem, and that asymmetry is the tell: by the time the fixups were
+//   resolved the table had reached its FINAL capacity, past the id range, so every key sat at its
+//   home slot. `resolveChunkRel32Fixups` measured FLAT across the same ladder that showed the
+//   inserts growing 4.3x.
+//
+// ⚠ **`stdlib`'s `spreadHash` KILLED THAT QUADRATIC AND DID NOT MAKE THE `Map` THE RIGHT STRUCTURE
+// HERE — IT MADE IT MEASURABLY WORSE.** Since `4def53ced`, `Map`/`Set` avalanche a hash before it
+// picks a slot, so no key ORDER can cluster. But a dense ascending id run is the case an identity
+// hash gets PERFECT — every key at its home slot, zero collisions — and spreading it trades that for
+// the ordinary open-addressing average at a 3/4 load factor. Replaying the real key sequences of a
+// 2,808-function corpus through the `Map` algorithm both ways (optimizer, 2026-07-26):
+//
+//        Std-tier blockRefs → block.id, 2,808 functions, largest 19,201 blocks
+//          identity hash            1.000 probes/insert
+//          spreadHash (today)       3.088 probes/insert
+//        Maxon-tier, 24 await-bearing functions of 1,201 blocks each
+//          identity hash            1.000 probes/insert
+//          spreadHash (today)       3.062 probes/insert
+//
+//   So on this key shape the class-level fix COSTS ~3x the probes it protects against, on top of the
+//   hash itself, the 3/4-load rehash chain (~log2(N) full table rebuilds) and a key column, a value
+//   column, a state column and a hash column where an array needs two. **The per-site "tidy O(n)"
+//   was always the better answer here and it still is** — the index space is dense, the key IS the
+//   index, and both operations become one bounds-checked array access with no hash at all.
+//
+// ⭐ WHY IT IS ONE GENERIC TYPE AND NOT A COPY PER VALUE TYPE. The array-pair-with-presence-column
+// shape was written out by hand once (for `CodeOffset`), and converting the two surviving
+// `Map with (BlockId, …)` sites would have written it a third and fourth time — three near-identical
+// bodies a reviewer can only read as drift. The value type is the ONLY thing that differs between
+// them, which is exactly what a type parameter is for. It lives under `Compiler/IR/` and not under
+// `Compiler/Targets/Shared/` beside its first user because `BlockId` is an IR concept and
+// `SemanticCheck` is FRONT-END: the front end must not reach into `Targets/`, and `Targets/` may
+// freely reach into `IR/`, so IR is the only layer all three users can share.
+//
+// ⭐ WHY `present` IS A PARALLEL BOOL COLUMN AND NOT A SENTINEL `Value`. For every instantiation
+// there is a legitimate value that a sentinel would have to steal: 0 is a REAL chunk offset (the
+// first block of every chunk is at 0) and a REAL `blockRefs` position (the entry block). So no value
+// can mean "absent", and the check the `Map` gave for free must be kept explicitly: a fixup naming a
+// block this chunk never laid down, or a branch to a block that is not in this function, is a
+// lowering bug and has to stay LOUD rather than silently resolving to entry.
+//
+// ⭐ WHY NOTHING SUPPLIES A FILL VALUE. `Array.growFilled` makes the caller supply the element the
+// type cannot invent, and a generic has none to offer — so a fill parameter would have propagated an
+// `unset: 0` out to all sixteen `place` sites to mean nothing. Instead the gap an out-of-order
+// `place` opens is filled with the value BEING PLACED: an arbitrary, unreadable entry, because
+// `present` is the only thing that says a slot means anything. `forBlockCount` likewise only sizes
+// `present` (`false` is a real "absent", so `bool` needs no help) and `reserve`s the value column,
+// which keeps the table at ONE allocation per column.
+// ⚠ That makes a MANAGED `Value` retain one reference per gap slot until the table dies. Both
+// instantiations are scalars; a managed one would need a different filling rule.
+export type BlockKeyedTable uses Value
+	typealias BlockValueColumn = Array with Value
+
+	var values as BlockValueColumn
+	var present as BoolArray
+
+	// An empty table that grows to fit whatever ids are placed in it. For the hand-assembled runtime
+	// chunks, which mint their labels one at a time (`X64RuntimeAsm.newLabel`) and have no count to
+	// size from. `place` extends geometrically, so growing this way is amortized linear.
+	export static function create() returns Self
+		return Self{values: BlockValueColumn.create(), present: BoolArray.create()}
+	end 'create'
+
+	// A table sized for a function whose block ids run `0 .. blockCount-1` — one allocation per
+	// column, and `place` never reallocates. `IrFunction.nextBlockId` IS that count.
+	export static function forBlockCount(blockCount BlockId) returns Self
+		var table = Self.create()
+		table.values.reserve(blockCount)
+		table.present.growFilled(blockCount, value: false)
+		return table
+	end 'forBlockCount'
+
+	// Record `value` for block `id`. Re-placing an id overwrites, which is what the runtime chunk
+	// builders' label reuse relies on.
+	export function place(id BlockId, value Value)
+		let needed = id + 1
+		self.values.growFilled(needed, value: value)
+		self.present.growFilled(needed, value: false)
+
+		try self.values.set(id, value: value) otherwise panic("BlockKeyedTable.place: values.set OOB for block {id} — the column was just extended to {needed}")
+		try self.present.set(id, value: true) otherwise panic("BlockKeyedTable.place: present.set OOB for block {id} — the column was just extended to {needed}")
+	end 'place'
+
+	// The value recorded for block `id`, or `absent` when nothing was ever placed for it. Every
+	// caller turns that into a panic naming its own fixup or branch, which is more use than one
+	// message here could be.
+	export function get(id BlockId) returns Value throws BlockTableLookupError
+		let known = try self.present.get(id) otherwise 'past'
+			throw BlockTableLookupError.absent
+		end 'past'
+
+		if not known 'notPlaced'
+			throw BlockTableLookupError.absent
+		end 'notPlaced'
+
+		return try self.values.get(id) otherwise panic("BlockKeyedTable.get: present says block {id} was placed but the value column has no slot for it — `place` extends both columns together, so they can only disagree if one was extended without the other")
+	end 'get'
+end 'BlockKeyedTable'
+
+// Why a `get` can fail: nothing was ever placed for that block id.
+export enum BlockTableLookupError implements Error
+	absent
+end 'BlockTableLookupError'

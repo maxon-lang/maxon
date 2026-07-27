@@ -28,6 +28,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genblocks.sh <n> <blocks\|funcs\|straight> <out>` | the same block count as ONE big function, as `n` small ones, or as one straight-line block | separates **blocks per FUNCTION** from **functions per module** — two axes `ScaleCorpus` doubles together and so cannot tell apart. It reached the SAME `phase:encode` quadratic as `genemit.sh` from the other side (×3.21 ×3.37 ×3.69 on `blocks`, ×2.0 flat on both controls), which is why both survive: one varies the branch count that mints blocks, the other holds a block count fixed and RESHAPES where those blocks live. |
 | `genclosure.sh <closures> <captures> <reads> <ranged\|plain> <out>` | `closures` functions, each with one closure capturing `captures` bindings read `reads` times each | **the only way to measure the capture path at all** — `ScaleCorpus` states outright that it generates no closures, so every `scale-test` column reads Δ0 for a change to it. Its three knobs are independent for `genmutchain.sh`'s reason; see below. |
 | `geninstances.sh <instances> <chain> <plain\|contested\|control> <out>` | `instances` generic instantiations, each with its own type argument; optionally a `chain` of `__`-prefixed declarations planted against instance 0 | the COMPILED-NAME path — `ProgramSignatures.mangleGenericInstance` and the `reservedIfDeclared` re-probe. Unlike closures the corpus *does* generate generics, so `scale-test` sees the per-instance cost; what it cannot express is a compiled name a DECLARATION also claims, or a re-probe deeper than one. See below. |
+| `genawait.sh <funcs> <ifs> <out>` | `funcs` await-bearing functions of `ifs` two-way branches each, the promise spawned before the thicket and awaited after it | the AWAIT-LINEARITY walk (`SemanticCheck.checkLinearAwaitInFunction`) and its per-function block table. `ScaleCorpus` lists async under **NOT GENERATED**, so this is the only way to measure it — see below. |
 
 ### `geninstances.sh` — the two things the corpus cannot claim a Δ0 about
 
@@ -67,6 +68,29 @@ three costs that live there, which a single doubling ladder would sum into one c
 
 ⚠ `<captures>` is bounded by the language, not by taste: a function may declare at most **64
 argument slots** (E2015), so a ladder past `genclosure.sh 1 64 …` does not compile.
+
+### `genawait.sh` — why the await walk needs its own ladder, and why two knobs
+
+`ScaleCorpus`'s manifest lists async under **NOT GENERATED**, so a Δ0 from `scale-test` on the
+await-linearity path is the instrument's blind spot and not a result. The two knobs separate the two
+costs the analysis has, which one doubling ladder would sum into a single column:
+
+- `<funcs>` at fixed `<ifs>` is the **control** — it moves only how often the `functionHasAwait` gate
+  opens, i.e. the per-function term.
+- `<ifs>` at fixed `<funcs>` holds the function count still and moves BLOCKS PER FUNCTION, which is
+  what loads the per-function block table (`IrModule.blockIndexById`) without touching anything else.
+
+That separation is what read the table conversion of 2026-07-26. On the `<ifs>` axis at `funcs=24`,
+`phase:semanticCheck` allocations went **1,864 → 2,056 → 2,248** (ifs 100 → 200 → 400) before the
+change — **+192 per doubling of the block count, which is 8 per function**, the `Map`'s rehash chain
+(one `grow()` per capacity doubling, and a `grow` builds four fresh columns). After it they are
+**FLAT at 712** across all three, because a pre-sized dense table is two allocations per function
+whatever the block count. The `<funcs>` control stayed linear on both sides (600 / 1,148 / 2,248
+before, 216 / 380 / 712 after).
+
+⚠ **Compile it with `--target=x64-windows` on a non-x64 host.** The green-thread substrate an `async`
+lowers to is x64-windows-gated at this rung, so an arm64/wasm build panics in the BACKEND — after the
+front-end phase this ladder measures, but with no `--metrics` file written.
 
 ### `genmutchain.sh` — why three knobs and not one
 

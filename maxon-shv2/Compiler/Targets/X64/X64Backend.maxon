@@ -1565,7 +1565,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// resolved after the block loop, when `chunkLabelOffsets` holds every block's chunk-local offset.
 	var jumpTables = JumpTablePendingArray.create()
 	// Sized from `func.nextBlockId` — the function's ids run 0..nextBlockId-1 — so the table is two
-	// allocations and `place` never grows. See BlockOffsetTable for why this is an array and not a Map.
+	// allocations and `place` never reallocates. See BlockKeyedTable for why this is an array and not a Map.
 	var chunkLabelOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// The base rsp offset of this function's spill-slot area, computed once (it depends
@@ -1597,7 +1597,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 		// Record this block's chunk-local start BEFORE emitting its ops, so branches
 		// (from any block) can resolve to it. Blocks are emitted in blockRefs order.
-		chunkLabelOffsets.place(block.id, offset: code.count())
+		chunkLabelOffsets.place(block.id, value: code.count())
 
 		if isFirstBlock and emitGuard 'guard'
 			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes)

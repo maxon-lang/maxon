@@ -693,7 +693,7 @@ function checkLinearAwait(project Project, module MaxonModule)
 end 'checkLinearAwait'
 
 // Per-function driver. `functionHasAwait` is the cheap, NON-ALLOCATING gate — mirroring `buildEscapeSummary`'s
-// `functionHasFunctionParam` — that keeps the reachability machinery (its per-function block map, site list, and
+// `functionHasFunctionParam` — that keeps the reachability machinery (its per-function block index, site list, and
 // walk state) off every await-free function, which is the entire scale corpus. Reports the FIRST violation in op
 // order and stops: a function with a double-await needs one diagnostic, and the deterministic op-order scan makes
 // the choice worker-invariant.
@@ -703,9 +703,9 @@ function checkLinearAwaitInFunction(project Project, module MaxonModule, func Ir
 	end 'noAwait'
 
 	let sites = collectAwaitSites(func, module: module)
-	let blockById = buildBlockByIdMap(func, module: module)
+	let blockIndex = module.blockIndexById(func)
 	for site in sites 'eachSite'
-		if checkAwaitSite(project, module: module, blockById: blockById, func: func, site: site) 'reported'
+		if checkAwaitSite(project, module: module, blockIndex: blockIndex, func: func, site: site) 'reported'
 			return
 		end 'reported'
 	end 'eachSite'
@@ -771,8 +771,8 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 end 'collectAwaitSites'
 
 // Check one await site; report E3100 and return `true` iff a second await of its thread is reachable from it.
-function checkAwaitSite(project Project, module MaxonModule, blockById BlockByIdMap, func IrFunction, site AwaitSite) returns bool
-	match reachableReawait(module, blockById: blockById, startBlock: site.block, startPos: site.pos, promise: site.promise) 'reach'
+function checkAwaitSite(project Project, module MaxonModule, blockIndex BlockIndexById, func IrFunction, site AwaitSite) returns bool
+	match reachableReawait(module, blockIndex: blockIndex, func: func, startBlock: site.block, startPos: site.pos, promise: site.promise) 'reach'
 		found(secondOpIdx) then return reportedViolation(project, func: func, secondOpIdx: secondOpIdx)
 		none then break 'reach'
 	end 'reach'
@@ -787,20 +787,6 @@ function reportedViolation(project Project, func IrFunction, secondOpIdx OpIndex
 	reportPositioned(project, code: ErrorCode.promiseAlreadyAwaited, message: "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice", line: range.line, column: range.column, filePath: func.sourceFilePath)
 	return true
 end 'reportedViolation'
-
-// A function-local map from a successor terminator's `BlockId` to the `BlockRef` that fetches the block from
-// `module.blocks`. `func.blockRefs` is in LAYOUT order and a terminator names its successors by `BlockId`, so a
-// walk that follows terminators needs this to resolve them. Built once per await-bearing function (rare).
-typealias BlockByIdMap = Map with (BlockId, BlockRef)
-
-function buildBlockByIdMap(func IrFunction, module MaxonModule) returns BlockByIdMap
-	var byId = BlockByIdMap.create()
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockByIdMap: blockRef from func.blockRefs not in module.blocks")
-		byId.upsert(block.id, value: blockRef)
-	end 'eachBlock'
-	return byId
-end 'buildBlockByIdMap'
 
 // The outcome of scanning one block's body ops for a re-await of the tracked promise.
 union AwaitScan
@@ -836,7 +822,7 @@ typealias BlockIdSet = Set with BlockId
 // each block entered from its top at most once (`visited`). A path DIES at the `asyncCall` that re-defines
 // `promise` (the re-arm). A block reached again via a loop back-edge is scanned from the top — which is what
 // makes a single lexical await inside a loop reach ITSELF and be refused.
-function reachableReawait(module MaxonModule, blockById BlockByIdMap, startBlock IrBlock, startPos BlockOpPos, promise ValueId) returns ReachableReawait
+function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func IrFunction, startBlock IrBlock, startPos BlockOpPos, promise ValueId) returns ReachableReawait
 	match scanBlockForReawait(module, block: startBlock, from: startPos + 1, promise: promise) 'tail'
 		foundSecond(idx) then return ReachableReawait.found(idx)
 		// SSA guarantees the definition dominates (precedes) the await, so a re-arm cannot sit in the tail —
@@ -858,8 +844,9 @@ function reachableReawait(module MaxonModule, blockById BlockByIdMap, startBlock
 		end 'seen'
 		visited.insert(blockId)
 
-		let blockRef = try blockById.get(blockId) otherwise panic("reachableReawait: successor BlockId {blockId} not in this function's block map")
-		let block = try module.blocks.get(blockRef) otherwise panic("reachableReawait: blockRef from block map not in module.blocks")
+		let position = try blockIndex.get(blockId) otherwise panic("reachableReawait: successor BlockId {blockId} is not a block of this function")
+		let blockRef = try func.blockRefs.get(position) otherwise panic("reachableReawait: blockIndexById placed block {blockId} at position {position}, which is past func.blockRefs")
+		let block = try module.blocks.get(blockRef) otherwise panic("reachableReawait: blockRef from func.blockRefs not in module.blocks")
 		match scanBlockForReawait(module, block: block, from: 0, promise: promise) 'scan'
 			foundSecond(idx) then return ReachableReawait.found(idx)
 			// Re-armed here — do NOT follow this block's successors; the promise past this point is a new thread.
