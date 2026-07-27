@@ -1,0 +1,18 @@
+// Test: error.field-write-on-builtin-base-a-declaration-also-claims
+typealias Int = int(i64.min to i64.max)
+
+type Array uses T
+	export var value as T
+end 'Array'
+
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	a.value = 4242
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods

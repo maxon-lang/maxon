@@ -15635,19 +15635,31 @@ export type Parser
 			return result
 		end 'runtimeSize'
 
-		return self.emitLiteral(self.concreteSizeofBytes(operand), valueType: MaxonType.integer, range: SourceRange.ofToken(sizeofTok))
+		return self.emitLiteral(try self.concreteSizeofBytes(operand, sizeofTok: sizeofTok), valueType: MaxonType.integer, range: SourceRange.ofToken(sizeofTok))
 	end 'parseSizeof'
 
 	// The byte size of a CONCRETE `sizeof` operand, computed at parse time. A struct is its full laid-out
 	// box (`StructLayout.sizeBytes`); a generic INSTANCE is the base struct's box; every non-aggregate type
 	// is its `primitiveTypeByteSize`. `typeParameter` never reaches here (its caller routes it to the
 	// descriptor path); `unresolved` is a TypeResolution bug and `void` is not a value type.
-	function concreteSizeofBytes(t MaxonType) returns ParsedInt
+	function concreteSizeofBytes(t MaxonType, sizeofTok Token) returns ParsedInt throws ParseError
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.structRef 'struct'
 			return self.namedStructSizeBytes(typeNameIdOf(t))
 		end 'struct'
 		if tag == ValueTypeTag.genericInstance 'instance'
+			// ⚠ **AN INSTANCE IS INTERNED FOR WHATEVER A `with` NAMED, SO THE BASE MAY BE NOTHING AT ALL**, and
+			// this fold runs at PARSE time while the E2055 `checkGenericInstance` recorded against that `with` is
+			// drained whole-program — so the user would never see it. `sizeof(IntMap)` for `typealias IntMap =
+			// Map with (Int, Int)` therefore died inside `genericInstanceBoxSize` with a stack trace and no
+			// `error E….` at all. Positioned here instead, carrying the cause itself, exactly as the field-access
+			// door does (`Parser.missingBaseLayout`). A BUILTIN base is NOT refused: its box is the fixed record
+			// and `sizeof(Array with Int)` is 48 — which is why the gate is `genericInstanceBaseIsKnown` and not
+			// the field walks' `genericInstanceHasBaseLayout`.
+			if not self.signatures.genericInstanceBaseIsKnown(typeNameIdOf(t)) 'unknownBase'
+				throw ParseError.unsupported("sizeof of a type that instantiates '{String.from(self.signatures.genericInstanceBaseName(typeNameIdOf(t)))}', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error", line: sizeofTok.line, column: sizeofTok.column)
+			end 'unknownBase'
+
 			// The instance's box size is THE one authority on ProgramSignatures — the same
 			// `genericInstanceBoxSize` the descriptor's `size@0` slot is emitted through — so a concrete
 			// `sizeof(Box with Integer)` folded here and a `sizeof(T)` descriptor read for the same instance
@@ -19616,23 +19628,43 @@ export type Parser
 	// positioned diagnostic. Both were one panic, and both were reachable: `arr.managed` on an `Array with
 	// Int` and `t.foo` on a parameter typed `Nonexistent with Int` each died with a stack trace and no
 	// `error E….` at all.
+	//
+	// ⇒ So the two tags do not ask the same question, and only the `structRef` half may ask `structOf`. The
+	// instance half asks the SAME walk gate the four `SignatureIndex` field walks open with, for the reason
+	// the gate below states: a name being declared is not the same fact as this instance's fields living
+	// there, and where they came apart the compiler read a heap pointer out as user data.
 	function structLayoutOfBinding(binding VarInfo, baseTok Token) returns StructLayout throws ParseError
 		let typeName = self.baseStructNameOfBinding(binding, baseTok: baseTok)
+
+		// ⚠⚠ **AN INSTANCE ASKS `genericInstanceHasBaseLayout`, NEVER `structOf` ALONE — THE TWO DISAGREE,
+		// AND THE DISAGREEMENT IS MEMORY-UNSAFE.** They answer different questions: `structOf` says "is a
+		// type of this NAME declared anywhere", the gate says "does THIS INSTANCE have a layout its fields
+		// actually live at". For a BUILTIN base they part company the moment a program writes `type Array
+		// uses T` — the declaration registers, so `structOf` hands back ITS field table, while the VALUE in
+		// hand is the runtime's synthesized 48-byte record, because every other door (`create`, the method
+		// router, `genericInstanceBoxSize`, `genericInstanceBoxDropCallee`) is already routed to the builtin
+		// by `isArrayInstance`. The field offsets then address the record, and MEASURED, with no diagnostic
+		// anywhere and a compile that exits 0: `a.value` on an `Array with Integer` printed 7077984 — the
+		// element buffer POINTER read as an Integer — and `a.value = 4242` overwrote that pointer, taking an
+		// access violation (0xC0000005) in the teardown. `Set` hands out its record's count the same way.
+		//
+		// So the walk gate is the ONE door here too, exactly as it is at the four `SignatureIndex` walks: an
+		// instance whose base has no layout OF ITS OWN never reads fields, whoever else declares the name.
+		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and not self.signatures.genericInstanceHasBaseLayout(typeNameIdOf(binding.varType)) 'noBaseLayout'
+			throw self.missingBaseLayout(typeName, baseTok: baseTok)
+		end 'noBaseLayout'
+
 		match self.signatures.structOf(typeName) 'declared'
 			declared(layout) then return layout
-			undeclared then throw self.missingBaseLayout(binding, typeName: typeName, baseTok: baseTok)
+			undeclared then panic("structLayoutOfBinding: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference), and an INSTANCE base was gated by genericInstanceHasBaseLayout above")
 		end 'declared'
 	end 'structLayoutOfBinding'
 
-	// What a MISSING base layout means, by the tag that reached it. A `structRef`'s absence is an invariant
-	// break and panics (see `structLayoutOfBinding`); a `genericInstance`'s is a program property and gets a
-	// positioned E2015, worded by the two reasons `ProgramSignatures.genericInstanceHasBaseLayout`
-	// distinguishes — a reader needs opposite things from them.
-	function missingBaseLayout(binding VarInfo, typeName ByteArray, baseTok Token) returns ParseError
-		if maxonTypeTag(binding.varType) != ValueTypeTag.genericInstance 'structRef'
-			panic("structLayoutOfBinding: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
-		end 'structRef'
-
+	// Which of the two ways a generic instance's base has no `StructLayout` this one is, worded for a reader
+	// who needs opposite things from them — the diagnostic half of `ProgramSignatures.genericInstanceHasBaseLayout`,
+	// whose header states the split. Only an instance reaches here; a `structRef` with no layout is an
+	// invariant break and panics at the call site above.
+	function missingBaseLayout(typeName ByteArray, baseTok Token) returns ParseError
 		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** `stdlib/Array.maxon:106` declares
 		// `export var managed as ElementMemory`, so `arr.managed` is a real language feature and reporting it
 		// as an unknown field would be a false statement about Maxon (12 committed spec cases write exactly

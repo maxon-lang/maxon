@@ -1385,3 +1385,78 @@ end 'main'
 ```maxoncstderr
 error E2055: <fragment>:3:20: Type 'Map' has no associated types
 ```
+
+<!-- test: error.field-write-on-builtin-base-a-declaration-also-claims -->
+The third way a generic instance's base has no layout OF ITS OWN, and the one that is not
+about a layout being ABSENT: a declaration claims a BUILTIN base name. `type Array uses T`
+registers a field table, but every door that decides what the VALUE is — `create`, the
+method router, the box size, the drop callee — is routed to the synthesized runtime record
+by `isArrayInstance`, so the declaration's field offsets address that record. The field
+access must ask the same walk gate the destructor walks do, not `structOf`, which answers
+the different question "is a type of this NAME declared". Before it did, this program
+compiled with no diagnostic at all: the write landed on the array record's element buffer
+POINTER and the teardown took an access violation (0xC0000005). Reading was as bad and
+quieter — `a.value` handed the raw heap address back as an Integer.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Array uses T
+	export var value as T
+end 'Array'
+
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	a.value = 4242
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+```
+
+<!-- test: error.field-read-on-builtin-set-base-a-declaration-also-claims -->
+The `Set` twin, and the READ direction — the two builtins are one rule, so a fix that
+reached only the one it was measured on would leave the other silently handing out its
+record. This one used to print the set record's live count as if it were the declared
+field.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Set uses T
+	export var value as T
+end 'Set'
+
+typealias IntSet = Set with Int
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	s.insert(7)
+	return s.value
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:9: Unsupported: a field access on 's': `Set` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Set.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+```
+
+<!-- test: error.sizeof-of-undeclared-generic-base -->
+The other query that assumes an instance's base exists, and it is NOT the field walks'
+gate: `genericInstanceBoxSize` answers for a BUILTIN (the fixed 48-byte record) as happily
+as for a declared base, and has nothing to say only when the base is neither. `sizeof`
+folds at PARSE time, while the E2055 `checkGenericInstance` recorded against this `with` is
+drained whole-program afterwards — so this used to die inside `ProgramSignatures.baseLayoutOf`'s
+sibling with a stack trace and the real diagnostic never printed. `sizeof(Array with Int)`
+still folds to 48; only an unknown base is refused.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntMap = Map with (Int, Int)
+
+function main() returns ExitCode
+	return sizeof(IntMap) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Map', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
+```

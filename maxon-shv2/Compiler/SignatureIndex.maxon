@@ -3800,7 +3800,7 @@ export type ProgramSignatures
 		end 'set'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
-			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base is not a declared struct")
+			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base '{String.from(self.genericInstanceBaseName(id))}' is neither a builtin nor a declared struct, so it has no box — every caller opens with genericInstanceBaseIsKnown")
 		end 'base'
 	end 'genericInstanceBoxSize'
 
@@ -4302,6 +4302,25 @@ export type ProgramSignatures
 		let baseName = self.genericInstanceBaseName(id)
 		return not self.isBuiltinGenericBaseName(baseName) and self.containsStruct(baseName)
 	end 'genericInstanceHasBaseLayout'
+
+	// Is instance `id`'s base one this compiler KNOWS AT ALL — a builtin it synthesizes, or a `type` some
+	// file declares. The UNDECLARED third of the split above, on its own.
+	//
+	// ⚠ **THIS IS NOT `genericInstanceHasBaseLayout` AND MUST NOT BE COLLAPSED INTO IT: THE TWO DISAGREE ON A
+	// BUILTIN, WHICH IS KNOWN AND HAS NO FIELDS.** They are the preconditions of two different queries, and
+	// each query needs its own:
+	//
+	//   • a FIELD WALK needs a layout, so `Array` stops it — `genericInstanceHasBaseLayout`.
+	//   • `genericInstanceBoxSize` answers for a builtin (the fixed record) AND for a declared base (its
+	//     box), and has nothing to say only for NEITHER — this one.
+	//
+	// Measured on the door that needed it: `sizeof(IntMap)` for `typealias IntMap = Map with (Int, Int)` died
+	// inside `genericInstanceBoxSize` with a stack trace and no `error E….`, because `sizeof` folds at PARSE
+	// time and the E2055 `checkGenericInstance` had already recorded is drained whole-program, later.
+	export function genericInstanceBaseIsKnown(id GenericInstanceId) returns bool
+		let baseName = self.genericInstanceBaseName(id)
+		return self.isBuiltinGenericBaseName(baseName) or self.containsStruct(baseName)
+	end 'genericInstanceBaseIsKnown'
 
 	// --- Generic-instance managed drop (P1.6-B2) ---
 	//
