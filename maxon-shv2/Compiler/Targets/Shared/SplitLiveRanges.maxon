@@ -987,6 +987,25 @@ type BlockPeakSlot
 	end 'create'
 end 'BlockPeakSlot'
 
+// Does the max suffix of a node START IN ITS LEFT child? `left` covers the EARLIER slots, so a suffix
+// opening there runs through the whole of `right` — which is the `rightSum +` term.
+//
+// ⚠ THE ONE STATEMENT OF THE TIE, AND IT HAS TWO CALLERS THAT MAY NOT DIFFER. `combine` folds it into
+// `nodeBest`, which is the PRESSURE the peak-finder reads; `blockPeak`'s descent re-asks it at every
+// level to recover the SLOT that pressure sits at. Written twice — which it was — a later edit to one
+// would hand back a peak whose slot is not where its own value is: a different victim, no crash, no
+// failing assertion, and nothing outside `VerifyIncrementalSplit` to notice.
+//
+// TIE GOES LEFT — the EARLIER op — because the sweep this replaces visits a block's ops in DECREASING
+// position and `peakOutranks` replaces on an exact tie, so its winner is the earliest op of the tying
+// run. Reproducing the ORDER is the whole contract (see `peakOutranks`).
+//
+// It takes the two children's AGGREGATES rather than their node indices so that `combine`, which has
+// already read all three for its own sum, pays no extra column read to ask it.
+function suffixBestIsInLeft(leftBest PressureDelta, rightSum PressureDelta, rightBest PressureDelta) returns bool
+	return rightSum + leftBest >= rightBest
+end 'suffixBestIsInLeft'
+
 export type PressureIndex
 	// A power of two: leaf `s` is node `slotCount + s`, node 1 is the root, node `n`'s children are `2n`
 	// and `2n + 1`.
@@ -1126,7 +1145,7 @@ export type PressureIndex
 		end 'eachOperand'
 	end 'seatOp'
 
-	// The slot of the op that DEFINES `valueId`. Only asked of a value `UseIndex.defSiteOf` has already
+	// The slot of the op that DEFINES `valueId`. Only asked of a value `UseIndex.defKindOf` has already
 	// said has an op def, so an unwritten entry is unreachable rather than a sentinel to test.
 	export function defSlotOf(valueId ValueId) returns PressureSlot
 		return try self.defSlot.get(valueId) otherwise panic("PressureIndex.defSlotOf: value {valueId} is outside the index's value space")
@@ -1175,12 +1194,24 @@ export type PressureIndex
 		self.promote(blockLocal, slot: slot)
 	end 'addDelta'
 
-	// REPLACE the contribution at `slot` for ONE file, and republish — for the EXIT leaf, whose number is
-	// the block's live-out population rather than an accumulation of per-value terms.
-	export function putDelta(blockLocal CfgIndex, slot PressureSlot, class RegClass, value PressureDelta)
-		self.setDelta(slot, class: class, value: value)
-		self.promote(blockLocal, slot: slot)
-	end 'putDelta'
+	// THE ONE STATEMENT OF WHAT A BLOCK'S EXIT LEAF HOLDS: its live-out population, per file. It is not
+	// an accumulation of per-value terms like every other leaf — it is REPLACED outright — and it is the
+	// number every suffix sum in the block runs through, so every `liveBefore` in that block is offset
+	// by it.
+	//
+	// ⚠ TWO CALLERS, ONE STATEMENT. `rebuild` publishes it from the row it seeds its own backward sweep
+	// with; `refreshExitLeaves` publishes it from `seedClassLive` over the same list, after a split has
+	// re-marked the live sets. Written out at both sites — which it was, one of them re-tallying the
+	// list by hand rather than through `seedClassLive` — the two are free to drift, and a block's whole
+	// pressure profile moves by the difference.
+	export function setExitPopulation(blockLocal CfgIndex, population RegCountColumn)
+		let exit = self.exitSlotOf(blockLocal)
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			self.setDelta(exit, class: class, value: classRowGet(population, class: class) as PressureDelta)
+		end 'eachClass'
+		self.promote(blockLocal, slot: exit)
+	end 'setExitPopulation'
 
 	// Replace the reuse-copy transient at `slot` for ONE file, and republish.
 	export function putTransient(blockLocal CfgIndex, slot PressureSlot, class RegClass, value PressureDelta)
@@ -1229,10 +1260,9 @@ export type PressureIndex
 			// the population to its right. Measured before they were there: a block peak of 31 where the
 			// same leaves scan to 17.
 			//
-			// TIE GOES LEFT — the EARLIER op — because the sweep this replaces visits a block's ops in
-			// DECREASING position and `peakOutranks` replaces on an exact tie, so its winner is the
-			// earliest op of the tying run. Reproducing the ORDER is the whole contract (see `peakOutranks`).
-			try self.nodeBest.set(classRowIndex(node, class: class), value: (rightSum + leftBest) if (rightSum + leftBest) >= rightBest else rightBest) otherwise panic("PressureIndex.combine: nodeBest.set OOB at {node}")
+			// The tie is `suffixBestIsInLeft`'s, which `blockPeak`'s descent asks in the same terms — see
+			// there for why the two may not be separate sentences.
+			try self.nodeBest.set(classRowIndex(node, class: class), value: (rightSum + leftBest) if suffixBestIsInLeft(leftBest, rightSum: rightSum, rightBest: rightBest) else rightBest) otherwise panic("PressureIndex.combine: nodeBest.set OOB at {node}")
 		end 'eachClass'
 	end 'combine'
 
@@ -1295,8 +1325,8 @@ export type PressureIndex
 	// ----------------------------------------------------------------------
 
 	// The block's peak: `max over its ops p of (liveBefore(p) + transient(p))`, and the SLOT it sits at.
-	// One node read plus one descent, and the descent resolves a tie toward the EARLIER op exactly as
-	// `combine` does.
+	// One node read plus one descent, and the descent resolves a tie through `suffixBestIsInLeft` — the
+	// SAME predicate `combine` folded the value with, not a second spelling of it.
 	export function blockPeak(blockLocal CfgIndex, class RegClass) returns BlockPeakSlot
 		let top = self.nodeOf(blockLocal)
 		let best = self.bestOf(top, class: class)
@@ -1308,7 +1338,7 @@ export type PressureIndex
 		while node < self.slotCount 'descend'
 			let left = node + node
 			let right = left + 1
-			node = left if self.sumOf(right, class: class) + self.bestOf(left, class: class) >= self.bestOf(right, class: class) else right
+			node = left if suffixBestIsInLeft(self.bestOf(left, class: class), rightSum: self.sumOf(right, class: class), rightBest: self.bestOf(right, class: class)) else right
 		end 'descend'
 		return BlockPeakSlot.create(true, slot: node - self.slotCount, pressure: best)
 	end 'blockPeak'
@@ -1554,12 +1584,10 @@ export type PressureIndex
 			seedClassLive(liveByClass, classes: liveness.valueClass, values: seedBuf)
 
 			// The EXIT leaf carries the block's live-out population, which is what turns a suffix sum from
-			// an op into that op's live-BEFORE count with no separate term to add.
-			let exit = self.exitSlotOf(b)
-			for classOrdinal in 0 upto RegClassCount 'eachClass'
-				let class = regClassAt(classOrdinal)
-				self.setDelta(exit, class: class, value: classRowGet(liveByClass, class: class) as PressureDelta)
-			end 'eachClass'
+			// an op into that op's live-BEFORE count with no separate term to add. `liveByClass` is that
+			// population exactly — `seedClassLive` has just filled it from the same live-out list — so this
+			// build and the incremental repair publish the leaf through one function.
+			self.setExitPopulation(b, population: liveByClass)
 
 			ordered.clear()
 			collectBlockOps(block, out: ordered)
@@ -1897,16 +1925,23 @@ function operandContribution(isUse bool, liveAfter bool) returns PressureDelta
 	return (1 if isUse else 0) - (1 if liveAfter else 0)
 end 'operandContribution'
 
-// Is `v` in `blockLocal`'s live-out set? O(live-out), and asked once per (value, block) the repair
-// touches — the same scan `sweepBlockPressure` pays to seed itself with.
-function liveOutHolds(live LiveSets, blockLocal CfgIndex, v ValueId) returns bool
-	for u in live.liveOut(blockLocal) 'each'
+// Is `v` in a block's live-IN or live-OUT list? A block's live sets are SPARSE LISTS, so there is no
+// bit to test and membership is an O(live) scan — the same scan `sweepBlockPressure` pays merely to
+// seed itself with, and asked once per (value, block) the repair touches.
+//
+// ONE scan over a LIST, rather than one per QUESTION. It was written THREE times: a `liveOutHolds` and a
+// `liveInHolds` differing only in which accessor they call, and a third copy down in `verifyLiveSet`,
+// which is the one this keeps the name of. Taking the LIST rather than a (sets, block) pair is what
+// makes one function serve all three — the block lookup is the caller's, and it is the only thing they
+// disagreed about.
+function liveListHolds(list ValueIdArray, v ValueId) returns bool
+	for u in list 'each'
 		if u == v 'found'
 			return true
 		end 'found'
 	end 'each'
 	return false
-end 'liveOutHolds'
+end 'liveListHolds'
 
 // Add (`adding`) or withdraw value `v`'s contribution at every op that names it as an operand. The one
 // direction difference is the SIGN, so both halves of the repair are one function and cannot come to
@@ -1918,6 +1953,13 @@ end 'liveOutHolds'
 // ⚠ AN EDGE USE IS NOT AN OPERAND. Its record names the block's terminator as its sequence anchor, but
 // the value is read by the EDGE, not by that op — it reaches the per-op numbers only through the block's
 // live-out population (the exit leaf). Contributing at the terminator would count it twice.
+//
+// ⚠ THE USE TERM AND THE DEF TERM ARE SUMMED, WHICH IS RIGHT ONLY BECAUSE NO OP GIVES ONE VALUE BOTH
+// ROLES. `operandContribution` is one term per (value, op), and this emits one for each op use plus one
+// for the def — so a value that were BOTH a use and a def operand of a single op would get two, and its
+// leaf would be low by exactly `[it is live after that op]`. SSA is what forbids it: a def mints a new
+// id, and a two-address op is modelled as a reuse DEF over a distinct input value (`pushReuseBinOperands`),
+// never as `v = op(v)`. A lowering that ever emitted one would need this to fold the two terms.
 function applyValueToPressure(liveness LivenessResult, pressure PressureIndex, v ValueId, adding bool)
 	let index = liveness.useIndex
 	let live = liveness.live
@@ -1942,7 +1984,7 @@ function applyValueToPressure(liveness LivenessResult, pressure PressureIndex, v
 			let blockLocal = index.useBlockAt(record)
 			if blockLocal != scannedBlock 'aNewBlock'
 				scannedBlock = blockLocal
-				scannedLiveOut = liveOutHolds(live, blockLocal: blockLocal, v: v)
+				scannedLiveOut = liveListHolds(live.liveOut(blockLocal), v: v)
 			end 'aNewBlock'
 			if blockLocal == defBlock 'readInItsOwnDefBlock'
 				usedInDefBlock = true
@@ -1967,7 +2009,7 @@ function applyValueToPressure(liveness LivenessResult, pressure PressureIndex, v
 	end 'noDefiningOp'
 
 	let defBlockLocal = index.defBlockOf(v)
-	let defLiveAfter = usedInDefBlock or liveOutHolds(live, blockLocal: defBlockLocal, v: v)
+	let defLiveAfter = usedInDefBlock or liveListHolds(live.liveOut(defBlockLocal), v: v)
 	pressure.addDelta(defBlockLocal, slot: pressure.defSlotOf(v), class: class, by: sign * operandContribution(false, liveAfter: defLiveAfter))
 end 'applyValueToPressure'
 
@@ -2029,7 +2071,7 @@ end 'refreshTransientAt'
 // Is `v` live AFTER the op sitting in `slot`? The general form of the lookahead
 // `applyOneUseToPressure` gets for free: live-out of the block, or read again later in it.
 function valueLiveAfterSlot(index UseIndex, live LiveSets, pressure PressureIndex, v ValueId, blockLocal CfgIndex, slot PressureSlot) returns bool
-	if liveOutHolds(live, blockLocal: blockLocal, v: v) 'liveOnEveryExit'
+	if liveListHolds(live.liveOut(blockLocal), v: v) 'liveOnEveryExit'
 		return true
 	end 'liveOnEveryExit'
 
@@ -2054,15 +2096,11 @@ end 'valueLiveAfterSlot'
 function refreshExitLeaves(liveness LivenessResult, pressure PressureIndex, dirty BlockSet, row RegCountColumn)
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		let blockLocal = dirty.at(k)
-		classRowZero(row)
-		for v in liveness.live.liveOut(blockLocal) 'eachLiveOut'
-			let class = liveness.classOf(v)
-			classRowSet(row, class: class, value: classRowGet(row, class: class) + 1)
-		end 'eachLiveOut'
-		for classOrdinal in 0 upto RegClassCount 'eachClass'
-			let class = regClassAt(classOrdinal)
-			pressure.putDelta(blockLocal, slot: pressure.exitSlotOf(blockLocal), class: class, value: classRowGet(row, class: class) as PressureDelta)
-		end 'eachClass'
+		// `seedClassLive`, not a tally written out again here: it is the same per-class count over the same
+		// sparse list that the index BUILD seeds its own sweep with, and a second copy of it is a second
+		// chance to count a file wrong (see `PressureIndex.setExitPopulation`).
+		seedClassLive(row, classes: liveness.valueClass, values: liveness.live.liveOut(blockLocal))
+		pressure.setExitPopulation(blockLocal, population: row)
 	end 'eachDirtyBlock'
 end 'refreshExitLeaves'
 
@@ -2130,11 +2168,26 @@ function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressu
 	let index = liveness.useIndex
 	var mask = paramCross.maskFor(w)
 
+	// ⚠ AN EDGE USE IS NOT AN OPERAND, and source 2 is about operands — so an edge record is SKIPPED here,
+	// exactly as `applyValueToPressure`, `refreshTransientsNaming` and `collectReindexCandidates` skip
+	// one. Its record names the block's terminator as its sequence anchor, but the value is read by the
+	// EDGE, and `forbidOperandsFromImplicit` walks that op's OPERAND LIST, which an edge arg is not in.
+	//
+	// What the terminator DOES reach it with is its CLOBBER, and that arrives through source 3: an
+	// edge-passed value is live-out of its block by construction (`LivenessMarkScratch.walkValue` puts it
+	// there for exactly this record), so `liveAcrossClobbersIn` runs its range to the block's exit and
+	// takes the terminator in. Asking `implicitTouchOf` here as well would add the terminator's implicit
+	// USES on top — which the sweep this reproduces never applies, and which no terminator carrying a
+	// successor has today (`jmp`, `jcc` and both jump tables read 0). A mask this could only ever WIDEN,
+	// with nothing but `VerifyIncrementalSplit` to notice.
 	let useSites = index.useCount(w)
 	if useSites > 0 'used'
 		var record = index.firstUseOf(w)
 		for _ in 0 upto useSites 'eachUse'
-			mask = mask or implicitTouchOf(module, opIdx: index.useOpAt(record), opFacts: liveness.opFacts)
+			match index.useKindAt(record) 'kind'
+				edge then break 'kind'
+				op then mask = mask or implicitTouchOf(module, opIdx: index.useOpAt(record), opFacts: liveness.opFacts)
+			end 'kind'
 			record = index.nextUseOf(record)
 		end 'eachUse'
 	end 'used'
@@ -2177,10 +2230,10 @@ function liveAcrossClobbersIn(liveness LivenessResult, pressure PressureIndex, w
 	let index = liveness.useIndex
 	let live = liveness.live
 	let definedHere = index.defKindOf(w) != ValueDefKind.none and index.defBlockOf(w) == blockLocal
-	let liveOut = liveOutHolds(live, blockLocal: blockLocal, v: w)
+	let liveOut = liveListHolds(live.liveOut(blockLocal), v: w)
 	let lastUse = lastUsePositionIn(index, w: w, blockLocal: blockLocal)
 
-	if not (definedHere or liveOut or lastUse.found or liveInHolds(live, blockLocal: blockLocal, v: w)) 'notLiveInThisBlockAtAll'
+	if not (definedHere or liveOut or lastUse.found or liveListHolds(live.liveIn(blockLocal), v: w)) 'notLiveInThisBlockAtAll'
 		return 0
 	end 'notLiveInThisBlockAtAll'
 
@@ -2237,17 +2290,6 @@ function lastUsePositionIn(index UseIndex, w ValueId, blockLocal CfgIndex) retur
 	return BlockLastUse.create(found, position: position)
 end 'lastUsePositionIn'
 
-// Is `v` in `blockLocal`'s live-IN set? `liveOutHolds`'s twin, and the same O(live) scan the block sweep
-// paid to seed itself with.
-function liveInHolds(live LiveSets, blockLocal CfgIndex, v ValueId) returns bool
-	for u in live.liveIn(blockLocal) 'each'
-		if u == v 'found'
-			return true
-		end 'found'
-	end 'each'
-	return false
-end 'liveInHolds'
-
 // The DEAD block-arg count of the ONE block a split can move it in.
 //
 // A block-arg is dead iff nothing in its block reads it and it is not carried out — the same predicate
@@ -2270,7 +2312,7 @@ function refreshDeadPhisFor(module TargetModule, liveness LivenessResult, victim
 	end 'zeroRow'
 
 	for arg in block.blockArgs 'eachPhi'
-		if lastUsePositionIn(index, w: arg.valueId, blockLocal: blockLocal).found or liveOutHolds(liveness.live, blockLocal: blockLocal, v: arg.valueId) 'live'
+		if lastUsePositionIn(index, w: arg.valueId, blockLocal: blockLocal).found or liveListHolds(liveness.live.liveOut(blockLocal), v: arg.valueId) 'live'
 			continue
 		end 'live'
 		let idx = classRowIndex(blockLocal, class: liveness.classOf(arg.valueId))
@@ -3289,13 +3331,17 @@ end 'materializePeak'
 // out of step with the one that found the peak.
 //
 // ⚠ THE OP INDEX COMES OUT OF THIS WALK BECAUSE THE BLOCK'S LAYOUT MUST BE STATED ONCE. The walk's
-// LAST step is by definition the op at `forwardPos`, and it reads that op out of the list
-// `collectBlockOps` just built — which is the one place that knows a block's execution order is its
-// `opRefs` followed by its terminator. A separate positional accessor spelling that order out again
-// is a second statement of it, and the two would not fail loudly: `peakOpIdx` feeds `usesAtPeakOp`
-// (which values the peak op READS, hence which are excluded as victims) and the mutators, so a
-// disagreement is a different victim and different code, never a crash. It also costs nothing to take
-// it from here — this walk builds the list either way.
+// LAST step is by definition the op at `forwardPos`, so taking `peakOpIdx` from it costs nothing and
+// cannot disagree with the op the row was folded to. That matters because a disagreement would not
+// fail loudly: `peakOpIdx` feeds `usesAtPeakOp` (which values the peak op READS, hence which are
+// excluded as victims) and the mutators, so it is a different victim and different code, never a crash.
+//
+// The ONE statement of a block's execution order is `blockOpAt` — body `opRefs`, then the terminator —
+// and `collectBlockOps` is now BUILT from it rather than spelling it out a second time. So reading the
+// suffix positionally here is the same statement the list-building consumers read, which is what makes
+// it safe to skip building the list at all: this walk usually wants a fraction of a block, and on a
+// function that is one basic block `collectBlockOps` was Θ(the function) once per split before the
+// walk even started.
 //
 // It costs ONE partial block sweep per pressure analysis, and it is what buys the removal of a heap
 // row plus a full `wordsPerRow` copy at EVERY tying op of EVERY block (see `PeakRank`).
@@ -5188,15 +5234,6 @@ function verifyLiveSet(actual ValueIdArray, fresh ValueIdArray, onEntry bool, bl
 		end 'stale'
 	end 'eachHeld'
 end 'verifyLiveSet'
-
-function liveListHolds(list ValueIdArray, v ValueId) returns bool
-	for u in list 'each'
-		if u == v 'found'
-			return true
-		end 'found'
-	end 'each'
-	return false
-end 'liveListHolds'
 
 // The whole use index, value by value: the op count, the sequence limit, and for every value its use
 // thread (record for record, in order — both are held ascending by sequence, so they must agree

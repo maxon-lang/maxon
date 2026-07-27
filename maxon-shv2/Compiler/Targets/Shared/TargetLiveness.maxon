@@ -2477,7 +2477,12 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 			next = next + 1
 		end 'eachCandidateHere'
 
-		indexBlockEdgeUses(index, block: block, blockLocal: blockLocal, opCount: pressure.opCountOf(blockLocal), which: which)
+		// `blockOpCount`, not the positional index's occupancy — the SAME source the whole-block walk
+		// counts with. An edge use is anchored at `seqAt(block, opCount - 1)`, i.e. at the terminator's
+		// BLOCK POSITION, and block positions are stated by `opRefs` + the terminator; the index's count
+		// is a copy derived from that. Reading the copy here would put an edge record at a sequence the
+		// block does not have the moment the two ever disagree.
+		indexBlockEdgeUses(index, block: block, blockLocal: blockLocal, opCount: blockOpCount(block), which: which)
 	end 'eachDirtyBlock'
 
 	if next != candidates.count() 'candidatesOutsideTheDirtyRegion'
