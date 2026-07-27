@@ -434,7 +434,8 @@ end 'main'
 0
 ```
 
-<!-- test: param-mutating-method-is-impure -->
+<!-- disabled-test: param-mutating-method-is-impure -->
+<!-- purity analysis (E3064/E3065) — shv2 has NO purity classification, so this case cannot pin the one it is named for: it accepts EVERY `_ =` discard unconditionally (a provably pure `_ = isTwo(2)` compiles clean), and docs/error-codes.txt claims E3064/E3065 for csharp+selfhosted only, with no shv2 line. The old marker named two blockers, `P1.7 Array + purity analysis`; the Array half landed and this half did not, so the exit code now tracks only "the removal happened". Its nine siblings above are disabled for exactly this -->
 A function that mutates a parameter through a mutating method (`arr.remove(i)`)
 is IMPURE — even though it neither writes a global nor calls a known impure
 builtin directly. Its `bool` result is therefore `_=`-discardable (E3065-style),

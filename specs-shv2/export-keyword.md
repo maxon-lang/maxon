@@ -189,6 +189,10 @@ end 'main'
 ```
 
 <!-- test: export-typealias-basic -->
+⚠ This gates the `Array with T` TYPEALIAS reaching another file, not the `export`
+keyword: shv2 enforces export visibility for `var`s only, so deleting `export` here
+still compiles. `error.non-exported-typealias-cross-file` below is the case that will
+gate the keyword, and it stays disabled until that enforcement exists.
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -247,6 +251,9 @@ end 'main'
 ```
 
 <!-- test: export-typealias-as-return-type -->
+The same reach in RETURN position — and the same caveat as `export-typealias-basic`:
+the `export` keyword is inert here, so what this gates is the instance typealias
+resolving to one type across a file boundary.
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)
