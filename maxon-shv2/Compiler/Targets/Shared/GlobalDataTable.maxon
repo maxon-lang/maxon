@@ -41,7 +41,7 @@ export typealias RdataOffsetMap = Map with (String, ByteOffset)
 // Both labels are `.rdata` labels this same table minted, so their offsets come from `rdataOffsetOf`.
 //
 // This is the DATA→DATA sibling of `PendingRdataReloc` (the code→text-VA-in-rdata patch that fills a
-// managed opaque array instance's descriptor `destroyFunc@40`); like it, this fixup is carried on the
+// witness-table method slot or a layout descriptor's function slots); like it, this fixup is carried on the
 // data table (not the code relocation list) because it patches the rdata IMAGE, not the `.text` bytes.
 export type StringBufferFixup
 	export let recordLabel as String
@@ -54,11 +54,14 @@ end 'StringBufferFixup'
 
 export typealias StringBufferFixupArray = Array with StringBufferFixup
 
-// ⭐ THE DATA→TEXT SIBLING of `StringBufferFixup` (P1.7 slice 3b-ii): a slot INSIDE a `.rdata` layout
-// descriptor — a managed-opaque-`T` instance's `destroyFunc@40` — must hold the ABSOLUTE VA of a `.text`
-// function (the element's destructor, `__str_decref`/`__destruct_<T>`/`__arr_decref`), and no `.text` VA
-// exists until the writer lays out the code section. So `ensureLayoutDescriptor` emits the descriptor blob
-// with `destroyFunc@40 = 0` and records this triple; the x64 writers patch the 8 bytes at
+// ⭐ THE DATA→TEXT SIBLING of `StringBufferFixup`: a slot INSIDE a `.rdata` blob must hold the ABSOLUTE VA
+// of a `.text` function, and no `.text` VA exists until the writer lays out the code section. THREE slots
+// need it — a WITNESS-TABLE method slot (P1.7a slice 2a, one per interface method per conformance, and by far
+// the most numerous), and a managed-opaque-`T` layout descriptor's `destroyFunc@40` (slice 3b-ii) and
+// `copyFunc@32` (slice 3b-vi-b-β) — so the type is named for the CHANNEL and not for any one of them; a
+// comment naming only the descriptor sent readers hunting for a managed opaque array in programs that had
+// none. The emitter (`ensureWitnessTable` / `ensureLayoutDescriptor`) leaves the slot 0 and records this triple;
+// the x64 writers patch the 8 bytes at
 // `rdataOffsetOf(rdataLabel) + offsetInLabel` with `funcName`'s runtime address once `.text`'s base is
 // known. `funcName` is a `.text` function this table's writer resolves through the debug-symbol map (as
 // `Arm64FuncAdrpReloc.funcName` resolves to `textOffset`); `rdataLabel` is a `.rdata` label this same table
@@ -152,9 +155,10 @@ export type GlobalDataTable
 	// The `(record, blob)` pairs the PE writer patches to bake each String literal's `buffer@0` — see
 	// StringBufferFixup. Empty for a program with no string literal, which is most of the corpus.
 	export var stringBufferFixups as StringBufferFixupArray
-	// The `(funcName, rdataLabel, offsetInLabel)` triples the x64 writers patch to bake a managed-opaque-`T`
-	// instance's descriptor `destroyFunc@40` with its element destructor's `.text` VA — see PendingRdataReloc.
-	// Empty for a program with no managed-opaque-`T` array (all but the P1.7-generics corpus).
+	// The `(funcName, rdataLabel, offsetInLabel)` triples the x64 writers patch to bake a `.rdata` slot with a
+	// `.text` function's VA — a witness-table method slot, or a managed-opaque-`T` descriptor's
+	// `destroyFunc@40`/`copyFunc@32`. See PendingRdataReloc. Empty for a program that conforms nothing to an
+	// interface and holds no managed-opaque-`T` array (all but the P1.7-generics corpus).
 	export var pendingRdataRelocs as PendingRdataRelocArray
 
 	export static function create() returns GlobalDataTable
@@ -232,12 +236,45 @@ export type GlobalDataTable
 	// `rdataImage`'s drift assert covers it too.
 	export function registerRdataConstantLabeled(label String, bytes ByteArray) returns String
 		if self.rdataOffsets.contains(label) 'alreadyRegistered'
+			self.requireIdenticalPayload(label, bytes: bytes)
 			return label
 		end 'alreadyRegistered'
 
 		self.appendRdataPayload(label, bytes: bytes)
 		return label
 	end 'registerRdataConstantLabeled'
+
+	// ⭐ **IDEMPOTENT MEANS *THE SAME BYTES*, AND UNTIL THIS EXISTED THE TABLE NEVER ASKED.** Every label
+	// reaching `registerRdataConstantLabeled` is STRUCTURAL — derived from the thing it names — so a second
+	// registration under one label is exactly one of two things: the SAME payload (the idempotence the
+	// function's contract promises), or TWO payloads whose derivations produced one name. The second is a
+	// label-space collision, and first-write-wins made it a silently wrong constant: the newcomer's bytes are
+	// dropped, every reference to its label resolves to the incumbent's, and nothing is reported.
+	//
+	// ⚠ **BOTH OF TODAY'S CALLERS MEMOIZE BEFORE THEY ASK** (`ensureWitnessTable` on the label,
+	// `ensureLayoutDescriptor` on the gid), so a repeat under one label is not the hot path this walks — it is
+	// the case that should not happen. The byte compare is therefore free in practice AND it is the only thing
+	// standing between a colliding derivation and a wrong `.rdata` constant, which is why it is not left to
+	// the callers: a caller's memo protects that caller, and this protects the TABLE.
+	//
+	// ⚠ **THE ASYMMETRY IS WHAT THIS CLOSES.** `rdataOffsetOf` and `dataSectionOffsetOf` both PANIC BY NAME
+	// on a label that is MISSING — an invariant break they refuse to paper over — while the write side
+	// accepted a label already taken without so much as comparing it. One end of the same map held two
+	// opposite opinions about how much it could be trusted.
+	//
+	// ⚠ **IT IS A BACKSTOP, NOT THE CURE FOR ANY PARTICULAR COLLISION, and the witness-label join is the
+	// case that proves the difference.** Two witness tables of equal method count carry BYTE-IDENTICAL
+	// zero-filled blobs — what distinguishes them is their RELOCATIONS, which are not payload — and the
+	// mint's own label-keyed memo returns before this is ever reached. Injectivity has to be a property of
+	// the LABEL (`IrInterface.witnessTableLabel`); what this catches is the residue: two derivations of one
+	// name whose CONTENT also disagrees, which is the `__layout_` family's shape.
+	function requireIdenticalPayload(label String, bytes ByteArray)
+		let index = try self.nameIndex.get(label) otherwise panic("GlobalDataTable.requireIdenticalPayload: '{label}' has a recorded offset but no name index — `appendRdataPayload` writes both in one call, so the two cannot disagree")
+		let existing = try self.values.get(index) otherwise panic("GlobalDataTable.requireIdenticalPayload: nameIndex maps '{label}' to {index}, which values does not hold — the two columns are pushed together and cannot disagree")
+		if not existing.equals(bytes) 'differs'
+			panic("GlobalDataTable.requireIdenticalPayload: '{label}' is registered twice with DIFFERENT payloads ({existing.count()} bytes, then {bytes.count()}) — a structural .rdata label names its content, so two payloads under one label means two derivations produced one name and the second would be silently dropped")
+		end 'differs'
+	end 'requireIdenticalPayload'
 
 	// Record that `recordLabel`'s `buffer@0` must be patched with `blobLabel`'s absolute VA — see
 	// StringBufferFixup. Both are `.rdata` labels this table minted; the writer resolves their offsets

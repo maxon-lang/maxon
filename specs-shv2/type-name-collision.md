@@ -121,9 +121,15 @@ even have to match: the sweep cannot see a local's type, so a `[Bar, Bar]` liter
 ⚠ **A `typealias` claims nothing, and neither does an `interface`.** An alias mints no symbol of its
 own — a generic instance's methods are emitted under its BASE's name — so `typealias Box_Integer = Box
 with Integer`, whose alias name is exactly what the instance it names compiles to, is legal and never
-displaces anything. An `interface`'s only emitted artifact is `__witness_<conformer>_<interface>`,
+displaces anything. An `interface`'s only emitted artifact is `__witness_<conformer>.<interface>`,
 whose head is the *conformer*, so it shares no symbol with an instance either. Only the declarations
 that mint `__destruct_<name>` — `type`, `enum`, `union` — can contest.
+
+That claim is about the DECLARED half of the namespace and it is unchanged. What changed is the
+separator it is written with, and it carries a second guarantee the old spelling did not: a `.` occurs
+in no source identifier and therefore in no compiled instance name, so a witness label can no longer be
+spelled by a DIFFERENT conformer/interface pair either. That half was silently untrue, and an
+`interface` is exactly where it bit — see *The WITNESS-TABLE label joins TWO names* below.
 
 ## Two INSTANTIATIONS that compile to one name are still E3006
 
@@ -148,6 +154,47 @@ enclosing alias instead would name a line whose own instantiation is fine.
 It is decided in the FRONT END, over the interned instantiations, **not** at symbol-emission time: a
 diagnostic raised where the symbol is minted has no user span to land on, and would blame a file the
 author never opened.
+
+## The WITNESS-TABLE label joins TWO names, so it joins them with a character no name can hold
+
+A type that conforms to an interface gets a `.rdata` **witness table** — the dictionary a constrained
+generic body dispatches through — and that table is labelled from the pair that identifies it: the
+CONFORMER and the INTERFACE. Joined with `_`, the label is **not injective**, for exactly the reason
+the instantiation join above is not: `_` is a legal character in a type name, so `(A_B, C)` and
+`(A, B_C)` both spell `__witness_A_B_C`.
+
+**The consequence is worse than the instantiation pair's, because there is no second claimant to
+diagnose.** Two instantiations are two interned declarations a front-end check can compare. A witness
+table is minted during LOWERING, from a memo keyed on the LABEL, so the second pair does not *collide*
+with the first — it silently *becomes* it: the mint finds its label already emitted, hands it back, and
+the dispatch site takes the address of a table built for the other pair. Every method slot then
+resolves to the other conformer's implementation, with the other conformer's `self`. Measured before
+this rule, on the two-pair program below: build exit 0, no diagnostic, and the program returned **33**
+where the answer is **43** — both dispatches reached `A_B.idc`.
+
+Which pair wins is not which one is declared first; it is **which dispatch is lowered first**, so the
+same two declarations return 33 or 44 depending only on the order two calls appear in an expression.
+
+**The rule: the label joins with `.`** — `(A_B, C)` is `__witness_A_B.C` and `(A, B_C)` is
+`__witness_A.B_C` — which makes it injective by CHARACTER CLASS rather than by an algorithm. A `.`
+cannot occur in either half: the lexer admits only `[A-Za-z0-9_]` inside an identifier, and every name
+that reaches the join is a source identifier, a compiled instance name (a `_`-join of source
+identifiers behind an optional `__`), or one of the compiler's own conformer names (`int`, `String`,
+`float`, `bool`). So the join has exactly one split and two pairs can never spell one label.
+
+The alternatives are worse in ways worth writing down, because a later reader will reach for them:
+
+- **Escaping by DOUBLING the separator does not even work.** With a one-character separator, a run of
+  five underscores between two components admits three valid splits, so the decoder would need told
+  the split it cannot derive.
+- **A length prefix works, but it makes injectivity a property of a DECODING ALGORITHM** that every
+  later reader has to get right. The character class makes it a property of the LEXER — the same
+  construction the compiled-instance namespace two sections above rests on, where `__` is safe purely
+  because `E2051` bars a declaration from it.
+
+It is the same `.` a method's compiled name is joined with (`Point.create`), for the same reason, but
+it is a SEPARATE decision and stays a separate constant: a method's separator is what the AUTHOR
+writes at a call site, and a witness label is a name no source can spell.
 
 ## Tests
 
@@ -1300,10 +1347,14 @@ end 'main'
 
 <!-- test: interface-named-like-a-compiled-instance-name -->
 The other side of the roster: an `interface` is NOT a claimant, and it used to be one. Its only emitted
-artifact is `__witness_<conformer>_<interface>`, whose head is the CONFORMER, so it shares no symbol with
+artifact is `__witness_<conformer>.<interface>`, whose head is the CONFORMER, so it shares no symbol with
 an instance and there is nothing to move out of the way — the instance keeps the bare `Box_String` and
 the interface keeps its name. shv2 rejected this program with E3006 before the roster shrank; the
 bootstrap has always built it and returned 9.
+
+The separator moved from `_` to `.` under this case and it must still return 9 — and the disjointness
+it pins got STRONGER, not weaker: a `.` occurs in no compiled instance name, so `__witness_Pen.Box_String`
+is now unreachable from the instance side by the character class as well as by its head.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1368,4 +1419,340 @@ end 'main'
 ```
 ```maxoncstderr
 error E2051: <fragment>:4:6: identifier '__Array_Foo' is reserved: declarations starting with '__' are reserved for compiler internals
+```
+
+
+<!-- test: witness-label-two-pairs-that-underscore-join-alike -->
+<!-- targets: x64-windows, x64-linux -->
+The witness half of the same non-injective join, and the one with no diagnostic to fall back on.
+`(A_B, C)` and `(A, B_C)` both spelled `__witness_A_B_C`, so the second pair's mint found the first
+pair's table already emitted and handed it back: `HoldB.go` dispatched through `HoldC`'s table and
+reached `A_B.idc`. Measured before the separator moved: build exit 0, no diagnostic, **33** — where
+`3 + 4 * 10` is 43.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+interface C
+	function idc() returns Integer
+end 'C'
+
+interface B_C
+	function idb() returns Integer
+end 'B_C'
+
+type A_B implements C
+	export var x as Integer
+	export static function create() returns Self
+		return Self{ x: 0 }
+	end 'create'
+	export function idc() returns Integer
+		return 3
+	end 'idc'
+end 'A_B'
+
+type A implements B_C
+	export var x as Integer
+	export static function create() returns Self
+		return Self{ x: 0 }
+	end 'create'
+	export function idb() returns Integer
+		return 4
+	end 'idb'
+end 'A'
+
+type HoldC uses T where T is C
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function go() returns Integer
+		return self.v.idc()
+	end 'go'
+end 'HoldC'
+
+type HoldB uses T where T is B_C
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function go() returns Integer
+		return self.v.idb()
+	end 'go'
+end 'HoldB'
+
+typealias HC = HoldC with A_B
+typealias HB = HoldB with A
+
+function main() returns ExitCode
+	let h1 = HC.create(A_B.create())
+	let h2 = HB.create(A.create())
+	return h1.go() + h2.go() * 10
+end 'main'
+```
+```exitcode
+43
+```
+
+
+<!-- test: witness-label-the-other-pair-settles-the-label-first -->
+<!-- targets: x64-windows, x64-linux -->
+The same two pairs with the OTHER one settling the shared label, which is what shows the old answer was
+not merely wrong but arbitrary. The declarations are in the opposite order AND the two dispatches are
+evaluated in the opposite order — and it is the DISPATCH order that decided, because the table is minted
+where a call materializes its witness argument, not where a type is declared. Measured before the
+separator moved: **44**, both dispatches reaching `A.idb`, against 33 for the identical program with the
+two calls swapped. The answer is 43 either way.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+interface B_C
+	function idb() returns Integer
+end 'B_C'
+
+type A implements B_C
+	export var x as Integer
+	export static function create() returns Self
+		return Self{ x: 0 }
+	end 'create'
+	export function idb() returns Integer
+		return 4
+	end 'idb'
+end 'A'
+
+interface C
+	function idc() returns Integer
+end 'C'
+
+type A_B implements C
+	export var x as Integer
+	export static function create() returns Self
+		return Self{ x: 0 }
+	end 'create'
+	export function idc() returns Integer
+		return 3
+	end 'idc'
+end 'A_B'
+
+type HoldB uses T where T is B_C
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function go() returns Integer
+		return self.v.idb()
+	end 'go'
+end 'HoldB'
+
+type HoldC uses T where T is C
+	export var v as T
+	export static function create(v T) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function go() returns Integer
+		return self.v.idc()
+	end 'go'
+end 'HoldC'
+
+typealias HB = HoldB with A
+typealias HC = HoldC with A_B
+
+function main() returns ExitCode
+	let h1 = HC.create(A_B.create())
+	let h2 = HB.create(A.create())
+	return h2.go() * 10 + h1.go()
+end 'main'
+```
+```exitcode
+43
+```
+
+
+<!-- test: witness-label-three-pairs-that-underscore-join-alike -->
+<!-- targets: x64-windows, x64-linux -->
+The witness twin of `error.three-instantiations-compile-to-one-name`: `_` splits `A_B_C_D` three ways, so
+`(A_B_C, D)`, `(A_B, C_D)` and `(A, B_C_D)` all spelled one label. Unlike the instantiation trio — which
+is reported twice and never compiles — this one built clean and returned **111**: three distinct
+interfaces, three distinct conformers, one table, every dispatch landing on `A_B_C.d`. Each of the three
+must reach its own conformer, which the digits of 123 read off individually.
+```maxon
+typealias Small = int(0 to 100)
+
+interface D
+	function d() returns Small
+end 'D'
+
+interface C_D
+	function cd() returns Small
+end 'C_D'
+
+interface B_C_D
+	function bcd() returns Small
+end 'B_C_D'
+
+type A_B_C implements D
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function d() returns Small
+		return 1
+	end 'd'
+end 'A_B_C'
+
+type A_B implements C_D
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function cd() returns Small
+		return 2
+	end 'cd'
+end 'A_B'
+
+type A implements B_C_D
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function bcd() returns Small
+		return 3
+	end 'bcd'
+end 'A'
+
+type HoldD uses T where T is D
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.d()
+	end 'go'
+end 'HoldD'
+
+type HoldCD uses T where T is C_D
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.cd()
+	end 'go'
+end 'HoldCD'
+
+type HoldBCD uses T where T is B_C_D
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.bcd()
+	end 'go'
+end 'HoldBCD'
+
+typealias H1 = HoldD with A_B_C
+typealias H2 = HoldCD with A_B
+typealias H3 = HoldBCD with A
+
+function main() returns ExitCode
+	let h1 = H1.create(A_B_C.create())
+	let h2 = H2.create(A_B.create())
+	let h3 = H3.create(A.create())
+	return h1.go() * 100 + h2.go() * 10 + h3.go()
+end 'main'
+```
+```exitcode
+123
+```
+
+
+<!-- test: witness-label-one-conformer-two-interfaces-and-a-third-pair -->
+<!-- targets: x64-windows, x64-linux -->
+ONE conformer with TWO interfaces, which is the pair the head-is-the-conformer argument alone does not
+separate. `A implements B, B_C` needs two tables — `__witness_A.B` and `__witness_A.B_C` — and they stay
+distinct under either separator, because their heads agree and only the tails differ. The third pair is
+what breaks: `(A_B, C)` joined to the SAME `__witness_A_B_C` as `(A, B_C)`, so `HoldC.go` dispatched
+`A_B.c` through `A`'s table and reached `A.bc`. Measured before the separator moved: **144**, where the
+answer is 142 — the first digit already correct, which is why the two-interface half has to be in the
+program to prove it was never at risk.
+```maxon
+typealias Small = int(0 to 100)
+
+interface B
+	function b() returns Small
+end 'B'
+
+interface B_C
+	function bc() returns Small
+end 'B_C'
+
+interface C
+	function c() returns Small
+end 'C'
+
+type A implements B, B_C
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function b() returns Small
+		return 1
+	end 'b'
+	export function bc() returns Small
+		return 4
+	end 'bc'
+end 'A'
+
+type A_B implements C
+	export var v as Small
+	export static function create() returns Self
+		return Self{ v: 0 }
+	end 'create'
+	export function c() returns Small
+		return 2
+	end 'c'
+end 'A_B'
+
+type HoldB uses T where T is B
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.b()
+	end 'go'
+end 'HoldB'
+
+type HoldBC uses T where T is B_C
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.bc()
+	end 'go'
+end 'HoldBC'
+
+type HoldC uses T where T is C
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Small
+		return self.item.c()
+	end 'go'
+end 'HoldC'
+
+typealias HB = HoldB with A
+typealias HBC = HoldBC with A
+typealias HC = HoldC with A_B
+
+function main() returns ExitCode
+	let hb = HB.create(A.create())
+	let hbc = HBC.create(A.create())
+	let hc = HC.create(A_B.create())
+	return hb.go() * 100 + hbc.go() * 10 + hc.go()
+end 'main'
+```
+```exitcode
+142
 ```

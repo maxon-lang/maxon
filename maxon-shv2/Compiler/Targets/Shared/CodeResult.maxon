@@ -67,8 +67,8 @@ export typealias DebugSymbolArray = Array with DebugSymbol
 export typealias DebugSymbolIndexMap = Map with (ByteArray, CodeOffset)
 
 // Relocation kind for code-to-rdata references — every arm patches a slot inside CODE with a reference into
-// rdata/symdata/data/covdata. The `.rdata`-INTERNAL patch (a layout descriptor's `destroyFunc@40` slot, filled
-// with a `.text` function's absolute VA) is NOT one of these: it patches the rdata IMAGE, not the `.text`
+// rdata/symdata/data/covdata. The `.rdata`-INTERNAL patch (a witness-table method slot or a layout descriptor's
+// function slot, filled with a `.text` function's absolute VA) is NOT one of these: it patches the rdata IMAGE, not the `.text`
 // bytes, so it rides the data table's `GlobalDataTable.pendingRdataRelocs` (see PendingRdataReloc), not this
 // code-relocation channel.
 export union RdataRelocKind
@@ -117,42 +117,52 @@ export function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns Deb
 	return index
 end 'buildDebugSymbolIndex'
 
-// ⭐ **BAKE EACH MANAGED-OPAQUE DESCRIPTOR'S `destroyFunc@40`** (P1.7 slice 3b-ii) — the DATA→TEXT sibling of
-// the writers' String-buffer bake. For each `funcAbs64InRdata` relocation, write the element destructor's
-// ABSOLUTE `.text` VA (`textBaseVa + funcOffset`) into the `.rdata` IMAGE at
-// `rdataOffsetOf(rdataLabel) + offsetInLabel`. `textBaseVa` is the writer's `.text` base — `ImageBase + textRva`
-// (PE, fixed-base) or `textVAddr` (ELF) — so the SAME loop serves both x64 writers over an absolute VA, exactly
-// as `patchStringBufferFixups`/`bakeElfStringBufferAddresses` share their shape.
+// ⭐ **BAKE EVERY `.rdata` SLOT THAT HOLDS A `.text` ADDRESS** — the DATA→TEXT sibling of the writers'
+// String-buffer bake. For each `funcAbs64InRdata` relocation, write the target function's ABSOLUTE `.text` VA
+// (`textBaseVa + funcOffset`) into the `.rdata` IMAGE at `rdataOffsetOf(rdataLabel) + offsetInLabel`.
+// `textBaseVa` is the writer's `.text` base — `ImageBase + textRva` (PE, fixed-base) or `textVAddr` (ELF) — so
+// the SAME loop serves both x64 writers over an absolute VA, exactly as `patchStringBufferFixups`/
+// `bakeElfStringBufferAddresses` share their shape.
 //
-// ⭐ **WIRED FOR x64 ONLY** (PE + ELF): arm64 / macOS / wasm managed-opaque arrays are deferred (the target
-// boundary keeps such programs off those backends), so a non-x64 target with a NON-empty reloc list is a
-// dispatch/boundary bug and PANICS — never a silently-skipped bake that would leave `destroyFunc@40 = 0` on
-// disk, a per-element LEAK with no diagnostic. Empty (every non-generic program) is a no-op. A `funcName` in no
-// debug symbol is a DCE-root gap (the destructor was not installed), which panics LOUD rather than baking a
-// stale VA into freed code.
+// ⚠ **THREE MECHANISMS RIDE THIS ONE CHANNEL, AND THE MESSAGES BELOW MUST NAME ALL THREE.** A
+// managed-opaque-`T` `Array` descriptor's `destroyFunc@40` (P1.7 slice 3b-ii) and its `copyFunc@32` (slice
+// 3b-vi-b-β) are two of them; the third — and the one a cross-target program is FAR likelier to hit, because
+// it needs no generics at all beyond a `where` clause — is a WITNESS-TABLE METHOD SLOT
+// (`LowerMaxonToStd.ensureWitnessTable`), where every interface method of every conformance is stamped this
+// way. A diagnostic that names only the descriptor sends a reader hunting for a managed opaque array in a
+// program that has none.
+//
+// ⭐ **WIRED FOR x64 ONLY** (PE + ELF): arm64 / macOS / wasm are deferred for all three (the target boundary
+// keeps such programs off those backends), so a non-x64 target with a NON-empty reloc list is a
+// dispatch/boundary bug and PANICS — never a silently-skipped bake, which would leave a 0 in the slot: a
+// per-element LEAK for a descriptor, a CALL THROUGH A NULL POINTER for a witness slot, neither with a
+// diagnostic. Empty (every program that uses none of the three) is a no-op. A `funcName` in no debug symbol is
+// a DCE-root gap — the target function was not installed — which panics LOUD rather than baking a stale VA
+// into freed code.
 export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, target Target, textBaseVa MachineWord)
 	if globalData.pendingRdataRelocs.count() == 0 'none'
 		return
 	end 'none'
 	if target.cpu != CpuArch.x64 'unwired'
-		panic("bakeFuncAbs64Relocs: a managed-opaque-`T` `Array` descriptor needs its destroyFunc@40 patched with the element destructor's .text VA, which only the x64 backends do — {targetToString(target)} managed-opaque arrays are deferred (restrict the spec to x64-windows, x64-linux)")
+		panic("bakeFuncAbs64Relocs: {globalData.pendingRdataRelocs.count()} .rdata slot(s) hold a .text address that only the x64 backends patch — a witness-table method slot, or a managed-opaque-`T` `Array` descriptor's destroyFunc@40/copyFunc@32. {targetToString(target)} is deferred for all three (restrict the spec to x64-windows, x64-linux)")
 	end 'unwired'
 
 	let funcOffsets = buildDebugSymbolIndex(debugSymbols)
 	for reloc in globalData.pendingRdataRelocs 'each'
-		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("bakeFuncAbs64Relocs: descriptor slot references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — its destructor was not installed (a DCE-root gap at the construction site), so its address cannot be resolved")
+		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("bakeFuncAbs64Relocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
 		patchQword(rdata, offset: globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel, value: textBaseVa + funcOffset)
 	end 'each'
 end 'bakeFuncAbs64Relocs'
 
-// ⭐ **REFUSE a managed-opaque-`T` descriptor relocation on a backend that cannot patch it** (P1.7 slice
-// 3b-ii) — the loud guard for MachO (arm64-macOS) and wasm, whose managed-opaque arrays are deferred. An
-// unwired writer that silently skipped a non-empty `pendingRdataRelocs` would ship `destroyFunc@40 = 0` — a
-// per-element leak with no diagnostic — so it PANICS. Empty (every program the target boundary keeps here) is
-// a no-op, so a non-managed-opaque program on these targets is unaffected.
+// ⭐ **REFUSE a `.text`-address-in-`.rdata` relocation on a backend that cannot patch it** — the loud guard
+// for MachO (arm64-macOS) and wasm. An unwired writer that silently skipped a non-empty `pendingRdataRelocs`
+// would ship a 0 in the slot — a per-element leak for a descriptor, a null call for a witness slot — so it
+// PANICS. It names the same three carriers `bakeFuncAbs64Relocs` does, for that function's reason. Empty
+// (every program the target boundary keeps here) is a no-op, so a program using none of the three is
+// unaffected.
 export function requireNoFuncAbs64Relocs(globalData GlobalDataTable, backend String)
 	if globalData.pendingRdataRelocs.count() > 0 'unpatched'
-		panic("{backend}: a managed-opaque-`T` `Array` descriptor needs its destroyFunc@40 patched with the element destructor's .text VA (funcAbs64InRdata), which only the x64 PE/ELF writers do — arm64/macOS/wasm managed-opaque arrays are deferred (restrict the spec to x64-windows, x64-linux)")
+		panic("{backend}: {globalData.pendingRdataRelocs.count()} .rdata slot(s) hold a .text address (funcAbs64InRdata) that only the x64 PE/ELF writers patch — a witness-table method slot, or a managed-opaque-`T` `Array` descriptor's destroyFunc@40/copyFunc@32. All three are deferred here (restrict the spec to x64-windows, x64-linux)")
 	end 'unpatched'
 end 'requireNoFuncAbs64Relocs'
 

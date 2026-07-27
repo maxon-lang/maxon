@@ -284,6 +284,14 @@ export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 // relocations, and the DCE-rooting of each impl are recorded ONCE per `(Type, Interface)`, even though a
 // concrete dispatch may reference the table at many call sites. `registerRdataConstantLabeled` is idempotent
 // by label on its own, but the relocations and the root are not, so this dedup gate guards them.
+//
+// ⭐ **KEYED ON THE LABEL, WHICH *IS* THE PAIR** — and that is a property of the label, not an assumption
+// here. `witnessTableLabel` joins with a character no name can contain, so the label and the
+// `(Type, Interface)` pair are in bijection and this memo is lossless. It was NOT, when the join was `_`:
+// `(A_B, C)` and `(A, B_C)` shared a key, so the second pair hit this gate, took the first pair's table and
+// never recorded its own relocations — a silent wrong answer that looked exactly like a cache hit. The
+// remedy is the separator and NOT a second, pair-keyed memo beside this one: two keys for one fact is the
+// shape that drifts, and with an injective label there is nothing the pair knows that the label does not.
 export typealias WitnessTableLabelSet = Set with String
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project) returns StdModule
@@ -856,7 +864,7 @@ type MaxonToStdLowering
 	end 'calleeWhereConstraints'
 
 	// The witness-table address to pass for ONE constraint (P1.7a slice 2a). A CONCRETE generic-instance
-	// receiver → the RIP-relative address of `__witness_<ConcreteArg>_<Iface>` (`rdataAddr`), emitting the
+	// receiver → the RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the
 	// table on first reference; a receiver that is the enclosing generic body's OWN `self` (`structRef`) or a
 	// value of its type parameter → FORWARD the caller's own witness slot for the same constraint index (a
 	// generic→generic call, both of the same type, so the slots align). Mirrors `materializeLayoutArg`.
@@ -865,7 +873,7 @@ type MaxonToStdLowering
 		if tag == ValueTypeTag.genericInstance 'concrete'
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeWitnessArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId)")
 			// The CANONICAL conformer name (`Box with Integer` -> `int`, `Box with Point` -> `Point`), so the
-			// table label (`__witness_int_Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
+			// table label (`__witness_int.Hashable`) and its slot reloc (`int.hash`) name the synthesized primitive
 			// impl — the SAME reducer the E3017 check keys its conformance lookup by, never a second spelling.
 			let concreteType = self.signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 			let label = self.ensureWitnessTable(concreteType, interfaceName: constraint.interfaceName)
@@ -893,7 +901,7 @@ type MaxonToStdLowering
 
 	// ⭐ **THE `.rdata` WITNESS-TABLE BLOB for `typeName` conforming to `interfaceName` (P1.7a slice 2a).** The
 	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `parentTablePtr@8`=0, `flags@16`=0, `methods[N]@24`) is
-	// registered zero-filled under `__witness_<Type>_<Iface>`; each method slot is stamped by a
+	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
 	// `funcAbs64InRdata` relocation whose target is the conforming type's own `<Type>.<method>` impl (the SAME
 	// reloc that bakes a layout descriptor's `destroyFunc@40`, so x64-only — the writers refuse it on
 	// arm64/wasm/macOS). Each impl is DCE-ROOTED (`recordCallUsage`) so the reloc never names a `.text` VA that
@@ -1165,7 +1173,7 @@ type MaxonToStdLowering
 		return try self.valueNameIds.get(setReceiver) otherwise panic("setWitnessKeyGid: set receiver v{setReceiver} has no name-id (its GenericInstanceId) — a `Set` value is always a concrete generic instance")
 	end 'setWitnessKeyGid'
 
-	// The `rdataAddr` of the `__witness_<keyType>_<interface>` table (P1.7b slice A) — the address a set runtime
+	// The `rdataAddr` of the `__witness_<keyType>.<interface>` table (P1.7b slice A) — the address a set runtime
 	// call passes for the key's `Hashable` or `Equatable` witness. `ensureWitnessTable` registers the blob and
 	// its `funcAbs64` slot reloc (to the synthesized `int.hash`/`int.equals`) on first reference, idempotent by
 	// label, so many set operations on one key type build ONE table per interface.
@@ -1310,7 +1318,7 @@ type MaxonToStdLowering
 	// witness ADDRESS is the enclosing (generic) function's own threaded witness parameter for this constraint
 	// — FORWARDED, exactly as `forwardCallerLayout` forwards the layout descriptor: a `witnessDispatch` is only
 	// ever emitted inside a generic body, whose `T` witness arrived as a hidden parameter (the concrete
-	// `__witness_<Type>_<Iface>` was materialized at the CALL SITE and passed in). Re-matched in a SMALL match
+	// `__witness_<Type>.<Iface>` was materialized at the CALL SITE and passed in). Re-matched in a SMALL match
 	// so `args` is bound in a single-call arm, never in `lowerOp`'s big one (the tail-slot-Array decref
 	// corruption `lowerIndirectCall` documents).
 	function lowerWitnessDispatch(hlOp MaxonOp, dstBlock IrBlock)

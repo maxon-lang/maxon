@@ -137,6 +137,22 @@ is the index.
   call, so a name revised after the parse would leave `main` calling a symbol nothing emits. It is
   applied ON CONTEST ONLY, so no name that ever compiled moves and no golden does either. *(→
   Parse-staging)*
+- **A SYMBOL BUILT BY JOINING TWO NAMES JOINS THEM WITH A CHARACTER NO NAME CAN HOLD** — the rule the
+  invariant above does not cover, because that one is about a name CONTESTED by a declaration and this
+  one is about two joins that spell each other. The lexer admits only `[A-Za-z0-9_]` inside an
+  identifier (`Lexer.isAlphaNum`), so `_` is *in* the alphabet the components are drawn from and an
+  `_`-join is **not injective**: `__witness_A_B_C` was both `(A_B, C)` and `(A, B_C)`, and since the
+  witness mint MEMOIZES ON THE LABEL, the second pair did not contest the first — it silently BECAME
+  it and dispatched every method slot to the other conformer's impl (measured: exit 0, no diagnostic,
+  33 where the answer is 43). The witness label therefore joins with **`.`**
+  (`IrInterface.witnessTableLabel`), which is injective by CHARACTER CLASS rather than by a decoding
+  algorithm — the same construction `__` gives the reserved space above, one alphabet lower down.
+  ⚠ **The instance mangler (`Base_Arg_Arg`) is the counter-example that must stay one**: it joins with
+  `_`, is deliberately *not* injective, and is covered instead by `checkTypeSymbolNamespace`'s **E3006**
+  — a front-end check it can afford because both claimants are interned declarations with source
+  anchors. A witness table has neither: it is minted during LOWERING, from a pair with no `typealias`
+  to blame, so it has no diagnostic available and the separator has to carry the whole property.
+  *(→ Parse-staging for the E3006 half; `IrInterface.witnessTableLabel` for the argument in full)*
 - **The parser writes only into a `FileParseArtifact`** — never into `Project`.
   `mergeArtifact` is the single writer of every shared registry. A file's parse is a
   pure function of `(tokens, filePath, namespace)`, which is what makes the per-file

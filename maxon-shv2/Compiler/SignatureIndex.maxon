@@ -3694,7 +3694,7 @@ export type ProgramSignatures
 	// file is parsed, which keeps a per-file parse from being the first to mutate the shared registry). At this
 	// slice the elements are all integer (a non-integer element is a later slice, rejected E2015), so one instance
 	// per base suffices. The `integer` element canonicalizes to the `int` conformer (`conformerTypeArgName`), so
-	// the witnesses are `__witness_int_*`. It is deliberately NOT folded into the content hash: a file gaining the
+	// the witnesses are `__witness_int.*`. It is deliberately NOT folded into the content hash: a file gaining the
 	// construct re-parses on its OWN bytes, and no OTHER file's meaning depends on this shared, deterministic instance.
 	export function internBuiltinIntegerInstance(baseName ByteArray) returns GenericInstanceId
 		return self.genericInstances.intern(self.typeNames.intern(baseName), args: singletonInteger())
@@ -3863,7 +3863,7 @@ export type ProgramSignatures
 
 	// ⭐ **THE CANONICAL CONFORMER NAME OF A TYPE ARGUMENT (P1.7a slice 2b).** A ranged int/float alias
 	// (`Integer` = `int(0 to u32.max)`) collapses to its underlying primitive name (`int`) — the name its
-	// INTRINSIC conformance (`int` implements `Hashable`/`Equatable`) and its witness table (`__witness_int_*`
+	// INTRINSIC conformance (`int` implements `Hashable`/`Equatable`) and its witness table (`__witness_int.*`
 	// → the synthesized `int.hash`/`int.equals` impls) are keyed by; a struct/String keeps its own name. The
 	// ONE reducer shared by the E3017 where-constraint check (`typeConformsTo`) and witness-table
 	// materialization (`materializeWitnessArg`), so the conformance lookup, the table label, and the impl
@@ -3983,10 +3983,18 @@ export type ProgramSignatures
 	// per-type symbol, so neither can collide with an instance and neither may displace one. An alias
 	// mints nothing at all — an instance's methods are emitted under its BASE's name, which is why
 	// `typealias Box_Integer = Box with Integer` is legal. An interface's only emitted artifact is
-	// `__witness_<conformer>_<interface>`, whose head is the CONFORMER, so an `interface Box_String`
+	// `__witness_<conformer>.<interface>`, whose head is the CONFORMER, so an `interface Box_String`
 	// beside a `Box with String` shares no symbol with it (measured against the bootstrap oracle: it
 	// builds and runs; shv2 used to refuse it with E3006).
 	//
+	// ⚠ **THE HEAD ARGUMENT ONLY EVER COVERED THE DECLARED HALF, WHICH IS THIS FUNCTION'S HALF, AND IT
+	// STILL DOES.** It says nothing about one witness label against ANOTHER — and that half WAS broken,
+	// silently: `_`-joined, `(A_B, C)` and `(A, B_C)` spelled one table. The cure is not a check here (a
+	// witness table is minted during lowering, long after this sweep, and there is no declaration to move
+	// aside) but the SEPARATOR — see `IrInterface.witnessTableLabel`. It also strengthens the claim above
+	// by a second, independent route: a `.` occurs in no source identifier, hence in none of the `_`-joined
+	// compiled instance names this function guards, so no witness label is spellable from the instance side
+	// at all.
 	// It reads THIS index's own registries and not `project.typeNameDecls`, because it is asked during
 	// the signature sweep — before any file is parsed, which is the whole point (see
 	// `mangleGenericInstance`). The two agree by construction for the kinds above: both are folded from

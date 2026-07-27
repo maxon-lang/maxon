@@ -64,11 +64,34 @@ export function witnessMethodSlotOffset(index WitnessMethodIndex) returns ByteOf
 	return WitnessTableHeaderBytes + WitnessSlotBytes * index
 end 'witnessMethodSlotOffset'
 
+// ⭐⭐ **THE SEPARATOR THE WITNESS LABEL JOINS ITS TWO NAMES WITH, AND THE CHARACTER CLASS *IS* THE
+// INJECTIVITY ARGUMENT.** The label identifies a `(conformer, interface)` PAIR, so a separator that a
+// name may itself contain does not identify one: `_` is a legal identifier byte (`Lexer.isAlphaNum`), so
+// an `_`-join spelled `(A_B, C)` and `(A, B_C)` as one `__witness_A_B_C`. That was not a collision the
+// mint could see — it MEMOIZES ON THE LABEL, so the second pair did not contest the first, it silently
+// BECAME it, and every method slot dispatched to the other conformer's impl with the other conformer's
+// `self`. MEASURED: exit 0, no diagnostic, the program returned 33 where the answer is 43.
+//
+// A `.` cannot occur in EITHER half, and that is the whole proof. The lexer admits only `[A-Za-z0-9_]`
+// inside an identifier, and every name reaching this join is one of: a source identifier, a compiled
+// instance name (`_`-joined source identifiers behind an optional `__`), or one of the compiler's own
+// conformer names (`int`/`String`/`float`/`bool`). So the join admits exactly ONE split, and injectivity
+// is a property of the LEXER rather than of a decoding algorithm a later reader has to get right.
+// Escaping by DOUBLING the separator would not even have worked: with a one-byte separator, a run of
+// five underscores between two components admits three valid splits.
+//
+// ⚠ **DELIBERATELY NOT `Parser.MethodNameSeparator`, which holds the same byte.** That one is the
+// separator the AUTHOR writes at a call site (`Point.create`) and which the mangled method name carries
+// verbatim; this one spells a symbol no source can name. One constant would couple a `.rdata` label to a
+// piece of surface syntax so that a change to either silently moved the other. What the two genuinely
+// share is the lexer property above — which is why each states it where its own value lives.
+let WitnessLabelSeparator = "."
+
 // The `.rdata` label of the witness table for `typeName` conforming to `interfaceName` (P1.7a slice 2a) —
-// `__witness_<Type>_<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
+// `__witness_<Type>.<Iface>`. The ONE place this label is spelled, shared by the blob emitter (which
 // registers it) and the concrete dispatch site (which takes its `rdataAddr`), so they cannot disagree.
 export function witnessTableLabel(typeName ByteArray, interfaceName ByteArray) returns String
-	return "__witness_{String.from(typeName)}_{String.from(interfaceName)}"
+	return "__witness_{String.from(typeName)}{WitnessLabelSeparator}{String.from(interfaceName)}"
 end 'witnessTableLabel'
 
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
@@ -79,7 +102,7 @@ let FormattedStringableInterfaceName = b"FormattedStringable"
 // are the reason: the comparison-operator lowerings pick their PROTOCOL by name (`==`/`!=` is Equatable's,
 // `<`/`>`/`<=`/`>=` is Comparable's) and then read everything else off the synthesized interface
 // (`requireBuiltinInterface`); and the `Set` runtime threads a key's `Hashable`/`Equatable` witness tables by
-// name (`LowerMaxonToStd.appendSetWitnessArgs` materializes `rdataAddr(__witness_<key>_Hashable)`), whose label
+// name (`LowerMaxonToStd.appendSetWitnessArgs` materializes `rdataAddr(__witness_<key>.Hashable)`), whose label
 // must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of keeping
 // its own — `SetRuntime` used to keep a second copy of two of them.
 export let HashableInterfaceName = b"Hashable"
@@ -310,7 +333,7 @@ export function requireBuiltinInterface(name ByteArray) returns IrInterface
 end 'requireBuiltinInterface'
 
 // The canonical conformer name of the primitive `int` — what `ProgramSignatures.conformerTypeArgName`
-// reduces every ranged int alias to, and the key of `int`'s witness tables (`__witness_int_*`) and its
+// reduces every ranged int alias to, and the key of `int`'s witness tables (`__witness_int.*`) and its
 // synthesized `int.hash`/`int.equals` impls. Named because the intrinsic-conformance predicate, the witness
 // materializer, and the impl installer must all spell it the same. It MUST equal
 // `primitiveTypeTagName(ValueTypeTag.integer)` — the one place a resolved `integer` is rendered to a name.
@@ -339,7 +362,7 @@ export function isSynthesizedIntAliasName(name ByteArray) returns bool
 end 'isSynthesizedIntAliasName'
 
 // The canonical conformer name of the managed concrete `String` — the twin of `IntConformerName` for the
-// String intrinsic conformance (P1.7b). It keys `String`'s witness tables (`__witness_String_*`) and its
+// String intrinsic conformance (P1.7b). It keys `String`'s witness tables (`__witness_String.*`) and its
 // synthesized `String.hash`/`String.equals` impls, and it MUST equal
 // `primitiveTypeTagName(ValueTypeTag.string)` — the one place a resolved `string` argument is rendered to a
 // name (`conformerTypeArgName` -> `mangleTypeArg` -> `primitiveTypeTagName`), so the conformance answer, the
@@ -469,7 +492,7 @@ export function isBuiltinConformer(conformer BuiltinConformer) returns bool
 end 'isBuiltinConformer'
 
 // ⭐ **THE CANONICAL NAME A CONFORMER IS KEYED BY** — the key of the intrinsic-conformance answer, of the
-// `__witness_<conformer>_*` tables and of the `<conformer>.<method>` impl symbols, so a direct dispatch and a
+// `__witness_<conformer>.*` tables and of the `<conformer>.<method>` impl symbols, so a direct dispatch and a
 // witness dispatch on the same type reach the same body. Each name's own header states the invariant this
 // rests on: it MUST equal `primitiveTypeTagName` of the tag it answers for, i.e. `int`/`float`/`bool` are
 // what resolved `integer`/`float`/`boolean` tags are called everywhere in the compiler.
