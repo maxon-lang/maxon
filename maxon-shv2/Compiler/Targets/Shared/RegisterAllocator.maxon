@@ -675,6 +675,12 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// Sourced once here and stored on each function's `LivenessResult`; the sites that hold `pool` but
 	// not `target` read it back from there (see `poolOfClass`).
 	let file = registerFileFor(target)
+	// ONE per-VARIANT op-facts memo for the WHOLE MODULE. Every fact in it is a property of the DIALECT —
+	// which registers a `callDirect` clobbers, whether a `loadRegSlot` touches a spill slot — so the
+	// natural lifetime is the compile, not the function. Built per function it re-derived the ~30 cases
+	// each function's own ops name and paid ~24 column reallocations to hold them, on EVERY function the
+	// allocator sees; built here each case is derived once ever and the columns are grown once.
+	var opFacts = OpVariantFacts.create()
 
 	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
 	// always has a safe home for its parallel copies. This runs OUTSIDE the
@@ -692,12 +698,12 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		var func = try module.functions.get(funcIndex) otherwise panic("allocateRegisters: functions.get OOB at {funcIndex}")
 		let classes = try valueClasses.get(funcIndex) otherwise panic("allocateRegisters: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
-		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, file: file, valueClass: classes, stats: stats, project: project)
+		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, file: file, valueClass: classes, opFacts: opFacts, stats: stats, project: project)
 	end 'eachFunc'
 	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
 end 'allocateRegisters'
 
-function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, file RegisterFile, valueClass ValueClassColumn, stats RegAllocStats, project Project) throws CompileError
+function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, file RegisterFile, valueClass ValueClassColumn, opFacts OpVariantFacts, stats RegAllocStats, project Project) throws CompileError
 	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
 	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
@@ -734,7 +740,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// does it in one place for all four (see PhaseProbe).
 	let livenessBefore = regAllocAccumulated(project, phase: RegAllocPhase.liveness)
 	let splitProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.splitting)
-	let liveness = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, file: file, valueClass: valueClass, stats: stats, project: project)
+	let liveness = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, file: file, valueClass: valueClass, opFacts: opFacts, stats: stats, project: project)
 	recordPhaseExcluding(project, phase: RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
 
 	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)

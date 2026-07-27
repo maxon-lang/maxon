@@ -920,7 +920,7 @@ let DfsBlack = 2 as DfsColor
 // value space grows, and the splitter knows exactly how (it minted the ids). Rebuilding the CFG
 // per split re-scanned the whole function, re-derived both CSR graphs, and re-walked one natural
 // loop per loop header, for an answer that could not have changed.
-export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile) returns LivenessResult
+export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, opFacts OpVariantFacts) returns LivenessResult
 	let valueCount = cfg.valueCount
 	let wordsPerRow = bitsetWordsFor(valueCount)
 	let numBlocks = cfg.topo.numBlocks
@@ -929,9 +929,12 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 		panic("computeLivenessOn: '{String.from(func.name)}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
 	end 'cfgStale'
 
-	// ONE memo for the whole function — every walk below shares it, so a variant's facts are derived on
-	// the first op of that case the index build meets and read from then on (see `OpVariantFacts`).
-	var opFacts = OpVariantFacts.create()
+	// The variant memo is the CALLER's — one per MODULE, made in `allocateRegisters` and threaded down.
+	// Its contents are a property of the DIALECT (which registers a `callDirect` clobbers, whether a
+	// `loadRegSlot` touches a slot), so a per-FUNCTION memo made every function re-derive the ~30 cases
+	// its own ops name and pay a handful of column reallocations to hold them. Every walk below shares
+	// this one, so a variant's facts are derived on the first op of that case the whole COMPILE meets and
+	// read from then on (see `OpVariantFacts`).
 	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount, opFacts: opFacts)
 	var marks = LivenessMarkScratch.create()
 	marks.begin(numBlocks)
@@ -1646,20 +1649,29 @@ export enum UseKind
 	edge
 end 'UseKind'
 
-// Where a value comes into existence — the ONE lookup unifying the two ways a Target value is
+// Where a value comes into existence — the ONE classification unifying the two ways a Target value is
 // defined, so the liveness walk's stop test, the splitter's store anchor, and its spillability gate
 // cannot drift on it.
 //
-//  • `opDef`  — an ordinary operand write, at a known op in a known block.
-//  • `phiDef` — a block-arg. Its def is its block's ENTRY: it arrives in its register via the edge
-//    copies SSA destruction places at the predecessors' ends, so there is no op to point at.
+//  • `opDef`  — an ordinary operand write, at a known op in a known block (`requireDefOp`, `defBlockOf`).
+//  • `phiDef` — a block-arg. Its def is its block's ENTRY (`defBlockOf`): it arrives in its register via
+//    the edge copies SSA destruction places at the predecessors' ends, so there is no op to point at.
 //
 // Every value in a function is one or the other, so `none` means it is not defined here at all.
-export union ValueDefSite
+//
+// ⚠ AN ENUM, AND IT USED TO BE A PAYLOAD-CARRYING UNION — the same change `OpSlotRole` made against the
+// same cost, for the same reason. Maxon heap-boxes EVERY value of a payload-carrying union, `none`
+// included, and this is asked of EVERY VALUE CROSSING THE PEAK, at EVERY SPLIT: `isRematerializable`,
+// `hasStoreAnchor` and `storeFitsPool` each ask it once per candidate, so a block holding Θ(N) live
+// values across Θ(N) splits paid Θ(N²) HEAP ALLOCATIONS to read a three-way tag. MEASURED on
+// `genwidelive 400 sum`: ~0.5 allocations per candidate per split, 80,000 of the splitter's 106,000
+// allocations at N=400, growing ×3.6 then ×3.8 over a doubling ladder. The PAYLOAD is read only where
+// the tag has already said there is one — exactly as `slotOfSlotOp` is reached only behind `slotRoleOf`.
+export enum ValueDefKind
 	none
-	opDef(opIdx OpIndex, blockLocal CfgIndex)
-	phiDef(blockLocal CfgIndex)
-end 'ValueDefSite'
+	opDef
+	phiDef
+end 'ValueDefKind'
 
 // The stack slot a value has already been spilled into, or `none` for a value no `storeSlotReg`
 // writes. A union rather than a sentinel index — slot 0 is a real slot and would be
@@ -1941,49 +1953,44 @@ export type UseIndex
 		return not (try self.touchesLoop.get(valueId) otherwise panic("UseIndex.defAndUsesAtDepthZero: value {valueId} out of range"))
 	end 'defAndUsesAtDepthZero'
 
-	export function defSiteOf(valueId ValueId) returns ValueDefSite
-		let opDefined = try self.hasOpDef.get(valueId) otherwise panic("UseIndex.defSiteOf: value {valueId} out of range")
+	// WHICH of the two ways `valueId` is defined, or `none` — a tag, never a boxed payload (see
+	// `ValueDefKind`). The payload accessors below are reached only behind it.
+	export function defKindOf(valueId ValueId) returns ValueDefKind
+		let opDefined = try self.hasOpDef.get(valueId) otherwise panic("UseIndex.defKindOf: value {valueId} out of range")
 		if opDefined 'opDefined'
-			let opIdx = try self.defOpIdx.get(valueId) otherwise panic("UseIndex.defSiteOf: defOpIdx.get OOB")
-			return ValueDefSite.opDef(opIdx, blockLocal: try self.defOpBlock.get(valueId) otherwise panic("UseIndex.defSiteOf: defOpBlock.get OOB"))
+			return ValueDefKind.opDef
 		end 'opDefined'
-
-		if self.isPhiValue(valueId) 'phiDefined'
-			return ValueDefSite.phiDef(try self.phiBlock.get(valueId) otherwise panic("UseIndex.defSiteOf: phiBlock.get OOB"))
-		end 'phiDefined'
-
-		return ValueDefSite.none
-	end 'defSiteOf'
+		return ValueDefKind.phiDef if self.isPhiValue(valueId) else ValueDefKind.none
+	end 'defKindOf'
 
 	// The block a value is defined in (an op def's block, or a phi's own block); panics for a value
 	// this function does not define at all.
 	export function defBlockOf(valueId ValueId) returns CfgIndex
-		match self.defSiteOf(valueId) 'site'
-			opDef(_, blockLocal) then return blockLocal
-			phiDef(blockLocal) then return blockLocal
+		match self.defKindOf(valueId) 'kind'
+			opDef then return try self.defOpBlock.get(valueId) otherwise panic("UseIndex.defBlockOf: defOpBlock.get OOB for value {valueId}")
+			phiDef then return try self.phiBlock.get(valueId) otherwise panic("UseIndex.defBlockOf: phiBlock.get OOB for value {valueId}")
 			none then panic("UseIndex.defBlockOf: value {valueId} has neither an op def nor a phi block")
-		end 'site'
+		end 'kind'
 	end 'defBlockOf'
 
 	// The block a value is defined in, or `numBlocks` when this function does not define it — the
 	// liveness walk's stop test, which must terminate on a value it never sees a def for rather than
 	// panic (an undefined value is simply live all the way up to the entry).
 	export function defBlockOrNone(valueId ValueId) returns CfgIndex
-		match self.defSiteOf(valueId) 'site'
-			opDef(_, blockLocal) then return blockLocal
-			phiDef(blockLocal) then return blockLocal
-			none then return self.numBlocks
-		end 'site'
+		if self.defKindOf(valueId) == ValueDefKind.none 'notDefinedHere'
+			return self.numBlocks
+		end 'notDefinedHere'
+		return self.defBlockOf(valueId)
 	end 'defBlockOrNone'
 
 	// The module op index of the value's def, panicking if absent (callers have already established
 	// the value has an op def).
 	export function requireDefOp(valueId ValueId) returns OpIndex
-		match self.defSiteOf(valueId) 'site'
-			opDef(opIdx, _) then return opIdx
+		match self.defKindOf(valueId) 'kind'
+			opDef then return try self.defOpIdx.get(valueId) otherwise panic("UseIndex.requireDefOp: defOpIdx.get OOB for value {valueId}")
 			phiDef then panic("UseIndex.requireDefOp: value {valueId} is a phi, not an op def")
 			none then panic("UseIndex.requireDefOp: value {valueId} has no op def")
-		end 'site'
+		end 'kind'
 	end 'requireDefOp'
 
 	// ----------------------------------------------------------------------
