@@ -126,10 +126,12 @@ end 'rangedAliasStorageBytes'
 // `StructLayout.sizeBytes`, which needs an interner this tag-only helper cannot see). A machine word
 // (int/float/function) is 8; a `bool` is 1; an `ExitCode` (`u32`) is 4.
 //
-// ⚠ The `named` arm is the FALLBACK for a name this compiler cannot size from a range — an enum, a union,
-// or a name no loaded file declares. A ranged alias never reaches it: `ProgramSignatures.namedTypeStorageBytes`
-// answers those from `rangedAliasStorageBytes` above, because sizing one needs the declared bounds a
-// tag-only helper cannot see.
+// ⚠ The `named` arm is the FALLBACK for a name this compiler cannot size from a range — an enum or a union.
+// A ranged ARRAY ELEMENT never reaches it: `ProgramSignatures.trivialElementStorageBytes` answers those from
+// `rangedAliasStorageBytes` above, because sizing one needs the declared bounds a tag-only helper cannot see,
+// and `undeclaredNamedElementStorageBytes` owns the rest of that door's miss arm. A ranged alias DOES reach
+// it as a LOGICAL size (`typeLogicalByteSize`), where a machine word is the right answer and the two
+// questions deliberately part ways.
 //
 // ⭐ A managed `String` is its FULL 48-byte record, NOT its 8-byte pointer — the oracle's rule
 // (`sizeof(managed T)` = the value record), which B2's managed args inherit unchanged.

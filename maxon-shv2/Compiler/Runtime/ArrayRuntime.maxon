@@ -61,10 +61,17 @@ let TrivialElementDestroy = 0 as ParsedInt
 // `.rdata` byte blob. Its `capacity@16` is `RdataBufferCapacity` — the shared encoding's negative value
 // for "this buffer is not the record's to write or to release" — written by the byte-string literal
 // lowering (`LowerMaxonToStd`) and read by `emitBufferNotOwned` alone, never compared against.
-// `element_size@24` is 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1 —
-// UNLIKE a slice-1 `Array with Byte` whose ranged-alias element still occupies a machine word). The
+// `element_size@24` is 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1). The
 // record is a real `__mm_alloc` box so the value is a first-class owned `Array with Byte` the ownership
 // model drops through `__arr_decref` — which, on that capacity, frees the record and skips the blob.
+//
+// ⭐ **IT IS THE SAME 1 `ProgramSignatures.arrayElementSize` GIVES AN `Array with Byte`, AND THAT IS NOW
+// CHECKED RATHER THAN HOPED FOR.** A `Byte = int(0 to u8.max)` element is one byte wide by the ranged-alias
+// storage rule (`rangedAliasStorageBytes`), so a `.create()`d array and a literal agree by construction —
+// they did NOT before P1.7 slice 2's element-size unification, when every ranged element took a machine
+// word and appending a literal into an `Array with Byte` aborted. This constant is also the number the
+// parser's gate compares that rule's answer against (`byteStringBlobStrideMessage`): a program that
+// declares `Byte` WIDER than one byte cannot hold both records at one type, and is refused at the literal.
 export let ByteStringElementSize = 1 as ParsedInt
 
 // ⭐ **WHERE AN ARRAY RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
@@ -122,12 +129,14 @@ end 'paddedByteArrayBlob'
 //     so it also catches a wrap to a small NON-zero value.
 //   * `arrayAppendElementSizeMismatch` — `__arr_append`'s two records disagree on `element_size@24`.
 //     `append` is the ONE array op that strides TWO records by a SINGLE element size (it reads `dest`'s
-//     and applies it to `src`), so it is correct only when they agree. Same-static-type arrays normally
-//     do; the ONE exception is a byte-string literal (`b"…"`), byte-PACKED at `element_size@24 == 1`
-//     while a heap-grown `Array with Byte` strides by a machine word — blitting `srcLen ·
-//     dest.element_size` bytes across that seam OVER-READS the packed source and splices garbage in.
-//     Making such an append WORK (an element-wise WIDENING copy across differing strides) is a distinct
-//     mechanism, not slice 4's.
+//     and applies it to `src`), so it is correct only when they agree; blitting `srcLen · dest.element_size`
+//     bytes across a seam where they do not OVER-READS the narrower source and splices garbage in.
+//     ⚠ **THE CASE THIS USED TO NAME IS GONE**: a byte-string literal and a `.create()`d `Array with Byte`
+//     both stride 1 since P1.7 slice 2 unified the element size on the ranged element's declared range, and
+//     a program whose `Byte` is WIDER than one byte is now refused at the literal
+//     (`Parser.byteStringBlobStrideMessage`) rather than reaching this abort. So the guard is a LAST
+//     RESORT against a stamp divergence no front-end rule allows — not a routine outcome — and an
+//     element-wise WIDENING append across differing strides remains a distinct mechanism, not slice 4's.
 //   * `arrayNegativeResize` — the one with a contract argument behind it, immediately below.
 
 // `arrayNegativeResize` — `__arr_resize` asked for a NEGATIVE length. A length is a count, so a

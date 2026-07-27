@@ -2198,6 +2198,31 @@ function requireByteCodepoint(codepoint ParsedInt) throws ParseError
 	end 'tooBig'
 end 'requireByteCodepoint'
 
+// ⭐ **A `b"…"` BLOB IS BYTE-PACKED BY CONSTRUCTION, so the literal is a value of `Array with Byte` only
+// while THIS program's `Byte` is one byte wide** — the E2015 both throw sites of that rule share
+// (`Parser.requireByteStringBlobStridesLikeItsType` and its const-sweep twin), so the two cannot come to
+// describe one defect differently.
+//
+// `LowerMaxonToStd.lowerByteStringLiteral` lays the blob out one byte per element and stamps
+// `element_size@24 = ByteStringElementSize` to match it; every OTHER `Array with Byte` record — `.create()`,
+// a global's `__arr_create`, a `clone`/`slice` of either — is stamped from `ProgramSignatures.arrayElementSize`,
+// which sizes the element from `Byte`'s DECLARED range. The two agree for the canonical `int(0 to u8.max)`
+// and for anything narrower, which is the whole of what a byte string is; they do not agree for a wider one.
+//
+// ⚠ **WITHOUT THE GATE THAT DISAGREEMENT IS A SILENT WRONG ANSWER, NOT MERELY AN ABORT.** Measured with
+// `typealias Byte = int(0 to 1000)`: two `Bytes` values, the same `push(300)` then `get(2)`, read back **44**
+// from the literal-produced record and **300** from the `.create()`-produced one — one static type, two
+// behaviours, no diagnostic. (`append` between the two does abort — `RuntimeAbort.arrayAppendElementSizeMismatch`
+// — but it is the ONE array operation that compares the strides.) There is no reference behaviour to match:
+// the bootstrap mis-answers the same program its own way, packing the blob and then TYPING the array u16, so
+// `b"CD".get(0)` reads **17475**. Emitting the blob WIDE is an element-wise widening emission — a real
+// mechanism and its own rung, exactly as the widening `__arr_append` across differing strides is — so until
+// that exists this is E2015 at the literal rather than a record that behaves unlike every other value of its
+// own type.
+function byteStringBlobStrideMessage(declaredStride ParsedInt) returns String
+	return "a `b\"…\"` byte-string literal in a program whose `Byte` is a {declaredStride}-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides {declaredStride} — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`"
+end 'byteStringBlobStrideMessage'
+
 // The exact E1004 text v1 emits (`reportByteStringCodepointRange`), including the literal `\xNN` guidance.
 function byteStringCodepointRangeMessage(codepoint ParsedInt) returns String
 	return "Codepoint U+{formatCodepointHex(codepoint)} exceeds the byte range 0-255 in byte string literal; use a \\xNN hex escape to embed a raw byte"
@@ -15783,7 +15808,7 @@ export type Parser
 	function parseByteStringLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.byteStringLiteral)
 		let bytes = try decodeByteStringLiteral(tok.value, tok: tok)
-		return self.emitByteStringLiteralValue(bytes, range: SourceRange.ofToken(tok))
+		return try self.emitByteStringLiteralValue(bytes, range: SourceRange.ofToken(tok))
 	end 'parseByteStringLiteral'
 
 	// Append a `byteStringLiteral` op carrying the DECODED bytes; return the owned `Array with Byte`
@@ -15792,13 +15817,49 @@ export type Parser
 	// bytes were decoded once by the declaration sweep. One emit site, so the value's TYPE (the concrete
 	// `Array with Byte` gid) and its OWNERSHIP (an owned temp the statement drops) cannot drift between
 	// the two spellings of the same literal.
-	function emitByteStringLiteralValue(bytes ByteArray, range SourceRange) returns ValueId
+	function emitByteStringLiteralValue(bytes ByteArray, range SourceRange) returns ValueId throws ParseError
+		try self.requireByteStringBlobStridesLikeItsType(range)
+
 		let giid = self.signatures.internArrayByteInstance()
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.byteStringLiteral(result, bytes: bytes), range: range)
 		self.trackOwnedTemp(result)
 		return result
 	end 'emitByteStringLiteralValue'
+
+	// ⭐ **A `b"…"` BLOB IS BYTE-PACKED BY CONSTRUCTION, so the literal is a value of `Array with Byte` only
+	// while THIS program's `Byte` is one byte wide** — the rule, what it costs when it does not hold, and why
+	// it is a refusal rather than a widened blob are all on `byteStringBlobStrideMessage`, beside the words
+	// both throw sites emit.
+	//
+	// ⚠ **THE SAME RULE HAS A SECOND THROW SITE**, `requireConstByteStringBlobStridesLikeItsType`, because a
+	// top-level `let G = b"…"` / `var G = b"…"` never reaches this emitter: the initializer sweep folds it to
+	// bytes and `ModuleInit` builds the record, so a STORED byte-string global would otherwise slip the gate
+	// (measured: it did). The two differ ONLY in the error union their tier speaks — `ParseError` here,
+	// `ConstEvalError.defective` there — so the stride and the message are each computed by ONE function and
+	// only the `throw` is written twice.
+	function requireByteStringBlobStridesLikeItsType(range SourceRange) throws ParseError
+		let declaredStride = self.byteElementDeclaredStride()
+		if declaredStride != ByteStringElementSize 'blobStrideDisagreesWithTheElement'
+			throw ParseError.unsupported(byteStringBlobStrideMessage(declaredStride), line: range.line, column: range.column)
+		end 'blobStrideDisagreesWithTheElement'
+	end 'requireByteStringBlobStridesLikeItsType'
+
+	// The `requireByteStringBlobStridesLikeItsType` twin for the top-level initializer sweep — same stride,
+	// same message, positioned at the `b"…"` token of the declaration rather than at a use.
+	function requireConstByteStringBlobStridesLikeItsType(tok Token) throws ConstEvalError
+		let declaredStride = self.byteElementDeclaredStride()
+		if declaredStride != ByteStringElementSize 'blobStrideDisagreesWithTheElement'
+			throw ConstEvalError.defective(ParseError.unsupported(byteStringBlobStrideMessage(declaredStride), line: tok.line, column: tok.column))
+		end 'blobStrideDisagreesWithTheElement'
+	end 'requireConstByteStringBlobStridesLikeItsType'
+
+	// What THIS program's `Byte` element strides — `arrayElementSize` over the very instance a `b"…"` literal
+	// carries, so the gate's antecedent is the number every other `Array with Byte` record is stamped with and
+	// not a second reading of the same declaration.
+	function byteElementDeclaredStride() returns ParsedInt
+		return self.signatures.arrayElementSize(self.signatures.internArrayByteInstance()) as ParsedInt
+	end 'byteElementDeclaredStride'
 
 	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
 	// ONE `__mm_alloc`'d fused record: the 48-byte String record with its UTF-8 bytes INLINE right behind it
@@ -17155,7 +17216,7 @@ export type Parser
 		// A `let`'s literal is re-materialized at the use, exactly as a bare reference to it would be.
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
 			match self.managedReceiverBindingOf(baseTok) 'binding'
-				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
+				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(baseTok)), varType: self.signatures.managedConstValueType(kind), mutable: false, resultUsed: resultUsed)
 				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
 				none then break 'binding'
 			end 'binding'
@@ -20115,7 +20176,7 @@ export type Parser
 	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
 			found(payload, tag) then return self.recordImmutableConstantRead(tok, value: self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok)))
-			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
+			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			notFound then break 'constant'
 		end 'constant'
 
@@ -20151,10 +20212,10 @@ export type Parser
 	//     mutated, and a real COPY promotion for `var b = <borrowed array>` (which today increfs the box,
 	//     and an rdata box has no refcount word to incref). Both are named in OPEN.md; neither is invented
 	//     here, because a SECOND immortality mechanism is precisely what this design exists to avoid.
-	function emitManagedConstant(bytes ByteArray, kind ManagedConstKind, range SourceRange) returns ValueId
+	function emitManagedConstant(bytes ByteArray, kind ManagedConstKind, range SourceRange) returns ValueId throws ParseError
 		return match kind 'k'
 			string gives self.emitStringLiteral(bytes, range: range)
-			byteArray gives self.emitByteStringLiteralValue(bytes, range: range)
+			byteArray gives try self.emitByteStringLiteralValue(bytes, range: range)
 		end 'k'
 	end 'emitManagedConstant'
 
@@ -20690,7 +20751,10 @@ export type Parser
 				return ConstInitializerValue.managed(try self.decodeConstStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.string)
 			end 'stringLiteral'
 			if self.at(TokenKind.byteStringLiteral) 'byteStringLiteral'
-				return ConstInitializerValue.managed(try self.decodeConstByteStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.byteArray)
+				let byteStringTok = self.consumeManagedLiteral()
+				try self.requireConstByteStringBlobStridesLikeItsType(byteStringTok)
+
+				return ConstInitializerValue.managed(try self.decodeConstByteStringLiteral(byteStringTok), kind: ManagedConstKind.byteArray)
 			end 'byteStringLiteral'
 		end 'singleTokenInitializer'
 

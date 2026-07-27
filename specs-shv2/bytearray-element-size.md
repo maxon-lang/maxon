@@ -216,3 +216,81 @@ end 'main'
 ```exitcode
 0
 ```
+
+### ⚠ THE STRIDE HAS TWO PRODUCERS, AND THEY ARE ONLY ALLOWED TO EXIST WHILE THEY AGREE
+
+`element_size@24` is stamped from `ProgramSignatures.arrayElementSize`, which sizes a ranged element from
+its DECLARED range — except for a `b"…"` literal, whose blob is byte-PACKED by construction and whose
+record `LowerMaxonToStd.lowerByteStringLiteral` stamps `1` directly. The two agree for the canonical
+`Byte = int(0 to u8.max)` and for anything narrower, which is the whole of what a byte string is.
+
+They do not agree for a WIDER `Byte`, and the cost of letting that compile is not an abort — it is a
+**silent wrong answer**. Measured with `typealias Byte = int(0 to 1000)`: two `Bytes` values, the same
+`push(300)` then `get(2)`, read back **44** from the literal-produced record and **300** from the
+`.create()`-produced one. One static type, two behaviours, no diagnostic. (`append` between them *does*
+abort — `RuntimeAbort.arrayAppendElementSizeMismatch` — but it is the ONE array operation that compares
+the two records' strides; every other one just uses whichever it was handed.)
+
+There is no reference behaviour to match here: the C# bootstrap mis-answers the same program its own way,
+emitting the blob byte-packed and then TYPING the array `u16`, so `b"CD".get(0)` reads **17475**
+(`0x4443`). Emitting the blob at a wider stride is an element-wise widening emission — a real mechanism,
+and the same one a widening `__arr_append` across differing strides would need — so until that exists the
+literal is refused at its own position.
+
+<!-- test: byte-string-literal-refused-when-byte-is-wider-than-one-byte -->
+### A `b"…"` literal is refused when this program's `Byte` does not fit one byte
+```maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(65)
+	made.append(b"CD")
+	return made.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/bytearray-element-size/byte-string-literal-refused-when-byte-is-wider-than-one-byte.test:8:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+```
+
+<!-- test: byte-string-global-refused-when-byte-is-wider-than-one-byte -->
+### The refusal reaches a top-level byte-string global, which no function body ever parses
+A `let`/`var` at file scope is folded to bytes by the initializer sweep and its record is built by
+`__module_init`, so it never reaches the expression-position emitter — it needs the sweep's own throw
+site or it slips the gate entirely (measured: it did).
+```maxon
+typealias Byte = int(0 to u64.max)
+typealias Bytes = Array with Byte
+
+var BUFFER = b"hi"
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(1)
+	BUFFER.push(2)
+	return made.count() + BUFFER.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/bytearray-element-size/byte-string-global-refused-when-byte-is-wider-than-one-byte.test:5:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 8-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 8 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
+```
+
+<!-- test: byte-string-literal-accepted-at-the-canonical-byte -->
+### The canonical `Byte` keeps both producers agreeing, and they interoperate
+`.create()` and `b"…"` both stride 1, so a literal appends into a heap-grown array — which is the whole
+point of the unification, and the thing that aborted before it.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(65)
+	made.append(b"CD")
+	return 0 if made.count() == 3 and (try made.get(1) otherwise 0) == 67 and (try made.get(2) otherwise 0) == 68 else 1
+end 'main'
+```
+```exitcode
+0
+```

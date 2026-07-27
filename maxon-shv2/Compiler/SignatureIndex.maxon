@@ -1500,6 +1500,27 @@ export let SetTypeParamCount = 1 as FieldIndex
 // its `sizeof` is the 48-byte record — and the drop walk / accessors move exactly that pointer.
 let ManagedArrayElementBytes = 8 as ByteOffset
 
+// ⭐ **THE STORAGE WIDTH OF A `named` ARRAY ELEMENT NO FILE DECLARES AS A RANGED ALIAS** — the MISS arm of
+// `trivialElementStorageBytes`'s registry probe. It is a function and not a bare fallback because a miss
+// means TWO different things, and only one of them is the machine word:
+//
+//   • **`Byte`** — the `Array with Byte` instance a `b"…"` literal MINTS FOR ITSELF
+//     (`internArrayByteInstance`) in a program that declares no such alias. No user type can name that
+//     instance (`Array with Byte` over an undeclared `Byte` does not resolve), so the literal's own record
+//     is the only one there is — and it is stamped byte-PACKED by construction (`ByteStringElementSize`).
+//     Answering the machine word here would leave this door and that record disagreeing about ONE
+//     instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
+//   • **anything else** — an enum or a boxed union's ordinal. Its range is not an `int(lo to hi)`
+//     declaration, so it misses the same probe, and it deliberately keeps the machine word
+//     (`specs-shv2/array-enum-element-size.md` pins that stride; narrowing it is its own rung).
+function undeclaredNamedElementStorageBytes(name ByteArray) returns ByteOffset
+	if name.equals(ByteElementTypeName) 'theByteStringsOwnInstance'
+		return ByteStringElementSize as ByteOffset
+	end 'theByteStringsOwnInstance'
+
+	return primitiveTypeByteSize(ValueTypeTag.named)
+end 'undeclaredNamedElementStorageBytes'
+
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
 // per call (a `MaxonTypeArray` is owned by the instance it is interned into).
 function singletonInteger() returns MaxonTypeArray
@@ -3651,6 +3672,7 @@ export type ProgramSignatures
 		if self.arrayElementIsManaged(id) 'managed'
 			return ManagedArrayElementBytes
 		end 'managed'
+
 		return self.trivialElementStorageBytes(self.arrayElementType(id))
 	end 'arrayElementSize'
 
@@ -3664,16 +3686,17 @@ export type ProgramSignatures
 	// by the `arrayElementIsManaged` arm above — so this has no aggregate arms to carry and needs no
 	// interner walk past the element's own name.
 	//
-	// ⚠ An ENUM/UNION element deliberately keeps the machine word. Its ordinal range is not in the ranged-
-	// alias registry (an enum is not an `int(lo to hi)` declaration), so it MISSES the probe rather than
-	// being excluded by a test — and `specs-shv2/array-enum-element-size.md` pins the current stride.
-	// Narrowing an enum element is its own rung.
+	// ⚠ A `named` element that the registry MISSES is not one case but two, and they do not share an answer
+	// — `undeclaredNamedElementStorageBytes` is where that split is written down. An enum keeps the machine
+	// word; the byte-string literal's own `Array with Byte` is one byte.
 	function trivialElementStorageBytes(t MaxonType) returns ByteOffset
 		let tag = maxonTypeTag(t)
-		if tag == ValueTypeTag.named 'rangedAliasOrEnum'
-			return try self.typeAliases.storageBytesInEveryFile(self.nameOfId(typeNameIdOf(t))) otherwise primitiveTypeByteSize(tag)
-		end 'rangedAliasOrEnum'
-		return primitiveTypeByteSize(tag)
+		if tag != ValueTypeTag.named 'notAName'
+			return primitiveTypeByteSize(tag)
+		end 'notAName'
+
+		let name = self.nameOfId(typeNameIdOf(t))
+		return try self.typeAliases.storageBytesInEveryFile(name) otherwise undeclaredNamedElementStorageBytes(name)
 	end 'trivialElementStorageBytes'
 
 	// The element DESTRUCTOR callee for a managed-element `Array with T` (P1.7 slice 3) — the runtime entry the

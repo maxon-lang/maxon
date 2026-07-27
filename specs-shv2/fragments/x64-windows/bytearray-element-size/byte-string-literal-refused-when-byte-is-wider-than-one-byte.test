@@ -1,0 +1,13 @@
+// Test: byte-string-literal-refused-when-byte-is-wider-than-one-byte
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var made = Bytes.create()
+	made.push(65)
+	made.append(b"CD")
+	return made.count()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:8:14: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
