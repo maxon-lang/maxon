@@ -1104,7 +1104,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
         if (!IsAtEnd() && Current().Type == TokenType.CharacterLiteral) Advance();
       } else if (Check(TokenType.Function) || Check(TokenType.Type)
-                 || Check(TokenType.Enum) || Check(TokenType.Union)) {
+                 || Check(TokenType.Enum) || Check(TokenType.Union) || CheckTestKeyword()) {
         Advance();
         SkipToMatchingEnd();
       } else {
@@ -1166,7 +1166,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
 
         if (Check(TokenType.Type) || Check(TokenType.Interface)
-            || Check(TokenType.Extension) || Check(TokenType.Function)) {
+            || Check(TokenType.Extension) || Check(TokenType.Function) || CheckTestKeyword()) {
           Advance();
           SkipToMatchingEnd();
           SkipNewlines();
@@ -1586,7 +1586,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     int depth = 0;
     while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
       var t = _tokens[prePos];
-      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.Identifier && t.Value == "module" && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.Identifier && t.Value == Lexer.ModuleKeyword && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[prePos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
           _typeRegistry[aliasName] = new IrPlaceholderType(aliasName);
@@ -1833,7 +1833,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             decl.TokenStart, decl.TokenEnd, decl.Line, decl.Column, isExported, isModuleVisible, _sourceFilePath));
         }
       } else if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum)
-          || Check(TokenType.Interface) || Check(TokenType.Extension) || Check(TokenType.Function)) {
+          || Check(TokenType.Interface) || Check(TokenType.Extension) || Check(TokenType.Function)
+          || CheckTestKeyword()) {
+        // A `test` body's `let`s are locals, not top-level constants — skipping the whole block
+        // is what keeps this walk from collecting them.
         Advance();
         SkipToMatchingEnd();
       } else {
@@ -1911,6 +1914,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // top-level twin of the duplicate-FUNCTION check, and it is per-file: two files may each hold a
     // private constant of the same name (that homonym is resolved per declarer's perspective).
     var declaredValueNames = new HashSet<string>();
+    // Symbol -> the prose name that claimed it, for the duplicate-test check. Walk-local for the
+    // same reason declaredValueNames is: it describes ONE file's declarations, and a field would
+    // have to be reset by hand on a pass that runs more than once.
+    var declaredTestNames = new Dictionary<string, string>();
     int savedPos = _pos;
 
     PreRegisterTopLevelTypeAliasNames();
@@ -1946,6 +1953,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } else if (Check(TokenType.Function)) {
         // Pre-register function signature for forward references
         PreScanFunction(module, null, isExported, isModuleVisible: isModuleVisible);
+      } else if (CheckTestKeyword()) {
+        PreScanTest(module, declaredTestNames);
       } else if (Check(TokenType.Type)) {
         PreScanType(module, isExported, isModuleVisible);
       } else if (Check(TokenType.Union)) {
@@ -2541,6 +2550,144 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Pre-scan a function declaration to register its signature.
   /// Only parses name, params, and return type; skips the body.
   /// </summary>
+  // The stdlib enum every `test` implicitly throws (stdlib/Testing.maxon), and the two spellings
+  // that turn a test's prose name into a symbol.
+  internal const string TestFailureTypeName = "TestFailure";
+  private const string TestSymbolPrefix = "__test_";
+  private const string MaxonFileSuffix = ".maxon";
+  private const string TestFileSuffix = ".test" + MaxonFileSuffix;
+
+  /// Everything a `test` header determines, read once. `IrFunction.ThrowsType` is INIT-ONLY, so
+  /// it can only be supplied to the constructor — and there are two constructor sites for a test
+  /// (PreScanTest's stub and ParseTest's real function). SetupFunctionParsing copies IsExported /
+  /// IsStatic / SourceFilePath from the stub but NOT ThrowsType, so the two sites must agree on
+  /// it by construction or the parsed function silently loses its `throws` and every forgotten
+  /// `try` inside it stops being an error. Returning every such fact from one reader is what makes
+  /// disagreeing impossible, rather than a comment asking two call sites to stay in step.
+  ///
+  /// `Symbol` is the bare sanitized name and `SymbolName` is it qualified by the file's namespace.
+  /// Both are kept because they answer different questions: the qualified one names the function,
+  /// and the bare one is what a duplicate-name message shows — two colliding tests are in the same
+  /// file, so their shared namespace is noise in that sentence.
+  private readonly record struct TestHeader(
+    Token NameToken, string DisplayName, string Symbol, string SymbolName, IrType ThrowsType);
+
+  /// The SYMBOL a test's prose name compiles to. The prose reaches name mangling, the executable's
+  /// symbol table, the .mxdbg sidecar and panic stack traces, none of which accept spaces or
+  /// punctuation, so every character outside [A-Za-z0-9_] becomes '_'.
+  private static string SanitizeTestName(string displayName) {
+    var chars = new char[displayName.Length];
+    for (int i = 0; i < displayName.Length; i++) {
+      var ch = displayName[i];
+      chars[i] = char.IsAsciiLetterOrDigit(ch) || ch == '_' ? ch : '_';
+    }
+    return TestSymbolPrefix + new string(chars);
+  }
+
+  /// Consume `test 'name'` plus the newline that ends the line, and derive everything the two
+  /// construction sites need. Rejecting parameters and a `returns` clause costs nothing extra:
+  /// ExpectNewline is already the rule that the header ends at the name, so `test 'x'(a int)`
+  /// and `test 'x' returns int` are refused by it, naming the token that does not belong.
+  private TestHeader ParseTestHeader() {
+    var testToken = Advance(); // the contextual `test` identifier
+
+    // Checked at the declaration, not at the file: ONE rule in ONE place, and the message can
+    // name both the file to rename and the declaration to move.
+    if (_sourceFilePath == null
+        || !Path.GetFileName(_sourceFilePath).EndsWith(TestFileSuffix, StringComparison.Ordinal)) {
+      var fileName = _sourceFilePath == null ? "<none>" : Path.GetFileName(_sourceFilePath);
+      var renamed = fileName.EndsWith(MaxonFileSuffix, StringComparison.Ordinal)
+        ? string.Concat(fileName.AsSpan(0, fileName.Length - MaxonFileSuffix.Length), TestFileSuffix)
+        : fileName + TestFileSuffix;
+      throw new CompileError(ErrorCode.ParserTestOutsideTestFile,
+        $"a 'test' declaration is only allowed in a file whose name ends in '{TestFileSuffix}'; "
+        + $"rename '{fileName}' to '{renamed}', or move this declaration into one",
+        testToken.Line, testToken.Column);
+    }
+
+    var nameToken = Expect(TokenType.CharacterLiteral);
+    if (nameToken.Value.Length == 0) {
+      throw new CompileError(ErrorCode.ParserTestEmptyName,
+        "a 'test' declaration's name cannot be empty",
+        nameToken.Line, nameToken.Column);
+    }
+
+    ExpectNewline();
+
+    // A test throws TestFailure without the author writing it, and the clause cannot be written.
+    // Resolved from the type registry rather than from synthesized tokens because the name is
+    // fixed — there is nothing to parse — and the registry is the same map ParseTypeRef consults
+    // for a written `throws TestFailure`.
+    if (!_typeRegistry.TryGetValue(TestFailureTypeName, out var throwsType)) {
+      throw new CompileError(ErrorCode.SemanticUnknownType,
+        $"'{TestFailureTypeName}' is not available; a 'test' declaration throws it implicitly, "
+        + "so stdlib/Testing.maxon must be on the compile path",
+        nameToken.Line, nameToken.Column);
+    }
+
+    var namespace_ = NamespaceOf();
+    var symbol = SanitizeTestName(nameToken.Value);
+    return new TestHeader(nameToken, nameToken.Value, symbol,
+      string.IsNullOrEmpty(namespace_) ? symbol : $"{namespace_}.{symbol}", throwsType);
+  }
+
+  /// Pre-register a `test` so it is visible before its body is parsed, mirroring PreScanFunction.
+  /// `declaredTestNames` maps symbol -> the prose name that claimed it, and is the walk-local
+  /// twin of the duplicate-value-declaration check in the same loop.
+  private void PreScanTest(IrModule<MaxonOp> module, Dictionary<string, string> declaredTestNames) {
+    var header = ParseTestHeader();
+
+    // Two prose names that sanitize alike would collide in the symbol table, and two tests
+    // sharing a DISPLAY name are unreportable regardless — a reader cannot tell which failed.
+    // Both prose names are needed in the message: with only one, a collision between
+    // `adds two` and `adds-two` is invisible.
+    if (declaredTestNames.TryGetValue(header.SymbolName, out var firstName)) {
+      throw new CompileError(ErrorCode.SemanticDuplicateTestName,
+        $"duplicate test name: '{firstName}' and '{header.DisplayName}' both compile to "
+        + $"'{header.Symbol}'",
+        header.NameToken.Line, header.NameToken.Column);
+    }
+    declaredTestNames[header.SymbolName] = header.DisplayName;
+
+    if (module.FindFunctionByExactName(header.SymbolName) == null) {
+      module.AddFunction(new IrFunction<MaxonOp>(header.SymbolName, [], [], null, header.ThrowsType) {
+        DisplayName = header.DisplayName,
+        SourceFilePath = _sourceFilePath,
+        SourceLine = header.NameToken.Line,
+        SourceColumn = header.NameToken.Column
+      });
+    }
+
+    SkipToMatchingEnd();
+  }
+
+  /// Parse a `test` declaration's body. Deliberately the same machinery as ParseFunction — a test
+  /// IS an ordinary IrFunction with no parameters, no return type and an implied `throws` — so
+  /// SetupFunctionParsing / ParseBodyUntilEnd / ExpectEndLabel / FinishFunctionBody are reused
+  /// rather than copied. `ExpectEndLabel` already compares the label as a raw string, so a
+  /// multi-word prose name round-trips through `end` with no change.
+  private void ParseTest(IrModule<MaxonOp> module) {
+    var header = ParseTestHeader();
+
+    var func = SetupFunctionParsing(module, header.SymbolName, [], [], [], returnType: null,
+      throwsType: header.ThrowsType,
+      nameLine: header.NameToken.Line, nameColumn: header.NameToken.Column);
+    func.DisplayName = header.DisplayName;
+    func.SourceLine = header.NameToken.Line;
+    func.SourceColumn = header.NameToken.Column;
+
+    int bodyStartPos = _pos;
+    try {
+      ParseBodyUntilEnd();
+      ExpectEndLabel(header.DisplayName);
+      FinishFunctionBody(header.DisplayName, header.NameToken, returnType: null);
+    } catch (CompileError ex) {
+      ex.FilePath ??= _sourceFilePath;
+      _errors.Add(ex);
+      CleanupFailedFunction(func, bodyStartPos, header.DisplayName);
+    }
+  }
+
   private void PreScanFunction(IrModule<MaxonOp> module, string? owningType, bool isExported = false, bool isStatic = false, bool isModuleVisible = false) {
     Advance(); // consume 'function'
     var nameToken = ExpectIdentifierLike();
@@ -5137,6 +5284,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     while (!IsAtEnd() && depth > 0) {
       if (prevWasDot) {
         // Keywords after '.' are member names, not block openers/closers
+      } else if (prevWasNewline && IsTestDeclarationAt(_tokens, _pos)) {
+        // A `test 'name'` block needs its own `end`, so it must be counted or this walk stops at
+        // the test's end and leaves the caller inside the enclosing construct. The statement-start
+        // guard is what separates it from `match test 'check'`, which is the same two tokens.
+        depth++;
       } else if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) || Check(TokenType.Match)) {
         // Keywords used as match case labels (e.g., `function then ...`, `if to newline then ...`)
         // are not block openers. Detect by checking if the next token indicates a case label context:
@@ -5718,6 +5870,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (Check(TokenType.Function)) {
       ParseFunction(module);
+    } else if (CheckTestKeyword()) {
+      ParseTest(module);
     } else if (Check(TokenType.Type)) {
       ParseTypeDecl(module);
     } else if (Check(TokenType.Union) || Check(TokenType.Enum)) {
@@ -23689,7 +23843,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private bool CheckModuleKeyword() {
     if (IsAtEnd()) return false;
     var t = Current();
-    if (t.Type != TokenType.Identifier || t.Value != "module") return false;
+    if (t.Type != TokenType.Identifier || t.Value != Lexer.ModuleKeyword) return false;
     if (_pos + 1 >= _tokens.Count) return false;
     var next = _tokens[_pos + 1].Type;
     return next == TokenType.Function
@@ -23703,6 +23857,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         || next == TokenType.Static
         || next == TokenType.Extension;
   }
+
+  // `test` is a contextual keyword, like `module` above — it lexes as an Identifier and is
+  // recognised as a declaration opener only where a declaration may start AND the next token is
+  // the test's quoted name.
+  //
+  // BOTH halves are load-bearing, and for different reasons. Without the word check, `test` is an
+  // ordinary variable at ~95 sites in this tree (`for test in tests`, `test.name` throughout
+  // maxon-shv2/Testing/), because `let`/`for`/expression positions call bare
+  // `Expect(TokenType.Identifier)` rather than `ExpectIdentifierLike`. Without the POSITION,
+  // the shape is still ambiguous: `match expression LABEL` means `match test 'check'` is also an
+  // identifier followed by a CharacterLiteral, and so is `while test 'loop'`. Only a caller that
+  // is already at declaration position can tell the two apart, which is why this predicate takes
+  // its position from where it is called rather than trying to prove it — exactly as
+  // CheckModuleKeyword does.
+  private bool CheckTestKeyword() => IsTestDeclarationAt(_tokens, _pos);
+
+  /// The one shape test of a `test` declaration opener, shared with the raw token walkers that
+  /// have no parser position of their own (SkipToMatchingEnd, Compiler.PreRegisterTypeNames).
+  /// Those supply the "at statement start" half themselves from their own newline tracking.
+  internal static bool IsTestDeclarationAt(List<Token> tokens, int pos) =>
+    pos + 1 < tokens.Count
+    && tokens[pos].Type == TokenType.Identifier
+    && tokens[pos].Value == Lexer.TestKeyword
+    && tokens[pos + 1].Type == TokenType.CharacterLiteral;
 
   // Parse the visibility modifier (`export`, `module`, or none). `export` and
   // `module` are mutually exclusive — combining them is a parse error.
@@ -23890,16 +24068,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         Advance();
         SkipNewlines();
         if (IsAtEnd() || Current().Type == TokenType.Eof) break;
-        if (IsTopLevelStart(Current().Type)) break;
+        if (IsTopLevelStart()) break;
         continue;
       }
       Advance();
     }
   }
 
-  private static bool IsTopLevelStart(TokenType type) =>
-    type is TokenType.Function or TokenType.Type or TokenType.Union or TokenType.Enum
+  // Position-based rather than token-based: `test` is a contextual keyword with no TokenType of
+  // its own, so recognising it needs the NEXT token too. Only ever asked at a newline boundary
+  // (SynchronizeToNextTopLevel), which is the statement-start half CheckTestKeyword relies on.
+  private bool IsTopLevelStart() =>
+    Current().Type is TokenType.Function or TokenType.Type or TokenType.Union or TokenType.Enum
       or TokenType.Extension or TokenType.Export or TokenType.Let
       or TokenType.Var or TokenType.TypeAlias or TokenType.Interface
-      or TokenType.HashIf;
+      or TokenType.HashIf
+    || CheckTestKeyword();
 }

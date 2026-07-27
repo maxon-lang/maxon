@@ -1,0 +1,147 @@
+// Test: test-stays-an-ordinary-identifier
+typealias Count = int(0 to 100)
+
+enum Status
+	ready
+	busy
+end 'Status'
+
+function classify(test Status) returns Count
+	match test 'check'
+		ready then return 20
+		busy then return 1
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	var total = 0 as Count
+	let tests = [1, 2, 3]
+
+	for test in tests 'loop'
+		total = total + test
+	end 'loop'
+
+	let test = Status.ready
+
+	if test == Status.ready 'ready'
+		total = total + classify(test)
+	end 'ready'
+
+	return total
+end 'main'
+---
+ExitCode: 26
+---
+// CompiledIR
+module {
+  func @classify(test: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je classify.check_0.case0
+  check_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je classify.check_0.case1
+  check_0.dispatch1:
+    x64.jmp classify.check_0.merge
+  check_0.case0:
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
+  check_0.case1:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.lea rcx, [rip+__static_lit_0]
+    x64.mov rdx, rcx
+    x64.mov rbx, 32
+    x64.add rdx, rbx
+    x64.mov [rbp-16], rdx
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdi, [rbp-16]
+    x64.mov [rbp-24], rdi
+    x64.xor r8d, r8d
+    x64.mov [rbp-32], r8
+    x64.jmp main.loop_0.header
+  loop_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, [rbp-32]
+    x64.cmp rdx, rcx
+    x64.jge main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rcx+24]
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, [rbx+0]
+    x64.imul rax, rdx
+    x64.add rsi, rax
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-40], rdi
+    x64.mov r8, [rbp-40]
+    x64.mov r9, [rbp-8]
+    x64.add r9, r8
+    x64.mov [rbp-8], r9
+    x64.jmp main.loop_0.incr
+  loop_0.incr:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov [rbp-32], rax
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.xor eax, eax
+    x64.mov [rbp-48], rax
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-48]
+    x64.cmp rdx, rcx
+    x64.jne main.ready_0.merge
+  ready_0:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call classify
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.ready_0.merge
+  ready_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-16]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

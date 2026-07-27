@@ -810,7 +810,13 @@ public class Compiler {
         // by a `module`/`export` modifier that the loop body consumes (advancing
         // past the `extension` token), so the increment is done in the extension
         // branch below where the token is seen regardless of any modifier.
-        if (t.Type is TokenType.Function or TokenType.If or TokenType.While
+        // A `test 'name'` declaration opens a block that `end` closes. Uncounted, its `end` would
+        // decrement blockDepth below the enclosing level and clear an `extension` block's
+        // visibility context early. `test` is contextual, so it is matched by value plus the
+        // statement-start guard — `match test 'check'` is the same two tokens mid-statement.
+        if (prevWasNewline && Parser.IsTestDeclarationAt(tokens, i)) {
+          blockDepth++;
+        } else if (t.Type is TokenType.Function or TokenType.If or TokenType.While
             or TokenType.For or TokenType.Match or TokenType.Type
             or TokenType.Enum or TokenType.Union or TokenType.Interface) {
           bool opensBlock = true;
@@ -859,7 +865,7 @@ public class Compiler {
         isExported = true;
         i++;
         t = tokens[i];
-      } else if (t.Type == TokenType.Identifier && t.Value == "module" && i + 1 < tokens.Count
+      } else if (t.Type == TokenType.Identifier && t.Value == Lexer.ModuleKeyword && i + 1 < tokens.Count
           && IsModuleModifierFollowedByDecl(tokens[i + 1].Type)) {
         // `module` is a contextual keyword. Recognize it here when followed by
         // a declaration token so module-scoped types are tracked correctly.

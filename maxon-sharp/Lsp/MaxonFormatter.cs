@@ -508,6 +508,13 @@ private record SourceComment(string Text, bool WholeLine);
       // Labeled block openers that must be at line start to open a block.
       if (wasAtLineStart && LabeledBlockOpeners.Contains(tok.Type))
         lineHasLabeledOpener = true;
+      // `test` is a LABELED opener — its name is the trailing CharacterLiteral, exactly like
+      // `if cond 'label'` — but it is a contextual keyword with no TokenType, so it is matched by
+      // value here rather than through LabeledBlockOpeners. The line-start guard is the same one
+      // the parser uses: mid-line, `test 'x'` is `match test 'check'`, not a declaration.
+      if (wasAtLineStart && tok.Type == TokenType.Identifier && tok.Value == Lexer.TestKeyword
+          && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.CharacterLiteral)
+        lineHasLabeledOpener = true;
       // These keywords open labeled blocks even when mid-line (but not 'then' — it only
       // opens a block when at line start, to avoid treating match arm labels as block openers).
       if (tok.Type == TokenType.Try || tok.Type == TokenType.Otherwise || tok.Type == TokenType.Match)

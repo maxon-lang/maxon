@@ -92,7 +92,13 @@ Block labels are character literals used as identifiers for block structures.
 
 ```
 LABEL         = "'" IDENTIFIER "'"
+TEST_NAME     = "'" { any character except "'" } "'"
 ```
+
+A `LABEL` names a block and is spelled as an identifier. A `TEST_NAME` is the same character
+literal token, but its content is PROSE — spaces, digits and punctuation are all allowed, and
+the lexer validates none of it. It appears only in `test_decl`, where the trailing `end` must
+repeat it verbatim.
 
 ### 1.6 Operators and Punctuation
 
@@ -147,6 +153,7 @@ program       = { top_level_decl }
 
 top_level_decl
               = function_decl
+              | test_decl
               | extern_decl
               | type_decl
               | enum_decl
@@ -172,9 +179,32 @@ The two modifiers are mutually exclusive — combining them is a parse error.
 `module` is a contextual keyword: it is recognised only when followed by a
 declaration token; in any other position it lexes as an identifier.
 
+A `test_decl` takes no `visibility_prefix` — a test is never referenced by name,
+so there is nothing for a visibility modifier to control.
+
 ---
 
 ## 3 — Declarations
+
+### 3.0 Test Declaration
+
+```
+test_decl     = 'test' TEST_NAME NEWLINE
+                body
+                'end' TEST_NAME
+```
+
+A test takes **no parameters** and **no `returns`**: `ExpectNewline` ends the header
+at the name, so `test 'x'(a int)` and `test 'x' returns int` are parse errors.
+
+`test` is a contextual keyword, recognised only at declaration position when the
+next token is a `TEST_NAME`; anywhere else it lexes as an identifier. The position
+half matters as much as the word: `match expression LABEL` makes `match test 'check'`
+the same two tokens, and only the declaration position separates them.
+
+Every test implicitly declares `throws TestFailure` (`stdlib/Testing.maxon`); the
+clause is never written and cannot be. A `test_decl` is legal only in a file whose
+name ends in `.test.maxon`.
 
 ### 3.1 Function Declaration
 

@@ -299,6 +299,18 @@ public class LspServer {
       });
     }
 
+    // Contextual keywords are deliberately absent from KeywordMap (they must stay usable as
+    // identifiers), so they get NOTHING from the loop above and have to be offered explicitly.
+    // `module` had this gap since it was introduced.
+    foreach (var (keyword, helpText) in Lexer.ContextualKeywordHelp) {
+      items.Add(new CompletionItem {
+        Label = keyword,
+        Kind = CompletionItemKind.Keyword,
+        Detail = helpText,
+        InsertText = keyword
+      });
+    }
+
     return new CompletionList(items, isIncomplete: false);
   }
 
@@ -333,6 +345,23 @@ public class LspServer {
           Range = GetWordRange(position, line, word)
         };
       }
+    }
+
+    // Check if it's a contextual keyword (`module`, `test`). These are absent from KeywordMap by
+    // design — they must stay usable as identifiers — so the lookup above cannot find them, and
+    // hovering one produced nothing at all. Gated on the enum-body check for the same reason the
+    // real keywords are: inside an enum body the word is a case name, not syntax.
+    if (Lexer.ContextualKeywordHelp.TryGetValue(word, out var contextualHelp)
+        && !IsInsideEnumBody(lines, (int)position.Line)) {
+      return new Hover {
+        Contents = new MarkedStringsOrMarkupContent(
+          new MarkupContent {
+            Kind = MarkupKind.Markdown,
+            Value = $"**{word}** (contextual keyword)\n\n{contextualHelp}"
+          }
+        ),
+        Range = GetWordRange(position, line, word)
+      };
     }
 
     // Check if it's an operator

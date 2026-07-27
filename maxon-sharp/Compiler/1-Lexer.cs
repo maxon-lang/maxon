@@ -167,6 +167,24 @@ public class Lexer(string source) {
   private const string UnterminatedStringToken = "__unterminated_string__:Unterminated string literal";
   private const string UnterminatedBlockCommentToken = "__unterminated_block_comment__:Unterminated block comment";
 
+  // The CONTEXTUAL keywords. Each is recognised as syntax only in one specific position and
+  // lexes as an ordinary Identifier everywhere else, so neither appears in KeywordMap and
+  // neither has a TokenType: putting a word there reserves it program-wide, which is the exact
+  // thing these two exist to avoid. (`test` alone is an ordinary variable at ~95 sites in this
+  // tree — `for test in tests`, `test.name` — and `module` at more.)
+  //
+  // The recognition predicates live in the parser, next to the positions they answer for
+  // (Parser.CheckModuleKeyword, Parser.CheckTestKeyword). This map is the ONE home for their
+  // user-facing help text, because a contextual keyword gets NOTHING for free: anything that
+  // walks KeywordMap — LSP completion, LSP hover — skips both unless it walks this too.
+  public const string ModuleKeyword = "module";
+  public const string TestKeyword = "test";
+
+  public static readonly Dictionary<string, string> ContextualKeywordHelp = new() {
+    { ModuleKeyword, "Declares directory-scoped visibility: the declaration is visible to every file in the same directory and any subdirectory, but not outside that subtree. Mutually exclusive with 'export'.\n\nRecognised only immediately before a declaration token; anywhere else 'module' is an ordinary identifier.\n\nExample:\n```maxon\nmodule function helper() returns Integer\n    return 42\nend 'helper'\n```" },
+    { TestKeyword, "Declares a unit test. A test takes no parameters and no 'returns', and implicitly throws TestFailure — so a forgotten 'try' on an assertion is a compile error.\n\nLegal only in a file whose name ends in '.test.maxon'. Recognised only at declaration position followed by the test's quoted name; anywhere else 'test' is an ordinary identifier.\n\nExample:\n```maxon\ntest 'adds two numbers'\n    try Expect.equal(add(2, 2), expected: 4)\nend 'adds two numbers'\n```" },
+  };
+
   // Keyword map: { keyword_text, TokenType, help_text, can_have_block_label }
   public static readonly Dictionary<string, KeywordInfo> KeywordMap = new() {
     { "function", new(TokenType.Function, "Declares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```", false) },

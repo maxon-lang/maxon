@@ -2,6 +2,18 @@ namespace MaxonSharp.Compiler.Ir.Core;
 
 public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> paramTypes, IrType? returnType, IrType? throwsType = null) where TOp : IPrintableOp {
   public string Name { get; internal set; } = name;
+
+  // The PROSE name a `test` declaration was written with, verbatim, and null for every other
+  // function. A test carries two names because its written name cannot be its symbol: it flows
+  // into name mangling, the PE/Mach-O symbol table, the .mxdbg sidecar and panic stack traces,
+  // none of which accept spaces or punctuation. `Name` is therefore the sanitized
+  // `<namespace>.__test_<sanitized>`, and this is what a report shows a human.
+  //
+  // Non-null also MARKS the function as a test entry point — nothing in the program calls a
+  // test, so dead-function elimination roots it (see DeadFunctionElimination.WalkReachableAndPrune).
+  // That makes this field the single fact "is a test", which is why nothing else may set it.
+  public string? DisplayName { get; set; }
+
   public List<string> ParamNames { get; } = paramNames;
   public List<IrType> ParamTypes { get; } = paramTypes;
   public IrType? ReturnType { get; set; } = returnType;
@@ -123,6 +135,7 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   /// Create an independent deep copy of this function.
   public IrFunction<TOp> DeepClone() {
     var clone = new IrFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
+      DisplayName = DisplayName,
       IsStdlib = IsStdlib,
       IsExported = IsExported,
       IsModuleVisible = IsModuleVisible,

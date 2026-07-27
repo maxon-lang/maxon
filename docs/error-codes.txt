@@ -333,6 +333,20 @@ E2057 GenericManagedArg
 	doc was rejected in the trivial slice (P1.6-A): the shared trivial destructor dropped nothing, so
 	doc a managed argument would leak. P1.6-B2 lifted the restriction (owning managed containers).
 
+E2058 ParserTestOutsideTestFile
+	csharp ParserTestOutsideTestFile
+	doc A `test` declaration appears in a file whose name does not end in `.test.maxon`. Tests are
+	doc confined to those files by ONE rule checked in ONE place, so which declarations a build
+	doc carries is answerable from the file list alone -- no flag, no attribute, nothing to read the
+	doc body for. The message names the fix: rename the file, or move the declaration.
+
+E2059 ParserTestEmptyName
+	csharp ParserTestEmptyName
+	doc A `test` declaration's name is the empty character literal (`test ''`). The name is the
+	doc test's whole identity -- it is what the reporter prints and what `end ''` must match -- and
+	doc an empty one names nothing. Refused at the declaration rather than at the report, where an
+	doc unnamed failure would be the least useful place to discover it.
+
 E3001 SemanticNoMain
 	csharp SemanticNoMain
 	selfhosted semanticNoMain
@@ -1063,6 +1077,18 @@ E3106 SemanticArrayResizeManagedElement
 	doc -- they track occupancy in a parallel `states` column and never read a slot they did not
 	doc write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
 	doc and it stays available.
+
+E3107 SemanticDuplicateTestName
+	csharp SemanticDuplicateTestName
+	doc Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has
+	doc two names -- the prose one the reporter prints, and the mangled `__test_<sanitized>` one that
+	doc reaches the symbol table -- and the sanitizer maps every character outside [A-Za-z0-9_] to
+	doc `_`, so `adds two` and `adds-two` collide even though they read differently.
+	doc The message names BOTH prose names and the symbol they share, because the collision is
+	doc invisible in either name alone.
+	doc Refusing it is independently worth doing: two tests with the same DISPLAY name are
+	doc unreportable -- a reader of the report cannot tell which one failed -- so this rejects the
+	doc identical-prose case for its own reason, not merely as a symbol-table accident.
 
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression

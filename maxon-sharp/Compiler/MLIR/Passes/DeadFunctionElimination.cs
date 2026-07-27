@@ -113,6 +113,18 @@ public static class DeadFunctionElimination {
         if (reachable.Add(func.Name))
           queue.Enqueue(func.Name);
       }
+      // A `test` is a ROOT, not something reached. Nothing in the program calls one — that is what
+      // a test IS — so "reached" is not a property it can have until the generated entry point
+      // exists, and until then it would mean "deleted". Deleting a test silently is precisely the
+      // failure this feature is built to prevent: a test that vanishes is a test that passes.
+      // When the entry point lands it will reach these too, and rooting them becomes redundant
+      // rather than wrong.
+      //
+      // This roots only the tests actually being compiled, and `test` is legal only in a
+      // `*.test.maxon` file — so which tests a build carries is decided by the FILE LIST, one
+      // decision with one home, and a build that excludes those files pays nothing here.
+      if (func.DisplayName != null && reachable.Add(func.Name))
+        queue.Enqueue(func.Name);
     }
 
     // Resolve a callee name to its actual function name (handles namespace-qualified names).

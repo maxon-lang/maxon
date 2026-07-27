@@ -1,0 +1,65 @@
+// Test: implied-throws-accepts-bare-try
+// --- file: assertions.maxon
+export function assertTrue(ok bool) throws TestFailure
+	if not ok 'bad'
+		throw TestFailure.assertion
+	end 'bad'
+end 'assertTrue'
+
+// --- file: example.test.maxon
+test 'a bare try needs no otherwise'
+	try assertTrue(true)
+end 'a bare try needs no otherwise'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @assertTrue(ok: i1) {
+  entry:
+    x64.mov rax, 1
+    x64.xor rcx, rax
+    x64.test rcx, rcx
+    x64.je assertTrue.bad_0.after
+  bad_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.ret
+  bad_0.after:
+    x64.xor edx, edx
+    x64.ret
+  }
+  func @__test_a_bare_try_needs_no_otherwise() {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call assertTrue
+    x64.mov [rbp-8], rdx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je __test_a_bare_try_needs_no_otherwise.try_continue_0
+  propagate_error_0:
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_0:
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.xor eax, eax
+    x64.ret
+  }
+}
+---

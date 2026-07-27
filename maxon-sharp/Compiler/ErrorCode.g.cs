@@ -153,6 +153,20 @@ public enum ErrorCode {
   /// check that only looked for a bare literal token missed its own motivating example.
   /// </summary>
   ParserShiftCountNegative = 2054,
+  /// <summary>
+  /// A `test` declaration appears in a file whose name does not end in `.test.maxon`. Tests are
+  /// confined to those files by ONE rule checked in ONE place, so which declarations a build
+  /// carries is answerable from the file list alone -- no flag, no attribute, nothing to read the
+  /// body for. The message names the fix: rename the file, or move the declaration.
+  /// </summary>
+  ParserTestOutsideTestFile = 2058,
+  /// <summary>
+  /// A `test` declaration's name is the empty character literal (`test ''`). The name is the
+  /// test's whole identity -- it is what the reporter prints and what `end ''` must match -- and
+  /// an empty one names nothing. Refused at the declaration rather than at the report, where an
+  /// unnamed failure would be the least useful place to discover it.
+  /// </summary>
+  ParserTestEmptyName = 2059,
 
   /// <summary>
   /// The program declares no 'main' function.
@@ -675,6 +689,18 @@ public enum ErrorCode {
   /// and it stays available.
   /// </summary>
   SemanticArrayResizeManagedElement = 3106,
+  /// <summary>
+  /// Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has
+  /// two names -- the prose one the reporter prints, and the mangled `__test_&lt;sanitized&gt;` one that
+  /// reaches the symbol table -- and the sanitizer maps every character outside [A-Za-z0-9_] to
+  /// `_`, so `adds two` and `adds-two` collide even though they read differently.
+  /// The message names BOTH prose names and the symbol they share, because the collision is
+  /// invisible in either name alone.
+  /// Refusing it is independently worth doing: two tests with the same DISPLAY name are
+  /// unreportable -- a reader of the report cannot tell which one failed -- so this rejects the
+  /// identical-prose case for its own reason, not merely as a symbol-table accident.
+  /// </summary>
+  SemanticDuplicateTestName = 3107,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.
