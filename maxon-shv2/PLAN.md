@@ -859,9 +859,23 @@ unnecessary**, and all four bugs above are unrepresentable rather than fixed.
 > Its output is refused for those two files until this is fixed, so **a whole-tree `maxon fmt` is not
 > currently idempotent** and the next person to run it must refuse the same two files.
 >
-> **⏭ CROSS-TARGET DEBT the un-gating creates** (this host can run neither; both need a golden mint on
-> their own hardware, alongside the existing #86/#91/#20): **x64-linux — 37 cases** newly live;
-> **arm64-linux — 107 cases** newly live. Plus **4 x64-windows fragments** owed by the cast fix
+> **✅ arm64-linux IS DONE, NOT DEBT — 1589/0** (`1de8d480a`, 119 new + 38 refreshed goldens). This was
+> filed as "needs its own hardware"; that was WRONG, and the correction is worth keeping because the
+> capability had been sitting in the runner the whole time: `SpecTestRunner.externalRunnerFor` routes a
+> Linux target from a macOS host to **OrbStack** (`orb run -m maxon-linux <abs-path>`), and the VM
+> mirrors the Mac's filesystem at identical REAL paths, so a binary the build just wrote runs with no
+> copying. **Check what the harness already does before filing a target as unreachable.**
+> - ⚠ **`maxon build maxon-shv2 --target=arm64-linux` yields a SILENTLY CORRUPTED COMPILER.** The
+>   backend ignores `--target` for a directory build (still Mach-O) but the frontend's `#if os()` does
+>   NOT, so `detectHostTarget()` answers `arm64-linux` on a macOS host, `needsExternalRunner()` answers
+>   false, and the runner spawns ELFs directly → **every test fails 126**, looking exactly like a broken
+>   harness. Clean rebuild cures it. Same root as the `--target`-vs-frontend-`os()` split that writes
+>   wrong golden VALUES, but worse: this one makes a compiler misidentify its own HOST.
+> - ⚠ **Run arm64-linux at `--workers=4`.** Each test is an `orb run` into one VM; at 12 workers three
+>   tests hit a 120 s spawn timeout. All pass individually — contention, not a defect.
+>
+> **⏭ CROSS-TARGET DEBT that remains** (genuinely not runnable here, alongside #86/#91/#20):
+> **x64-linux — 37 cases** newly live. Plus **4 x64-windows fragments** owed by the cast fix
 > (`cast-to-loaded-stdlib-internal-typealias`, `wide-file-cast-still-accepted`, and the two
 > `ranged-typealias/unsigned-max-upper-*`). **x64-windows gains nothing else** — the one marker that
 > excludes it was preserved on the merits (E5001, 18 live values against a 14-register pool).
