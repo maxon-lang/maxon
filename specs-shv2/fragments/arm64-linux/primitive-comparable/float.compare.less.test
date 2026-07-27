@@ -1,0 +1,90 @@
+// Test: float.compare.less
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	let result = a.compare(b)
+	match result 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 1
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.bl float.compare
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchdead:
+  matchcont:
+}
+
+func @float.compare {
+  entry:
+    arm64.prologue 16
+    arm64.fcmp d0, d0
+    arm64.cset x0, ne
+    arm64.cbnz x0, selfIsNan
+    arm64.b selfNotNan
+  selfIsNan:
+    arm64.fcmp d1, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, equal
+    arm64.b less
+  selfNotNan:
+    arm64.fcmp d1, d1
+    arm64.cset x0, ne
+    arm64.cbnz x0, greater
+    arm64.b ordered
+  ordered:
+    arm64.fcmp d0, d1
+    arm64.cset x0, mi
+    arm64.cbnz x0, less
+    arm64.b notLess
+  less:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  notLess:
+    arm64.fcmp d0, d1
+    arm64.cset x0, gt
+    arm64.cbnz x0, greater
+    arm64.b equal
+  greater:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  equal:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

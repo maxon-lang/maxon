@@ -1,0 +1,51 @@
+// Test: first-class-function.pass-as-argument
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function triple(n Integer) returns Integer
+	return n * 3
+end 'triple'
+
+function main() returns ExitCode
+	return apply(triple, x: 10)
+end 'main'
+---
+ExitCode: 30
+---
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @triple {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_triple
+    arm64.movImm x1, 10
+    arm64.movImm x2, 0
+    arm64.bl apply
+    arm64.epilogue 16
+    arm64.ret
+}

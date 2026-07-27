@@ -1,0 +1,46 @@
+// Test: var-global-string-to-appending-param-ok
+typealias Integer = int(i64.min to i64.max)
+
+var greeting = "hi"
+
+function grow(s String) returns Integer
+	s.append("XY")
+	return s.byteLength()
+end 'grow'
+
+function main() returns ExitCode
+	return grow(greeting) as ExitCode
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __data_greeting@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @grow {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x1, __str_rec_1
+    arm64.movRegReg x0, x19
+    arm64.bl __str_append
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_greeting
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl grow
+    arm64.epilogue 16
+    arm64.ret
+}

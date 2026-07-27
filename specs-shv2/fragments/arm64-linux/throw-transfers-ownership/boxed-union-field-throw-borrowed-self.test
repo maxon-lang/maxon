@@ -1,0 +1,165 @@
+// Test: boxed-union-field-throw-borrowed-self
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Lex
+	export var pendingError as OuterErr
+
+	static function create() returns Lex
+		return Self{pendingError: OuterErr.unterminatedString(7, column: 13)}
+	end 'create'
+
+	function run() returns N throws OuterErr
+		throw pendingError
+	end 'run'
+end 'Lex'
+
+function main() returns ExitCode
+	var lex = Lex.create()
+	var caught = 0
+	try lex.run() otherwise (e) 'fail'
+		match e 'k'
+			unterminatedString(line, column) then caught = (line + column)
+			unexpectedEof(line, column) then caught = 900
+		end 'k'
+	end 'fail'
+	let again = lex.pendingError
+	match again 'k2'
+		unterminatedString(line, column) then return (caught + line + column)
+		unexpectedEof(line, column) then return (caught + 500)
+	end 'k2'
+end 'main'
+---
+ExitCode: 40
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Lex.create {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 7
+    arm64.movImm x20, 13
+    arm64.movImm x0, 24
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x21 + 0], x0
+    arm64.storeBaseDispReg.word64 [x21 + 8], x19
+    arm64.storeBaseDispReg.word64 [x21 + 16], x20
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Lex.run {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_incref
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Lex.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl Lex.run
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 8]
+    arm64.loadRegBaseDisp.word64 x1, [x9 + 16]
+    arm64.add x20, x0, x1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 16]
+    arm64.movImm x20, 900
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x9
+    arm64.bl __mm_decref
+    arm64.b trycont
+  matchdead:
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.add x1, x20, x1
+    arm64.add x20, x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchnext:
+    arm64.cmp x1, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchdead
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
+    arm64.add x20, x20, 500
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Lex
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchdead:
+  matchcont:
+}

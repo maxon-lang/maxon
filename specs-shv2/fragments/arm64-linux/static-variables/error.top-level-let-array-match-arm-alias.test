@@ -1,0 +1,21 @@
+// Test: error.top-level-let-array-match-arm-alias
+let A = [1, 2]
+var M = [5, 5]
+
+enum Which
+	fixed
+	live
+end 'Which'
+
+function main() returns ExitCode
+	let w = Which.fixed
+	var pick = match w 'w'
+		fixed gives A
+		live gives M
+	end 'w'
+	pick.push(9)
+	return A.count()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`

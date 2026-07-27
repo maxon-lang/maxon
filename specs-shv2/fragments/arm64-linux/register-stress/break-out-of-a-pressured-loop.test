@@ -36,10 +36,7 @@ ExitCode: 0
 ---
 func @breakUnderPressure {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x24
-    arm64.storeSlotReg slot4, x23
-    arm64.storeSlotReg slot3, x22
+    arm64.prologue 48
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
@@ -55,20 +52,20 @@ func @breakUnderPressure {
     arm64.add x20, x0, 10
     arm64.add x21, x0, 11
     arm64.add x0, x0, 12
-    arm64.movImm x22, 0
-    arm64.movImm x23, 0
+    arm64.movImm x3, 0
+    arm64.movImm x4, 0
     arm64.b whilehdr
   whilehdr:
-    arm64.cmp x23, 100
-    arm64.cset x24, lt
-    arm64.cbnz x24, loop
+    arm64.cmp x4, 100
+    arm64.cset x5, lt
+    arm64.cbnz x5, loop
     arm64.b critsplit
   loop:
-    arm64.add x22, x22, x23
-    arm64.add x23, x23, 1
-    arm64.cmp x22, 6
-    arm64.cset x24, gt
-    arm64.cbnz x24, stop
+    arm64.add x3, x3, x4
+    arm64.add x4, x4, 1
+    arm64.cmp x3, 6
+    arm64.cset x5, gt
+    arm64.cbnz x5, stop
     arm64.b ifcont
   stop:
     arm64.b whileexit
@@ -77,7 +74,7 @@ func @breakUnderPressure {
   critsplit:
     arm64.b whileexit
   whileexit:
-    arm64.add x1, x22, x1
+    arm64.add x1, x3, x1
     arm64.add x1, x1, x2
     arm64.add x1, x1, x6
     arm64.add x1, x1, x7
@@ -92,10 +89,7 @@ func @breakUnderPressure {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.loadRegSlot x23, slot4
-    arm64.loadRegSlot x24, slot5
-    arm64.epilogue 64
+    arm64.epilogue 48
     arm64.ret
 }
 

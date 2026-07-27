@@ -1,0 +1,51 @@
+// Test: two-floats-multiplied-between-calls
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function main() returns ExitCode
+	let a = 1.5
+	let b = 2.5
+	var s = 0.0
+	var acc = 0
+	acc = work(acc)
+	s = s + a * b
+	acc = work(acc)
+	s = s + a * b
+	return trunc(s) + acc
+end 'main'
+---
+ExitCode: 9
+---
+func @work {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, d10
+    arm64.storeSlotReg slot1, d9
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.fpLoadRdata d9, [rdata + __fconst_1]
+    arm64.fpLoadRdata d10, [rdata + __fconst_2]
+    arm64.movImm x0, 0
+    arm64.bl work
+    arm64.fmul d0, d8, d9
+    arm64.fadd d10, d10, d0
+    arm64.bl work
+    arm64.fmul d0, d8, d9
+    arm64.fadd d0, d10, d0
+    arm64.fcvtzs x1, d0
+    arm64.add x0, x1, x0
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.loadRegSlot d10, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

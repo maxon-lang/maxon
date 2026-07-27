@@ -1,0 +1,20 @@
+// Test: transitive-let-array-error
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function inner(d IntArray)
+	d.push(7)
+end 'inner'
+
+function outer(d IntArray)
+	inner(d)
+end 'outer'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	outer(a)
+	return try a.get(0) otherwise -1
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:15:2: cannot pass 'a' to function that mutates parameter 'd' (in main)

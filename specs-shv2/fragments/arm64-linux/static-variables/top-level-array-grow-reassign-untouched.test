@@ -1,0 +1,120 @@
+// Test: top-level-array-grow-reassign-untouched
+typealias Integer = int(i64.min to i64.max)
+
+var grow = [1]
+var untouched = [7, 7, 7]
+let fixed = [4, 5, 6]
+
+function main() returns ExitCode
+	var i = 0
+	while i < 200 'fill'
+		grow.push(i)
+		i = i + 1
+	end 'fill'
+	grow = [3, 4]
+	let a = try grow.get(0) otherwise 0
+	let b = try grow.get(1) otherwise 0
+	let c = try fixed.get(2) otherwise 0
+	return a + b + c + grow.count()
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __data_grow@0 = i64 0
+  __data_fixed@8 = i64 0
+  __slab_cursor@16 = i64 0
+  __slab_end@24 = i64 0
+  __mm_alloc_count@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x19, 200
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b whileexit
+  fill:
+    arm64.leaGlobal x0, __data_grow
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movRegReg x1, x19
+    arm64.bl __arr_push
+    arm64.add x19, x19, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 4
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.leaGlobal x0, __data_grow
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_decref
+    arm64.leaGlobal x0, __data_grow
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.leaGlobal x0, __data_grow
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x19, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+    arm64.b trycont
+  trycont:
+    arm64.leaGlobal x0, __data_grow
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 1
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x20, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x20, x0
+    arm64.b trycont
+  trycont:
+    arm64.leaGlobal x0, __data_fixed
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 2
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.add x1, x19, x20
+    arm64.add x19, x1, x0
+    arm64.leaGlobal x0, __data_grow
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,26 @@
+// Test: top-level-let-array-let-alias
+let A = [1, 2]
+
+function main() returns ExitCode
+	let b = A
+	return b.count()
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __data_A@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_A
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.epilogue 16
+    arm64.ret
+}

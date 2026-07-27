@@ -1,0 +1,31 @@
+// Test: error.return-wrong-instance
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LeafBox = Box with Leaf
+typealias OtherBox = Box with Other
+function wrong() returns LeafBox
+	return OtherBox.create(Other.make("x"))
+end 'wrong'
+function main() returns ExitCode
+	let v = wrong()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:23:2: Cannot return 'Box_Other' from function declared to return 'Box_Leaf'

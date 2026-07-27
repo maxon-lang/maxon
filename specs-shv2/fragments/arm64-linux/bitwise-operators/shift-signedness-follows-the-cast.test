@@ -1,0 +1,93 @@
+// Test: shift-signedness-follows-the-cast
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function viaCast(p Num) returns Wide
+	let w = p as Wide
+	return w shr 60
+end 'viaCast'
+
+function viaParam(w Wide) returns Wide
+	return w shr 60
+end 'viaParam'
+
+function main() returns ExitCode
+	if viaParam(u64.max) != 15 'declaredParam'
+		return 1
+	end 'declaredParam'
+	if viaCast(u64.max) != 15 'castLocal'
+		return 2
+	end 'castLocal'
+	if viaCast(u64.max) != viaParam(u64.max) 'twoRoutesOneType'
+		return 3
+	end 'twoRoutesOneType'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @viaCast {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 0
+    arm64.lsr x0, x0, 60
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @viaParam {
+  entry:
+    arm64.prologue 16
+    arm64.lsr x0, x0, 60
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, -1
+    arm64.bl viaParam
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, declaredParam
+    arm64.b ifcont
+  declaredParam:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.bl viaCast
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, castLocal
+    arm64.b ifcont
+  castLocal:
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.bl viaCast
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, -1
+    arm64.bl viaParam
+    arm64.cmp x19, x0
+    arm64.cset x0, ne
+    arm64.cbnz x0, twoRoutesOneType
+    arm64.b ifcont
+  twoRoutesOneType:
+    arm64.movImm x0, 3
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

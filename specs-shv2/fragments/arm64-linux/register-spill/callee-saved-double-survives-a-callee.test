@@ -1,0 +1,67 @@
+// Test: callee-saved-double-survives-a-callee
+function leaf(x int) returns int
+	return x + 1
+end 'leaf'
+
+function inner(k int) returns int
+	let p = 2.0
+	var acc = k
+	acc = leaf(acc)
+	return acc + trunc(p)
+end 'inner'
+
+function outer(k int) returns int
+	let a = 42.5
+	var acc = k
+	acc = inner(acc)
+	return acc + trunc(a)
+end 'outer'
+
+function main() returns ExitCode
+	return outer(0) as ExitCode
+end 'main'
+---
+ExitCode: 45
+---
+func @leaf {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @inner {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.bl leaf
+    arm64.fcvtzs x1, d8
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot d8, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @outer {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d8, [rdata + __fconst_1]
+    arm64.bl inner
+    arm64.fcvtzs x1, d8
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot d8, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl outer
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,74 @@
+// Test: a-function-typed-parameter-costs-two-argument-slots
+typealias Integer = int(i64.min to i64.max)
+typealias IntFn = function(x Integer) returns Integer
+
+function twice(x Integer) returns Integer
+	return x * 2
+end 'twice'
+
+function apply(fn IntFn, a Integer, b Integer, c Integer, d Integer, e Integer) returns Integer
+	return fn(a) + b + c + d + e
+end 'apply'
+
+function main() returns ExitCode
+	return apply(twice, a: 10, b: 1, c: 2, d: 4, e: 8)
+end 'main'
+---
+ExitCode: 35
+---
+func @twice {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @apply {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x2
+    arm64.movRegReg x21, x3
+    arm64.movRegReg x22, x4
+    arm64.movRegReg x23, x5
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x6
+    arm64.blr x19
+    arm64.add x0, x0, x20
+    arm64.add x0, x0, x21
+    arm64.add x0, x0, x22
+    arm64.add x0, x0, x23
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_twice
+    arm64.movImm x1, 10
+    arm64.movImm x2, 1
+    arm64.movImm x6, 2
+    arm64.movImm x7, 4
+    arm64.movImm x8, 8
+    arm64.movImm x9, 0
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.movRegReg x5, x8
+    arm64.movRegReg x6, x9
+    arm64.bl apply
+    arm64.epilogue 16
+    arm64.ret
+}

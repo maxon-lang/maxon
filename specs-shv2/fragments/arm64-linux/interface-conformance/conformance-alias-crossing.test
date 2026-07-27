@@ -1,0 +1,76 @@
+// Test: conformance-alias-crossing
+
+typealias Integer = int(i64.min to i64.max)
+typealias A = int(0 to 100)
+typealias B = int(0 to 100)
+
+interface Processor
+	function process(value A) returns Integer
+end 'Processor'
+
+type Widget implements Processor
+	var v as Integer
+
+	function process(value B) returns Integer
+		return value
+	end 'process'
+
+	static function create() returns Self
+		return Self{v: 0}
+	end 'create'
+end 'Widget'
+
+function main() returns ExitCode
+	var w = Widget.create()
+	return w.process(7)
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Widget.process {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Widget.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Widget.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl Widget.process
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

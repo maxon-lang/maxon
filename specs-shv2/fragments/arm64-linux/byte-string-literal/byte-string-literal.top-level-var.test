@@ -1,0 +1,61 @@
+// Test: byte-string-literal.top-level-var
+var Buffer = b""
+
+function main() returns ExitCode
+		if Buffer.count() != 0 'notEmpty'
+				return 1
+		end 'notEmpty'
+		Buffer = b"filled"
+		return Buffer.count()
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __data_Buffer@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaGlobal x0, __data_Buffer
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, notEmpty
+    arm64.b ifcont
+  notEmpty:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 48
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __barr_blob_0
+    arm64.storeBaseDispReg.word64 [x19 + 0], x0
+    arm64.movImm x0, 6
+    arm64.storeBaseDispReg.word64 [x19 + 8], x0
+    arm64.movImm x0, -2
+    arm64.storeBaseDispReg.word64 [x19 + 16], x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x19 + 24], x0
+    arm64.leaGlobal x0, __data_Buffer
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_decref
+    arm64.leaGlobal x0, __data_Buffer
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.leaGlobal x0, __data_Buffer
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_count
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

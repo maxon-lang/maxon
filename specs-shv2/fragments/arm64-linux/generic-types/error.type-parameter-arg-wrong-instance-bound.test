@@ -1,0 +1,29 @@
+// Test: error.type-parameter-arg-wrong-instance-bound
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Other
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias OtherBox = Box with Other
+typealias LeafBoxBox = Box with (Box with Leaf)
+function main() returns ExitCode
+	let wrong = OtherBox.create(Other.make("x"))
+	let bad = LeafBoxBox.create(wrong)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:24:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'Box_Other'

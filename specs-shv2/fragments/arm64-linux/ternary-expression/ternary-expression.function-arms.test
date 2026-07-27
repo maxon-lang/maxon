@@ -1,0 +1,60 @@
+// Test: ternary-expression.function-arms
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function trp(n Integer) returns Integer
+	return n * 3
+end 'trp'
+
+function main() returns ExitCode
+	let c = 1
+	let h = dbl if c > 0 else trp
+	return h(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @dbl {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @trp {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, gt
+    arm64.cbnz x0, ternarytrue
+    arm64.b ternaryfalse
+  ternarytrue:
+    arm64.leaFuncAddr x19, __fnref_dbl
+    arm64.b matchcont
+  ternaryfalse:
+    arm64.leaFuncAddr x19, __fnref_trp
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x0, 21
+    arm64.movImm x1, 0
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

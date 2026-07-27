@@ -1,0 +1,41 @@
+// Test: error.nested-instantiations-compile-to-one-name
+typealias Small = int(0 to 100)
+
+type Box
+	export var v as Small
+end 'Box'
+
+type Str
+	export var v as Small
+end 'Str'
+
+type Box_Int
+	export var v as Small
+end 'Box_Int'
+
+type Int_Str
+	export var v as Small
+end 'Int_Str'
+
+type Pair uses X, Y
+	export var first as X
+	export var second as Y
+end 'Pair'
+
+type Wrap uses Z
+	export var only as Z
+end 'Wrap'
+
+type Hold uses Z
+	export var only as Z
+end 'Hold'
+
+typealias W1 = Wrap with (Pair with (Box_Int, Str))
+typealias H1 = Hold with (Pair with (Box, Int_Str))
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3006: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name

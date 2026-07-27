@@ -1,0 +1,42 @@
+// Test: dead-global-dropped-beside-a-live-managed-one
+let deadArr = [1, 2, 3]
+let liveArr = [10, 20, 30]
+var probe = 4
+
+function main() returns ExitCode
+	return ((try liveArr.get(1) otherwise 0) - probe) as ExitCode
+end 'main'
+---
+ExitCode: 16
+---
+data {
+  __data_liveArr@0 = i64 0
+  __data_probe@8 = i64 4
+  __slab_cursor@16 = i64 0
+  __slab_end@24 = i64 0
+  __mm_alloc_count@32 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_liveArr
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 1
+    arm64.bl __arr_get
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 0
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.leaGlobal x1, __data_probe
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.sub x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}

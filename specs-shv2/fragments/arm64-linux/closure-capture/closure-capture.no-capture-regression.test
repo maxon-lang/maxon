@@ -1,0 +1,48 @@
+// Test: closure-capture.no-capture-regression
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias FnTypeAlias1 = function(Integer) returns Integer
+function apply(f FnTypeAlias1, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let result = apply(function(n Integer) gives n * 3, x: 10)
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+func @apply {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, main$closure_0
+    arm64.movImm x1, 10
+    arm64.movImm x2, 0
+    arm64.bl apply
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 3
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}

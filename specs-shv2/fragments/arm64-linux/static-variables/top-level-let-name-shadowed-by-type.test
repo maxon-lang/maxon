@@ -1,0 +1,34 @@
+// Test: top-level-let-name-shadowed-by-type
+typealias Integer = int(i64.min to i64.max)
+
+let Widget = "abcdefghij"
+
+type Widget
+	export var v as Integer
+
+	export static function byteLength() returns Integer
+		return 42
+	end 'byteLength'
+end 'Widget'
+
+function main() returns ExitCode
+	return Widget.byteLength() as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @Widget.byteLength {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl Widget.byteLength
+    arm64.epilogue 16
+    arm64.ret
+}

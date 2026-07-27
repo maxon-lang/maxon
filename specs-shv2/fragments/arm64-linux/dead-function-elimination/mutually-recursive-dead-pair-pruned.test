@@ -1,0 +1,27 @@
+// Test: mutually-recursive-dead-pair-pruned
+typealias Integer = int(i64.min to i64.max)
+
+function pingDead(n Integer) returns Integer
+	if n <= 0 'base'
+		return 0
+	end 'base'
+	return pongDead(n - 1)
+end 'pingDead'
+
+function pongDead(n Integer) returns Integer
+	return pingDead(n - 1)
+end 'pongDead'
+
+function main() returns ExitCode
+	return 3
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+}
