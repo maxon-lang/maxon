@@ -164,8 +164,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: guard-protects-right-side -->
-<!-- an `as`-cast expression as an ARRAY-LITERAL element — `[10 as Index, 20 as Index]` is read as mixed-type (E2015) while `[a, b]` over the same cast values compiles; the literal's element-type unification does not see through the cast -->
+<!-- test: guard-protects-right-side -->
 ```maxon
 typealias Index = int(0 to u64.max)
 

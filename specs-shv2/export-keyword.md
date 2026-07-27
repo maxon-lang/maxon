@@ -348,8 +348,8 @@ end 'main'
 error E3008: specs/fragments/export-keyword/error.non-exported-function-cross-file.test:11:9: function 'privateHelper' is not exported
 ```
 
-<!-- disabled-test: error.typealias-with-unknown-element-type -->
-<!-- generic type ARGUMENT existence is unchecked — `Array with UnknownType` compiles CLEAN in shv2, so the E2003 this case pins never fires (`checkGenericInstance` validates the base and the arity, never the arguments) -->
+<!-- test: error.typealias-with-unknown-element-type -->
+<!-- shv2 raises its OWN registered code for this fact: E3011 `SemanticUnknownType` ("a named type resolves to no declared type") is what `docs/error-codes.txt` gives that meaning, and it is the code `TypeResolution` and both `as`-cast sites already raise for it. The oracle spends E2003 (`ParserExpectedType` — "a type was required here and the token stream had something else") because its parser reaches the fact first; using that number here would give one number two meanings. The anchor is the ARGUMENT's own first token rather than the oracle's one-past-the-end column. -->
 ```maxon
 typealias BadArray = Array with UnknownType
 
@@ -362,7 +362,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:44: Unknown type: UnknownType
+error E3011: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:33: Unknown type 'UnknownType'
 ```
 
 <!-- disabled-test: exported-type-cross-file -->

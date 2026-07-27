@@ -46,6 +46,11 @@ export typealias TokenIndex = int(0 to u64.max)
 // range: nesting is unbounded.
 typealias BlockDepth = int(0 to u64.max)
 
+// How many `[` are open around a token — the depth at which a NEWLINE is layout rather than the end of a
+// top-level initializer (see `initializerEndIndex`). A separate alias from `BlockDepth` because it counts a
+// different thing: an array literal opens no block, and a block keyword opens no bracket.
+typealias BracketDepth = int(0 to u64.max)
+
 // (The six-register parameter cap that used to live here is GONE. It was never a limit of the machine —
 // only of a milestone that had not been built — and it refused 34 of shv2's own functions. Its
 // replacement is the ceiling the representation genuinely has, `StdDialect.MaxAbiArgs`, enforced by
@@ -5537,11 +5542,40 @@ export type Parser
 	// Maxon has no statement terminator, so the newline IS the boundary — the bootstrap reads it the
 	// same way (`SkipToEndOfLine`, 2-Parser.cs:1701).
 	//
+	// ⚠ **EXCEPT INSIDE `[…]`, WHERE A NEWLINE IS LAYOUT AND NOT A TERMINATOR.** `var xs = [10,\n\t20]`
+	// is one initializer written on two lines, and the runnable oracle folds it as one; ending the range at
+	// the first newline handed the evaluator `[10,` and reported `Expected expression but got 'newline'`
+	// against a program the language accepts. The depth counter is what tells the two newlines apart, and it
+	// is the SAME rule the element walks below apply at their own boundaries (`finishArrayLiteral`) — a
+	// literal's shape must not depend on where its author pressed return.
+	//
 	// It cannot run away: `kindAt` answers `eof` past the end of the token array (see `tokenAt`), so
-	// an unterminated last line stops at the file's end rather than walking off it.
+	// an unterminated last line — or an unclosed `[` — stops at the file's end rather than walking off it.
 	function initializerEndIndex(start TokenIndex) returns TokenIndex
 		var i = start
-		while self.kindAt(i) != TokenKind.newline and self.kindAt(i) != TokenKind.eof 'scan'
+		var depth = 0 as BracketDepth
+		while true 'scan'
+			let kind = self.kindAt(i)
+			if kind == TokenKind.eof 'fileEnd'
+				break
+			end 'fileEnd'
+
+			if kind == TokenKind.newline and depth == 0 'lineEnd'
+				break
+			end 'lineEnd'
+
+			if kind == TokenKind.leftBracket 'openBracket'
+				depth = depth + 1
+			end 'openBracket'
+
+			// Guarded, because `BracketDepth` is unsigned: a stray `]` with no `[` before it would wrap the
+			// counter to its maximum and the scan would swallow the rest of the FILE. Left at 0 it is simply
+			// not a bracket the initializer opened, and the line's own newline still ends the range — which
+			// is what the malformed initializer's diagnostic then names.
+			if kind == TokenKind.rightBracket and depth > 0 'closeBracket'
+				depth = depth - 1
+			end 'closeBracket'
+
 			i = i + 1
 		end 'scan'
 
@@ -5785,8 +5819,51 @@ export type Parser
 			nodes.append(subNodes)
 			return
 		end 'nested'
-		nodes.push(GenericArgNode.leaf(try self.parseTypeReference()))
+
+		let argTok = self.current()
+		let argType = try self.parseTypeReference()
+		self.checkGenericArgType(argType, argTok: argTok)
+		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
+
+	// ⭐ **A TYPE ARGUMENT MUST NAME A TYPE THAT EXISTS.** `checkGenericInstance` validated the BASE and the
+	// ARITY and nothing else, so `typealias BadArray = Array with UnknownType` COMPILED, RAN and returned an
+	// answer — a silent acceptance of a program naming a type the program does not have, which is the one
+	// class of defect a suite cannot catch by being green. The runnable oracle rejects it, and so does this.
+	//
+	// It asks `denotedNamedType` — the ONE cascade `TypeResolution` and both `as`-cast sites ask — so an
+	// argument and a cast target can never come to disagree about what a name means. Only a `named` type can
+	// be in question: `parseTypeReference` has already answered every spelling it settles syntactically
+	// (`Self`, the enclosing type's own name, `String`, a type PARAMETER, a bare inner alias, a
+	// generic-instance alias, a function alias, the primitive keywords) with a concrete arm, and a
+	// `typeParameter`/`genericInstance`/`structRef` argument is exactly the legal case that must not be
+	// refused.
+	//
+	// ⚠ **RECORDED, NOT THROWN — the TOLERANT SWEEP is what makes that mandatory**, exactly as for
+	// `checkGenericInstance` beside it. The sweep reads this while the whole-program index is still BUILDING,
+	// so a generic-instance or function alias declared later in the program legitimately answers "undeclared"
+	// there; the sweep's artifact is discarded (`queryProgramSignatures` uses a throwaway `Parser`), and the
+	// REAL parse — index complete — records the genuine verdict. A throw would abort a file's whole parse
+	// over a whole-program semantic error, which is not what one is.
+	//
+	// ⚠ **A `b"…"` BYTE-STRING NEEDS NO EXEMPTION, and that is a property of where its instance comes from.**
+	// The compiler MINTS `Array with Byte` for a byte-string literal (`internArrayByteInstance`) rather than
+	// reading it off a `Base with Args` in source, so a byte string never reaches this check at all. A program
+	// that WRITES `Array with Byte` declares its own `typealias Byte = int(0 to u8.max)` — a ranged alias the
+	// cascade resolves — which is exactly what `undeclaredNamedElementStorageBytes` means when it says no user
+	// type can name the literal's own instance.
+	function checkGenericArgType(argType MaxonType, argTok Token)
+		if maxonTypeTag(argType) != ValueTypeTag.named 'alreadyConcrete'
+			return
+		end 'alreadyConcrete'
+
+		let nameId = typeNameIdOf(argType)
+		let name = self.internedName(nameId)
+		_ = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise 'undeclared'
+			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name)), tok: argTok)
+			return
+		end 'undeclared'
+	end 'checkGenericArgType'
 
 	// ⭐ **CHECK A `Base with Args` INSTANTIATION (P1.6-A/B2)** — reads the whole-program index (complete in
 	// the real parse). Two rejections, in the order the reader most wants to hear them, each RECORDED as a
@@ -17768,17 +17845,25 @@ export type Parser
 	function parseArrayLiteral(func IrFunction) returns ValueId throws ParseError
 		let openTok = try self.consume(TokenKind.leftBracket)
 		let range = SourceRange.ofToken(openTok)
+		self.skipNewlines()
 
 		if self.at(TokenKind.rightBracket) 'empty'
 			throw ParseError.unsupported("an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array", line: openTok.line, column: openTok.column)
 		end 'empty'
 
 		// ⭐ **THE INT-LITERAL FAST PATH keeps slice 1's op ORDER (create the record BEFORE evaluating any
-		// element)**, so the pre-existing int-array-literal goldens do not move. It is taken when the first
-		// element is a numeric literal — an `[…]` of integers, the slice-1 case. A MANAGED / inferred literal
-		// (`["…"]`, `[p1,p2]`) cannot: its record's element_destroy stamp needs the element type, which is only
-		// known after the first element is parsed, so that path evaluates the first element first.
-		if self.at(TokenKind.intLiteral) 'intFastPath'
+		// element)**, so the pre-existing int-array-literal goldens do not move. A MANAGED / inferred literal
+		// (`["…"]`, `[p1,p2]`) cannot take it: its record's element_destroy stamp needs the element type, which
+		// is only known after the first element is parsed, so that path evaluates the first element first.
+		//
+		// ⚠ **THE GUARD MUST BE SOUND, NOT MERELY LIKELY — it once asked only whether the first TOKEN was an
+		// int literal, and that is a different question from whether the ELEMENT is an integer.** `[10 as Index]`
+		// starts with an int literal and is an `Index`: the record was created for `Array with integer`, the
+		// element resolved to `Array with Index`, and the mismatch was reported as **"mixed element types" on a
+		// literal with ONE element** — a false rejection whose message was false twice over. A token-level guard
+		// can settle an element's type for exactly one shape, a BARE int literal, so that is the shape it asks
+		// about (`arrayElementIsSingleToken`); anything else goes down the path that asks the element itself.
+		if self.at(TokenKind.intLiteral) and self.arrayElementIsSingleToken(self.pos) 'intFastPath'
 			return try self.parseIntArrayLiteralBody(func, range: range)
 		end 'intFastPath'
 
@@ -17789,43 +17874,51 @@ export type Parser
 		let arr = self.emitArrayCreateOp(giid, range: range)
 		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
 
+		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
+	end 'parseArrayLiteral'
+
+	// The int-array-literal body (`[10, 20, 30]`) — the record is created FIRST (the element type is `integer`,
+	// which the caller's guard has already settled from the token), then each element is parsed and pushed.
+	// This is slice 1's exact op order, kept so the pre-existing int-literal goldens do not move.
+	function parseIntArrayLiteralBody(func IrFunction, range SourceRange) returns ValueId throws ParseError
+		let giid = self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+		let arr = self.emitArrayCreateOp(giid, range: range)
+
+		// The FIRST element is not checked against `giid` — it is what FIXES it, exactly as in the general
+		// path above. Only a LATER element can disagree with the first, which is why the "mixed element types"
+		// verdict lives in the shared tail and can never be reached by a one-element literal.
+		let firstStart = self.pos
+		let first = try self.parseExpression(func, block: self.currentBlock)
+		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
+
+		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
+	end 'parseIntArrayLiteralBody'
+
+	// The tail every array literal shares once its record exists and its first element is pushed: the `, e`
+	// elements, the closing `]`, and the owned-temp registration. ONE home, so the two entry paths cannot
+	// drift on the element rule, on where a newline may fall, or on when the array becomes a tracked temp.
+	//
+	// ⚠ **A NEWLINE IS SKIPPED ONLY AT AN ELEMENT BOUNDARY, and never before `pushArrayLiteralElement`** —
+	// the same two rules `parseStructLiteralFields` states for `{…}`. A skip before the push would widen the
+	// `[valueStart, self.pos)` window `moveElementIntoArray` reads to decide whether the element was a bare
+	// local, and silently mis-decide a managed element's move-in.
+	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		self.skipNewlines()
 		while self.at(TokenKind.comma) 'moreElements'
 			try self.consume(TokenKind.comma)
+			self.skipNewlines()
 			let elemTok = self.current()
 			let elemStart = self.pos
 			let elem = try self.parseExpression(func, block: self.currentBlock)
 			try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
 			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
+			self.skipNewlines()
 		end 'moreElements'
 		try self.consume(TokenKind.rightBracket)
 
 		self.trackOwnedTemp(arr)
 		return arr
-	end 'parseArrayLiteral'
-
-	// The int-array-literal body (`[10, 20, 30]`) — the record is created FIRST (element type is `integer`,
-	// known without parsing), then each element is parsed and pushed; every element must be integer. This is
-	// slice 1's exact op order, kept so the pre-existing int-literal goldens do not move; the shared
-	// `pushArrayLiteralElement`/`requireArrayLiteralElementMatches` emit the same ops a trivial element always did.
-	function parseIntArrayLiteralBody(func IrFunction, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
-		let arr = self.emitArrayCreateOp(giid, range: range)
-		while true 'elements'
-			let elemTok = self.current()
-			let elemStart = self.pos
-			let elem = try self.parseExpression(func, block: self.currentBlock)
-			try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
-			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
-			if not self.at(TokenKind.comma) 'done'
-				break
-			end 'done'
-			try self.consume(TokenKind.comma)
-		end 'elements'
-		try self.consume(TokenKind.rightBracket)
-
-		self.trackOwnedTemp(arr)
-		return arr
-	end 'parseIntArrayLiteralBody'
+	end 'finishArrayLiteral'
 
 	// Push one already-parsed array-literal element, moving a managed element in (the array owns it; a trivial
 	// element passes through) — `moveElementIntoArray` off the value's start position so a bare local is poisoned.
@@ -20792,6 +20885,7 @@ export type Parser
 	// the literal exactly as `moveElementIntoArray` promotes a borrowed one.
 	function evalConstArrayLiteral(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		let openTok = try self.consumeConst(TokenKind.leftBracket)
+		self.skipNewlines()
 		if self.at(TokenKind.rightBracket) 'empty'
 			throw ConstEvalError.defective(ParseError.unsupported(EmptyConstArrayLiteralMessage, line: openTok.line, column: openTok.column))
 		end 'empty'
@@ -20801,14 +20895,19 @@ export type Parser
 		let element = constArrayElementKindOf(first)
 		elements.push(first)
 
+		// A newline at each element boundary, exactly as the body walk allows one (`finishArrayLiteral`) — a
+		// multi-line literal is the same literal, and the two positions must not disagree about that.
+		self.skipNewlines()
 		while self.at(TokenKind.comma) 'moreElements'
 			try self.consumeConst(TokenKind.comma)
+			self.skipNewlines()
 			let elemTok = self.current()
 			let elem = try self.evalConstArrayElement(stack)
 			if constArrayElementKindOf(elem) != element 'mixed'
 				throw ConstEvalError.defective(ParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column))
 			end 'mixed'
 			elements.push(elem)
+			self.skipNewlines()
 		end 'moreElements'
 		try self.consumeConst(TokenKind.rightBracket)
 
@@ -20825,7 +20924,7 @@ export type Parser
 	// wrote. shv2 rejects a bool element in a function body too (`arrayLiteralInstanceFor`), so this is the
 	// same boundary at the same width — a top-level literal must never accept more than a body does.
 	function evalConstArrayElement(stack TopLevelDeclIndexArray) returns ConstArrayElement throws ConstEvalError
-		if self.at(TokenKind.stringLiteral) and self.constArrayElementIsSingleToken(self.pos) 'stringElement'
+		if self.at(TokenKind.stringLiteral) and self.arrayElementIsSingleToken(self.pos) 'stringElement'
 			return ConstArrayElement.string(try self.decodeConstStringLiteral(self.consumeManagedLiteral()))
 		end 'stringElement'
 
@@ -20838,14 +20937,20 @@ export type Parser
 		return ConstArrayElement.integer(value.payload)
 	end 'evalConstArrayElement'
 
-	// Is the element STARTING at `index` exactly one token — i.e. is the next token the `,` or `]` that ends
-	// it? The element-level twin of `evalConstInitializer`'s `initEnd == initStart + 1`, and it is there for
-	// the identical reason: one token is the whole managed test, so an interpolation (several tokens) and
-	// every trailing form stay out of the String arm and reach the walk that rejects them.
-	function constArrayElementIsSingleToken(index TokenIndex) returns bool
-		let after = self.kindAt(index + 1)
+	// Is the element STARTING at `index` exactly one token — i.e. is the next SIGNIFICANT token the `,` or `]`
+	// that ends it? The element-level twin of `evalConstInitializer`'s `initEnd == initStart + 1`, and it is
+	// there for the identical reason: one token is the whole managed test, so an interpolation (several tokens)
+	// and every trailing form stay out of the String arm and reach the walk that rejects them.
+	//
+	// ⭐ **BOTH array-literal walks ask it, and they ask the SAME question about DIFFERENT token kinds** — the
+	// top-level one about a `"…"` (is this element a bare String literal?), the body one about an int literal
+	// (is this element a bare integer, so the record may be created before it is evaluated?). Each caller has
+	// already matched the kind; what neither can settle alone is whether the token is the WHOLE element, and
+	// that is this. A second copy of it would be a second answer to "where does an element end".
+	function arrayElementIsSingleToken(index TokenIndex) returns bool
+		let after = self.kindAt(self.indexPastNewlines(index + 1))
 		return after == TokenKind.comma or after == TokenKind.rightBracket
-	end 'constArrayElementIsSingleToken'
+	end 'arrayElementIsSingleToken'
 
 	// Take the managed-literal token the caller has just recognized and step past it. It cannot be
 	// `consumeConst(kind)`: the caller has already matched the kind, and this is used in ARGUMENT
@@ -22940,6 +23045,18 @@ export type Parser
 			self.advance()
 		end 'skip'
 	end 'skipNewlines'
+
+	// The first index at or after `index` that is not a newline — `skipNewlines` as a LOOKAHEAD, moving no
+	// cursor. A lookahead that counted newlines as tokens would answer a question about the source's LAYOUT
+	// where the asker meant one about its shape: `[10]` and `[10\n]` are the same literal, and the two must
+	// not take different paths through the parser. `tokenAt` answers `eof` past the end, so this terminates.
+	function indexPastNewlines(index TokenIndex) returns TokenIndex
+		var scan = index
+		while self.kindAt(scan) == TokenKind.newline 'skip'
+			scan = scan + 1
+		end 'skip'
+		return scan
+	end 'indexPastNewlines'
 
 	// Consume an optional block label (`'name'`, a charLiteral) after `end`.
 	function skipOptionalLabel()

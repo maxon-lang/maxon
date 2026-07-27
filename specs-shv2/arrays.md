@@ -1339,3 +1339,153 @@ end 'main'
 ```exitcode
 5
 ```
+
+### Multi-line array literals
+
+A `[…]` literal may be written across several lines — after the `[`, after an element, and after a
+separating `,`. A newline in those positions is LAYOUT, not the end of the expression, exactly as it is
+inside a `{…}` struct literal. shv2-authored: the corpus writes multi-line literals only in cases blocked
+on other slices (`array-realloc-dangling-ref`'s E3070 borrow-liveness pass, `map`'s P1.8 map literal), so
+it has no runnable case for the rule itself. The expected values are the bootstrap oracle's, which
+compiles every program below.
+
+<!-- test: multi-line-literal-break-after-comma -->
+```maxon
+function main() returns ExitCode
+	let a = [10,
+		20]
+	let v = try a.get(1) otherwise 0
+	return v
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: multi-line-literal-one-element-per-line -->
+```maxon
+function main() returns ExitCode
+	let a = [
+		10,
+		20,
+		30
+	]
+	let v = try a.get(2) otherwise 0
+	return a.count() + v
+end 'main'
+```
+```exitcode
+33
+```
+
+<!-- test: multi-line-literal-trailing-newline-before-bracket -->
+```maxon
+function main() returns ExitCode
+	let a = [10, 20, 30
+	]
+	return a.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: multi-line-string-literal-elements -->
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+function main() returns ExitCode
+	let words = ["alpha",
+		"beta",
+		"gamma"]
+	let w = try words.get(1) otherwise ""
+	if w == "beta" 'middle'
+		return words.count() as ExitCode
+	end 'middle'
+	return 99
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: multi-line-literal-top-level-var -->
+```maxon
+var xs = [10,
+	20]
+
+function main() returns ExitCode
+	let v = try xs.get(1) otherwise 0
+	return v
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: multi-line-literal-empty-still-rejected -->
+A `[` and `]` with only a newline between them is still the EMPTY literal, and still carries the empty
+literal's own advice — the newline skip must not turn it into "expected expression".
+```maxon
+function main() returns ExitCode
+	let a = [
+	]
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/arrays/multi-line-literal-empty-still-rejected.test:3:10: Unsupported: an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array
+```
+
+### An `as`-cast element fixes the literal's element type
+
+The literal's element type comes from what the first element IS, not from the token it starts with. An
+`as`-cast to a ranged alias starts with an int literal and is not an `int`, and reading the token alone
+reported "mixed element types" against a literal with ONE element. shv2-authored: the corpus's own case
+(`short-circuit-evaluation`'s `guard-protects-right-side`) covers the multi-element spelling, and these
+pin the one-element and formatting-independence halves it cannot.
+
+<!-- test: single-cast-element-literal -->
+```maxon
+typealias Index = int(0 to u64.max)
+
+function main() returns ExitCode
+	let single = [10 as Index]
+	let v = try single.get(0) otherwise 0
+	return v
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: cast-element-literal-matches-instance-alias -->
+```maxon
+typealias Index = int(0 to u64.max)
+typealias IndexArray = Array with Index
+
+function total(xs IndexArray) returns ExitCode
+	let a = try xs.get(0) otherwise 0
+	let b = try xs.get(1) otherwise 0
+	return a + b
+end 'total'
+
+function main() returns ExitCode
+	return total([10 as Index,
+		20 as Index])
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: int-literal-expression-element-stays-integer -->
+```maxon
+function main() returns ExitCode
+	let a = [10 + 5, 20]
+	let v = try a.get(0) otherwise 0
+	return v + a.count()
+end 'main'
+```
+```exitcode
+17
+```

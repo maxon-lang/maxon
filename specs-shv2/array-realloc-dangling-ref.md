@@ -88,7 +88,7 @@ error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-arra
 ```
 
 <!-- disabled-test: multiple-refs-survive-array-growth -->
-<!-- a MULTI-LINE array literal — shv2's expression parser stops at the newline after the first element's comma (E2004); behind it sits the same missing E3070 borrow-liveness pass as its two siblings -->
+<!-- the same missing E3070 borrow-liveness pass as its two siblings (the multi-line array literal this case also used to trip over now parses — see `arrays.md`'s multi-line literal cases) -->
 ### Multiple references borrow conflict detected
 Get references to multiple elements, then grow the array. The borrow checker must reject this.
 ```maxon
