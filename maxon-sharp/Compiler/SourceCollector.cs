@@ -101,6 +101,26 @@ public static class SourceCollector {
     Ignored,
     /// <summary>A <c>*.test.maxon</c>, and this caller asked for production source only.</summary>
     TestFile,
+    /// <summary>
+    /// Inside a <see cref="BuildCache.CompilerOwnedDirName"/> directory — the compiler's OWN output,
+    /// at any depth. Never source, for any caller, which is why it takes no parameter.
+    /// </summary>
+    CompilerOutput,
+  }
+
+  /// <summary>
+  /// Whether <paramref name="normalizedPath"/> lies inside a compiler-output directory.
+  ///
+  /// Tested per SEGMENT rather than as a prefix of one root, because a walk rooted at a directory
+  /// that CONTAINS projects (the repo itself) reaches every nested project's output too, and each of
+  /// those is the same kind of not-source as the walked project's own.
+  /// </summary>
+  private static bool IsInCompilerOutputDir(string normalizedPath) {
+    foreach (var segment in normalizedPath.Split('/')) {
+      if (segment.Equals(BuildCache.CompilerOwnedDirName, StringComparison.OrdinalIgnoreCase))
+        return true;
+    }
+    return false;
   }
 
   /// <summary>
@@ -113,6 +133,12 @@ public static class SourceCollector {
   /// excluded became a source again as soon as it was open in an editor.
   /// </summary>
   private static SourceExclusion? ExclusionFor(string path, bool includesTests) {
+    // Asked FIRST, because it is the only rule whose answer does not depend on the caller: a file
+    // the compiler itself wrote is not source to anybody, and the cheapest place to stop it is
+    // before any question about what it might otherwise have been.
+    if (IsInCompilerOutputDir(path))
+      return SourceExclusion.CompilerOutput;
+
     if (Path.GetFileName(path).Equals(BuildManifestFileName, StringComparison.OrdinalIgnoreCase))
       return SourceExclusion.BuildManifest;
 

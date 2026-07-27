@@ -382,6 +382,15 @@ internal static class TestExecutor {
       shardOutput.Append(NoOutputCapturedText);
     }
 
+    // Materialized ONCE. `StringBuilder.ToString()` copies the whole buffer on every call and caches
+    // nothing, so asking for it inside the loop below made the shard's stray output cost
+    // O(tests x bytes) to hand out — a product of two things that both grow with a project, for a
+    // value that is the same string every time and that `BuildResult` reads on one branch only (a
+    // test that began, never ended, was not killed, and wrote nothing of its own). The builder is
+    // complete by here: nothing after the OutputReadTimedOut substitution above writes to it, and
+    // `AttributeLeak` re-launches processes without touching it.
+    var strayOutput = shardOutput.ToString();
+
     var finished = new List<UnitTestResult>();
     var notRun = new List<int>();
 
@@ -391,13 +400,13 @@ internal static class TestExecutor {
         continue;
       }
 
-      finished.Add(BuildResult(index, lookup[index], partial, launch, shardOutput.ToString()));
+      finished.Add(BuildResult(index, lookup[index], partial, launch, strayOutput));
     }
 
     var leaked = launch.Outcome == ProcessRunOutcome.Exited && launch.IsMemoryLeak;
     if (leaked) finished = AttributeLeak(finished, options);
 
-    return new Attribution(finished, notRun, shardOutput.ToString());
+    return new Attribution(finished, notRun, strayOutput);
   }
 
   /// <summary>

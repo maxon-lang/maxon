@@ -108,8 +108,26 @@ static class BuildCache {
     return _compilerModifiedTicks.Value;
   }
 
+  /// <summary>
+  /// The directory the compiler CREATES INSIDE a project it is compiling, and writes its own
+  /// artifacts into: this cache, the manifests, the test binary, the discovery manifest, and by
+  /// convention a project's emitted executable.
+  ///
+  /// Spelled here — beside <see cref="EnsureCacheDir"/>, which is what brings it into existence —
+  /// because the party that must also know it is <see cref="Compiler.SourceCollector"/>, whose job
+  /// is to decide what counts as SOURCE. Output that a source walk collects is output that becomes
+  /// the next compile's input, and the two caches keyed on that walk can then never agree with
+  /// themselves: the run writes files the next run discovers, so the source SET changes underneath
+  /// a key computed from it. Measured on <c>maxon-dev-mcp/test</c>, whose registry-conformance
+  /// fixtures write scratch <c>ErrorCodeRegistry.maxon</c> trees here — the run after a cold one
+  /// missed BOTH the discovery manifest and the build cache every time, re-parsing (413ms) and
+  /// recompiling (~1.4s) a project nothing had changed, and compiled 8 scratch files into the test
+  /// binary as dead weight.
+  /// </summary>
+  public const string CompilerOwnedDirName = ".maxon";
+
   public static string GetCacheDir(string projectDir) {
-    return Path.Combine(projectDir, ".maxon", "cache");
+    return Path.Combine(projectDir, CompilerOwnedDirName, "cache");
   }
 
   public static void EnsureCacheDir(string projectDir) {
