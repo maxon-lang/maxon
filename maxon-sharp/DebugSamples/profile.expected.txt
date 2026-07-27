@@ -7,8 +7,15 @@ percentage below is masked to `N` / `P%` by the `sed` in each block's own comman
 is the thing a profiler can be held to:
 
   * the SHAPE of the report — which sections exist and in what order;
-  * that the sample COUNT and the RATE are reported at all, next to each other, so a reader can tell 3
-    samples from 30,000 (as percentages those are identical, and mean opposite things);
+  * that the sample COUNT and BOTH RATES are reported, next to each other, so a reader can tell 3
+    samples from 30,000 (as percentages those are identical, and mean opposite things) — and can
+    tell the rate that was ACHIEVED from the rate that was asked for. The achieved rate is the
+    headline because it is the DENOMINATOR every percentage below was computed against; the
+    requested one is the parenthetical because it is only what somebody typed. They are both
+    printed unconditionally, including when they agree, because whether they agree is itself a
+    measured quantity — a report that collapsed to one line when it happened to hit the rate
+    would change SHAPE with the host's timer and load, and this golden's whole method is that the
+    shape is stable while the numbers are not;
   * that UNSYMBOLIZED samples are counted on their own line rather than dropped or folded into the
     nearest known function;
   * that the known-hot function is the top row of the self-time table;
@@ -69,17 +76,20 @@ WHAT EACH BLOCK PROVES (asserted by the output below):
 WHAT IS STABLE vs ENVIRONMENT-SPECIFIC:
   * Every structural element above is STABLE and is asserted.
   * Every count, percentage and duration is ENVIRONMENT-SPECIFIC and is masked to `N` / `P%` / `Ts` by
-    each block's own command. The sampling RATE is not masked: it is what the caller asked for.
+    each block's own command — INCLUDING the achieved rate, which is a ratio of two measurements.
+    The REQUESTED rate is deliberately left unmasked and is asserted literally (`requested 1000 Hz`,
+    `requested 10 Hz`): it is not a measurement, it is the argument the block's own command line
+    passed, so a report quoting a rate nobody asked for would be caught here.
   * The program's own stdout goes to STDERR (so stdout is only ever the report), which is why the
     blocks that assert a report discard stderr and the blocks that assert a REFUSAL fold it in with
     `2>&1` — a refusal is not a report and does not belong on the report's channel.
   * Blocks 1-4 were each run four or more times while this golden was written, and produced
     byte-identical masked output every time.
 
---- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ at [0-9]+ Hz over [0-9.]+s (\(requested [0-9.]+ Hz\))$/samples: N at R Hz over Ts \1/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
 profile: maxon-sharp/DebugSamples/profile.exe
 target exit code: 0
-samples: N at 1000 Hz over Ts
+samples: N at R Hz over Ts (requested 1000 Hz)
 unsymbolized: N samples (P%)
 stacks: N truncated, N unreadable
 
@@ -105,17 +115,17 @@ stacks: N truncated, N unreadable
 [unnamed .text];main;work;hot N
 [unnamed .text];main;work;warm N
 
---- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --rate=10 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/' | head -6 ---
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --rate=10 2>/dev/null | sed -E 's/^samples: [0-9]+ at [0-9]+ Hz over [0-9.]+s (\(requested [0-9.]+ Hz\))$/samples: N at R Hz over Ts \1/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/' | head -6 ---
 profile: maxon-sharp/DebugSamples/profile.exe
 target exit code: 0
-samples: N at 10 Hz over Ts
+samples: N at R Hz over Ts (requested 10 Hz)
 TOO FEW SAMPLES: under 100, so the shares below are arithmetic on a handful of readings rather than a measurement. Profile a longer run, or raise the rate
 unsymbolized: N samples (P%)
 stacks: N truncated, N unreadable
 
---- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --timeout=0.2 --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ (at [0-9.]+ Hz over )[0-9.]+s$/samples: N \1Ts/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
+--- EXPECTED: maxon profile run maxon-sharp/DebugSamples/profile.exe --timeout=0.2 --min-percent=5 2>/dev/null | sed -E 's/^samples: [0-9]+ at [0-9]+ Hz over [0-9.]+s (\(requested [0-9.]+ Hz\))$/samples: N at R Hz over Ts \1/; s/^unsymbolized: [0-9]+ samples \([0-9.]+%\)$/unsymbolized: N samples (P%)/; s/^stacks: [0-9]+ truncated, [0-9]+ unreadable$/stacks: N truncated, N unreadable/; s/^ *[0-9]+\.[0-9]+% +[0-9]+  /  P%      N  /; s/^  \(([0-9]+) ([a-z]+) below/  (N \2 below/' ---
 profile: maxon-sharp/DebugSamples/profile.exe
-samples: N at 1000 Hz over Ts
+samples: N at R Hz over Ts (requested 1000 Hz)
 PARTIAL: the program was still running when sampling stopped — this profile describes the part that ran
 unsymbolized: N samples (P%)
 stacks: N truncated, N unreadable

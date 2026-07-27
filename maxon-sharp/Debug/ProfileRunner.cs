@@ -58,19 +58,28 @@ public static class ProfileRunner {
   /// The fastest rate this accepts. Refused rather than silently clamped, which would report a rate that
   /// was not used.
   ///
-  /// ⚠ THIS CEILING IS NOT THE ONE THAT BINDS, and the difference is worth stating because the reason
-  /// written here used to be the suspend/resume share and that is measurably not it. The sampler's own
-  /// per-tick work is 48-57 us, good for ~18 kHz; what actually caps the loop is the granularity of the
-  /// OS waitable timer it ticks on. MEASURED: at <c>--rate=5000</c> and <c>--rate=10000</c> essentially
-  /// every tick is already past its deadline (1609/1610 and 1616/1617) and the wait STILL returns after
-  /// ~520 us, so both collect ~1,750 samples/second — while the report's header prints the rate that was
-  /// ASKED FOR. It does not scale with the number of running threads (a two-processor green-thread run
-  /// reads the same 517 us), which is what identifies the timer rather than the work.
+  /// ⚠⚠ THIS CEILING IS NOT THE ONE THAT BINDS. **The real ceiling is the OPERATING SYSTEM's, not the
+  /// sampler's**, and it sits near 1.75 kHz — far below this number. Stated here because this is the
+  /// constant a reader questions when a profile does not collect what they asked for.
   ///
-  /// Left alone deliberately: ~0.5 ms is this host's granularity, not a portable constant, so replacing
-  /// 10000 with 2000 would trade one number that can be wrong for another. The honest remedies are a
-  /// design choice — report the ACHIEVED rate beside the requested one, or skip the wait when the
-  /// deadline has already passed (which would deliver the rate, at the cost of sampling in bursts).
+  /// The reason written here used to be the suspend/resume share, and that is measurably not it. The
+  /// sampler's own per-tick work is 48-57 us, good for ~18 kHz; what caps the loop is the granularity of
+  /// the OS waitable timer it ticks on. MEASURED: at <c>--rate=5000</c> and <c>--rate=10000</c>
+  /// essentially every tick is already past its deadline (1609/1610 and 1616/1617) and the wait STILL
+  /// returns after ~520 us, so both collect ~1,750 ticks/second. It does not scale with the number of
+  /// running threads (a two-processor green-thread run reads the same 517 us), which is what identifies
+  /// the timer rather than the work.
+  ///
+  /// Two things were considered and REFUSED, both deliberately:
+  ///   * Lowering this to ~2000. ~0.5 ms is THIS host's granularity, not a portable constant, so it
+  ///     would trade an honest over-ask for a promise about hardware nobody has measured.
+  ///   * Delivering the nominal rate by skipping waits whose deadline has already passed. That returns
+  ///     the requested COUNT as a burst, and 50 readings 20 us apart are not 50 readings — a sampler
+  ///     that inflates its count with non-independent observations is worse than one that under-delivers.
+  ///
+  /// What is done instead: the report states the rate it ACHIEVED
+  /// (<see cref="ProfileReport.AchievedRateHz"/>) beside the one requested, so over-asking past the
+  /// timer's granularity is self-documenting — the reader sees exactly what they got.
   /// </summary>
   public const double MaxRateHz = 10000;
 
@@ -173,7 +182,7 @@ public static class ProfileRunner {
 
     error = "";
     return session.Collector.Finish(exePath, run.ExitCode, runCompleted: !run.TimedOut, options.RateHz,
-      session.SampledSeconds, options.MinPercent);
+      session.Ticks, session.SampledSeconds, options.MinPercent);
   }
 
   /// <summary>
@@ -208,6 +217,11 @@ public static class ProfileRunner {
     /// The window the samples were drawn from — measured around the SAMPLER, not around the process, so
     /// the rate a reader divides by is the rate that was actually in force for this many seconds.
     public double SampledSeconds => _clock.Elapsed.TotalSeconds;
+
+    /// How many times the sampler ticked, over exactly the <see cref="SampledSeconds"/> above — the two
+    /// halves of the ACHIEVED rate, taken from the same interval so their ratio means something. Read
+    /// only after <see cref="Dispose"/> has joined the sampling thread.
+    public long Ticks => sampler.Ticks;
 
     public static SamplingSession? Start(Process process, MxdbgReader sidecar, uint textImageOffset,
         uint textSize, double rateHz) {

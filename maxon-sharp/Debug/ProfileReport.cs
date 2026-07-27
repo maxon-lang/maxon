@@ -64,7 +64,8 @@ public sealed record ProfileReport(
   string ExePath,
   int? TargetExitCode,
   bool RunCompleted,
-  double RateHz,
+  double RequestedRateHz,
+  long Ticks,
   double DurationSeconds,
   long Samples,
   long SamplesUnsymbolized,
@@ -84,6 +85,25 @@ public sealed record ProfileReport(
   public const long MinimumTrustworthySamples = 100;
 
   public bool Sparse => Samples < MinimumTrustworthySamples;
+
+  /// <summary>
+  /// The rate the sampler ACTUALLY ticked at — <see cref="Ticks"/> over <see cref="DurationSeconds"/>.
+  ///
+  /// ⭐ THIS, NOT <see cref="RequestedRateHz"/>, IS WHAT THE REPORT MEANS. A sampling profiler's rate is
+  /// not decoration beside the numbers, it is the DENOMINATOR every percentage in the report is computed
+  /// against, so printing a rate the run did not achieve states a wrong answer about every row at once.
+  /// It is reachable: the loop ticks on an OS waitable timer whose granularity this host puts at ~0.5 ms,
+  /// so a caller asking <c>--rate=5000</c> gets about 1,750 (see <see cref="ProfileRunner.MaxRateHz"/>)
+  /// — and that ceiling is deliberately NOT enforced as a lower <c>MaxRateHz</c>, because ~0.5 ms is one
+  /// machine's granularity rather than a portable fact. Reporting what was achieved is what makes an
+  /// over-ask self-documenting instead of a silent lie.
+  ///
+  /// ⚠ Derived from TICKS rather than samples on purpose. One tick samples every thread that has RUN
+  /// since the last one, so `Samples / DurationSeconds` is samples-per-second and drifts from the tick
+  /// rate in BOTH directions by a program-dependent amount — up when threads run concurrently, down when
+  /// none ran. Both are real numbers; only this one answers the question `--rate` asks.
+  /// </summary>
+  public double AchievedRateHz => DurationSeconds > 0 ? Ticks / DurationSeconds : 0;
 }
 
 /// <summary>
@@ -141,9 +161,16 @@ public static class ProfileRender {
     if (report.TargetExitCode is { } exitCode)
       sb.Append("target exit code: ").Append(exitCode).Append('\n');
 
+    // ⭐ THE ACHIEVED RATE IS THE HEADLINE and the requested one is the parenthetical, because the
+    // achieved rate is what every percentage below was computed against while the requested rate is
+    // only what somebody typed. Both are always printed, rather than collapsing to one line when they
+    // agree: whether they agree is itself a MEASURED quantity that lands wherever the host's timer and
+    // load put it, so a report whose shape depended on it would change shape run to run — and this
+    // report's whole discipline is that its structure is stable while its numbers are not.
     sb.Append("samples: ").Append(report.Samples)
-      .Append(" at ").Append(Number(report.RateHz)).Append(" Hz")
-      .Append(" over ").Append(Number(report.DurationSeconds)).Append("s\n");
+      .Append(" at ").Append(Rate(report.AchievedRateHz)).Append(" Hz")
+      .Append(" over ").Append(Number(report.DurationSeconds)).Append('s')
+      .Append(" (requested ").Append(Number(report.RequestedRateHz)).Append(" Hz)\n");
 
     if (!report.RunCompleted)
       sb.Append("PARTIAL: the program was still running when sampling stopped —"
@@ -249,6 +276,12 @@ public static class ProfileRender {
   /// so the prose face and the JSON face cannot print different numbers for one measurement.
   private static string Number(double value) => value.ToString(CultureInfo.InvariantCulture);
 
+  /// A MEASURED rate, to whole hertz. Unlike every other number here it is a ratio of two measurements,
+  /// so its full binary expansion (`963.9614325876122`) is a dozen digits of noise around a figure whose
+  /// last honest digit is the first — and the JSON face carries the exact ticks and duration for anyone
+  /// who wants to divide them differently.
+  private static string Rate(double hz) => hz.ToString("0", CultureInfo.InvariantCulture);
+
   /// <summary>
   /// Collapsed stacks: one line per distinct call path, `root;child;leaf &lt;samples&gt;`.
   ///
@@ -283,7 +316,12 @@ public static class ProfileRender {
       w.WriteString("exe", ReportPath.Display(report.ExePath));
       if (report.TargetExitCode is { } exitCode) w.WriteNumber("targetExitCode", exitCode);
       w.WriteBoolean("runCompleted", report.RunCompleted);
-      w.WriteNumber("rateHz", report.RateHz);
+      // Both rates, named for which is which, plus the two raw measurements they come from — so a
+      // consumer can divide them itself rather than trusting a rounded figure, and cannot mistake the
+      // rate that was asked for for the one every share below was computed against.
+      w.WriteNumber("achievedRateHz", report.AchievedRateHz);
+      w.WriteNumber("requestedRateHz", report.RequestedRateHz);
+      w.WriteNumber("ticks", report.Ticks);
       w.WriteNumber("durationSeconds", report.DurationSeconds);
       w.WriteNumber("samples", report.Samples);
       w.WriteNumber("samplesUnsymbolized", report.SamplesUnsymbolized);

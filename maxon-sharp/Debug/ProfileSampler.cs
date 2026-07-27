@@ -147,6 +147,25 @@ internal sealed class ProfileSampler : IDisposable {
 
   private volatile bool _stop;
 
+  /// <summary>
+  /// How many times the loop actually TICKED. It is what the report divides by the run's duration to
+  /// state the rate the sampler ACHIEVED, as opposed to the one a caller asked for.
+  ///
+  /// ⭐ A TICK, not a sample, and the distinction is the whole reason this is counted rather than
+  /// derived. `--rate` asks for a TICK rate; one tick samples every thread that has RUN since the last
+  /// one, which is neither one sample nor a fixed number of them. `Samples / Duration` therefore drifts
+  /// from the tick rate in BOTH directions and by an amount that depends on the program: upwards when
+  /// several threads run at once, and downwards when none has (measured on the two-processor
+  /// green-thread sample, whose threads happen to run sequentially: 915 ticks against 870 samples).
+  /// That ratio is a real quantity — samples per second — but it is not the one the flag names, and
+  /// printing it beside the flag's own word would be a second wrong answer in the line the first one
+  /// was found in.
+  ///
+  /// Written from the sampling thread and read after it is joined, which is the happens-before edge
+  /// that makes a plain field safe here (the same one <see cref="ProfileCollector"/> relies on).
+  /// </summary>
+  public long Ticks { get; private set; }
+
   private ProfileSampler(Process process, nint processHandle, nint contextAllocation, nint context,
       nint stopEvent) {
     _process = process;
@@ -266,6 +285,7 @@ internal sealed class ProfileSampler : IDisposable {
       }
 
       SampleOnce(sink);
+      Ticks++;
 
       // The target exiting is checked AFTER a sample, so the last moments of a short program are
       // measured rather than lost to a liveness check that happened to win the race.

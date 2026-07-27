@@ -159,9 +159,9 @@ internal sealed class ProfileCollector(MxdbgReader sidecar, ulong textBase, uint
   /// hot rows resolves the same way on every run — a report whose row order flipped between runs could
   /// not be diffed, which is most of what a profile is for.
   /// </summary>
-  public ProfileReport Finish(string exePath, int? targetExitCode, bool runCompleted, double rateHz,
-      double durationSeconds, double minPercent) =>
-    new(exePath, targetExitCode, runCompleted, rateHz, durationSeconds,
+  public ProfileReport Finish(string exePath, int? targetExitCode, bool runCompleted, double requestedRateHz,
+      long ticks, double durationSeconds, double minPercent) =>
+    new(exePath, targetExitCode, runCompleted, requestedRateHz, ticks, durationSeconds,
       _samples, _samplesUnsymbolized, _stacksUnreadable, _stacksTruncated, minPercent,
       [.. _selfSamples.Keys.Union(_totalSamples.Keys, StringComparer.Ordinal)
         .Select(name => new ProfileFunction(name, _selfSamples.GetValueOrDefault(name),
