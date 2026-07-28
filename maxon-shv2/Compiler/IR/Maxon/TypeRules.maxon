@@ -94,6 +94,13 @@ export enum TypeClass
 	// borrowing `unknown`'s (which carries E3004 semantics). It lets `IntBox.create(42)` pass an int to
 	// a `T` parameter and `b.get() == 42` compare a `T` result as an i64.
 	typeParameter
+	// The class of a `Character` — one extended grapheme cluster (P1.8 slice B). Its OWN class, NOT
+	// `text`, even though a Character and a String share a record: a class is what AGREES with what, and
+	// `s == c` must be a type error rather than a byte compare. Like `text` it converts to nothing and
+	// nothing converts to it, and like `text` it has no ORDERING (two Characters agree but do not
+	// `comparableOperands`) — a byte-lexicographic `compare` is real but has no consumer at this slice,
+	// so `c < d` is refused rather than guessed at.
+	character
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -136,6 +143,10 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// alias — the trivial slice never mints a genericInstance-tagged VALUE (a factory returns
 		// `Self`, i.e. `structRef`), so this is the sound answer for the type, not a hot path.
 		genericInstance gives TypeClass.structRef
+		// A Character. NOT `text` — see TypeClass's `character` arm: sharing the String RECORD is a
+		// REPRESENTATION fact, and a class is an AGREEMENT fact. Agreeing with `text` here would make
+		// `s == c` a silent byte compare and `print(c)` legal.
+		character gives TypeClass.character
 	end 'k'
 end 'typeClassOf'
 
@@ -229,6 +240,9 @@ function typeClassIsAggregate(c TypeClass) returns bool
 		structRef gives true
 		text gives true
 		function gives true
+		// A Character is a POINTER to a byte record, exactly as a String is — so `c as Age` and
+		// `42 as Character` describe no conversion and are E3009, for `text`'s reason.
+		character gives true
 		boolean gives false
 		numeric gives false
 		unknown gives false
@@ -247,6 +261,8 @@ function typeClassIsScalar(c TypeClass) returns bool
 		structRef gives false
 		text gives false
 		function gives false
+		// A Character is a record pointer, not a register-sized number — `text`'s answer.
+		character gives false
 		unknown gives false
 		noValue gives false
 		typeParameter gives false
@@ -481,6 +497,9 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// is a struct pointer, not an integer.
 		typeParameter gives false
 		genericInstance gives false
+		// A Character is a record pointer, not a magnitude — `string`'s answer, and what makes
+		// `c shl 1` / `c and 3` the same rejection `s shl 1` gets.
+		character gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -530,6 +549,9 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// pointer, matching what a plain `structRef` prints).
 		typeParameter gives "type parameter"
 		genericInstance gives "struct"
+		// The `Character` builtin. Both reference compilers print the builtin's own name here
+		// (`stdlib/Character.maxon` declares `type Character`), so a Character type error names it.
+		character gives "Character"
 	end 'k'
 end 'typeTagName'
 
@@ -1398,9 +1420,9 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 	// ORDERING one (which has no meaning on a byte pointer) or a `string`-vs-non-`string` mismatch
 	// (already rejected by the agreement gate above). Both are `false`. The bootstrap rejects ordering
 	// on String identically.
-	if operandsAreText(left, right: right) 'noStringOrdering'
+	if operandsAreByteRecord(left, right: right) 'noByteRecordOrdering'
 		return false
-	end 'noStringOrdering'
+	end 'noByteRecordOrdering'
 
 	// Two floats compare; two integers compare; two bools compare (they agreed, and neither is a
 	// float). One of each does not.
@@ -1431,12 +1453,41 @@ export function tagIsText(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.string
 end 'tagIsText'
 
-// **DOES EITHER OPERAND NAME A STRING?** `operandsAreStructRef`'s twin, and it exists for the same
+// ⭐⭐ **IS THIS TAG'S VALUE A POINTER TO THE FUSED BYTE RECORD?** — the `String` record
+// (`StringRuntime`'s 48-byte layout: `buffer@0`, `length@8`, `capacity@16`, `parent@32`, `isAscii@40`),
+// which a `String` and a `Character` BOTH are.
+//
+// ⚠ **THIS IS A QUESTION ABOUT REPRESENTATION, AND `tagIsText` IS A QUESTION ABOUT TYPE. THEY WERE ONE
+// PREDICATE, AND THAT WAS THE DEFECT.** Before P1.8 slice B there was exactly one byte-record type, so
+// `tagIsText` answered both and nothing could tell that it was two questions wearing one name. Adding a
+// second byte-record type is what separated them — and it separated them SILENTLY, because
+// `tagIsText` is a one-line `tag == ValueTypeTag.string` that simply answers "no" for a new tag. Three
+// of its 29 call sites would have been a LEAK (`Parser.valueIsManagedHeap` — the one owned-temp
+// adoption test, so every `Character` temporary is never dropped), a WRONG DROP CALLEE
+// (`Parser.decrefCalleeFor`), and a POINTER COMPARE for `c1 == c2` (`Parser.emitCompare`). All three
+// are measured by sabotage — see `specs-shv2/character-ownership.md`.
+//
+// ⇒ **THE RULE FOR CHOOSING BETWEEN THEM.** Ask `tagIsByteRecord` when the answer decides what happens
+// to the MEMORY — is it dropped (`__str_decref`), cloned (`__str_clone`), promoted by a fused-record
+// blit, moved into durable storage, or blitted into an interpolation. Ask `tagIsText` when the answer
+// decides what the TYPE may do — may this be `print`ed, may it be a `panic` message, is this Set's key
+// a String, is this array literal's element a String. A site that is asking "is the memory mine?" and
+// spells it `tagIsText` is the bug this comment exists to prevent recurring.
+export function tagIsByteRecord(tag ValueTypeTag) returns bool
+	return tagIsText(tag) or tag == ValueTypeTag.character
+end 'tagIsByteRecord'
+
+// **DOES EITHER OPERAND NAME A BYTE RECORD?** `operandsAreStructRef`'s twin, and it exists for the same
 // reason: an operator with no reading for a String (arithmetic, ordering, the bit ops) has none for
 // either side, so both `lacksIntegralReading` and `comparableOperands` have to ask.
-export function operandsAreText(left ValueTypeTag, right ValueTypeTag) returns bool
-	return tagIsText(left) or tagIsText(right)
-end 'operandsAreText'
+//
+// It asks the REPRESENTATION question rather than the type one, and that is deliberate: neither a
+// String nor a Character is a magnitude, so `c shl 1` and `c < d` are refused for the identical reason
+// `s shl 1` and `s < t` are. Equality is the one operator either has, and it never reaches these two
+// rules — `Parser.emitCompare` intercepts a matching byte-record pair at its top.
+export function operandsAreByteRecord(left ValueTypeTag, right ValueTypeTag) returns bool
+	return tagIsByteRecord(left) or tagIsByteRecord(right)
+end 'operandsAreByteRecord'
 
 // **DOES EITHER OPERAND NAME A STRUCT?** `operandsAreFloat`'s twin, and it exists for the same
 // reason: the operators that have no reading for one of them have no reading for the other, and
@@ -1599,7 +1650,7 @@ end 'integralOperandsFor'
 // everything by deferral, so `x and undeclaredCall()` — already reported as E3004 at its call
 // site — would collect a second, invented diagnostic naming a type nobody pinned.
 function lacksIntegralReading(tag ValueTypeTag) returns bool
-	return tagIsFloat(tag) or tagIsStructRef(tag) or tagIsText(tag)
+	return tagIsFloat(tag) or tagIsStructRef(tag) or tagIsByteRecord(tag)
 end 'lacksIntegralReading'
 
 // **WHICH OPERAND THE `nonIntegralOperands` DIAGNOSTIC MUST NAME** — the first one with no
@@ -1722,5 +1773,8 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// but agreement is not an operator: `not t` is refused here exactly as `t + 1` is elsewhere.
 		typeParameter gives NotOperator.nonIntegralOperand
 		genericInstance gives NotOperator.nonIntegralOperand
+		// `not c` has no reading: a Character is a record pointer, and complementing one produces a
+		// number the source did not mean. `string`'s answer.
+		character gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'

@@ -118,6 +118,12 @@ let TypeShapeTypeParameter = 31 as ContentHash
 // apart. A distinct prime for `TypeShapeStructRef`'s reason.
 let TypeShapeGenericInstance = 37 as ContentHash
 
+// A `Character`'s shape (P1.8 slice B) — a builtin with no name to mix, exactly like `TypeShapeString`.
+// A DISTINCT prime from it, and that is the whole point: a Character and a String share a RECORD but not
+// a TYPE, so `returns String` and `returns Character` must hash apart or a signature change between them
+// would serve a stale parse from every other file's memo.
+let TypeShapeCharacter = 41 as ContentHash
+
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
 // of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
@@ -839,6 +845,12 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// Reachable for the `string` arm's reason, and only through a managed LITERAL — the constant
 		// evaluator folds no `Set.create()`/`Map` initializer, so no other instance can get here.
 		genericInstance then break 'reachable'
+		// A CHARACTER global is unreachable: a top-level binding's initializer is a folded constant, and a
+		// multi-byte character literal folds to a managed `TopLevelConstant.managedValue` only for the two
+		// TEXT kinds the evaluator knows (a String literal and a `b"…"` byte string). Were a Character
+		// global ever admitted, its slot would be a record POINTER — `string`'s answer, not a width — so
+		// this panics rather than silently sizing one.
+		character then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a character literal is not a foldable constant initializer, so a global's inferred type is never a Character")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -967,6 +979,12 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// tag). Its storage is the `genericInstance` type itself, which `maxonTypeToStdType` gives an i64
 		// (a pointer), so `payloadStorageOf`/`payloadValueTypeOf` lower it like any managed pointer.
 		genericInstance then return PayloadClass.managed(fieldType, isString: false)
+		// ⭐ A CHARACTER payload is an OWNED byte record — the same record a `string` payload is, so it is
+		// managed and `isString: true`: `isString` selects the fused-record COPY/DROP protocol
+		// (`promoteToOwnedString` in, `__str_decref` out), which is a question about the REPRESENTATION and
+		// not about the type. A Character answering `false` here would take the aggregate path and try to
+		// co-own a record that has no `__mm_retain` owner.
+		character then return PayloadClass.managed(fieldType, isString: true)
 		named then break 'kind'
 	end 'kind'
 
@@ -1285,9 +1303,12 @@ end 'CalleeConsume'
 // first, so a scalar reaching here is a classification drift and panics rather than mis-routing.
 export function managedFieldDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns ByteArray
 	let tag = maxonTypeTag(fieldType)
-	if tagIsText(tag) 'string'
+	// ⚠ `tagIsByteRecord`: WHICH DROP a field takes is a question about its record, and a Character's record
+	// is a String's. Spelled `tagIsText` a Character field falls through to the named/struct arm and drops
+	// through the wrong callee.
+	if tagIsByteRecord(tag) 'byteRecord'
 		return StrDecrefName
-	end 'string'
+	end 'byteRecord'
 	// A nested generic-INSTANCE field (`Box with (Box with String)`, P1.6-B2) is an owned base-struct box:
 	// it drops through ITS OWN `__destruct_<instance>` cascade when the instance owns managed heap, else the
 	// trivial `__mm_decref` — resolved inside `signatures` over its own registry/interner (a gid is not an
@@ -1365,9 +1386,11 @@ end 'ManagedCloneStrategy'
 // The field is a precondition MANAGED one, so a scalar reaching here is a classification drift and panics.
 export function managedFieldCloneStrategy(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns ManagedCloneStrategy
 	let tag = maxonTypeTag(fieldType)
-	if tagIsText(tag) 'string'
+	// `tagIsByteRecord`, mirroring `managedFieldDropCallee`: a Character clones by the same fused-record
+	// deep copy a String does, because it IS one.
+	if tagIsByteRecord(tag) 'byteRecord'
 		return ManagedCloneStrategy.direct(StrCloneName)
-	end 'string'
+	end 'byteRecord'
 	if tag == ValueTypeTag.genericInstance 'instance'
 		return instanceCloneStrategy(signatures, id: typeNameIdOf(fieldType))
 	end 'instance'
@@ -3356,6 +3379,9 @@ export type ProgramSignatures
 			// `mixConstant`'s `managedValue` arm and never reaches this tag-only door.
 			typeParameter then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
 			genericInstance then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a `b\"…\"` global hashes through `mixConstant`'s `managedValue` arm, never through this one")
+			// A CHARACTER top-level binding is unreachable for `string`'s reason: the const evaluator folds
+			// no character literal, so none is ever a top-level constant to hash.
+			character then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a character literal is not folded to a top-level constant")
 		end 'k'
 	end 'mixValueTag'
 
@@ -4256,6 +4282,8 @@ export type ProgramSignatures
 			// CANONICAL, not `instanceArgTypeName`: a nested instance's identity must match what the two
 			// value-side extractors produce for the same type, whichever way it was spelled.
 			genericInstance then return self.canonicalInstanceName(typeNameIdOf(self.substitutedInstanceArg(gid, position: position)))
+			// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
+			character then return EmptySourceText
 		end 'k'
 	end 'instanceArgAggregateName'
 
@@ -4501,9 +4529,10 @@ export type ProgramSignatures
 	// borrow-liveness pass, `arr.get(0); arr.push(x)`, is a SEPARATE future rung this did not build.)
 	export function typeArgIsOwned(t MaxonType) returns bool
 		let tag = maxonTypeTag(t)
-		if tagIsText(tag) 'string'
+		// `tagIsByteRecord`: a Character argument is an owned record exactly as a String one is.
+		if tagIsByteRecord(tag) 'byteRecord'
 			return true
-		end 'string'
+		end 'byteRecord'
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return self.genericInstanceHasManagedField(typeNameIdOf(t))
 		end 'instance'
@@ -4720,9 +4749,9 @@ export type ProgramSignatures
 		end 'noFields'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if tagIsText(maxonTypeTag(self.substituteInstanceFieldType(id, index: i))) 'string'
+			if tagIsByteRecord(maxonTypeTag(self.substituteInstanceFieldType(id, index: i))) 'byteRecord'
 				return true
-			end 'string'
+			end 'byteRecord'
 		end 'eachField'
 		return false
 	end 'genericInstanceHasStringField'
@@ -5044,9 +5073,12 @@ export type ProgramSignatures
 	// the `false` return without boxing a `DeclaredStruct`/`DeclaredEnum`.
 	export function typeIsManaged(fieldType MaxonType) returns bool
 		let tag = maxonTypeTag(fieldType)
-		if tagIsText(tag) or tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance 'stringStructOrInstance'
+		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character
+		// owns exactly the record a String does. This is the root every other managed classifier delegates
+		// to, so answering "no" here would leak a Character field, element and payload at once.
+		if tagIsByteRecord(tag) or tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance 'byteRecordStructOrInstance'
 			return true
-		end 'stringStructOrInstance'
+		end 'byteRecordStructOrInstance'
 		if tag != ValueTypeTag.named 'notNamed'
 			return false
 		end 'notNamed'
@@ -5111,9 +5143,9 @@ export type ProgramSignatures
 		if not self.typeIsManaged(type) 'trivialLeaf'
 			return true
 		end 'trivialLeaf'
-		if tagIsText(tag) 'string'
+		if tagIsByteRecord(tag) 'byteRecord'
 			return true
-		end 'string'
+		end 'byteRecord'
 		if tag == ValueTypeTag.genericInstance 'instance'
 			return self.instanceSupportsDeepClone(typeNameIdOf(type), asElement: asElement, visited: visited)
 		end 'instance'
@@ -5244,6 +5276,8 @@ export type ProgramSignatures
 			// unchanged. `adoptType` handles both identically; routing through it keeps the one crossing door.
 			typeParameter gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			genericInstance gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			// A `Character` return type carries no interned name either — it crosses files unchanged.
+			character gives rt
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -5274,6 +5308,8 @@ export type ProgramSignatures
 			// interner ids, so there is nothing to remap: they pass through unchanged, like a primitive.
 			typeParameter gives t
 			genericInstance gives t
+			// A `Character` carries no name id, so like a primitive it passes through unchanged.
+			character gives t
 		end 'r'
 	end 'adoptType'
 
@@ -5325,6 +5361,9 @@ export type ProgramSignatures
 			// shape (recursed), so `Box with Integer` and `Box with Bool` hash apart. `mixGenericInstance`
 			// reads the `(baseId, args)` payload out of THIS index's own registry.
 			genericInstance(id) gives self.mixGenericInstance(mix(state, value: TypeShapeGenericInstance), id: id)
+			// A `Character` (P1.8 slice B) — its own shape, and no name to mix. It hashes DISTINCTLY from
+			// `string`: the two share a record but not a type (see `TypeShapeCharacter`).
+			character gives mix(state, value: TypeShapeCharacter)
 		end 'r'
 	end 'mixType'
 

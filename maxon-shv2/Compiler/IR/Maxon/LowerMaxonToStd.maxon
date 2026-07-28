@@ -70,6 +70,8 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// struct pointer). Their width is a machine word, assigned one line down by the same table.
 		typeParameter then break 'residue'
 		genericInstance then break 'residue'
+		// A Character is concrete — a record pointer — so it is no more a residue than a String is.
+		character then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -134,6 +136,8 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		typeParameter then return StdType.i64
 		// A GENERIC INSTANCE IS A POINTER to the base struct's box — one machine word, like `structRef`.
 		genericInstance then return StdType.i64
+		// A CHARACTER IS A POINTER to the fused byte record — the same machine word a String is.
+		character then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 

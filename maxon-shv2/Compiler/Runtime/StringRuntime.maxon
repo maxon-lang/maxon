@@ -468,9 +468,29 @@ export type RuntimeUsage
 	// entire scheduler — plus the allocator and the leak gate under it — for a program that asks what
 	// today's date is. Drives `installClockRuntime` + the one `__clock_wall_ticks` `.data` slot.
 	export var usesWallClock as bool
+	// ⭐ **THE P1.8 SLICE B GRAPHEME FAMILY — ONE BIT PER ENTRY POINT**, following this file's existing
+	// discipline rather than one `usesGrapheme` blanket: a program that only asks
+	// `graphemeBreakProperty(cp)` must carry neither the segmenter nor the UTF-8 decoders, and a program
+	// that never touches a String at all must carry none of it. Each is set TRANSITIVELY by
+	// `recordCallUsage` from whichever entry point the module actually names (a `__gr_count` reference
+	// turns on `__gr_end`, which turns on `__gr_break` and the decoders, which turn on `__gbp` and
+	// `__ext_pict`) — the same "declare what the synthesized body calls, because this Maxon-module scan
+	// cannot see inside it" rule the String method family already follows.
+	export var usesGbp as bool
+	export var usesExtPict as bool
+	export var usesUtf8Decode as bool
+	export var usesGraphemeBreak as bool
+	export var usesGraphemeEnd as bool
+	export var usesGraphemeCount as bool
+	// `__char_at` MINTS a Character — one `__mm_alloc`'d fused record per call, blitted with `__str_copy`
+	// — so it declares the heap and the copy loop that `emitBuildOwnedInlineString` puts inside its body.
+	export var usesCharAt as bool
+	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
+	// (and the heap under it) exactly as `__str_split` declares them for its segments.
+	export var usesStrToBytes as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -683,6 +703,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrCopy = true
 	end 'strclone'
 	recordStringMethodUsage(callee, usage: usage)
+	recordGraphemeUsage(callee, usage: usage)
 	// The three MANAGED-element array copies (`__arr_slice_managed`/`__arr_clone_managed`/`__arr_append_managed`,
 	// P1.7 slice 3b-vi-b). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
 	// prefixed); THIS bit gates their install so a trivial-array program does not carry them.
@@ -706,6 +727,71 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.neededCloners.insert(callee)
 	end 'structcloner'
 end 'recordCallUsage'
+
+// ⭐ The P1.8 Slice B grapheme family's arm of the callee → usage-bit map — the `recordStringMethodUsage`
+// twin, split out for the same reason: `recordCallUsage` stays a readable list of families. Direct
+// references only; what each referenced body in turn needs is closed by `closeGraphemeNeeds`.
+function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
+	if callee.equals(GbpName) 'gbp'
+		usage.usesGbp = true
+	end 'gbp'
+	if callee.equals(ExtPictName) 'extpict'
+		usage.usesExtPict = true
+	end 'extpict'
+	if callee.equals(Utf8CodepointAtName) or callee.equals(Utf8LengthAtName) 'utf8'
+		usage.usesUtf8Decode = true
+	end 'utf8'
+	if callee.equals(GraphemeBreakName) or callee.equals(GraphemeStateName) 'grbreak'
+		usage.usesGraphemeBreak = true
+	end 'grbreak'
+	if callee.equals(GraphemeEndName) 'grend'
+		usage.usesGraphemeEnd = true
+	end 'grend'
+	if callee.equals(GraphemeCountName) 'grcount'
+		usage.usesGraphemeCount = true
+	end 'grcount'
+	if callee.equals(CharAtName) 'charat'
+		usage.usesCharAt = true
+	end 'charat'
+	if callee.equals(StrToBytesName) 'tobytes'
+		usage.usesStrToBytes = true
+	end 'tobytes'
+	closeGraphemeNeeds(usage)
+end 'recordGraphemeUsage'
+
+// ⭐ **WHAT EACH GRAPHEME BODY CALLS THAT THIS SCAN CANNOT SEE.** The family's members call each other from
+// inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is DECLARED here
+// rather than discovered, exactly as `closeStringMethodNeeds` declares the String family's. Run as a
+// CLOSURE after every record (rather than each arm listing its own transitive set) so the answer cannot
+// depend on the order in which the module happens to name its entry points.
+function closeGraphemeNeeds(usage RuntimeUsage)
+	if usage.usesGraphemeCount 'countScans'
+		usage.usesGraphemeEnd = true
+	end 'countScans'
+	// `__gr_end` decodes codepoints, classifies them and runs the rules — its whole general scan.
+	if usage.usesGraphemeEnd 'scans'
+		usage.usesUtf8Decode = true
+		usage.usesGraphemeBreak = true
+	end 'scans'
+	// `__gr_break` asks `__ext_pict` for GB11; `__gr_state` asks it for the emoji-run flag.
+	if usage.usesGraphemeBreak 'classifies'
+		usage.usesExtPict = true
+	end 'classifies'
+	// Every scan classifies each codepoint through `__gbp`.
+	if usage.usesGraphemeEnd 'needsProperty'
+		usage.usesGbp = true
+	end 'needsProperty'
+	// `__char_at` builds a fresh owned inline record: one `__mm_alloc` plus a `__str_copy` blit.
+	if usage.usesCharAt 'mintsCharacters'
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'mintsCharacters'
+	// `__str_to_bytes` pushes into the caller's array.
+	if usage.usesStrToBytes 'pushesBytes'
+		usage.usesArray = true
+		usage.usesHeap = true
+	end 'pushesBytes'
+end 'closeGraphemeNeeds'
 
 // The P1.8 Slice C family's own arm of the callee → usage-bit map, split out so `recordCallUsage` stays a
 // readable list of families rather than growing eight more inline arms. Direct references only; what each
@@ -952,17 +1038,20 @@ function emitPredicateReturn(module StdModule, block IrBlock, value ParsedInt, i
 	module.setTerminator(block, op: StdOp.ret(result))
 end 'emitPredicateReturn'
 
-// One byte at `addr` — the ONE `u8` load spelling in this file, so a widened read is a one-line change
-// rather than a sweep of every byte-walking loop.
-function emitLoadByteAt(module StdModule, block IrBlock, addr ValueId, ids ValueMinter) returns ValueId
+// ⭐ **ONE BYTE AT `addr` — THE `u8` LOAD SPELLING FOR EVERY RUNTIME BUILDER**, so a widened read is a
+// one-line change rather than a sweep of every byte-walking loop. Exported because `GraphemeRuntime`'s
+// decoders and its segmenter walk bytes too: they had their own copy of these two, which is the shape
+// this comment claimed to prevent — two files each owning "the ONE spelling".
+export function emitLoadByteAt(module StdModule, block IrBlock, addr ValueId, ids ValueMinter) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.loadIndirect(v, addrId: addr, offset: 0, valueType: StdType.u8))
 	return v
 end 'emitLoadByteAt'
 
 // One byte at `base[index]` — the address add plus the `u8` load, the shape every byte-walking loop that
-// does NOT also need the address repeats (the compare loop's two operands, the search's first-byte probe).
-function emitLoadByteIndexed(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
+// does NOT also need the address repeats (the compare loop's two operands, the search's first-byte probe,
+// the grapheme runtime's byte-view fill). Exported for `emitLoadByteAt`'s reason.
+export function emitLoadByteIndexed(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	return emitLoadByteAt(module, block: block, addr: emitBin(module, block: block, a: base, b: index, opcode: StdBinOpcode.add, ids: ids), ids: ids)
 end 'emitLoadByteIndexed'
 

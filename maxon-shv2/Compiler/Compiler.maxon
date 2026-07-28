@@ -386,6 +386,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
 	installStringRuntime(pipeline.stdModule, usage: usage)
 
+	// The GRAPHEME runtime (`__gbp`/`__ext_pict`/`__utf8_*`/`__gr_*`/`__char_at`/`__str_to_bytes`, P1.8
+	// slice B) — installed the same already-lowered way, keyed on its OWN per-entry-point bits so a
+	// program that never segments a String carries none of it. It sits BEFORE the array install because
+	// `__str_to_bytes` sets `usesArray` transitively (`closeGraphemeNeeds`) — but that bit was already
+	// settled by `scanRuntimeUsage`, which runs before any install, so the order is readability, not a
+	// dependency. It sits AFTER the String install for the same reason `__char_at` needs no ordering: the
+	// functions are appended to one module and the backend resolves calls by name.
+	installGraphemeRuntime(pipeline.stdModule, usage: usage)
+
 	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
 	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers

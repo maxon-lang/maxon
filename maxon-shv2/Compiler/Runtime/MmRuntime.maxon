@@ -1039,9 +1039,11 @@ function structHasStringField(signatures ProgramSignatures, structName ByteArray
 	let layout = requireDeclaredStruct(signatures, structName: structName, context: "structHasStringField")
 	for i in 0 upto layout.fieldCount() 'eachField'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structHasStringField: fieldTypes.get OOB at {i}")
-		if tagIsText(maxonTypeTag(fieldType)) 'string'
+		// `tagIsByteRecord`: the gate this feeds is `usesStrDecref`, i.e. "does this destructor CALL
+		// `__str_decref`?" — and it does for a Character field for the reason it does for a String one.
+		if tagIsByteRecord(maxonTypeTag(fieldType)) 'byteRecord'
 			return true
-		end 'string'
+		end 'byteRecord'
 	end 'eachField'
 	return false
 end 'structHasStringField'

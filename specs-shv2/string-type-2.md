@@ -368,8 +368,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: count-graphemes -->
-<!-- `String.count()` (grapheme count) — P1.2 wave D provides only `append`/`byteLength` (E2015) -->
+<!-- test: count-graphemes -->
 ### count Returns Grapheme Count
 ```maxon
 function main() returns ExitCode
@@ -385,8 +384,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: count-vs-bytes-count -->
-<!-- P1.8: byte view / .bytes() -->
+<!-- test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon
 function main() returns ExitCode
@@ -404,8 +402,7 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: grapheme-iteration-emoji -->
-<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
+<!-- test: grapheme-iteration-emoji -->
 ### Grapheme Iteration with Emoji
 ```maxon
 function main() returns ExitCode
@@ -427,8 +424,7 @@ a🎉b
 3
 ```
 
-<!-- disabled-test: grapheme-iteration-flag -->
-<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
+<!-- test: grapheme-iteration-flag -->
 ### Grapheme Iteration with Flag Emoji
 ```maxon
 function main() returns ExitCode
@@ -450,8 +446,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: grapheme-iteration-zwj -->
-<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
+<!-- test: grapheme-iteration-zwj -->
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
 function main() returns ExitCode

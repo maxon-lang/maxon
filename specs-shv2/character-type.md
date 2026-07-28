@@ -119,8 +119,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: multibyte-character-2byte -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: multibyte-character-2byte -->
 ### Multi-byte Character (2-byte UTF-8)
 
 ```maxon
@@ -137,8 +136,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: multibyte-character-3byte -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: multibyte-character-3byte -->
 ### Multi-byte Character (3-byte UTF-8)
 
 ```maxon
@@ -155,8 +153,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: multibyte-character-4byte -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: multibyte-character-4byte -->
 ### Multi-byte Character (4-byte Emoji)
 
 ```maxon
@@ -192,8 +189,7 @@ end 'main'
 A
 ```
 
-<!-- disabled-test: multibyte-character-to-string -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value; also P1.2 String - `print` and string interpolation -->
+<!-- test: multibyte-character-to-string -->
 ### Multi-byte Character to String
 
 ```maxon
@@ -211,8 +207,7 @@ end 'main'
 中
 ```
 
-<!-- disabled-test: character-equality-multibyte -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: character-equality-multibyte -->
 ### Multi-byte Character Equality
 
 ```maxon
@@ -229,8 +224,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: character-inequality-multibyte -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: character-inequality-multibyte -->
 ### Multi-byte Character Inequality
 
 ```maxon
@@ -247,8 +241,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: emoji-character -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: emoji-character -->
 ### Emoji Character
 
 ```maxon
@@ -265,8 +258,7 @@ end 'main'
 🎉
 ```
 
-<!-- disabled-test: flag-emoji-character -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: flag-emoji-character -->
 ### Flag Emoji (Regional Indicator Pair)
 
 ```maxon
@@ -285,8 +277,7 @@ end 'main'
 🇺🇸
 ```
 
-<!-- disabled-test: family-emoji-character -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: family-emoji-character -->
 ### Family Emoji (ZWJ Sequence)
 
 ```maxon
@@ -303,8 +294,7 @@ end 'main'
 18
 ```
 
-<!-- disabled-test: skin-tone-emoji -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value -->
+<!-- test: skin-tone-emoji -->
 ### Skin Tone Modifier Emoji
 
 ```maxon
@@ -444,7 +434,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ascii-value-non-ascii -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value; also P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()`. NOT a Character gap: `Character` and its `bytes`/`byteLength` land at P1.8 Slice B, and the blocker is that shv2 has no `if try <throwing call>` form for ANY callee (measured on an already-throwing builtin: `if try a.first()` over an `Array` is `E3005: 'if' requires a bool condition, got 'int'`). `Character.asciiValue()` itself is deliberately unbuilt until that form exists — it throws `CharacterError.notAscii`, so without it there is no non-sentinel way to call it -->
 ### ASCII Value for Non-ASCII Returns Error
 
 ```maxon
@@ -461,7 +451,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ascii-value-emoji -->
-<!-- P1.2 Character - a multi-byte/EGC literal needs the heap `Character` type (UTF-8 backing, EGC-aware equality); shv2 materializes only a SINGLE-BYTE literal, as its byte value; also P1.4 errors (`try`/`otherwise`) + P1.2 `Character.asciiValue()` -->
+<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try c.asciiValue()`. NOT a Character gap: `Character` and its `bytes`/`byteLength` land at P1.8 Slice B, and the blocker is that shv2 has no `if try <throwing call>` form for ANY callee (measured on an already-throwing builtin: `if try a.first()` over an `Array` is `E3005: 'if' requires a bool condition, got 'int'`). `Character.asciiValue()` itself is deliberately unbuilt until that form exists — it throws `CharacterError.notAscii`, so without it there is no non-sentinel way to call it -->
 ### ASCII Value for Emoji Returns Error
 
 ```maxon

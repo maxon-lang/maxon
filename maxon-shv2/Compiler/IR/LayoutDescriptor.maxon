@@ -150,6 +150,9 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		function then return 8
 		structRef then panic("primitiveTypeByteSize: a `structRef` is an aggregate — size it through StructLayout.sizeBytes, not this helper")
 		genericInstance then panic("primitiveTypeByteSize: a `genericInstance` is an aggregate — size it through its base StructLayout.sizeBytes, not this helper")
+		// A Character is a POINTER to the fused byte record — one machine word in a slot, exactly as a
+		// String is. `sizeof(Character)` is therefore the pointer, not the record.
+		character then return MachineWordBytes
 		typeParameter then panic("primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read, not a compile-time constant")
 		unresolved then panic("primitiveTypeByteSize: an `unresolved` type reached sizeof — TypeResolution should have eliminated it or SemanticCheck rejected the reference")
 		void then panic("primitiveTypeByteSize: `void` is not a value type and has no size")
@@ -168,6 +171,7 @@ export function primitiveTypeTagName(tag ValueTypeTag) returns String
 		float then return "float"
 		exitCode then return "ExitCode"
 		string then return "String"
+		character then return "Character"
 		function then return "function"
 		named then panic("primitiveTypeTagName: a `named` type is mangled by its interned NAME, not this tag speller")
 		structRef then panic("primitiveTypeTagName: a `structRef` is mangled by its struct NAME, not this tag speller")

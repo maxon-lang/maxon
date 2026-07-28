@@ -1761,6 +1761,32 @@ end 'requireAbiParamCount'
 let StringAppendMethod = b"append"
 let StringByteLengthMethod = b"byteLength"
 
+// ⭐ **THE P1.8 SLICE B METHOD NAMES.** `count`/`bytes` are String's; `bytes`/`byteLength`/`asciiValue`
+// are Character's. `bytes` is spelled ONCE and dispatched from both receivers to the same emitter — a
+// String's bytes and a Character's are the same question about the same record.
+let StringCountMethod = b"count"
+let ByteViewMethod = b"bytes"
+
+// The `Character` BUILTIN's type name — the `String` twin (`StringBuiltinName`), recognized
+// syntactically in a type position. Also the name a `for c in s` element binds under in a diagnostic.
+export let CharacterBuiltinName = b"Character"
+
+// The two BARE FREE FUNCTIONS this rung exposes — the UAX #29 classifiers, which `specs/grapheme-clusters.md`
+// calls directly (`graphemeBreakProperty(65)`, `isExtendedPictographic(128512)`). They join the builtin
+// table in `parseCallNamed` beside `print`/`trunc`/the math intrinsics.
+//
+// ⚠ **A BARE-NAME BUILTIN RESERVES ITS NAME PROGRAM-WIDE, and that reservation is UNDIAGNOSED** — a user
+// `function graphemeBreakProperty` would compile and be silently unreachable, which is the standing hazard
+// `StdlibLoader`'s header measured for `sleep`. It is accepted here for the reason the classifiers exist at
+// all: shv2 synthesizes the segmenter as a compiler builtin (it reads no stdlib), so there is no
+// declaration for a call to reach instead, and the corpus calls these two by name. The day
+// `stdlib/helpers/string/grapheme.maxon` becomes loadable, these builtins are what must be retired FIRST.
+let GraphemeBreakPropertyBuiltinName = b"graphemeBreakProperty"
+let IsExtendedPictographicBuiltinName = b"isExtendedPictographic"
+
+// Both classifiers take exactly one argument — the codepoint.
+let GraphemeClassifierArity = 1 as ParamCount
+
 // ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the seven `String` methods that need no Unicode character
 // database, no grapheme segmentation and no `StringIndex`. That last one is the LINE, not a coincidence:
 // `findFirst`/`findLast` return a `StringIndex` whose `charIdx` is a GRAPHEME index, and `slice` takes two of
@@ -2061,10 +2087,11 @@ union CharLiteralValue
 	byte(value ParsedInt)
 	// `''`. No character, and no value to give it.
 	empty
-	// A literal whose UTF-8 body is more than one byte: `'é'`, `'中'`, an emoji, an EGC.
-	// Representing one needs the `Character` TYPE (a heap value with `.bytes()`,
-	// `.asciiValue()`, EGC-aware equality) — String's cone, not this rung's.
-	multiByte
+	// A literal whose UTF-8 body is more than one byte: `'é'`, `'中'`, an emoji, an EGC. It
+	// materializes as a `Character` (P1.8 slice B) — an immortal `.rdata` byte record carrying
+	// exactly these bytes, typed `character`. The BYTES ride the case because the decode already
+	// has them and re-deriving them at the emit site would be the same escape walk twice.
+	multiByte(bytes ByteArray)
 	// A `\` escape this decoder does not know.
 	badEscape(text String)
 end 'CharLiteralValue'
@@ -2087,7 +2114,7 @@ function charValueOf(buf ByteArray) returns CharLiteralValue
 		return CharLiteralValue.empty
 	end 'empty'
 	if buf.count() > 1 'wide'
-		return CharLiteralValue.multiByte
+		return CharLiteralValue.multiByte(buf)
 	end 'wide'
 	let b = try buf.get(0) otherwise panic("charValueOf: count()==1 but get(0) failed")
 	return CharLiteralValue.byte(b as ParsedInt)
@@ -2121,6 +2148,26 @@ function decodeEscapes(raw ByteArray) returns DecodedLiteral
 		end 'literalByte'
 
 		let next = try raw.get(i + 1) otherwise panic("decodeEscapes: i + 1 < len just held but get({i + 1}) failed")
+
+		// ⭐ **`\uNNNN` — THE ONE ESCAPE THAT PRODUCES MORE THAN ONE BYTE**, which is why it cannot ride
+		// `escapeByte`'s table (that answers with a single byte). In a REGULAR literal the codepoint is
+		// UTF-8 ENCODED, so `"e\u0301"` is three bytes and one grapheme; in a `b"…"` literal the same
+		// escape means one LATIN-1 byte and is decoded by `appendByteStringEscape` instead. Two spellings
+		// of one syntax with genuinely different meanings — see that function's header — so they are two
+		// decoders on purpose, sharing the digit VALIDATION and the digit ARITHMETIC.
+		//
+		// A malformed `\uNN` is reported as the ordinary unknown-escape diagnostic rather than a case of
+		// its own: the shape the author wrote is not an escape this decoder recognizes, which is exactly
+		// what that message says.
+		if next == LowerU 'uniEscape'
+			if not hexEscapeWellFormed(raw, at: i, len: len, digitCount: UniEscapeDigits) 'malformed'
+				return DecodedLiteral.unknownEscape("\\{String.from(byteSlice(next))}")
+			end 'malformed'
+			appendUtf8Encoded(buf, codepoint: uniEscapeCodepoint(raw, at: i))
+			i = i + EscapeMarkerBytes + UniEscapeDigits
+			continue
+		end 'uniEscape'
+
 		match escapeByte(next) 'esc'
 			byte(b) then buf.push(b)
 			unknown then return DecodedLiteral.unknownEscape("\\{String.from(byteSlice(next))}")
@@ -2129,6 +2176,46 @@ function decodeEscapes(raw ByteArray) returns DecodedLiteral
 	end 'decode'
 	return DecodedLiteral.bytes(buf)
 end 'decodeEscapes'
+
+// ⭐ **UTF-8 ENCODE a codepoint into `buf`** — the inverse of `decodeUtf8Sequence`, and the dual of
+// `stdlib/Character.maxon`'s `fromCodepoint` (`:170-235`), whose four-way ladder and bit layout this is.
+// Its one caller is the `\uNNNN` escape in a regular literal, which is the only place shv2 turns a
+// codepoint back into bytes: every other source character is ALREADY UTF-8 in the file and is copied
+// through verbatim.
+function appendUtf8Encoded(buf ByteArray, codepoint ParsedInt)
+	if codepoint < Utf8OneByteCeiling 'ascii'
+		buf.push(codepoint as Byte)
+		return
+	end 'ascii'
+	if codepoint < Utf8TwoByteCeiling 'twoByte'
+		buf.push((Utf8LeadTwoByteFloor or (codepoint shr Utf8ContinuationBits)) as Byte)
+		buf.push(utf8ContinuationByte(codepoint, shift: 0))
+		return
+	end 'twoByte'
+	if codepoint < Utf8ThreeByteCeiling 'threeByte'
+		buf.push((Utf8LeadThreeByteFloor or (codepoint shr Utf8ThreeByteHighShift)) as Byte)
+		buf.push(utf8ContinuationByte(codepoint, shift: Utf8ContinuationBits))
+		buf.push(utf8ContinuationByte(codepoint, shift: 0))
+		return
+	end 'threeByte'
+	buf.push((Utf8LeadFourByteFloor or (codepoint shr Utf8FourByteHighShift)) as Byte)
+	buf.push(utf8ContinuationByte(codepoint, shift: Utf8ThreeByteHighShift))
+	buf.push(utf8ContinuationByte(codepoint, shift: Utf8ContinuationBits))
+	buf.push(utf8ContinuationByte(codepoint, shift: 0))
+end 'appendUtf8Encoded'
+
+// One CONTINUATION byte: `0b10` followed by the six payload bits at `shift`.
+function utf8ContinuationByte(codepoint ParsedInt, shift ParsedInt) returns Byte
+	return (Utf8ContinuationFloor or ((codepoint shr shift) and Utf8ContinuationMask)) as Byte
+end 'utf8ContinuationByte'
+
+// The three codepoint ceilings that pick a UTF-8 encoding's width, and the continuation byte's `0b10`
+// tag. `Utf8OneByteCeiling` doubles as the ASCII threshold (`AsciiCeiling` says the same of a source
+// BYTE; this one is about a CODEPOINT, which is why both exist).
+let Utf8OneByteCeiling = 128 as ParsedInt
+let Utf8TwoByteCeiling = 2048 as ParsedInt
+let Utf8ThreeByteCeiling = 65536 as ParsedInt
+let Utf8ContinuationFloor = 0x80 as ParsedInt
 
 // The byte a two-character escape `\<c>` denotes, or `unknown`.
 union EscapeByte
@@ -2358,12 +2445,20 @@ end 'formatCodepointHex'
 // ill-formed one is E2015 (positioned). No enabled spec hits this — it is the correctness floor that keeps a
 // malformed escape a clean reject rather than a silent mis-decode.
 function requireByteStringHexEscape(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset, tok Token) throws ParseError
-	let firstDigit = at + EscapeMarkerBytes
-	let afterDigits = firstDigit + digitCount
-	if afterDigits > len or not hexDigitsPresent(raw, from: firstDigit, to: afterDigits) 'malformed'
+	if not hexEscapeWellFormed(raw, at: at, len: len, digitCount: digitCount) 'malformed'
 		throw ParseError.unsupported("a malformed hex/unicode escape in a byte string literal: `\\x`/`\\u` must be followed by {digitCount} hex digits", line: tok.line, column: tok.column)
 	end 'malformed'
 end 'requireByteStringHexEscape'
+
+// Is the `\x`/`\u` escape at `at` followed by exactly `digitCount` hex digits, in bounds? THE one
+// statement of a hex escape's well-formedness, shared by the two decoders that admit one — the
+// byte-string one (which THROWS on a malformed escape) and the regular-literal one (which reports it as
+// an unknown escape). They differ only in what they do with the answer, so only the answer is shared.
+function hexEscapeWellFormed(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset) returns bool
+	let firstDigit = at + EscapeMarkerBytes
+	let afterDigits = firstDigit + digitCount
+	return afterDigits <= len and hexDigitsPresent(raw, from: firstDigit, to: afterDigits)
+end 'hexEscapeWellFormed'
 
 function hexDigitsPresent(raw ByteArray, from ByteOffset, to ByteOffset) returns bool
 	var i = from
@@ -3695,6 +3790,13 @@ export type Parser
 		// same limitation, and an unreferenced instance has no descriptor or destructor synthesized (both gate
 		// on usage), so it costs a registry entry and no codegen.
 		var hasStringSplitCall = false
+		// A `.bytes()` — the P1.8 slice B byte view, which constructs the SAME `Array with Byte` instance a
+		// `b"…"` literal does. Like `split`'s, its instance has no typealias to intern from, so the sweep
+		// interns it and the parser reads the giid back at construction time; and like `split`'s, the sweep
+		// reads TOKENS and cannot know the receiver is a String or a Character, so it OVER-interns. An
+		// unreferenced instance has no descriptor or destructor synthesized (both gate on usage), so it
+		// costs a registry entry and no codegen.
+		var hasByteViewCall = false
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -3718,6 +3820,10 @@ export type Parser
 			if self.atStringSplitCall() 'splitToken'
 				hasStringSplitCall = true
 			end 'splitToken'
+
+			if self.atByteViewCall() 'bytesToken'
+				hasByteViewCall = true
+			end 'bytesToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
@@ -3793,7 +3899,7 @@ export type Parser
 		// Intern the `Array with Byte` instance if this file materializes a byte-string literal — after
 		// `foldFile`, exactly as the int-array literal instance above, so its giid follows the file's named
 		// generic instances (a stable, source-path-ordered assignment).
-		if hasByteStringLiteral 'internByteStrLiteral'
+		if hasByteStringLiteral or hasByteViewCall 'internByteStrLiteral'
 			_ = index.internArrayByteInstance()
 		end 'internByteStrLiteral'
 
@@ -3869,8 +3975,21 @@ export type Parser
 	// method name so the predicate reads FORWARD like `atSetFromConstruction` and never has to index behind
 	// the cursor.
 	function atStringSplitCall() returns bool
-		return self.at(TokenKind.dot) and self.peekKind() == TokenKind.identifier and self.tokenAt(self.pos + 1).value.equals(StringSplitMethod)
+		return self.atBuiltinMethodCall(StringSplitMethod)
 	end 'atStringSplitCall'
+
+	// A `.bytes(` at the cursor — the P1.8 slice B byte view, whose `Array with Byte` the sweep interns.
+	function atByteViewCall() returns bool
+		return self.atBuiltinMethodCall(ByteViewMethod)
+	end 'atByteViewCall'
+
+	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
+	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
+	// like. It is deliberately TOLERANT — it sees a token pair, not a receiver type — which is what makes
+	// its callers OVER-intern rather than miss (see `hasStringSplitCall`).
+	function atBuiltinMethodCall(methodName ByteArray) returns bool
+		return self.at(TokenKind.dot) and self.peekKind() == TokenKind.identifier and self.tokenAt(self.pos + 1).value.equals(methodName)
+	end 'atBuiltinMethodCall'
 
 	// The block depth after the token at the cursor. `end` FLOORS at zero rather than underflowing: a
 	// stray `end` is malformed source, and the sweep is tolerant — the real parse reports it, with a
@@ -6386,6 +6505,8 @@ export type Parser
 			// naming one is not reachable in the trivial slice — this is exhaustiveness insurance.
 			typeParameter gives EmptySourceText
 			genericInstance gives EmptySourceText
+			// A Character is a builtin with no interned name, exactly like `string` above.
+			character gives EmptySourceText
 		end 'k'
 	end 'functionAliasTypeName'
 
@@ -7690,10 +7811,16 @@ export type Parser
 	// Is `value` a managed HEAP value — a struct box, a String, or a boxed union — the kinds a consumed
 	// parameter can own (and this function must drop) and a consumed argument must transfer? A ranged-alias /
 	// `int` / `bool` owns no heap. This is the one owned-temp adoption test, so `mintOwnedCallResult` routes
-	// through it rather than re-spelling the three tags. A managed heap value is a String (text) or a non-text
-	// aggregate, so it is derived from `valueIsNonTextAggregate` to keep the aggregate half stated once.
+	// through it rather than re-spelling the three tags. A managed heap value is a BYTE RECORD (a String or a
+	// Character) or a non-text aggregate, so it is derived from `valueIsNonTextAggregate` to keep the
+	// aggregate half stated once.
+	//
+	// ⚠ **`tagIsByteRecord`, NOT `tagIsText` — THIS IS THE LEAK SITE.** It is the single test that decides
+	// whether a freshly minted value is ADOPTED as an owned temporary and therefore ever dropped. Spelled
+	// `tagIsText` it answers "no" for a Character, and every Character a program produces — every trip of
+	// `for c in s` — is allocated and never freed (measured by sabotage: exit 101).
 	function valueIsManagedHeap(value ValueId) returns bool
-		return tagIsText(self.tagOf(value)) or self.valueIsNonTextAggregate(value)
+		return tagIsByteRecord(self.tagOf(value)) or self.valueIsNonTextAggregate(value)
 	end 'valueIsManagedHeap'
 
 	// Is `value` a managed heap AGGREGATE — a struct box or a boxed union — but NOT a String? An aggregate
@@ -7806,6 +7933,14 @@ export type Parser
 			if tok.value.equals(StringBuiltinName) 'stringBuiltin'
 				return MaxonType.string
 			end 'stringBuiltin'
+			// The `Character` BUILTIN (P1.8 slice B) — recognized SYNTACTICALLY, exactly as `String` is
+			// one line up and for the identical reason: it needs no registry, so the tolerant declaration
+			// sweep and the real parse answer it the same way. It resolves to its own `MaxonType.character`
+			// arm (NEVER `named`), which is what tags a `Character` parameter's value `character` at parse
+			// time and keeps every `named`-reading rule from treating a record pointer as a ranged int.
+			if tok.value.equals(CharacterBuiltinName) 'characterBuiltin'
+				return MaxonType.character
+			end 'characterBuiltin'
 			// The type's own name inside its own body means what `Self` means. Both spellings are
 			// legal Maxon and they must not resolve differently — one `structRef`, one `named` —
 			// because the second would type `create`'s result as an integer and `p.x` would fail
@@ -8807,7 +8942,7 @@ export type Parser
 		// COPIED into a fresh owned record, an already-owned value is MOVED (its source binding poisoned,
 		// or its pending statement-end drop cancelled). A second spelling here would be free to leak the
 		// temporary or double-free the source.
-		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsText(maxonTypeTag(valueType)), anchor: nameTok, range: range)
+		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), anchor: nameTok, range: range)
 
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
@@ -9418,7 +9553,7 @@ export type Parser
 	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws ParseError
 		let retTag = self.tagOf(retVal)
 		var returned = retVal
-		if tagIsText(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
+		if tagIsByteRecord(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
 			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
 
@@ -10303,7 +10438,7 @@ export type Parser
 			if self.tagOf(otherwiseValue) != self.tagOf(result) 'managedOtherwiseTypeMismatch'
 				throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
 			end 'managedOtherwiseTypeMismatch'
-			if not self.valueIsOwnedHeap(otherwiseValue) and not tagIsText(self.tagOf(otherwiseValue)) 'borrowedAggregateOtherwise'
+			if not self.valueIsOwnedHeap(otherwiseValue) and not tagIsByteRecord(self.tagOf(otherwiseValue)) 'borrowedAggregateOtherwise'
 				throw ParseError.unsupported("an `otherwise` fallback that is a borrowed struct/union value — it merges with the try's owned result through a phi dropped exactly once, and a borrowed aggregate's own owner keeps a live reference, so dropping the merged value would free it twice. Return an OWNED value (a fresh factory call), or catch the error in an `otherwise (e) 'label' … end` block; consuming a borrowed aggregate arrives with cross-call consume", line: tryTok.line, column: tryTok.column)
 			end 'borrowedAggregateOtherwise'
 		end 'managedOtherwise'
@@ -10655,9 +10790,13 @@ export type Parser
 			return GtPromiseDropName
 		end 'promise'
 		let tag = self.tagOf(value)
-		if tag == ValueTypeTag.string 'string'
+		// ⚠ `tagIsByteRecord`, NOT `tag == ValueTypeTag.string`: WHICH DROP a value takes is decided by its
+		// RECORD, and a Character's record is a String's. Left narrow, a dropped Character falls past every
+		// arm below to the generic `__mm_decref`, which frees the box without releasing the external buffer a
+		// detached record owns — a leak on exactly the values this rung mints.
+		if tagIsByteRecord(tag) 'byteRecord'
 			return StrDecrefName
-		end 'string'
+		end 'byteRecord'
 		// ⭐ AN OPAQUE TYPE-PARAMETER binding (`push(item Element)`'s `item`, enrolled owned in a shared generic
 		// body, P1.7 slice 3b-v). Its element destructor is not known statically — the body compiles ONCE for
 		// every instantiation — so it drops through `__drop_type_param(descriptor, value)`, which reads the
@@ -11179,12 +11318,21 @@ export type Parser
 	// with the source as its one part (`__str_copy` blits `buffer@0`/`length@8`) — yields an owned
 	// temporary the caller can safely drop. `emitStringInterp` marks it owned (`trackOwnedTemp`); the
 	// return's move-out then takes it out of the pending list. NO second record layout is hand-rolled.
+	// ⚠ **THE PROMOTION KEEPS THE SOURCE'S TYPE, AND GETTING THAT WRONG WAS A REACHABLE BUG.** The copy is
+	// built by the interpolation encoder, whose result is a `String` — so promoting a borrowed CHARACTER
+	// used to hand back a `string`-tagged value, and `var found = 'é'` (a `var` promotes its managed
+	// initializer at the declaration) typed `found` as a **String**. The next line then refused a
+	// Character: *"cannot assign 'Character' to variable 'found' of type 'String'"*, on a program that is
+	// plainly legal. The RECORD is identical either way — that is the whole premise of `tagIsByteRecord` —
+	// so only the tag was wrong, which is exactly the class of bug a shared representation invites.
+	// `resultTag` is threaded from here rather than fixed at the encoder because the encoder has a second
+	// caller (`parseStringInterpolation`) whose result genuinely IS a String.
 	function promoteToOwnedString(source ValueId, range SourceRange) returns ValueId
 		var partBufs = ValueIdArray.create()
 		var partLens = ValueIdArray.create()
 		var scratchIds = ValueIdArray.create()
 		self.materializeStringRecordPart(source, partBufs: partBufs, partLens: partLens, range: range)
-		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range, resultTag: self.tagOf(source))
 	end 'promoteToOwnedString'
 
 	// ⭐ **RETAIN A BORROWED MANAGED AGGREGATE AS A FRESH OWNED VALUE (OPEN #40).** The struct/union analogue
@@ -11239,9 +11387,9 @@ export type Parser
 	// copying would break an agreement rather than fix a disagreement. Immutability of the SOURCE is the
 	// whole discriminator.
 	function promoteBorrowedToOwned(value ValueId, range SourceRange) returns ValueId throws ParseError
-		if tagIsText(self.tagOf(value)) 'text'
+		if tagIsByteRecord(self.tagOf(value)) 'byteRecord'
 			return self.promoteToOwnedString(value, range: range)
-		end 'text'
+		end 'byteRecord'
 
 		if self.valueIsNonTextAggregate(value) 'aggregate'
 			// The one asker of `immutableGlobalReads`, and the one place the answer changes anything: a
@@ -11901,6 +12049,13 @@ export type Parser
 		//
 		// Taken here, it is still well before the loop VARIABLE is declared, which is what keeps
 		// `for arr in arr` locking the SOURCE binding rather than the loop variable that shadows its name.
+		// ⭐ **A STRING SOURCE IS ITS OWN THIRD FORM** (P1.8 slice B) — neither a counted range nor an array.
+		// It shares the range form's answer to every question the ARRAY form asks specially: it takes no
+		// iteration LOCK and records no borrow SUBJECT, because it hands the body a value it MINTS rather
+		// than one the source stores (see the ownership note on the element read below), so there is no
+		// borrow for a mutation to invalidate. What it does share with the array form is that its source is
+		// a heap record evaluated once into the preheader.
+		var isString = false
 		var sourceLock = false
 		// ⭐ **THE E3070 SUBJECT OF THE ELEMENT THIS LOOP WILL BORROW** — resolved HERE, beside the lock and
 		// off the same `sourceStart`, because both are answers about the SOURCE and both must be taken before
@@ -11908,10 +12063,20 @@ export type Parser
 		// variable that shadows its name. Empty for a range (no borrow) and for a source that names no
 		// binding, exactly as the lock is.
 		var elementBorrowSubject = EmptySourceText
-		if not isRange 'arraySource'
+		if not isRange 'collectionSource'
 			try self.requireIterableArray(source, forTok: forTok)
-			sourceLock = self.lockIterationSource(sourceStart)
-			elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
+			isString = tagIsText(self.tagOf(source))
+
+			// ⚠ **THE LOCK AND THE BORROW SUBJECT ARE THE ARRAY FORM'S ALONE.** A String hands the body a
+			// MINTED Character, not a slot the source keeps, so there is no borrow for a mutation to
+			// dangle — locking would refuse a legal `s.append(t)` inside `for c in s` for a danger that
+			// does not exist. (`s.append(t)` mid-iteration still reads the record's live `length@8` in
+			// the header, which is the array form's own live-length discipline; the CLUSTER already
+			// minted is a copy and cannot dangle behind a reallocation.)
+			if not isString 'arrayBorrowConcerns'
+				sourceLock = self.lockIterationSource(sourceStart)
+				elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
+			end 'arrayBorrowConcerns'
 
 			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
 			// / `for x in build()` produces a record the statement owns; left in `pendingTempDrops` it
@@ -11931,7 +12096,7 @@ export type Parser
 				self.removeFromPendingTemps(source)
 				self.ownedBindings.push(VarInfo.createValueBinding(IterationSourceBindingName, varType: self.typeOf(source), mutable: false, boundValue: source))
 			end 'ownSourceTemp'
-		end 'arraySource'
+		end 'collectionSource'
 
 		// Every OTHER temporary the source expression built — an interpolation handed to a factory call
 		// — belongs to this statement and dies here, in the preheader, exactly as a `while` condition's
@@ -11970,7 +12135,14 @@ export type Parser
 		self.currentBlock = header
 		var bound = limit
 		if not isRange 'lengthReadLive'
-			bound = self.emitRuntimeCall(ArrCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+			// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER for a String too** — `length@8` off the record,
+			// the same discipline the array form's live `__arr_count` follows and for the same reason: the
+			// header comparison IS the bounds check that licenses the unchecked read below it.
+			//
+			// ⚠ The String's index is a BYTE position, not a cluster ordinal, so the header asks "is there
+			// a byte left?" — which is exactly the reference's `countGraphemes` loop condition
+			// (`while pos < len`). A cluster ordinal would need the count, which costs a whole extra scan.
+			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if isString else self.emitRuntimeCall(ArrCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
 		end 'lengthReadLive'
 		let testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
 		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(testAnchorIndex))
@@ -11982,27 +12154,81 @@ export type Parser
 		var exit = self.newBlock(func, label: b"forexit", line: forTok.line)
 		self.emitCondBranch(header, cond: cond, thenId: body.id, elseId: exit.id, ifTok: forTok)
 
-		// The loop variable: the index itself for a range, a BORROWED element read for an array. `_` is
-		// the discard (`DiscardBindingName`) and binds nothing at all — declaring it would make an
-		// ordinary `_ = f()` discard statement inside the body a write to a `let`.
+		// ⭐⭐ **THE PER-TRIP FRAME, AND IT EXISTS FOR THE STRING FORM ALONE.** A range's loop variable is the
+		// header phi and an array's is a BORROW the array still owns — neither owns anything, so for those
+		// two this frame opens and closes empty and emits not one op. A STRING's element is different in
+		// kind: it is MINTED fresh every trip (`__char_at` allocates a record), so exactly one owner exists
+		// and this loop is it, once per iteration.
+		//
+		// ⚠ **IT IS A FRAME AND NOT A LIST OF DROP SITES, AND THAT IS THE WHOLE POINT.** Four paths leave a
+		// trip — the body's fall-through, `continue`, `break`, and a `return`/`throw` out of the body — and
+		// every one of them already drains owned bindings down to a MARK. Enrolling the element as an
+		// ordinary owned binding of its own frame therefore makes all four correct by construction, where a
+		// per-site drop would be a hand-maintained door list of exactly the kind that has already been
+		// wrong twice in this rung's own machinery (see the write-door debt in PLAN.md).
+		//
+		// The ORDER of the three lines below is load-bearing and each is a different exit path:
+		//   • the frame opens BEFORE the element is minted, so `closeBlock` below pops it and the loop's
+		//     own `end` (which drains `forMark`) does NOT drop a value that is dead by then — and could
+		//     not name it anyway, since the element is defined in the body and does not dominate the exit;
+		//   • `ownedFloor` is captured from THIS mark rather than after the enrolment, so `break`/`continue`
+		//     (`dropLoopScopedOwned`) drain THROUGH the element rather than stopping above it;
+		//   • the fall-through drain below uses the same mark, which is the one path with no drop of its own.
+		let tripMark = self.openBlock()
+
+		// `ownedFloor` is the per-trip frame's height — so a `break`/`continue` releases the body's
+		// declarations AND the trip's minted element, and leaves the iteration source (enrolled below this
+		// mark) for the exit.
+		self.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: tripMark.ownedCount))
+
+		// The loop variable: the index itself for a range, a BORROWED element read for an array, a MINTED
+		// grapheme cluster for a String. `_` is the discard (`DiscardBindingName`) and binds nothing at all
+		// — declaring it would make an ordinary `_ = f()` discard statement inside the body a write to a
+		// `let`.
 		self.currentBlock = body
 		var loopValue = indexPhi
-		if not isRange 'readElement'
+		var graphemeEnd = indexPhi
+		if isString 'readCluster'
+			graphemeEnd = self.emitRuntimeCall(GraphemeEndName, args: pairArgs(source, second: indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(nameTok))
+			loopValue = self.emitRuntimeCall(CharAtName, args: tripleArgs(source, second: indexPhi, third: graphemeEnd), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(nameTok))
+			// ⭐⭐ **THE OWNERSHIP RULING: A STRING'S ELEMENT IS OWNED, WHERE AN ARRAY'S IS BORROWED — and
+			// the difference is not a preference, it is a fact about where the value lives.** Slice A could
+			// borrow because the ARRAY KEEPS the element and its own `__arr_decref` walk destroys it, so
+			// there was an owner to borrow from. A String's grapheme clusters are stored NOWHERE: the
+			// record holds bytes, and a Character is a record, so the value the body sees did not exist
+			// until `__char_at` built it. A minted value has exactly one owner and it is this trip.
+			//
+			// Enrolled even when the name is `_`, and that is not an oversight: the discard binds no NAME
+			// but the record was still allocated, so the drop is owed regardless of whether anything could
+			// read it. (`for _ in s` is exactly `grapheme-clusters/grapheme-boundary-combining-iteration`,
+			// which counts clusters without looking at one — and it would leak every cluster it counted.)
+			//
+			// ⚠ **THE PROVENANCE BIT AND THE BINDING ARE BOTH REQUIRED, AND THE BINDING ALONE IS NOT ENOUGH.**
+			// `ownedBindings` is what DROPS the value; `markValueOwnsHeap` is what makes every other owner-
+			// aware rule recognize it as owned — above all `reassignBindingValue`, which asks
+			// `valueIsOwnedHeap` to decide MOVE-vs-COPY. Without the bit, `found = c` promoted a COPY of the
+			// cluster (a second `__mm_alloc` per trip) and left the original with no owner, which the leak
+			// gate caught as exit 101. `markValueOwnsHeap` rather than `trackOwnedTemp` for the reason a
+			// consumed parameter uses it: this value already drops through `ownedBindings`, and enrolling it
+			// in `pendingTempDrops` as well would drop it a SECOND time at the statement's end.
+			self.markValueOwnsHeap(loopValue)
+			self.ownedBindings.push(VarInfo.createValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
+		end 'readCluster'
+		if not isRange and not isString 'readElement'
 			loopValue = self.emitArrayElementAccessor(func, callee: ArrGetUncheckedName, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(nameTok))
 		end 'readElement'
 		if not nameTok.value.equals(DiscardBindingName) 'bindLoopVariable'
-			// Declared in the `for`'s OWN frame (not the body's), so it is in scope for the whole body
-			// and gone at the loop's `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
+			// Declared in the per-trip frame, so it is in scope for the whole body and gone at the loop's
+			// `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
 			let loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, value: loopValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
 			// ⭐ E3070: the element this loop just read is a BORROW, and it is live for the BODY'S EXTENT
 			// rather than to the variable's last use — see `attachPendingBorrows`'s `liveUntil`. `_` binds
 			// nothing, so nothing can hold the element past its read and there is no borrow to record.
+			// A STRING's element is OWNED rather than borrowed, so there is no borrow to attach — the call
+			// is a no-op on it (`attachPendingBorrows` reads the pending-borrow list the array accessor
+			// fills, and a minted value files none).
 			self.attachPendingBorrows(func, borrower: loopBinding, boundValue: loopValue, liveUntil: bodyEndIndex)
 		end 'bindLoopVariable'
-
-		// `ownedFloor` is the owned-binding height NOW — above the iteration source's own binding, so a
-		// `break` releases the body's declarations and leaves the source for the exit (see below).
-		self.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
 
 		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
 
@@ -12014,10 +12240,23 @@ export type Parser
 
 		// The step block, read off the context rather than spelled again — see `parseWhileStatement`'s
 		// fall-through for why the two loop parsers share that derivation.
+		//
+		// ⚠ **THE FALL-THROUGH IS THE ONE TRIP EXIT WITH NO DROP OF ITS OWN**, so it takes the per-trip
+		// frame's drain here — `break`/`continue` already emitted theirs down to `ctx.ownedFloor` (which IS
+		// this mark), and a `return`/`throw` drained the whole binding stack. It is skipped on a TERMINATED
+		// `bodyEnd` for `parseBlockBody`'s reason: one of those three has already run, and dropping again
+		// would double-free.
 		if not bodyEnd.isTerminated() 'fallsToStep'
+			self.currentBlock = bodyEnd
+			self.emitScopeDrops(tripMark.ownedCount, anchor: forTok)
 			self.recordBranchEdge(bodyEnd, targetId: ctx.continueTargetId, argIds: self.edgeArgsFor(phiVars, preLoop: false))
 			self.emitBranch(bodyEnd, targetId: ctx.continueTargetId)
 		end 'fallsToStep'
+
+		// The per-trip frame closes BEFORE the step/exit wiring: its element is dead past the body, and
+		// leaving it enrolled would let the exit block's own drain (`forMark`) name a value that the exit
+		// does not dominate.
+		self.closeBlock(tripMark)
 
 		// ⭐ **THE STEP BLOCK IS A MERGE, so it carries phis of its own.** Its predecessors are the
 		// body's fall-through AND every `continue`, and a carried `var` assigned before a `continue`
@@ -12028,8 +12267,17 @@ export type Parser
 			var pv = try ctx.phiVars.get(k) otherwise panic("parseForStatement: phiVars.get OOB at {k}")
 			pv.binding.boundValue = self.mintPhiForBinding(step, binding: pv.binding)
 		end 'mkStepPhi'
-		let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-		let nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+		// ⭐ **WHAT ONE STEP IS.** A range and an array advance by ONE (an ordinal); a String advances to the
+		// END OF THE CLUSTER the body just saw, because its index is a BYTE position and a cluster is
+		// 1..18 bytes wide. `graphemeEnd` is computed in the body's first block, which dominates the step
+		// (every predecessor of the step — the fall-through and every `continue` — is inside the body), so
+		// it is read straight rather than carried on a phi. Computing it again here would run the whole
+		// UAX #29 scan a second time per trip.
+		var nextIndex = graphemeEnd
+		if not isString 'ordinalStep'
+			let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+			nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+		end 'ordinalStep'
 		self.recordBranchEdge(step, targetId: header.id, argIds: self.loopHeaderArgs(nextIndex, carried: self.edgeArgsFor(phiVars, preLoop: false)))
 		self.emitBranch(step, targetId: header.id)
 
@@ -12066,7 +12314,11 @@ export type Parser
 		if self.tagOf(source) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(source)) 'array'
 			return
 		end 'array'
-		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — P1.8 slice A iterates an `Array` and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; String / byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
+		// A STRING iterates its GRAPHEME CLUSTERS (P1.8 slice B) — see `parseForStatement`'s String arm.
+		if tagIsText(self.tagOf(source)) 'string'
+			return
+		end 'string'
+		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `String`'s grapheme clusters, and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
 	end 'requireIterableArray'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableArray`, and
@@ -14209,14 +14461,14 @@ export type Parser
 	// so it is a parser invariant break.
 	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId throws ParseError
 		let giveTag = self.tagOf(give)
-		if tagIsText(giveTag) 'text'
+		if tagIsByteRecord(giveTag) 'byteRecord'
 			let saved = self.currentBlock
 			self.currentBlock = arm.exitBlock
 			let owned = self.promoteToOwnedString(give, range: SourceRange.ofToken(matchTok))
 			self.removeFromPendingTemps(owned)
 			self.currentBlock = saved
 			return owned
-		end 'text'
+		end 'byteRecord'
 
 		if self.valueIsNonTextAggregate(give) 'borrowedAggregate'
 			// `named` is the boxed-union tag whose `typeTagName` reads as a bare `int` (it is erased to one
@@ -16721,6 +16973,9 @@ export type Parser
 			// a type parameter is an opaque i64 and a generic instance is a struct pointer, neither in the
 			// float domain.
 			exitCode to genericInstance gives false
+			// A Character is a record pointer, not a number in any domain — `string`'s answer, which
+			// `exitCode to genericInstance` above covers for every other aggregate.
+			character gives false
 		end 'k'
 	end 'typeIsFloatDomain'
 
@@ -16858,15 +17113,26 @@ export type Parser
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
 
-		// ⭐ STRING `==`/`!=` IS A RUNTIME BYTE COMPARE, not a `compare` op (which would compare two box
-		// POINTERS — reference equality answering a question about VALUES). Handled at the TOP, before
-		// `comparableOperands`: two strings do NOT `comparableOperands` (that rule governs ORDERING,
-		// which strings have none of), so a both-`string` pair must be intercepted here or it would be
-		// rejected as a mismatch. A string-vs-non-string pair is NOT both-`string`, so it falls through
-		// to the mismatch gate below — a clean type error, not a crash.
-		if tagIsText(leftTag) and tagIsText(rightTag) 'stringCompare'
+		// ⭐ A BYTE RECORD'S `==`/`!=` IS A RUNTIME BYTE COMPARE, not a `compare` op (which would compare two
+		// box POINTERS — reference equality answering a question about VALUES). Handled at the TOP, before
+		// `comparableOperands`: two byte records do NOT `comparableOperands` (that rule governs ORDERING,
+		// which neither a String nor a Character has), so a matching pair must be intercepted here or it
+		// would be rejected as a mismatch. A byte-record-vs-anything-else pair falls through to the mismatch
+		// gate below — a clean type error, not a crash.
+		//
+		// ⚠ **`leftTag == rightTag` IS THE HALF THAT KEEPS A STRING AND A CHARACTER APART, AND WITHOUT IT
+		// THIS IS A SILENT WRONG ANSWER.** They share a record, so `__str_eq` would happily compare a
+		// one-cluster String against a Character and report `true` for two values whose TYPES disagree —
+		// admitting `s == c` to the language through the back door, where every other rule refuses it
+		// (`typeClassOf` gives them different classes precisely so it is E3005). The equality of the two tags
+		// is what makes the interception a rule about ONE type at a time.
+		//
+		// ⚠ It is spelled `tagIsByteRecord(leftTag) and leftTag == rightTag` rather than testing each side,
+		// because the property being asserted is "both operands are the SAME byte-record type" — one
+		// sentence, not two that a later edit could widen independently.
+		if tagIsByteRecord(leftTag) and leftTag == rightTag 'byteRecordCompare'
 			return try self.emitStringCompare(lhs, rhs: rhs, op: op, opTok: opTok)
-		end 'stringCompare'
+		end 'byteRecordCompare'
 
 		// ⭐ A `union` VALUE HAS NO COMPARISON — of ANY kind (E3066). Refused BEFORE `comparableOperands`,
 		// which would pass a `named`-vs-`named` pair (they agree) and lower to a compare of two BOX
@@ -17420,11 +17686,42 @@ export type Parser
 	// value, and heap values arrive with String at P1.2 — so it REJECTS them with a
 	// positioned diagnostic naming the gap, exactly as v1's own comment says it must
 	// ("report them as a diagnostic instead of silently producing the wrong byte").
+	// ⭐ **A CHARACTER LITERAL HAS TWO MATERIALIZATIONS, DECIDED BY ITS BYTE WIDTH** (P1.8 slice B).
+	//
+	//   * ONE byte — an ASCII character or an escape that produces one — materializes as an ordinary
+	//     INTEGER literal carrying that byte. Unchanged, and load-bearing: it is what makes `cp == '-'`,
+	//     `cp - '0'` and `if c >= '0'` mean what they say (`specs-shv2/char-literal-to-int.md`).
+	//   * MORE than one byte — `'é'`, `'中'`, an emoji, a whole EGC — materializes as a `Character`: an
+	//     immortal `.rdata` byte record, typed `character`.
+	//
+	// ⚠ **THAT SPLIT IS A DIVERGENCE FROM BOTH REFERENCES AND IT IS DELIBERATE.** There, EVERY character
+	// literal is a `Character` and an integer CONTEXT coerces it (`BuiltinCharLiteral`); here the WIDTH
+	// decides, with no coercion. The corpus does not distinguish the two models on any enabled case — the
+	// integer-coercion cases all use single-byte literals and the Character cases all use multi-byte ones
+	// — and the width rule needs no context-dependent literal typing, which shv2 has nowhere else. The
+	// visible consequence is that `'A'.asciiValue()` is not available (an int has no methods) while
+	// `'é'.asciiValue()` is; `character-type.md`'s five single-byte `ascii-value-*` cases stay disabled
+	// naming exactly that, rather than a missing Character.
 	function parseCharLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.charLiteral)
-		let value = try self.decodeCharPatternValue(tok)
-		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+		match decodeCharLiteral(tok.value) 'decoded'
+			byte(value) then return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+			multiByte(bytes) then return self.emitCharacterLiteral(bytes, range: SourceRange.ofToken(tok))
+			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
+			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
+		end 'decoded'
 	end 'parseCharLiteral'
+
+	// ⭐ Append the `stringLiteral` op a multi-byte character literal materializes as, and mint a
+	// `character`-tagged value for it. It is the SAME op a String literal emits — one immortal `.rdata`
+	// byte record, `capacity@16 = RdataBufferCapacity`, never allocated or dropped — because a Character
+	// IS that record (see `GraphemeRuntime`'s header). Only the value's TAG differs, and the tag is what
+	// every rule reads, so `'é' == "é"` is a type error and `print(c)` is refused while `"{c}"` works.
+	function emitCharacterLiteral(bytes ByteArray, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.character, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.stringLiteral(result, bytes: bytes), range: range)
+		return result
+	end 'emitCharacterLiteral'
 
 	// Decode a single-byte character literal to its byte value, or the same positioned diagnostic
 	// `parseCharLiteral` gives for an empty/multi-byte/bad-escape literal. Shared with the match interval
@@ -17433,7 +17730,10 @@ export type Parser
 		match decodeCharLiteral(tok.value) 'decoded'
 			byte(value) then return value
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
-			multiByte then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' (a character wider than one byte is a `Character` — a heap value with `.bytes()` and `.asciiValue()` — which arrives with String; a single-byte literal materializes as its byte value)", line: tok.line, column: tok.column)
+			// A `match` PATTERN needs a compile-time integer bound, and a Character is a record pointer —
+			// there is nothing to compare a scrutinee against here. `match` over Characters is P1.1's
+			// pattern machinery meeting this type, not this rung's.
+			multiByte(bytes) then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' as a `match` pattern — a pattern bound is a compile-time integer and a `Character` is a byte record ({bytes.count()} bytes here); comparing Characters in a `match` needs pattern dispatch over a runtime equality", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 		end 'decoded'
 	end 'decodeCharPatternValue'
@@ -17612,10 +17912,14 @@ export type Parser
 	// next waves; a Stringable struct is P1.7a.
 	function materializeInterpExpr(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
 		let tag = self.tagOf(exprVal)
-		if tagIsText(tag) 'stringPart'
+		// ⚠ `tagIsByteRecord`, NOT `tagIsText`: this asks whether `buffer@0`/`length@8` can be read off the
+		// value and blitted, which is a question about the RECORD. A Character carries the same record, so
+		// `"{c}"` is the identical two loads — and interpolation is how a Character reaches stdout at all,
+		// `print` itself taking a String and refusing one.
+		if tagIsByteRecord(tag) 'byteRecordPart'
 			self.materializeStringRecordPart(exprVal, partBufs: partBufs, partLens: partLens, range: range)
 			return
-		end 'stringPart'
+		end 'byteRecordPart'
 
 		if tagIsIntegral(tag) 'intPart'
 			self.materializeScratchPart(exprVal, converter: IntToStringName, scratchBytes: IntToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
@@ -17701,12 +18005,12 @@ export type Parser
 	// (`trackOwnedTemp`) — an INLINE String (`capacity@16 = InlineBufferCapacity`) whose bytes die with the
 	// record's slot, so its destructor is `TrivialDestructor` (0), exactly a struct's: `__mm_decref` →
 	// `__mm_free` reclaims record and bytes together, with no external buffer and no destructor cascade.
-	function emitStringInterp(partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) returns ValueId
+	function emitStringInterp(partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange, resultTag ValueTypeTag = ValueTypeTag.string) returns ValueId
 		let totalLen = self.sumPartLengths(partLens, range: range)
 
 		let overhead = self.emitLiteral(StringInterpOverheadBytes, valueType: MaxonType.integer, range: range)
 		let allocSize = self.emitMachineWordAdd(totalLen, rhs: overhead, range: range)
-		let result = self.emitBoxAlloc(allocSize, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		let result = self.emitBoxAlloc(allocSize, resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(result)
 
 		// The inline byte region begins right after the record. Copy each part in at a cursor that advances
@@ -18972,6 +19276,12 @@ export type Parser
 		if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
 			return try self.parseStringMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
 		end 'stringMethod'
+		// A CHARACTER receiver (P1.8 slice B) — its own dispatcher, for the reason it is its own type.
+		// It takes no `receiverOwner`: no Character method writes its receiver (the type is immutable at
+		// this slice), so there is no mutation to attribute to an owning parameter.
+		if maxonTypeTag(binding.varType) == ValueTypeTag.character 'characterMethod'
+			return try self.parseCharacterMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
+		end 'characterMethod'
 
 		// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
 		// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
@@ -19370,7 +19680,17 @@ export type Parser
 			return try self.parseStringSplit(func, binding: binding, range: range)
 		end 'split'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, and the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`); `findFirst`/`findLast`/`slice` traffic in `StringIndex`, and `count`/`bytes`/`graphemes`/`utf16` need the grapheme segmenter — both arrive at P1.8 Slice B", line: methodTok.line, column: methodTok.column)
+		// ⭐ P1.8 Slice B. `count()` is the GRAPHEME count — O(n) per call, exactly as the reference's is
+		// (see `GraphemeRuntime.buildGraphemeCount`). `bytes()` is the byte view, shared with Character's.
+		if methodTok.value.equals(StringCountMethod) 'count'
+			try self.consumeEmptyArgList()
+			return self.emitRuntimeCall(GraphemeCountName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'count'
+		if methodTok.value.equals(ByteViewMethod) 'bytes'
+			return try self.parseByteView(binding.boundValue, range: range)
+		end 'bytes'
+
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, and the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`); `findFirst`/`findLast`/`slice` traffic in `StringIndex`, which arrives at P1.8 Slice B2, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
 	end 'parseStringMethodCall'
 
 	// `s.startsWith(p)` / `s.endsWith(p)` / `s.contains(p)` — the three predicates, which differ ONLY in which
@@ -19424,6 +19744,66 @@ export type Parser
 		self.trackOwnedTemp(parts)
 		return parts
 	end 'parseStringSplit'
+
+	// ⭐ **`.bytes()` — ONE EMITTER FOR A STRING'S AND A CHARACTER'S**, because they are one question about
+	// one record: hand back this record's bytes as an `Array with Byte`.
+	//
+	// The array is created HERE, through `emitArrayCreateOp` — the one array-creation door — and handed to
+	// `__str_to_bytes` to fill, which is `split`'s split of labour and for `split`'s reason: element size
+	// and the `element_destroy@40` stamp are decided by the same code a `b"…"` literal uses, so a
+	// `.bytes()` result and a byte-string literal cannot disagree about what an `Array with Byte` is. They
+	// are in fact the SAME interned instance (`internArrayByteInstance`).
+	//
+	// ⚠ **IT MATERIALIZES; THE REFERENCE'S `ByteView` IS LAZY.** shv2 has no `Iterable`, no associated
+	// types and no cursor protocol — the same absence that made `for x in <array>` an index counter rather
+	// than v1's heap iterator — so `.bytes()` copies into the one collection shv2 has. `.count()` and
+	// `for b in x.bytes()` then work through machinery that already exists, at one allocation and one copy.
+	// The result is an OWNED temp whose `__arr_decref` frees the record and its buffer.
+	function parseByteView(record ValueId, range SourceRange) returns ValueId throws ParseError
+		try self.consumeEmptyArgList()
+		let bytes = self.emitArrayCreateOp(self.signatures.internArrayByteInstance(), range: range)
+		_ = self.emitRuntimeCall(StrToBytesName, args: pairArgs(record, second: bytes), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.trackOwnedTemp(bytes)
+		return bytes
+	end 'parseByteView'
+
+	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `parseStringMethodCall` twin, and a
+	// separate dispatcher for the reason the two types are separate: a Character has no `append`, no
+	// `split` and no case conversion, and a String has no `asciiValue`. Sharing one dispatcher would make
+	// each type's method set the union of both, which is precisely the type-safety the distinct tag buys.
+	//
+	// The receiver must be LIVE (a moved-from Character touched through a method is use-after-move, E3102),
+	// checked before the method name is resolved — `parseStringMethodCall`'s guard, for its reason.
+	//
+	// It takes no `resultUsed`, unlike its String twin: every Character method RETURNS a value, so there is
+	// no void result for a value-position call to misuse (`append` is the String method that needs it).
+	function parseCharacterMethodCall(binding VarInfo, baseTok Token) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(baseTok, last: methodTok)
+
+		if methodTok.value.equals(ByteViewMethod) 'bytes'
+			return try self.parseByteView(binding.boundValue, range: range)
+		end 'bytes'
+		// `byteLength()` is `length@8` — the UTF-8 width of the whole cluster, which for an EGC is the sum
+		// of its codepoints' widths (a family emoji is 18). The same field load a String's `byteLength()`
+		// is, because it is the same field of the same record.
+		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
+			try self.consumeEmptyArgList()
+			return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: range)
+		end 'byteLength'
+		// ⚠ **`asciiValue()` IS ABSENT ON PURPOSE, NOT MISSING BY OVERSIGHT.** It is a THROWING method
+		// (`stdlib/Character.maxon:154-166` — `CharacterError.notAscii`), and its two corpus cases spell the
+		// call `if try c.asciiValue()`, the SUCCESS-TEST form of `try` in a condition. shv2 does not have
+		// that form for ANY throwing call — measured on an already-throwing builtin: `if try a.first()` on
+		// an `Array` is `E3005: 'if' requires a bool condition, got 'int'` — so it is a gap in the `try`
+		// machinery, not in this type. Shipping the method regardless would be vocabulary ahead of its
+		// consumer, and a non-throwing version would have to answer a non-ASCII cluster with a sentinel.
+		throw ParseError.unsupported("Character method '{String.from(methodTok.value)}' -- shv2 provides `bytes` and `byteLength`; `asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus", line: methodTok.line, column: methodTok.column)
+	end 'parseCharacterMethodCall'
 
 	// `( )` — the empty argument list of a no-argument BUILTIN call, whichever family it belongs to: a String
 	// accessor (`byteLength`, `toLower`, `toUpper`), an array method (`count`, `first`, `pop`, `clear`, …), a
@@ -22176,6 +22556,9 @@ export type Parser
 			// This is what a `b.value` read on `type Box uses T` loads through.
 			typeParameter then return declared
 			genericInstance then return declared
+			// A CHARACTER field stores a POINTER to the fused byte record, exactly as a String field
+			// does — already concrete, so `maxonTypeToStdType` gives the machine word directly.
+			character then return declared
 			named then break 'kind'
 		end 'kind'
 
@@ -23652,7 +24035,10 @@ export type Parser
 		match decodeCharLiteral(tok.value) 'decoded'
 			byte(value) then return ConstValue.create(value, tag: ValueTypeTag.integer)
 			empty then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column))
-			multiByte then throw ConstEvalError.defective(ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' (a character wider than one byte is a `Character` — a heap value — which arrives with String; a single-byte literal materializes as its byte value)", line: tok.line, column: tok.column))
+			// A TOP-LEVEL binding folds to a compile-time constant, and a Character is a heap-shaped record
+			// the constant evaluator has no representation for (`SignatureIndex.globalStdType` says the same
+			// from the other end). A module-scope `let c = 'é'` is therefore refused rather than folded.
+			multiByte(bytes) then throw ConstEvalError.defective(ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' at module scope — a top-level binding's initializer folds to a compile-time constant and a `Character` is a byte record ({bytes.count()} bytes here); declare it inside a function", line: tok.line, column: tok.column))
 			badEscape(text) then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column))
 		end 'decoded'
 	end 'evalConstCharLiteral'
@@ -23950,6 +24336,19 @@ export type Parser
 		// intrinsic 99.99% of the time. These four `equals` allocate nothing and `scale-test` returns
 		// to bit-for-bit parity with main. (The `flat union` rule in ARCHITECTURE.md is about NESTING
 		// costing a box per level; this is the same accounting one level down.)
+		// ⭐ The two UAX #29 CLASSIFIERS (P1.8 slice B). Recognized by name after their arguments are parsed,
+		// exactly as the math intrinsics above are, and routed straight to the grapheme runtime. Both take
+		// one codepoint; `graphemeBreakProperty` yields the 0..13 property and `isExtendedPictographic` a
+		// bool. See `GraphemeBreakPropertyBuiltinName` for why these are bare builtins rather than
+		// declarations, and what that reserves.
+		if callee.equals(GraphemeBreakPropertyBuiltinName) 'gbpBuiltin'
+			return try self.emitGraphemeClassifier(args, runtimeName: GbpName, builtinName: GraphemeBreakPropertyBuiltinName, resultTag: ValueTypeTag.integer, calleeTok: anchor)
+		end 'gbpBuiltin'
+
+		if callee.equals(IsExtendedPictographicBuiltinName) 'extPictBuiltin'
+			return try self.emitGraphemeClassifier(args, runtimeName: ExtPictName, builtinName: IsExtendedPictographicBuiltinName, resultTag: ValueTypeTag.boolean, calleeTok: anchor)
+		end 'extPictBuiltin'
+
 		if callee.equals(FloorBuiltinName) 'floorBuiltin'
 			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.floor, name: callee, calleeTok: anchor)
 		end 'floorBuiltin'
@@ -24111,6 +24510,26 @@ export type Parser
 	// It requires exactly one `String` argument and returns VOID, so a call in VALUE position is
 	// rejected exactly as a void user-call is (`mintDeclaredCallResult`'s `voidCallResultUsed`), and at
 	// the same anchor.
+	// ⭐ **BOTH UAX #29 CLASSIFIERS FROM ONE EMITTER** — they differ only in the runtime entry point they
+	// name and the tag of their result, so the arity check, the operand-domain check and the call are
+	// written once. A codepoint is an INTEGER, checked with `tagIsIntegral` rather than
+	// `== ValueTypeTag.integer` for `requireSetKeyMatchesType`'s measured reason: a value whose static type
+	// is a ranged alias carries the `named` tag until TypeResolution collapses it, so the narrow spelling
+	// would falsely refuse `graphemeBreakProperty(cp)` where `cp` is a `Codepoint`-typed parameter.
+	function emitGraphemeClassifier(args ValueIdArray, runtimeName ByteArray, builtinName ByteArray, resultTag ValueTypeTag, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != GraphemeClassifierArity 'arity'
+			throw ParseError.builtinArity(String.from(builtinName), expected: GraphemeClassifierArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let arg = try args.get(0) otherwise panic("emitGraphemeClassifier: args.count() == GraphemeClassifierArity just checked but get(0) failed")
+		let argTag = self.tagOf(arg)
+		if not tagIsIntegral(argTag) 'notACodepoint'
+			throw ParseError.builtinOperandType(String.from(builtinName), required: typeTagName(ValueTypeTag.integer), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notACodepoint'
+
+		return self.emitRuntimeCall(runtimeName, args: singletonArgs(arg), resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitGraphemeClassifier'
+
 	function emitPrint(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
 		if args.count() != PrintArity 'arity'
 			throw ParseError.builtinArity(String.from(PrintBuiltinName), expected: PrintArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
@@ -24838,11 +25257,11 @@ export type Parser
 			return argValue
 		end 'scalar'
 		if not self.valueIsOwnedHeap(argValue) 'borrowedManaged'
-			if tagIsText(self.tagOf(argValue)) 'string'
+			if tagIsByteRecord(self.tagOf(argValue)) 'byteRecord'
 				let owned = self.promoteToOwnedString(argValue, range: SourceRange.ofToken(anchor))
 				self.removeFromPendingTemps(owned)
 				return owned
-			end 'string'
+			end 'byteRecord'
 			throw ParseError.unsupported("passing a borrowed struct/union value at a CONSUMING argument position — the callee moves it into durable storage, so ownership must transfer, and a borrowed struct/union has no `clone`, so its owner keeps a live reference the callee's field would dangle behind; forwarding a borrowed aggregate parameter to a consuming callee is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
 		end 'borrowedManaged'
 		try self.poisonMoveSource(argValue, anchor: anchor)

@@ -142,7 +142,7 @@ end 'main'
 ```
 
 <!-- disabled-test: char-literal-codepoint-iteration -->
-<!-- P1.8b/c `String.codepoints()` — the `for` statement itself landed in P1.8 slice A; a codepoint VIEW source has not -->
+<!-- A METHOD ON A NON-BINDING RECEIVER — `"a-b-c".codepoints()` calls a method on a string LITERAL, which shv2 refuses for every method (the filed, pre-existing gap: `"abc".toUpper()` is `E2015: Unsupported: . statement`). `String.codepoints()` is a second, smaller blocker behind it: P1.8 Slice B builds the grapheme segmenter and `.bytes()`, and a CODEPOINT view has no other consumer in the corpus -->
 ### Character literal comparison during codepoint iteration
 
 ```maxon
