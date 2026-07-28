@@ -1339,6 +1339,15 @@ public partial class ARM64CodeEmitter() {
     // Zero X29 and X30 so the frame chain terminates here for stack walkers
     EmitMovRegImm(ARM64Register.X29, 0);
     EmitMovRegImm(ARM64Register.X30, 0);
+
+    // Zero X28 (the dedicated P* register) to state the "no green-thread context" case the
+    // compiled-function prologue already tests for (`CBZ X28` in EmitPrologue). Until __gt_init
+    // sets it, the main thread genuinely has no P — but that was true only by luck, because X28
+    // arrives from dyld and is merely LIKELY to be zero. Anything called in this window with a
+    // non-zero X28 takes the guard's live path and dereferences [X28, #POffCurrentGt], a wild
+    // load into whatever dyld left behind. Costing one instruction, this makes the window's
+    // invariant a fact of the code rather than of the loader.
+    EmitMovRegImm(ARM64Register.X28, 0);
     // Set up a minimal frame: STP x29, x30, [sp, #-32]!
     EmitWord(0xA9BE7BFD); // STP x29, x30, [sp, #-32]!
     EmitMovRegReg(ARM64Register.X29, ARM64Register.Sp);
@@ -1348,11 +1357,6 @@ public partial class ARM64CodeEmitter() {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X11, 0, 8); // STR X9, [X11]
     EmitAdrpAddGlobalFixup(ARM64Register.X11, "__argv_global", 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X10, ARM64Register.X11, 0, 8); // STR X10, [X11]
-
-    // Call module init if present
-    if (!string.IsNullOrEmpty(moduleInitFunctionName)) {
-      EmitBranchLink(moduleInitFunctionName);
-    }
 
     // Initialize green thread runtime
     EmitBranchLink("__gt_init");
@@ -1374,6 +1378,30 @@ public partial class ARM64CodeEmitter() {
     // Initialize the always-present debug agent (checks MAXON_DEBUG; dark and ~free if unset).
     if (!Compiler.NoDebugAgent) {
       EmitBranchLink("__dbg_init");
+    }
+
+    // call __module_init (initializes globals) — LAST of the init calls and immediately before
+    // main, which is where the x64 stub puts it (X86CodeEmitter.EmitStartWrapper) and where it
+    // has to be. It is the first thing in the process that runs COMPILED code, so every floor
+    // it stands on must already be down, and three are:
+    //
+    //   __gt_init  — sets X28 = P[0], which every compiled prologue's stack-growth check
+    //                dereferences, AND calls __slab_init (Step 9). A global initializer
+    //                allocates; running it first sent every managed global down __slab_alloc's
+    //                not-yet-initialized OS-direct fallback — surviving, but on an allocation
+    //                path x64 never takes for the same program, which the leak checker and
+    //                --mm-trace both see.
+    //   __io_init  — a global initializer that touches a file or socket needs kqueue up.
+    //   __dbg_init — the agent cannot report a stop inside code that ran before it armed.
+    //
+    // This stub called it FIRST until 2026-07-27. The x64 twin has always said the invariant out
+    // loud ("must be non-NULL before any user code runs (including module initialization)") and
+    // __gt_init on both backends still says "nothing allocates before __gt_init returns" — on
+    // this target that was false. Neither other compiler could drift this way: v1 inserts the
+    // call into mrt_start's shared IR before `call main` (patchMrtStartWithModuleInits) and shv2
+    // shares appendModuleInitCall across its stubs. Only this compiler writes the sequence twice.
+    if (!string.IsNullOrEmpty(moduleInitFunctionName)) {
+      EmitBranchLink(moduleInitFunctionName);
     }
 
     // Call main
