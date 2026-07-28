@@ -340,6 +340,38 @@ function markerInterface(name ByteArray) returns IrInterface
 	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create())
 end 'markerInterface'
 
+// ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
+// AGREE WITH IT (P1.7a slice 2b-iv-B).** A witness table's method slot is typed by the INTERFACE, so three
+// parties have to spell one signature: the DISPATCH SITE (which derives it from the declarations just below,
+// through `Parser.interfaceReturnMaxonType` → `valueTagToStdType`), the synthesized IMPL that lands in the
+// slot (`BuiltinConformanceRuntime`, `StringRuntime.buildStrEq`), and the hand-built `Set` runtime whose
+// bodies dispatch `hash`/`equals` through witnesses of their own (`SetRuntime`). Nothing makes a synthesized
+// impl obey a conformance check — there is none to run — so without this the three were three copies.
+//
+// ⚠ **THEY HAD ALREADY DRIFTED, AND ONLY ONE TARGET COULD SEE IT.** `equals` returns `bool` — an `i1`, a
+// wasm `i32` — while every impl and the `Set` runtime declared the uniform machine word `i64`. On x64/arm64 a
+// `bool` rides a 64-bit register as readily as a tag, so the disagreement computed the right answer
+// everywhere; on wasm, whose `call_indirect` checks the declared functype against the target's own EXACTLY,
+// it was a **`wasm trap: indirect call type mismatch`** across 18 spec cases (`set`, `equatable`,
+// `primitive-conformance`, `string-conformance`).
+//
+// It is keyed by the RENDERED RETURN-TYPE NAME each declaration below already carries, so adding a protocol
+// method means writing its return type once — in the declaration — and this answers for it.
+export function builtinProtocolResultStdType(returnTypeName ByteArray) returns StdType
+	// `bool` is the one sub-64 result: `valueTagToStdType(boolean)` is `i1`.
+	if returnTypeName.equals(BoolConformerName) 'boolResult'
+		return StdType.i1
+	end 'boolResult'
+
+	// `HashValue` is a ranged int alias and `Ordering` an enum — both collapse to a machine word
+	// (`valueTagToStdType`'s `named`/`integer` arms), which is what makes them agree with the impls already.
+	if returnTypeName.equals(HashValueTypeName) or returnTypeName.equals(OrderingTypeName) 'machineWordResult'
+		return StdType.i64
+	end 'machineWordResult'
+
+	panic("builtinProtocolResultStdType: '{String.from(returnTypeName)}' is not a synthesized protocol method's return type — the three below return `bool`, `HashValue` and `Ordering`, and a fourth must be given its Std type here rather than assumed to be a machine word")
+end 'builtinProtocolResultStdType'
+
 // The SYNTHESIZED stdlib protocol interfaces, verbatim from stdlib/Interfaces.maxon —
 // so `implements Stringable`/`Hashable`/… resolves without shv2 reading the stdlib (the
 // same reason `String`/`Array` are synthesized). Returns `notFound` for every other name,

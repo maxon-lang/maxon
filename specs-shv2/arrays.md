@@ -1391,7 +1391,7 @@ end 'main'
 ```
 
 <!-- test: multi-line-string-literal-elements -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let words = ["alpha",

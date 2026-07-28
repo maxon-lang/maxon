@@ -705,8 +705,16 @@ end 'buildPrintString'
 // for a `while`, here built directly because a runtime function has no parser. The header's phi
 // `argType` is set to i64 explicitly: `retypeBlockArgs` runs in `lowerMaxonToStd`, which these
 // post-pipeline functions never pass through.
+// ⭐ **IT RETURNS `bool`, NOT A MACHINE WORD, AND THE WITNESS SLOT IS WHY** (P1.7a slice 2b-iv-B). Under the
+// `String.equals` name this graph lands in an `Equatable` witness table, whose slot every dispatch site types
+// from `Equatable.equals(other Self) returns bool` — so its declared result must be the one
+// `builtinProtocolResultStdType` gives that declaration, an `i1`. Declared `i64` it agreed on the register
+// targets (a `bool` rides a 64-bit register) and trapped `indirect call type mismatch` on wasm. The `__str_eq`
+// name shares the declaration for the reason it shares the body: ONE graph cannot have two signatures, and
+// the operator path already types its result `boolean` at the call site (`Parser.emitStringEquality`), so
+// this is the type it was always claiming to return.
 export function buildStrEq(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")

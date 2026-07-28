@@ -118,7 +118,7 @@ end 'main'
 ```
 
 <!-- test: witness-method-kept -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 `Point.digest` is reached only through the `.rdata` witness table `Box`'s constrained `T` dispatches on —
 there is no `call` naming it anywhere in the module. It is rooted because the table's method slot names
 it.
@@ -163,7 +163,7 @@ end 'main'
 ```
 
 <!-- test: descriptor-destructor-kept -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A `Container with String`'s element destructor is named by ONE thing in the whole program: the
 `destroyFunc@40` slot of the instance's `.rdata` layout descriptor, which the shared opaque `Array` body
 reads back at runtime and calls indirectly. Pruning it leaves that slot pointing at freed code — so the

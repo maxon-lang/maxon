@@ -21,7 +21,7 @@ parameters separate with `,` (`where T is Digest, U is Tagged`).
 ## Tests
 
 <!-- test: where-clauses.witness-user-dispatch -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Dispatch a USER interface method through the witness of a constrained type parameter — the concrete type is
 unknown in `Box.itemDigest`'s shared body, so `self.item.digest()` goes through the `(Point, Digest)` witness.
 ```maxon
@@ -69,7 +69,7 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-dispatch-in-loop -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same witness dispatch driven in a loop — the fused witness call and its element borrow must be leak-free
 across iterations.
 ```maxon
@@ -123,7 +123,7 @@ end 'main'
 ```
 
 <!-- test: where-clauses.two-constraints -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Two constraints on one parameter (`where T is Digest and Tagged`) reserve two witness slots; a dispatch of
 each interface's method reads its own slot.
 ```maxon
@@ -178,7 +178,7 @@ end 'main'
 ```
 
 <!-- test: where-clauses.forward-through-sibling -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A generic method that dispatches on `T` reached through a sibling self-call — the caller forwards its own
 witness slot to the sibling (no reload), so both drive the same witness.
 ```maxon
@@ -229,7 +229,7 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-temporary-arg -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The element passed to the container is a TEMPORARY (an rvalue constructor result, not a named binding).
 Its borrow escapes into the container's field, so it is RETAINED (co-owned) at the constructor feed — the
 box holds a real second reference that outlives the temporary's statement, the later witness dispatch reads

@@ -481,7 +481,7 @@ end 'main'
 ```
 
 <!-- test: reassign-managed-opaque-field-in-generic-method -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Reassigning a bare opaque `T` field INSIDE a shared generic method body (`self.saved = next`) WORKS when an
 instantiation makes it MANAGED (`Box with String`): the field's old opaque value is dropped through the
 descriptor-gated single-value drop (`__drop_type_param`), whose install is now decoupled from the array floor,
@@ -509,7 +509,7 @@ end 'main'
 ```
 
 <!-- test: reassign-managed-opaque-field-concrete-instance -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same reassignment on a CONCRETE instance (`b.saved = "beta"` where `b` is `Box with String`) WORKS too:
 the field retypes to the instance's substituted `String`, so the old String drops through `__str_decref`
 (Finding B's concrete-field fix) and the new one moves in — no descriptor needed, the field is concrete here.
@@ -533,7 +533,7 @@ end 'main'
 ```
 
 <!-- test: reassign-opaque-managed-field-in-loop -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Reassigning a managed opaque `T` field REPEATEDLY (a loop of `b.replace(...)`) drops each previous value
 before storing the next: every iteration frees the old String exactly once and stores a fresh one, and the
 final value drops at the container's own scope exit — a balanced drop-per-store, leak-free under `__mm_free`
@@ -564,7 +564,7 @@ end 'main'
 ```
 
 <!-- test: reassign-opaque-field-struct-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The opaque `T` need not be a String: a `Box with Holder` whose `Holder` owns a `String` field drops the old
 struct through the descriptor's `destroyFunc@40` (`__destruct_<Holder>`, which frees the Holder's String),
 then moves the new struct in. Both the shared-body reassign (`self.saved = next`) and the container's own

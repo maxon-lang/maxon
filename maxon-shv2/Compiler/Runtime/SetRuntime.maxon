@@ -227,15 +227,19 @@ end 'emitSetMask'
 // The fused `callMem [hashWitness + 24]`; for an int key the slot holds `int.hash`, so this is `elem & 0xFFFFFFFF`.
 function emitSetKeyHash(module StdModule, block IrBlock, hashWitness ValueId, elem ValueId, ids ValueMinter) returns ValueId
 	let hash = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: SetWitnessMethodIndex, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
+	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: SetWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
 	return hash
 end 'emitSetKeyHash'
 
 // `a.equals(b)` through the `Equatable` witness — `witnessCall(eqWitness, method 0, a, b) -> bool` (0/1). For
 // an int key the slot holds `int.equals`, so this is `a == b`.
+//
+// ⚠ The result type is `builtinProtocolResultStdType`'s and NOT a hand-written `i64`, because this runtime is
+// a THIRD party to a witness slot's signature (beside the dispatch site and the impl) and a slot's signature
+// is checked exactly on wasm — see that function. `bool` here, a machine word for the `hash` above.
 function emitSetKeyEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, ids ValueMinter) returns ValueId
 	let equal = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: SetWitnessMethodIndex, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0 as ArgFloatMask, args: twoArgs(a, second: b)))
+	module.appendOp(block, op: StdOp.witnessCall(equal, witnessAddr: eqWitness, methodIndex: SetWitnessMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), argFloatMask: 0 as ArgFloatMask, args: twoArgs(a, second: b)))
 	return equal
 end 'emitSetKeyEquals'
 

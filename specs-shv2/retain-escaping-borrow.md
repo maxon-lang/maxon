@@ -32,7 +32,7 @@ future rung.)
 ## Tests
 
 <!-- test: cross-scope-temporary -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The RED: a container `b` in the OUTER scope is reassigned inside an inner block to hold a TEMPORARY
 element (`b = PointBox.create(Point.create(3, y: 4))`). The temporary is retained (co-owned) by the
 box, so a later witness dispatch on `b`'s element reads a LIVE element rather than freed memory, and
@@ -81,7 +81,7 @@ end 'main'
 ```
 
 <!-- test: named-inner-binding -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same escape through a NAMED inner binding (`let pInner = Point.create(3, y: 4); b =
 PointBox.create(pInner)`), which the earlier scope-local materialization never covered. `pInner` is
 retained, so the inner scope's drop lowers its count without freeing it, and `b`'s later read is live.
@@ -130,7 +130,7 @@ end 'main'
 ```
 
 <!-- test: loop-carried-reassignment -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The container is reassigned each iteration to a fresh inner-scope element. Every iteration retains the
 new element and the loop-carried reassignment drops the previous container's co-owned element exactly
 once — no leak accumulates across iterations, and the final read is live.

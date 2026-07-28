@@ -127,11 +127,12 @@ error E3019: specs/fragments/immutable-method-call/remove-on-let-set-error.test:
 ```
 
 <!-- test: contains-on-let-set-ok -->
-<!-- targets: x64-windows, x64-linux -->
-A read-only `Set` method on a `let` receiver is fine. Restricted to x64 like every other Set case that
-actually COMPILES a set: a `Set` instance's descriptor needs `destroyFunc@40` patched with
-`funcAbs64InRdata`, which only the x64 writers do. (The `let`-receiver ERROR cases above are refused
-before any of that, so they carry no restriction.)
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+A read-only `Set` method on a `let` receiver is fine. Restricted like every other Set case that actually
+COMPILES a set: a `Set` instance's descriptor needs `destroyFunc@40` patched with `funcAbs64InRdata`,
+which the x64 writers bake as a `.text` VA and the wasm backend as a funcref-table index — arm64 still
+refuses it. (The `let`-receiver ERROR cases above are refused before any of that, so they carry no
+restriction.)
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

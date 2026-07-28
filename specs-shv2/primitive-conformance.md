@@ -37,8 +37,10 @@ operators (see `comparable.md`):
   `interface Weird` with `function equals(other Self) returns Integer` would otherwise be accepted and
   `a == b` would evaluate to whatever integer the author's `equals` returned.
 
-The witness dispatch rides the x64 rdata function-pointer relocation, so these cases are x64-only (as the
-`where-clauses` witness cases are); the E3005 reject is a compile error and is target-independent.
+The witness dispatch rides the rdata function-pointer relocation, which the x64 writers bake as a `.text`
+VA and the wasm backend as a funcref-table index, so these cases run on x64 and wasm (as the
+`where-clauses` witness cases do) and arm64 still refuses them; the E3005 reject is a compile error and is
+target-independent.
 
 Float `hash` is a separate future mechanism and is NOT covered here. `Comparable`/`Ordering` and DIRECT
 dispatch on a concrete value (`i.hash()`, `i.equals(j)`, `i.compare(j)`, reaching the very same synthesized
@@ -48,7 +50,7 @@ impls without a witness table) have both shipped and have their own specs — `c
 ## Tests
 
 <!-- test: primitive-conformance.hash-identity -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 An `int` argument's `Hashable` witness dispatches `element.hash()` to the synthesized `int.hash` — identity
 for a value inside `u32`.
 ```maxon
@@ -79,7 +81,7 @@ end 'main'
 ```
 
 <!-- test: primitive-conformance.hash-low32-mask -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 `int.hash()` masks to the low 32 bits: a value above `u32.max` folds down, and a negative value's two's
 complement folds to its low 32 bits (`-1` -> `4294967295`).
 ```maxon
@@ -118,7 +120,7 @@ end 'main'
 ```
 
 <!-- test: primitive-conformance.equals-via-constraint -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 An `int` argument's `Equatable` witness dispatches `element.equals(other)` to the synthesized `int.equals`.
 ```maxon
 typealias Integer = int(0 to u32.max)
@@ -151,7 +153,7 @@ end 'main'
 ```
 
 <!-- test: primitive-conformance.hashable-and-equatable -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The `Set` key shape — a parameter constrained with `where T is Hashable and Equatable` dispatches BOTH
 witnesses on an `int` argument, each to its synthesized impl.
 ```maxon
@@ -191,7 +193,7 @@ end 'main'
 ```
 
 <!-- test: primitive-conformance.eq-with-equatable -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The `==` OPERATOR on an Equatable-constrained type parameter lowers to the Equatable witness dispatch — for
 an `int` argument that is the synthesized `int.equals`, so `b.eq(42)` is true and the `if` returns 1.
 ```maxon

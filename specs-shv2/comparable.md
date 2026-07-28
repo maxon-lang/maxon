@@ -70,9 +70,10 @@ half-shadowing it. The same rule covers the other compiler-owned type names, `Ha
 A RANGED typealias over one of those names stays legal: it erases to `int`/`float`, which is what the
 builtin resolves to as well, so there is no second meaning for the name to acquire.
 
-The witness dispatch rides the x64 rdata function-pointer relocation, so the witness cases are x64-only
-(as the `primitive-conformance`, `string-conformance` and `where-clauses` witness cases are). The
-compile-error cases and the pure-`Ordering` value cases are target-independent.
+The witness dispatch rides the rdata function-pointer relocation, which the x64 writers bake as a `.text`
+VA and the wasm backend as a funcref-table index, so the witness cases run on x64 and wasm (as the
+`primitive-conformance`, `string-conformance` and `where-clauses` witness cases do). arm64 still refuses
+that relocation. The compile-error cases and the pure-`Ordering` value cases are target-independent.
 
 Direct `i.compare(j)` on a concrete primitive value, float/bool `Comparable`, `Character` ordering, and
 sorting are separate future mechanisms and are NOT covered here.
@@ -80,7 +81,7 @@ sorting are separate future mechanisms and are NOT covered here.
 ## Tests
 
 <!-- test: comparable.compare-via-witness -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The headline shape: `self.a.compare(self.b)` inside `where T is Comparable` dispatches `Comparable`'s
 `compare` through witness slot 0 to the synthesized `int.compare`, and the `Ordering` it returns is
 matched by case name. Three pairs cover all three verdicts — `3` vs `9` is `lessThan` (1), `7` vs `7`
@@ -144,7 +145,7 @@ end 'main'
 ```
 
 <!-- test: comparable.user-type-direct-compare -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A user type conforming explicitly: `implements Comparable` plus `compare(other Self) returns Ordering`
 type-checks (the interface's `Self` substitutes `Point`), and the method is callable by CONCRETE
 dispatch — no witness table — with its `Ordering` result matched by case name.
@@ -184,7 +185,7 @@ end 'main'
 ```
 
 <!-- test: comparable.ordering-operators-via-witness -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 All four ordering OPERATORS on a `Comparable`-constrained type parameter, each lowered to the `compare`
 witness dispatch plus an ordinal test on its `Ordering`. `mask()` packs the four verdicts as
 `lt|le<<1|gt<<2|ge<<3`, so `3 < 9` reads `3` (lt+le), `7` vs `7` reads `10` (le+ge) — the case that
@@ -251,7 +252,7 @@ end 'main'
 ```
 
 <!-- test: comparable.ordering-reversed-operands -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The dispatch is ASYMMETRIC — the LEFT operand is the witness receiver — so `self.b < self.a` is a
 different question from `self.a < self.b`. On `(3, 9)` the forward form is true and the reverse false,
 so only the forward branch fires and the exit code is `1`.
@@ -291,7 +292,7 @@ end 'main'
 ```
 
 <!-- test: comparable.concrete-typeparam-result-stays-scalar -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A generic-method result read in a NON-generic caller carries the `typeParameter` tag but has a known
 concrete type, so `v < 9` stays an ordinary scalar comparison — it must NOT be rerouted to a witness
 (there is none: `Box` declares no `where` constraint at all). `7 < 9` holds, so the exit code is `1`.
@@ -324,7 +325,7 @@ end 'main'
 ```
 
 <!-- test: comparable.compare-in-loop-no-leak -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A generic instance constructed, compared through BOTH witness forms (the `compare` method and the `<`
 operator), and dropped every iteration of a 100-iteration loop — the standing leak/double-free probe.
 If the witness receiver were consumed rather than borrowed, the per-iteration drop would free an
@@ -543,7 +544,7 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Orderi
 ```
 
 <!-- test: comparable.ranged-alias-over-owned-name-is-legal -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The other side of that line, so the reject cannot creep: a RANGED typealias over a compiler-owned name is
 ACCEPTED. It mints no identity — it erases to `int`, the same thing `HashValue` resolves to — so the
 `Hashable` witness keeps working through it and `b.itemHash()` still reads `97`.

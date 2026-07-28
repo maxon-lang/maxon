@@ -31,7 +31,7 @@ Conformance validates the throws relation in BOTH directions:
 ## Tests
 
 <!-- test: witness-throws.propagate-through-witness -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The throw is taken through the witness: `Point.digest` throws, `Box.itemDigest` propagates it with a bare
 `try`, and `main`'s `otherwise` yields 55. A dropped error flag would return the impl's throw-path primary
 (0) instead.
@@ -83,7 +83,7 @@ end 'main'
 ```
 
 <!-- test: witness-throws.success-edge-through-witness -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The SAME program with a value that does not throw — the success edge of the throwing witness dispatch must
 still carry the real result (42), so a fix to the error edge cannot be bought by breaking this one.
 ```maxon
@@ -134,7 +134,7 @@ end 'main'
 ```
 
 <!-- test: witness-throws.try-binding-inside-generic-body -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The `try`-BOUND spelling inside the shared generic body — `let d = try self.item.digest()`. A `try` target
 reached through a `self.<field>.<method>()` chain whose field is a type parameter must resolve to the witness
 dispatch, not to a further field access.
@@ -188,7 +188,7 @@ end 'main'
 ```
 
 <!-- test: witness-throws.otherwise-inside-generic-body -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The generic body CATCHES rather than propagates: `try self.item.digest() otherwise 9` inside the shared body,
 so the whole error edge of the witness dispatch is confined to `Box.itemDigest`, which cannot itself throw.
 ```maxon
@@ -238,7 +238,7 @@ end 'main'
 ```
 
 <!-- test: witness-throws.managed-result-both-edges -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A MANAGED (`String`) witness result on both edges. The success edge owns its `+1` and drops it once at scope
 exit; the error edge leaves the result register NULL and must not decref it. A leak or a double free of the
 returned String is exit 101, not a wrong answer.
@@ -292,7 +292,7 @@ end 'main'
 ```
 
 <!-- test: witness-throws.boxed-error-caught-at-witness-edge -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A PAYLOAD-CARRYING (heap-boxed) union error caught at the witness dispatch's own error edge, inside the
 shared generic body. The box is handed to the caller owned, so the `(e)` binding must release it exactly
 once — a leak or a double free is exit 101.

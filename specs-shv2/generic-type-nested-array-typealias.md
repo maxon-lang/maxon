@@ -63,7 +63,7 @@ end 'main'
 ### Generic type with string element
 
 <!-- test: string-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -110,7 +110,7 @@ end 'main'
 A method that FORWARDS its type-parameter element argument to a consuming sibling (`add` → `store` → `self.items.push`) must promote-and-consume the managed argument at its OWN concrete call site — otherwise the borrowed String is stored into the owning array and freed by the array's decref, a double-free. The transitive feed fixpoint marks `add`'s `item` a feed because it forwards to `store`'s feed parameter, so `sc.add("alpha")` consumes exactly as `sc.store("alpha")` would.
 
 <!-- test: forward-to-consuming-sibling -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -150,7 +150,7 @@ end 'main'
 The feed fixpoint closes over a chain of any depth: `a` forwards to `b` forwards to `c` forwards to the array push, so every hop's parameter is a feed and the outermost concrete call promotes-and-consumes.
 
 <!-- test: multi-hop-forward -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -285,7 +285,7 @@ edge — through the runtime descriptor gate (`__drop_type_param` reads the inst
 String is freed exactly once and the false branch does not leak.
 
 <!-- test: conditional-move-leak-free -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -323,7 +323,7 @@ The same method with the branch TAKEN moves the element into the array, which ow
 marks it moved on the pushed edge, so no second drop is emitted.
 
 <!-- test: conditional-move-into-array -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -406,7 +406,7 @@ the remaining String on `main`'s scope exit — each String is freed exactly onc
 moved-out element).
 
 <!-- test: pop-moves-opaque-element-out -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -458,7 +458,7 @@ top-level-managed-`let` rung needed it. The property under test is unchanged: th
 through a LOCAL bound to the field rather than through the field directly.
 
 <!-- test: pop-via-local-binding -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -504,7 +504,7 @@ exits leak-free. A borrow that were mistakenly tracked owned would free the elem
 to free it again — a double-free the exit-0 run rules out.
 
 <!-- test: get-borrows-opaque-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -551,7 +551,7 @@ the array. `peekEnds` borrows both ends of a one-element array and drops nothing
 String once on scope exit.
 
 <!-- test: first-last-borrow-opaque-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -594,7 +594,7 @@ returned opaque word is owned by the caller. `dropAt` removes and drops element 
 drops the survivor on scope exit — each String freed once.
 
 <!-- test: remove-moves-opaque-element-out -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -638,7 +638,7 @@ nested String. `drainOne` pops one `Pair` of two and drops it (freeing its Strin
 survivor. No String leaks.
 
 <!-- test: pop-opaque-struct-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Integer = int(i64.min to i64.max)
@@ -882,7 +882,7 @@ then dropping it would double-free (exit 101 / a poison fault). The exit-0 run p
 independent deep copy that outlives its source.
 
 <!-- test: opaque-clone-source-freed -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -939,7 +939,7 @@ second container's drop — under the always-on free-poison this is a fault or a
 run rules out.
 
 <!-- test: opaque-clone-both-live -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -995,7 +995,7 @@ into a fresh container and returns it; the source `a` (two Strings) drops at `bu
 String is an independent deep copy — the exit-0 run with the source freed proves it.
 
 <!-- test: opaque-slice-managed -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -1054,7 +1054,7 @@ fields drop at container drop, each freeing its own Strings exactly once. A shal
 sharing `extra`'s pointers) would double-free at drop — the exit-0 run rules it out.
 
 <!-- test: opaque-append-managed -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -1118,7 +1118,7 @@ struct cloner is referenced ONLY by the descriptor `copyFunc@32` relocation (the
 so this exercises the cloner DCE-root. Source freed, clone survives — exit 0.
 
 <!-- test: opaque-clone-struct-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -1294,7 +1294,7 @@ compiles and exits 0. (Adding a copy method to this same type is rejected — se
 test above.)
 
 <!-- test: opaque-drop-only-uncopyable-struct-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias StringArray = Array with String

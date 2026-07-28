@@ -18585,6 +18585,23 @@ export type Parser
 	// keywords map to their tags, `String` to the builtin, and every other name — a user ranged alias
 	// (`Code`), a struct — to a `named` type `mintOwnedCallResult` resolves through the same alias/struct doors
 	// a direct call's return does.
+	//
+	// ⭐ **`ExitCode` IS CLAIMED HERE, WITH THE KEYWORDS AND NOT WITH THE USER NAMES, AND THE REASON IS A
+	// WIDTH (P1.7a slice 2b-iv-B).** An interface stores its return type as a rendered source STRING, so this
+	// function RE-DERIVES what a declaration derived once — and the `named` fallback is only safe while the
+	// two derivations agree. They agree for every name but this one: a ranged alias, an enum and a struct all
+	// collapse to an i64 machine word whichever route reaches them (`valueTagToStdType`), whereas `ExitCode`
+	// is the ONE builtin whose tag carries a sub-64 width (u32). Left to the fallback, the dispatch site typed
+	// its result i64 while the conforming impl declared u32 — invisible on the register targets, where every
+	// value occupies a 64-bit register, and a **`wasm trap: indirect call type mismatch`** on wasm, whose
+	// `call_indirect` checks the declared functype against the target's own EXACTLY. MEASURED: an
+	// `ExitCode`-returning interface method returned 42 on x64 and trapped under wasmtime.
+	//
+	// It is claimed by the SAME named constant `denotedNamedType` claims it by — the authority for what a type
+	// NAME denotes — rather than a second spelling of the bytes, since a second spelling is the thing that
+	// would let the two drift apart again. It cannot be routed through that cascade wholesale: this function
+	// answers for the VALUE column, where a ranged alias deliberately keeps its `named` identity (see
+	// `castConvertsPerInstance`), while the cascade erases it for the SIGNATURE column.
 	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
 		if returnTypeName.equals(b"bool") 'boolReturn'
 			return MaxonType.boolean
@@ -18598,6 +18615,9 @@ export type Parser
 		if returnTypeName.equals(b"String") 'stringReturn'
 			return MaxonType.string
 		end 'stringReturn'
+		if returnTypeName.equals(ExitCodeBuiltinName) 'exitCodeReturn'
+			return MaxonType.exitCode
+		end 'exitCodeReturn'
 		return MaxonType.named(self.artifact.typeNames.intern(returnTypeName))
 	end 'interfaceReturnMaxonType'
 

@@ -16,13 +16,13 @@ type's `Hashable` / `Equatable` witness tables (dictionary-passing), so the runt
 
 A set is constructed either with `Set from [1, 2, 3]` — an array literal whose element type (int) is
 inferred — or with `IntSet.create()` for an empty typed set. `Set from` with managed/String keys and
-iteration are later slices. The witness tables are x64-only (funcAbs64 relocations), so these tests are
-gated to the x64 targets.
+iteration are later slices. The witness tables ride the funcAbs64 relocation — a `.text` VA on x64, a
+funcref-table index on wasm — so these tests are gated to those targets; arm64 still refuses it.
 
 ## Tests
 
 <!-- test: empty-set -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Create an empty set and verify it starts empty.
 
 ```maxon
@@ -42,7 +42,7 @@ end 'main'
 ```
 
 <!-- test: basic.creation -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = Set from [1, 2, 3]
@@ -54,7 +54,7 @@ end 'main'
 ```
 
 <!-- test: basic.contains-true -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = Set from [10, 20, 30]
@@ -69,7 +69,7 @@ end 'main'
 ```
 
 <!-- test: basic.contains-false -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = Set from [10, 20, 30]
@@ -84,7 +84,7 @@ end 'main'
 ```
 
 <!-- test: insert.new-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -97,7 +97,7 @@ end 'main'
 ```
 
 <!-- test: insert.duplicate -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -110,7 +110,7 @@ end 'main'
 ```
 
 <!-- test: insert.then-contains -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -126,7 +126,7 @@ end 'main'
 ```
 
 <!-- test: remove.existing -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -142,7 +142,7 @@ end 'main'
 ```
 
 <!-- test: remove.nonexistent -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -158,7 +158,7 @@ end 'main'
 ```
 
 <!-- test: remove.then-contains -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -174,7 +174,7 @@ end 'main'
 ```
 
 <!-- test: grow.preserves-elements -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
@@ -194,7 +194,7 @@ end 'main'
 ```
 
 <!-- test: empty.single-element -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = Set from [42]
@@ -206,7 +206,7 @@ end 'main'
 ```
 
 <!-- test: remove-reinsert -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = Set from [1, 2, 3]
@@ -223,7 +223,7 @@ end 'main'
 ```
 
 <!-- test: negative-values -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = Set from [-5, -3, -1, 0, 1, 3, 5]
@@ -238,7 +238,7 @@ end 'main'
 ```
 
 <!-- test: grow.insert-loop -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Growing a `.create()`d set past the 75% load factor of the initial 16-slot table by repeated `insert`
 forces a grow-and-rehash; every element survives, the count is exact, and a never-inserted key is absent.
 
@@ -274,7 +274,7 @@ end 'main'
 ```
 
 <!-- test: insert.alias-typed-key -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A key whose static type is a ranged ALIAS is an int key. It carries the `named` tag until TypeResolution
 collapses it — which is every parameter and every field read of `typealias Int = int(…)` — so a key check
 spelled `== integer` rather than "is integral" rejected it as *"`Set with int` requires an int key — got a
@@ -301,7 +301,7 @@ end 'main'
 ```
 
 <!-- test: insert.self-field-set -->
-<!-- targets: x64-windows, x64-linux -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A `Set` held in a `var` FIELD, inserted into and counted through the bare field name. The alias holds no
 SSA value (`boundValue` is 0, and 0 is `self`'s own id), so the receiver has to be materialized before the
 dispatch — taking it directly handed `__set_count` the enclosing struct's box.

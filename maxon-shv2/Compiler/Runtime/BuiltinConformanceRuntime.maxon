@@ -35,15 +35,16 @@
 // third kind of reference impossible to forget, because a reference is by definition something the module
 // spells.
 //
-// Golden-neutral for every program that names no impl (the conformance-free corpus and the whole wasm
-// suite): the walk builds nothing, and `eliminateDeadFunctions` would prune an over-installed impl anyway.
+// Golden-neutral for every program that names no impl (the conformance-free corpus): the walk builds
+// nothing, and `eliminateDeadFunctions` would prune an over-installed impl anyway.
 //
 // The SEMANTICS match the reference compilers' monomorphizing source (`stdlib/PrimitiveExtensions.maxon`,
 // `stdlib/helpers/string/hash.maxon`): `int.hash() = self & 0xFFFFFFFF` (the low-32 mask — identity for a
 // value that already fits u32); `<scalar>.equals(other) = self == other`; `<scalar>.compare(other)` = the
 // `lessThan`/`greaterThan`/`equalTo` cascade, which `float.compare` precedes with a NaN preamble
 // (`buildFloatCompare`); `String.hash() = djb2` over the bytes; `String.equals(other) = __str_eq`'s content
-// compare. x64-only rides the witness reloc, which the arm64/wasm writers already refuse.
+// compare. The witness reloc these ride is baked by the x64 writers and, since P1.7a slice 2b-iv-B, by the
+// wasm backend as a funcref-table index; arm64 still refuses it.
 
 // The low-32-bit mask `int.hash`/`String.hash` fold their result through — `HashValue` is `int(0 to u32.max)`,
 // so a hash is the low 32 bits. The one place the mask is spelled, shared by both hashers (it IS `HashValue`'s
@@ -268,7 +269,7 @@ end 'noteBuiltinImplReference'
 // by-value scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight in
 // — no pointer indirection), so the whole body is a mask and a return.
 function buildIntHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -283,12 +284,24 @@ function buildIntHash(module StdModule, name ByteArray)
 end 'buildIntHash'
 
 // The two-operand Std function every builtin `equals`/`compare` impl is: two parameters of its OWN operand
-// type, returning one i64 (a 0/1 bool, or an `Ordering` tag — an `Ordering` value IS its tag). ONE place
-// where the declared ABI and the operand width meet, so a caller cannot pair an f64 compare with i64
-// parameters — which would route the arguments through the WRONG register file at every call site
-// (`calleeParamClass` reads exactly these declared types) with nothing to report it.
-function createTwoOperandImpl(name ByteArray, operandType StdType) returns IrFunction
-	return IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoOperandParams(operandType), returnLine: 0)
+// type, returning the type the INTERFACE METHOD it implements declares. ONE place where the declared ABI and
+// the operand width meet, so a caller cannot pair an f64 compare with i64 parameters — which would route the
+// arguments through the WRONG register file at every call site (`calleeParamClass` reads exactly these
+// declared types) with nothing to report it.
+//
+// ⭐ **THE RESULT TYPE IS THE INTERFACE'S, NOT A UNIFORM MACHINE WORD, AND THAT IS A WITNESS-TABLE
+// OBLIGATION (P1.7a slice 2b-iv-B).** These impls are installed into a witness table typed by the interface,
+// and there is no `ConformanceCheck` to hold them to it — they are synthesized, so nothing but this line
+// makes their declared signature agree with the one every DISPATCH SITE derives from
+// `Equatable`/`Comparable` itself. `equals` returns `bool` (an `i1`) and `compare` an `Ordering` tag (an
+// `i64`); declaring both `i64` was invisible on the register targets, where a `bool` rides a 64-bit register
+// as readily as a tag, and on wasm it was a **`wasm trap: indirect call type mismatch`** — the dispatch site
+// declared `(i64,i64)->i32` against an impl typed `(i64,i64)->i64`. MEASURED: 7 `Equatable`-via-constraint
+// spec cases across `equatable`/`primitive-conformance`/`string-conformance` trapped under wasmtime while
+// answering correctly on x64. The PARAMETERS stay i64 — the uniform indirect ABI passes every non-float
+// argument as a machine word, so those already agree.
+function createTwoOperandImpl(name ByteArray, operandType StdType, resultType StdType) returns IrFunction
+	return IrFunction.createFromStd(name, returnType: StdReturnType.value(resultType), paramCount: 2, paramTypes: twoOperandParams(operandType), returnLine: 0)
 end 'createTwoOperandImpl'
 
 // The parameter list for `createTwoOperandImpl`, routed through `MmRuntime`'s shared param shapes rather
@@ -322,7 +335,7 @@ end 'twoOperandParams'
 // (`stdlib/PrimitiveExtensions.maxon:39-41` is a bare `self == other` beside a NaN-aware `compare`) and the
 // canonical corpus pins both halves, so the asymmetry is the specification rather than an oversight here.
 function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdType)
-	var func = createTwoOperandImpl(name, operandType: operandType)
+	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(BoolConformerName))
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -395,7 +408,7 @@ end 'emitOrderedCascade'
 // cannot use it: IEEE `<`/`>` are false for every NaN pair, so `buildFloatCompare` enters the SAME cascade
 // from a NaN preamble instead.
 function buildOrderingCompare(module StdModule, name ByteArray, operandType StdType)
-	var func = createTwoOperandImpl(name, operandType: operandType)
+	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(OrderingTypeName))
 	var ids = ValueMinter.create(2)
 	let ordering = builtinOrderingEnum()
 
@@ -436,7 +449,7 @@ end 'buildOrderingCompare'
 // write it. Hoisting it would make it a VALUE two blocks read rather than a branch, which on x64 costs the
 // `setne`+`setp`+`lea` materialization instead of a fused jump — a bigger body, to save a duplicated compare.
 function buildFloatCompare(module StdModule, name ByteArray)
-	var func = createTwoOperandImpl(name, operandType: StdType.f64)
+	var func = createTwoOperandImpl(name, operandType: StdType.f64, resultType: builtinProtocolResultStdType(OrderingTypeName))
 	var ids = ValueMinter.create(2)
 	let ordering = builtinOrderingEnum()
 
@@ -481,7 +494,7 @@ end 'buildFloatCompare'
 // accumulator added. Both phi `argType`s are set to i64 explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
 function buildStrHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")

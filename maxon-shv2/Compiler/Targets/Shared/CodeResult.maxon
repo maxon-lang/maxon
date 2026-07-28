@@ -132,11 +132,13 @@ end 'buildDebugSymbolIndex'
 // way. A diagnostic that names only the descriptor sends a reader hunting for a managed opaque array in a
 // program that has none.
 //
-// ⭐ **WIRED FOR x64 ONLY** (PE + ELF): arm64 / macOS / wasm are deferred for all three (the target boundary
-// keeps such programs off those backends), so a non-x64 target with a NON-empty reloc list is a
-// dispatch/boundary bug and PANICS — never a silently-skipped bake, which would leave a 0 in the slot: a
-// per-element LEAK for a descriptor, a CALL THROUGH A NULL POINTER for a witness slot, neither with a
-// diagnostic. Empty (every program that uses none of the three) is a no-op. A `funcName` in no debug symbol is
+// ⭐ **THIS FUNCTION IS THE x64 BAKE** (PE + ELF): it writes a `.text` VA, which only a register target has.
+// wasm bakes the SAME slots with the callee's funcref-TABLE INDEX instead (`StdToWasm.bakeFuncTableIndexRelocs`,
+// P1.7a slice 2b-iv-B) — the blob layout is target-agnostic and only the VALUE in the slot differs. arm64 is
+// still deferred for all three (the target boundary keeps such programs off it), so a non-x64 target reaching
+// HERE with a NON-empty reloc list is a dispatch/boundary bug and PANICS — never a silently-skipped bake, which
+// would leave a 0 in the slot: a per-element LEAK for a descriptor, a CALL THROUGH A NULL POINTER for a witness
+// slot, neither with a diagnostic. Empty (every program that uses none of the three) is a no-op. A `funcName` in no debug symbol is
 // a DCE-root gap — the target function was not installed — which panics LOUD rather than baking a stale VA
 // into freed code.
 export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, target Target, textBaseVa MachineWord)
@@ -144,7 +146,7 @@ export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable,
 		return
 	end 'none'
 	if target.cpu != CpuArch.x64 'unwired'
-		panic("bakeFuncAbs64Relocs: {globalData.pendingRdataRelocs.count()} .rdata slot(s) hold a .text address that only the x64 backends patch — a witness-table method slot, or a managed-opaque-`T` `Array` descriptor's destroyFunc@40/copyFunc@32. {targetToString(target)} is deferred for all three (restrict the spec to x64-windows, x64-linux)")
+		panic("bakeFuncAbs64Relocs: {globalData.pendingRdataRelocs.count()} .rdata slot(s) hold a .text address that only the x64 backends patch — a witness-table method slot, or a managed-opaque-`T` `Array` descriptor's destroyFunc@40/copyFunc@32. {targetToString(target)} is deferred for all three (restrict the spec to x64-windows, x64-linux, wasm32-wasi)")
 	end 'unwired'
 
 	let funcOffsets = buildDebugSymbolIndex(debugSymbols)
@@ -155,14 +157,15 @@ export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable,
 end 'bakeFuncAbs64Relocs'
 
 // ⭐ **REFUSE a `.text`-address-in-`.rdata` relocation on a backend that cannot patch it** — the loud guard
-// for MachO (arm64-macOS) and wasm. An unwired writer that silently skipped a non-empty `pendingRdataRelocs`
+// for MachO (arm64-macOS). wasm no longer needs it: it BAKES these slots, as a funcref-table index
+// (`StdToWasm.bakeFuncTableIndexRelocs`, P1.7a slice 2b-iv-B). An unwired writer that silently skipped a non-empty `pendingRdataRelocs`
 // would ship a 0 in the slot — a per-element leak for a descriptor, a null call for a witness slot — so it
 // PANICS. It names the same three carriers `bakeFuncAbs64Relocs` does, for that function's reason. Empty
 // (every program the target boundary keeps here) is a no-op, so a program using none of the three is
 // unaffected.
 export function requireNoFuncAbs64Relocs(globalData GlobalDataTable, backend String)
 	if globalData.pendingRdataRelocs.count() > 0 'unpatched'
-		panic("{backend}: {globalData.pendingRdataRelocs.count()} .rdata slot(s) hold a .text address (funcAbs64InRdata) that only the x64 PE/ELF writers patch — a witness-table method slot, or a managed-opaque-`T` `Array` descriptor's destroyFunc@40/copyFunc@32. All three are deferred here (restrict the spec to x64-windows, x64-linux)")
+		panic("{backend}: {globalData.pendingRdataRelocs.count()} .rdata slot(s) hold a .text address (funcAbs64InRdata) that only the x64 PE/ELF writers patch — a witness-table method slot, or a managed-opaque-`T` `Array` descriptor's destroyFunc@40/copyFunc@32. All three are deferred here (restrict the spec to x64-windows, x64-linux, wasm32-wasi)")
 	end 'unpatched'
 end 'requireNoFuncAbs64Relocs'
 
