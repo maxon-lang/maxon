@@ -217,12 +217,14 @@ let PressuredLoopsBase = 2 as KnobSize
 
 // ONE function, ONE chain of loops NESTED to depth N — distinct from `pressuredLoops`, which grows
 // loop COUNT at depth 1. Depth is what the loop-phi token pre-scan climbs: `parseWhileStatement`
-// re-derives each loop's extent from the tokens (`loopBodyEndIndex`) and reads its assigned names off
-// them (`namesAssignedIn`), and a loop NESTED inside another has its tokens re-scanned once per
-// enclosing loop. So D nested loops make the scan O(depth x tokens) — quadratic in TIME.
+// re-derives each loop's extent from the tokens (`blockStatementEndIndex`) and reads its carried set off
+// them (`assignedBindingsIn`), and a loop NESTED inside another has its tokens re-scanned once per
+// enclosing loop. So D nested loops make the scan O(depth x tokens) — quadratic in TIME. ⚠ **STILL TRUE
+// AFTER 2026-07-28**, which removed a DIFFERENT quadratic from the same function (the O(vars in scope)
+// filter) and left the token walk exactly as it was; `gennest.sh` is the ladder that isolates this one.
 //
 // ⚠ IT WILL READ ~LINEAR IN THE ALLOCATION COLUMN ANYWAY, AND THAT IS A LIMIT OF THAT COLUMN RATHER
-// THAN OF THIS KNOB. The scan allocates ~one small `AssignedNameSet` per loop and mints one phi per
+// THAN OF THIS KNOB. The scan allocates one small position list per loop and mints one phi per
 // carried var per loop — both LINEAR in depth — so allocations and bytes cannot express the scan's
 // cost however quadratic in TIME it is. THE CPU COLUMN IS WHERE IT SHOULD NOW SHOW: per-phase CPU
 // ticks measure the compiling thread's own time, so a `phase:parse` that bends past x2 per doubling
@@ -433,9 +435,14 @@ let DivisorMask = 7
 //     quadratic here (parse bytes read x3.9): each `if` snapshotted the whole mutable-var set — O(V) per
 //     branch × O(ifs) = O(V·ifs) — invisible until V doubled. FIXED the way loops were (11b9bbcba): an
 //     `if` now carries only the vars its token extent ASSIGNS, so the snapshot is O(assigned) and parse
-//     bytes read x2.03. What is LEFT is an O(V)-per-`if` TIME scan of `mutableVars` (`assignedBindingsIn`)
-//     that allocates nothing and is invisible to this memory instrument BY DESIGN — so if a future change
-//     reintroduces an O(V) per-branch ALLOCATION, this column is what catches it.
+//     bytes read x2.03.
+//   • ⭐ `phase:parse` CPU grew x2.02 x2.21 x2.52 x2.90 x3.33 — the SAME O(V·ifs) shape one column
+//     over, and the last place it was hiding. `assignedBindingsIn` filtered the WHOLE `mutableVars`
+//     list through the assigned-name set, so it ran a hash probe per binding in scope per construct:
+//     39,400,068 of them at rung 5, x3.99 per doubling, ALLOCATING NOTHING and therefore invisible to
+//     the two columns above by construction. FIXED 2026-07-28 by inverting the lookup (a name -> position
+//     index on the parser); the ratios now read x1.89 x1.92 x2.00 x2.06 x1.98. This knob is the guard
+//     on all three: a future O(V)-per-branch cost shows up here in whichever column can see it.
 let LocalsPerFunctionBase = 128 as KnobSize
 
 // The BOUNDED set of accumulators the generated branches actually MUTATE — the "assigned" set, held
@@ -1192,7 +1199,7 @@ let NestedDriver = "scaleNested"
 // fold-resistant, because `acc` originates in the opaque seed.
 //
 // ⚠ EXPECT THIS TO READ ~LINEAR IN MEMORY EVEN IF THE SCAN IS QUADRATIC IN TIME. The scan allocates
-// ~one `AssignedNameSet` per loop (linear in depth) and each loop mints one phi for `acc` (linear in
+// ~one carried-position list per loop (linear in depth) and each loop mints one phi for `acc` (linear in
 // depth); its O(depth x tokens) cost is spent WALKING tokens, which allocates nothing. scale-test
 // measures memory only, so a time-only superlinearity is invisible here BY DESIGN — this knob is the
 // manifest's worked example of that blind spot, not a curve expected to bend.
@@ -2831,8 +2838,8 @@ export function printCorpusManifest()
 	print("     is why there is now a THIRD per-phase table — CPU TICKS, the compiling THREAD's own time, so\n")
 	print("     preemption and every other process are invisible to it and it can be trended where wall time\n")
 	print("     never could. The worked example is IN this corpus: the loop-nest knob drives the loop-phi\n")
-	print("     token pre-scan (Parser.loopBodyEndIndex + namesAssignedIn) to O(depth x tokens) while\n")
-	print("     allocating ~one small set per loop, so it reads ~x2 in allocations and is the CPU column's\n")
+	print("     token pre-scan (Parser.blockStatementEndIndex + assignedBindingsIn) to O(depth x tokens) while\n")
+	print("     allocating ~one small list per loop, so it reads ~x2 in allocations and is the CPU column's\n")
 	print("     to show. It is no longer an example of what this instrument cannot see.\n")
 	print("     ⚠ THE CPU COLUMN IS NOT EXACT, AND IS NOT READ LIKE THE OTHER TWO. It moves a few percent\n")
 	print("     with turbo, thermal throttling and cache pressure from other cores, so a movement inside that\n")

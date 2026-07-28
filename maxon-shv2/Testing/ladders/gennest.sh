@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DEPTH of loop NESTING, held independent of program SIZE.
 #
-# The question: `Parser.namesAssignedIn` scans every token between a loop's header and its
+# The question: `Parser.assignedBindingsIn` scans every token between a loop's header and its
 # `end`, once per loop, to fix the carried-variable set before the body is parsed. A loop
 # NESTED inside another therefore has its tokens scanned again by every enclosing loop, so D
 # nested loops cost O(depth x tokens) in TIME while allocating one small set per loop.

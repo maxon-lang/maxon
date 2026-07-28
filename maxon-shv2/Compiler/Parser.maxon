@@ -1097,7 +1097,7 @@ let MaxBoundField = b"max"
 // a local shadow.
 //
 // **It is NAMED because a second, distant thing depends on the answer and does not look like it
-// does**: `namesAssignedIn`, the loop-phi token scan, is exhaustive only while every write to a
+// does**: `assignedBindingsIn`, the loop-phi token scan, is exhaustive only while every write to a
 // mutable binding is spelled `identifier =` — which a `var` parameter's call-site write is not.
 // Written as a bare `false` at the binding site, that coupling was invisible from both ends. The
 // tripwire that enforces it lives in `bindParameters`, on the flag itself; this constant is what
@@ -2742,11 +2742,68 @@ end 'LoopPhiVar'
 
 typealias LoopPhiVarArray = Array with LoopPhiVar
 
-// The variable names a construct's token extent ASSIGNS — the set `parseWhileStatement` intersects
-// with the mutable bindings in scope to decide which ones the loop carries a phi for. Keyed by
-// the identifier's raw source slice, which is how every other name lookup in the parser is keyed
-// (`ByteArray` hashes and compares by content — see Token.value).
-typealias AssignedNameSet = Set with ByteArray
+// ⭐ **A POSITION IN `Parser.mutableVars`** — an index into that declaration-ordered stack, or
+// `NoMutableVar` for "no mutable binding of that name is in scope". The stack is addressed by
+// position (rather than the bindings being addressed by name) in exactly one place: the inverse
+// index below, which is what turns "which bindings does this construct assign?" from a walk of
+// everything in scope into a lookup per name assigned. Ascending position IS declaration order,
+// which is the order every carried set must be returned in (see `assignedBindingsIn`).
+typealias MutableVarPosition = int(-1 to 1048575)
+let NoMutableVar = -1 as MutableVarPosition
+
+// A construct's carried positions, kept ASCENDING and duplicate-free — the working set
+// `assignedBindingsIn` builds and then reads the bindings off.
+typealias MutableVarPositionArray = Array with MutableVarPosition
+
+// ⭐ **THE INVERSE OF `mutableVars`: name → the position of the INNERMOST binding with that name.**
+// Keyed by the identifier's raw source slice, which is how every other name lookup in the parser is
+// keyed (`ByteArray` hashes and compares by content — see Token.value).
+//
+// It holds only the innermost binding of each name because a name has only one meaning at a time.
+// The ones it SHADOWS are still reachable — `Parser.mutableVarShadowed` chains them — because a
+// carried set must contain every entry of `mutableVars` a construct's tokens name, shadowed or not
+// (see `assignedBindingsIn` for why the shadowed ones are harmless and must nonetheless be kept).
+typealias MutableVarPositionByName = Map with ByteArray, MutableVarPosition
+
+// The INITIAL value of BOTH index fields, and the `is`-identity that says this function has not
+// declared a `var` yet — `sharedEmptyIterationLocks`'s pattern, for its reason and with its
+// invariant: the shared instances are NEVER mutated (`pushMutableVar` replaces them before its
+// first write), so they are safe across the per-file parse fan-out.
+//
+// ⭐ **IT IS NOT DEFENSIVE, IT IS THE COST.** A `Parser` is built per FILE by the signature sweep,
+// per top-level CONSTANT by `SignatureIndex.walkConstInitializer`, and reset per FUNCTION and per
+// CLOSURE — and none of the first two, nor any function without a `var`, ever pushes one. Creating
+// the pair unconditionally measured **+13,410 allocations and +590,040 bytes in `phase:signatures`
+// at scale rung 5**, a phase this change has no business touching at all; off the shared empties it
+// is +0 in every column there.
+let sharedEmptyMutableVarShadowed = MutableVarPositionArray.create()
+let sharedEmptyMutableVarInnermost = MutableVarPositionByName.create()
+
+// Insert `position` into an ASCENDING, duplicate-free list, and say whether it was new. Binary
+// search rather than an append-then-sort, because the list is the construct's carried set: a
+// handful of entries on real code (never more than two across the whole scale corpus), so the
+// shift costs less than a sort's setup would, and building it ordered is what lets the caller
+// hand back `mutableVars` declaration order without a second pass.
+function insertCarriedPosition(positions MutableVarPositionArray, position MutableVarPosition) returns bool
+	var lo = 0
+	var hi = positions.count()
+	while lo < hi 'bisect'
+		let mid = lo + (hi - lo) / 2
+		let atMid = try positions.get(mid) otherwise panic("insertCarriedPosition: positions.get OOB at {mid} of {positions.count()}")
+		if atMid == position 'alreadyCarried'
+			return false
+		end 'alreadyCarried'
+
+		if atMid < position 'above'
+			lo = mid + 1
+		end 'above' else 'below'
+			hi = mid
+		end 'below'
+	end 'bisect'
+
+	positions.insert(lo, value: position)
+	return true
+end 'insertCarriedPosition'
 
 // A dense per-TOKEN column of token indices — `Parser.blockExtentEnds`, which answers "where does the block
 // opened here close?" in one array read. Flat and dense for the reason `SourceRangeTable`'s columns are: a
@@ -3146,6 +3203,24 @@ export type Parser
 	// over the SUBSET of this list its branches assign, in this list's order, and it mints a
 	// phi only where the two paths differ.
 	var mutableVars as VarInfoArray
+	// ⭐ **THE INVERSE OF THE LIST ABOVE, AND THE REASON A CARRIED SET COSTS O(assigned) RATHER THAN
+	// O(vars in scope).** `mutableVarInnermost` maps a name to the position of the innermost binding
+	// that holds it; `mutableVarShadowed` holds, per POSITION, the position that binding shadows (or
+	// `NoMutableVar`), so the entries a name hides are reachable without a second map entry per name.
+	//
+	// Both are maintained in exact lockstep with `mutableVars` — pushed together at a `var`
+	// declaration, popped together at the block's `end`, reset together per function — which is
+	// what lets `openBlock`'s single height mark unwind all three (see `closeBlock`). Both start at
+	// a shared empty and are copy-on-written by the first push (see `sharedEmptyMutableVarShadowed`),
+	// so a `Parser` that declares no `var` — every one the signature sweep builds — allocates neither.
+	//
+	// ⚠ **THIS IS AN INDEX, NOT A SECOND SYMBOL TABLE.** Nothing resolves a NAME through it: an
+	// ordinary variable reference goes to `Scope`, which answers a different and larger question
+	// (`let`s, self-fields, payload bindings, shadowing across function boundaries). This answers
+	// only "where in the phi/merge ordering does this mutable binding sit", which is the one question
+	// `mutableVars`'s ORDER exists to answer and the one `Scope` cannot.
+	var mutableVarShadowed as MutableVarPositionArray
+	var mutableVarInnermost as MutableVarPositionByName
 	// The enclosing loops, innermost last (M4b). `break`/`continue` resolve their
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
@@ -3591,6 +3666,8 @@ export type Parser
 			topLevelBorrowSubjects: sharedEmptyTopLevelBorrowSubjects,
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
+			mutableVarShadowed: sharedEmptyMutableVarShadowed,
+			mutableVarInnermost: sharedEmptyMutableVarInnermost,
 			loops: LoopContextArray.create(),
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
@@ -7354,6 +7431,8 @@ export type Parser
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
 		self.mutableVars = VarInfoArray.create()
+		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
+		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
 		// Re-CREATED, not cleared, exactly as every other per-function column is: a stray owned
 		// binding carried across a function boundary would emit a `__mm_decref` of a value from the
 		// PREVIOUS function's SSA space — a wild pointer, and one the leak gate could not even
@@ -7686,7 +7765,7 @@ export type Parser
 
 			// ⚠ THE LOOP-PHI TOKEN SCAN DEPENDS ON THIS BEING FALSE, AND NOTHING ELSE SAYS SO.
 			//
-			// `namesAssignedIn` decides which vars a loop carries a phi for by scanning TOKENS for
+			// `assignedBindingsIn` decides which vars a loop carries a phi for by scanning TOKENS for
 			// `identifier =` (`assignsAt`). That is exhaustive only while EVERY write to a mutable
 			// binding wears that shape — and a `var` (mutating) PARAMETER does not: its write is
 			// `mutate(p)` at the CALL SITE, with no `=` anywhere in the loop for the scan to find.
@@ -7707,7 +7786,7 @@ export type Parser
 			// case that instruction cannot reach, because it is not a statement at all.
 			let paramIsMutable = ParametersAreMutable
 			if paramIsMutable 'writesThisScanCannotSee'
-				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `namesAssignedIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`namesAssignedIn` the new write form before binding a parameter mutable.")
+				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `assignedBindingsIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`assignedBindingsIn` the new write form before binding a parameter mutable.")
 			end 'writesThisScanCannotSee'
 
 			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
@@ -8228,13 +8307,13 @@ export type Parser
 			try self.parseAssignment(func, block: block)
 		end 'assign' else if self.selfFieldAssignsAt(self.pos) 'selfFieldAssign'
 			// `self.count = 5` — the explicit spelling of a self-field store. Its own predicate for
-			// `fieldAssignsAt`'s reason: it assigns no BINDING, so `namesAssignedIn` must not see it.
+			// `fieldAssignsAt`'s reason: it assigns no BINDING, so `assignedBindingsIn` must not see it.
 			// (The BARE spelling, `count = 5`, matches `assignsAt` and is routed above — see there
 			// for why the scan finding `count` is harmless.)
 			try self.parseExplicitSelfFieldAssignment(func, block: block)
 		end 'selfFieldAssign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
 			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
-			// predicate, and `namesAssignedIn` reads only `assignsAt`: see `assignsAt` for why
+			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
 			try self.parseFieldAssignment(func, block: block)
 		end 'fieldAssign' else if self.methodCallsAt(self.pos) 'methodCallStmt'
@@ -8394,7 +8473,7 @@ export type Parser
 			// Record `var`s in declaration order so loop headers can mint phis for every
 			// mutable binding in scope (M4b on-the-fly SSA). `let`s never join — they
 			// cannot be reassigned, so they carry no loop-carried phi.
-			self.mutableVars.push(binding)
+			self.pushMutableVar(binding)
 		end 'trackVar'
 
 		// ⭐ **A BINDING OWNS A DROP IFF ITS VALUE OWNS DROPPABLE HEAP** (`valueIsOwnedHeap` — a struct
@@ -8478,12 +8557,54 @@ export type Parser
 	function closeBlock(mark BlockMark)
 		self.scope.popScope()
 		while self.mutableVars.count() > mark.mutableCount 'drainVars'
-			_ = try self.mutableVars.pop() otherwise panic("closeBlock: mutableVars.pop failed above the mark {mark.mutableCount}")
+			self.popMutableVar()
 		end 'drainVars'
 		while self.ownedBindings.count() > mark.ownedCount 'drainOwned'
 			_ = try self.ownedBindings.pop() otherwise panic("closeBlock: ownedBindings.pop failed above the mark {mark.ownedCount}")
 		end 'drainOwned'
 	end 'closeBlock'
+
+	// Push a `var` onto the mutable-binding stack, and onto the two structures that index it.
+	// THE ONE PLACE ALL THREE GROW, so they cannot grow apart: the shadow column is written before
+	// the name index, because the position it records is the one the name index is about to lose.
+	function pushMutableVar(binding VarInfo)
+		// COPY-ON-WRITE off the shared empties before the first push — see
+		// `sharedEmptyMutableVarShadowed`. One guard covers both because both are written right below,
+		// and a function that declares no `var` keeps the shared pair for its whole life.
+		if self.mutableVarShadowed is sharedEmptyMutableVarShadowed 'firstVarInThisFunction'
+			self.mutableVarShadowed = MutableVarPositionArray.create()
+			self.mutableVarInnermost = MutableVarPositionByName.create()
+		end 'firstVarInThisFunction'
+
+		self.mutableVarShadowed.push(self.innermostMutableVarPosition(binding.name))
+		self.mutableVarInnermost.upsert(binding.name, value: self.mutableVars.count() as MutableVarPosition)
+		self.mutableVars.push(binding)
+	end 'pushMutableVar'
+
+	// Pop the innermost `var` off all three, restoring whatever name it shadowed. The twin of
+	// `pushMutableVar` and the ONE place all three shrink.
+	//
+	// ⚠ It relies on the stack being STRICTLY LIFO — the popped binding's name must be the one the
+	// index currently maps to this position. `openBlock`/`closeBlock` are the only things that move
+	// the height, and they nest, so it is; a mid-stack removal (the shape `removeFromOwnedBindings`
+	// deliberately avoids for the drop marks) would desync the index instead.
+	function popMutableVar()
+		let dropped = try self.mutableVars.pop() otherwise panic("popMutableVar: mutableVars.pop failed on a non-empty stack")
+		let shadowed = try self.mutableVarShadowed.pop() otherwise panic("popMutableVar: the shadow column ran out before `mutableVars` did — the two grew apart")
+		if shadowed == NoMutableVar 'nothingShadowed'
+			_ = self.mutableVarInnermost.remove(dropped.name)
+			return
+		end 'nothingShadowed'
+
+		self.mutableVarInnermost.upsert(dropped.name, value: shadowed)
+	end 'popMutableVar'
+
+	// Where the innermost mutable binding named `name` sits in `mutableVars`, or `NoMutableVar` when
+	// no `var` of that name is in scope (a `let`, a self-field, a payload binding, an undeclared name
+	// — none of which can carry a phi).
+	function innermostMutableVarPosition(name ByteArray) returns MutableVarPosition
+		return try self.mutableVarInnermost.get(name) otherwise NoMutableVar
+	end 'innermostMutableVarPosition'
 
 	// Parse a lexical block's statements into `block`, through its closing `end [label]`.
 	// The ONE place a block body is parsed, so the scope frame is opened and closed in
@@ -11813,7 +11934,7 @@ export type Parser
 	//         end 'b'       // ⇒ the false edge would carry 1, resetting x every iteration
 	//     end 'l'
 	//
-	// So the set is read off the TOKENS, before a single op is emitted: `namesAssignedIn`
+	// So the set is read off the TOKENS, before a single op is emitted: `assignedBindingsIn`
 	// over the loop's token extent. It is an over-approximation on purpose (a shadowed inner
 	// declaration of the same name counts, and so does a `let`), and over-approximating is
 	// FREE while under-approximating is a miscompile — a surplus phi costs nothing:
@@ -11836,11 +11957,11 @@ export type Parser
 
 		// Decided from the tokens, before anything is emitted — see the header.
 		let bodyEndIndex = self.blockStatementEndIndex(whileIndex, continuesAtElse: false)
-		let assigned = self.namesAssignedIn(whileIndex, endIndex: bodyEndIndex)
+		let carried = self.assignedBindingsIn(whileIndex, endIndex: bodyEndIndex)
 
 		var header = self.newBlock(func, label: b"whilehdr", line: whileTok.line)
 
-		let phiVars = self.mintLoopHeaderPhis(header, assigned: assigned)
+		let phiVars = self.mintLoopHeaderPhis(header, carried: carried)
 
 		self.recordBranchEdge(block, targetId: header.id, argIds: self.edgeArgsFor(phiVars, preLoop: true))
 		self.emitBranch(block, targetId: header.id)
@@ -11905,10 +12026,11 @@ export type Parser
 	end 'parseWhileStatement'
 
 	// ⭐ **MINT ONE HEADER PHI PER CARRIED BINDING** — the front half BOTH loop statements run, and the
-	// only place a loop-carried phi is created. `assigned` is the construct's carried set, read off the
-	// tokens by its caller (see `parseWhileStatement`'s header for why it must be known up front); the
-	// phis follow `mutableVars` DECLARATION order, which is what makes a merge inside the body mint its
-	// own phis in the same order (`assignedBindingsIn`).
+	// only place a loop-carried phi is created. `carried` is the construct's carried set, read off the
+	// tokens by its caller (see `parseWhileStatement`'s header for why it must be known up front) and
+	// already in `mutableVars` DECLARATION ORDER, which is what makes a merge inside the body mint its
+	// own phis in the same order — both come from `assignedBindingsIn`, so it is one ordering rather
+	// than two that agree.
 	//
 	// Each binding's PRE-LOOP value is captured into the `LoopPhiVar` as it goes, because installing the
 	// phi overwrites `boundValue` — that snapshot is what `edgeArgsFor(preLoop: true)` reads to build the preheader
@@ -11916,14 +12038,10 @@ export type Parser
 	//
 	// Index-based so each binding is a MUTABLE reference — a `for x in …` loop variable is immutable,
 	// and installing the phi writes through the binding.
-	function mintLoopHeaderPhis(header IrBlock, assigned AssignedNameSet) returns LoopPhiVarArray
+	function mintLoopHeaderPhis(header IrBlock, carried VarInfoArray) returns LoopPhiVarArray
 		var phiVars = LoopPhiVarArray.create()
-		for k in 0 upto self.mutableVars.count() 'mkPhi'
-			var binding = try self.mutableVars.get(k) otherwise panic("mintLoopHeaderPhis: mutableVars.get OOB at {k}")
-			if not assigned.contains(binding.name) 'neverAssigned'
-				continue
-			end 'neverAssigned'
-
+		for k in 0 upto carried.count() 'mkPhi'
+			var binding = try carried.get(k) otherwise panic("mintLoopHeaderPhis: carried.get OOB at {k}")
 			let entryValue = binding.boundValue
 			let phiId = self.mintPhiForBinding(header, binding: binding)
 			phiVars.push(LoopPhiVar.create(binding, phiId: phiId, entryValue: entryValue))
@@ -11978,7 +12096,6 @@ export type Parser
 
 		// Decided from the tokens, before anything is emitted — see `parseWhileStatement`'s header.
 		let bodyEndIndex = self.blockStatementEndIndex(forIndex, continuesAtElse: false)
-		let assigned = self.namesAssignedIn(forIndex, endIndex: bodyEndIndex)
 
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -12124,7 +12241,11 @@ export type Parser
 		let indexNameId = self.valueNameId(source) if isRange else UnnamedTypeId
 		let indexPhi = self.mintPhi(header, tag: indexTag, nameId: indexNameId)
 
-		let phiVars = self.mintLoopHeaderPhis(header, assigned: assigned)
+		// The carried set is selected against `mutableVars` HERE, not at the extent scan above, because
+		// that is where the walk it replaces used to make the selection. Nothing between the two pushes a
+		// `var` (the source expression declares no binding, and the loop variable is bound in the body),
+		// so the two points agree today — reading it here is what keeps them agreeing tomorrow.
+		let phiVars = self.mintLoopHeaderPhis(header, carried: self.assignedBindingsIn(forIndex, endIndex: bodyEndIndex))
 
 		// The preheader is `currentBlock`, not `block`: a short-circuit `and`/`or` inside a bound leaves
 		// control in a fresh merge block, and the entry edge belongs on the block control is actually in.
@@ -12960,8 +13081,14 @@ export type Parser
 	// `depth × stmtsPerLevel` fixed so the program barely changes size while the nesting doubles: at a
 	// constant 1024 statements `phase:parse` CPU climbed ×1.20 ×1.33 ×1.50 ×1.74 per depth doubling, and
 	// with this skip it climbs ×1.11 ×1.20 ×1.39 ×1.40 — HALF the depth term, to the tick. The other half
-	// is `namesAssignedIn`, whose own scan is the same shape; see its header for why inverting THAT one
-	// into a per-name index is a net loss until the Θ(bindings × constructs) loop above it is gone.
+	// is `assignedBindingsIn`, whose own scan still walks token by token and so still re-reads a nested
+	// construct's tokens once per enclosing construct. ⚠ **THAT HALF IS STILL THERE.** Inverting it — a
+	// per-file `name → ascending assignment sites` index with a binary-searched `isAssignedIn` predicate —
+	// was measured at `phase:parse` ×3.5 on the corpus back when its per-test constant was multiplied by a
+	// Θ(bindings × constructs) walk (rung 5: 10.0G → 34.5G CPU ticks). That walk is GONE as of the
+	// 2026-07-28 entry in `docs/optimization-log.md`, so the measurement no longer stands either way and
+	// the question is open again; it is bounded by nesting DEPTH, which `LoopNestBase` doubles and
+	// `gennest.sh` isolates.
 	function blockStatementEndIndex(startIndex TokenIndex, continuesAtElse bool) returns TokenIndex
 		self.buildBlockExtentIndex()
 
@@ -13144,58 +13271,6 @@ export type Parser
 		let next = self.kindAt(index + 1)
 		return next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or
 	end 'keywordIsMatchCaseName'
-
-	// The names ASSIGNED anywhere in `[startIndex, endIndex)` — the construct's carried-variable
-	// set, read straight off the tokens (see `parseWhileStatement` for why it must be known
-	// before the body is parsed).
-	//
-	// A reassignment is the ONLY way a `var` already in scope changes value, and its syntax is
-	// exactly `identifier =` (parseStatement's two-token lookahead). `==` is a single
-	// `equalsEquals` token, so a comparison cannot be mistaken for one.
-	//
-	// It OVER-approximates, and every case where it does is harmless because a surplus phi is
-	// harmless while a missing one is a miscompile:
-	//   • `let r = …` / `var t = …` inside the loop match the shape too. Those names are not
-	//     mutable bindings in scope at the header, so they select nothing — unless an outer var
-	//     of the same name is being SHADOWED, in which case the outer one gets a phi it does not
-	//     need. Costs one coalesced copy; the alternative is tracking shadowing at token level,
-	//     which is the block structure written down a THIRD time.
-	//
-	// ⚠ **IT IS A SET, PER CONSTRUCT, AND THAT SHAPE IS LOAD-BEARING FOR ITS TWO CALLERS' COST.** Both
-	// ask it once and then test it once per MUTABLE BINDING IN SCOPE, so the test runs
-	// Θ(bindings × constructs) times — 518 × 800 in ONE function of the scale corpus's `d_blocks`, and
-	// 26.5 MILLION times at rung 5. A small per-construct set keeps each of those tests to one hash and
-	// one probe. MEASURED: replacing it with a per-FILE `name -> ascending assignment sites` index and a
-	// binary-searched `isAssignedIn(name, start, end)` predicate — which does make the SCAN linear in
-	// nesting depth — multiplies that quadratic's per-test constant and costs **`phase:parse` ×3.5 on the
-	// corpus** (rung 5: 10.0G → 34.5G CPU ticks; rung 2 ×3.03). The scan's own depth term is worth far
-	// less than that constant. Making both cheap needs the carried sets computed BOTTOM-UP over the
-	// construct tree (each parent unioning its children's), which is a redesign of how a phi set is
-	// ordered, not an edit to this function.
-	function namesAssignedIn(startIndex TokenIndex, endIndex TokenIndex) returns AssignedNameSet
-		// ⚠ THIS SCAN IS EXHAUSTIVE ONLY BECAUSE PARAMETERS ARE IMMUTABLE. Everything below reads
-		// TOKENS, so it can only ever find a write that IS tokens — `identifier =`. A `var`
-		// parameter is written by `mutate(p)` at the call site, leaving no `=` in this loop at all:
-		// the scan would return without `p`, the header would mint no phi, and `p` would reset to
-		// its entry value every iteration. Silent, and invisible to the drift panic that guards
-		// this scan's OTHER assumption (the loop's extent), because the extent would be right.
-		//
-		// The tripwire for it is in `bindParameters`, on the mutability flag itself at the moment
-		// it is passed — not here. This scan cannot enumerate parameters to check them, and a guard
-		// here reading the `ParametersAreMutable` constant would be defeated by the very change it
-		// guards against: a per-parameter feature stops reading that constant, and the guard goes
-		// quiet exactly when it was needed.
-		var assigned = AssignedNameSet.create()
-		var i = startIndex
-		while i < endIndex 'scan'
-			if self.assignsAt(i) 'assignment'
-				assigned.insert(self.tokenAt(i).value)
-			end 'assignment'
-
-			i = i + 1
-		end 'scan'
-		return assigned
-	end 'namesAssignedIn'
 
 	// ⭐ **THE FILE'S BLOCK-EXTENT INDEX: per token, the `end` that closes the block opened there** — one
 	// linear bracket-matching pass over the token array, run on the first construct that asks and shared
@@ -13391,25 +13466,87 @@ export type Parser
 	// two phis of one `if` and move codegen — the scale corpus's rotating write set proves it
 	// (`w5 = …; w0 = …` assigns in the order 5, 0 but must merge in the order 0, 5).
 	//
-	// Built by filtering `mutableVars` through `namesAssignedIn` — the SAME token scan the loop
-	// carried set uses. The scan OVER-approximates (a shadowing inner `let`/`var`, or a name
-	// assigned only past the extent when `blockStatementEndIndex` runs wide, is included), and that
-	// is FREE: an unassigned carried binding has a == b at the merge and mints no phi, costing
-	// one snapshot slot and nothing else. UNDER-approximating would drop a real phi — a silent
-	// miscompile — so the extent errs wide and the drift guard (`assertScanAligned`) refuses a
-	// too-short one. A name in scope but NOT mutable, or not bound at entry (a branch-local
-	// `var`), matches no `mutableVars` entry and is correctly absent.
+	// THE ONE TOKEN SCAN, shared by `if`, `match`, `while` and `for`. A reassignment is the ONLY way
+	// a `var` already in scope changes value, and its syntax is exactly `identifier =`
+	// (parseStatement's two-token lookahead). `==` is a single `equalsEquals` token, so a comparison
+	// cannot be mistaken for one.
+	//
+	// It OVER-approximates, and every case where it does is harmless because a surplus carried
+	// binding is harmless while a missing one is a miscompile:
+	//   • `let r = …` / `var t = …` inside the extent match the shape too. Those names are not
+	//     mutable bindings in scope at the construct, so they select nothing — unless an outer var
+	//     of the same name is being SHADOWED, in which case the outer one is carried when it need
+	//     not be. Costs one snapshot slot (an `if`: a == b, so no phi) or one coalesced copy (a
+	//     loop); the alternative is tracking shadowing at token level, which is the block structure
+	//     written down a THIRD time.
+	//   • a name assigned only PAST the extent, when `blockStatementEndIndex` runs wide.
+	// UNDER-approximating would drop a real phi — a silent miscompile — so the extent errs wide and
+	// the drift guard (`assertScanAligned`) refuses a too-short one. A name in scope but NOT
+	// mutable, or not bound at entry (a branch-local `var`), is in no `mutableVars` entry and is
+	// correctly absent.
+	//
+	// ⚠ THIS SCAN IS EXHAUSTIVE ONLY BECAUSE PARAMETERS ARE IMMUTABLE. Everything below reads
+	// TOKENS, so it can only ever find a write that IS tokens — `identifier =`. A `var` parameter is
+	// written by `mutate(p)` at the call site, leaving no `=` in this loop at all: the scan would
+	// return without `p`, a loop header would mint no phi, and `p` would reset to its entry value
+	// every iteration. Silent, and invisible to the drift panic that guards this scan's OTHER
+	// assumption (the construct's extent), because the extent would be right.
+	//
+	// The tripwire for it is in `bindParameters`, on the mutability flag itself at the moment it is
+	// passed — not here. This scan cannot enumerate parameters to check them, and a guard here
+	// reading the `ParametersAreMutable` constant would be defeated by the very change it guards
+	// against: a per-parameter feature stops reading that constant, and the guard goes quiet
+	// exactly when it was needed.
+	//
+	// ⭐ **IT COSTS O(tokens in the extent), NOT O(vars in scope), AND THAT IS THE WHOLE POINT.** It
+	// used to build a `Set` of the assigned NAMES and then test that set once per mutable binding in
+	// scope — Θ(bindings × constructs) probes, which is quadratic in a program that grows both, and
+	// invisible to the memory columns because a probe allocates nothing. MEASURED on the scale
+	// corpus at rung 5: 39,400,068 probes across 18,571 constructs, ×3.99 per doubling, against a
+	// carried set that was never bigger than TWO. Asking the inverse index per assigned NAME instead
+	// makes the whole thing linear (see `MutableVarPositionByName`).
+	//
+	// ⚠ **AND THE ANSWER MUST STILL COME BACK IN `mutableVars` DECLARATION ORDER.** That order is
+	// load-bearing: the phis a merge mints follow it, so token/assignment order would permute two
+	// phis of one `if` and MOVE CODEGEN — the scale corpus's rotating write set proves it
+	// (`w5 = …; w0 = …` assigns in the order 5, 0 but must merge in the order 0, 5). Ascending
+	// POSITION is that order, which is why the positions are collected ascending rather than sorted
+	// afterwards (see `collectCarriedPositions`).
 	function assignedBindingsIn(startIndex TokenIndex, endIndex TokenIndex) returns VarInfoArray
-		let assigned = self.namesAssignedIn(startIndex, endIndex: endIndex)
+		var positions = MutableVarPositionArray.create()
+		var i = startIndex
+		while i < endIndex 'scan'
+			if self.assignsAt(i) 'assignment'
+				self.collectCarriedPositions(positions, name: self.tokenAt(i).value)
+			end 'assignment'
+
+			i = i + 1
+		end 'scan'
+
 		var bindings = VarInfoArray.create()
-		for k in 0 upto self.mutableVars.count() 'each'
-			var binding = try self.mutableVars.get(k) otherwise panic("assignedBindingsIn: mutableVars.get OOB at {k}")
-			if assigned.contains(binding.name) 'isAssigned'
-				bindings.push(binding)
-			end 'isAssigned'
+		for k in 0 upto positions.count() 'each'
+			let position = try positions.get(k) otherwise panic("assignedBindingsIn: positions.get OOB at {k}")
+			bindings.push(try self.mutableVars.get(position) otherwise panic("assignedBindingsIn: carried position {position} is off the end of a {self.mutableVars.count()}-deep mutable-binding stack"))
 		end 'each'
 		return bindings
 	end 'assignedBindingsIn'
+
+	// Add every mutable binding named `name` to `positions` — the innermost one and each entry it
+	// SHADOWS, which is exactly the set a walk of `mutableVars` testing `name` would have found.
+	//
+	// The walk stops at the first position already present, and that is sound rather than an
+	// optimization: a position only ever enters `positions` through this routine, which inserts the
+	// whole chain below it in the same call, so a chain whose head is present is present entire.
+	function collectCarriedPositions(positions MutableVarPositionArray, name ByteArray)
+		var position = self.innermostMutableVarPosition(name)
+		while position != NoMutableVar 'chain'
+			if not insertCarriedPosition(positions, position: position) 'chainAlreadyCollected'
+				return
+			end 'chainAlreadyCollected'
+
+			position = try self.mutableVarShadowed.get(position) otherwise panic("collectCarriedPositions: position {position} is off the end of a {self.mutableVarShadowed.count()}-deep shadow column")
+		end 'chain'
+	end 'collectCarriedPositions'
 
 	// One slot per carried binding, in phi order — the block-arg list of EVERY edge in a loop's phi
 	// model. `preLoop` picks which value each slot carries, and that is the only thing the two kinds of
@@ -23146,6 +23283,8 @@ export type Parser
 		let savedScope = self.scope
 		let savedValueIds = self.valueIds
 		let savedMutableVars = self.mutableVars
+		let savedMutableVarShadowed = self.mutableVarShadowed
+		let savedMutableVarInnermost = self.mutableVarInnermost
 		let savedLoops = self.loops
 		let savedCurrentBlock = self.currentBlock
 		let savedValueTags = self.valueTags
@@ -23202,6 +23341,8 @@ export type Parser
 		self.scope = Scope.create()
 		self.valueIds = ValueIdRef.create((paramCount + 1) as ParamCount)
 		self.mutableVars = VarInfoArray.create()
+		self.mutableVarShadowed = sharedEmptyMutableVarShadowed
+		self.mutableVarInnermost = sharedEmptyMutableVarInnermost
 		self.ownedBindings = VarInfoArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
@@ -23313,6 +23454,8 @@ export type Parser
 		self.scope = savedScope
 		self.valueIds = savedValueIds
 		self.mutableVars = savedMutableVars
+		self.mutableVarShadowed = savedMutableVarShadowed
+		self.mutableVarInnermost = savedMutableVarInnermost
 		self.loops = savedLoops
 		self.currentBlock = savedCurrentBlock
 		self.valueTags = savedValueTags
@@ -25630,7 +25773,7 @@ export type Parser
 	end 'at'
 
 	// The kind of the token at an ABSOLUTE index. The cursor-independent read the token-extent
-	// scans need — `blockStatementEndIndex`, `namesAssignedIn` and `opensBlockAt` all walk the
+	// scans need — `blockStatementEndIndex`, `assignedBindingsIn` and `opensBlockAt` all walk the
 	// token array without moving `pos`.
 	function kindAt(index TokenIndex) returns TokenKind
 		return self.tokenAt(index).kind
@@ -25640,7 +25783,7 @@ export type Parser
 	// of these on purpose.** Two callers ask it and they must never disagree:
 	//
 	//   • `parseStatement`, deciding that this statement IS a reassignment, and
-	//   • `namesAssignedIn`, deciding which vars a loop CARRIES A PHI FOR.
+	//   • `assignedBindingsIn`, deciding which vars a loop CARRIES A PHI FOR.
 	//
 	// Written down twice, a new write form (a compound assignment, a store through a field) taught
 	// to the dispatcher and not to the scan would compile: the statement would assign the var, the
@@ -25656,7 +25799,7 @@ export type Parser
 	// does.
 	//
 	// ⭐ **THAT IS WHY FIELD STORES HAVE THEIR OWN PREDICATE — `fieldAssignsAt` — AND WHY THIS ONE
-	// WAS NOT WIDENED** (P1.1a wave 2). `parseStatement` routes on both; `namesAssignedIn` reads
+	// WAS NOT WIDENED** (P1.1a wave 2). `parseStatement` routes on both; `assignedBindingsIn` reads
 	// only this one, and that is CORRECT rather than an omission: **a field store assigns no
 	// binding.** `p` is a box pointer that `p.x = 5` never reassigns — the write goes to MEMORY,
 	// through `storeIndirect`, and the box's address is the same value afterwards. So there is no
@@ -25674,7 +25817,7 @@ export type Parser
 	//
 	// ⚠ A write with NO `=` ANYWHERE cannot be covered by either half of the above, because it is
 	// not a statement to teach the dispatcher about: a `var` PARAMETER is written by `mutate(p)`
-	// at the call site. `ParametersAreMutable` is the tripwire for that one — see `namesAssignedIn`.
+	// at the call site. `ParametersAreMutable` is the tripwire for that one — see `assignedBindingsIn`.
 	function assignsAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
 	end 'assignsAt'
@@ -25709,7 +25852,7 @@ export type Parser
 	//
 	// Its own predicate rather than a widening of `fieldAssignsAt`, because `self` is a KEYWORD and
 	// not an identifier — and, more to the point, for `fieldAssignsAt`'s own reason: it assigns no
-	// BINDING, so `namesAssignedIn` must not see it. (The BARE spelling `count = 5` DOES match
+	// BINDING, so `assignedBindingsIn` must not see it. (The BARE spelling `count = 5` DOES match
 	// `assignsAt` and is deliberately left to; see there.)
 	function selfFieldAssignsAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.self and self.kindAt(index + 1) == TokenKind.dot and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.equals
@@ -25804,7 +25947,7 @@ export type Parser
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
 	// needs to see the `=` without committing to consuming the identifier first — and it is
-	// the same question `namesAssignedIn` asks of every token in a loop's extent, which is why
+	// the same question `assignedBindingsIn` asks of every token in a loop's extent, which is why
 	// both read it through `kindAt` and the past-the-end rule lives in exactly one place.
 	function peekKind() returns TokenKind
 		return self.kindAt(self.pos + 1)

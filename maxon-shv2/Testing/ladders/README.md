@@ -37,6 +37,34 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genfor.sh <loops> <depth> <accesses> <array\|range\|noloop> <out>` | `loops/depth` functions, each one NEST of `depth` `for` loops with `accesses` binding accesses per level | `for … in` (P1.8 slice A) and the four doors of its ITERATION LOCK. `ScaleCorpus` generates **no `for` at all** — the construct did not parse until that commit — so every column of a default run reads a flat Δ0 for it. **Its knobs are independent** (program size is `loops × accesses`, so `depth` moves alone) and `noloop` is the CONTROL: the same accesses through the same doors with not one `for` in the program. See below. |
 | `genstring.sh <n> <sites-*\|data-*> <out>` | ⚠ **TWO families, and `<n>` means a different thing in each**: `sites-*` is a COMPILE ladder (`<n>` = method CALL SITES, four per function); `data-*` is a RUN ladder (`<n>` = DOUBLINGS of the subject string, the program timing only the operation and printing a CSV line) | the seven byte/ASCII `String` methods (P1.8 Slice C). `ScaleCorpus` emits **not one** of `startsWith`/`endsWith`/`contains`/`toLower`/`toUpper`/`replace`/`split` at any rung — dump it and the complete method-call inventory is `create push count get append scaleBy probe byteLength slice reserve clone firstVal` — so the family is structurally invisible to a default run. ⚠ **It is NOT blind to `String`**, which is the trap: 756 `==` sites plus `append`/`byteLength`/interpolation across the six rungs mean a Slice C change to the SHARED `__str_eq` loop DOES read, and that non-zero looks like coverage of a rung it does not cover. `sites-control` is the CONTROL (the P1.2 surface only, no Slice C method), and `data-appendloop` measures the P1.2 `append` this generator has to route around. See below. |
 | `genfnval.sh <aliases> <sites> <arity> <indirect\|direct> <out>` | `aliases` function typealiases with a matching callee each, called through a function VALUE `sites` times per alias, plus a `return` door and an argument door per alias | FUNCTION VALUES and their DECLARED TYPES — `resolveFunctionAliasShapes`, `declaredFunctionShapeOf`, `checkIndirectCall`, `checkFunctionTypeDoors` and `indirectCalleeParamTypes`. `--emit-corpus` finds **ZERO `typealias = function(…)` and ZERO function references** in all 465 generated files, so every column of a default run reads a flat Δ0 for the whole mechanism. `direct` is the CONTROL: the same declarations, bodies and CALL COUNT, called by NAME. See below. |
+| `genscope.sh <constructs> <locals> <if\|ifelse\|while\|match\|straight> <out>` | ONE function with `locals` scope-filler `var`s in scope and `constructs` merging statements after them, each assigning a BOUNDED two of six accumulators | THE PARSER'S SCOPE DIMENSION — mutable bindings IN SCOPE (V) against the CONSTRUCTS that merge them (C), which `ScaleCorpus` doubles TOGETHER (`LocalsPerFunctionBase` and `LongIfsBase`/`DeepBlocksBase`) and therefore cannot tell apart. It is what separated the `phase:parse` bend of 2026-07-28: **linear in C alone, linear in V alone, quadratic in the two together** — an O(V×C) term, which the `straight` CONTROL (same V, same statement count, no merging construct) then pinned to the construct rather than to program size. See below. |
+
+### `genscope.sh` — two knobs the standing corpus can only move together
+
+**A cost of the form O(V × C) is invisible on a ladder that doubles V and C at once**, and not because
+the ladder is blind to it — it shows up perfectly, as a bend. It is invisible because the bend is
+unattributable: `ScaleCorpus` doubles twenty-five knobs per rung, so *everything* quadruples against
+*everything*, and `phase:parse` climbing ×2.02 → ×3.33 names a phase and nothing inside it. Separating
+the two axes is the whole job, and it takes three columns, not one:
+
+| ladder | `phase:parse` CPU per doubling | reading |
+| --- | --- | --- |
+| C alone (V = 256) | ×1.72 ×1.86 ×1.89 | linear in constructs |
+| V alone (C = 400) | ×1.46 ×1.57 ×1.83 | linear in scope size |
+| **both** | **×2.21 ×2.45 ×2.83** | **the product term** |
+| `straight`, both | ×1.80 ×1.90 ×1.89 | the control: it is the CONSTRUCT, not the size |
+
+⚠ **THE CONTROL IS NOT OPTIONAL AND IT IS NOT THE `if` SHAPE WITH A SMALLER NUMBER.** `straight` emits
+the same V declarations and the same statement COUNT, and merges nothing — so a cost that is really
+per-statement, per-token or per-`var` reads the same on both and is ruled out in one run. Without it,
+"doubling both bends" is equally consistent with a cost that is simply quadratic in program size, and
+this ladder would have named a phase exactly as the corpus already did.
+
+⭐ **THE SCOPE-FILLER TRICK IS LOAD-BEARING AND IS COPIED FROM `ScaleCorpus.fillerLocalsDecl`.** Each
+filler is folded into a working accumulator on the very next line, so it is IN SCOPE for every later
+construct but LIVE for one instruction. Declaring V locals and reading them at the end instead makes
+all V live at once and trips E5001 above ~13 — which is to say the obvious way to write this ladder
+cannot climb the axis it exists to climb.
 
 ### `genstring.sh` — the two questions, and the ONE that was not about Slice C at all
 
@@ -328,7 +356,7 @@ program.
 ×2.00 ×2.00 (CPU ×2.04 ×2.02 ×1.99 ×1.99); `range` mode, whose literal bounds leave the lock stack
 empty, reads ×2.00 in every phase in both columns. On the constant-size **depth** ladder
 `phase:parse` allocations go 6,541 / 6,674 / 6,940 / 7,469 — an excess over depth 1 of
-**133 / 399 / 928, i.e. 133 × (1, 3, 7)**, exactly ∝ (D−1). That is `namesAssignedIn`'s documented
+**133 / 399 / 928, i.e. 133 × (1, 3, 7)**, exactly ∝ (D−1). That is `assignedBindingsIn`'s documented
 Θ(tokens × depth) scan, **linear in depth**, and the lock walk adds nothing on top of it.
 `phase:regalloc` jumps ×7.21 from depth 1 to 2 and then reads ×1.68 ×1.95 — a MODE CHANGE (the
 splitter engages at all once two loops nest), not a curve, and the identical shape appears on
