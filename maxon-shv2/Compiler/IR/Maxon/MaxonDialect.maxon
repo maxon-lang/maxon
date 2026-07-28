@@ -782,13 +782,19 @@ export union MaxonOp
 	// the code pointer (unlike `call`'s `callee ByteArray` NAME) — the whole reason it is a distinct op. It
 	// has full call-barrier semantics like `call`, so category `callFree` (the same band as `call`/`tryCall`).
 	//
-	// ⚠ **NO `argLabels`/`argRanges` (a DEVIATION from `call`, DELIBERATE).** A1 indirect calls are
-	// POSITIONAL — a function TYPE has no parameter names, so there is nothing to label — and this rung does
-	// not validate an indirect call's arguments, so per-argument labels and spans would be dead weight:
-	// always empty and read by nothing. `args` alone is what an indirect call needs. The Std
-	// `callIndirect` it lowers to DOES carry the function value's signature (`resultType`/`argFloatMask`, for
-	// the float result/arg register files — P1.5 #78), but `lowerIndirectCall` derives that from the
-	// already-typed result and arg VALUES (`stdTypeOf`), so no signature rides this Maxon op either.
+	// ⚠ **NO `argLabels`/`argRanges` (a DEVIATION from `call`, DELIBERATE).** Indirect calls are POSITIONAL —
+	// a function TYPE has no parameter names, so there is nothing to label — and an argument's own span would
+	// be dead weight: `SemanticCheck.checkIndirectCall` anchors every argument diagnostic on the CALL, and
+	// names the argument by POSITION for the same reason there is no label.
+	//
+	// ⚠ **`args` ALWAYS CARRIES ONE MORE ENTRY THAN THE FUNCTION TYPE DECLARES** — see
+	// `IndirectCallEnvArgCount`.
+	//
+	// ⚠ **NO SIGNATURE RIDES THIS OP EITHER, and both consumers recover the same one the same way.** The Std
+	// `callIndirect` it lowers to carries the function value's register-file signature
+	// (`resultType`/`argFloatMask` — P1.5 #78), and both the argument validation and the argument WIDENING
+	// resolve it from the callee VALUE's governing name through `declaredFunctionShapeOf` — the declared type,
+	// which is the authority a call site derives its ABI from.
 	//
 	// ⚠ Its `args` (an `Array with ValueId`) must be BOUND in a SMALL match, never destructured by
 	// `lowerMaxonToStd.lowerOp`'s big one — see `LowerMaxonToStd.lowerIndirectCall` for the bootstrap
@@ -922,6 +928,16 @@ export union MaxonOp
 	// `witnessDispatch`'s trap, unchanged.
 	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 end 'MaxonOp'
+
+// ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
+// is NOT the argument list the source wrote.** Under the uniform `(userargs, env) -> R` ABI every function
+// value is called through one signature, so `Parser.parseIndirectCall` appends an env pointer as the LAST
+// argument — the callee value's own env when it carries one, else a materialized null. Every consumer that
+// pairs `args` with the function type's DECLARED parameters must therefore drop this many from the end:
+// `SemanticCheck.checkIndirectCall` (which would otherwise report every call as one argument too many) and
+// `LowerMaxonToStd.widenIndirectCallArgs` (which would otherwise index a parameter that does not exist).
+// ONE named fact, read by both, rather than a bare `- 1` in each.
+export let IndirectCallEnvArgCount = 1 as ParamCount
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and
 // `errorOrdinal + ErrorFlagOrdinalBias` when a scalar error is thrown — the bias is what reserves `0`.

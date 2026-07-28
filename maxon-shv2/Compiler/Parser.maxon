@@ -5138,7 +5138,7 @@ export type Parser
 	// collision the form feeds is decided at the merge from the REAL parse's artifact (whose position
 	// is the one a diagnostic must be anchored on).
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
-		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, buildFunctionDisplay: false) otherwise return
+		_ = try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, recordFunctionSignature: false) otherwise return
 	end 'recordScannedTypeAlias'
 
 	// Cursor is AT `type`. Append the struct it declares, plus a `FuncReturnTypeEntry` for each
@@ -5522,7 +5522,7 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), noun: "field")
+		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), door: FunctionTypeDoor.field)
 	end 'requireFieldDefaultType'
 
 	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
@@ -5658,7 +5658,7 @@ export type Parser
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, buildFunctionDisplay: true)
+			let form = try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, recordFunctionSignature: true)
 			self.recordTypeName(nameIndex, kind: form)
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration()
@@ -5857,7 +5857,7 @@ export type Parser
 	// rule has to tell them apart (`TypeNameRegistry`). The alternative — the caller inferring the
 	// form from which array grew, or re-deciding it off the tokens — would be a second copy of the
 	// discrimination this function already makes, which is this project's signature bug.
-	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, buildFunctionDisplay bool) returns TypeDeclKind throws ParseError
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, recordFunctionSignature bool) returns TypeDeclKind throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -5865,15 +5865,16 @@ export type Parser
 
 		// A FUNCTION typealias — `function(paramTypes) [returns T]` (P1.5-A1). The literal `function(…)`
 		// form is legal ONLY as a typealias RHS (the spec), so this is the one place it is parsed as a
-		// type. It records its own registry (`FunctionTypeAlias`), not the ranged one. `buildFunctionDisplay`
-		// is the real parse's signal that this alias's `#81` display string is wanted (it will be merged and
-		// read by the value-merge check); the sweep and the nested-alias reader pass false.
+		// type. It records its own registry (`FunctionTypeAlias`), not the ranged one.
+		// `recordFunctionSignature` is the REAL parse's signal that this alias's whole declared signature —
+		// its `#81` display string and its parameter types — is wanted; the sweep and the nested-alias reader
+		// pass false (see `readFunctionTypeAlias` for why only the real parse may record it).
 		if self.at(TokenKind.function) 'functionAlias'
 			// A function alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference to
 			// `function`), so it may not take a compiler-owned type name — unlike the ranged form below, which
 			// erases. See `requireTypeNameNotCompilerOwned`.
 			try self.requireTypeNameNotCompilerOwned(nameTok)
-			functionOut.push(try self.readFunctionTypeAlias(nameTok, buildDisplay: buildFunctionDisplay))
+			functionOut.push(try self.readFunctionTypeAlias(nameTok, recordSignature: recordFunctionSignature))
 			return TypeDeclKind.functionAlias
 		end 'functionAlias'
 
@@ -5942,7 +5943,7 @@ export type Parser
 		// The FORM comes from the reader that decided it, never from which array grew: that inference
 		// would be a second copy of a discrimination `readTypeAliasDeclaration` already makes, free to
 		// drift the day a fourth form appears.
-		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, buildFunctionDisplay: false)
+		let form = try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, recordFunctionSignature: false)
 
 		// A generic-instance nested alias (`Array with T`) — recorded by `readGenericInstanceAlias` into
 		// `generics`. Its instance is PARTIALLY OPAQUE (`Array with typeParameter(pos)`), keyed whole-program by
@@ -6292,28 +6293,34 @@ export type Parser
 	end 'checkGenericInstanceAgainst'
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS (P1.5-A1), the cursor sitting on
-	// `function`. The RETURN type is stored INTERNER-FREE (tag + name) so it rides the no-remap fold, and an
-	// indirect call needs it to type its result. The PARAMETER types are not needed by a call (arg-type/arity
-	// checking against a function-typed place is a later rung), but the #81 merge check needs the WHOLE
-	// signature to compare a `f UnaryOp` arm — so they are collected here into the `fn(…) returns …` DISPLAY
-	// STRING (also interner-free), which is the only thing that carries the params past this point. An absent
-	// `returns` clause is a void function type.
-	function readFunctionTypeAlias(nameTok Token, buildDisplay bool) returns FunctionTypeAlias throws ParseError
+	// `function`. The whole declared SIGNATURE is stored INTERNER-FREE (a tag + a name per parameter and for
+	// the return) so it rides the no-remap fold, plus the `#81` `fn(…) returns …` DISPLAY STRING built from
+	// the same parameter list. An absent `returns` clause is a void function type.
+	//
+	// ⚠ **ONLY THE REAL PARSE MAY RECORD THE SIGNATURE, and that is a property of the SWEEP rather than an
+	// optimization.** `parseTypeReference` answers a type spelling differently during the whole-program token
+	// sweep — `isFunctionAlias`/`isGenericAlias` consult the very registries the sweep is still building, so a
+	// parameter spelled with a function or generic alias reads back as a bare `named` there — and a fact
+	// recorded twice from two answers is two facts. The sweep and the nested-alias reader therefore pass
+	// `recordSignature: false` and store the RETURN type alone, which they read identically; every consumer
+	// of a parameter type reads the real parse's copy in `project.functionTypeAliases`. The params are PARSED
+	// either way: the syntax must be consumed, and a malformed one rejected, wherever it is met.
+	function readFunctionTypeAlias(nameTok Token, recordSignature bool) returns FunctionTypeAlias throws ParseError
 		try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
 
-		// The parameter TYPES are collected only to build the `#81` display string, and ONLY the real parse
-		// needs it: the whole-program token sweep and the nested-alias reader discard the function alias, so
-		// they pass `buildDisplay: false`, push nothing into `paramTypes`, and build no display string. The
-		// empty `paramTypes` they still construct grows no heap buffer — an `Array`'s backing storage is
-		// allocated lazily on the first `push`, which the sweep never makes. The params are PARSED either
-		// way — the syntax must be consumed, and a malformed one rejected.
+		// Two lists off one parse: the `MaxonType`s the display string renders (this file's interner ids, used
+		// and dropped here) and the interner-free `(tag, name)` pairs the alias stores. The empty arrays a
+		// sweep still constructs grow no heap buffer — an `Array`'s backing storage is allocated lazily on the
+		// first `push`, which a sweep never makes.
 		var paramTypes = MaxonTypeArray.create()
+		var declaredParams = FunctionAliasParamArray.create()
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
 				let paramType = try self.readFunctionTypeParam()
-				if buildDisplay 'collectParam'
+				if recordSignature 'collectParam'
 					paramTypes.push(paramType)
+					declaredParams.push(FunctionAliasParam.create(maxonTypeTag(paramType), typeName: self.functionAliasTypeName(paramType)))
 				end 'collectParam'
 				if not self.at(TokenKind.comma) 'endParams'
 					break
@@ -6331,15 +6338,15 @@ export type Parser
 			try self.consume(TokenKind.returns)
 			let returnType = try self.parseTypeReference()
 			returnTag = maxonTypeTag(returnType)
-			returnTypeName = self.functionAliasReturnName(returnType)
+			returnTypeName = self.functionAliasTypeName(returnType)
 			returnForDisplay = MaxonReturnType.value(returnType)
 		end 'hasReturn'
 
 		var display = EmptySourceText
-		if buildDisplay 'display'
+		if recordSignature 'display'
 			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames).toByteArray()
 		end 'display'
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, display: display)
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, display: display, paramTypes: declaredParams)
 	end 'readFunctionTypeAlias'
 
 	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
@@ -6361,11 +6368,13 @@ export type Parser
 		return k == TokenKind.identifier or k == TokenKind.int or k == TokenKind.bool or k == TokenKind.float or k == TokenKind.selfType
 	end 'peekStartsType'
 
-	// The interned NAME behind a function alias's return type, stored so the return type can be
-	// re-interned into any reader's own interner at an indirect call (see FunctionTypeAlias). A primitive
-	// return (`bool`/`int`/`float`/`ExitCode`/`void`) carries no name and yields the empty string.
-	function functionAliasReturnName(returnType MaxonType) returns ByteArray
-		return match returnType 'k'
+	// The interned NAME behind one type in a function alias's declared signature — a PARAMETER's or the
+	// RETURN's — stored so the type can be re-interned into any reader's own interner (see
+	// FunctionTypeAlias). A primitive (`bool`/`int`/`float`/`ExitCode`/`void`) carries no name and yields the
+	// empty string. ONE extractor for both halves of the signature: they are stored the same way, so a second
+	// copy of this match is a second answer waiting to disagree.
+	function functionAliasTypeName(declared MaxonType) returns ByteArray
+		return match declared 'k'
 			named(id) gives self.internedName(id)
 			structRef(id) gives self.internedName(id)
 			function(id) gives self.internedName(id)
@@ -6374,11 +6383,11 @@ export type Parser
 			string gives EmptySourceText
 			// A type parameter / generic instance carries no re-internable NAME (its id is a POSITION / a
 			// GenericInstanceId, P1.6-A), so like a primitive it yields the empty string. A function ALIAS
-			// returning one is not reachable in the trivial slice — this is exhaustiveness insurance.
+			// naming one is not reachable in the trivial slice — this is exhaustiveness insurance.
 			typeParameter gives EmptySourceText
 			genericInstance gives EmptySourceText
 		end 'k'
-	end 'functionAliasReturnName'
+	end 'functionAliasTypeName'
 
 	// The `to <high>` / `upto <high>` half of a range, returned as an INCLUSIVE upper
 	// bound: `upto` is exclusive, so it normalizes to `high - 1` here and the registry
@@ -8516,7 +8525,7 @@ export type Parser
 		// an int: `x == 3.0` on the next line was E3005 ("cannot compare int with float") against a
 		// perfectly legal program, and a rebind INSIDE A LOOP fed an i64 and an f64 into one header phi —
 		// measured, a cross-register-file panic in the x64 emitter.
-		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, noun: "variable")
+		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(binding.varType), door: FunctionTypeDoor.variable)
 
 		// ⭐ OPEN #54/#59: reassigning a `var` to the WRONG named aggregate — a DIFFERENT struct/union, OR
 		// an aggregate where the binding declares a SCALAR — is a retype the tag check above cannot see
@@ -8785,8 +8794,7 @@ export type Parser
 		// The slot keeps the type its declaration gave it, so `g = 3` into a `var g = 0.0` stores a WIDENED
 		// f64 and not the integer's raw bytes — the same coercion the local rebind above performs, through
 		// the same door.
-		let declared = maxonTypeTag(valueType)
-		let stored = try self.assignableValue(nameTok, value: value, declared: declared, noun: "global")
+		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global)
 
 		let range = SourceRange.ofToken(nameTok)
 		if not self.signatures.typeIsManaged(valueType) 'scalarGlobal'
@@ -8799,7 +8807,7 @@ export type Parser
 		// COPIED into a fresh owned record, an already-owned value is MOVED (its source binding poisoned,
 		// or its pending statement-end drop cancelled). A second spelling here would be free to leak the
 		// temporary or double-free the source.
-		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsText(declared), anchor: nameTok, range: range)
+		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsText(maxonTypeTag(valueType)), anchor: nameTok, range: range)
 
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
@@ -8922,29 +8930,43 @@ export type Parser
 	// It returns a value rather than nothing precisely because the caller must REBIND: the promoted id is
 	// a different SSA value from the one that was parsed, and a caller that stored the original would
 	// store the raw integer bits — which is what all five of them did.
-	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, noun String) returns ValueId throws ParseError
-		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: declared, noun: noun)
+	//
+	// ⚠ **EVERY ARGUMENT IT TAKES IS A SCALAR, AND THAT IS MEASURED RATHER THAN STYLISTIC.** This is one of
+	// the hottest paths in the parser — every `var` rebind, every struct-literal field, every field write
+	// and every global store — so what crosses the boundary is what the program pays per assignment. The
+	// declared type arrives as the `(tag, nameId)` PAIR every other type-deciding door in this file takes
+	// (`aggregateNameOf`, `floatResolvedTag`, `maxonTypeOfTag`), and the place arrives as the door ENUM
+	// rather than the noun STRING it used to: threading that string on into the function-type door cost
+	// **one allocation per call, +1,852 in `phase:parse` at scale rung 0**, for a record almost every call
+	// then discarded. See `FunctionTypeDoor`.
+	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor) returns ValueId throws ParseError
+		let got = self.tagOf(value)
+		try self.requireAssignable(nameTok, value: got, declared: declared, door: door)
+		if isFunctionTypeDoor(declared, got: got) 'functionTypeDoor'
+			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.valueNameId(value), door: door, placeName: nameTok.value, anchor: nameTok)
+		end 'functionTypeDoor'
 		return self.coerceToDeclared(value, declared: declared, anchor: nameTok)
 	end 'assignableValue'
 
 	// The VERDICT rule for an ASSIGNMENT — the local path, the global one, the struct-literal field, the
 	// field write and the field DEFAULT all ask it, and none of them restates it. A global is no less able
 	// to be handed a bool where it declared an int, or a float where it declared an int, than a local is;
-	// every one of them anchors the diagnostic on the assigned NAME and names its own PLACE (`noun`).
+	// every one of them anchors the diagnostic on the assigned NAME and names its own PLACE (the `door`,
+	// whose noun `functionTypeDoorNoun` renders — and renders only where a diagnostic is built).
 	//
 	// ⚠ It is the verdict ALONE, and it is asked DIRECTLY by exactly one caller: the site holding a
 	// parse-time CONSTANT rather than an SSA value (a struct field's literal default), which pays the
 	// widening the verdict licenses in the constant's own representation. Every site holding a VALUE asks
 	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
-	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, noun String) throws ParseError
+	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, door FunctionTypeDoor) throws ParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break 'declared'
 			mismatch then throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(value), expected: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 			// A FUNCTION VALUE into a NON-function place (P1.5-A1) — the spec's specific E3005 ("cannot
-			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). `noun` is what
-			// the caller names the place ("variable" for a local, "global"/"field" for the others).
-			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction(noun, name: String.from(nameTok.value), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). The noun comes
+			// from the DOOR the caller named, so this site and the function-type check word one place alike.
+			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction(functionTypeDoorNoun(door), name: String.from(nameTok.value), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 		end 'declared'
 	end 'requireAssignable'
 
@@ -9049,6 +9071,36 @@ export type Parser
 
 		return EmptySourceText
 	end 'aggregateNameOf'
+
+	// ⭐ **RECORD A FUNCTION VALUE MEETING A FUNCTION-TYPED PLACE — the FUNCTION twin of the nominal
+	// `aggregatesConflict` identity check every door beside this one already makes.** A `structRef` and a
+	// `function` are both aggregates the tag check reads as one type: two different structs share
+	// `structRef`, and two different function TYPES share `function`. The struct half is decided in place,
+	// because a struct's identity is its name and the parser holds both names. The function half cannot be:
+	// a function value's own shape is its parameter list, which lives in the whole-program `funcSignatures`
+	// the parser does not have, and the shapes are compared RESOLVED, which is not true until
+	// `resolveTypes`. So this records the two governing NAMES and
+	// `SemanticCheck.checkFunctionTypeDoors` decides.
+	//
+	// A NO-OP unless BOTH sides are function-tagged: a function value meeting a non-function place is
+	// `DeclaredTypeMatch.functionIntoNonFunction` (already reported, with its own advice), and a
+	// non-function value meeting a function place is an ordinary class mismatch. Only function-meets-function
+	// reaches a rule that has nothing left to compare.
+	// ⚠ **PRECONDITION: `isFunctionTypeDoor` ANSWERED TRUE** — the gate is the CALLER's, so a call that is
+	// not a door evaluates nothing at all. That matters here more than at a typical helper: two of the three
+	// doors sit on the hottest paths in the parser (`assignableValue` runs at every assignment,
+	// `parseReturnStatement` at every `return`) and almost none of them is a function meeting a function.
+	//
+	// ⚠ Placing the gate here was NOT what made the cost go away, and the difference is worth recording
+	// because it was measured the wrong way round first: with the gate inside, at the call site, or with the
+	// declared type passed as a `MaxonType`, the ladder read the SAME +1,852 allocations at rung 0 to the
+	// digit. What actually cost that was the place NOUN — a `String` threaded on from `assignableValue` —
+	// and it went to ZERO the moment the noun became a scalar (`FunctionTypeDoor`). Every argument this
+	// takes is now a scalar or a shared reference, which is why `phase:parse` is allocation-identical to
+	// the parent.
+	function recordFunctionTypeDoor(declaredNameId TypeNameId, gotNameId TypeNameId, door FunctionTypeDoor, placeName ByteArray, anchor Token)
+		self.artifact.recordFunctionTypeDoor(PendingFunctionTypeDoor.create(self.internedName(gotNameId), declaredName: self.internedName(declaredNameId), door: door, placeName: placeName, line: anchor.line, column: anchor.column, filePath: self.filePath))
+	end 'recordFunctionTypeDoor'
 
 	// ⭐ **THE PRE-ERASURE UNION/ENUM IDENTITY COLUMN A SIGNATURE CARRIES (OPEN #54 Slice B2)** — one
 	// `ByteArray` per parameter for `FuncSignature.paramAggregateNames`, the interned name of a declared
@@ -9296,6 +9348,13 @@ export type Parser
 		// name, EXACT (no subtyping). Un-gated — both names are computed unconditionally, `aggregateNameOf`
 		// returning the shared empty for a scalar with no allocation — and `giveTypeName` prints the
 		// scalar side's primitive (`int`), not an empty name.
+		// The FUNCTION twin of the aggregate identity check below — a function value returned where a
+		// function type is declared agrees on the tag and can still be a different function type entirely.
+		// See `recordFunctionTypeDoor` for why it is recorded rather than decided here.
+		if isFunctionTypeDoor(declaredTag, got: retTag) 'functionTypeDoor'
+			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.valueNameId(retVal), door: FunctionTypeDoor.returned, placeName: EmptySourceText, anchor: retTok)
+		end 'functionTypeDoor'
+
 		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
 		if self.signatures.aggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
@@ -16413,6 +16472,17 @@ export type Parser
 		let targetTag = try self.castTargetTag(targetType, asTok: asTok)
 		try self.requireCastKindsConvert(sourceTag, targetTag: targetTag, asTok: asTok)
 
+		// ⭐ **A FUNCTION-TO-FUNCTION CAST IS THE ONE `requireCastKindsConvert` LETS THROUGH UNEXAMINED.**
+		// Both ends are `TypeClass.function`, so `castHasNoLegalConversion` sees the same class and stands
+		// aside, and the value then falls all the way to the representational no-op at the end of this
+		// function — untouched, and now claiming to be a function type it may share nothing with but its
+		// tag. `intish as FloatFn` compiled clean and the integer `intish` returns was read back out of the
+		// float return register. The id `castTargetTag` discards is exactly what names the target's
+		// signature, which is why this reads `targetType` and not the reduced tag.
+		if isFunctionTypeDoor(targetTag, got: sourceTag) 'functionTypeDoor'
+			self.recordFunctionTypeDoor(typeNameIdOf(targetType), gotNameId: self.valueNameId(value), door: FunctionTypeDoor.cast, placeName: EmptySourceText, anchor: asTok)
+		end 'functionTypeDoor'
+
 		let sourceIsFloat = tagIsFloat(self.tagOf(value))
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
@@ -17960,10 +18030,10 @@ export type Parser
 			return value
 		end 'managed'
 
-		// The SAME verdict-plus-coercion the assignment doors ask, noun "field" — which is what it always
+		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
-		return try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), noun: "field")
+		return try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field)
 	end 'requireFieldType'
 
 	// ⭐ **REJECT A DOUBLE-MOVE OF ONE VALUE INTO TWO OWNING FIELDS (P1.6-B2)** — the move-only guard that

@@ -2519,3 +2519,316 @@ end 'main'
 ```maxoncstderr
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-into-container-errors.test:10:9: cannot pass a closure that captures to a compiler runtime entry: it puts the value in heap memory that outlives this frame, and a runtime entry has no signature for the escape summary to be built from. captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
+
+<!-- test: first-class-function.int-literal-widens-at-indirect-call -->
+An INT LITERAL passed at a `float` parameter of a function value. A DIRECT call widens it
+(`LowerMaxonToStd.widenIntArgsToFloatParams`); an indirect call must widen it the same way, off the
+DECLARED parameter types of the function type the call goes through. Without that the raw i64 `2`
+travels in a GPR to a callee reading `xmm0`, and `v * 2.0` multiplies whatever was left there —
+a silent wrong answer, not a crash.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Real = float(f64.min to f64.max)
+typealias Scaler = function(v Real) returns Real
+
+function twice(v Real) returns Real
+	return v * 2.0
+end 'twice'
+
+function apply(f Scaler) returns Real
+	return f(2)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = twice
+	let r = apply(fn)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: first-class-function.int-literal-widens-through-function-ref -->
+The same widening where the callee value is a bare FUNCTION REFERENCE rather than a function-typed
+parameter — its declared type is the function's own signature, not an alias's, so the two must reach
+the same answer through one lookup.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+
+function scale(x Ratio) returns Ratio
+	return x * 2.0
+end 'scale'
+
+function main() returns ExitCode
+	let fn = scale
+	return trunc(fn(3)) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: first-class-function.int-literal-widens-through-closure -->
+The third callee kind: a LIFTED CLOSURE, whose declared parameter types are its own. The closure
+declares `x Ratio`, so the literal `3` widens exactly as it does for a named function.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+
+function main() returns ExitCode
+	let f = function(x Ratio) gives x * 2.0
+	return trunc(f(3)) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: first-class-function.mixed-int-float-literal-args-indirect -->
+The formal→actual MAPPING, pinned rather than "some argument widened": an int literal at an `int`
+parameter must STAY an integer while an int literal at a `float` parameter must widen. Each failure
+mode has its own answer — widening the wrong one makes `n == 3` compare an f64 bit pattern (5), and
+widening neither leaves `x` an integer whose f64 reading is ~2.5e-323 (0).
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias Count = int(0 to 1000)
+typealias MixFn = function(n Count, x Ratio) returns Ratio
+
+function combine(n Count, x Ratio) returns Ratio
+	if n == 3 'exact'
+		return x * 10.0
+	end 'exact'
+	return x
+end 'combine'
+
+function apply(f MixFn) returns Ratio
+	return f(3, 5)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = combine
+	return trunc(apply(fn)) as ExitCode
+end 'main'
+```
+```exitcode
+50
+```
+
+<!-- test: first-class-function.matching-signature-cast-accepted -->
+A cast to a function type whose signature MATCHES stays legal and stays a no-op — the guard against
+an over-strict signature rule, which would otherwise refuse every cast a program legitimately writes.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Real = float(f64.min to f64.max)
+typealias Scaler = function(v Real) returns Real
+
+function twice(v Real) returns Real
+	return v * 2.0
+end 'twice'
+
+function main() returns ExitCode
+	let f = twice as Scaler
+	return trunc(f(3.0)) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: first-class-function.closure-into-alias-typed-param-accepted -->
+A closure passed into a parameter declared with a function typealias. Its declared parameter types
+are the alias's, and its RETURN type is INFERRED — `float`, where the alias spells `Ratio` — so a
+signature rule that compared the two by NAME would refuse a program both reference compilers accept.
+The rule compares the RESOLVED representation, which is what the call ABI actually depends on.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias ScaleFn = function(x Ratio) returns Ratio
+
+function apply(f ScaleFn, v Ratio) returns Ratio
+	return f(v)
+end 'apply'
+
+function main() returns ExitCode
+	let g = function(x Ratio) gives x * 3.0
+	return trunc(apply(g, v: 4.0)) as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: first-class-function.error.cast-return-type-mismatch -->
+A cast whose target function type returns something else. Accepted silently before this rule, after
+which the integer the function really returns is read back out of the float return register.
+```maxon
+
+typealias Real = float(f64.min to f64.max)
+typealias Integer = int(i64.min to i64.max)
+typealias FloatFn = function(x Real) returns Real
+
+function intish(x Real) returns Integer
+	return trunc(x) + 14
+end 'intish'
+
+function main() returns ExitCode
+	let f = intish as FloatFn
+	return trunc(f(1.0)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:12:17: function type mismatch in cast: expected 'fn(float) returns float', got 'fn(float) returns int'
+```
+
+<!-- test: first-class-function.error.cast-param-type-mismatch -->
+The parameter half of the same rule: the target function type declares a `float` parameter the
+function itself declares as an int, so every call through the cast value would write the argument to
+the wrong register file.
+```maxon
+
+typealias Real = float(f64.min to f64.max)
+typealias Integer = int(i64.min to i64.max)
+typealias FloatFn = function(x Real) returns Real
+
+function intParam(x Integer) returns Real
+	return x * 2.0
+end 'intParam'
+
+function main() returns ExitCode
+	let f = intParam as FloatFn
+	return trunc(f(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:12:19: function type mismatch in cast: expected 'fn(float) returns float', got 'fn(int) returns float'
+```
+
+<!-- test: first-class-function.error.cast-arity-mismatch -->
+The arity half: a one-parameter function cast to a two-parameter function type. Every call through it
+supplies an argument the callee never reads and reads a parameter the caller never wrote.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Bin = function(a Integer, b Integer) returns Integer
+
+function one(a Integer) returns Integer
+	return a + 1
+end 'one'
+
+function main() returns ExitCode
+	let f = one as Bin
+	return f(3) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:11:14: function type mismatch in cast: expected 'fn(int, int) returns int', got 'fn(int) returns int'
+```
+
+<!-- test: first-class-function.error.wrong-signature-into-function-param -->
+The rule is NOT cast-only. The same disagreement reached through a function-typed PARAMETER — no cast
+anywhere — was accepted just as silently, because the argument check compared only the `function` TAG.
+```maxon
+
+typealias Real = float(f64.min to f64.max)
+typealias Integer = int(i64.min to i64.max)
+typealias FloatFn = function(x Real) returns Real
+
+function intish(x Real) returns Integer
+	return trunc(x) + 14
+end 'intish'
+
+function use(f FloatFn) returns Real
+	return f(1.0)
+end 'use'
+
+function main() returns ExitCode
+	let r = use(intish)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:16:10: argument type mismatch for 'f': expected 'fn(float) returns float', got 'fn(float) returns int'
+```
+
+<!-- test: first-class-function.error.wrong-signature-returned -->
+And through a `return`, the third door — a two-parameter function handed back where a one-parameter
+function type is declared.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(n Integer) returns Integer
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function pick() returns UnaryOp
+	return add
+end 'pick'
+
+function main() returns ExitCode
+	let f = pick()
+	return f(4) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'
+```
+
+<!-- test: first-class-function.error.indirect-call-too-few-args -->
+An indirect call that supplies fewer arguments than the function type declares. The missing argument
+was read out of whatever the register held — `f(3)` against `a + b` returned 3 — and the arity a
+function value promises is exactly the fact the declared type now carries.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Bin = function(a Integer, b Integer) returns Integer
+
+function two(a Integer, b Integer) returns Integer
+	return a + b
+end 'two'
+
+function use(f Bin) returns Integer
+	return f(3)
+end 'use'
+
+function main() returns ExitCode
+	return use(two) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:11:10: 'Bin' expects 2 argument(s) but 1 were provided
+```
+
+<!-- test: first-class-function.error.indirect-call-arg-type-mismatch -->
+And an indirect call whose argument is the wrong KIND. A `String` at an int parameter reached the
+backend untouched and the callee did integer arithmetic on a heap pointer.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Un = function(a Integer) returns Integer
+
+function one(a Integer) returns Integer
+	return a + 1
+end 'one'
+
+function use(f Un) returns Integer
+	return f("hello")
+end 'use'
+
+function main() returns ExitCode
+	return use(one) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: argument type mismatch for 1: expected 'int', got 'String'
+```

@@ -37,6 +37,11 @@ export function semanticCheck(project Project, module MaxonModule)
 	// call site to refuse an immutable binding handed to a parameter the callee writes.
 	let mutationSummary = buildParamMutationSummary(project, module: module)
 	checkCalls(project, module: module, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
+	// The function-type doors the parser recorded (`PendingFunctionTypeDoor`). It runs HERE, and not beside
+	// `checkValueMergeSignatures`, for one reason: the shapes are compared RESOLVED, and resolution has not
+	// happened when that check drains. After `checkCalls` so a program with both a bad argument and a bad
+	// cast reports the argument first, in the order the reader meets them.
+	checkFunctionTypeDoors(project)
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
@@ -1028,15 +1033,25 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// The error terminators and the panic op read no callee signature.
 					throwError to panicAbort then break 'op'
 					// P1.5-A1: a `functionRef`'s "does this function name resolve?" was answered by the parser
-					// (`emitFunctionRef` checks `returnTypeOf`, else E2004), and A1 does not type-check the
-					// positional arguments of the indirect call that later consumes it — so signature
-					// validation has nothing to say about either. The TARGET gate does, about the
-					// `functionRef` alone: taking a STDLIB function's ADDRESS reaches its body exactly
+					// (`emitFunctionRef` checks `returnTypeOf`, else E2004). The TARGET gate is what this pass
+					// has to say about it: taking a STDLIB function's ADDRESS reaches its body exactly
 					// as a call does (it is one of the four edges `markMaxonCalleeEdge` counts), so the
 					// crossing is refused at the span where the address is taken. An `indirectCall`'s callee
 					// is a VALUE, whose `functionRef` was already gated here.
 					functionRef(_, funcName) then requireTargetSupportsCallee(project, func: func, opIndex: opIdx, callee: funcName, blameTargetErrorsHere: blameTargetErrorsHere)
-					indirectCall then break 'op'
+					// An INDIRECT call is validated against the function type its callee VALUE was declared
+					// with — the arity and the argument types a direct call gets from `funcSignatures`. It is
+					// this pass's to make for the same reason a direct call's is: the declared type is a
+					// whole-program fact (a function alias, or the callee function's own signature) and the
+					// types must be RESOLVED to compare, neither of which is true at parse.
+					//
+					// ⚠ It hands the WHOLE op on to be re-matched rather than destructuring it here, for the
+					// reason `LowerMaxonToStd.lowerIndirectCall`'s header states in full: the C# reference
+					// MISCOMPILES a large match's arm that binds an `Array` payload sitting in the TAIL field
+					// slot of its variant, corrupting the SCRUTINEE's decref. `indirectCall`'s `args` is
+					// exactly that (no field follows it), unlike `call`/`tryCall`, whose trailing `argRanges`
+					// makes binding `args` here safe.
+					indirectCall then checkIndirectCall(project, func: func, opIndex: opIdx, op: op)
 					// P1.5-B1a: an async spawn validates its arguments like a plain call AND requires the
 					// callee's PARAMETERS to be GPR scalars (the trampoline passes them through the integer
 					// arg registers); `await`'s operand is a runtime promise handle, not a callee to resolve.
@@ -1194,6 +1209,121 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, result 
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(callee), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 	end 'slot'
 end 'validateCall'
+
+// ⭐ **VALIDATE AN INDIRECT CALL AGAINST THE FUNCTION TYPE ITS CALLEE VALUE WAS DECLARED WITH.** The
+// declared type is the authority: the call site derives its argument count, its per-argument register file
+// and its result register from it, so anything the arguments disagree with it about is a wrong answer the
+// backend cannot see. `f(3)` against a two-parameter function type read `b` out of whatever the register
+// held; `f("hello")` at an int parameter did integer arithmetic on a heap pointer.
+//
+// Re-matched in a SMALL match so `args` is bound in a single-call arm, never in `checkCalls`' big one —
+// the tail-slot-`Array` decref corruption `LowerMaxonToStd.lowerIndirectCall` documents.
+function checkIndirectCall(project Project, func IrFunction, opIndex OpIndex, op MaxonOp)
+	match op 'ic'
+		indirectCall(_, callee, args) then checkIndirectCallArgs(project, func: func, opIndex: opIndex, callee: callee, args: args)
+		default panic("checkIndirectCall: expected an `indirectCall` op, got a different MaxonOp variant — `checkCalls` routes only `indirectCall` here")
+	end 'ic'
+end 'checkIndirectCall'
+
+// The arity and per-argument type checks, against the callee value's declared shape. A helper because the
+// arm above must hand `args` to a function and touch it no other way (see there).
+function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex, callee ValueId, args ValueIdArray)
+	let callRange = project.opRanges.get(opIndex)
+	let calleeName = functionValueGoverningName(project, func: func, value: callee)
+	// Unreachable `undeclared`, and PROVEN so at the point the op was emitted rather than assumed here:
+	// `Parser.mintIndirectCallResult` types every indirect call's result through `functionValueReturnType`,
+	// which resolves the same governing name against the same three producers (a lifted closure, a function
+	// alias, a declared function) and panics if it is none of them. So an `indirectCall` op cannot exist
+	// with a callee whose type nothing declares.
+	let shape = functionTypeShapeOf(project, name: calleeName, side: "called")
+
+	// The trailing uniform-ABI env pointer is the compiler's, not the program's (see IndirectCallEnvArgCount).
+	let suppliedCount = args.count() - IndirectCallEnvArgCount
+	if suppliedCount != shape.paramTypes.count() 'arity'
+		reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(calleeName), expected: shape.paramTypes.count(), got: suppliedCount), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		return
+	end 'arity'
+
+	for i in 0 upto suppliedCount 'eachArg'
+		let argId = try args.get(i) otherwise panic("checkIndirectCallArgs: args.get OOB at {i} — the arity check above proved there are at least this many")
+		let paramType = try shape.paramTypes.get(i) otherwise panic("checkIndirectCallArgs: paramTypes.get OOB at {i} — the arity check above proved the counts equal")
+		// A function TYPE carries no pre-erasure union/enum identity (see `checkOneArgType`), so the
+		// aggregate carrier is empty and a union parameter is checked structurally.
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: EmptySourceText, paramName: EmptySourceText, position: i, argId: argId, callRange: callRange, filePath: func.sourceFilePath)
+	end 'eachArg'
+end 'checkIndirectCallArgs'
+
+// The NAME that governs a function value's type — the FUNCTION it refers to (a `functionRef`, or a lifted
+// closure) or the function TYPEALIAS the place it came from was declared with. It is the value's own
+// `named` column entry, because `MaxonType.function(id)` carries exactly that (see MaxonType's `function`
+// arm); the parser reads the same fact through its file-local interner in `functionValueReturnType`.
+function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns ByteArray
+	let nameId = try func.valueNameIds.get(value) otherwise panic("functionValueGoverningName: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	return functionTypeNameOf(project, nameId: nameId)
+end 'functionValueGoverningName'
+
+// The name behind a `function`-tagged type's id, from the merged interner. The same read whether the id came
+// from a VALUE's name column or from a declared `MaxonType.function`, which is the point: both carry the
+// governing name of a function type and both must resolve it the same way.
+function functionTypeNameOf(project Project, nameId TypeNameId) returns ByteArray
+	return try project.typeNames.nameOf(nameId) otherwise panic("functionTypeNameOf: type-name id {nameId} is not in the project interner — a function type's name id is remapped project-global at merge (mergeArtifact)")
+end 'functionTypeNameOf'
+
+// ⭐ **DRAIN THE FUNCTION-TYPE DOORS — the whole-program half of a rule the parser can only record.** Each
+// entry is a function VALUE that met a function-typed place (a cast, a `return`, an assignment); the two
+// shapes must agree, and until this drained, only the `function` TAG was compared. See
+// `PendingFunctionTypeDoor` and `Parser.recordFunctionTypeDoor`.
+function checkFunctionTypeDoors(project Project)
+	for door in project.pendingFunctionTypeDoors 'eachDoor'
+		checkOneFunctionTypeDoor(project, door: door)
+	end 'eachDoor'
+end 'checkFunctionTypeDoors'
+
+// One door. Both governing names resolve — see `functionTypeShapeOf`.
+function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
+	let declared = functionTypeShapeOf(project, name: door.declaredName, side: "declared")
+	let got = functionTypeShapeOf(project, name: door.gotName, side: "arriving")
+	if functionShapesAgree(declared, got: got) 'agree'
+		return
+	end 'agree'
+
+	let expected = formatFnTypeDisplay(declared.paramTypes, returnType: declared.returnType, typeNames: project.typeNames)
+	let actual = formatFnTypeDisplay(got.paramTypes, returnType: got.returnType, typeNames: project.typeNames)
+	// A cast is a CAST rejection and takes E3009, the sibling of the cross-kind refusal
+	// `castHasNoLegalConversion` makes; every other door is a type mismatch and takes E3005, the sibling of
+	// what a bool meeting a declared int earns there. One sentence for all three, because one RULE decided
+	// all three — only the site phrase differs.
+	let code = ErrorCode.semanticUnsafeCast if door.door == FunctionTypeDoor.cast else ErrorCode.typeMismatch
+	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}', got '{actual}'", line: door.line, column: door.column, filePath: door.filePath)
+end 'checkOneFunctionTypeDoor'
+
+// Where the door was, as the diagnostic says it. An assignment names its place (`assigning to variable
+// 'g'`); a cast and a `return` are the construct itself and name nothing, which is why the record's
+// `placeName` is empty for them and why the three assignment arms are covered by ONE range arm.
+function functionTypeDoorSite(door PendingFunctionTypeDoor) returns String
+	return match door.door 'd'
+		cast gives "in cast"
+		returned gives "in return"
+		variable to field gives "assigning to {functionTypeDoorNoun(door.door)} '{String.from(door.placeName)}'"
+	end 'd'
+end 'functionTypeDoorSite'
+
+// The resolved shape behind a governing name, for the three sites that require one to exist: an indirect
+// call's callee, and each end of a function-type door. `side` names which one in the panic, so an invariant
+// break says whether it was the callee, the place or the value whose type went missing.
+//
+// It PANICS rather than reporting, and that is a statement about the parser rather than about the program:
+// a `function` TAG is minted only from a name one of the three producers declares
+// (`Parser.parseTypeReference` for a function alias, `emitFunctionRef` for a function,
+// `parseClosureExpression` for a lifted closure), and every caller here has already established that both
+// its tags are `function`. A missing shape therefore means a producer was added without a registry entry,
+// which is a compiler bug and never user input.
+function functionTypeShapeOf(project Project, name ByteArray, side String) returns FunctionShape
+	match declaredFunctionShapeOf(project.funcSignatures, funcReturnTypes: project.funcReturnTypes, aliasShapes: project.functionAliasShapes, name: name) 'shape'
+		declared(shape) then return shape
+		undeclared then panic("functionTypeShapeOf: the {side} function type's governing name '{String.from(name)}' names neither a declared function/closure nor a function typealias — a `function` tag is minted only from one of the three (Parser.parseTypeReference / emitFunctionRef / parseClosureExpression)")
+	end 'shape'
+end 'functionTypeShapeOf'
 
 // ⭐ **THE RUNTIME ENTRIES A SOURCE-WRITTEN BUILTIN LOWERS TO THAT ONLY x64-WINDOWS CAN PROVIDE.** The
 // exact set `requireTargetSupportsCallee` refuses below (E3104), and the deliberate counterpart of
@@ -1736,9 +1866,6 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("checkArgTypes: argIds.get OOB at {i}")
 		let paramType = try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature")
-		let argTag = try func.valueTags.get(argId) otherwise panic("checkArgTypes: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
-
-		let paramTag = maxonTypeTag(paramType)
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
 		// ⭐ THE RECEIVER ARGUMENT (`__self`, position 0 of an instance-method call) IS COMPATIBLE WITH ITS
@@ -1751,54 +1878,96 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 			continue
 		end 'receiverArg'
 
-		// ⭐ OPEN #54 Slice B/B2: a DIFFERENT named aggregate passed where one is declared shares the
-		// scalar tag — two STRUCTS both `structRef`, two boxed UNIONS both erased to `integer` — so the
-		// `checkDeclaredType` tag check below would ACCEPT it, and at a CONSUMING argument (a constructor
-		// storing it into a field) it is then dropped under the DECLARED parameter type's destructor: a
-		// wild free the tag check cannot see. Identity is the interned name, EXACT — an aggregate is never
-		// a subtype of another. The comparison RULE is `namedAggregatesConflict`, shared verbatim with the
-		// parser's coercion sites; only the name EXTRACTION is local.
-		//
-		// A STRUCT parameter keeps its `structRef(id)` through `resolveTypes`, so `aggregateNameFor` reads
-		// its name straight off `paramType` (Slice B). A UNION/ENUM parameter does NOT — `resolveTypes`
-		// erased its `named` tag to bare `integer`, so `aggregateNameFor` returns empty and the name comes
-		// from the signature's pre-erasure `paramAggregateNames` carrier the parser stashed before that
-		// erasure (Slice B2). The ARG side always resolves live, because an argument keeps its `named`/
-		// `structRef` tag (`aggregateNameFor` handles both). Additive — the tag check still runs on every
-		// path this leaves alone — and it reads a name only when the PARAMETER is an aggregate.
-		var expectedAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
-		if expectedAggregate.isEmpty() 'erasedUnionParam'
-			expectedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
-		end 'erasedUnionParam'
-		if not expectedAggregate.isEmpty() 'aggregateParam'
-			let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkArgTypes: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-			let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
-			if namedAggregatesConflict(expectedAggregate, got: gotAggregate) 'aggregateArgMismatch'
-				reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expectedAggregate)}', got '{aggregateArgDisplay(gotAggregate, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
-				continue
-			end 'aggregateArgMismatch'
-		end 'aggregateParam'
-
-		// `checkDeclaredType`, not `typesAgree` — an argument meeting its parameter is a COERCION
-		// SITE, and the symmetric rule cannot see a direction. A float and an int AGREE (they must,
-		// or `5 + 2.0` would not compile), so `takeInt(3.7)` passed this check and the float reached
-		// the x64 emitter as an f64 headed for a GPR argument register. The same rule now answers
-		// here, at the `return` and at both assignments.
-		match checkDeclaredType(argTag, declared: paramTag) 'declared'
-			ok then continue
-			mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{typeTagName(paramTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
-			// The parameter is NAMED, unlike the parser's three sites, because the reader's next
-			// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
-			// shared verbatim, so the four sites cannot come to explain one rule four ways.
-			narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument '{String.from(paramName)}': {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(paramTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
-			// A FUNCTION VALUE passed to a NON-function parameter (P1.5-A1) — the argument twin of the
-			// parser's assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one
-			// rule one way. (Reached only through the whole-program signature the parser cannot see, which
-			// is why the rule's argument arm lives here rather than at the call site.)
-			functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument '{String.from(paramName)}', which holds '{typeTagName(paramTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
-		end 'declared'
+		// The pre-erasure UNION/ENUM identity a DIRECT call's signature carries; see `checkOneArgType`.
+		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, paramName: paramName, position: i, argId: argId, callRange: callRange, filePath: filePath)
 	end 'eachArg'
 end 'checkArgTypes'
+
+// How a diagnostic NAMES the parameter an argument met: by NAME at a direct call, by 1-based POSITION at
+// an indirect one — a function TYPE's parameter names are documentation the parser discards
+// (`Parser.readFunctionTypeParam`), which is also why `parseIndirectCall` passes arguments positionally.
+// An EMPTY name is the indirect call's "there is no name", the same `EmptySourceText`-means-none convention
+// `aggregateNameFor` answers with.
+//
+// ⚠ **IT IS CALLED ONLY FROM THE REPORTING ARMS, and that is a measurement rather than a preference.**
+// Rendering the label up front and passing it in cost a `String.from` plus an interpolation on EVERY
+// argument of EVERY call in the program — a per-argument allocation on a path that reports nothing almost
+// every time. That is why the label arrives as its two pieces.
+function argParamLabel(paramName ByteArray, position ParamCount) returns String
+	return "{position + 1}" if paramName.isEmpty() else "'{String.from(paramName)}'"
+end 'argParamLabel'
+
+// ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
+// reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument
+// (`checkIndirectCall`); the two differ ONLY in what the parameter is CALLED, which is `argParamLabel`'s
+// question and is asked only when something is actually reported.
+//
+// `preErasedAggregate` is the union/enum identity `resolveTypes` destroys: a STRUCT parameter keeps its
+// `structRef(id)` through resolution so `aggregateNameFor` reads it straight off `paramType`, but a
+// UNION/ENUM parameter collapses to bare `integer`, and only the carrier the parser stashed before that
+// erasure still holds the name. A direct call has one on its signature (`paramAggregateNames`); an
+// indirect call has none, because a function TYPE's stored parameters are not a `FuncSignature` — so a
+// union-parameter function type is checked structurally and not nominally there. That is strictly more
+// than the nothing it got before, and it is the bound of what a `FunctionShape` can say.
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, paramName ByteArray, position ParamCount, argId ValueId, callRange SourceRange, filePath FilePath)
+	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	let paramTag = maxonTypeTag(paramType)
+
+	// ⭐ OPEN #54 Slice B/B2: a DIFFERENT named aggregate passed where one is declared shares the
+	// scalar tag — two STRUCTS both `structRef`, two boxed UNIONS both erased to `integer` — so the
+	// `checkDeclaredType` tag check below would ACCEPT it, and at a CONSUMING argument (a constructor
+	// storing it into a field) it is then dropped under the DECLARED parameter type's destructor: a
+	// wild free the tag check cannot see. Identity is the interned name, EXACT — an aggregate is never
+	// a subtype of another. The comparison RULE is `namedAggregatesConflict`, shared verbatim with the
+	// parser's coercion sites; only the name EXTRACTION is local. The ARG side always resolves live,
+	// because an argument keeps its `named`/`structRef` tag (`aggregateNameFor` handles both).
+	var expectedAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+	if expectedAggregate.isEmpty() 'erasedUnionParam'
+		expectedAggregate = preErasedAggregate
+	end 'erasedUnionParam'
+	if not expectedAggregate.isEmpty() 'aggregateParam'
+		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
+		if namedAggregatesConflict(expectedAggregate, got: gotAggregate) 'aggregateArgMismatch'
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{String.from(expectedAggregate)}', got '{aggregateArgDisplay(gotAggregate, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'aggregateArgMismatch'
+	end 'aggregateParam'
+
+	// ⭐ **A FUNCTION VALUE MEETING A FUNCTION-TYPED PARAMETER — the ARGUMENT door.** It is checked HERE and
+	// not through a recorded `PendingFunctionTypeDoor` for the reason the parser's doors are recorded: the
+	// two shapes must be compared whole-program and RESOLVED, and this pass already is both. `checkDeclaredType`
+	// below answers `ok` for it (two `function` tags agree), which is how `use(intish)` reached the backend
+	// with a callee returning an integer where the call site read the float return register.
+	if paramTag == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionArg'
+		let declaredShape = functionTypeShapeOf(project, name: functionTypeNameOf(project, nameId: typeNameIdOf(paramType)), side: "declared")
+		let gotShape = functionTypeShapeOf(project, name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
+		if not functionShapesAgree(declaredShape, got: gotShape) 'signatureMismatch'
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{formatFnTypeDisplay(declaredShape.paramTypes, returnType: declaredShape.returnType, typeNames: project.typeNames)}', got '{formatFnTypeDisplay(gotShape.paramTypes, returnType: gotShape.returnType, typeNames: project.typeNames)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'signatureMismatch'
+	end 'functionArg'
+
+	// `checkDeclaredType`, not `typesAgree` — an argument meeting its parameter is a COERCION
+	// SITE, and the symmetric rule cannot see a direction. A float and an int AGREE (they must,
+	// or `5 + 2.0` would not compile), so `takeInt(3.7)` passed this check and the float reached
+	// the x64 emitter as an f64 headed for a GPR argument register. The same rule now answers
+	// here, at the `return` and at both assignments.
+	match checkDeclaredType(argTag, declared: paramTag) 'declared'
+		ok then break 'declared'
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{typeTagName(paramTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		// The parameter is NAMED, unlike the parser's three sites, because the reader's next
+		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
+		// shared verbatim, so the four sites cannot come to explain one rule four ways.
+		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(paramName, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(paramTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
+		// A FUNCTION VALUE passed to a NON-function parameter (P1.5-A1) — the argument twin of the
+		// parser's assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one
+		// rule one way. (Reached only through the whole-program signature the parser cannot see, which
+		// is why the rule's argument arm lives here rather than at the call site.)
+		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(paramName, position: position)}, which holds '{typeTagName(paramTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
+	end 'declared'
+end 'checkOneArgType'
 
 // The interned name of the declared STRUCT or boxed UNION/ENUM a (tag, nameId) pair denotes, or
 // `EmptySourceText` for anything that is not one — the SemanticCheck half of the OPEN #54 identity

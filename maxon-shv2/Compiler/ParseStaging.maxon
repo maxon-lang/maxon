@@ -38,6 +38,7 @@
 let sharedEmptyInterfaces = IrInterfaceArray.create()
 let sharedEmptyConformances = ConformanceDeclArray.create()
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
+let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 
 // One `funcReturnTypes` registry contribution: a function's name and its
 // declared return type, recorded by the parser. Ordered in an array so the
@@ -113,6 +114,10 @@ export type FileParseArtifact
 	// Appended to `project.pendingFnMergeChecks` by `commitPendingFnMergeChecks`; the check itself is
 	// drained after merge, before resolution (see PendingFnMergeCheck).
 	export var pendingFnMergeChecks as PendingFnMergeCheckArray
+	// This file's recorded function-type doors awaiting whole-program shape agreement. Appended to
+	// `project.pendingFunctionTypeDoors` by `commitPendingFunctionTypeDoors`; the check itself is drained
+	// after RESOLUTION (see PendingFunctionTypeDoor).
+	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
 	// This file's range-check contributions (P1.9), one per function that has a cast into a
 	// ranged alias or a ranged `return`. Folded into `project.rangeChecks` by `commitRangeChecks`.
 	export var rangeChecks as FunctionRangeCheckEntryArray
@@ -121,8 +126,9 @@ export type FileParseArtifact
 	// the E3105 a cross-file underlying conflict earns (see RangedTypeAlias).
 	export var typeAliases as RangedTypeAliasArray
 	// This file's declared FUNCTION typealiases (P1.5-A1), in declaration order. The twin of
-	// `typeAliases`, and remap-free: a function alias's return type is stored interner-free (a tag
-	// + a name ByteArray), so `mergeArtifact` folds it by NAME with no id rewrite.
+	// `typeAliases`, and remap-free: a function alias's whole declared signature is stored interner-free
+	// (a tag + a name ByteArray per parameter and for the return), so `mergeArtifact` folds it by NAME
+	// with no id rewrite.
 	export var functionTypeAliases as FunctionTypeAliasArray
 	// This file's declared struct types (`type Point`), in declaration order.
 	export var structTypes as StructLayoutArray
@@ -184,6 +190,7 @@ export type FileParseArtifact
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
+			pendingFunctionTypeDoors: sharedEmptyFunctionTypeDoors,
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
 			functionTypeAliases: FunctionTypeAliasArray.create(),
@@ -334,6 +341,18 @@ export type FileParseArtifact
 		end 'firstConformance'
 		self.conformances.push(conformance)
 	end 'recordConformance'
+
+	// Record a function VALUE meeting a function-typed PLACE (see PendingFunctionTypeDoor). Copy-on-write
+	// off the shared empty on the first push, for the reason `recordTypeNameDecl` is: only the REAL parse
+	// can reach a door, so eagerly creating the array would bill one allocation to every declaration SWEEP
+	// and every top-level CONSTANT (`walkConstInitializer` builds a `Parser`, and so an artifact, per one)
+	// for a structure they can never fill.
+	export function recordFunctionTypeDoor(door PendingFunctionTypeDoor)
+		if self.pendingFunctionTypeDoors.count() == 0 'firstDoor'
+			self.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
+		end 'firstDoor'
+		self.pendingFunctionTypeDoors.push(door)
+	end 'recordFunctionTypeDoor'
 end 'FileParseArtifact'
 
 // Fold `artifact` into the whole-program build in source-path order:
@@ -378,6 +397,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
+	commitPendingFunctionTypeDoors(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
 	// BEFORE the five per-kind commits below, because it is the one that can REFUSE a declaration: a
 	// name reported here is one whose meaning the registries beneath cannot agree on, and reporting it
@@ -803,3 +823,11 @@ function commitPendingFnMergeChecks(project Project, artifact FileParseArtifact)
 		project.pendingFnMergeChecks.push(check)
 	end 'each'
 end 'commitPendingFnMergeChecks'
+
+// Append this file's recorded function-type doors to the whole-program list — the twin of the merge-check
+// commit above, dedup-free for the same reason: each entry is a distinct SITE with its own position.
+function commitPendingFunctionTypeDoors(project Project, artifact FileParseArtifact)
+	for door in artifact.pendingFunctionTypeDoors 'each'
+		project.pendingFunctionTypeDoors.push(door)
+	end 'each'
+end 'commitPendingFunctionTypeDoors'

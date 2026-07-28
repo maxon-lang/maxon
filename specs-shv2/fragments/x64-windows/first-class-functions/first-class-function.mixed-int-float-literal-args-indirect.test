@@ -1,0 +1,126 @@
+// Test: first-class-function.mixed-int-float-literal-args-indirect
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias Count = int(0 to 1000)
+typealias MixFn = function(n Count, x Ratio) returns Ratio
+
+function combine(n Count, x Ratio) returns Ratio
+	if n == 3 'exact'
+		return x * 10.0
+	end 'exact'
+	return x
+end 'combine'
+
+function apply(f MixFn) returns Ratio
+	return f(3, 5)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = combine
+	return trunc(apply(fn)) as ExitCode
+end 'main'
+---
+ExitCode: 50
+---
+func @combine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc equal, exact
+    x64.jmp ifcont
+  exact:
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rax, 5
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.callReg rbx
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_combine]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect apply
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

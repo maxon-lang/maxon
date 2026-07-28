@@ -312,6 +312,20 @@ end 'DeclaredTypeMatch'
 // The order is load-bearing: a class mismatch is reported as a mismatch (`return flag` from a
 // `returns int` is not a "narrowing"), so agreement is established FIRST and the narrowing rule
 // then runs on a pair already known to be two numbers.
+// ⭐ **IS THIS A FUNCTION VALUE MEETING A FUNCTION-TYPED PLACE?** The gate every coercion-site door asks
+// before recording one for the whole-program shape check. It is here beside `checkDeclaredType` because it
+// is the SAME question one arm of that verdict answers, asked from the other side: `functionIntoNonFunction`
+// is a function value meeting a NON-function place and is decided on the spot, while function-meets-function
+// is the one pairing no tag comparison can settle — two different function types share the `function` tag
+// exactly as two different structs share `structRef`.
+//
+// It is a `bool` and it is asked FIRST, before anything is built, for the reason
+// `ProgramSignatures.isFunctionAlias` is a bool twin: these doors are every assignment and every `return` in
+// the program, and the overwhelming majority are neither side a function.
+export function isFunctionTypeDoor(declared ValueTypeTag, got ValueTypeTag) returns bool
+	return declared == ValueTypeTag.function and got == ValueTypeTag.function
+end 'isFunctionTypeDoor'
+
 export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) returns DeclaredTypeMatch
 	// A function value fits a function-typed place and nothing else (P1.5-A1). Tested FIRST, so a function
 	// value meeting a non-function place gets its specific verdict rather than the generic class

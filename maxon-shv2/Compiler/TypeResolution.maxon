@@ -98,10 +98,191 @@ export function resolveTypes(project Project, module MaxonModule)
 	end 'eachFunc'
 
 	checkStructFieldTypes(project, signatures: signatures)
+	resolveFunctionAliasShapes(project, signatures: signatures)
 
 	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
 	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
 end 'resolveTypes'
+
+// ⭐ **THE FOURTH DECLARATION SITE — a FUNCTION TYPEALIAS's parameter and return types.** A
+// `typealias Scaler = function(v Real) returns Real` names two types the three sweeps above never reach:
+// the alias is not a function (so it has no `funcSignatures` entry to re-sync) and its types are stored
+// interner-free (so nothing rewrote them at merge). This resolves them into `project.functionAliasShapes`,
+// which is the form BOTH consumers need — the indirect call's argument widening and the function-type door
+// agreement both ask about the REPRESENTATION, and a `named` alias answers neither until it is erased.
+//
+// ⚠ **IT RE-INTERNS THE STORED NAMES INTO `project.typeNames`** — the merged interner every id downstream of
+// this pass lives in — because the alias deliberately carries names rather than ids (see FunctionTypeAlias).
+// Interning is idempotent and the names came from files whose own interners already folded in, so this mints
+// no new id in practice; it is what makes the alias's types comparable with a signature's at all.
+//
+// ⚠ Unlike `checkStructFieldTypes` it VALIDATES NOTHING. An undeclared name in a function alias's signature
+// is already E3011 from the site that USES the alias (a parameter/field/return declared with it resolves
+// through `resolveNamedType` on the way in); reporting it a second time here would double every such
+// diagnostic. `resolveType`'s recovery answer for an unknown name is what lands in the shape, and the
+// pipeline's error gate stops the build before anything reads it.
+function resolveFunctionAliasShapes(project Project, signatures ProgramSignatures)
+	for (name, alias) in project.functionTypeAliases 'eachAlias'
+		var resolvedParams = MaxonTypeArray.create()
+		for param in alias.paramTypes 'eachParam'
+			resolvedParams.push(resolveType(project, signatures: signatures, t: functionAliasParamType(project, param: param)))
+		end 'eachParam'
+		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: functionAliasReturnType(project, alias: alias))))
+	end 'eachAlias'
+end 'resolveFunctionAliasShapes'
+
+// Rebuild one stored parameter's `MaxonType` from its interner-free `(tag, name)` pair, re-interning the
+// name into the project's merged interner. The twin of `functionAliasReturnType` below and of the parser's
+// own `functionAliasReturnType`, which does the identical rebuild against the FILE's interner — the storage
+// convention is one, so the rebuild is stated once per interner and nowhere else.
+function functionAliasParamType(project Project, param FunctionAliasParam) returns MaxonType
+	return maxonTypeOfTag(param.tag, nameId: functionAliasNameId(project, typeName: param.typeName))
+end 'functionAliasParamType'
+
+// Rebuild a function alias's declared RETURN type from its interner-free storage. `void` means the function
+// type returns nothing.
+function functionAliasReturnType(project Project, alias FunctionTypeAlias) returns MaxonReturnType
+	if alias.returnTag == ValueTypeTag.void 'voidReturn'
+		return MaxonReturnType.void
+	end 'voidReturn'
+	return MaxonReturnType.value(maxonTypeOfTag(alias.returnTag, nameId: functionAliasNameId(project, typeName: alias.returnTypeName)))
+end 'functionAliasReturnType'
+
+// The project-interner id behind one stored type NAME — `UnnamedTypeId` for a primitive, which carries none
+// (the convention `FunctionTypeAlias.returnTypeName` and `FunctionAliasParam.typeName` share).
+function functionAliasNameId(project Project, typeName ByteArray) returns TypeNameId
+	return UnnamedTypeId if typeName.isEmpty() else project.typeNames.intern(typeName)
+end 'functionAliasNameId'
+
+// ⭐ **THE RESOLVED SHAPE OF THE FUNCTION TYPE A GOVERNING NAME DENOTES — THE ONE LOOKUP.** A function value
+// carries its type as `MaxonType.function(id)`, whose id names either the FUNCTION it refers to (a
+// `functionRef`, or a lifted closure) or the function TYPEALIAS a declared place was written with — and
+// "the declared type is authoritative" means those two must reach one answer through one door. A declared
+// function's resolved shape already exists as `funcSignatures` + `funcReturnTypes` (`resolveTypes` re-synced
+// both), so it is assembled on demand rather than duplicated into a third registry; an alias's was
+// materialized by `resolveFunctionAliasShapes` because nothing else holds it.
+//
+// The two registries are DISJOINT by construction — `Parser.requireUnreservedName`/`checkTypeSymbolNamespace`
+// keep a type name and a function name from colliding — so the order they are tried in cannot matter.
+//
+// `undeclared` is the honest answer for a name in neither, and every caller must handle it rather than assume:
+// see `hasDeclaredFunctionShape` for the allocation-free question, asked first on the hot paths.
+export union DeclaredFunctionShape
+	declared(shape FunctionShape)
+	undeclared
+end 'DeclaredFunctionShape'
+
+export function declaredFunctionShapeOf(funcSignatures FuncSignatureMap, funcReturnTypes FuncReturnTypeMap, aliasShapes FunctionShapeMap, name ByteArray) returns DeclaredFunctionShape
+	if let sig = try funcSignatures.get(name) 'declaredFn'
+		let returnType = try funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType))
+	end 'declaredFn'
+
+	if let aliasShape = try aliasShapes.get(name) 'alias'
+		return DeclaredFunctionShape.declared(aliasShape)
+	end 'alias'
+
+	return DeclaredFunctionShape.undeclared
+end 'declaredFunctionShapeOf'
+
+// The `bool` half of `declaredFunctionShapeOf`, and a HOT-PATH one for the reason
+// `ProgramSignatures.isFunctionAlias` is: a `DeclaredFunctionShape` is a Maxon union VALUE and so a heap
+// box, and a caller that only wants to know whether the question is answerable must not pay for one.
+export function hasDeclaredFunctionShape(funcSignatures FuncSignatureMap, aliasShapes FunctionShapeMap, name ByteArray) returns bool
+	return funcSignatures.contains(name) or aliasShapes.contains(name)
+end 'hasDeclaredFunctionShape'
+
+// ⭐ **DO TWO FUNCTION TYPES AGREE? THE ONE ANSWER, for every door a function value passes through.** Same
+// arity, and position for position the same RESOLVED type — which is exactly what a call through the value
+// depends on, because a call site derives its argument register files, its argument count and its result
+// register from the type it was DECLARED with and gets whatever the callee actually is.
+//
+// It is deliberately NOT `typesAgree`, and the difference is the whole rule: `typesAgree` puts `int` and
+// `float` in one class (`5 + 2.0` must compile), so it would accept `fn(Real) returns Integer` standing in
+// for `fn(Real) returns Real` — the very silent wrong answer this exists to close. Nor is it the NOMINAL
+// display comparison `checkValueMergeSignatures` makes; see FunctionShape for why a door and a merge ask
+// different questions and get different rules.
+export function functionShapesAgree(declared FunctionShape, got FunctionShape) returns bool
+	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
+		return false
+	end 'arity'
+
+	for i in 0 upto declared.paramTypes.count() 'eachParam'
+		let declaredParam = try declared.paramTypes.get(i) otherwise panic("functionShapesAgree: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
+		let gotParam = try got.paramTypes.get(i) otherwise panic("functionShapesAgree: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
+		if not resolvedTypesMatch(declaredParam, got: gotParam) 'paramMismatch'
+			return false
+		end 'paramMismatch'
+	end 'eachParam'
+
+	return returnSlotsMatch(declared.returnType, got: got.returnType)
+end 'functionShapesAgree'
+
+// Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
+// meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
+// a function that writes none reads whatever was there.
+function returnSlotsMatch(declared MaxonReturnType, got MaxonReturnType) returns bool
+	match declared 'declaredSlot'
+		void then return isVoidReturnType(got)
+		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(declaredValue, got: returnedValueType(got))
+	end 'declaredSlot'
+end 'returnSlotsMatch'
+
+// Is this return slot the void arm?
+function isVoidReturnType(ret MaxonReturnType) returns bool
+	return match ret 'r'
+		void gives true
+		value gives false
+	end 'r'
+end 'isVoidReturnType'
+
+// The type a non-void return slot carries. `void` is a caller bug — every caller asks `isVoidReturnType`
+// first — so it panics rather than inventing a type nothing returns.
+function returnedValueType(ret MaxonReturnType) returns MaxonType
+	match ret 'r'
+		value(inner) then return inner
+		void then panic("returnedValueType: a `void` return slot carries no type — ask isVoidReturnType first")
+	end 'r'
+end 'returnedValueType'
+
+// Two POST-RESOLUTION types are the same type: the same tag, and — for the tags that still carry an
+// identity after resolution — the same id. Both sides' ids live in `project.typeNames` (a signature's were
+// remapped project-global at merge, an alias shape's were interned there by `resolveFunctionAliasShapes`),
+// so the ids are directly comparable.
+//
+// Which tags carry an identity is stated as an exhaustive match rather than a list of "interesting" ones,
+// so a tag added to `ValueTypeTag` cannot default into "compare the tag only" and silently let two distinct
+// types agree.
+function resolvedTypesMatch(declared MaxonType, got MaxonType) returns bool
+	let declaredTag = maxonTypeTag(declared)
+	if declaredTag != maxonTypeTag(got) 'differentTag'
+		return false
+	end 'differentTag'
+
+	let identifiedByName = match declaredTag 'k'
+		// Every one of these IS its own type: there is nothing else about an `int`, a `float`, a `bool`, an
+		// `ExitCode`, a `void` or a `String` to disagree about.
+		boolean to float gives false
+		exitCode to void gives false
+		string gives false
+		// A `named` type and a struct are NOMINAL — two of them share a tag and are still different types.
+		// (`named` should not survive resolution, which erases a ranged alias and a boxed union to
+		// `integer`; comparing its id costs nothing and is the correct answer if one does.)
+		named gives true
+		structRef gives true
+		// A `function`-tagged type inside a function type is a function value parameter/return, whose id
+		// names its own function type. Compared by NAME id here rather than by shape: a function type
+		// nested inside another is not in the corpus, and a structural descent would need a recursion guard
+		// against a self-referential alias that this rung has no case to justify.
+		function gives true
+		// A type PARAMETER's id is its POSITION and a generic INSTANCE's is its whole-program
+		// `GenericInstanceId`; two function types agree only if they take the same instances in the same
+		// opaque positions, so both are compared the same way for their own reasons.
+		typeParameter to genericInstance gives true
+	end 'k'
+
+	return not identifiedByName or typeNameIdOf(declared) == typeNameIdOf(got)
+end 'resolvedTypesMatch'
 
 // ⭐ **THE THIRD DECLARATION SITE.** A program names a type in exactly three places — a PARAMETER,
 // a RETURN type, and a FIELD — and until P1.1a wave 3 this pass walked only the first two. So a
@@ -165,8 +346,35 @@ function syncResolvedSignature(project Project, func IrFunction)
 		return
 	end 'noSig'
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: func.maxonParamTypes, paramAggregateNames: sig.paramAggregateNames))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count()), paramAggregateNames: sig.paramAggregateNames))
 end 'syncResolvedSignature'
+
+// ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED
+// CLOSURE carries one more (`Parser.parseClosureExpression` promotes the reserved `__env` slot to a real
+// trailing parameter so every function value shares one indirect signature), and its `funcSignatures` entry
+// deliberately records the USER parameters only. Copying `maxonParamTypes` wholesale therefore left a
+// closure's signature with 2 types against 1 name — the very lockstep `checkArgTypes` panics about, held by
+// every other function and silently broken by this one.
+//
+// It went unnoticed while nothing asked a signature how many parameters its TYPES describe: `slotCallArgs`
+// counts NAMES, and a lifted closure has no direct call to slot. It stops being invisible the moment a
+// function value's declared SHAPE is read off the signature — a closure then claims an arity one too high
+// and a `fn(int, int) returns int` where the source wrote `fn(int)`.
+//
+// The NAME column is the authority for how many source parameters there are, and the types are prefix-
+// aligned with it by construction (the env is APPENDED), so the fix is a prefix. A fresh array is built only
+// when the counts differ, i.e. only for a lifted closure.
+function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns MaxonTypeArray
+	if func.maxonParamTypes.count() == declaredCount 'alreadyExact'
+		return func.maxonParamTypes
+	end 'alreadyExact'
+
+	var sourceParams = MaxonTypeArray.create()
+	for i in 0 upto declaredCount 'eachDeclared'
+		sourceParams.push(try func.maxonParamTypes.get(i) otherwise panic("sourceParamTypesOf: '{String.from(func.name)}' declares {declaredCount} parameter names but its type column holds only {func.maxonParamTypes.count()} — the compiler may APPEND a hidden parameter (a lifted closure's `__env`), never omit a declared one"))
+	end 'eachDeclared'
+	return sourceParams
+end 'sourceParamTypesOf'
 
 function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType) returns MaxonReturnType
 	return match ret 'r'

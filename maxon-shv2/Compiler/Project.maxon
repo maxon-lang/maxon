@@ -855,15 +855,27 @@ export typealias RangeCheckPlanMap = Map with (ByteArray, FunctionRangeChecks)
 // ranged alias (the `typeClassOf`/`fieldStorageType`/`resolveNamedType` consumers of the ranged registry
 // all read a numeric `underlying`, which a function alias has none of).
 //
-// For A1 it carries only the RETURN type (an indirect call needs it to type its result; arg-type/arity
-// checking against the PARAM types is a later rung, so they are parsed-and-discarded, not stored). The
-// return type is stored INTERNER-FREE — its TAG plus the NAME behind a `named`/`structRef` return (empty
-// for a primitive) — so it rides the no-remap alias fold and re-interns cleanly into any reader's own
-// interner (`Parser.functionAliasReturnType`). `returnTag == void` means the function returns nothing.
+// It carries the WHOLE declared signature — the return type AND the parameter types — because a
+// function value's declared type is what every use of it is checked and lowered against: an indirect
+// call's arity and argument types (`SemanticCheck.checkIndirectCall`), the int→float widening of its
+// arguments (`LowerMaxonToStd.widenIndirectCallArgs`), and the agreement of a function VALUE with the
+// function-typed place it flows into (`SemanticCheck.checkFunctionTypeDoors`). Both halves are stored
+// INTERNER-FREE — a TAG plus the NAME behind a `named`/`structRef`/`function` type, empty for a
+// primitive — so they ride the no-remap alias fold (`ProgramSignatures.recordFunctionTypeAlias` and
+// `ParseStaging.commitFunctionTypeAliases` both key by name and rewrite no ids) and re-intern cleanly
+// into any reader's own interner. `returnTag == void` means the function returns nothing.
 export type FunctionTypeAlias
 	export let name as ByteArray
 	export let returnTag as ValueTypeTag
 	export let returnTypeName as ByteArray
+	// ⭐ **THE DECLARED PARAMETER TYPES**, in declaration order. EMPTY for an alias read by the
+	// whole-program token SWEEP rather than by a real parse, and that is a property of the sweep and not
+	// an omission: `Parser.parseTypeReference` answers a type spelling DIFFERENTLY there (the alias and
+	// generic-instance registries it consults are the ones still being built), so a swept parameter type
+	// can disagree with the real one. The sweep's copy therefore carries the return type — which it reads
+	// identically — and nothing else, and every consumer of a parameter type reads
+	// `project.functionTypeAliases`, the real parse's. See `Parser.readFunctionTypeAlias`.
+	export let paramTypes as FunctionAliasParamArray
 	// ⭐ **THE `fn(P1, P2) returns R` DISPLAY STRING (P1.5 #81).** The full canonical signature — parameter
 	// types included — computed at parse (where the param types are still in hand, with THIS file's
 	// interner, so a `named` alias reads as `Integer`) and stored as a plain ByteArray. It is what lets a
@@ -874,13 +886,64 @@ export type FunctionTypeAlias
 	// against a declared function's display built the same way.
 	export let display as ByteArray
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, display ByteArray) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, display: display}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, display ByteArray, paramTypes FunctionAliasParamArray) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, display: display, paramTypes: paramTypes}
 	end 'create'
 end 'FunctionTypeAlias'
 
+// ONE parameter of a function typealias, stored the way the alias's RETURN type is and for the same
+// reason: a function alias travels by NAME through both fold paths and is remapped by neither, so a
+// `MaxonType` here would carry the DECLARING file's interner ids into registries that never rewrite
+// them. The parameter's own NAME is deliberately absent — a function TYPE's parameter names are
+// documentation (`Parser.readFunctionTypeParam` discards them, and `parseIndirectCall` passes arguments
+// positionally because of it), so a diagnostic names the POSITION, which is the only thing that binds.
+export type FunctionAliasParam
+	export let tag as ValueTypeTag
+	// The declared type's NAME for a `named`/`structRef`/`function` parameter, EMPTY for a primitive —
+	// exactly `FunctionTypeAlias.returnTypeName`'s convention, produced by the same
+	// `Parser.functionAliasTypeName`.
+	export let typeName as ByteArray
+
+	export static function create(tag ValueTypeTag, typeName ByteArray) returns FunctionAliasParam
+		return Self{tag: tag, typeName: typeName}
+	end 'create'
+end 'FunctionAliasParam'
+
+export typealias FunctionAliasParamArray = Array with FunctionAliasParam
+
 export typealias FunctionTypeAliasArray = Array with FunctionTypeAlias
 export typealias FunctionTypeAliasMap = Map with (ByteArray, FunctionTypeAlias)
+
+// ⭐ **THE CALLABLE SHAPE OF A FUNCTION TYPE — RESOLVED.** What a call through a function value
+// actually depends on: how many arguments it takes, what each one's concrete type is, and what comes
+// back. Every parameter/return type in it has been through `TypeResolution.resolveType`, so a ranged
+// alias has already collapsed to the `int`/`float` it is — which is exactly the property that makes it
+// the right currency for BOTH consumers: the ABI question the widening asks (`is parameter k a float?`)
+// and the agreement question the doors ask (`may this function value stand in this function-typed
+// place?`) are both questions about the REPRESENTATION, not about which alias name was spelled.
+//
+// ⚠ **THAT IS A DELIBERATE DIFFERENCE FROM `checkValueMergeSignatures`, WHICH COMPARES NOMINALLY**, and
+// the two are not in conflict — they ask the different questions the coercion-site section of TypeRules
+// draws the line between. A MERGE is symmetric (`unary if c else binary` — are these two values the SAME
+// type?) and matches the reference oracle's nominal `MergeTernaryArmFnTypes`. A DOOR is one-sided (may
+// this value stand HERE?), and there a nominal rule is measurably wrong: a lifted closure's return type
+// is INFERRED, so `function(x Ratio) gives x * 3.0` has return type `float` where the `ScaleFn` it is
+// passed to spells `Ratio` — and both reference compilers accept that program.
+export type FunctionShape
+	export let paramTypes as MaxonTypeArray
+	export let returnType as MaxonReturnType
+
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType) returns FunctionShape
+		return Self{paramTypes: paramTypes, returnType: returnType}
+	end 'create'
+end 'FunctionShape'
+
+// Registry: FUNCTION-TYPEALIAS name -> its resolved shape. Built once by `TypeResolution.resolveTypes`
+// from `project.functionTypeAliases`, which stores the alias's declared types interner-free and
+// UNRESOLVED. A declared function or lifted closure needs no entry here — its resolved shape is already
+// `funcSignatures` + `funcReturnTypes`, which `resolveTypes` re-syncs — so only aliases are materialized,
+// and a program with none pays nothing.
+export typealias FunctionShapeMap = Map with (ByteArray, FunctionShape)
 
 // --- Declared struct types (P1.0r) ---
 
@@ -1506,6 +1569,83 @@ end 'PendingFnMergeCheck'
 
 export typealias PendingFnMergeCheckArray = Array with PendingFnMergeCheck
 
+// WHICH DOOR a function VALUE met a declared function TYPE at. The rule is one — the two shapes must
+// agree — so the only thing the whole-program drain needs from the site is which SENTENCE to write and
+// which code to write it under: a cast is a cast rejection (E3009, the sibling of the cross-kind
+// `castHasNoLegalConversion` refusal), everything else is a type mismatch (E3005, the sibling of every
+// other door's refusal).
+//
+// The CALL-ARGUMENT door is deliberately absent. It is checked in place by `SemanticCheck.checkArgTypes`,
+// which already holds both sides and already owns the sentence a bad argument earns; recording it here
+// would be the same rule asked twice, and the reader's next question at an argument is WHICH argument.
+export enum FunctionTypeDoor
+	cast
+	returned
+	// The ASSIGNMENT-shaped doors, which differ from each other only in what the place is CALLED. They are
+	// arms of this enum rather than one `assigned` arm beside a noun STRING, and that is MEASURED, not
+	// tidiness: a `String` noun threaded on from `Parser.assignableValue` into the door cost ONE ALLOCATION
+	// PER ASSIGNMENT, per struct-literal field and per global store in the whole program — +1,852 in
+	// `phase:parse` at scale rung 0, growing x1.96/x1.98/x1.99 with the corpus, on a path that records
+	// nothing almost every time. It reads as the SAME number whether the door's guard sits at the caller or
+	// inside the recorder, which is what identified the noun rather than the branch. A scalar carries the
+	// same fact in a register and the ladder now reads allocation-identical to the parent;
+	// `functionTypeDoorNoun` renders the word only where a diagnostic is actually built.
+	//
+	// They sit CONTIGUOUSLY at the end so the site that treats them uniformly covers them with one range
+	// arm (`SemanticCheck.functionTypeDoorSite`) — the band discipline `StdOp` states in full. A new
+	// assignment-shaped door is APPENDED here; a new non-assignment door goes before `variable`.
+	variable
+	global
+	field
+end 'FunctionTypeDoor'
+
+// What an assignment-shaped door calls the place it writes into. Every site that names one — the
+// function-type mismatch below, and `Parser.requireAssignable`'s three verdict arms — renders it from
+// here, so a global and a field cannot come to be described two ways.
+export function functionTypeDoorNoun(door FunctionTypeDoor) returns String
+	match door 'd'
+		variable then return "variable"
+		global then return "global"
+		field then return "field"
+		// Neither names a place: a cast and a `return` ARE the construct, and `functionTypeDoorSite`
+		// words them without a noun. Reaching here means a caller asked the wrong question of the door.
+		cast to returned then panic("functionTypeDoorNoun: a cast/return door names no place — only the assignment doors have a noun")
+	end 'd'
+end 'functionTypeDoorNoun'
+
+// ⭐ **A RECORDED FUNCTION-TYPE DOOR awaiting whole-program shape agreement.** A function value meeting a
+// function-typed place — `f as Scaler`, `return twice` from a `returns Scaler`, `slot.op = twice` — must
+// be a function of THAT type, and until this record existed only the `function` TAG was compared: every
+// signature disagreement flowed through untouched and the call site then typed its call from a promise
+// the callee does not keep (`intish as FloatFn` read an integer back out of the float return register).
+//
+// It is recorded rather than checked because the parser cannot answer it: a function value's own shape
+// lives in the whole-program `funcSignatures`, which is not assembled until merge, and the shapes are
+// compared RESOLVED, which is not true until `resolveTypes`. So the parser records the two governing
+// NAMES (interner-free, keys into `funcSignatures`/`functionAliasShapes` — exactly `PendingFnMergeCheck`'s
+// carrier), the door, the place's noun and name for the sentence, and the anchor;
+// `SemanticCheck.checkFunctionTypeDoors` drains them.
+export type PendingFunctionTypeDoor
+	// The governing name of the VALUE that arrived — a function, a lifted closure, or a function alias.
+	export var gotName as ByteArray
+	// The governing name of the function TYPE the place declares — a function alias, or (for a place
+	// typed by a `functionRef` value's own name) that function.
+	export var declaredName as ByteArray
+	export var door as FunctionTypeDoor
+	// The NAME of the place written into, for an assignment-shaped door. EMPTY for a cast and a `return`,
+	// which name no place — `door` is what decides whether it is read.
+	export var placeName as ByteArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
+
+	export static function create(gotName ByteArray, declaredName ByteArray, door FunctionTypeDoor, placeName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingFunctionTypeDoor
+		return Self{gotName: gotName, declaredName: declaredName, door: door, placeName: placeName, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'PendingFunctionTypeDoor'
+
+export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDoor
+
 // The outcome of slotting a call's arguments to its callee's parameter positions.
 // `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
 // every other arm is a call error the caller renders as a positioned diagnostic. This
@@ -1680,6 +1820,12 @@ export type Project
 	// `mergeArtifact` (each file's `pendingFnMergeChecks` appended in order); drained by
 	// `checkValueMergeSignatures` before the pipeline runs. Reset with the other merge targets.
 	export var pendingFnMergeChecks as PendingFnMergeCheckArray
+	// ⭐ Recorded function-type doors awaiting whole-program shape agreement (see PendingFunctionTypeDoor).
+	// Filled by `mergeArtifact` (each file's `pendingFunctionTypeDoors` appended in order); drained by
+	// `SemanticCheck.checkFunctionTypeDoors`, which is AFTER `resolveTypes` because the shapes are compared
+	// resolved — the one thing that keeps it out of `checkValueMergeSignatures`' pre-resolution sweep. Reset
+	// with the other push-merge targets so a warm rebuild does not double it.
+	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedAliasRegistry
@@ -1700,6 +1846,10 @@ export type Project
 	// FunctionTypeAlias). The parser reads it to resolve a function-typed place and to type an indirect
 	// call's result.
 	export var functionTypeAliases as FunctionTypeAliasMap
+	// The RESOLVED shape of each function typealias (see FunctionShapeMap) — derived from the registry
+	// above by `TypeResolution.resolveTypes`, not merged, so it is rebuilt whenever resolution runs and
+	// there is no second copy of a declaration to keep in step.
+	export var functionAliasShapes as FunctionShapeMap
 	// Declared struct types, keyed by name (see StructLayout). The registry's OTHER half: a
 	// `MaxonType.named` resolves against the aliases above OR against this, and a name in neither
 	// is E3011.
@@ -1771,10 +1921,12 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
+			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			typeAliases: RangedAliasRegistry.create(),
 			typeNameDecls: TypeNameRegistry.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
+			functionAliasShapes: FunctionShapeMap.create(),
 			structTypes: StructLayoutMap.create(),
 			enumTypes: createEnumRegistry(),
 			interfaces: IrInterfaceMap.create(),

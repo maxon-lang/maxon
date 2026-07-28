@@ -1,0 +1,61 @@
+// Test: first-class-function.int-literal-widens-through-function-ref
+
+typealias Ratio = float(0.0 to 1000.0)
+
+function scale(x Ratio) returns Ratio
+	return x * 2.0
+end 'scale'
+
+function main() returns ExitCode
+	let fn = scale
+	return trunc(fn(3)) as ExitCode
+end 'main'
+---
+ExitCode: 6
+---
+func @scale {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rbx, [rip + __fnref_scale]
+    x64.movRegImm32 rax, 3
+    x64.movRegImm32 rcx, 0
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.callReg rbx
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
