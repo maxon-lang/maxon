@@ -57,7 +57,7 @@ internal sealed class DbgValueRenderer {
 
   // The fused String/Array record IS a __ManagedMemory: buffer@0, length@8, capacity@16, element_size@24,
   // parent_ptr@32 (MaxonToStandardConversion.Helpers.cs ManagedField* / MlirType.cs InlineManagedMemoryBytes).
-  // A String adds isAsciiFlag@40 for a 48-byte record; the renderer needs only the first three fields.
+  // A String adds singleByteGraphemesFlag@40 for a 48-byte record; the renderer needs only the first three fields.
   private const int ManagedBufferOffset = 0;
   private const int ManagedLengthOffset = 8;
   private const int ManagedHeaderReadBytes = 16; // buffer@0 + length@8 — the only two fields we interpret

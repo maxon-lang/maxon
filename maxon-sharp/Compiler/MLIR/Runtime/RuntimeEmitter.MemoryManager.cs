@@ -1419,9 +1419,9 @@ public partial class RuntimeEmitter {
 
     // --- Struct-level COW: allocate a new record of the SAME SIZE and copy it whole ---
     // The record's size is read from its allocation header (alloc_size = user_size +
-    // MmHeaderSize), so a fused String (48 bytes, with a trailing isAsciiFlag) is preserved
+    // MmHeaderSize), so a fused String (48 bytes, with a trailing singleByteGraphemesFlag) is preserved
     // rather than truncated to a bare 40-byte __ManagedMemory. The whole user region is
-    // memcpy'd, so every field — including isAsciiFlag and any future trailing field — carries
+    // memcpy'd, so every field — including singleByteGraphemesFlag and any future trailing field — carries
     // over; only buffer/capacity/parent are then overwritten to make the copy an owner.
 
     // Step 1: user_size = alloc_size - MmHeaderSize, spilled for the struct-wide copy below.

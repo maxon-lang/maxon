@@ -373,6 +373,74 @@ end 'main'
 4
 ```
 
+<!-- test: crlf-is-one-grapheme-when-iterating -->
+### CR+LF Is One Grapheme When Iterating, Not Just When Counting
+UAX #29 GB3 joins CR and LF into a single grapheme cluster, so an all-ASCII string is
+NOT "one byte per character". `count()` and `for c in s` must agree: three clusters, of
+which the middle one is two bytes wide.
+
+The same four bytes are then assembled at RUNTIME. A compiler classifies a literal's bytes
+itself, while a string built from a `ByteArray` is classified by the stdlib scanning them —
+one rule with an implementation on each side of the compiler boundary, and nothing but this
+case to make them agree. Both must report three.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	let s = "a\r\nb"
+	for c in s 'each'
+		print("[{c.toString().byteLength()}]")
+	end 'each'
+	print("\ncount={s.count()}\n")
+
+	var raw = ByteArray.create()
+	raw.push(97)
+	raw.push(13)
+	raw.push(10)
+	raw.push(98)
+	print("scanned={String.from(raw).count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[1][2][1]
+count=3
+scanned=3
+```
+
+<!-- test: trim-character-set-splitting-crlf -->
+### Trimming Never Splits a CR+LF Cluster
+A set holding CR but not LF (or LF but not CR) does not match the two-byte `"\r\n"`
+cluster, so nothing is trimmed. A set holding the cluster itself does match it. Trimming
+whitespace hides this: CR and LF are independently whitespace, so a byte-at-a-time trim
+reaches the same answer by coincidence. These sets remove the coincidence.
+```maxon
+function main() returns ExitCode
+	let crOnly = CharacterSet.from(CharSet from ['\r'])
+	let lfOnly = CharacterSet.from(CharSet from ['\n'])
+	let crlf = CharacterSet.from(CharSet from ['\r\n'])
+	let s = "\r\nx\r\n"
+	print("{s.trimStart(crOnly).byteLength()}\n")
+	print("{s.trimEnd(lfOnly).byteLength()}\n")
+	print("{s.trim(crOnly).byteLength()}\n")
+	print("{s.trim(crlf).byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+5
+5
+1
+```
+
 <!-- test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon

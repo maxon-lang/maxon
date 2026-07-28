@@ -321,12 +321,35 @@ end 'findGraphemeStart'
 // Count grapheme helpers
 // ============================================
 
+// THE THREE BULK WALKS, AND THE ONE SHORTCUT THEY ARE ALLOWED.
+//
+// Each converts between byte positions and grapheme counts by stepping `findGraphemeEnd` one
+// cluster at a time — Θ(clusters), with a real call per step, since the bootstrap has no inliner.
+//
+// `String.hasSingleByteGraphemes()` collapses all three to arithmetic, and it is the ONLY predicate
+// that may: the string has already been classified, at construction, as one byte per grapheme, so
+// byte offsets and grapheme indices ARE the same number. That is applying a fact the string states
+// about itself, not a second opinion about where clusters end — which is exactly what the old
+// `isAscii` shortcut was, and why it split CR+LF ten different ways.
+//
+// The shortcut lives HERE, in the file that owns UAX #29, rather than in `String`'s methods. There
+// is one place that knows what the flag licenses, and callers stay unaware of it.
+//
+// Measured (100k-byte ASCII string, x64-windows): without it `findFirst`/`findLast`/`slice-by-length`
+// cost what `count()` costs — ×2.4 at 64 bytes rising to ×6.5 at 100k. `for c in s` does NOT get one
+// and does not need one: it steps a cluster at a time either way, and routing every step through
+// `findGraphemeEnd` measured +1.3%, inside noise, next to the Character it allocates per step.
+
 /// Count the total number of grapheme clusters in a String.
 ///
 /// The private `countGraphemesManagedRange` this used to forward to is gone with the window: its
 /// only caller was this function, passing the whole string.
 export function countGraphemes(s String) returns GraphemeCount
 	let len = s.byteLength()
+	if s.hasSingleByteGraphemes() 'oneByteEach'
+		return len
+	end 'oneByteEach'
+
 	var graphemeCount = 0
 	var pos = 0
 	while pos < len 'countLoop'
@@ -339,9 +362,20 @@ end 'countGraphemes'
 /// Convert a byte index to a grapheme (character) index
 /// Returns the number of grapheme clusters before the byte position
 export function byteIndexToGraphemeIndex(s String, byteIdx BytePos) returns GraphemeCount
+	let len = s.byteLength()
+	// The byte offset IS the grapheme index. The walk below stops at the end of the string when
+	// `byteIdx` runs past it, so this must too. `byteIdx` needs no guard of the kind
+	// `graphemeOffsetToBytePos`'s `count` does: it is never caller-supplied, arriving only from
+	// `findIn`/`findLastIn`, which return a position inside the string they searched.
+	if s.hasSingleByteGraphemes() 'oneByteEach'
+		if byteIdx < len 'inRange'
+			return byteIdx
+		end 'inRange'
+		return len
+	end 'oneByteEach'
+
 	var graphemeIdx = 0
 	var pos = 0
-	let len = s.byteLength()
 	while pos < byteIdx and pos < len 'count'
 		pos = findGraphemeEnd(s, startPos: pos)
 		graphemeIdx = graphemeIdx + 1
@@ -352,8 +386,25 @@ end 'byteIndexToGraphemeIndex'
 /// Advance from a byte position by a number of grapheme clusters
 /// Returns the byte position after advancing by `count` graphemes
 export function graphemeOffsetToBytePos(s String, startBytePos BytePos, count GraphemeCount) returns BytePos
-	var pos = startBytePos
 	let len = s.byteLength()
+	// Advancing `count` graphemes is advancing `count` bytes, so the walk collapses to arithmetic —
+	// but only for the inputs that arithmetic can represent, and the WALK stays the definition of
+	// what the others mean. `count` reaching this from `slice(start, length:)` is caller-supplied,
+	// and `GraphemeCount` spans past i64.max where the comparisons this shortcut needs stop behaving
+	// (`u64.max` orders as -1); `count > 0` is what declines those, and declining hands them to the
+	// walk, which reaches the same answer it always did. An optimisation that changes the answer for
+	// an edge case is not one.
+	//
+	// Inside the guard the arithmetic is safe: `startBytePos < len` makes the subtraction positive,
+	// and the sum is only formed when it is already known to land below `len`.
+	if s.hasSingleByteGraphemes() and count > 0 and startBytePos < len 'oneByteEach'
+		if count < len - startBytePos 'inRange'
+			return startBytePos + count
+		end 'inRange'
+		return len
+	end 'oneByteEach'
+
+	var pos = startBytePos
 	var i = 0
 	while i < count and pos < len 'advance'
 		pos = findGraphemeEnd(s, startPos: pos)

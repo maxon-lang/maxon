@@ -2336,3 +2336,28 @@ end 'main'
 ```stdout
 total=6
 ```
+
+<!-- test: rc-repeated-self-append -->
+Appending a string to ITSELF, twice. The second append must grow the buffer, and growing
+it frees the old one — so the bytes being copied in are the bytes that just moved. A copy
+that reads the pre-grow pointer reads freed memory, and the string silently ends in the
+freed block's contents rather than its own. Both rounds must double the string.
+```maxon
+function main() returns ExitCode
+	var s = "abc"
+	s.append(s)
+	print("A={s}|{s.byteLength()}\n")
+	s.append(s)
+	print("B={s}|{s.byteLength()}\n")
+	print("C=done\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A=abcabc|6
+B=abcabcabcabc|12
+C=done
+```

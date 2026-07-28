@@ -34,7 +34,7 @@ public static partial class MaxonToStandardConversion {
 	// each slot filled at init with an element static record's user pointer; RdataLabel is then unused.
 	private sealed record StaticLiteralRecord(
 		string GlobalLabel, string RdataLabel, int RecordSize, int AllocSize,
-		int TagIndex, int Length, int ElementSize, bool IsString, bool IsAscii,
+		int TagIndex, int Length, int ElementSize, bool IsString, bool SingleByteGraphemes,
 		string[]? ElementLabels = null);
 
 	/// Reset the static-literal state for a fresh module lowering, seeding the eligibility set
@@ -93,7 +93,7 @@ public static partial class MaxonToStandardConversion {
 	/// over an already-computed rdata buffer — ONE allocation, no separate __ManagedMemory. Writes
 	/// buffer/length/capacity(-2, the rdata sentinel: read-only, destructor frees nothing)/
 	/// element_size(1, one byte per element)/parent(0) inline at offsets 0..32. The record's own
-	/// size follows its type (a String is 48 bytes for the trailing isAsciiFlag, others 40).
+	/// size follows its type (a String is 48 bytes for the trailing singleByteGraphemesFlag, others 40).
 	private static StdHeapPtr EmitFusedRdataRecord(
 	  StdI64 bufferPtr, StdI64 lengthVal, string allocTag, string tempName,
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes) {
@@ -131,10 +131,10 @@ public static partial class MaxonToStandardConversion {
 	/// Intern the shared immortal record for (value, typeName), creating it — rdata bytes, a
 	/// zero-initialized .data blob global, and a module-init materialization request — on first
 	/// sight, and returning its .data global label. The record's byte length comes from the
-	/// interned rdata; its size/tag from the type. isAscii is only meaningful (and only baked)
+	/// interned rdata; its size/tag from the type. The flag is only meaningful (and only baked)
 	/// for a String.
 	private static string InternStaticLiteralRecord(
-	  string value, string typeName, bool isString, bool isAscii,
+	  string value, string typeName, bool isString, bool singleByteGraphemes,
 	  string rdataPrefix, System.Text.Encoding? encoding, IrModule<StandardOp> result) {
 
 		var key = (value, typeName);
@@ -150,7 +150,7 @@ public static partial class MaxonToStandardConversion {
 		result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 
 		_staticLiteralRecords!.Add(new StaticLiteralRecord(
-			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen, 1, isString, isAscii));
+			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen, 1, isString, singleByteGraphemes));
 		_staticRecordLabels[key] = globalLabel;
 		return globalLabel;
 	}
@@ -182,12 +182,12 @@ public static partial class MaxonToStandardConversion {
 	/// ZERO per-evaluation allocation (the record's user pointer, materialized by
 	/// EmitStaticRecordUserPtr — no allocation, exactly like an mm_alloc result).
 	private static StdHeapPtr EmitStaticManagedLiteral(
-	  string value, int resultId, string typeName, bool isString, bool isAscii,
+	  string value, int resultId, string typeName, bool isString, bool singleByteGraphemes,
 	  string rdataPrefix, string tempPrefix, System.Text.Encoding? encoding,
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
 	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
 
-		var globalLabel = InternStaticLiteralRecord(value, typeName, isString, isAscii, rdataPrefix, encoding, result);
+		var globalLabel = InternStaticLiteralRecord(value, typeName, isString, singleByteGraphemes, rdataPrefix, encoding, result);
 		_staticLiteralLabelByResultId![resultId] = globalLabel;
 		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, tempPrefix, block, varTypes, temps, inlineTarget);
 	}
@@ -244,7 +244,7 @@ public static partial class MaxonToStandardConversion {
 			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 			_staticLiteralRecords!.Add(new StaticLiteralRecord(
 				globalLabel, rdataLabel, recordSize, allocSize, EnsureTagIndex(typeName),
-				info.Values.Length, elementSize, /*isString*/ false, /*isAscii*/ false));
+				info.Values.Length, elementSize, /*isString*/ false, /*singleByteGraphemes*/ false));
 			_staticRecordLabels[key] = globalLabel;
 		}
 
@@ -274,7 +274,7 @@ public static partial class MaxonToStandardConversion {
 			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 			_staticLiteralRecords!.Add(new StaticLiteralRecord(
 				globalLabel, "", recordSize, allocSize, EnsureTagIndex(typeName),
-				elementLabels.Length, StaticManagedElementSize, /*isString*/ false, /*isAscii*/ false, elementLabels));
+				elementLabels.Length, StaticManagedElementSize, /*isString*/ false, /*singleByteGraphemes*/ false, elementLabels));
 			_staticRecordLabels[key] = globalLabel;
 		}
 		_staticLiteralLabelByResultId![resultId] = globalLabel;
@@ -306,7 +306,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Materialize every interned static literal record into __module_init: for each record,
 	/// write its MM header (alloc_size, packed_id, destructor=0, refcount=IMMORTAL) and its
-	/// record fields (buffer=&rdata, length, capacity=-2, element_size=1, parent=0, [isAscii])
+	/// record fields (buffer=&rdata, length, capacity=-2, element_size=1, parent=0, [flag])
 	/// into its .data blob. Only the buffer pointer genuinely REQUIRES runtime materialization
 	/// (a data->data pointer the loader relocates under ASLR); the constants are written the same
 	/// way for uniformity and are cheap (one-time, at startup). Prepended to __module_init so the
@@ -398,7 +398,7 @@ public static partial class MaxonToStandardConversion {
 		Store(rec.ElementSize, rec0 + ManagedFieldElementSize); // 1 for a string; the element width for an array (0 = bit-packed bool)
 		Store(0, rec0 + ManagedFieldParentPtr);
 		if (rec.IsString) {
-			Store(rec.IsAscii ? 1 : 0, rec0 + StringFieldIsAscii);
+			Store(rec.SingleByteGraphemes ? 1 : 0, rec0 + StringFieldSingleByteGraphemes);
 		}
 	}
 
@@ -411,14 +411,17 @@ public static partial class MaxonToStandardConversion {
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
-		// Compute isAscii at compile time (used by both the static and heap paths).
-		bool isAscii = op.Value.All(c => c < 128);
+		// Classify at compile time (used by both the static and heap paths). CR is excluded as
+		// well as the non-ASCII bytes: `String.singleByteGraphemesFlag` asserts one byte per
+		// GRAPHEME, and UAX #29 GB3 joins CR to a following LF, so an all-ASCII literal holding a
+		// CR is not one byte per grapheme. A literal is the one place this is free to establish.
+		bool singleByteGraphemes = op.Value.All(c => c < 128 && c != '\r');
 
-		// Static-eligible: share one immortal .data record — no allocation. isAscii is baked
+		// Static-eligible: share one immortal .data record — no allocation. The flag is baked
 		// into that record at init, so nothing to store here.
 		if (IsStaticEligibleLiteral(op.Result.Id)) {
 			valueMap[op.Result] = EmitStaticManagedLiteral(
-				op.Value, op.Result.Id, "String", isString: true, isAscii, "str", "strtmp", null,
+				op.Value, op.Result.Id, "String", isString: true, singleByteGraphemes, "str", "strtmp", null,
 				block, varTypes, result, temps, inlineTarget);
 			return;
 		}
@@ -426,10 +429,10 @@ public static partial class MaxonToStandardConversion {
 		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, result, temps, "String", inlineTarget);
 		valueMap[op.Result] = heapPtr;
 
-		// Store isAscii
-		var isAsciiConst = new StdConstI64Op(isAscii ? 1 : 0);
-		block.AddOp(isAsciiConst);
-		EmitStructFieldStore(block, isAsciiConst.Result, heapPtr.VarName!, StringFieldIsAscii, IrType.I64, varTypes);
+		// Store the flag
+		var flagConst = new StdConstI64Op(singleByteGraphemes ? 1 : 0);
+		block.AddOp(flagConst);
+		EmitStructFieldStore(block, flagConst.Result, heapPtr.VarName!, StringFieldSingleByteGraphemes, IrType.I64, varTypes);
 	}
 
 	private static void LowerByteStringLiteral(
@@ -449,7 +452,7 @@ public static partial class MaxonToStandardConversion {
 		// Latin1-encoded (one byte per element), matching the heap path below.
 		if (IsStaticEligibleLiteral(op.Result.Id)) {
 			valueMap[op.Result] = EmitStaticManagedLiteral(
-				op.Value, op.Result.Id, op.ArrayTypeName, isString: false, isAscii: false, "bstr", "bstrtmp",
+				op.Value, op.Result.Id, op.ArrayTypeName, isString: false, singleByteGraphemes: false, "bstr", "bstrtmp",
 				System.Text.Encoding.Latin1, block, varTypes, result, temps, inlineTarget);
 			return;
 		}
@@ -478,7 +481,7 @@ public static partial class MaxonToStandardConversion {
 		// Static-eligible: share one immortal .data record — no allocation.
 		if (IsStaticEligibleLiteral(op.Result.Id)) {
 			valueMap[op.Result] = EmitStaticManagedLiteral(
-				op.Value, op.Result.Id, "Character", isString: false, isAscii: false, "chr", "chrtmp", null,
+				op.Value, op.Result.Id, "Character", isString: false, singleByteGraphemes: false, "chr", "chrtmp", null,
 				block, varTypes, result, temps, inlineTarget);
 			return;
 		}
@@ -525,7 +528,7 @@ public static partial class MaxonToStandardConversion {
 				EmitInitManagedMemory(block, toStrTemp, toStrBufR, toStrLen, toStrLen, elemOne.Result, parentInline.Result, varTypes);
 				var toStrAscii = new StdConstI64Op(0);
 				block.AddOp(toStrAscii);
-				EmitStructFieldStore(block, toStrAscii.Result, toStrTemp, StringFieldIsAscii, IrType.I64, varTypes);
+				EmitStructFieldStore(block, toStrAscii.Result, toStrTemp, StringFieldSingleByteGraphemes, IrType.I64, varTypes);
 				valueMap[op.Result] = new StdHeapPtr(toStrSelf.Id, toStrSelf.TypeName, toStrTemp);
 				return;
 			}
@@ -538,7 +541,7 @@ public static partial class MaxonToStandardConversion {
 			valueMap[op.Result] = heapPtr;
 			var iaConst = new StdConstI64Op(0);
 			block.AddOp(iaConst);
-			EmitStructFieldStore(block, iaConst.Result, heapPtr.VarName!, StringFieldIsAscii, IrType.I64, varTypes);
+			EmitStructFieldStore(block, iaConst.Result, heapPtr.VarName!, StringFieldSingleByteGraphemes, IrType.I64, varTypes);
 			return;
 		}
 
@@ -643,10 +646,10 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(interpParentInline);
 		EmitInitManagedMemory(block, tempName2, finalBuf, finalLen, finalLen, elemSizeConst2.Result, interpParentInline.Result, varTypes);
 
-		// Store isAscii = 0 (conservative default)
-		var isAsciiConst2 = new StdConstI64Op(0);
-		block.AddOp(isAsciiConst2);
-		EmitStructFieldStore(block, isAsciiConst2.Result, tempName2, StringFieldIsAscii, IrType.I64, varTypes);
+		// Store the flag = 0 (conservative default)
+		var flagConst2 = new StdConstI64Op(0);
+		block.AddOp(flagConst2);
+		EmitStructFieldStore(block, flagConst2.Result, tempName2, StringFieldSingleByteGraphemes, IrType.I64, varTypes);
 
 		valueMap[op.Result] = new StdHeapPtr(interpOuterPtr.Id, interpOuterPtr.TypeName, tempName2);
 	}
@@ -1091,16 +1094,16 @@ public static partial class MaxonToStandardConversion {
 		EmitInitManagedMemory(block, tempName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
 
 		if (isString) {
-			var isAsciiConst = new StdConstI64Op(0);
-			block.AddOp(isAsciiConst);
-			EmitStructFieldStore(block, isAsciiConst.Result, tempName, StringFieldIsAscii, IrType.I64, varTypes);
+			var flagConst = new StdConstI64Op(0);
+			block.AddOp(flagConst);
+			EmitStructFieldStore(block, flagConst.Result, tempName, StringFieldSingleByteGraphemes, IrType.I64, varTypes);
 		}
 
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
 
 	/// Envelope-collapse construction of a fused managed wrapper from a REAL source:
-	/// `String{managed: X, isAsciiFlag: A}` / `Character{managed: X}` / `Array{managed: X}` (init,
+	/// `String{managed: X, singleByteGraphemesFlag: A}` / `Character{managed: X}` / `Array{managed: X}` (init,
 	/// clone, slice — X is a parameter or method result, not a fresh literal). The result is a fresh
 	/// slice-VIEW of the source, matching the pre-collapse envelope's refcount shape. Array/Vector
 	/// literals and empty `create()` are handled separately (absorbed into a single record — see the
@@ -1115,10 +1118,10 @@ public static partial class MaxonToStandardConversion {
 	  string scopeName) {
 
 		MaxonValue? managedVal = null;
-		MaxonValue? isAsciiVal = null;
+		MaxonValue? flagVal = null;
 		foreach (var (fieldName, fieldVal) in op.FieldValues) {
 			if (fieldName == "managed") managedVal = fieldVal;
-			else if (fieldName == "isAsciiFlag") isAsciiVal = fieldVal;
+			else if (fieldName == "singleByteGraphemesFlag") flagVal = fieldVal;
 		}
 		if (managedVal == null)
 			throw new InvalidOperationException($"{op.TypeName} construction missing 'managed' field in '{scopeName}'");
@@ -1154,17 +1157,17 @@ public static partial class MaxonToStandardConversion {
 		EmitInitManagedMemory(block, resultVarName, srcBuf, srcLen, negOne.Result, viewElemSize, srcParent, varTypes);
 		EmitIncrefValue(block, srcParent, scopeName: scopeName);
 		if (isString) {
-			var (viewFlag, viewFlagType) = ResolveIsAsciiFlag(isAsciiVal, valueMap, block);
-			EmitStructFieldStore(block, viewFlag, resultVarName, StringFieldIsAscii, viewFlagType, varTypes);
+			var (viewFlag, viewFlagType) = ResolveSingleByteGraphemesFlag(flagVal, valueMap, block);
+			EmitStructFieldStore(block, viewFlag, resultVarName, StringFieldSingleByteGraphemes, viewFlagType, varTypes);
 		}
 		valueMap[op.Result] = new StdHeapPtr(op.Result.Id, op.TypeName, resultVarName);
 	}
 
-	/// The isAsciiFlag value + its storage width for a String construction. Stored at its natural
+	/// The flag's value + its storage width for a String construction. Stored at its natural
 	/// width; the low byte is read back as the `bool` field. Defaults to 0 (conservative) if absent.
-	private static (StdValue Value, IrType Type) ResolveIsAsciiFlag(
-	  MaxonValue? isAsciiVal, Dictionary<MaxonValue, StdValue> valueMap, IrBlock<StandardOp> block) {
-		if (isAsciiVal != null && valueMap.TryGetValue(isAsciiVal, out var v)) {
+	private static (StdValue Value, IrType Type) ResolveSingleByteGraphemesFlag(
+	  MaxonValue? flagVal, Dictionary<MaxonValue, StdValue> valueMap, IrBlock<StandardOp> block) {
+		if (flagVal != null && valueMap.TryGetValue(flagVal, out var v)) {
 			return v is StdBool ? (v, IrType.I1) : (v, IrType.I64);
 		}
 		var zero = new StdConstI64Op(0);

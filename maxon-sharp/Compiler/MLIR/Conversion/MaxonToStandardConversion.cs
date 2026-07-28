@@ -1641,7 +1641,7 @@ public static partial class MaxonToStandardConversion {
 
               // Fused String/Character/Array expose their inline __ManagedMemory fields (length,
               // buffer, capacity, ...) at the same offsets, but the wrapper type itself declares
-              // only `managed` (+ `isAsciiFlag` for String). Resolve those fields against the op's
+              // only `managed` (+ `singleByteGraphemesFlag` for String). Resolve those fields against the op's
               // declared parent type (__ManagedMemory), whose layout matches the embedded record.
               if (fieldDef == null && parentStructType != null
                   && parentStructType.ConformsToBuiltinManagedWrapper

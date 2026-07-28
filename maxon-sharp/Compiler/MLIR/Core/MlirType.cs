@@ -214,7 +214,7 @@ public class IrStructType : IrType {
     || ConformingInterfaces.Contains("BuiltinArrayLiteral");
 
   // The `managed` field of such a wrapper is stored inline (the __ManagedMemory embedded at
-  // offset 0), not as an 8-byte heap pointer, so that a String's `isAsciiFlag` lands at offset
+  // offset 0), not as an 8-byte heap pointer, so that a String's `singleByteGraphemesFlag` lands at offset
   // 40 and an Array is exactly a 40-byte __ManagedMemory.
   private bool IsInlineManagedField(IrStructField field) =>
     field.Name == "managed" && ConformsToBuiltinManagedWrapper;

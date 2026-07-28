@@ -50,7 +50,7 @@ public static partial class MaxonToStandardConversion {
   /// exactly one qword, which is true of every type that reaches here TODAY and is not a property of
   /// the layout: an inline `managed` field is 40 bytes (see `IrStructType.FieldSlotSize`), so a
   /// `String` is 2 fields and 6 qwords. Asking `Fields.Count` gave `StackSlotName` a NEGATIVE index
-  /// for String's `isAsciiFlag` (`2 - 1 - 40/8` = -4) — invalid, and reachable the moment such a type
+  /// for String's `singleByteGraphemesFlag` (`2 - 1 - 40/8` = -4) — invalid, and reachable the moment such a type
   /// becomes stack-allocatable. Size is the question; ask it.
   /// </summary>
   private static int StackSlotCount(IrStructType structType) => structType.SizeInBytes / 8;
@@ -550,9 +550,9 @@ public static partial class MaxonToStandardConversion {
 
   // Fused String/Character layout (envelope collapse): the record IS a __ManagedMemory
   // (buffer@0, length@8, capacity@16, element_size@24, parent_ptr@32) plus, for String, a
-  // trailing isAsciiFlag@40. So `self.managed == self`, and the managed field offsets above
+  // trailing singleByteGraphemesFlag@40. So `self.managed == self`, and the managed field offsets above
   // apply to `self` directly. Character is exactly a __ManagedMemory (40 bytes, no flag).
-  private const int StringFieldIsAscii = 40;
+  private const int StringFieldSingleByteGraphemes = 40;
   private const int StringStructSize = 48;
   private const int CharacterStructSize = 40;
 
@@ -571,7 +571,7 @@ public static partial class MaxonToStandardConversion {
     UnionFirstPayloadOffset + slotIndex * UnionPayloadSlotSize;
 
   /// True for a fused String type (conforms to BuiltinStringLiteral): a 48-byte record
-  /// whose first 40 bytes are a __ManagedMemory, with isAsciiFlag at offset 40.
+  /// whose first 40 bytes are a __ManagedMemory, with singleByteGraphemesFlag at offset 40.
   private static bool IsFusedStringType(string? typeName) =>
     typeName != null
     && _resultModule!.TypeDefs.TryGetValue(typeName, out var td)
@@ -597,7 +597,7 @@ public static partial class MaxonToStandardConversion {
     IsFusedStringType(typeName) || IsFusedCharType(typeName) || IsFusedArrayType(typeName);
 
   /// Allocation size of a managed-memory-shaped record: a fused String is 48 bytes (trailing
-  /// isAsciiFlag), a fused Character/Array 40, a bare __ManagedMemory 40. Used so a slice
+  /// singleByteGraphemesFlag), a fused Character/Array 40, a bare __ManagedMemory 40. Used so a slice
   /// preserves its source's shape/size (a slice of a String is itself a 48-byte String).
   private static int FusedManagedRecordSize(string? typeName) =>
     IsFusedStringType(typeName) ? StringStructSize

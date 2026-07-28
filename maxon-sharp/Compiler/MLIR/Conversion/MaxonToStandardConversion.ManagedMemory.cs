@@ -1160,6 +1160,27 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// After a grow, tell `self` where its bytes now live BEFORE reading the copy source, and read
+  /// that source from `other`'s record rather than from a pointer captured earlier.
+  ///
+  /// `other` MAY BE `self` — `s.append(s)`, `a.append(a)` — and then the source bytes are wherever
+  /// the grow just put them: the pre-grow pointer is the block maxon_string_ensure_cap has just
+  /// mm_raw_free'd, so copying from it copies freed memory. (Measured: `s = "abc"; s.append(s)`
+  /// twice ended as `abcabc` + six bytes of the freed block, reported as success.) The two halves
+  /// are one fix — re-reading `other.buffer` only sees the new buffer because `self.buffer` was
+  /// published first, and publishing first is only safe because the source is re-read.
+  ///
+  /// When `other` is a different record the re-read returns exactly what the earlier capture held,
+  /// so nothing but the load's position changes. The self-hosted runtime's twin
+  /// (`__managed_mem_append` in stdlib/Internals.maxon) loads both buffers after its grow, which is
+  /// why shv2 answers an aliased append correctly and the bootstrap did not.
+  private static StdI64 PublishGrownBufferAndLoadSource(
+    IrBlock<StandardOp> block, string selfVarName, string otherVarName, StdI64 grownBuf,
+    Dictionary<string, string> varTypes) {
+    EmitStructFieldStore(block, grownBuf, selfVarName, ManagedFieldBuffer, IrType.I64, varTypes);
+    return LoadManagedBuffer(block, otherVarName, varTypes);
+  }
+
   /// <summary>
   /// Emit a COW (copy-on-write) check for a managed memory struct.
   /// If capacity < 0, the buffer is read-only (rdata/slice) and must be copied to a writable heap allocation.
@@ -1792,7 +1813,6 @@ public static partial class MaxonToStandardConversion {
       var selfBuf = LoadManagedBuffer(appendBlock, selfVarName, varTypes);
       var selfLen = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldLength, IrType.I64, varTypes);
       var selfCap = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldCapacity, IrType.I64, varTypes);
-      var otherBuf = LoadManagedBuffer(appendBlock, otherVarName, varTypes);
       var otherLenReload = (StdI64)EmitLoad(appendBlock, otherLenVar, varTypes);
 
       // Compute new total length
@@ -1821,11 +1841,14 @@ public static partial class MaxonToStandardConversion {
       // An inline array detached by this grow (buffer changed) becomes a plain external owner.
       EmitReleaseParentOnDetach(appendBlock, selfVarName, selfBuf, newBuf, varTypes);
 
-      // Spill values for the loop
+      // Spill values for the loop. The source buffer is read only AFTER self.buffer is published,
+      // because `other` may BE `self` — see PublishGrownBufferAndLoadSource.
       var newBufVar = $"__append_buf_{uid}";
       EmitStore(appendBlock, newBuf, newBufVar, varTypes);
       var otherBufVar = $"__append_otherbuf_{uid}";
-      EmitStore(appendBlock, otherBuf, otherBufVar, varTypes);
+      EmitStore(appendBlock,
+        PublishGrownBufferAndLoadSource(appendBlock, selfVarName, otherVarName, newBuf, varTypes),
+        otherBufVar, varTypes);
       var selfLenVar = $"__append_selflen_{uid}";
       EmitStore(appendBlock, selfLen, selfLenVar, varTypes);
       var loopVar = $"__append_i_{uid}";
@@ -1865,9 +1888,8 @@ public static partial class MaxonToStandardConversion {
       EmitStore(bodyBlock, newI.Result, loopVar, varTypes);
       bodyBlock.AddOp(new StdBrOp(loopHeaderLabel));
 
+      // buffer was published before the copy loop; only length and capacity are left.
       block = func.Body.AddBlock(loopExitLabel);
-      var finalBuf = (StdI64)EmitLoad(block, newBufVar, varTypes);
-      EmitStructFieldStore(block, finalBuf, selfVarName, ManagedFieldBuffer, IrType.I64, varTypes);
       EmitStructFieldStore(block, totalLen.Result, selfVarName, ManagedFieldLength, IrType.I64, varTypes);
       // Update capacity: use totalLen if grew (conservative)
       var grewCmp = new StdCmpU64Op("ugt", requiredCap, selfCapBytes);
@@ -1882,20 +1904,18 @@ public static partial class MaxonToStandardConversion {
       var selfLen = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldLength, IrType.I64, varTypes);
       var selfCap = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldCapacity, IrType.I64, varTypes);
       var elemSize = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldElementSize, IrType.I64, varTypes);
-      var otherBuf = LoadManagedBuffer(appendBlock, otherVarName, varTypes);
       var otherLenReload = (StdI64)EmitLoad(appendBlock, otherLenVar, varTypes);
 
-      // Spill values that are needed after ensure_cap call (which clobbers registers)
+      // Spill values that are needed after ensure_cap call (which clobbers registers). `other`'s
+      // BUFFER is deliberately not among them — see PublishGrownBufferAndLoadSource.
       var selfLenVar = $"__append_selflen_{uid}";
       var selfCapVar = $"__append_selfcap_{uid}";
       var selfBufVar = $"__append_selfbuf_{uid}";
       var elemSizeVar = $"__append_elemsize_{uid}";
-      var otherBufVar = $"__append_otherbuf_{uid}";
       EmitStore(appendBlock, selfLen, selfLenVar, varTypes);
       EmitStore(appendBlock, selfCap, selfCapVar, varTypes);
       EmitStore(appendBlock, selfBuf, selfBufVar, varTypes);
       EmitStore(appendBlock, elemSize, elemSizeVar, varTypes);
-      EmitStore(appendBlock, otherBuf, otherBufVar, varTypes);
 
       // Compute new total length (in elements)
       var totalLen = new StdAddI64Op(selfLen, otherLenReload);
@@ -1938,24 +1958,25 @@ public static partial class MaxonToStandardConversion {
       // An inline array/string detached by this grow (buffer changed) becomes a plain external owner.
       EmitReleaseParentOnDetach(appendBlock, selfVarName, callBuf, newBuf, varTypes);
 
+      // Publish self.buffer, then read other.buffer — in that order, because they may be the same
+      // field. See PublishGrownBufferAndLoadSource.
+      var reloadNewBuf = (StdI64)EmitLoad(appendBlock, newBufVar, varTypes);
+      var srcBuf = PublishGrownBufferAndLoadSource(appendBlock, selfVarName, otherVarName, reloadNewBuf, varTypes);
+
       // Memcpy: other.buffer -> newBuffer + selfLen * elemSize
       var reloadSelfLen = (StdI64)EmitLoad(appendBlock, selfLenVar, varTypes);
       var reloadElemSize = (StdI64)EmitLoad(appendBlock, elemSizeVar, varTypes);
       var offsetBytes = new StdMulI64Op(reloadSelfLen, reloadElemSize);
       appendBlock.AddOp(offsetBytes);
-      var reloadNewBuf = (StdI64)EmitLoad(appendBlock, newBufVar, varTypes);
       var dstAddr = new StdAddI64Op(reloadNewBuf, offsetBytes.Result);
       appendBlock.AddOp(dstAddr);
-      var reloadOtherBuf = (StdI64)EmitLoad(appendBlock, otherBufVar, varTypes);
       var reloadOtherLen = (StdI64)EmitLoad(appendBlock, otherLenVar, varTypes);
       var reloadElemSize2 = (StdI64)EmitLoad(appendBlock, elemSizeVar, varTypes);
       var copyBytes = new StdMulI64Op(reloadOtherLen, reloadElemSize2);
       appendBlock.AddOp(copyBytes);
-      appendBlock.AddOp(new StdMemCopyOp(reloadOtherBuf, dstAddr.Result, copyBytes.Result));
+      appendBlock.AddOp(new StdMemCopyOp(srcBuf, dstAddr.Result, copyBytes.Result));
 
-      // Update self: buffer, length, capacity
-      var finalBuf = (StdI64)EmitLoad(appendBlock, newBufVar, varTypes);
-      EmitStructFieldStore(appendBlock, finalBuf, selfVarName, ManagedFieldBuffer, IrType.I64, varTypes);
+      // Update self: length, capacity (buffer was published above, before the copy)
       var finalLen = (StdI64)EmitLoad(appendBlock, totalLenVar, varTypes);
       EmitStructFieldStore(appendBlock, finalLen, selfVarName, ManagedFieldLength, IrType.I64, varTypes);
 

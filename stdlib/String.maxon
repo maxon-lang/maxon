@@ -31,6 +31,13 @@ typealias ByteBuffer = __ManagedMemory with Byte
 // `String.mapAsciiCase` adds it to a byte in the A-Z / a-z range.
 typealias AsciiCaseDelta = int(-32 to 32)
 
+// The lowest non-ASCII byte value: at or above this, a byte begins a multi-byte UTF-8 codepoint.
+let AsciiLimit = 128 as Byte
+
+// U+000D. The ONE ASCII byte that is not a grapheme cluster on its own: GB3 joins it to a following
+// LF. That is the whole reason `singleByteGraphemesFlag` is stronger than "is ASCII".
+let CarriageReturnByte = 13 as Byte
+
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 
@@ -51,30 +58,65 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// The field STAYS, and stays first: field order is the ABI, and literal initialization writes
 	/// these two fields directly.
 	var managed as ByteMemory
-	var isAsciiFlag as bool
 
-	/// Check whether this string contains only ASCII bytes
+	/// EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE — ASCII-only AND free of CR.
+	///
+	/// This field used to say only "is ASCII", and ten methods read THAT as "one byte per
+	/// character". They are not the same statement: CR+LF is a single cluster under UAX #29 GB3, so
+	/// an all-ASCII string is not necessarily one byte per character, and all ten split the cluster.
+	/// The field now carries the fact its readers actually want, so there is nothing left for them
+	/// to re-derive — and `findGraphemeEnd` stays the only thing that decides where a cluster ends,
+	/// including for the strings this flag is false for.
+	///
+	/// CR-FREE rather than CRLF-free, and that is what makes it composable: "no CR" is a property of
+	/// each byte on its own, so it survives both slicing and concatenation — `append` just ANDs the
+	/// two flags. "No CRLF pair" would not: `"a\r"` and `"\nb"` each lack one and their join has one.
+	///
+	/// Establishing it is O(n), which is why it is carried rather than recomputed, and why the
+	/// compiler bakes it into literal records. `isAscii()` asks the WEAKER question and pays a walk
+	/// when this flag is clear — the rare shape, and on no hot path.
+	var singleByteGraphemesFlag as bool
+
+	/// Check whether this string contains only ASCII bytes.
 	export function isAscii() returns bool
-		return isAsciiFlag
+		// The flag is the STRONGER fact, so when it is set it settles this outright. When it is
+		// clear the cause may be a non-ASCII byte OR a CR, and only a walk tells those apart.
+		//
+		// That walk reaches `managed`, which under 4b-2 MATERIALIZES a record for a small String —
+		// the cost `byteAt` exists to avoid. It is accepted here and only here: the fallback runs
+		// solely for a string holding a CR or a non-ASCII byte, and nothing in the stdlib calls this
+		// (`StringBuilder` asks `hasSingleByteGraphemes()`, which is a field read). A 4b-2 author who
+		// needs it cheaper should route the scan through `byteAt` rather than re-derive the flag.
+		if singleByteGraphemesFlag 'known'
+			return true
+		end 'known'
+		return scanIsAscii(managed)
 	end 'isAscii'
 
+	/// Whether every grapheme is one byte — the `helpers/string/` grapheme walks' way to ask, since
+	/// the field itself is theirs to read but not to reach. `module`, for the same reason
+	/// `addressableBytes()` is: open to `stdlib/` and its subdirectories, shut to everyone else.
+	module function hasSingleByteGraphemes() returns bool
+		return singleByteGraphemesFlag
+	end 'hasSingleByteGraphemes'
+
 	// Default type for string literals - compiler discovers this via BuiltinStringLiteral interface.
-	// The C# compiler bypasses this for literals and writes fields directly (including isAsciiFlag).
-	// For runtime-created strings, scan the bytes to determine ASCII status.
+	// The C# compiler bypasses this for literals and writes fields directly (including the flag).
+	// For runtime-created strings, scan the bytes to classify them.
 	export static function init(managed ByteMemory) returns String
-		return String{managed: managed, isAsciiFlag: scanIsAscii(managed)}
+		return String{managed: managed, singleByteGraphemesFlag: scanSingleByteGraphemes(managed)}
 	end 'init'
 
 	/// Create a String from a byte array (zero-copy slice of the array's backing memory)
 	export static function from (bytes ByteArray) returns String
-		return String{managed: bytes.managed, isAsciiFlag: scanIsAscii(bytes.managed)}
+		return String{managed: bytes.managed, singleByteGraphemesFlag: scanSingleByteGraphemes(bytes.managed)}
 	end 'from'
 
-	// `from`, for a caller that ALREADY KNOWS whether the bytes are ASCII and is handing over a
-	// buffer it will never touch again. `StringBuilder.build` is the only caller, and both halves
-	// matter to it: it watched every byte go in, so re-scanning them here (`from` does) would make
-	// finishing a build O(n) for an answer already in hand — and it gives the buffer UP, which is
-	// what makes taking it rather than copying it sound.
+	// `from`, for a caller that ALREADY KNOWS how the bytes classify and is handing over a buffer it
+	// will never touch again. `StringBuilder.build` is the only caller, and both halves matter to
+	// it: it watched every byte go in, so re-scanning them here (`from` does) would make finishing a
+	// build O(n) for an answer already in hand — and it gives the buffer UP, which is what makes
+	// taking it rather than copying it sound.
 	//
 	// Not exported: "take these bytes and trust me about them" is not a promise the stdlib can let
 	// arbitrary code make.
@@ -83,8 +125,8 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// re-apply a function's own visibility — a type-qualified name skips the filter on purpose, so
 	// that a hidden TYPE reports E4006 rather than a confusing not-exported about its method, and
 	// only the instance path had been re-checking afterwards.
-	static function fromOwnedBytes(bytes ByteArray, isAscii bool) returns String
-		return String{managed: bytes.managed, isAsciiFlag: isAscii}
+	static function fromOwnedBytes(bytes ByteArray, singleByteGraphemes bool) returns String
+		return String{managed: bytes.managed, singleByteGraphemesFlag: singleByteGraphemes}
 	end 'fromOwnedBytes'
 
 	/// The UTF-8 bytes as a NEW, INDEPENDENT `ByteArray`. Writing to it never touches this string,
@@ -144,7 +186,8 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// the same promise the same way.
 	///
 	/// ALSO THE ANSWER TO "return self, unchanged". Nine places used to spell out
-	/// `String{managed: managed, isAsciiFlag: isAsciiFlag}` for that — `replace` with no match,
+	/// `String{managed: managed, singleByteGraphemesFlag: singleByteGraphemesFlag}` for that —
+	/// `replace` with no match,
 	/// `split` on an empty delimiter, each `trim` of an empty string — and every one of them was
 	/// this method, written out. They call it now.
 	///
@@ -156,7 +199,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// TWICE — a slice record, then a String viewing the slice — for one COW view of the same bytes.
 	/// Constructing straight from `managed` is the same thing in one allocation.
 	export function clone() returns String
-		return String{managed: managed, isAsciiFlag: isAsciiFlag}
+		return String{managed: managed, singleByteGraphemesFlag: singleByteGraphemesFlag}
 	end 'clone'
 
 	/// THE byte-access primitives, and the only way anything inside `String` is allowed to read a
@@ -253,19 +296,20 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// from part of itself. `slice`, `split`, `trim`/`trimStart`/`trimEnd` and `mapAsciiCase` all come
 	/// through here.
 	///
-	/// `isAscii` is the CALLER's to state, because the caller always knows and re-deriving it would
-	/// cost O(n) for an answer already in hand: any slice of an ASCII string is ASCII, and an empty
-	/// slice is ASCII whatever the source was. (`String.from` pays that scan; `fromOwnedBytes` exists
-	/// precisely to let a caller who knows skip it.)
+	/// `singleByteGraphemes` is the CALLER's to state, because the caller always knows and re-deriving
+	/// it would cost O(n) for an answer already in hand: any slice of a one-byte-per-grapheme string
+	/// is one too — both halves of the flag are per-byte properties — and an empty slice is one
+	/// whatever the source was. (`String.from` pays that scan; `fromOwnedBytes` exists precisely to
+	/// let a caller who knows skip it.)
 	///
 	/// THE ONLY `managed.slice` LEFT INSIDE `String`, and deliberately so: FOURTEEN sites used to
 	/// spell this out, which meant fourteen separate reach-throughs for Stage 4b-2 to teach the
 	/// discriminant. Now there is one. Under 4b-2 a range of 15 bytes or fewer becomes a SMALL String
 	/// with those bytes copied inline and no reference to `self` at all — which is exactly why
 	/// "always build large" was refused: `split` and `trim` are how strings get short.
-	function sliceBytes(start BytePos, endPos BytePos, isAscii bool) returns String
+	function sliceBytes(start BytePos, endPos BytePos, singleByteGraphemes bool) returns String
 		let result = try managed.slice(start, endPos) otherwise panic("String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()")
-		return String{managed: result, isAsciiFlag: isAscii}
+		return String{managed: result, singleByteGraphemesFlag: singleByteGraphemes}
 	end 'sliceBytes'
 
 	export function isEmpty() returns bool
@@ -294,7 +338,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Create a fresh iterator for grapheme cluster traversal.
 	/// Throws IterationError.exhausted if the string is empty.
 	export function createIterator() returns StringIterator throws IterationError
-		return try StringIterator.create(self, isAsciiFlag: isAsciiFlag)
+		return try StringIterator.create(self)
 	end 'createIterator'
 
 	// String index methods
@@ -309,10 +353,6 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Get character at the given index. Returns the grapheme cluster at that position.
 	export function charAt(idx StringIndex) returns Character
-		if isAsciiFlag 'asciiPath'
-			return makeCharFromBytes(idx.bytePos(), len: 1)
-		end 'asciiPath'
-		// Calculate the byte length of this grapheme at the given byte position
 		let byteStart = idx.bytePos()
 		let endPos = findGraphemeEnd(self, startPos: byteStart)
 		return makeCharFromBytes(byteStart, len: endPos - byteStart)
@@ -320,17 +360,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Get the index after the given position (for iteration)
 	export function indexAfter(idx StringIndex) returns StringIndex throws StringError
-		let len = byteLength()
-		if idx.bytePos() >= len 'atEnd'
+		if idx.bytePos() >= byteLength() 'atEnd'
 			throw StringError.invalidIndex
 		end 'atEnd'
-		if isAsciiFlag 'asciiPath'
-			return StringIndex.create(idx.charIndex() + 1, bytePos: idx.bytePos() + 1)
-		end 'asciiPath'
-		let byteStart = idx.bytePos()
-		let endPos = findGraphemeEnd(self, startPos: byteStart)
-		let byteLen = endPos - byteStart
-		return StringIndex.create(idx.charIndex() + 1, bytePos: byteStart + byteLen)
+		return StringIndex.create(idx.charIndex() + 1, bytePos: findGraphemeEnd(self, startPos: idx.bytePos()))
 	end 'indexAfter'
 
 	/// Get the index before the given position (for reverse iteration).
@@ -341,11 +374,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if idx.bytePos() == 0 'atStart'
 			throw StringError.invalidIndex
 		end 'atStart'
-		if isAsciiFlag 'asciiPath'
-			return StringIndex.create(idx.charIndex() - 1, bytePos: idx.bytePos() - 1)
-		end 'asciiPath'
-		let graphemeStart = findGraphemeStart(self, beforePos: idx.bytePos())
-		return StringIndex.create(idx.charIndex() - 1, bytePos: graphemeStart)
+		return StringIndex.create(idx.charIndex() - 1, bytePos: findGraphemeStart(self, beforePos: idx.bytePos()))
 	end 'indexBefore'
 
 	/// Append another string's content to this string in place.
@@ -359,9 +388,9 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// golden in `specs/fragments-x64-windows/static-variables/`. A field read costs nothing.
 	export function append(other String)
 		managed.append(other.managed)
-		if not other.isAsciiFlag 'clearAscii'
-			isAsciiFlag = false
-		end 'clearAscii'
+		if not other.singleByteGraphemesFlag 'clearFlag'
+			singleByteGraphemesFlag = false
+		end 'clearFlag'
 	end 'append'
 
 	// Search methods
@@ -397,37 +426,29 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return false
 	end 'contains'
 
+	/// The `StringIndex` naming the grapheme that STARTS at `byteIdx` — the one thing both searches
+	/// have to do with the byte offset they find, and the one both used to shortcut identically.
+	function indexAtByte(byteIdx BytePos) returns StringIndex
+		return StringIndex.create(byteIndexToGraphemeIndex(self, byteIdx: byteIdx), bytePos: byteIdx)
+	end 'indexAtByte'
+
 	export function findFirst(needle String) returns StringIndex throws StringError
-		let byteIdx = try findIn(self, offset: 0, len: byteLength(), needle: needle)
-		if isAsciiFlag 'asciiPath'
-			return StringIndex.create(byteIdx, bytePos: byteIdx)
-		end 'asciiPath'
-		let charIdx = byteIndexToGraphemeIndex(self, byteIdx: byteIdx)
-		return StringIndex.create(charIdx, bytePos: byteIdx)
+		return indexAtByte(try findIn(self, offset: 0, len: byteLength(), needle: needle))
 	end 'findFirst'
 
 	export function findLast(needle String) returns StringIndex throws StringError
-		let byteIdx = try findLastIn(self, needle: needle)
-		if isAsciiFlag 'asciiPath'
-			return StringIndex.create(byteIdx, bytePos: byteIdx)
-		end 'asciiPath'
-		let charIdx = byteIndexToGraphemeIndex(self, byteIdx: byteIdx)
-		return StringIndex.create(charIdx, bytePos: byteIdx)
+		return indexAtByte(try findLastIn(self, needle: needle))
 	end 'findLast'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
-		return sliceBytes(start.bytePos(), endPos: endIndex.bytePos(), isAscii: isAsciiFlag)
+		return sliceBytes(start.bytePos(), endPos: endIndex.bytePos(), singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
 
 	export function slice(start StringIndex, length GraphemeCount) returns String
-		if isAsciiFlag 'asciiPath'
-			// Every ASCII grapheme is one byte, so the grapheme count IS the byte count.
-			return sliceBytes(start.bytePos(), endPos: start.bytePos() + length, isAscii: true)
-		end 'asciiPath'
 		let endBytePos = graphemeOffsetToBytePos(self, startBytePos: start.bytePos(), count: length)
-		return sliceBytes(start.bytePos(), endPos: endBytePos, isAscii: isAsciiFlag)
+		return sliceBytes(start.bytePos(), endPos: endBytePos, singleByteGraphemes: singleByteGraphemesFlag)
 	end 'slice'
 
 	// View methods - returns lazy Iterable views over bytes/codepoints/UTF-16
@@ -496,7 +517,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 					let prefixSlice = try selfBytes.slice(pos, matchPos) otherwise 'prefixSliceErr'
 						panic("String.replace: prefix slice — pos and matchPos within bounds from findIn")
 					end 'prefixSliceErr'
-					out.appendBytes(prefixSlice, isAscii: isAsciiFlag)
+					out.appendBytes(prefixSlice, singleByteGraphemes: singleByteGraphemesFlag)
 				end 'has_prefix'
 				out.append(with)
 				pos = matchPos + oldLen
@@ -510,7 +531,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			let suffixSlice = try selfBytes.slice(pos, selfLen) otherwise 'suffixSliceErr'
 				panic("String.replace: suffix slice — pos < selfLen guaranteed")
 			end 'suffixSliceErr'
-			out.appendBytes(suffixSlice, isAscii: isAsciiFlag)
+			out.appendBytes(suffixSlice, singleByteGraphemes: singleByteGraphemesFlag)
 		end 'has_suffix'
 
 		return out.build()
@@ -542,14 +563,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		let head = try selfBytes.slice(0, idx) otherwise 'rfHeadSliceErr'
 			panic("String.replaceFirst: head slice — idx from findIn, always in bounds")
 		end 'rfHeadSliceErr'
-		out.appendBytes(head, isAscii: isAsciiFlag)
+		out.appendBytes(head, singleByteGraphemes: singleByteGraphemesFlag)
 
 		out.append(with)
 
 		let tail = try selfBytes.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
 			panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
 		end 'rfTailSliceErr'
-		out.appendBytes(tail, isAscii: isAsciiFlag)
+		out.appendBytes(tail, singleByteGraphemes: singleByteGraphemesFlag)
 
 		return out.build()
 	end 'replaceFirst'
@@ -573,7 +594,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while pos <= selfLen - delimLen 'search'
 			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: delimiter) 'try_find'
 				let matchPos = pos + idx
-				result.push(sliceBytes(pos, endPos: matchPos, isAscii: isAsciiFlag))
+				result.push(sliceBytes(pos, endPos: matchPos, singleByteGraphemes: singleByteGraphemesFlag))
 				pos = matchPos + delimLen
 			end 'try_find' else 'no_more'
 				break
@@ -581,7 +602,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'search'
 
 		// Append remaining suffix (always — even if empty, to handle trailing delimiters)
-		result.push(sliceBytes(pos, endPos: selfLen, isAscii: isAsciiFlag))
+		result.push(sliceBytes(pos, endPos: selfLen, singleByteGraphemes: singleByteGraphemesFlag))
 
 		return result
 	end 'split'
@@ -604,7 +625,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return clone()
 		end 'empty'
 
-		var work = sliceBytes(0, endPos: len, isAscii: isAsciiFlag)
+		var work = sliceBytes(0, endPos: len, singleByteGraphemes: singleByteGraphemesFlag)
 
 		for i in 0 upto len 'convert'
 			let b = try work.byteAt(i) otherwise panic("String.mapAsciiCase: byteAt OOB — i < len invariant")
@@ -625,6 +646,45 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return mapAsciiCase(97, hi: 122, delta: -32)
 	end 'toUpper'
 
+	/// The byte position of the first grapheme NOT in `chars`, scanning forward from the start —
+	/// `byteLength()` when every grapheme matches.
+	///
+	/// This and `scanTrimEnd` are one scan each because the three `trim`s ask exactly two questions
+	/// between them. They used to be SIX loops: each `trim` carried a grapheme-correct copy plus a
+	/// byte-at-a-time "ASCII" copy that assumed one ASCII byte is one grapheme. That assumption is
+	/// false for CR+LF (UAX #29 GB3), and the whitespace sets hid it — CR and LF are independently
+	/// whitespace, so splitting the cluster reached the right answer by coincidence. A set holding
+	/// one and not the other separates them; `specs/string-type-2` pins that shape now.
+	function scanTrimStart(chars CharacterSet) returns BytePos
+		let len = byteLength()
+		var start = 0
+		while start < len 'scan'
+			let endByte = findGraphemeEnd(self, startPos: start)
+			let ch = makeCharFromBytes(start, len: endByte - start)
+			if not chars.contains(ch) 'found'
+				break
+			end 'found'
+			start = endByte
+		end 'scan'
+		return start
+	end 'scanTrimStart'
+
+	/// The byte position just past the last grapheme NOT in `chars`, scanning backward from `from`
+	/// and never below `downTo` — `downTo` when every grapheme in the window matches. Both bounds
+	/// must be grapheme boundaries, which is what the scan itself only ever produces.
+	function scanTrimEnd(chars CharacterSet, from BytePos, downTo BytePos) returns BytePos
+		var endPos = from
+		while endPos > downTo 'scan'
+			let graphemeStart = findGraphemeStart(self, beforePos: endPos)
+			let ch = makeCharFromBytes(graphemeStart, len: endPos - graphemeStart)
+			if not chars.contains(ch) 'found'
+				break
+			end 'found'
+			endPos = graphemeStart
+		end 'scan'
+		return endPos
+	end 'scanTrimEnd'
+
 	/// Trim characters in the given set from both ends of the string.
 	export function trim(chars CharacterSet) returns String
 		let len = byteLength()
@@ -632,64 +692,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return clone()
 		end 'empty'
 
-		if isAsciiFlag 'asciiPath'
-			// Forward scan: each ASCII byte is one grapheme
-			var start = 0
-			while start < len 'scanStartAscii'
-				let ch = makeCharFromBytes(start, len: 1)
-				if not chars.contains(ch) 'foundStartAscii'
-					break
-				end 'foundStartAscii'
-				start = start + 1
-			end 'scanStartAscii'
+		let start = scanTrimStart(chars)
+		if start >= len 'allMatch'
+			return sliceBytes(0, endPos: 0, singleByteGraphemes: true)
+		end 'allMatch'
 
-			if start >= len 'allMatchAscii'
-				return sliceBytes(0, endPos: 0, isAscii: true)
-			end 'allMatchAscii'
-
-			// Backward scan
-			var endPos = byteLength()
-			while endPos > start 'scanEndAscii'
-				endPos = endPos - 1
-				let ch = makeCharFromBytes(endPos, len: 1)
-				if not chars.contains(ch) 'foundEndAscii'
-					endPos = endPos + 1
-					break
-				end 'foundEndAscii'
-			end 'scanEndAscii'
-
-			return sliceBytes(start, endPos: endPos, isAscii: true)
-		end 'asciiPath'
-
-		// Forward scan: find first non-matching grapheme
-		var start = 0
-		while start < len 'scan_start'
-			let endByte = findGraphemeEnd(self, startPos: start)
-			let graphemeLen = endByte - start
-			let ch = makeCharFromBytes(start, len: graphemeLen)
-			if not chars.contains(ch) 'found_start'
-				break
-			end 'found_start'
-			start = endByte
-		end 'scan_start'
-
-		if start >= len 'all_match'
-			return sliceBytes(0, endPos: 0, isAscii: true)
-		end 'all_match'
-
-		// Backward scan from end: find last non-matching grapheme
-		var endPos = byteLength()
-		while endPos > start 'scan_end'
-			let graphemeStart = findGraphemeStart(self, beforePos: endPos)
-			let graphemeLen = endPos - graphemeStart
-			let ch = makeCharFromBytes(graphemeStart, len: graphemeLen)
-			if not chars.contains(ch) 'found_end'
-				break
-			end 'found_end'
-			endPos = graphemeStart
-		end 'scan_end'
-
-		return sliceBytes(start, endPos: endPos, isAscii: isAsciiFlag)
+		let endPos = scanTrimEnd(chars, from: len, downTo: start)
+		return sliceBytes(start, endPos: endPos, singleByteGraphemes: singleByteGraphemesFlag)
 	end 'trim'
 
 	/// Trim characters in the given set from the start of the string.
@@ -699,39 +708,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return clone()
 		end 'empty'
 
-		if isAsciiFlag 'asciiPath'
-			var start = 0
-			while start < len 'scanStartAscii'
-				let ch = makeCharFromBytes(start, len: 1)
-				if not chars.contains(ch) 'foundStartAscii'
-					break
-				end 'foundStartAscii'
-				start = start + 1
-			end 'scanStartAscii'
+		let start = scanTrimStart(chars)
+		if start >= len 'allMatch'
+			return sliceBytes(0, endPos: 0, singleByteGraphemes: true)
+		end 'allMatch'
 
-			if start >= len 'allMatchAscii'
-				return sliceBytes(0, endPos: 0, isAscii: true)
-			end 'allMatchAscii'
-
-			return sliceBytes(start, endPos: len, isAscii: true)
-		end 'asciiPath'
-
-		var start = 0
-		while start < len 'scan_start'
-			let endByte = findGraphemeEnd(self, startPos: start)
-			let graphemeLen = endByte - start
-			let ch = makeCharFromBytes(start, len: graphemeLen)
-			if not chars.contains(ch) 'found_start'
-				break
-			end 'found_start'
-			start = endByte
-		end 'scan_start'
-
-		if start >= len 'all_match'
-			return sliceBytes(0, endPos: 0, isAscii: true)
-		end 'all_match'
-
-		return sliceBytes(start, endPos: len, isAscii: isAsciiFlag)
+		return sliceBytes(start, endPos: len, singleByteGraphemes: singleByteGraphemesFlag)
 	end 'trimStart'
 
 	/// Trim characters in the given set from the end of the string.
@@ -741,35 +723,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return clone()
 		end 'empty'
 
-		if isAsciiFlag 'asciiPath'
-			var pos = byteLength()
-			while pos > 0 'scanAscii'
-				pos = pos - 1
-				let ch = makeCharFromBytes(pos, len: 1)
-				if not chars.contains(ch) 'notMatch'
-					return sliceBytes(0, endPos: pos + 1, isAscii: true)
-				end 'notMatch'
-			end 'scanAscii'
-			return sliceBytes(0, endPos: 0, isAscii: true)
-		end 'asciiPath'
+		let endPos = scanTrimEnd(chars, from: len, downTo: 0)
+		if endPos == 0 'allMatch'
+			return sliceBytes(0, endPos: 0, singleByteGraphemes: true)
+		end 'allMatch'
 
-		// Backward scan from end: find first non-matching grapheme
-		var pos = byteLength()
-		while pos > 0 'scan'
-			let graphemeStart = findGraphemeStart(self, beforePos: pos)
-			let graphemeLen = pos - graphemeStart
-			let ch = makeCharFromBytes(graphemeStart, len: graphemeLen)
-			if not chars.contains(ch) 'not_match'
-				break
-			end 'not_match'
-			pos = graphemeStart
-		end 'scan'
-
-		if pos == 0 'all_match'
-			return sliceBytes(0, endPos: 0, isAscii: true)
-		end 'all_match'
-
-		return sliceBytes(0, endPos: pos, isAscii: isAsciiFlag)
+		return sliceBytes(0, endPos: endPos, singleByteGraphemes: singleByteGraphemesFlag)
 	end 'trimEnd'
 
 	/// Trim Unicode whitespace from both ends.
@@ -811,11 +770,12 @@ end 'String'
 export type StringBuilder
 	var bytes as ByteArray
 	// Tracked as the pieces arrive rather than re-scanned at the end: the builder already sees every
-	// byte that goes in. An empty builder is trivially ASCII, and one non-ASCII piece settles it.
-	var isAsciiFlag as bool
+	// byte that goes in. An empty builder trivially has one-byte graphemes, and one piece that does
+	// not settles it — the property is per-byte, so a join of qualifying pieces qualifies.
+	var singleByteGraphemesFlag as bool
 
 	export static function create() returns StringBuilder
-		return StringBuilder{bytes: ByteArray.create(), isAsciiFlag: true}
+		return StringBuilder{bytes: ByteArray.create(), singleByteGraphemesFlag: true}
 	end 'create'
 
 	/// Reserve room for `byteCount` bytes up front — for the one case a growth policy cannot beat:
@@ -830,24 +790,23 @@ export type StringBuilder
 	end 'reserve'
 
 	export function append(other String)
-		appendBytes(other.addressableBytes(), isAscii: other.isAscii())
+		appendBytes(other.addressableBytes(), singleByteGraphemes: other.hasSingleByteGraphemes())
 	end 'append'
 
-	/// Append a raw UTF-8 byte range whose ASCII-ness the caller ALREADY KNOWS — a slice cut out of a
-	/// string that has already been classified, which is what `String.replace` spends its whole life
-	/// doing. Routing those through `append(String)` would wrap each piece in a `String`, and a
-	/// `String` built from raw bytes RE-SCANS them to decide `isAscii` — paying O(n) for an answer the
-	/// caller is holding.
+	/// Append a raw UTF-8 byte range whose classification the caller ALREADY KNOWS — a slice cut out
+	/// of a string that has already been classified, which is what `String.replace` spends its whole
+	/// life doing. Routing those through `append(String)` would wrap each piece in a `String`, and a
+	/// `String` built from raw bytes RE-SCANS them — paying O(n) for an answer the caller is holding.
 	///
 	/// The bytes are COPIED in. The range may point into a buffer this builder is about to reallocate
 	/// (`replace` slices the very string it is rebuilding), so borrowing it would be a use-after-free
 	/// waiting for the next growth.
-	function appendBytes(piece ByteBuffer, isAscii bool)
+	function appendBytes(piece ByteBuffer, singleByteGraphemes bool)
 		bytes.appendMemory(piece)
 
-		if not isAscii 'clearAscii'
-			isAsciiFlag = false
-		end 'clearAscii'
+		if not singleByteGraphemes 'clearFlag'
+			singleByteGraphemesFlag = false
+		end 'clearFlag'
 	end 'appendBytes'
 
 	export function byteLength() returns ByteCount
@@ -862,7 +821,7 @@ export type StringBuilder
 	/// pays for its growth once instead of once per string.
 	export function clear()
 		bytes.clear()
-		isAsciiFlag = true
+		singleByteGraphemesFlag = true
 	end 'clear'
 
 	/// The `String` that was built. The builder is EMPTY afterwards, and that is not an accident.
@@ -874,17 +833,22 @@ export type StringBuilder
 	/// from under it, and the string would be reading freed memory. So there is exactly one way to
 	/// finish, and it cannot alias.
 	export function build() returns String
-		let built = String.fromOwnedBytes(self.bytes, isAscii: self.isAsciiFlag)
+		let built = String.fromOwnedBytes(self.bytes, singleByteGraphemes: self.singleByteGraphemesFlag)
 		self.bytes = ByteArray.create()
-		self.isAsciiFlag = true
+		self.singleByteGraphemesFlag = true
 		return built
 	end 'build'
 end 'StringBuilder'
 
 /// Iterator for String — traverses Unicode grapheme clusters.
-/// Positioning invariant: iterPos always points at the start of a valid grapheme,
-/// and graphemeLen holds that grapheme's byte length. current() returns it without
-/// recomputing boundaries; advance() moves past it.
+/// Positioning invariant: iterPos always points at the start of a valid grapheme, and graphemeEnd
+/// is where `findGraphemeEnd` said that grapheme stops. current() returns it without recomputing
+/// boundaries; advance() steps to graphemeEnd and asks again.
+///
+/// The field holds the AUTHORITY'S ANSWER, not a length derived from it, because this iterator used
+/// to derive it a second way: an `singleByteGraphemesFlag` shortcut returned 1 for every ASCII byte, which is
+/// wrong for CR+LF (UAX #29 GB3) and made `for c in "a\r\nb"` take four steps where `count()` said
+/// three. There is one function that knows where a cluster ends, and this asks it.
 ///
 /// IT HOLDS THE `String`, NOT ITS BYTES, and that is what Stage 4b-1b came here for. This field
 /// used to be `var managed as ByteMemory` — a record reference that ESCAPES THE FRAME, since the
@@ -902,37 +866,27 @@ end 'StringBuilder'
 export type StringIterator implements Iterator with Character
 	var s as String
 	var iterPos as BytePos
-	var graphemeLen as ByteCount
-	var isAsciiFlag as bool
+	var graphemeEnd as BytePos
 
-	export static function create(s String, isAsciiFlag bool) returns Self throws IterationError
+	export static function create(s String) returns Self throws IterationError
 		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
-		let len = computeGraphemeLen(s, pos: 0, isAsciiFlag: isAsciiFlag)
-		return Self{s: s, iterPos: 0, graphemeLen: len, isAsciiFlag: isAsciiFlag}
+		return Self{s: s, iterPos: 0, graphemeEnd: findGraphemeEnd(s, startPos: 0)}
 	end 'create'
 
 	export function current() returns Character
-		return s.makeCharFromBytes(iterPos, len: graphemeLen)
+		return s.makeCharFromBytes(iterPos, len: graphemeEnd - iterPos)
 	end 'current'
 
 	export function advance() throws IterationError
-		let nextPos = iterPos + graphemeLen
-		if nextPos >= s.byteLength() 'done'
+		if graphemeEnd >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
-		iterPos = nextPos
-		graphemeLen = computeGraphemeLen(s, pos: iterPos, isAsciiFlag: isAsciiFlag)
+		iterPos = graphemeEnd
+		graphemeEnd = findGraphemeEnd(s, startPos: iterPos)
 	end 'advance'
 end 'StringIterator'
-
-function computeGraphemeLen(s String, pos BytePos, isAsciiFlag bool) returns ByteCount
-	if isAsciiFlag 'ascii'
-		return 1
-	end 'ascii'
-	return findGraphemeEnd(s, startPos: pos) - pos
-end 'computeGraphemeLen'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable
@@ -1048,16 +1002,38 @@ function findLastIn(haystack String, needle String) returns BytePos throws Strin
 	throw StringError.notFound
 end 'findLastIn'
 
-/// Takes the raw bytes, and MUST: this runs while a `String` is being CONSTRUCTED from them
-/// (`init`, `from`), so `isAsciiFlag` has no value yet and there is no `String` to ask. Its callers
+/// Both take the raw bytes, and the first MUST: it runs while a `String` is being CONSTRUCTED from
+/// them (`init`, `from`), so the flag has no value yet and there is no `String` to ask. Their callers
 /// are already holding a real `__ManagedMemory` — the one they are building the string out of — so
 /// there is nothing to materialize here under 4b-2 and nothing to route through `byteAt`. This is a
 /// construction boundary, in the same family as `addressableBytes()`'s intrinsic callers.
+/// `singleByteGraphemesFlag`'s value: whether every grapheme in these bytes is exactly one byte.
+/// Two independent things make it false and neither implies the other — a byte at or above the ASCII
+/// limit begins a multi-byte codepoint, and a CR may join a following LF into a two-byte cluster
+/// (UAX #29 GB3).
+///
+/// ONE pass, testing both, rather than `scanIsAscii and not containsCarriageReturn`. The composition
+/// reads better and was written first; it costs a second walk of the same bytes on EVERY string
+/// construction, and `Character.toString()` constructs one per character — measured at +90% on a
+/// `for c in s` loop over a 100k-byte string. Construction gets one pass, as it always had.
+function scanSingleByteGraphemes(managed __ManagedMemory) returns bool
+	let len = managed.length()
+	for i in 0 upto len 'scan'
+		let b = try managed.byteAt(i) otherwise panic("scanSingleByteGraphemes: byteAt OOB — i < len invariant")
+		if b >= AsciiLimit or b == CarriageReturnByte 'notSingleByte'
+			return false
+		end 'notSingleByte'
+	end 'scan'
+	return true
+end 'scanSingleByteGraphemes'
+
+/// The WEAKER question, for `isAscii()` alone — the one shape the flag cannot answer for, since a
+/// clear flag means either a non-ASCII byte or a CR and only a walk tells those apart.
 function scanIsAscii(managed __ManagedMemory) returns bool
 	let len = managed.length()
 	for i in 0 upto len 'scan'
 		let b = try managed.byteAt(i) otherwise panic("scanIsAscii: byteAt OOB — i < len invariant")
-		if b >= 128 'nonAscii'
+		if b >= AsciiLimit 'nonAscii'
 			return false
 		end 'nonAscii'
 	end 'scan'
