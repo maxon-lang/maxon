@@ -1790,8 +1790,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-string-replace-no-leak -->
-<!-- beyond P1.2: String.replace not yet in shv2 -->
+<!-- test: rc-string-replace-no-leak -->
 String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
 ```maxon
 function main() returns ExitCode

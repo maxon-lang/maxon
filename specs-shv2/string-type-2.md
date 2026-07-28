@@ -273,8 +273,7 @@ end 'main'
 27
 ```
 
-<!-- disabled-test: toLower -->
-<!-- P1.8: string methods -->
+<!-- test: toLower -->
 ```maxon
 function main() returns ExitCode
 	var s = "HELLO"
@@ -289,8 +288,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: case-conversion-does-not-mutate-receiver -->
-<!-- P1.8: string methods -->
+<!-- test: case-conversion-does-not-mutate-receiver -->
 ### toLower / toUpper return a new string and leave the receiver unchanged
 Regression guard. `toLower`/`toUpper` used to rewrite the receiver's bytes in place and
 return the SAME buffer, so `let b = a.toLower()` silently lowercased `a` too. They now
@@ -316,8 +314,7 @@ hello world
 HELLO WORLD
 ```
 
-<!-- disabled-test: case-conversion-on-let-binding -->
-<!-- P1.8: string methods -->
+<!-- test: case-conversion-on-let-binding -->
 ### toLower / toUpper are non-mutating, so they work on an immutable binding
 ```maxon
 function main() returns ExitCode
@@ -524,7 +521,7 @@ end 'main'
 ```
 
 <!-- disabled-test: slice-basic -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — NOT string methods generally (P1.8 Slice C shipped the byte methods). `slice` is grapheme-indexed BY ITS PARAMETERS: it takes two `StringIndex`es, produced here by `startIndex`/`endIndex`/`findFirst`, and shv2 has no `StringIndex`, no `StringError` and no `GraphemeCount` -->
 ### Basic String Slicing
 ```maxon
 function main() returns ExitCode
@@ -544,7 +541,7 @@ hello
 ```
 
 <!-- disabled-test: slice-full -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `slice-basic`: `slice` takes two `StringIndex`es, which shv2 has no type for -->
 ### Slice Entire String
 ```maxon
 function main() returns ExitCode
@@ -564,7 +561,7 @@ hello
 ```
 
 <!-- disabled-test: slice-empty -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `slice-basic`: `slice` takes two `StringIndex`es, which shv2 has no type for -->
 ### Empty Slice
 ```maxon
 function main() returns ExitCode
@@ -583,7 +580,7 @@ end 'main'
 ```
 
 <!-- disabled-test: slice-iteration -->
-<!-- `String.startIndex()` and the slice-index view — P1.2 wave D provides only `append`/`byteLength` (E2015) -->
+<!-- P1.8 Slice B `StringIndex` — see `slice-basic`: `startIndex`/`findFirst`/`slice` all traffic in `StringIndex`, which shv2 has no type for. (The old marker blamed "P1.2 wave D provides only append/byteLength", which stopped being the measured blocker the moment Slice C added a method dispatcher — the gap is the INDEX TYPE.) String iteration (`for c in sub`) is a SECOND blocker behind it -->
 ### Iterate Over Sliced String
 ```maxon
 function main() returns ExitCode

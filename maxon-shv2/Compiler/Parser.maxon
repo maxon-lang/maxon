@@ -1755,11 +1755,25 @@ function requireAbiParamCount(paramCount ParamCount, anchor Token) throws ParseE
 	throw ParseError.unsupported("a function with {paramCount} argument slots — more than the {MaxAbiArgs} a call can carry. A signature's slots are its declared parameters plus the hidden ones the ABI adds (a companion environment per function-typed parameter, a layout descriptor for a generic that reads `sizeof`, one witness per `where` constraint), and the limit is the width of the per-argument float mask that routes each one to its register file", line: anchor.line, column: anchor.column)
 end 'requireAbiParamCount'
 
-// **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
-// its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
-// `parseStringMethodCall` off a String-typed receiver.
+// **THE BUILTIN STRING METHODS** (P1.2 wave D; the byte/ASCII family P1.8 Slice C). `append` grows a `var`
+// String in place; `byteLength` reads its byte count. String is the one non-struct type with methods at this
+// rung, dispatched by name in `parseStringMethodCall` off a String-typed receiver.
 let StringAppendMethod = b"append"
 let StringByteLengthMethod = b"byteLength"
+
+// ⭐ **THE P1.8 SLICE C BYTE/ASCII METHODS** — the seven `String` methods that need no Unicode character
+// database, no grapheme segmentation and no `StringIndex`. That last one is the LINE, not a coincidence:
+// `findFirst`/`findLast` return a `StringIndex` whose `charIdx` is a GRAPHEME index, and `slice` takes two of
+// them, so all three are grapheme-indexed BY THEIR SIGNATURES and wait for that type (P1.8 Slice B) however
+// byte-level their search happens to be. `contains` here is the `String` overload only — the `Character` one
+// (`stdlib/String.maxon:392-398`) needs a type shv2 has not got.
+let StringStartsWithMethod = b"startsWith"
+let StringEndsWithMethod = b"endsWith"
+let StringContainsMethod = b"contains"
+let StringToLowerMethod = b"toLower"
+let StringToUpperMethod = b"toUpper"
+let StringReplaceMethod = b"replace"
+let StringSplitMethod = b"split"
 
 // The argument slot a builtin-conformance dispatch spends on its RECEIVER (P1.7a direct dispatch). The
 // synthesized impls take `self` positionally in argument 0 — `int.compare(self, other)` — exactly as an
@@ -3674,6 +3688,13 @@ export type Parser
 		// source array resolves to. (The `[…]` of the literal itself sets `hasIntArrayLiteral` / `hasStringArrayLiteral`,
 		// so the SOURCE array instance is interned too.) Set here, acted on after the walk.
 		var hasSetFromLiteral = false
+		// A `.split` — the one builtin METHOD that constructs an `Array with String` at runtime (P1.8 Slice C).
+		// Like a bare `["…"]`, its instance has no typealias to intern from, so the sweep interns it and the
+		// parser reads the giid back at construction time. The sweep reads TOKENS and cannot know the receiver
+		// is a String, so it OVER-interns — the same answer `internArrayLiteralAggregateInstances` gives to the
+		// same limitation, and an unreferenced instance has no descriptor or destructor synthesized (both gate
+		// on usage), so it costs a registry entry and no codegen.
+		var hasStringSplitCall = false
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -3693,6 +3714,10 @@ export type Parser
 			if self.atSetFromConstruction() 'setFromToken'
 				hasSetFromLiteral = true
 			end 'setFromToken'
+
+			if self.atStringSplitCall() 'splitToken'
+				hasStringSplitCall = true
+			end 'splitToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
@@ -3775,7 +3800,7 @@ export type Parser
 		// Intern the managed-element literal instances — `Array with String` for a `["…"]`, plus every declared
 		// struct/union for a `[<identifier>…]` (whose element type the sweep cannot see). After `foldFile` so the
 		// aggregate loop reads the folded structs/unions and so the giids follow the file's named instances (P1.7 slice 3).
-		if hasStringArrayLiteral 'internStringArrayLiteral'
+		if hasStringArrayLiteral or hasStringSplitCall 'internStringArrayLiteral'
 			_ = index.arrayInstanceForString()
 		end 'internStringArrayLiteral'
 		if hasAggregateArrayLiteral 'internAggregateArrayLiteral'
@@ -3839,6 +3864,13 @@ export type Parser
 	function atSetFromConstruction() returns bool
 		return self.at(TokenKind.identifier) and self.current().value.equals(SetBuiltinBaseName) and self.peekKind() == TokenKind.from
 	end 'atSetFromConstruction'
+
+	// Is the cursor on the `.` of a `<receiver>.split` method call? Asked at the DOT rather than at the
+	// method name so the predicate reads FORWARD like `atSetFromConstruction` and never has to index behind
+	// the cursor.
+	function atStringSplitCall() returns bool
+		return self.at(TokenKind.dot) and self.peekKind() == TokenKind.identifier and self.tokenAt(self.pos + 1).value.equals(StringSplitMethod)
+	end 'atStringSplitCall'
 
 	// The block depth after the token at the cursor. `end` FLOORS at zero rather than underflowing: a
 	// stray `end` is malformed source, and the sweep is tolerant — the real parse reports it, with a
@@ -19242,8 +19274,127 @@ export type Parser
 			return try self.parseStringByteLength(binding, methodTok: methodTok)
 		end 'byteLength'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+", line: methodTok.line, column: methodTok.column)
+		// ⭐ The P1.8 Slice C byte/ASCII family. Every one of them READS the receiver and writes a fresh
+		// value, so none takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine throughout —
+		// which is exactly what `case-conversion-on-let-binding` pins.
+		let range = SourceRange.between(baseTok, last: methodTok)
+		if methodTok.value.equals(StringStartsWithMethod) 'startsWith'
+			return try self.parseStringPredicate(func, binding: binding, callee: StrStartsWithName, methodName: StringStartsWithMethod, range: range)
+		end 'startsWith'
+		if methodTok.value.equals(StringEndsWithMethod) 'endsWith'
+			return try self.parseStringPredicate(func, binding: binding, callee: StrEndsWithName, methodName: StringEndsWithMethod, range: range)
+		end 'endsWith'
+		if methodTok.value.equals(StringContainsMethod) 'contains'
+			return try self.parseStringPredicate(func, binding: binding, callee: StrContainsName, methodName: StringContainsMethod, range: range)
+		end 'contains'
+		if methodTok.value.equals(StringToLowerMethod) 'toLower'
+			return try self.parseStringCaseConversion(binding, lo: AsciiUpperA, hi: AsciiUpperZ, delta: AsciiToLowerDelta, range: range)
+		end 'toLower'
+		if methodTok.value.equals(StringToUpperMethod) 'toUpper'
+			return try self.parseStringCaseConversion(binding, lo: AsciiLowerA, hi: AsciiLowerZ, delta: AsciiToUpperDelta, range: range)
+		end 'toUpper'
+		if methodTok.value.equals(StringReplaceMethod) 'replace'
+			return try self.parseStringReplace(func, binding: binding, range: range)
+		end 'replace'
+		if methodTok.value.equals(StringSplitMethod) 'split'
+			return try self.parseStringSplit(func, binding: binding, range: range)
+		end 'split'
+
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, and the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`); `findFirst`/`findLast`/`slice` traffic in `StringIndex`, and `count`/`bytes`/`graphemes`/`utf16` need the grapheme segmenter — both arrive at P1.8 Slice B", line: methodTok.line, column: methodTok.column)
 	end 'parseStringMethodCall'
+
+	// `s.startsWith(p)` / `s.endsWith(p)` / `s.contains(p)` — the three predicates, which differ ONLY in which
+	// runtime entry point they name: same receiver, same single String argument, same `bool` result. One home,
+	// so a fourth predicate cannot arrive with a different idea of any of those three.
+	function parseStringPredicate(func IrFunction, binding VarInfo, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
+		let arg = try self.parseStringArg(func, methodName: methodName)
+		return self.emitRuntimeCall(callee, args: pairArgs(binding.boundValue, second: arg), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+	end 'parseStringPredicate'
+
+	// `s.toLower()` / `s.toUpper()` — ONE runtime graph, the caller supplying the gated byte range and the
+	// shift, because that is the only thing the two methods differ in (`__str_map_case`). The result is a
+	// FRESH owned String and the receiver is untouched, so neither method needs `noteReceiverWrite` and both
+	// are legal on a `let`.
+	function parseStringCaseConversion(binding VarInfo, lo ParsedInt, hi ParsedInt, delta ParsedInt, range SourceRange) returns ValueId throws ParseError
+		try self.consumeEmptyArgList()
+		let args = quadArgs(binding.boundValue, second: self.emitLiteral(lo, valueType: MaxonType.integer, range: range), third: self.emitLiteral(hi, valueType: MaxonType.integer, range: range), fourth: self.emitLiteral(delta, valueType: MaxonType.integer, range: range))
+		return self.emitOwnedRuntimeResult(StrMapCaseName, args: args, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+	end 'parseStringCaseConversion'
+
+	// `s.replace(old, with: new)` — the one two-argument builtin String method, and the only one whose label
+	// is a KEYWORD (see `consumeWithArgLabel`). Both arguments are BORROWED (their bytes are read and copied),
+	// so neither is moved and an owned interpolation argument stays a pending temp that drops at statement
+	// end, after the copy — `append`'s rule for its argument, for the same reason.
+	function parseStringReplace(func IrFunction, binding VarInfo, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let old = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
+		try self.consumeWithArgLabel()
+		let replacement = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
+		try self.consume(TokenKind.rightParen)
+		return self.emitOwnedRuntimeResult(StrReplaceName, args: tripleArgs(binding.boundValue, second: old, third: replacement), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+	end 'parseStringReplace'
+
+	// ⭐ **`s.split(delimiter)` — the first builtin method that CONSTRUCTS an `Array with String` at runtime.**
+	// The array is created HERE, through `emitArrayCreateOp` — the one array-creation door — and handed to
+	// `__str_split` to fill. That split of labour is the point: element size and the `element_destroy@40`
+	// stamp that makes each segment droppable are decided by the same code an array literal uses, so a split
+	// result and a `["a","b"]` literal cannot disagree about what an `Array with String` is. The runtime only
+	// pushes.
+	//
+	// The result is an OWNED array of OWNED Strings: its scope-exit `__arr_decref` walks the slots and
+	// `__str_decref`s every segment, and no segment aliases the receiver's bytes, so there is nothing
+	// double-freed and nothing left behind. It is enrolled owned AFTER the fill rather than through
+	// `emitOwnedRuntimeResult`, because the value the caller owns is the array the PARSER created, not the
+	// void result of the call that filled it — the same order `finishArrayLiteral` uses for its pushes.
+	function parseStringSplit(func IrFunction, binding VarInfo, range SourceRange) returns ValueId throws ParseError
+		let delimiter = try self.parseStringArg(func, methodName: StringSplitMethod)
+		let giid = self.signatures.arrayInstanceForString()
+		let parts = self.emitArrayCreateOp(giid, range: range)
+		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(binding.boundValue, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.trackOwnedTemp(parts)
+		return parts
+	end 'parseStringSplit'
+
+	// `( )` — the empty argument list of a no-argument BUILTIN call, whichever family it belongs to: a String
+	// accessor (`byteLength`, `toLower`, `toUpper`), an array method (`count`, `first`, `pop`, `clear`, …), a
+	// set method, and the two static factories (`IntArray.create()`, `IntSet.create()`). It had four separate
+	// spellings; one home means a builtin's empty argument list is parsed the same way everywhere, and any
+	// future relaxation (a newline inside the parens, say) reaches all of them at once.
+	function consumeEmptyArgList() throws ParseError
+		try self.consume(TokenKind.leftParen)
+		try self.consume(TokenKind.rightParen)
+	end 'consumeEmptyArgList'
+
+	// `( expr )` — the single String-typed argument every one-argument builtin String method takes
+	// (`append`, `startsWith`, `endsWith`, `contains`, `split`). One home for the paren pair and the type
+	// check, so a new method cannot arrive with its own idea of what a String argument is.
+	function parseStringArg(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let arg = try self.requireStringArgValue(func, methodName: methodName)
+		try self.consume(TokenKind.rightParen)
+		return arg
+	end 'parseStringArg'
+
+	// Parse one argument expression and require it to be a String, blaming the argument's own first token.
+	// Split from `parseStringArg` for `replace`, whose two arguments share the paren pair.
+	function requireStringArgValue(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
+		let argTok = self.current()
+		let arg = try self.parseExpression(func, block: self.currentBlock)
+		if self.tagOf(arg) != ValueTypeTag.string 'argNotString'
+			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(ValueTypeTag.string), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
+		end 'argNotString'
+		return arg
+	end 'requireStringArgValue'
+
+	// The ` , with : ` separating `replace`'s positional needle from its labelled replacement. It cannot go
+	// through `consumeArrayArgLabel` — that one consumes an IDENTIFIER and compares its text, and `with` is a
+	// reserved KEYWORD (`Array with T`), so the lexer never hands it over as an identifier. Here the token
+	// KIND *is* the label, which makes consuming the kind the whole check.
+	function consumeWithArgLabel() throws ParseError
+		try self.consume(TokenKind.comma)
+		try self.consume(TokenKind.with)
+		try self.consume(TokenKind.colon)
+	end 'consumeWithArgLabel'
 
 	// s.append(t) -- grow the String s by t's bytes, IN PLACE (a __str_append(s, t) runtime call). s must
 	// be a var (append mutates the receiver), else E3019 with the bootstrap's exact framing. s is already
@@ -19265,15 +19416,7 @@ export type Parser
 			throw ParseError.voidCallResultUsed(String.from(StringAppendMethod), line: methodTok.line, column: methodTok.column)
 		end 'voidResultUsed'
 
-		try self.consume(TokenKind.leftParen)
-		let argTok = self.current()
-		let arg = try self.parseExpression(func, block: self.currentBlock)
-		try self.consume(TokenKind.rightParen)
-
-		if self.tagOf(arg) != ValueTypeTag.string 'argNotString'
-			throw ParseError.builtinOperandType(String.from(StringAppendMethod), required: typeTagName(ValueTypeTag.string), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
-		end 'argNotString'
-
+		let arg = try self.parseStringArg(func, methodName: StringAppendMethod)
 		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(binding.boundValue, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(baseTok, last: methodTok))
 		// append is a statement (resultUsed false, checked above); the returned id is discarded by the
 		// caller. The receiver value is the honest thing to hand back -- it is what s still denotes.
@@ -19284,8 +19427,7 @@ export type Parser
 	// receiver alike, and it takes no arguments. The value is integer-tagged (a byte count), exactly as a
 	// field read is, and returns through the one String-field load site.
 	function parseStringByteLength(binding VarInfo, methodTok Token) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		try self.consume(TokenKind.rightParen)
+		try self.consumeEmptyArgList()
 		return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
 	end 'parseStringByteLength'
 
@@ -19592,8 +19734,7 @@ export type Parser
 		if not methodTok.value.equals(ArrayCreateMethod) 'unknownStatic'
 			throw ParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — P1.7 slice 1 provides `create()` only", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
-		try self.consume(TokenKind.leftParen)
-		try self.consume(TokenKind.rightParen)
+		try self.consumeEmptyArgList()
 		let arr = self.emitArrayCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
 		self.trackOwnedTemp(arr)
 		return arr
@@ -19608,8 +19749,7 @@ export type Parser
 		if not methodTok.value.equals(SetCreateMethod) 'unknownStatic'
 			throw ParseError.unsupported("`Set` static method '{String.from(methodTok.value)}' — P1.7b slice A provides `create()` only", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
-		try self.consume(TokenKind.leftParen)
-		try self.consume(TokenKind.rightParen)
+		try self.consumeEmptyArgList()
 		try self.requireSetKeyType(giid, tok: aliasTok)
 		let set = self.emitSetCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
 		self.trackOwnedTemp(set)
@@ -19669,9 +19809,7 @@ export type Parser
 
 		let arr = try self.parseArrayLiteral(func)
 		let setGid = try self.setInstanceForArrayLiteral(self.valueNameId(arr), setTok: setTok)
-		let set = self.emitRuntimeCall(SetFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: setGid, range: SourceRange.ofToken(setTok))
-		self.trackOwnedTemp(set)
-		return set
+		return self.emitOwnedRuntimeResult(SetFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: setGid, range: SourceRange.ofToken(setTok))
 	end 'parseSetFromConstruction'
 
 	// The `Set with <elem>` instance a `Set from [<literal>]` constructs — its key type is the array literal's
@@ -19721,7 +19859,7 @@ export type Parser
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(SetCountMethod) 'count'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(SetCountName, args: singletonArgs(set), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(SetContainsMethod) 'contains'
@@ -20299,15 +20437,15 @@ export type Parser
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, throwing: true, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitArrayElementAccessor(func, callee: ArrFirstName, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'first'
 		if methodTok.value.equals(ArrayLastMethod) 'last'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitArrayElementAccessor(func, callee: ArrLastName, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'last'
 		if methodTok.value.equals(ArrayPopMethod) 'pop'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitArrayElementAccessor(func, callee: ArrPopName, args: singletonArgs(arr), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'pop'
 		if methodTok.value.equals(ArrayRemoveMethod) 'remove'
@@ -20321,27 +20459,27 @@ export type Parser
 
 		// Non-throwing value accessors.
 		if methodTok.value.equals(ArrayCountMethod) 'count'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(ArrayCapacityMethod) 'capacity'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'capacity'
 		if methodTok.value.equals(ArrayIsEmptyMethod) 'isEmpty'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
 		if methodTok.value.equals(ArrayCloneMethod) 'clone'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			if self.signatures.arrayElementIsOpaque(giid) 'opaqueClone'
-				return self.emitArrayInstanceAccessor(ArrCloneOpaqueName, args: singletonArgs(arr), giid: giid, range: range)
+				return self.emitOwnedRuntimeResult(ArrCloneOpaqueName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 			end 'opaqueClone'
 			if self.signatures.arrayElementIsManaged(giid) 'managedClone'
-				return self.emitArrayInstanceAccessor(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), giid: giid, range: range)
+				return self.emitOwnedRuntimeResult(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 			end 'managedClone'
-			return self.emitArrayInstanceAccessor(ArrCloneName, args: singletonArgs(arr), giid: giid, range: range)
+			return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'clone'
 
 		// Non-throwing void mutators — rejected in value position (E3059).
@@ -20360,7 +20498,7 @@ export type Parser
 			return self.emitArrayVoidCall(ArrResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
 		if methodTok.value.equals(ArrayClearMethod) 'clear'
-			try self.parseArrayNoArgs()
+			try self.consumeEmptyArgList()
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
 		if methodTok.value.equals(ArrayInsertMethod) 'insert'
@@ -20697,19 +20835,30 @@ export type Parser
 		return self.arrayElementValueType(giid)
 	end 'elementAccessorResultType'
 
-	// ⭐ **EMIT A WHOLE-ARRAY ACCESSOR that yields a NEW OWNED array** (`slice`/`clone`, P1.7 slice 4). Unlike an
-	// element accessor, the result is a fresh `Array` instance (`__mm_alloc`'d record + buffer), so it is typed
-	// `genericInstance` at the SAME `giid` as the receiver — `sub.get(0)`/`sub.count()` dispatch on it — and
-	// enrolled as an OWNED temp exactly like an array literal (`[10,20,30]`): the caller owns it and its scope-exit
-	// drop routes through `genericInstanceBoxDropCallee` → `__arr_decref`, which frees the fresh record + buffer.
-	// Shared by `slice` (throwing — the enclosing `try` rewrites this last `call` to a `tryCall`, and `finishValueTry`
-	// reconciles the OWNED result with the OWNED `otherwise` fallback: both drop once, on their own edge) and `clone`
-	// (non-throwing — the owned temp is bound by `parseBinding` or dropped at statement end).
-	function emitArrayInstanceAccessor(callee ByteArray, args ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
-		let result = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	// ⭐ **THE ONE DOOR FOR "A RUNTIME CALL WHOSE RESULT IS A FRESH OWNED HEAP VALUE".** The result carries the
+	// value type the caller names and is enrolled as a statement-scoped OWNED temporary (`trackOwnedTemp`), so
+	// an UNBOUND result is dropped at statement end and a bound one transfers to the binding; its scope-exit
+	// drop then routes by TAG through `decrefCalleeFor` (`__arr_decref` for an instance, `__str_decref` for a
+	// String), which is why the tag is the caller's to state and nothing here needs to know the family.
+	//
+	// ⚠ **SINGLE-SOURCED BECAUSE IT HAD FOUR INDEPENDENT COPIES and nothing made them agree** — the whole-array
+	// `slice`/`clone` (P1.7 slice 4), `Set from […]` (P1.7b), a subprocess line read (P1.5 slice 1b) and the
+	// String byte methods (P1.8 Slice C) each spelled `emitRuntimeCall` + `trackOwnedTemp` + return. They are
+	// the same two-step ownership protocol, so a future change to what enrolling an owned temporary costs (an
+	// escape mark, a second registry, a different drop door) would have had to be made in four places that each
+	// read as correct on its own — the failure mode being a LEAK or a double-free in whichever copy was missed,
+	// never a compile error.
+	//
+	// The callers that pass `genericInstance` + the receiver's own `giid` get the P1.7 slice 4 behaviour
+	// unchanged: `sub.get(0)`/`sub.count()` dispatch on the result because it is the SAME instance type as the
+	// receiver. `slice` is THROWING, so this must stay the last op it emits — the enclosing `try` rewrites it
+	// to a `tryCall`, and `finishValueTry` reconciles the OWNED result with an OWNED `otherwise` fallback (both
+	// drop once, on their own edge).
+	function emitOwnedRuntimeResult(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+		let result = self.emitRuntimeCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
 		self.trackOwnedTemp(result)
 		return result
-	end 'emitArrayInstanceAccessor'
+	end 'emitOwnedRuntimeResult'
 
 	// `slice(start, endIndex: end)` — the index positional, the end labelled `endIndex:` (mirroring `set`'s
 	// `value:`). Emits the throwing `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites
@@ -20721,12 +20870,12 @@ export type Parser
 		let endIndex = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.rightParen)
 		if self.signatures.arrayElementIsOpaque(giid) 'opaqueSlice'
-			return self.emitArrayInstanceAccessor(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), giid: giid, range: range)
+			return self.emitOwnedRuntimeResult(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'opaqueSlice'
 		if self.signatures.arrayElementIsManaged(giid) 'managedSlice'
-			return self.emitArrayInstanceAccessor(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), giid: giid, range: range)
+			return self.emitOwnedRuntimeResult(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'managedSlice'
-		return self.emitArrayInstanceAccessor(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), giid: giid, range: range)
+		return self.emitOwnedRuntimeResult(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'parseArraySlice'
 
 	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
@@ -20835,12 +20984,6 @@ export type Parser
 		end 'named'
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
 	end 'arrayElementValueType'
-
-	// `(` `)` — a no-argument array method (`count`, `first`, `pop`, `clear`, …).
-	function parseArrayNoArgs() throws ParseError
-		try self.consume(TokenKind.leftParen)
-		try self.consume(TokenKind.rightParen)
-	end 'parseArrayNoArgs'
 
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
@@ -24047,9 +24190,7 @@ export type Parser
 		let handle = try self.requireHandleArg(args, builtinName: builtinName, arity: SubpReadArity, calleeTok: calleeTok)
 		var callArgs = ValueIdArray.create()
 		callArgs.push(handle)
-		let result = self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
-		self.trackOwnedTemp(result)
-		return result
+		return self.emitOwnedRuntimeResult(runtimeName, args: callArgs, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSubpReadLine'
 
 	// `subpWriteLine(h, line: s)` — **WRITE A LINE TO STDIN** (P1.5 slice 1b): route to `__gt_subp_write_line`, which

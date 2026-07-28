@@ -364,8 +364,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: startsWith -->
-<!-- P1.8: string methods -->
+<!-- test: startsWith -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -385,8 +384,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: endsWith -->
-<!-- P1.8: string methods -->
+<!-- test: endsWith -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -406,8 +404,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: contains -->
-<!-- P1.8: string methods -->
+<!-- test: contains -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -428,7 +425,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — NOT string methods generally (P1.8 Slice C shipped the byte-level search as `contains`). `findFirst` is blocked BY ITS RETURN TYPE: a `StringIndex` whose `charIdx` is a GRAPHEME index computed through full UAX#29 segmentation (`stdlib/helpers/string/grapheme.maxon:341-350`), and shv2 has no `StringIndex`, no `StringError` and no segmenter -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -450,7 +447,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find-last-basic -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
 ```maxon
 function main() returns ExitCode
 	let s = "abcabc"
@@ -469,7 +466,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find-last-single -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -486,7 +483,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find-last-not-found -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -506,7 +503,7 @@ NOT_FOUND
 ```
 
 <!-- disabled-test: find-last-at-end -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -523,7 +520,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find-last-at-start -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
 ```maxon
 function main() returns ExitCode
 	let s = "abcdef"
@@ -540,7 +537,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find-last-overlapping -->
-<!-- P1.8: string methods -->
+<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
 ```maxon
 function main() returns ExitCode
 	let s = "aaa"
@@ -556,8 +553,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: replace-single -->
-<!-- P1.8: string methods -->
+<!-- test: replace-single -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -573,8 +569,7 @@ end 'main'
 hello there
 ```
 
-<!-- disabled-test: replace-multiple -->
-<!-- P1.8: string methods -->
+<!-- test: replace-multiple -->
 ```maxon
 function main() returns ExitCode
 	let s = "aaa bbb aaa"
@@ -590,8 +585,7 @@ end 'main'
 x bbb x
 ```
 
-<!-- disabled-test: replace-no-match -->
-<!-- P1.8: string methods -->
+<!-- test: replace-no-match -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -607,8 +601,7 @@ end 'main'
 hello world
 ```
 
-<!-- disabled-test: replace-empty-needle -->
-<!-- P1.8: string methods -->
+<!-- test: replace-empty-needle -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -624,8 +617,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: replace-with-empty -->
-<!-- P1.8: string methods -->
+<!-- test: replace-with-empty -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -641,8 +633,7 @@ end 'main'
 hell wrld
 ```
 
-<!-- disabled-test: replace-adjacent -->
-<!-- P1.8: string methods -->
+<!-- test: replace-adjacent -->
 ```maxon
 function main() returns ExitCode
 	let s = "aaaa"
