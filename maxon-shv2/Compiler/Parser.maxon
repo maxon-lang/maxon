@@ -7290,14 +7290,6 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		// E3070: the element accessors NO name took are dead the moment the body is — nothing later can bind
-		// their values, and `borrowFacts` rides the merged module for the rest of the compile. The COMPLETED
-		// borrows and the recorded writes stay; only this transient claim list goes. Guarded, so a body that
-		// borrowed nothing leaves the shared-empty facts untouched.
-		if func.borrowFacts.pending.count() > 0 'dropUnclaimedBorrows'
-			func.borrowFacts.pending = PendingBorrowArray.create()
-		end 'dropUnclaimedBorrows'
-
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
@@ -7955,7 +7947,12 @@ export type Parser
 				let tok = self.current()
 				throw ParseError.unexpectedEof(tok.line, column: tok.column)
 			end 'eof'
+			// ⭐⭐ **E3070: AN ELEMENT ACCESSOR NO NAME TOOK DIES WITH ITS STATEMENT** — the watermark is taken
+			// here and the claim list is cut back to it below. See `dropUnclaimedPendingBorrows` for why this
+			// loop is the only place that may do it, and what it cost when nothing did.
+			let pendingBorrowMark = func.borrowFacts.pending.count()
 			current = try self.parseStatement(func, block: current)
+			self.dropUnclaimedPendingBorrows(func, mark: pendingBorrowMark)
 		end 'stmts'
 		return current
 	end 'parseStatements'
@@ -12136,19 +12133,51 @@ export type Parser
 	// correctly get none: `otherwise return`/`throw`/`panic` leave the accessor's own result as the try's
 	// value, and so does a propagating `try`.
 	function retargetPendingBorrow(func IrFunction, from ValueId, to ValueId)
-		if func.borrowFacts.pending.count() == 0 'nothingPending'
-			return
-		end 'nothingPending'
-
-		// The entry is REBUILT rather than written through: a `for … in` element is an immutable binding and a
-		// field store through one is E2013, which is the language's rule and not a limitation to route around.
-		for k in 0 upto func.borrowFacts.pending.count() 'each'
+		// Scanned from the END and stopped at the match, for the reason `attachPendingBorrows` states: a
+		// value id is DEFINED ONCE, so at most one entry can carry it, and the one a merge is retargeting was
+		// almost always minted by the very expression the merge closes. Both walks are over a list one
+		// statement long (`dropUnclaimedPendingBorrows`), so neither can grow with the body.
+		var k = func.borrowFacts.pending.count()
+		while k > 0 'each'
+			k = k - 1
 			let pending = try func.borrowFacts.pending.get(k) otherwise panic("retargetPendingBorrow: pending.get OOB at {k} inside count()")
 			if pending.borrowValue == from 'thisOne'
+				// The entry is REBUILT rather than written through: a `for … in` element is an immutable binding
+				// and a field store through one is E2013, which is the language's rule and not a limitation to
+				// route around.
 				try func.borrowFacts.pending.set(k, value: PendingBorrow.create(pending.subject, borrowValue: to, borrowLine: pending.borrowLine)) otherwise panic("retargetPendingBorrow: pending.set OOB at {k}, the index just read")
+				return
 			end 'thisOne'
 		end 'each'
 	end 'retargetPendingBorrow'
+
+	// ⭐⭐ **CUT THE PENDING CLAIM LIST BACK TO `mark` — the ONE thing that keeps it from growing with the
+	// function body.** A `PendingBorrow` is minted by an element ACCESSOR and claimed by the BINDING or the
+	// MERGE that takes its value, and every one of those claimants is inside the same STATEMENT as the
+	// accessor. So whatever is still pending when a statement ends can never be claimed, and both walks over
+	// this list (`retargetPendingBorrow`, `attachPendingBorrows`) would otherwise re-read it for the rest of
+	// the body.
+	//
+	// It is a WATERMARK and not a reset, and that distinction is the whole reason this is safe where a reset
+	// was not: `let s = try arr.get(0) otherwise return 1` parses its handler by RE-ENTERING the statement
+	// parser mid-initializer, and a reset there wiped the OUTER statement's mint — no borrow recorded, the
+	// following `arr.clear()` waved through, measured **0xC0000005** (see `PendingBorrow`'s ⭐⭐ block). The
+	// nested parse takes its own mark ABOVE the outer's entry and can only ever cut back to it.
+	//
+	// ⚠ **`parseStatements` IS THE ONLY CALLER, AND MUST STAY SO.** The two direct `parseStatement` call
+	// sites — a `try … otherwise return/break/continue` handler and a `match` arm body — are both re-entrant
+	// parses INSIDE a statement whose accessors are still claimable; cutting there is exactly the reset that
+	// segfaulted. Their leftovers are cut by the enclosing statement's own mark instead.
+	//
+	// MEASURED, on `Testing/ladders/genborrow.sh <K> pending` — K statements of `s = try arr.get(0)
+	// otherwise ""`, an ASSIGNMENT, which takes no borrow a binding can complete and so left one entry behind
+	// each time. Before: +0.44M / +0.48M / +2.02M / +7.74M / +24.2M CPU ticks over the parent binary at
+	// K = 64 … 1024 — ×4.2 ×3.8 ×3.1 per doubling, and 19% of `phase:parse` at K=1024.
+	function dropUnclaimedPendingBorrows(func IrFunction, mark PendingBorrowCount)
+		while func.borrowFacts.pending.count() > mark 'dropOne'
+			_ = try func.borrowFacts.pending.remove(func.borrowFacts.pending.count() - 1) otherwise panic("dropUnclaimedPendingBorrows: pending.remove OOB at the last index of a non-empty list")
+		end 'dropOne'
+	end 'dropUnclaimedPendingBorrows'
 
 	// ⭐ **COMPLETE, AT THE BINDING, EVERY BORROW THE INITIALIZER JUST TOOK.** This is where the borrowing NAME
 	// and the ACTIVATION point exist, and activating here rather than at the accessor is what makes a mutation
@@ -12157,7 +12186,9 @@ export type Parser
 	// Both references are emphatic about the same choice (`MaxonBorrowCheck.maxon:425-428`;
 	// `BorrowCheckPass.cs:72-80`).
 	//
-	// Everything pending belongs to THIS initializer: `parseStatement` drops what the previous statement left.
+	// Everything pending belongs to THIS statement: `parseStatements` cuts the list back to its entry
+	// watermark after every one (`dropUnclaimedPendingBorrows`), so nothing an earlier statement minted and
+	// no name took can still be here to be claimed by the wrong binding.
 	//
 	// ⭐⭐ **`liveUntil` IS WHERE THE TWO BORROW KINDS DIFFER, AND IT IS THE WHOLE DIFFERENCE.**
 	//

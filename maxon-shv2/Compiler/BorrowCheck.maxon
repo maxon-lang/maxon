@@ -106,6 +106,11 @@ end 'PendingBorrow'
 
 export typealias PendingBorrowArray = Array with PendingBorrow
 
+// A length of, or an index into, the pending-claim list. It is one STATEMENT long
+// (`Parser.dropUnclaimedPendingBorrows`) and in practice 0 or 1, but nothing CAPS it — a statement may
+// spell as many element accessors as it likes — so the range stays wide until one is provable.
+export typealias PendingBorrowCount = int(0 to u64.max)
+
 // A completed borrow: binding `borrower` holds an element of subject `subject` from `activationToken`
 // until its own last use.
 export type BorrowRecord
@@ -250,19 +255,53 @@ function checkFunctionBorrowConflicts(project Project, func IrFunction, mutation
 	// :1099-1114). Nothing is allocated per site here.
 	var subjectKeys = CsrColumn.create()
 	var borrowRows = CsrColumn.create()
+	var previousActivation = 0
 	for i in 0 upto facts.borrows.count() 'eachBorrow'
-		subjectKeys.push(borrowAt(facts, index: i).subject)
+		let borrow = borrowAt(facts, index: i)
+		// ⚠ **THE ORDER THE WALK BELOW IS AMORTIZED ON, CHECKED WHERE IT IS ESTABLISHED.** See
+		// `reportFirstLiveBorrow`: it stops at the first not-yet-active borrow instead of walking past it,
+		// which is only equivalent because activation is non-decreasing. It is, because every activation is
+		// `Parser.attachPendingBorrows`'s `self.pos` and the cursor is monotone through a function body — the
+		// same invariant `Parser.requireBindingLive`'s forward-only rule rests on. A parser change that
+		// rewound the cursor mid-body would silently STOP REPORTING conflicts, which is a use-after-free
+		// nobody would be told about, so it says so here instead.
+		if borrow.activationToken < previousActivation 'borrowsOutOfActivationOrder'
+			panic("checkFunctionBorrowConflicts: borrow {i} activates at token {borrow.activationToken}, below its predecessor's {previousActivation} — the parse cursor rewound inside a function body and the live-borrow walk's ordering no longer holds")
+		end 'borrowsOutOfActivationOrder'
+		previousActivation = borrow.activationToken
+
+		subjectKeys.push(borrow.subject)
 		borrowRows.push(i)
 	end 'eachBorrow'
 	let bySubject = buildCsr(subjectKeys, to: borrowRows, nodeCount: facts.subjects.count())
 
+	// ⭐⭐ **THE PER-SUBJECT WALK CURSOR — what makes this pass LINEAR instead of sites × borrows.** A
+	// borrow that is DEAD at one site is dead at every LATER site (its last use is fixed once parsing ends,
+	// and the sites are visited in token order), so the walk below never has to look at it again: the cursor
+	// only ever moves FORWARD, and across the whole function it advances at most once per borrow. The pass
+	// is therefore O(borrows + sites) rather than O(sites × borrows-of-that-subject).
+	//
+	// MEASURED, on `Testing/ladders/genborrow.sh <K> dead` — K dead borrows and K writes of one array in one
+	// body, which is the shape both references also walk in full. Before: 0.40M / 1.53M / 5.85M / 23.7M /
+	// 94.3M CPU ticks over K = 64 … 1024, a clean ×3.8 ×3.8 ×4.1 ×4.0 per doubling — a quadratic.
+	// One entry per subject, so a body that borrows one array pays one word.
+	var walked = CsrColumn.create()
+	walked.resize(facts.subjects.count())
+
+	var previousSiteToken = 0
 	for s in 0 upto facts.mutations.count() 'eachSite'
 		let site = try facts.mutations.get(s) otherwise panic("checkFunctionBorrowConflicts: mutations.get OOB at {s}")
+		// The other half of the same invariant, and it carries the same consequence — see the borrow loop.
+		if site.token < previousSiteToken 'sitesOutOfTokenOrder'
+			panic("checkFunctionBorrowConflicts: mutation site {s} is at token {site.token}, below its predecessor's {previousSiteToken} — the parse cursor rewound inside a function body and the live-borrow walk's cursor no longer holds")
+		end 'sitesOutOfTokenOrder'
+		previousSiteToken = site.token
+
 		if not mutationSiteWrites(project, site: site, mutationSummary: mutationSummary) 'notAWriteAfterAll'
 			continue
 		end 'notAWriteAfterAll'
 
-		reportFirstLiveBorrow(project, func: func, facts: facts, bySubject: bySubject, site: site)
+		reportFirstLiveBorrow(project, func: func, facts: facts, bySubject: bySubject, walked: walked, site: site)
 	end 'eachSite'
 end 'checkFunctionBorrowConflicts'
 
@@ -291,20 +330,34 @@ end 'mutationSiteWrites'
 // Report the FIRST borrow of this site's subject that is already active and not yet dead, and stop —
 // one diagnostic per write, naming one borrow, exactly as both references do. Anchored on the WRITE,
 // which is the line:col the four goldens pin.
-function reportFirstLiveBorrow(project Project, func IrFunction, facts BorrowFacts, bySubject CsrGraph, site MutationSite)
-	for k in 0 upto bySubject.degree(site.subject) 'eachBorrowOfThisSubject'
+//
+// ⭐ `walked` is the per-subject cursor described at its declaration: the count of this subject's
+// borrows already proved DEAD, which no later site need look at again. It is advanced here and read
+// nowhere else.
+function reportFirstLiveBorrow(project Project, func IrFunction, facts BorrowFacts, bySubject CsrGraph, walked CsrColumn, site MutationSite)
+	let degree = bySubject.degree(site.subject)
+	var k = try walked.get(site.subject) otherwise panic("reportFirstLiveBorrow: walked.get OOB at subject {site.subject}, a key the CSR was built over")
+	while k < degree 'eachBorrowOfThisSubject'
 		let borrow = borrowAt(facts, index: bySubject.neighbour(site.subject, k: k))
 
 		// NOT YET BOUND at this write (a `try` handler's, or anything earlier in the body): the
-		// borrowing name does not exist there, so there is nothing to conflict with.
+		// borrowing name does not exist there, so there is nothing to conflict with — and neither is any
+		// borrow BEHIND it, because activation is non-decreasing along a bucket (checked where the buckets
+		// are built). The cursor is NOT advanced: this borrow becomes live at a later site.
 		if borrow.activationToken > site.token 'notBorrowedYet'
-			continue
+			return
 		end 'notBorrowedYet'
 
 		// NON-LEXICAL LIFETIMES: the borrow ends at the borrowing binding's LAST USE, not at its
 		// scope's end. `lastUseToken` is seeded to the activation, so a binding never read again is
 		// dead the instant it is bound — which is what makes `borrow-nll-allowed` compile.
+		//
+		// ⭐ **AND IT IS DEAD FOR EVERY LATER SITE TOO**, since `lastUseToken` is final once parsing ends and
+		// the sites arrive in token order — so the cursor steps over it once and for all. That is the whole
+		// of what makes this pass linear.
 		if borrow.borrower.lastUseToken <= site.token 'borrowAlreadyDead'
+			k = k + 1
+			try walked.set(site.subject, value: k) otherwise panic("reportFirstLiveBorrow: walked.set OOB at subject {site.subject}, the index just read")
 			continue
 		end 'borrowAlreadyDead'
 
