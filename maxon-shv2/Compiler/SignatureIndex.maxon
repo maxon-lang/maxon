@@ -2463,21 +2463,32 @@ export type ProgramSignatures
 	function mixFieldDefault(state ContentHash, defaultValue FieldDefault) returns ContentHash
 		return match defaultValue 'shape'
 			none gives mix(state, value: FieldShapeNoDefault)
-			literal(payload) gives self.mixDefaultPayload(state, payload: payload)
+			literal(payload, tag) gives self.mixDefaultLiteral(state, payload: payload, tag: tag)
 		end 'shape'
 	end 'mixFieldDefault'
 
-	// The payload half of a defaulted field's hash. Split from `mixFieldDefault` so the payload
+	// The literal half of a defaulted field's hash. Split from `mixFieldDefault` so the payload
 	// arrives as a bound PARAMETER: it is SIGNED (`ParsedInt` — and a float default's is a bit
 	// pattern that routinely has its top bit set) while the hash domain is unsigned, so it crosses
 	// by an explicit cast, and that cast needs a local. `recordAlias` has the same two lines for the
 	// same reason: written inline as an argument to a nested `mix`, the bootstrap misreads it as
 	// already-hashed and rejects the cast as unneeded (E3010) — a false positive that costs nothing
 	// to route around.
-	function mixDefaultPayload(state ContentHash, payload ParsedInt) returns ContentHash
+	//
+	// ⚠ **THE TAG RIDES, AND THE PAYLOAD ALONE WOULD NOT CARRY IT.** A default is stored as the source
+	// wrote it and widened only when it fills a slot (`Parser.fillFieldDefault`), so the tag is a real
+	// input to what a reader compiles to — and it is the one input the payload cannot stand in for:
+	// `= 0` and `= 0.0` have the SAME `ParsedInt` (zero is the one fixed point of int→f64 bits) and
+	// differ only here. Hashing the pair keeps a memo from surviving an edit between them.
+	//
+	// It rides through `mixValueTag`, the door a top-level constant's tag already uses, and NOT through
+	// the enum's ordinal — see the shape constants' own header: an ordinal is not a value in Maxon, and a
+	// hash that moved when `ValueTypeTag`'s arms were REORDERED would invalidate every parse memo in the
+	// project for a change that means nothing.
+	function mixDefaultLiteral(state ContentHash, payload ParsedInt, tag ValueTypeTag) returns ContentHash
 		let payloadBits = payload as ContentHash
-		return mix(mix(state, value: FieldShapeDefaulted), value: payloadBits)
-	end 'mixDefaultPayload'
+		return mix(self.mixValueTag(mix(state, value: FieldShapeDefaulted), tag: tag), value: payloadBits)
+	end 'mixDefaultLiteral'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
 	// and not merely the name, and that is load-bearing: widening `int(0 to 100)` to
@@ -3283,15 +3294,27 @@ export type ProgramSignatures
 		return mix(self.mixValueTag(mix(state, value: ConstShapeValue), tag: tag), value: payload as ContentHash)
 	end 'mixConstantValue'
 
-	// Mix a top-level binding's TAG. Shared by both arms of `mixDeclAnswer`, so a `let` and a `var`
+	// Mix a FOLDED LITERAL's TAG. Shared by both arms of `mixDeclAnswer`, so a `let` and a `var`
 	// cannot come to disagree about what distinguishes a bool from an int — the difference between
 	// them is which EXTRA facts ride along (a constant's payload; a var's label), never this one.
 	//
-	// Exhaustive over `ValueTypeTag`, and the unreachable arms panic rather than hashing: the
-	// evaluator produces `integer`, `boolean` and `float` and nothing else (its literals are ints,
-	// chars, bools and floats; `foldIntCompare` yields a bool; `binOpResultTag` yields one of them
-	// given two of them). Hashing the rest "just in case" would be inventing a key for a value that
-	// cannot exist, and the day one can, this is where it must be decided rather than defaulted.
+	// ⭐ **AND SHARED WITH THE STRUCT FIELD DEFAULT** (`mixDefaultLiteral`), which is the same question
+	// about the same three tags: a `boolean` 1 and an `integer` 1 are the same number and different
+	// values. A second tag→shape mapping would be one lattice hashed from three directions instead of
+	// two, and a tag that hashed differently depending on which door it came through is a cache that
+	// answers a stale parse for a changed file — the very failure the `TypeShapeFloat` reuse below was
+	// introduced to prevent.
+	//
+	// Exhaustive over `ValueTypeTag`, and the unreachable arms panic rather than hashing. Both producers
+	// bottom out in the same three tags, by different routes: the constant EVALUATOR produces `integer`,
+	// `boolean` and `float` and nothing else (its literals are ints, chars, bools and floats;
+	// `foldIntCompare` yields a bool; `binOpResultTag` yields one of them given two of them), and a field
+	// DEFAULT is a TOKEN-KIND lookup over exactly three literal kinds (`Parser.readFieldDefaultLiteral`;
+	// anything else is `rejectNonLiteralFieldDefault`). So each arm's argument below is stated for the
+	// evaluator — the producer that can reach furthest — and holds a fortiori for the field default,
+	// whose reader admits three token kinds and no expression at all. Hashing the rest "just in case"
+	// would be inventing a key for a value that cannot exist, and the day one can, this is where it must
+	// be decided rather than defaulted.
 	//
 	// P1.0d.4 takes the invitation the old `float to named` arm left ("a float needs P1.0d.4"):
 	// `let PI = 3.14` and `var ratio = 2.5` are constants now, so a float tag is REACHABLE and gets
@@ -3306,29 +3329,29 @@ export type ProgramSignatures
 			float then return mix(state, value: TypeShapeFloat)
 			// `named` stays out: a constant's initializer is a bare expression and shv2 infers
 			// `int`/`bool`/`float` from it, never an alias — that needs an `as` cast (P1.9).
-			named then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a constant's type is inferred from a bare initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
-			exitCode to void then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
+			named then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a constant's type is inferred from a bare initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
+			exitCode to void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 			// A struct is unreachable here for `globalStdType`'s reason and one more: the only way to
 			// build one is `T.create(…)`, and a CALL in a top-level initializer is E2045 in every
 			// compiler in the tree. It stays out of the hash rather than being given a key "just in
 			// case" — inventing one for a value that cannot exist is what `mixValueTag` has refused to
 			// do since it was written, and the day a struct constant is legal the question is which of
 			// its FIELDS a reader copies, which is a decision, not a default.
-			structRef then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a struct constant would have to be folded from a `T.create(…)` call, and a call in a constant initializer is E2045")
+			structRef then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a struct constant would have to be folded from a `T.create(…)` call, and a call in a constant initializer is E2045")
 			// A String top-level binding never reaches here, and P1.7's two managed slices did not change
 			// that: a managed literal folds to `TopLevelConstant.managedValue`, whose hash is
 			// `mixConstant`'s own arm (the BYTES and the KIND ride there), so it never comes through
 			// `mixDeclAnswer` to this tag-only door at all.
-			string then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a managed binding hashes through `mixConstant`'s `managedValue` arm, never through this one")
+			string then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a managed binding hashes through `mixConstant`'s `managedValue` arm, never through this one")
 			// A FUNCTION top-level binding never reaches here (P1.5-A1): a function reference is not a
 			// constant initializer, so the const evaluator never folds one to a `function`-tagged value.
-			function then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so it is never folded to a top-level constant")
+			function then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so it is never folded to a top-level constant")
 			// A TYPE-PARAMETER / GENERIC-INSTANCE top-level binding is unreachable (P1.6-A) for
 			// `structRef`'s reason: neither is a folded scalar constant, so the const evaluator never
 			// produces one at module scope. A `b"…"` global IS a generic instance, but it hashes through
 			// `mixConstant`'s `managedValue` arm and never reaches this tag-only door.
-			typeParameter then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
-			genericInstance then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a `b\"…\"` global hashes through `mixConstant`'s `managedValue` arm, never through this one")
+			typeParameter then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
+			genericInstance then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — a `b\"…\"` global hashes through `mixConstant`'s `managedValue` arm, never through this one")
 		end 'k'
 	end 'mixValueTag'
 
@@ -4825,19 +4848,6 @@ export type ProgramSignatures
 
 		return self.adoptType(declared, into: into)
 	end 'fieldTypeOf'
-
-	// The field's declared type EXACTLY AS THE DECLARATION SWEEP RECORDED IT — `fieldTypeOf` minus the
-	// alias re-tagging, and as a bare TAG, so it needs no interner and allocates nothing.
-	//
-	// It exists for one question, and it is a question about the sweep's own blind spot: was this field
-	// declared with a ranged ALIAS? A field's LITERAL DEFAULT is recorded by the same sweep, against this
-	// raw tag, so a field declared `as Weight = 3` recorded an INTEGER payload that `fieldTypeOf` now says
-	// is an f64 slot. `Parser.fillFieldDefault` is where that deferred conversion is paid, and this is what
-	// tells it a conversion is owed.
-	export function fieldDeclaredTagOf(structName ByteArray, index FieldIndex) returns ValueTypeTag
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldDeclaredTagOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		return maxonTypeTag(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldDeclaredTagOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`"))
-	end 'fieldDeclaredTagOf'
 
 	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
 	// payload-bearing (boxed) union? Drives the struct's `__destruct_<T>` drop CASCADE: every field this

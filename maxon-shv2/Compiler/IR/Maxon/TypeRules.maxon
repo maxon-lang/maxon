@@ -1215,18 +1215,6 @@ export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) retu
 	panic("foldFloatBinOp: '{op.rawValue}' has no float reading — requireBinOpOperands turns a float away from `mod` / the bit ops / the shifts before this fold is reached")
 end 'foldFloatBinOp'
 
-// ⭐ **THE COMPILE-TIME `cvtsi2sd`** — the f64 BIT PATTERN of an integer the parser is holding as a
-// constant, and the CONSTANT half of the `widensIntToFloat` obligation (its SSA half is
-// `Parser.promoteToFloat`). `0.0 + value` is the host's own int→f64 conversion and `floatToBits`
-// captures the result, so a constant widens by exactly the rule the emitted `cvtsi2sd` obeys.
-//
-// It is the shared primitive of the two places a widened constant is produced — the operand of a float
-// FOLD (`Parser.constFloatBits`) and a struct field's literal DEFAULT — which were about to be two
-// spellings of one host round-trip.
-export function intToFloatBits(value ParsedInt) returns ParsedInt
-	return __Builtins.floatToBits(0.0 + value)
-end 'intToFloatBits'
-
 // Fold a unary operator over an integer the parser already holds. `logicalNot` is a BOOL operator —
 // the parser has already resolved which `not` the source meant (see MaxonUnaryOp), so meeting it on
 // an integer is a parser bug, not a fold to decline.

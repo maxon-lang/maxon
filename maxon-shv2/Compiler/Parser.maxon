@@ -5445,7 +5445,7 @@ export type Parser
 			// the whole of the type inference — see `readFieldDefaultLiteral`.
 			try self.consume(TokenKind.equals)
 			let inferred = try self.readFieldDefaultLiteral()
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload))
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag))
 			return
 		end 'typeFromLiteral'
 
@@ -5461,25 +5461,37 @@ export type Parser
 		// Integer = 50.0` is the same lossy coercion `var x as Integer` then `x = 50.0` is, so it
 		// asks the same rule (`requireAssignable`) rather than a second opinion about floats.
 		//
-		// ⭐ It is the ONE coercion site holding a parse-time CONSTANT rather than an SSA value, so the
-		// widening `TypeRules.widensIntToFloat` licenses is paid in the constant's own representation
-		// (`constFloatBits`, the compile-time `cvtsi2sd`) instead of through `assignableValue`. `as float =
-		// 3` recorded the integer 3 in a slot the store then writes as an f64 — 1.5e-323 read back out.
-		//
-		// ⚠ **THE DECLARED TAG IS THE RAW ONE, so a `named` RANGED ALIAS reads here as an INTEGER.** This
-		// reader is SHARED with the declaration sweep, which is handed the index it is BUILDING and so may
-		// not consult the alias registry (`Queries.queryProgramSignatures`) — and it is the SWEEP's layout
-		// that a `Self{…}` literal later reads its defaults out of, so widening in the real parse alone
-		// would write into the wrong copy. A field declared with a ranged FLOAT alias therefore records its
-		// payload UNWIDENED, and `fillFieldDefault` — which runs where `fieldTypeOf` can resolve the alias
-		// — pays the deferred half.
+		// **THE LITERAL IS RECORDED EXACTLY AS WRITTEN — payload AND tag, unconverted.** The widening a
+		// `float` field's `= 3` needs is paid at the ONE place a default becomes a value
+		// (`fillFieldDefault`), off the tag recorded here. It cannot be paid at this line: the declaration
+		// SWEEP shares this reader and may not resolve `fieldType` when it is a ranged-alias NAME, yet it is
+		// the SWEEP's layout a `Self{…}` reads its defaults out of — so a conversion decided here would be
+		// decided blind for exactly the fields that need it, and written into the wrong copy besides.
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
-		let declaredTag = maxonTypeTag(fieldType)
-		try self.requireAssignable(nameTok, value: given.tag, declared: declaredTag, noun: "field")
-		let payload = self.constFloatBits(given) if widensIntToFloat(given.tag, declared: declaredTag) else given.payload
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(payload))
+		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, given: given)
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload, tag: given.tag))
 	end 'readStructFieldInto'
+
+	// ⭐ **THE VERDICT ON A FIELD'S LITERAL DEFAULT, ASKED ONLY WHERE IT CAN BE ANSWERED.** `as Integer =
+	// 50.0` is the same lossy coercion `var x as Integer` then `x = 50.0` is, so it is the same
+	// `requireAssignable` — but the DECLARED type may be a ranged-alias NAME, and a name reads as an
+	// INTEGER (`tagIsIntegral`) until the alias registry can resolve it.
+	//
+	// ⚠ **`allFilesFolded` IS THE GATE**, the same one `checkGenericArgType` and `checkGenericInstance` sit
+	// behind and for the identical reason: during the sweep this index is still being BUILT
+	// (`Queries.queryProgramSignatures` hands the sweeper the index it is filling), so an alias that is
+	// genuinely a `float(low to high)` reads as undeclared and the verdict is not merely discarded, it is
+	// systematically WRONG — `as Weight = 2.5` would be refused as a lossy float→int conversion, which is
+	// a rejection of legal code. The sweep is not a validator; the real parse is the only reader that
+	// reports, and it is on the far side of the fold, so it resolves the alias and decides.
+	function requireFieldDefaultType(nameTok Token, fieldType MaxonType, given ConstValue) throws ParseError
+		if not self.signatures.allFilesFolded 'indexStillBuilding'
+			return
+		end 'indexStillBuilding'
+
+		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), noun: "field")
+	end 'requireFieldDefaultType'
 
 	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
 	// VALUE and its TAG, off one token, returned together so a caller cannot read one without the
@@ -18002,7 +18014,7 @@ export type Parser
 				// The literal did not fill this slot and the declaration offers nothing. That is
 				// E3086, and `requireAllFieldsInitialized` is what says so — not this function.
 				none then continue
-				literal(payload) then self.fillFieldDefault(layout, index: i, payload: payload, fieldValues: fieldValues, filled: filled, range: range)
+				literal(payload, tag) then self.fillFieldDefault(layout, index: i, given: ConstValue.create(payload, tag: tag), fieldValues: fieldValues, filled: filled, range: range)
 			end 'declared'
 		end 'eachField'
 	end 'applyFieldDefaults'
@@ -18011,22 +18023,26 @@ export type Parser
 	// is bound by the match arm that proved there IS one, rather than read back out of the union
 	// through an accessor with a `none` case to mishandle.
 	//
-	// ⭐ **THE DEFERRED HALF OF THE FIELD-DEFAULT WIDENING.** `readStructFieldInto` records a default in the
-	// field's own representation whenever it can decide — but it is shared with the declaration sweep, which
-	// may not read the alias registry, so a field declared `as Weight = 3` (a ranged FLOAT alias) recorded a
-	// raw INTEGER against a `named` tag the sweep read as integral. Here the whole program IS known:
-	// `fieldTypeOf` resolves that alias to `float`, and `fieldDeclaredTagOf` — the RAW tag, deliberately
-	// un-retagged — is what says the recorded payload was never widened. Left unpaid it wrote the integer's
-	// bytes into an f64 slot.
+	// ⭐ **THE ONE PLACE A FIELD DEFAULT IS COERCED**, and the only place it can be: `readStructFieldInto`
+	// records the literal exactly as the source wrote it, because the declaration sweep it shares cannot
+	// resolve a ranged-alias field type. Here the whole program IS known — `fieldTypeOf` answers `float`
+	// for a `float(low to high)` alias — so a `= 3` against it widens to the f64 bit pattern. Left unpaid
+	// it wrote the integer's raw bytes into an f64 slot and read back 1.5e-323.
 	//
-	// ⚠ The two conditions are BOTH necessary and neither is redundant. A CONCRETE `float` field was already
-	// widened at the declaration, so its raw tag is `float` and `widensIntToFloat` is false — it must not be
-	// converted a second time. And a `named` field that is an INT alias resolves to `named`, not `float`, so
-	// it is not converted at all.
-	function fillFieldDefault(layout StructLayout, index FieldIndex, payload ParsedInt, fieldValues ValueIdArray, filled BoolArray, range SourceRange)
+	// ⚠ **TWO QUESTIONS, AND EACH IS ASKED EXACTLY ONCE.** The RESOLVED type says whether the slot is an
+	// f64 at all; the RECORDED TAG — inside `constFloatBits`, the shared primitive — says whether putting
+	// `given` in it is a conversion or a no-op. That second read is the whole reason the tag is stored:
+	// `= 3` and `= 3.0` are two `ParsedInt`s and nothing else once the tag is gone, so no rule anywhere
+	// else in the compiler could tell them apart, and none is consulted.
+	//
+	// ⚠ It does NOT re-ask `widensIntToFloat` on the way in, and that is deliberate rather than an
+	// oversight: `constFloatBits` already turns away a float, so a guard naming the literal's tag as well
+	// would be a second, REDUNDANT read that merely LOOKS load-bearing — measured, replacing it with a
+	// constant changed no test. A condition that cannot fail is worse than no condition, because the next
+	// reader trusts it.
+	function fillFieldDefault(layout StructLayout, index FieldIndex, given ConstValue, fieldValues ValueIdArray, filled BoolArray, range SourceRange)
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-		let recorded = self.signatures.fieldDeclaredTagOf(layout.name, index: index)
-		let bits = intToFloatBits(payload) if widensIntToFloat(recorded, declared: maxonTypeTag(declared)) else payload
+		let bits = self.constFloatBits(given) if tagIsFloat(maxonTypeTag(declared)) else given.payload
 		let value = self.emitLiteral(bits, valueType: self.fieldStorageType(declared), range: range)
 
 		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
@@ -23045,16 +23061,21 @@ export type Parser
 		end 'folded'
 	end 'foldConstBinOp'
 
-	// The f64 BIT PATTERN of a constant in a float fold: a float carries its bits; an INT is PROMOTED
-	// to its f64 value first (`TypeRules.intToFloatBits`, the compile-time `cvtsi2sd`), so `1 + 2.0`
-	// folds to 3.0 and not to a summed bit pattern. Idempotent, exactly as `promoteToFloat` is, so a
-	// caller never has to work out which side it is holding.
+	// ⭐ **THE COMPILE-TIME `cvtsi2sd`** — the f64 BIT PATTERN of a constant the parser is holding, and the
+	// CONSTANT half of the `TypeRules.widensIntToFloat` obligation (its SSA half is `promoteToFloat`). A
+	// float carries its bits already; an INT is promoted to its f64 value first, so `1 + 2.0` folds to 3.0
+	// and not to a summed bit pattern, and a `as float = 3` field default fills its slot with 3.0 rather
+	// than with eight bytes of two's complement. `0.0 + payload` is the host's own int→f64 conversion;
+	// `floatToBits` captures the result.
+	//
+	// Idempotent, exactly as `promoteToFloat` is, so neither caller — the float FOLD or the field DEFAULT —
+	// has to work out which side it is holding.
 	function constFloatBits(value ConstValue) returns ParsedInt
 		if tagIsFloat(value.tag) 'alreadyFloat'
 			return value.payload
 		end 'alreadyFloat'
 
-		return intToFloatBits(value.payload)
+		return __Builtins.floatToBits(0.0 + value.payload)
 	end 'constFloatBits'
 
 	// ⭐ THE SHIFT RULE, asked of a constant. Every part of the answer comes from TypeRules — the fill,

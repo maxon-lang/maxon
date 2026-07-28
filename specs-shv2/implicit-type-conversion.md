@@ -557,6 +557,33 @@ end 'main'
 error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-default-rejected.test:3:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
+<!-- test: float-to-int-alias-field-default-rejected -->
+The field-default door reached through a ranged INT alias. It is the case the widening one is most
+easily confused with — the same syntax, the same unresolved NAME at the declaration — and it must
+still refuse: `Count` is an `int` alias, so a float default is the lossy direction however the type
+was spelled. A field default is exactly where a silent narrowing would hide, because nothing at the
+construction site mentions the value at all.
+```maxon
+
+typealias Count = int(i64.min to i64.max)
+
+type Bag
+	export var n as Count = 2.5
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.make()
+	return b.n
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-alias-field-default-rejected.test:6:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
 <!-- test: float-to-int-global-rejected -->
 ```maxon
 var counter = 0

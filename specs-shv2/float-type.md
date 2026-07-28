@@ -258,6 +258,10 @@ The two halves of that alias meeting each other: the field's type resolves to `f
 DECLARED DEFAULT — recorded by the same sweep, against the same unresolved name — must be widened to
 the f64 bit pattern before it fills the slot. Fixing the field's TYPE alone turns this program from a
 clean rejection into a silent 1.5e-323.
+
+⭐ **THIS IS THE CASE WHOSE ANSWER IS DECIDED BY THE RECORDED LITERAL'S TAG**, and its pair below is
+what proves the decision is self-supporting: the two defaults differ ONLY in the tag, and each must
+reach the slot as `3.0` and `2.5` respectively. Break the tag and exactly one of them goes wrong.
 <!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
@@ -276,6 +280,71 @@ function main() returns ExitCode
 	if p.mass == 3.0 'exact'
 		return trunc(p.mass * 14.0)
 	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+
+<!-- test: float-alias-struct-field-float-default -->
+The pair: a FLOAT literal default through the same alias, which must NOT be widened a second time. It
+was a false `E3009: cannot implicitly convert 'float' to 'int'` — a lossy-conversion rejection of a
+float meeting a float — because the declaration sweep reads an unresolved alias NAME as an integer.
+The verdict now waits for the whole-program index; the widening decision is a separate question the
+recorded tag answers, so neither half stands on the other.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Weight = float(f64.min to f64.max)
+
+type Particle
+	export var mass as Weight = 2.5
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Particle'
+
+function main() returns ExitCode
+	let p = Particle.make()
+	if p.mass == 2.5 'exact'
+		return trunc(p.mass * 8.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+20
+```
+
+
+<!-- test: float-alias-struct-field-zero-defaults -->
+`= 0` and `= 0.0` are the one pair the payload CANNOT tell apart — zero is the single fixed point of
+the int→f64 bit conversion — so they are the sharpest statement of why the literal's tag is recorded
+rather than inferred. Both must reach the slot as `0.0`.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Weight = float(f64.min to f64.max)
+
+type Particle
+	export var mass as Weight = 0
+	export var vel as Weight = 0.0
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Particle'
+
+function main() returns ExitCode
+	let p = Particle.make()
+	if p.mass == 0.0 'zeroMass'
+		if p.vel == 0.0 'zeroVel'
+			return trunc((p.mass + p.vel + 4.2) * 10.0)
+		end 'zeroVel'
+	end 'zeroMass'
 	return 7
 end 'main'
 ```

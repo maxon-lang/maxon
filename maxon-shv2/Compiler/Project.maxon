@@ -911,20 +911,33 @@ let EmptyStructBytes = FieldSlotBytes
 
 // The value a field declaration supplies when a `Self{…}` literal omits it — `export var value = 0`.
 //
-// It carries the PAYLOAD only, never a type: the default's type IS the field's declared type, which
-// `StructLayout.fieldTypes` already holds. For `= 0` the literal is what SET that type (there is no
-// annotation to read); for `as Integer = 0` the annotation set it and the literal was CHECKED
-// against it. Either way one field has one type in one column, so a default cannot come to disagree
-// with the slot it fills.
-//
 // The payload is a `ParsedInt` for a float exactly as for an integer — a float literal's value IS
 // its IEEE-754 bit pattern (see `Parser.parseFloatLiteral`), which is why a defaulted float costs no
 // second column and no second decoder.
+//
+// ⚠⚠ **AND THAT IS PRECISELY WHY THE LITERAL'S OWN TAG RIDES BESIDE IT.** Two `ParsedInt`s are
+// indistinguishable once written down, so the payload alone cannot say which representation it is in:
+// the integer `3` and the f64 bits of `3.0` are both just numbers here. `as float = 3` therefore has
+// to be WIDENED before it fills the slot (`Parser.fillFieldDefault`), and the only fact that can
+// decide that is what the source WROTE.
+//
+// It used to carry the payload alone, on the argument that "the default's type IS the field's declared
+// type, so a default cannot come to disagree with the slot it fills". That argument had one silent
+// hole and it is the reason for this field: the declaration SWEEP that records a layout may not read
+// the alias registry it is still building (`Queries.queryProgramSignatures`), so a field declared with
+// a ranged FLOAT alias reaches this record with its type still an unresolved NAME — and a name reads
+// as an integer. The sweep therefore CANNOT normalize the payload, and it is the sweep's layout that a
+// `Self{…}` literal reads its defaults out of. The tag is what carries the question across to the one
+// place that can answer it.
 export union FieldDefault
 	// The declaration supplies none: `export var x as Integer`. A literal that omits this field is
 	// E3086, and that is the rule field defaults exist to relax.
 	none
-	literal(payload ParsedInt)
+	// `tag` is the LITERAL's own type as the source wrote it (`int` for `= 3`, `float` for `= 3.0`) —
+	// NOT the field's declared type, which `StructLayout.fieldTypes` holds and which may still be an
+	// unresolved alias name here. The pair travels together for `ConstValue`'s reason: a payload
+	// without its tag is a number whose meaning has been thrown away.
+	literal(payload ParsedInt, tag ValueTypeTag)
 end 'FieldDefault'
 
 export typealias FieldDefaultArray = Array with FieldDefault
