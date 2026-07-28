@@ -1,0 +1,25 @@
+// Test: error.propagate-from-non-throwing-function
+// A bare `try` (the PROPAGATE form) needs somewhere to re-publish the caught flag, and a function
+// declaring no `throws` has nowhere: `propagateError` writes an error register the caller never reads,
+// so the error is silently discarded and the callee's throw-path primary (0) comes back as a real
+// answer. Accepted, this program exited 0. The runnable oracle refuses it too.
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function inner() returns Integer throws MyError
+	throw MyError.failed
+end 'inner'
+
+function outer() returns Integer
+	return try inner()
+end 'outer'
+
+function main() returns ExitCode
+	return outer() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:17:9: type mismatch: 'try propagates 'MyError' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws MyError''

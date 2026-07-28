@@ -415,6 +415,34 @@ end 'main'
 42
 ```
 
+<!-- test: error.propagate-from-non-throwing-function -->
+```maxon
+// A bare `try` (the PROPAGATE form) needs somewhere to re-publish the caught flag, and a function
+// declaring no `throws` has nowhere: `propagateError` writes an error register the caller never reads,
+// so the error is silently discarded and the callee's throw-path primary (0) comes back as a real
+// answer. Accepted, this program exited 0. The runnable oracle refuses it too.
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function inner() returns Integer throws MyError
+	throw MyError.failed
+end 'inner'
+
+function outer() returns Integer
+	return try inner()
+end 'outer'
+
+function main() returns ExitCode
+	return outer() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.propagate-from-non-throwing-function.test:17:9: type mismatch: 'try propagates 'MyError' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws MyError''
+```
+
 <!-- test: error.main-cannot-throw -->
 ```maxon
 // main cannot be declared with throws

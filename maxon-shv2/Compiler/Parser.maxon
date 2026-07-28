@@ -9901,11 +9901,10 @@ export type Parser
 	// ⭐ **E3059 — PROPAGATE TYPE MISMATCH.** A bare `try …` (no `otherwise`) re-publishes the caught flag
 	// VERBATIM into the ENCLOSING function's error register, so if the propagated callee throws a DIFFERENT
 	// error type than the enclosing function declares, the caller decodes one enum's ordinals as another's
-	// tags — a silent miscompile a boxed union turns into a wild free. Refused when both types are named and
-	// differ. Shared by every try shape — a direct call, `try await p` (the awaited callee's throws type IS
-	// the promise's) and a witness dispatch — because each answers `tryTargetThrows` and only the CLAUSE
-	// reaches here. An enclosing NON-throwing function that propagates is a separate defect this does not
-	// diagnose.
+	// tags — a silent miscompile a boxed union turns into a wild free. Refused when the two named types differ,
+	// AND when the enclosing function names none at all (see `rejectPropagateAgainstEnclosing`). Shared by
+	// every try shape — a direct call, `try await p` (the awaited callee's throws type IS the promise's) and a
+	// witness dispatch — because each answers `tryTargetThrows` and only the CLAUSE reaches here.
 	function checkPropagateType(func IrFunction, throwsClause ThrowsClause, tryTok Token) throws ParseError
 		match throwsClause 'calleeThrows'
 			none then break 'calleeThrows'
@@ -9914,11 +9913,24 @@ export type Parser
 	end 'checkPropagateType'
 
 	// The enclosing-function half of the propagate-type check: refuse when the enclosing function throws a
-	// DIFFERENT named type than `propagated`. Split so the nested `match`/comparison is not an inline
-	// labelled-if in a match arm (which the parser rejects).
+	// DIFFERENT named type than `propagated` — or NO type at all. Split so the nested `match`/comparison is
+	// not an inline labelled-if in a match arm (which the parser rejects).
+	//
+	// ⚠ **THE `none` ARM IS A REJECT, NOT A FALLTHROUGH.** A bare `try f()` inside a function declaring no
+	// `throws` has nowhere to re-publish the flag: `propagateError` writes the enclosing function's error
+	// register, and a non-throwing function's caller never reads it — so the error is SILENTLY DISCARDED and
+	// the callee's throw-path primary (`0`) comes back as a real answer. MEASURED both ways: `try inner(3)` in
+	// a non-throwing `outer` exited 0 where the answer is the error path, and so did the witness spelling
+	// (`try self.item.digest()` in a non-throwing generic method). The runnable oracle refuses both — E2001,
+	// "try without otherwise requires the enclosing function to have 'throws'" — so this closes a divergence,
+	// not a design question. `error-handling.md`'s own Error Propagation section already stated the rule
+	// ("only valid in functions with `throws`"); the prose and the compiler had simply disagreed. It rides
+	// E3059 through the existing free-form `errorTypeMismatch` arm rather than a new `ParseError` variant,
+	// because it is the SAME fact that arm's four other messages carry: the error type does not fit where it
+	// is going. A `none` enclosing clause is that mismatch at its limit — there is no there to fit into.
 	function rejectPropagateAgainstEnclosing(func IrFunction, propagated String, tryTok Token) throws ParseError
 		match func.throwsTypeName 'enclosing'
-			none then break 'enclosing'
+			none then throw ParseError.errorTypeMismatch("try propagates '{propagated}' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws {propagated}'", line: tryTok.line, column: tryTok.column)
 			throwing(enclosing) then try self.rejectIfDifferentThrows(propagated, enclosing: enclosing, tryTok: tryTok)
 		end 'enclosing'
 	end 'rejectPropagateAgainstEnclosing'

@@ -298,31 +298,76 @@ end 'checkOneMethod'
 //     arriving from the other side, and it is not diagnosable anywhere else: at the dispatch the compiler
 //     sees only the interface, and at the impl it sees only the type.
 //
-// The two thrown TYPES are NOT required to match, which is both oracles' rule and is kept: the flag is
-// re-published verbatim, so a MISMATCH is caught where it can do harm — the `try`'s propagate path, whose
-// E3059 compares the caught type against the enclosing function's.
+//   • **the two thrown TYPES differ** — ⚠ **shv2's OWN rule too; NEITHER reference has it** (the bootstrap's
+//     `ValidateThrowsConformance` asks only that the impl throws SOMETHING conforming to `Error`), and it is
+//     the same divergence for the third time. Under MONOMORPHIZATION, which is what both oracles do, a `try`
+//     is typed off the CALLEE's own clause, so a differing impl type is harmless — the caught error is
+//     whatever the impl actually throws. Under shv2's DICTIONARY-PASSING there is no callee to ask: the `try`
+//     at the dispatch types its `(e)` binding off the INTERFACE, so an impl throwing a different enum has its
+//     ordinals decoded as the interface's. MEASURED, both halves: an impl throwing `OtherError.one` under an
+//     interface declaring `throws DigestError` was caught as `DigestError.beta` (a silent wrong answer), and a
+//     SCALAR-throwing impl under a BOXED-union interface clause made the `try` treat the ordinal as a box
+//     pointer and SEGFAULT. `checkPropagateType`'s E3059 cannot see it — that check compares the INTERFACE's
+//     clause against the enclosing function's, and those two agree in exactly this program.
+//
+// Split on the INTERFACE's clause first: each side then asks a different question of the impl's, and both
+// answers come out of a `match` on it rather than a boolean pair, so a clause is never re-extracted behind an
+// `otherwise panic` that has to argue it cannot fire.
+//
+// ⚠ **THE AGREEING PATH ALLOCATES NOTHING, AND THAT IS WHY THE DECISION REPORTS RATHER THAN RETURNS.** The
+// obvious shape here is a `ThrowsConformanceVerdict{agree, violated(message)}` returned up to one report site.
+// It was written that way and MEASURED: the `agree` box is 16 bytes, paid once per CONFORMING METHOD of every
+// program that declares any conformance, and scale-test read it straight off — +16 / +24 / +40 / +72 / +136 /
+// +264 allocations across the six rungs (exactly 16 bytes each), landing OUTSIDE every per-phase bucket
+// because `checkConformance` runs before the pipeline. Passing `project` down and reporting in the arm that
+// decides costs one extra parameter and allocates only when a diagnostic is actually produced.
 function validateThrowsConformance(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, implFunc IrFunction)
-	let interfaceThrows = throwsClauseIsThrowing(collectedMethod.method.throwsClause)
-	let implThrows = throwsClauseIsThrowing(implFunc.throwsTypeName)
-	if interfaceThrows == implThrows 'agree'
-		return
-	end 'agree'
-
-	let message = missingThrowsMessage(conformance.typeName, collectedMethod: collectedMethod) if interfaceThrows else unexpectedThrowsMessage(conformance.typeName, collectedMethod: collectedMethod, implFunc: implFunc)
-	reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: message, line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+	match collectedMethod.method.throwsClause 'iface'
+		none then requireImplDoesNotThrow(project, conformance: conformance, collectedMethod: collectedMethod, implClause: implFunc.throwsTypeName)
+		throwing(required) then requireImplThrowsSameType(project, conformance: conformance, collectedMethod: collectedMethod, required: required, implClause: implFunc.throwsTypeName)
+	end 'iface'
 end 'validateThrowsConformance'
 
-// The interface requires a throws clause the impl does not declare — the oracles' wording verbatim.
-function missingThrowsMessage(typeName ByteArray, collectedMethod CollectedInterfaceMethod) returns String
-	let required = try throwsClauseName(collectedMethod.method.throwsClause) otherwise panic("missingThrowsMessage: the interface method's clause is `none` — only the throwing side reaches this message")
-	return "Method '{String.from(typeName)}.{String.from(collectedMethod.method.name)}' must throw '{required}' as required by interface '{String.from(collectedMethod.sourceInterfaceName)}'"
-end 'missingThrowsMessage'
+// The interface method declares NO throws clause: the impl may not declare one either (shv2's own rule).
+function requireImplDoesNotThrow(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, implClause ThrowsClause)
+	match implClause 'impl'
+		none then break 'impl'
+		throwing(declared) then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it non-throwing — a witness dispatch of a non-throwing interface method reads no error flag, so the error would be silently dropped")
+	end 'impl'
+end 'requireImplDoesNotThrow'
 
-// The impl declares a throws clause the interface does not — shv2's own rule (see the header above).
-function unexpectedThrowsMessage(typeName ByteArray, collectedMethod CollectedInterfaceMethod, implFunc IrFunction) returns String
-	let declared = try throwsClauseName(implFunc.throwsTypeName) otherwise panic("unexpectedThrowsMessage: the impl's clause is `none` — only the throwing side reaches this message")
-	return "Method '{String.from(typeName)}.{String.from(collectedMethod.method.name)}' throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it non-throwing — a witness dispatch of a non-throwing interface method reads no error flag, so the error would be silently dropped"
-end 'unexpectedThrowsMessage'
+// The interface method declares `throws required`: the impl must declare a throws clause, and it must name
+// the SAME error type — the dispatch site types its caught error off `required`, whatever the impl throws.
+function requireImplThrowsSameType(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, implClause ThrowsClause)
+	match implClause 'impl'
+		// The oracles' wording verbatim.
+		none then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} must throw '{required}' as required by interface '{String.from(collectedMethod.sourceInterfaceName)}'")
+		throwing(declared) then requireSameErrorType(project, conformance: conformance, collectedMethod: collectedMethod, required: required, declared: declared)
+	end 'impl'
+end 'requireImplThrowsSameType'
+
+// Both sides throw: they must name the same error type. Split out because the comparison is a labelled `if`,
+// which a `match` arm cannot hold inline (the shape `rejectIfDifferentThrows` is split for).
+function requireSameErrorType(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, required String, declared String)
+	if declared.equals(required) 'sameErrorType'
+		return
+	end 'sameErrorType'
+
+	reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it 'throws {required}' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as '{required}'")
+end 'requireSameErrorType'
+
+// The ONE report site for all three throws-conformance violations. Not a pass-through: it derives four of
+// `reportPositioned`'s six arguments from `conformance` (the code, and the position the `implements` clause
+// anchors on), which three separate arms would otherwise each spell out — and a fourth arm added later would
+// spell out again, differently.
+function reportThrowsViolation(project Project, conformance ConformanceDecl, message String)
+	reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: message, line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+end 'reportThrowsViolation'
+
+// `Method 'Type.method'` — the subject all three throws-conformance diagnostics open with, spelled once.
+function throwsConformanceSubject(typeName ByteArray, collectedMethod CollectedInterfaceMethod) returns String
+	return "Method '{String.from(typeName)}.{String.from(collectedMethod.method.name)}'"
+end 'throwsConformanceSubject'
 
 // Does the impl method's signature match the interface method's? Instance methods carry `__self` at
 // position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Each side's

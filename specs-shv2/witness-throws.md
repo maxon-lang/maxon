@@ -22,7 +22,11 @@ Conformance validates the throws relation in BOTH directions:
   (E3016) — otherwise a `try` at the dispatch would branch on a flag register the callee never wrote;
 - an interface method that declares NO throws clause requires its implementation to declare none either
   (E3016) — otherwise the witness dispatch, correctly emitted as a non-throwing call, would silently drop
-  the error the implementation raises.
+  the error the implementation raises;
+- an implementation that throws must throw the SAME error type the interface method declares (E3016) —
+  the `try` at the dispatch has no callee to ask, so it types its caught error off the INTERFACE, and a
+  differing implementation type has its ordinals decoded as the interface's (a scalar under a boxed clause
+  is dereferenced as a box pointer).
 
 ## Tests
 
@@ -413,6 +417,93 @@ end 'main'
 error E3016: <fragment>:12:6: Method 'Point.digest' throws 'DigestError' but interface 'Digest' declares it non-throwing — a witness dispatch of a non-throwing interface method reads no error flag, so the error would be silently dropped
 ```
 
+<!-- test: witness-throws.error.impl-throws-a-different-type -->
+An implementation may not throw a DIFFERENT error type than the interface method declares (E3016). Both
+reference oracles accept this, because both MONOMORPHIZE: a `try` there is typed off the callee's own clause,
+so the caught error is whatever the impl actually threw. shv2 dictionary-passes, so the `try` at the dispatch
+has no callee to ask and types its `(e)` binding off the INTERFACE — this program, accepted, caught
+`OtherError.one` as `DigestError.beta` and returned 72.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	alpha
+	beta
+	gamma
+end 'DigestError'
+
+enum OtherError implements Error
+	zero
+	one
+end 'OtherError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws OtherError
+		if self.x < 10 'small'
+			throw OtherError.one
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:19:6: Method 'Point.digest' throws 'OtherError' but interface 'Digest' declares it 'throws DigestError' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'DigestError'
+```
+
+<!-- test: witness-throws.error.impl-throws-scalar-where-interface-boxes -->
+The same rule, at the severity that makes it a memory-safety obligation rather than a wrong answer: the
+interface declares a BOXED (payload-bearing) union and the implementation throws a SCALAR enum. The `try` types
+its caught error off the interface, so the flag — an ordinal — is dereferenced as a box pointer. Accepted, this
+program SEGFAULTED.
+```maxon
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+	plain
+end 'BoxedError'
+
+enum ScalarError implements Error
+	oops
+end 'ScalarError'
+
+interface Digest
+	function digest() returns Code throws BoxedError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws ScalarError
+		if self.x < 10 'small'
+			throw ScalarError.oops
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:17:6: Method 'Point.digest' throws 'ScalarError' but interface 'Digest' declares it 'throws BoxedError' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'BoxedError'
+```
+
 <!-- test: witness-throws.error.bare-dispatch-needs-try -->
 A throwing interface method dispatched through a witness WITHOUT `try` is E3057, exactly as a bare throwing
 direct call is — the flag would be dropped and the impl's throw-path primary returned as a real answer.
@@ -500,4 +591,54 @@ end 'main'
 ```
 ```maxoncstderr
 error E3055: <fragment>:24:10: try requires a throwing function: 'digest' does not throw'
+```
+
+<!-- test: witness-throws.error.propagate-from-non-throwing-generic-body -->
+A bare `try` on a throwing witness dispatch inside a generic method that declares no `throws` has nowhere to
+re-publish the flag, exactly as the direct-call form does not (`error.propagate-from-non-throwing-function`) —
+one rule, one place, reported through the same `checkPropagateType`. Accepted, this program exited 0 where the
+answer is the error path.
+```maxon
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws DigestError
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code
+		return try self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3))
+	return b.itemDigest() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:31:10: type mismatch: 'try propagates 'DigestError' but the enclosing function declares no 'throws' — the error has nowhere to go and would be dropped; add 'otherwise' to handle it, or declare 'throws DigestError''
 ```
