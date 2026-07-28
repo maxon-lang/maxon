@@ -1342,7 +1342,7 @@ end 'main'
 ```
 
 <!-- disabled-test: match-break.basic -->
-<!-- break-in-match context, its own small concern -->
+<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1359,7 +1359,7 @@ end 'main'
 ```
 
 <!-- disabled-test: match-break.labeled -->
-<!-- break-in-match context, its own small concern -->
+<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1377,7 +1377,7 @@ end 'main'
 ```
 
 <!-- disabled-test: match-break.inside-loop -->
-<!-- break-in-match context, its own small concern -->
+<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1397,7 +1397,7 @@ end 'main'
 ```
 
 <!-- disabled-test: match-break.exits-match-not-loop -->
-<!-- break-in-match context, its own small concern -->
+<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
