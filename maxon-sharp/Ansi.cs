@@ -67,21 +67,36 @@ internal static class Ansi {
   };
 
   /// <summary>
+  /// Every accepted <c>--color=</c> value and what it means. THE list: <see cref="TryParse"/>
+  /// matches against it and <see cref="Choices"/> is joined from it, so the usage text cannot name a
+  /// spelling the parser has stopped accepting. Written down twice — a switch here and a literal
+  /// there — renaming one value leaves the help advertising a flag value that is then refused, and
+  /// both texts look equally authoritative.
+  /// </summary>
+  private static readonly (string Name, ColorSetting Setting)[] Accepted = [
+    ("auto", ColorSetting.Auto),
+    ("always", ColorSetting.Always),
+    ("never", ColorSetting.Never),
+  ];
+
+  /// <summary>
   /// Parse the value of <c>--color=</c>. An unknown value is REFUSED by the caller rather than
   /// falling back to auto: a misspelled <c>--color=alwyas</c> that silently means something else is
   /// the flag failing at the one job it has.
   /// </summary>
   public static bool TryParse(string value, out ColorSetting setting) {
-    switch (value) {
-      case "auto": setting = ColorSetting.Auto; return true;
-      case "always": setting = ColorSetting.Always; return true;
-      case "never": setting = ColorSetting.Never; return true;
-      default: setting = ColorSetting.Auto; return false;
+    foreach (var (name, accepted) in Accepted) {
+      if (!string.Equals(value, name, StringComparison.Ordinal)) continue;
+      setting = accepted;
+      return true;
     }
+
+    setting = ColorSetting.Auto;
+    return false;
   }
 
   /// <summary>The accepted <c>--color=</c> values, for the usage text — spelled from one list.</summary>
-  public const string Choices = "auto|always|never";
+  public static string Choices => string.Join('|', Accepted.Select(a => a.Name));
 
   /// <summary>
   /// Wrap <paramref name="text"/> in an SGR code, or return it untouched when colour is off.

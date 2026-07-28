@@ -6,7 +6,6 @@
 
 let InputSuffix = ".in.json"
 let AssertSuffix = ".assert.json"
-let FixtureDirRelativePath = "maxon-dev-mcp/test/fixtures"
 
 // The JSON path a walk starts from. Reported at the head of every failure, so a reader can paste
 // the rest of the path straight into the assertion file.
@@ -43,7 +42,9 @@ let ScratchRootPlaceholder = "<SCRATCH_ROOT>"
 // own root could not do — it would find the real one and answer. So the fixture fails in two
 // independent ways if the argument is dropped: the wrong root is echoed, AND a call that must
 // refuse instead succeeds.
-let FixtureScratchDir = "maxon-dev-mcp/test/.maxon/fixture-scratch"
+function fixtureScratchDir() returns String
+	return "{testScratchRoot()}/fixture-scratch"
+end 'fixtureScratchDir'
 
 export type Fixture
 	/// Run the fixture called `name` and assert its responses. Throws `TestFailure` at the first
@@ -54,7 +55,7 @@ export type Fixture
 	export static function check(name String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		let site = AssertSite.create(file, line: line)
 		let repoRoot = resolveRepoRoot()
-		let dir = joinPath(repoRoot, segment: FixtureDirRelativePath)
+		let dir = joinPath(repoRoot, segment: fixtureRoot())
 
 		let inputPath = joinPath(dir, segment: "{name}{InputSuffix}")
 		let rawInput = try File.readText(inputPath) otherwise 'readErr'
@@ -99,7 +100,7 @@ export type Fixture
 	/// The file is `__file__` by default, which expands at the call site — so the check reads the
 	/// very file the tests are declared in, and no test has to spell its own name.
 	export static function requireEveryFixtureHasATest(file String = __file__, line SourceLineNumber = __line__) throws TestFailure
-		let dir = joinPath(resolveRepoRoot(), segment: FixtureDirRelativePath)
+		let dir = joinPath(resolveRepoRoot(), segment: fixtureRoot())
 		try requireEveryFixtureIsNamed(dir, suffix: InputSuffix, skipping: StringArray.create(), site: AssertSite.create(file, line: line))
 	end 'requireEveryFixtureHasATest'
 end 'Fixture'
@@ -203,7 +204,7 @@ export function requireEveryFixtureIsNamed(dir FilePath, suffix String, skipping
 	// `site.file` is the CALLER's `__file__`. Only its base name is used, joined to this project's
 	// one directory, so the check does not depend on what a `__file__` string is rooted at.
 	let sourceName = lastSegment(site.file)
-	let sourcePath = joinPath(joinPath(resolveRepoRoot(), segment: TestSourceDirRelativePath), segment: sourceName)
+	let sourcePath = joinPath(joinPath(resolveRepoRoot(), segment: TestProjectRelativePath), segment: sourceName)
 	let source = try File.readText(sourcePath) otherwise 'readErr'
 		try Expect.fail("cannot read {sourcePath.path}, so which fixtures have tests cannot be established", file: site.file, line: site.line)
 		return
@@ -221,7 +222,6 @@ export function requireEveryFixtureIsNamed(dir FilePath, suffix String, skipping
 	try Expect.isEmpty(orphans, message: "these fixtures exist under {dir.path} but no test in {sourceName} names them, so nothing runs them", file: site.file, line: site.line)
 end 'requireEveryFixtureIsNamed'
 
-let TestSourceDirRelativePath = "maxon-dev-mcp/test"
 
 // =============================================================================
 // Placeholder expansion and the scratch checkout
@@ -229,7 +229,7 @@ let TestSourceDirRelativePath = "maxon-dev-mcp/test"
 
 // A scratch root must look like a Maxon checkout or the server refuses `repoRoot` outright.
 function materializeFixtureScratchRoot(repoRoot FilePath) returns FilePath
-	let scratch = joinPath(repoRoot, segment: FixtureScratchDir)
+	let scratch = joinPath(repoRoot, segment: fixtureScratchDir())
 	for marker in checkoutMarkerDirs() 'eachMarker'
 		if not Directory.create(joinPath(scratch, segment: marker)) 'mkFailed'
 			panic("materializeFixtureScratchRoot: could not create {marker} under {scratch.path}")

@@ -1290,6 +1290,10 @@ inside `Testing.maxon`.
 | `atLeast(actual, than:)` | integer, float | `actual >= than` |
 | `atMost(actual, than:)` | integer, float | `actual <= than` |
 | `close(actual, expected:, within:)` | float | `abs(actual - expected) <= within` |
+
+NaN satisfies no comparison, so it FAILS every float matcher: each float arm tests whether the
+assertion holds rather than whether its negation does, which are the same question for every value
+except NaN.
 | `isTrue(actual)` / `isFalse(actual)` | `bool` | the value is `true` / `false` |
 | `contains(haystack, needle:)` | `String` | `haystack` contains `needle` |
 | `startsWith(haystack, needle:)` | `String` | prefix match |

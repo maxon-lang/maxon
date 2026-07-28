@@ -40,29 +40,35 @@ internal static class TestRender {
     "an assertion failed, and the test wrote nothing to stderr saying which";
 
   /// <summary>
-  /// How a non-passing outcome is labelled, in both faces. One map, so the word a human reads and
-  /// the token a machine reads can never describe different states.
+  /// Both spellings of every outcome: the word a human reads and the token a machine reads.
+  ///
+  /// ONE map, keyed by the outcome, rather than two switches side by side. Two switches is what
+  /// this was, under a comment claiming it was one, and C# gives no help there — each ended in
+  /// <c>_ =&gt; throw</c>, so a seventh outcome compiles clean and is discovered at RUNTIME, in
+  /// whichever face someone happened not to extend: the text run renders it and <c>--json</c>
+  /// throws mid-document, or the reverse. Paired here, a new outcome is one entry or a missing key,
+  /// and both faces fail the same way at the same moment.
   /// </summary>
-  private static string Label(TestOutcome outcome) => outcome switch {
-    TestOutcome.Passed => "PASS",
-    TestOutcome.Failed => "FAIL",
-    TestOutcome.Crashed => "CRASHED",
-    TestOutcome.DidNotRun => "DID NOT RUN",
-    TestOutcome.TimedOut => "TIMED OUT",
-    TestOutcome.Leaked => "LEAKED",
-    _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unhandled test outcome"),
+  private static readonly Dictionary<TestOutcome, (string Label, string JsonState)> Spellings = new() {
+    [TestOutcome.Passed] = ("PASS", "passed"),
+    [TestOutcome.Failed] = ("FAIL", "failed"),
+    [TestOutcome.Crashed] = ("CRASHED", "crashed"),
+    [TestOutcome.DidNotRun] = ("DID NOT RUN", "didNotRun"),
+    [TestOutcome.TimedOut] = ("TIMED OUT", "timedOut"),
+    [TestOutcome.Leaked] = ("LEAKED", "leaked"),
   };
 
+  /// <summary>An outcome's two spellings, or a throw naming the one nobody taught this renderer.</summary>
+  private static (string Label, string JsonState) SpellingOf(TestOutcome outcome) =>
+    Spellings.TryGetValue(outcome, out var spelling)
+      ? spelling
+      : throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unhandled test outcome");
+
+  /// <summary>How a non-passing outcome is labelled for a human.</summary>
+  private static string Label(TestOutcome outcome) => SpellingOf(outcome).Label;
+
   /// <summary>The machine-readable spelling of an outcome, for JSON.</summary>
-  private static string JsonState(TestOutcome outcome) => outcome switch {
-    TestOutcome.Passed => "passed",
-    TestOutcome.Failed => "failed",
-    TestOutcome.Crashed => "crashed",
-    TestOutcome.DidNotRun => "didNotRun",
-    TestOutcome.TimedOut => "timedOut",
-    TestOutcome.Leaked => "leaked",
-    _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unhandled test outcome"),
-  };
+  private static string JsonState(TestOutcome outcome) => SpellingOf(outcome).JsonState;
 
   /// <summary>
   /// One file's results: a header naming the file, then a line per test.

@@ -30,6 +30,32 @@ export let subprocessTimeoutMs = 600000
 export let transcriptCaptureBytes = 16 * 1024 * 1024
 export let diagnosticCaptureBytes = 1024 * 1024
 
+// WHERE THIS SUITE LIVES, relative to the checkout root. Every other path in the suite is built
+// from it rather than spelling it again: the fixture directory, the two scratch trees under
+// `.maxon/`, and the source directory `Fixtures.requireEveryFixtureIsNamed` READS to prove every
+// fixture has a test. Written down at each of those five sites — as it was — moving or renaming
+// this project is a five-place edit across three files, and the sites fail differently when one is
+// missed: a stale fixture dir reports "no fixtures found", a stale source dir turns the coverage
+// check into "cannot read", and a stale scratch dir writes outside the compiler-owned directory
+// that SourceCollector excludes, which quietly makes the run its own next input.
+export let TestProjectRelativePath = "maxon-dev-mcp/test"
+
+// The compiler-owned directory inside this project. Everything a test WRITES goes under it, because
+// SourceCollector excludes `.maxon/` at any depth: scratch trees written anywhere else become
+// sources of the next `maxon test` compile and change the cache key the run was started under.
+//
+// Functions rather than `let`s: a top-level constant's initializer must be a CONSTANT expression
+// and an interpolation is not one (E2004), so a derived path can only be spelled where an
+// expression may run.
+export function testScratchRoot() returns String
+	return "{TestProjectRelativePath}/.maxon"
+end 'testScratchRoot'
+
+// The fixture corpus. `Conformance` reads the `registry/` subtree of it.
+export function fixtureRoot() returns String
+	return "{TestProjectRelativePath}/fixtures"
+end 'fixtureRoot'
+
 // Deep enough for `<repo>/maxon-dev-mcp/test/.maxon/cache/<binary>` plus room to spare, shallow
 // enough that a runner started outside a checkout fails fast. Mirrors `MaxRepoRootWalkDepth` in
 // mcp/Util.maxon.

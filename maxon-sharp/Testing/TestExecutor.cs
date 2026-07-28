@@ -325,24 +325,32 @@ internal static class TestExecutor {
 
     var partials = new Dictionary<int, PartialResult>();
     var shardOutput = new StringBuilder();
-    PartialResult? current = null;
-    int? inFlight = null;
+
+    // The test currently BETWEEN its markers — its index and its partial result in one value, or
+    // null when no test is running. One variable because it is one fact: it was two (a `current`
+    // partial beside an `inFlight` index) that were only ever assigned and cleared together, so the
+    // end-marker guard had to test both and agree with itself. Split like that, an edit that
+    // cleared one and not the other would not fail — it would mis-attribute every event after it,
+    // and a mis-attributed report is exactly the answer this command exists to be trusted about.
+    (int Index, PartialResult Result)? inFlight = null;
 
     foreach (var evt in events) {
       switch (evt) {
-        case TestBegan began:
-          current = new PartialResult();
-          partials[began.Index] = current;
-          inFlight = began.Index;
+        case TestBegan began: {
+          var partial = new PartialResult();
+          partials[began.Index] = partial;
+          inFlight = (began.Index, partial);
           break;
+        }
 
-        case TestEnded ended when inFlight == ended.Index && current != null:
-          current.Ended = true;
-          current.Passed = ended.Passed;
-          current.Nanos = ended.Nanos;
-          current = null;
+        case TestEnded ended when inFlight?.Index == ended.Index: {
+          var partial = inFlight.Value.Result;
+          partial.Ended = true;
+          partial.Passed = ended.Passed;
+          partial.Nanos = ended.Nanos;
           inFlight = null;
           break;
+        }
 
         case TestEnded:
           // An end for a test that did not begin, or for the wrong one. The dispatcher cannot emit
@@ -350,8 +358,9 @@ internal static class TestExecutor {
           // did begin as crashed, which is the loud outcome this deserves.
           break;
 
-        case TestThrew threw when current != null:
-          current.Thrown = new ThrownError(threw.ErrorType, threw.ErrorCase, threw.File, threw.Line);
+        case TestThrew threw when inFlight is { } running:
+          running.Result.Thrown =
+            new ThrownError(threw.ErrorType, threw.ErrorCase, threw.File, threw.Line);
           break;
 
         case TestThrew orphan:
@@ -364,7 +373,7 @@ internal static class TestExecutor {
           break;
 
         case TestOutputLine line:
-          Append(current?.Output ?? shardOutput, line.Text);
+          Append(inFlight?.Result.Output ?? shardOutput, line.Text);
           break;
 
         default:

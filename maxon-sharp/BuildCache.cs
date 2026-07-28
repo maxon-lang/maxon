@@ -8,9 +8,10 @@ static class BuildCache {
   /// Bumped whenever the manifest's SHAPE changes. A manifest written by an older compiler is not
   /// merely stale — it cannot be compared field for field — so it is rejected outright rather than
   /// half-read. Version 2 moved the compiler flags into <see cref="EmittedCodeFlags"/> and added
-  /// <c>ExtraKey</c>.
+  /// <c>ExtraKey</c>; version 3 moved the compiler timestamp, the target and the source timestamps
+  /// into <see cref="SourceInputs"/>, the one both this cache and the test-discovery manifest read.
   /// </summary>
-  const int ManifestVersion = 2;
+  const int ManifestVersion = 3;
 
   /// <summary>
   /// The manifest slot for a project's own binary. The compiler keeps several caches per project
@@ -69,17 +70,64 @@ static class BuildCache {
   }
 
   /// <summary>
+  /// The INPUTS a cached artifact was produced from: which compiler, which target, and which source
+  /// files at which versions.
+  ///
+  /// One definition because there are TWO caches over exactly this key — the build cache's manifest
+  /// and <see cref="Testing.TestManifest"/>'s — and "have the inputs changed" has to be one
+  /// question. It was two: each manifest carried its own copy of the three fields and its own copy
+  /// of the comparison, so a rule added to one (a new key field, a content hash instead of a
+  /// timestamp) would leave the other still answering the older question and serving a stale
+  /// artifact without saying so. Neither would look wrong at its own site.
+  ///
+  /// Every property is <c>required</c>, so adding a field is a compile error at
+  /// <see cref="Current"/> rather than one that silently reads as its default.
+  /// </summary>
+  internal record SourceInputs {
+    public required long CompilerModified { get; init; }
+    public required string TargetArch { get; init; }
+    public required string TargetOs { get; init; }
+    public required Dictionary<string, long> Sources { get; init; }
+
+    /// <summary>The inputs a build of <paramref name="onDiskSources"/> would have right now.</summary>
+    public static SourceInputs Current(SourceFile[] onDiskSources, CompileTarget target) => new() {
+      CompilerModified = GetCompilerModifiedTicks(),
+      TargetArch = target.Arch,
+      TargetOs = target.Os,
+      Sources = SourceTimestamps(onDiskSources),
+    };
+
+    /// <summary>
+    /// Whether these RECORDED inputs still describe the current ones.
+    ///
+    /// The cheap fields are compared first and the timestamps last, because
+    /// <see cref="SourceTimestamps"/> costs a stat per file (stdlib included) and a compiler or
+    /// target change has already settled the answer.
+    /// </summary>
+    public bool StillCurrent(SourceFile[] onDiskSources, CompileTarget target) {
+      if (CompilerModified != GetCompilerModifiedTicks()) return false;
+      if (TargetArch != target.Arch || TargetOs != target.Os) return false;
+
+      var expected = SourceTimestamps(onDiskSources);
+      if (Sources.Count != expected.Count) return false;
+
+      foreach (var (path, ticks) in expected) {
+        if (!Sources.TryGetValue(path, out var recorded) || recorded != ticks) return false;
+      }
+
+      return true;
+    }
+  }
+
+  /// <summary>
   /// Every property is <c>required</c> so that adding one is a compile error at the single place a
   /// manifest is built, rather than a field that silently reads as its default forever after.
   /// </summary>
   record CacheManifest {
     public required int Version { get; init; }
-    public required long CompilerModified { get; init; }
-    public required string TargetArch { get; init; }
-    public required string TargetOs { get; init; }
+    public required SourceInputs Inputs { get; init; }
     public required EmittedCodeFlags Flags { get; init; }
     public required string OutputPath { get; init; }
-    public required Dictionary<string, long> Sources { get; init; }
 
     /// <summary>
     /// The caller's own contribution to the cache key, covering source this cache cannot see:
@@ -192,8 +240,6 @@ static class BuildCache {
     var manifest = ReadManifest(projectDir, cacheName);
     if (manifest == null) return false;
 
-    if (manifest.CompilerModified != GetCompilerModifiedTicks()) return false;
-    if (manifest.TargetArch != target.Arch || manifest.TargetOs != target.Os) return false;
     if (manifest.Flags != EmittedCodeFlags.Current) return false;
     if (manifest.ExtraKey != extraKey) return false;
 
@@ -208,14 +254,7 @@ static class BuildCache {
     if (Compiler.Compiler.DebugInfo
         && !File.Exists(manifest.OutputPath + Debug.MxdbgFormat.SidecarExtension)) return false;
 
-    var expectedSources = SourceTimestamps(onDiskSources);
-    if (manifest.Sources.Count != expectedSources.Count) return false;
-    foreach (var (path, ticks) in expectedSources) {
-      if (!manifest.Sources.TryGetValue(path, out var cachedTicks)) return false;
-      if (cachedTicks != ticks) return false;
-    }
-
-    return true;
+    return manifest.Inputs.StillCurrent(onDiskSources, target);
   }
 
   public static string? GetCachedOutputPath(string projectDir, string cacheName = ProjectCacheName) {
@@ -247,12 +286,9 @@ static class BuildCache {
       CompileTarget target, string cacheName = ProjectCacheName, string extraKey = NoInMemorySources) {
     var manifest = new CacheManifest {
       Version = ManifestVersion,
-      CompilerModified = GetCompilerModifiedTicks(),
-      TargetArch = target.Arch,
-      TargetOs = target.Os,
+      Inputs = SourceInputs.Current(onDiskSources, target),
       Flags = EmittedCodeFlags.Current,
       OutputPath = Path.GetFullPath(outputPath),
-      Sources = SourceTimestamps(onDiskSources),
       ExtraKey = extraKey,
     };
 

@@ -215,6 +215,16 @@ export type Expect
 	// These DO have float arms, unlike `equal`. The hazard that removes a float `equal` is exact
 	// bit-equality, which an ordering test does not ask for: comparing a float against a threshold
 	// is a stable question on every target.
+	//
+	// ⚠ Every FLOAT arm is written as "fail unless the assertion HOLDS", never as "fail when its
+	// negation holds", and the two are not the same question once NaN exists. NaN satisfies NO
+	// comparison, so `actual <= than` is FALSE for a NaN `actual` — an arm testing the negation
+	// takes the passing branch and reports green for a value that is not a number at all. Inverted,
+	// the same fact sends NaN down the failing branch, which is the only honest answer: a test whose
+	// subject produced NaN did not meet its bound. `close` below is written the same way and for the
+	// same reason. Measured, not reasoned: all five arms passed against a NaN before this shape.
+	// The INT arms are left in their direct form — an integer has no NaN, so there is no second
+	// question for them to answer differently.
 
 	export static function greaterThan(actual AssertedInt, than AssertedInt, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		if actual <= than 'notGreater'
@@ -223,7 +233,7 @@ export type Expect
 	end 'greaterThan'
 
 	export static function greaterThan(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
-		if actual <= than 'notGreater'
+		if not (actual > than) 'notGreater'
 			try Expect.raiseMismatch(Expect.greaterThanName, expected: "{Expect.greaterPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'notGreater'
 	end 'greaterThan'
@@ -235,7 +245,7 @@ export type Expect
 	end 'lessThan'
 
 	export static function lessThan(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
-		if actual >= than 'notLess'
+		if not (actual < than) 'notLess'
 			try Expect.raiseMismatch(Expect.lessThanName, expected: "{Expect.lessPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'notLess'
 	end 'lessThan'
@@ -247,7 +257,7 @@ export type Expect
 	end 'atLeast'
 
 	export static function atLeast(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
-		if actual < than 'below'
+		if not (actual >= than) 'below'
 			try Expect.raiseMismatch(Expect.atLeastName, expected: "{Expect.atLeastPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'below'
 	end 'atLeast'
@@ -259,7 +269,7 @@ export type Expect
 	end 'atMost'
 
 	export static function atMost(actual AssertedReal, than AssertedReal, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
-		if actual > than 'above'
+		if not (actual <= than) 'above'
 			try Expect.raiseMismatch(Expect.atMostName, expected: "{Expect.atMostPrefix}{than}", received: "{actual}", note: message, file: file, line: line)
 		end 'above'
 	end 'atMost'
@@ -267,11 +277,14 @@ export type Expect
 	// --- close ---------------------------------------------------------------------------------
 	// The only equality a float gets. There is no `equal` overload for floats because a float `==`
 	// matcher passes on one target and fails on another; requiring an explicit tolerance makes the
-	// author state how much agreement the test actually needs. NaN satisfies no comparison, so a
-	// NaN `actual` fails here rather than slipping through.
+	// author state how much agreement the test actually needs.
+	//
+	// Written as "fail unless the values are within the window", for the reason the ordering
+	// section gives: NaN satisfies no comparison, so `abs(NaN - expected) > within` is FALSE and
+	// the negated form reported a NaN as close to anything.
 
 	export static function close(actual AssertedReal, expected AssertedReal, within Tolerance, message String = "", file String = __file__, line SourceLineNumber = __line__) throws TestFailure
-		if abs(actual - expected) > within 'apart'
+		if not (abs(actual - expected) <= within) 'apart'
 			try Expect.raiseMismatch(Expect.closeName, expected: "{expected} ({Expect.withinLabel} {within})", received: "{actual}", note: message, file: file, line: line)
 		end 'apart'
 	end 'close'

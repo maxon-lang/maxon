@@ -378,12 +378,18 @@ internal static class TestCommand {
   /// Every default it quotes is read from the constant that supplies it, for the same reason.
   /// </remarks>
   public static void WriteOptions(TextWriter output) {
-    Option(output, $"{FilterFlagShort}, {FilterFlagLong}P", "run only tests whose NAME or FILE contains P");
+    Option(output, $"{FilterFlagShort} P, {FilterFlagShortEquals}P, {FilterFlagLong}P",
+      "run only tests whose NAME or FILE contains P");
     Option(output, "", "(case-insensitive; comma-separated patterns are a union)");
     Option(output, ListFlag, "print the tests that would run and compile nothing");
     Option(output, JsonFlag, "emit the report as JSON instead of text");
     Option(output, IsolateFlag, "run every test in its own process");
-    Option(output, $"{BailFlag}[=N]", $"stop after N failures (default {DefaultBailAfter})");
+    // "stop CLAIMING", not "stop": TestExecutor checks the limit before a worker takes its NEXT
+    // shard, so shards already in flight finish and report. A run can therefore end with more than
+    // N failures, and a usage line promising exactly N would be describing a harness that killed
+    // work it had already paid for.
+    Option(output, $"{BailFlag}[=N]", $"stop claiming new work after N failures (default {DefaultBailAfter});");
+    Option(output, "", "shards already running finish, so the total may exceed N");
     Option(output, $"{WorkersFlag}N", $"run N test processes at once (default {TestExecutor.DefaultWorkers} here)");
     Option(output, $"{TimeoutFlag}MS", $"kill a test process after MS milliseconds (default {DefaultTimeoutMs});");
     Option(output, "", $"a whole file shares one process, so {IsolateFlag} gives each test its own budget");
@@ -391,6 +397,10 @@ internal static class TestCommand {
     Option(output, $"{ColorFlag}{Ansi.Choices}", "");
     Option(output, "", "colour; auto means only when stdout is a terminal");
     Option(output, $"{TargetFlag}ARCH-OS", "compile the test binary for a specific target");
+    // Accepted by the parser above, so it is listed. A flag this block leaves out is a flag no
+    // reader can discover and no drift check can notice — the listing is only THE listing if it is
+    // complete.
+    Option(output, $"{LogFlag}CATEGORY:LEVEL", "enable compiler logging (e.g. codegen:trace)");
     output.WriteLine();
     output.WriteLine("Exit codes:");
     output.WriteLine($"  {ExitAllPassed}  every test passed.");

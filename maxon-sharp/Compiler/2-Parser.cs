@@ -23312,16 +23312,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// Re-parses stored default value tokens via ParseExpression(), so any literal
   /// expression (strings, arrays, structs, characters, etc.) works as a default.
+  ///
+  /// The swap is undone in a `finally` because `ParseExpression` on a default can THROW — a default
+  /// naming something unresolvable raises a CompileError from here, and that error is caught
+  /// upstream (ParseFunction records it and carries on parsing the file). Restored only on the
+  /// success path, the parser would carry on reading from the DEFAULT's token array, at an offset
+  /// into the real one: not a crash, a stream of nonsense diagnostics against a file that has one
+  /// error in it. Same rule as ParseSynthesizedSource, which is the other place the stream is
+  /// swapped.
   private MaxonValue EmitDefaultFromTokens(TokenRangeAttr tokenRange) {
     var savedPos = _pos;
     var savedTokens = _tokens;
     // Inject the stored tokens plus an EOF sentinel so ParseExpression stops cleanly
     _tokens = [.. tokenRange.Tokens, new Token(TokenType.Eof, "", 0, 0)];
     _pos = 0;
-    var result = ResolveExprValue(ParseExpression());
-    _tokens = savedTokens;
-    _pos = savedPos;
-    return result;
+    try {
+      return ResolveExprValue(ParseExpression());
+    } finally {
+      _tokens = savedTokens;
+      _pos = savedPos;
+    }
   }
 
   private static long ParseNegatedIntegerLiteral(Token token) {

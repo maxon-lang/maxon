@@ -185,16 +185,17 @@ maxon test [directory] [options]
 
 | Option | Description |
 |--------|-------------|
-| `-t`, `--filter=PATTERN` | Run only tests whose NAME or FILE path contains PATTERN (case-insensitive). Comma-separated patterns run a union. |
+| `-t PATTERN`, `-t=PATTERN`, `--filter=PATTERN` | Run only tests whose NAME or FILE path contains PATTERN (case-insensitive). Comma-separated patterns run a union. |
 | `--list` | Print the tests that would run, and compile nothing |
 | `--json` | Emit the report as JSON instead of text |
 | `--isolate` | Run every test in its own process |
 | `--bail[=N]` | Stop claiming new work after N failures (default 1) |
-| `--workers=N` | Run N test processes at once (default `ProcessorCount - 2`) |
+| `--workers=N` | Run N test processes at once (default `max(1, ProcessorCount - 2)`) |
 | `--timeout=MS` | Kill a test process after MS milliseconds (default 5000) |
 | `--no-timing` | Omit durations, making stdout byte-reproducible |
 | `--color=auto\|always\|never` | Colour; `auto` colours only when stdout is a terminal |
 | `--target=ARCH-OS` | Compile the test binary for a specific target |
+| `--log=CATEGORY:LEVEL` | Enable compiler logging (e.g. `codegen:trace`) |
 
 **Outcomes.** A test that does not pass is reported as one of five distinct states, because they
 are found by different evidence and call for different action:
@@ -206,6 +207,19 @@ are found by different evidence and call for different action:
 | `TIMED OUT` | Still running when its process hit `--timeout`, and was killed |
 | `DID NOT RUN` | Selected for a process that died before reaching it, and re-running made no progress. Never reported as a pass. |
 | `LEAKED` | Held an allocation at exit (exit code 101), attributed by re-running the test alone |
+
+`--json` reports the same outcomes under its own `state` vocabulary, which a machine reader
+branches on. The two spellings are one map in the renderer, so they cannot describe different
+states:
+
+| `state` | Text label |
+|---------|------------|
+| `passed` | (a `✓` line) |
+| `failed` | `FAIL` |
+| `crashed` | `CRASHED` |
+| `timedOut` | `TIMED OUT` |
+| `didNotRun` | `DID NOT RUN` |
+| `leaked` | `LEAKED` |
 
 **Exit codes:**
 
@@ -329,7 +343,7 @@ maxon spec-test [options]
 | Option | Description |
 |--------|-------------|
 | `--filter=PATTERN` | Run only tests matching the pattern. Comma-separated terms run a union (any-of) — e.g. `--filter=basics,arrays,map`. Whitespace around each term is trimmed. |
-| `--workers=N` | Use N worker threads (default: `ProcessorCount - 2`) |
+| `--workers=N` | Use N worker threads (default: `max(1, ProcessorCount - 2)`) |
 | `--update-required` | Force regeneration and update `RequiredIR` + `MmTrace` stderr blocks |
 | `--verbose` | Show per-test PASS/FAIL timing logs |
 | `--no-batch` | Disable per-spec compile batching (each test compiled individually) |

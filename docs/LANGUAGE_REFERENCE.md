@@ -158,12 +158,20 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 
 ### Keywords
 ```
-and, as, bool, break, byte, continue, cstring, default, else, end, enum, export,
-extends, extension, fallthrough, false, float, for, from, function, gives, if,
-ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
-return, returns, self, Self, shl, shr, static, then, throw, throws, to,
-true, try, type, typealias, upto, uses, var, where, while, with, xor
+and, as, async, await, bool, break, byte, continue, cstring, default, else, end,
+enum, export, extends, extension, fallthrough, false, float, for, from, function,
+gives, if, ignore, implements, in, int, interface, is, let, match, mod, not, of,
+or, otherwise, panic, return, returns, self, Self, shl, shr, static, then, throw,
+throws, to, true, try, type, typealias, union, upto, uses, var, where, while,
+with, xor, __file__, __line__
 ```
+
+This list is `Lexer.KeywordMap` transcribed; nothing checks the transcription, so read the map
+when it matters. It had drifted: `async`, `await`, `mod`, `panic` and `union` were missing, and so
+were `__file__` / `__line__` — while [Source-Location Defaults](#source-location-defaults) in this
+same document asserted that both are reserved words.
+
+
 
 #### Contextual keywords
 

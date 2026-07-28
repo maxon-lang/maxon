@@ -17,9 +17,11 @@ namespace MaxonSharp.Testing;
 internal static class TestManifest {
   /// <summary>
   /// Bumped when the stored SHAPE changes. An older manifest is rejected outright rather than
-  /// half-read, matching <see cref="BuildCache"/>'s rule for the same reason.
+  /// half-read, matching <see cref="BuildCache"/>'s rule for the same reason. Version 2 replaced
+  /// this manifest's own copy of the key fields with the shared
+  /// <see cref="BuildCache.SourceInputs"/>.
   /// </summary>
-  private const int ManifestVersion = 1;
+  private const int ManifestVersion = 2;
 
   /// <summary>
   /// The file this cache lives in.
@@ -40,19 +42,19 @@ internal static class TestManifest {
   /// </summary>
   private sealed record Manifest {
     public required int Version { get; init; }
-    public required long CompilerModified { get; init; }
 
     /// <summary>
-    /// The target the recorded discovery was performed for. Part of the key because WHICH tests
-    /// exist depends on it — <c>#if os(...)</c> / <c>arch(...)</c> are resolved during the parse
+    /// What the recorded discovery was performed against, in the SHARED shape — so this cache and
+    /// the build cache cannot come to disagree about whether a change has happened.
+    ///
+    /// The TARGET is in that key and carries this cache's own reason to be there: WHICH tests exist
+    /// depends on it, because <c>#if os(...)</c> / <c>arch(...)</c> are resolved during the parse
     /// this caches. Without it, `maxon test --target=arm64-macos` followed by a plain `maxon test`
     /// would reuse the first run's answer; and because the dispatcher's content hash is derived
     /// FROM that answer, the build cache would then also hit, handing back the wrong binary.
     /// </summary>
-    public required string TargetArch { get; init; }
-    public required string TargetOs { get; init; }
+    public required BuildCache.SourceInputs Inputs { get; init; }
 
-    public required Dictionary<string, long> Sources { get; init; }
     public required List<DiscoveredTest> Tests { get; init; }
   }
 
@@ -73,14 +75,7 @@ internal static class TestManifest {
     try {
       var manifest = JsonSerializer.Deserialize<Manifest>(File.ReadAllText(path), JsonOptions);
       if (manifest == null || manifest.Version != ManifestVersion) return null;
-      if (manifest.CompilerModified != BuildCache.GetCompilerModifiedTicks()) return null;
-      if (manifest.TargetArch != target.Arch || manifest.TargetOs != target.Os) return null;
-
-      var expected = BuildCache.SourceTimestamps(onDiskSources);
-      if (manifest.Sources.Count != expected.Count) return null;
-      foreach (var (file, ticks) in expected) {
-        if (!manifest.Sources.TryGetValue(file, out var cached) || cached != ticks) return null;
-      }
+      if (!manifest.Inputs.StillCurrent(onDiskSources, target)) return null;
 
       return manifest.Tests;
     } catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) {
@@ -93,10 +88,7 @@ internal static class TestManifest {
       List<DiscoveredTest> tests) {
     var manifest = new Manifest {
       Version = ManifestVersion,
-      CompilerModified = BuildCache.GetCompilerModifiedTicks(),
-      TargetArch = target.Arch,
-      TargetOs = target.Os,
-      Sources = BuildCache.SourceTimestamps(onDiskSources),
+      Inputs = BuildCache.SourceInputs.Current(onDiskSources, target),
       Tests = tests,
     };
 

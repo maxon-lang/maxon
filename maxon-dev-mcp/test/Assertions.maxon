@@ -109,9 +109,15 @@ end 'AssertOp'
 // The JSON key that names each operator. Written down ONCE, so the word a fixture spells and the
 // arm `walkObjectAssertion` dispatches to cannot drift apart — they used to be two parallel lists,
 // a nine-branch `if` chain and a nine-arm `match`.
+//
+// `none` is not an operator: it is the ANSWER "this object is not an operator leaf", so it has no
+// keyword and asking for one is a caller bug. It PANICS rather than handing back `""`, which was a
+// sentinel in the precise sense the rule names — a value a caller can carry, compare and match on.
+// It was also not the safe one the comment below it claimed: `{"": true}` is legal JSON, so an
+// empty-string key in a fixture would have COMPARED EQUAL to it and classified as an operator.
 function operatorKeyword(op AssertOp) returns String
 	return match op 'k'
-		none gives ""
+		none panic("operatorKeyword: 'none' means there is no operator, so it has no keyword — callers must gate on it")
 		equals gives "equals"
 		isString gives "isString"
 		isNumber gives "isNumber"
@@ -133,8 +139,9 @@ function detectOperator(assertDoc JsonDoc, assertId JsonNodeId) returns AssertOp
 	end 'empty'
 
 	for op in AssertOp.allCases 'each'
-		// `none` is the absence of an operator and keys on the empty string, which no fixture key
-		// can equal by accident — skipped so it can never be MATCHED, only fallen through to.
+		// `none` is the absence of an operator, not one of them: it is what this returns when nothing
+		// matched, so it is skipped here — and `operatorKeyword` panics if asked for its spelling,
+		// which is why the short-circuit `and` is load-bearing rather than merely tidy.
 		if op != AssertOp.none and first.equals(operatorKeyword(op)) 'hit'
 			return op
 		end 'hit'

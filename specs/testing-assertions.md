@@ -96,6 +96,11 @@ exact bit-equality, which an ordering test does not ask for.
 | `isEmpty(haystack)` | the `String` has no characters |
 | `fail(message)` | never — the escape hatch |
 
+**NaN fails every float matcher.** NaN satisfies no comparison, so each float arm is written as
+"fail unless the assertion HOLDS" rather than "fail when its negation holds" — the two differ
+only for NaN, and the negated form reported a NaN as green. A test whose subject produced NaN
+did not meet its bound, and says so.
+
 `fail` is what an unreachable branch calls. It has no pair of values to compare, so its report
 carries only the message.
 

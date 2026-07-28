@@ -29,11 +29,15 @@
 // A fixture is `<name>.txt` (the registry both readers see), an optional `<name>.after.txt`
 // (written over it AFTER generation, to strand the artifact), and `<name>.expect.json`.
 
-let ConformanceFixtureDir = "maxon-dev-mcp/test/fixtures/registry"
+function conformanceFixtureDir() returns String
+	return "{fixtureRoot()}/registry"
+end 'conformanceFixtureDir'
 
 // Scratch checkouts live under the test project's gitignored build dir — never in a real tree,
 // because `error-codes generate` WRITES into whatever root it is pointed at.
-let ConformanceWorkDir = "maxon-dev-mcp/test/.maxon/conformance"
+function conformanceWorkDir() returns String
+	return "{testScratchRoot()}/conformance"
+end 'conformanceWorkDir'
 
 let RegistryRelativePath = "docs/error-codes.txt"
 let InterchangeRelativePath = "docs/error-codes.json"
@@ -74,7 +78,7 @@ export type Conformance
 	export static function check(name String, file String = __file__, line SourceLineNumber = __line__) throws TestFailure
 		let site = AssertSite.create(file, line: line)
 		let repoRoot = resolveRepoRoot()
-		let fixturesDir = joinPath(repoRoot, segment: ConformanceFixtureDir)
+		let fixturesDir = joinPath(repoRoot, segment: conformanceFixtureDir())
 
 		let expect = try readJsonFile(joinPath(fixturesDir, segment: "{name}{ExpectationSuffix}")) otherwise 'noExpect'
 			try Expect.fail("cannot read or parse {name}{ExpectationSuffix}", file: file, line: line)
@@ -114,7 +118,7 @@ export type Conformance
 		var mutations = StringArray.create()
 		mutations.push(MutationSuffix)
 
-		let dir = joinPath(resolveRepoRoot(), segment: ConformanceFixtureDir)
+		let dir = joinPath(resolveRepoRoot(), segment: conformanceFixtureDir())
 		try requireEveryFixtureIsNamed(dir, suffix: RegistryFixtureSuffix, skipping: mutations, site: AssertSite.create(file, line: line))
 	end 'requireEveryFixtureHasATest'
 end 'Conformance'
@@ -129,12 +133,12 @@ function judgeCase(expect JsonDoc, code JsonInt, gate GateOutcome, tool ToolVerd
 	end 'unsanctioned'
 
 	// (2) The gate's verdict is the one the fixture documents.
-	let wantGate = try stringField(expect, key: "gate") otherwise panic("judgeCase: the expectation file has no `gate`")
+	let wantGate = try expect.getString(expect.root, key: "gate") otherwise panic("judgeCase: the expectation file has no `gate`")
 	try Expect.equal(gate.accepted, expected: wantGate.equals(GateAcceptWord), message: "the gate should {wantGate} this registry. It said: {gate.stderr.trim()}", file: site.file, line: site.line)
 	try requireOptionalContains(expect, key: "gateStderrContains", actual: gate.stderr, what: "gate stderr", site: site)
 
 	// (3) The tool's verdict is the one the fixture documents.
-	let wantTool = try stringField(expect, key: "tool") otherwise panic("judgeCase: the expectation file has no `tool`")
+	let wantTool = try expect.getString(expect.root, key: "tool") otherwise panic("judgeCase: the expectation file has no `tool`")
 	try Expect.equal(tool.answered, expected: wantTool.equals(ToolAnswerWord), message: "the tool should {wantTool}. It said: {tool.errorMessage.trim()}", file: site.file, line: site.line)
 	try requireOptionalContains(expect, key: "toolErrorContains", actual: tool.errorMessage, what: "tool refusal", site: site)
 
@@ -198,7 +202,7 @@ end 'ScratchError'
 // A throwaway checkout holding nothing but the fixture registry. `error-codes generate` WRITES into
 // the root it is given, which is exactly why it is never given a real one.
 function materializeScratchCheckout(name String, repoRoot FilePath, fixturesDir FilePath) returns FilePath throws ScratchError
-	let workRoot = joinPath(joinPath(repoRoot, segment: ConformanceWorkDir), segment: name)
+	let workRoot = joinPath(joinPath(repoRoot, segment: conformanceWorkDir()), segment: name)
 
 	for marker in checkoutMarkerDirs() 'eachMarker'
 		if not Directory.create(joinPath(workRoot, segment: marker)) 'markerFailed'
@@ -379,10 +383,6 @@ function readJsonFile(path FilePath) returns JsonDoc throws NotFound
 	let text = try File.readText(path) otherwise throw NotFound.notFound
 	return try Json.parse(text) otherwise throw NotFound.notFound
 end 'readJsonFile'
-
-function stringField(doc JsonDoc, key String) returns String throws NotFound
-	return try doc.getString(doc.root, key: key) otherwise throw NotFound.notFound
-end 'stringField'
 
 function stringArrayField(doc JsonDoc, key String) returns StringArray throws NotFound
 	let id = try doc.getChild(doc.root, key: key) otherwise throw NotFound.notFound

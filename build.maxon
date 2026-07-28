@@ -160,7 +160,7 @@ export function test_dev_mcp() returns ExitCode
 	// the fixtures shell out to a full spec-test / scale-test run, so this is a ceiling for the
 	// slowest machine rather than a fit for the seconds the suite takes here.
 	argv.push("--timeout={mcpTestProcessTimeoutMs}")
-	let runResult = run("Running MCP tests", exe: Executable.path(sharpExe), argv: argv, timeoutMs: mcpTestProcessTimeoutMs)
+	let runResult = run("Running MCP tests", exe: Executable.path(sharpExe), argv: argv, timeoutMs: mcpTestOuterDeadlineMs)
 	if runResult != 0 'testFail'
 		return runResult
 	end 'testFail'
@@ -169,10 +169,25 @@ export function test_dev_mcp() returns ExitCode
 	return 0
 end 'test_dev_mcp'
 
-// One number for both the deadline `maxon test` enforces on a test process and the deadline this
-// build target enforces on `maxon test` itself. Written twice, they could only ever disagree —
-// and the harness losing the race would report the wrong party.
+// The deadline `maxon test` enforces on ONE test PROCESS — a whole test file shares it. Two of the
+// fixtures shell out to a full spec-test / scale-test run, so this is a ceiling for the slowest
+// machine rather than a fit for the seconds the suite takes here.
 let mcpTestProcessTimeoutMs = 1200000
+
+// How much longer this build target waits for the WHOLE `maxon test` invocation than the inner
+// harness waits for one process inside it.
+//
+// The two deadlines nest, so they must NOT be the same number, and sharing one is the wrong cure
+// rather than a tidy one: the outer clock starts first and covers discovery, the compile of the
+// whole test project, and then EVERY test file — so at equality the outer party always fires first.
+// A test file that genuinely reached its own deadline would be killed by this `run()` instead, and
+// the report would name the build target rather than the file that hung, which is precisely the
+// "harness losing the race reports the wrong party" failure the single number was chosen to avoid.
+//
+// Stated as a MARGIN over the inner budget rather than as a second absolute, so raising one raises
+// the other and the ordering cannot be edited away.
+let mcpTestOuterMarginMs = 600000
+let mcpTestOuterDeadlineMs = mcpTestProcessTimeoutMs + mcpTestOuterMarginMs
 
 /// Compile the shv2 compiler and run its Wasm spec tests.
 export function spec_test_wasm() returns ExitCode
