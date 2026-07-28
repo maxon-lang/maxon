@@ -1,0 +1,27 @@
+// Test: witness-throws.error.impl-must-throw
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:12:6: Method 'Point.digest' must throw 'DigestError' as required by interface 'Digest'
