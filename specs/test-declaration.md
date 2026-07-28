@@ -363,6 +363,55 @@ module {
   }
 }
 ```
+```RequiredIR:arm64-macos
+=== maxon
+module {
+  func @__test_is_kept_alive() {
+  entry:
+    %0 = maxon.enum_literal @TestFailure.assertion
+    maxon.scope_end []
+    maxon.throw @TestFailure %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.scope_end []
+    maxon.return %1
+  }
+}
+=== standard
+module {
+  func @__test_is_kept_alive() {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    %1 = arith.constant {value = 1 : i64}
+    %2 = arith.addi %0, %1
+    func.error_return %2
+  }
+  func @main() -> u8 {
+  entry:
+    %3 = arith.constant {value = 0 : i64}
+    func.return %3
+  }
+}
+=== arm64
+module {
+  func @__test_is_kept_alive() {
+  entry:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+```
 
 <!-- test: namespace-qualified-name -->
 A test in a subdirectory takes that directory's namespace, exactly as a function does.
