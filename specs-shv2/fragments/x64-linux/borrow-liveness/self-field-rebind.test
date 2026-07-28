@@ -1,0 +1,25 @@
+// Test: self-field-rebind
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: ["hello world this is a long string for heap allocation"]}
+	end 'create'
+
+	function peek() returns ExitCode
+		let s = try items.get(0) otherwise ""
+		items = StringArray.create()
+		print("[{s}]\n")
+		return 0
+	end 'peek'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	return b.peek()
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:13:3: cannot mutate 'items' via '=' while it is borrowed by 's' (borrowed at line 12)
