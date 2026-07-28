@@ -283,10 +283,15 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, declared MaxonType, g
 
 	let identifiedByName = match declaredTag 'k'
 		// Every one of these IS its own type: there is nothing else about an `int`, a `float`, a `bool`, an
-		// `ExitCode`, a `void` or a `String` to disagree about.
+		// `ExitCode`, a `void`, a `String` or a `Character` to disagree about.
 		boolean to float gives false
 		exitCode to void gives false
 		string gives false
+		// ⚠ A SEPARATE ARM, not `string to character`: the two are NOT adjacent — `function`,
+		// `typeParameter` and `genericInstance` sit between them and every one of those `gives true`.
+		// A range spanning them would silently flip three tags, which is the trap `ValueTypeTag`'s own
+		// declaration warns about ("a range adopts whatever is inserted between its endpoints").
+		character gives false
 		// A `named` type and a struct are NOMINAL — two of them share a tag and are still different types.
 		// (`named` should not survive resolution, which erases a ranged alias and a boxed union to
 		// `integer`; comparing its id costs nothing and is the correct answer if one does.)
