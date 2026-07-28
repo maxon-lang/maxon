@@ -1,0 +1,39 @@
+// Test: int-expression-to-float-return
+
+typealias Float = float(f64.min to f64.max)
+
+function widen(a int, b int) returns Float
+	return a + b
+end 'widen'
+
+function main() returns ExitCode
+	return trunc(widen(20, b: 22) + 0.5)
+end 'main'
+---
+ExitCode: 42
+---
+func @widen {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegReg rax, rcx, rdx
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 22
+    x64.callDirect widen
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

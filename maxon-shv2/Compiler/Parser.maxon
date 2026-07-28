@@ -5460,10 +5460,25 @@ export type Parser
 		// Shape 3. The ANNOTATION is the field's type and the literal must agree with it: `as
 		// Integer = 50.0` is the same lossy coercion `var x as Integer` then `x = 50.0` is, so it
 		// asks the same rule (`requireAssignable`) rather than a second opinion about floats.
+		//
+		// ⭐ It is the ONE coercion site holding a parse-time CONSTANT rather than an SSA value, so the
+		// widening `TypeRules.widensIntToFloat` licenses is paid in the constant's own representation
+		// (`constFloatBits`, the compile-time `cvtsi2sd`) instead of through `assignableValue`. `as float =
+		// 3` recorded the integer 3 in a slot the store then writes as an f64 — 1.5e-323 read back out.
+		//
+		// ⚠ **THE DECLARED TAG IS THE RAW ONE, so a `named` RANGED ALIAS reads here as an INTEGER.** This
+		// reader is SHARED with the declaration sweep, which is handed the index it is BUILDING and so may
+		// not consult the alias registry (`Queries.queryProgramSignatures`) — and it is the SWEEP's layout
+		// that a `Self{…}` literal later reads its defaults out of, so widening in the real parse alone
+		// would write into the wrong copy. A field declared with a ranged FLOAT alias therefore records its
+		// payload UNWIDENED, and `fillFieldDefault` — which runs where `fieldTypeOf` can resolve the alias
+		// — pays the deferred half.
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
-		try self.requireAssignable(nameTok, value: given.tag, declared: maxonTypeTag(fieldType), noun: "field")
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload))
+		let declaredTag = maxonTypeTag(fieldType)
+		try self.requireAssignable(nameTok, value: given.tag, declared: declaredTag, noun: "field")
+		let payload = self.constFloatBits(given) if widensIntToFloat(given.tag, declared: declaredTag) else given.payload
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(payload))
 	end 'readStructFieldInto'
 
 	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
@@ -8452,23 +8467,31 @@ export type Parser
 		let valueTag = self.tagOf(value)
 		let declaredTag = maxonTypeTag(binding.varType)
 
-		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag, noun: "variable")
+		// ⭐ The binding KEEPS ITS DECLARED TYPE ACROSS A REBIND, so `x = 3` into a `var x = 0.0` rebinds
+		// to a WIDENED float and not to the raw integer. Without the coercion the binding silently became
+		// an int: `x == 3.0` on the next line was E3005 ("cannot compare int with float") against a
+		// perfectly legal program, and a rebind INSIDE A LOOP fed an i64 and an f64 into one header phi —
+		// measured, a cross-register-file panic in the x64 emitter.
+		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, noun: "variable")
 
 		// ⭐ OPEN #54/#59: reassigning a `var` to the WRONG named aggregate — a DIFFERENT struct/union, OR
 		// an aggregate where the binding declares a SCALAR — is a retype the tag check above cannot see
 		// (`structRef == structRef` for any two structs; a boxed union and a ranged-int alias share
 		// `named`); the overwritten box would later be dropped under the binding's declared destructor —
-		// a wild free / leak. `requireAssignable` stays tag-based (its scalar-coercion job is, and it is
-		// SHARED with the global-store and field-default callers). Identity is the interned name, EXACT.
+		// a wild free / leak. `assignableValue`'s verdict stays tag-based (its scalar-coercion job is, and
+		// it is SHARED with the global-store and field callers). Identity is the interned name, EXACT.
 		// Un-gated — both names are computed unconditionally, empty for a scalar with no allocation — and
 		// `giveTypeName` prints the scalar side's primitive, not an empty name.
+		//
+		// It reads the PARSED value, not the coerced one: a widening only ever produces a float scalar, so
+		// both aggregate names are empty on that path and the question is the same one either way.
 		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
 		let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(declaredAggregate, got: assignedAggregate) 'aggregateReassignMismatch'
 			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.giveTypeName(valueTag, aggregateName: assignedAggregate), expected: self.giveTypeName(declaredTag, aggregateName: declaredAggregate), line: nameTok.line, column: nameTok.column)
 		end 'aggregateReassignMismatch'
 
-		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
+		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
 	end 'parseAssignment'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
@@ -8715,12 +8738,15 @@ export type Parser
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
 
+		// The slot keeps the type its declaration gave it, so `g = 3` into a `var g = 0.0` stores a WIDENED
+		// f64 and not the integer's raw bytes — the same coercion the local rebind above performs, through
+		// the same door.
 		let declared = maxonTypeTag(valueType)
-		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: declared, noun: "global")
+		let stored = try self.assignableValue(nameTok, value: value, declared: declared, noun: "global")
 
 		let range = SourceRange.ofToken(nameTok)
 		if not self.signatures.typeIsManaged(valueType) 'scalarGlobal'
-			self.emitGlobalStore(label, valueType: valueType, value: value, range: range)
+			self.emitGlobalStore(label, valueType: valueType, value: stored, range: range)
 			return
 		end 'scalarGlobal'
 
@@ -8729,7 +8755,7 @@ export type Parser
 		// COPIED into a fresh owned record, an already-owned value is MOVED (its source binding poisoned,
 		// or its pending statement-end drop cancelled). A second spelling here would be free to leak the
 		// temporary or double-free the source.
-		let owned = try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsText(declared), anchor: nameTok, range: range)
+		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsText(declared), anchor: nameTok, range: range)
 
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
@@ -8799,10 +8825,52 @@ export type Parser
 		end 'compilerOwned'
 	end 'requireTypeNameNotCompilerOwned'
 
-	// The COERCION rule for an ASSIGNMENT — shared by the local path and the global one, which
-	// were already two copies of the same three lines and would now have been two copies of the
-	// same five. A global is no less able to be handed a bool where it declared an int, or a float
-	// where it declared an int, than a local is; both anchor the diagnostic on the assigned NAME.
+	// ⭐⭐ **THE PARSER-TIER COERCION, PAID.** `TypeRules.widensIntToFloat` states the obligation an `ok`
+	// verdict leaves behind; this is the ONE place the parser discharges it for an SSA value, and every
+	// parser-tier coercion site routes through here rather than restating the rule. That is the whole
+	// shape of the bug it closes: six doors each asked `checkDeclaredType`, accepted `ok`, and then went
+	// on using the value they already held — an i64 in a GPR meeting a slot declared f64.
+	//
+	// `promoteToFloat` is the primitive (a `cvtsi2sd`, via `MaxonUnaryOp.promoteToFloat`) and it is
+	// idempotent, so the guard is about the DECLARED side, not the value's: without it a `return 3` from
+	// a `returns int` would convert too.
+	//
+	// ⚠ It is the PARSER's promotion and deliberately not the Std tier's. shv2 has exactly two promotion
+	// primitives and the split is forced: `LowerMaxonToStd.floatWidenedArg` widens a call ARGUMENT, whose
+	// callee signature is a whole-program fact the parser may not have; every site below is intra-file —
+	// a `return` against its own function's declared type, a field against a layout already in hand, a
+	// binding against its own declaration — so all of them promote HERE, off the `valueTags` column, with
+	// no second table.
+	function coerceToDeclared(value ValueId, declared ValueTypeTag, anchor Token) returns ValueId
+		if not widensIntToFloat(self.tagOf(value), declared: declared) 'noWidening'
+			return value
+		end 'noWidening'
+
+		return self.promoteToFloat(value, opTok: anchor)
+	end 'coerceToDeclared'
+
+	// **CHECK AN ASSIGNED VALUE AGAINST ITS DECLARED SLOT AND HAND BACK THE VALUE THAT SLOT WANTS** — the
+	// verdict and the coercion in ONE call, so a caller cannot take the `ok` and forget the conversion.
+	// Every assignment-shaped door in the parser goes through it: a local `var` rebind, a top-level global
+	// store, a struct-literal field, a field write, a self-field write.
+	//
+	// It returns a value rather than nothing precisely because the caller must REBIND: the promoted id is
+	// a different SSA value from the one that was parsed, and a caller that stored the original would
+	// store the raw integer bits — which is what all five of them did.
+	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, noun String) returns ValueId throws ParseError
+		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: declared, noun: noun)
+		return self.coerceToDeclared(value, declared: declared, anchor: nameTok)
+	end 'assignableValue'
+
+	// The VERDICT rule for an ASSIGNMENT — the local path, the global one, the struct-literal field, the
+	// field write and the field DEFAULT all ask it, and none of them restates it. A global is no less able
+	// to be handed a bool where it declared an int, or a float where it declared an int, than a local is;
+	// every one of them anchors the diagnostic on the assigned NAME and names its own PLACE (`noun`).
+	//
+	// ⚠ It is the verdict ALONE, and it is asked DIRECTLY by exactly one caller: the site holding a
+	// parse-time CONSTANT rather than an SSA value (a struct field's literal default), which pays the
+	// widening the verdict licenses in the constant's own representation. Every site holding a VALUE asks
+	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
 	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, noun String) throws ParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break 'declared'
@@ -9169,15 +9237,24 @@ export type Parser
 			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
 		end 'aggregateReturnMismatch'
 
-		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `retVal` is the
+		// ⭐ **THE `ok` VERDICT ABOVE LICENSED A WIDENING, AND SOMETHING HAS TO PERFORM IT.** `return 3`
+		// from a `returns float` function agreed (both numeric, nothing lost) and then handed the raw i64
+		// straight to `emitOwnedValueReturn` — which put a GPR where the f64 return register is, and the
+		// x64 emitter panicked on the cross-register-file move it was asked for. The same door every other
+		// coercion site uses; `retVal` is already a float when the source wrote one, so this is a no-op for
+		// every program that compiled before.
+		let returned = self.coerceToDeclared(retVal, declared: declaredTag, anchor: retTok)
+
+		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `returned` is the
 		// scalar the `ret` terminator will carry (a ranged int return is never an owned value, so
 		// `emitOwnedValueReturn` passes it through unwrapped), so recording it here matches the id the
-		// Std pass finds on the `ret` op. Anchored on the `return` keyword (the E3005 position).
+		// Std pass finds on the `ret` op. Anchored on the `return` keyword (the E3005 position). A ranged
+		// INT alias never widens, so this is the value the coercion returned untouched.
 		if not self.rangeCheckReturnAlias.isEmpty() 'rangedReturn'
-			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(retVal, line: retTok.line, column: retTok.column))
+			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(returned, line: retTok.line, column: retTok.column))
 		end 'rangedReturn'
 
-		try self.emitOwnedValueReturn(retVal, anchor: retTok)
+		try self.emitOwnedValueReturn(returned, anchor: retTok)
 	end 'parseReturnStatement'
 
 	// ⭐ **EMIT A VALUE `ret` THAT HANDS ITS VALUE TO THE CALLER AS AN OWNED ONE** — the shared tail of a
@@ -17760,10 +17837,13 @@ export type Parser
 			// captured first so `rhsWasBareLocalReference` can decide, after the value is parsed, whether
 			// it was a bare local — a managed field's move-in poisons that source.
 			let valueStart = self.pos
-			let value = try self.parseValueExpression(func)
+			let parsed = try self.parseValueExpression(func)
 			let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-			try self.requireFieldType(layout, index: index, fieldType: fieldType, value: value, anchor: nameTok)
-			try self.rejectDoubleOwningStore(movedOwningValues, value: value, fieldType: fieldType, valueStart: valueStart)
+			// The COERCED value is what fills the slot — `Self{v: 3}` into a `float` field stores the
+			// widened f64, not the integer's bytes. A widening only ever produces a fresh scalar, so the
+			// ownership questions below still read the value the source actually named.
+			let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, anchor: nameTok)
+			try self.rejectDoubleOwningStore(movedOwningValues, value: parsed, fieldType: fieldType, valueStart: valueStart)
 
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a struct field at CONSTRUCTION either** —
 			// a `Self{op: closure}` box is the same heap slot `x.op = closure` writes (one carries only the
@@ -17797,22 +17877,28 @@ export type Parser
 	// It is the parser's to check and not SemanticCheck's, unlike a call ARGUMENT: a call's callee
 	// may be declared in another file, but a struct literal's layout is already in hand here — the
 	// parser had to have it to know the field exists at all.
-	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) throws ParseError
+	//
+	// ⭐ **IT RETURNS THE VALUE THE FIELD WANTS, AND EVERY CALLER REBINDS.** A scalar field is a coercion
+	// site like any other, so an int meeting a declared `float` widens (`assignableValue`) — and the
+	// promoted id is a DIFFERENT SSA value from the one that was parsed. All three callers (the struct
+	// literal, the field write, the self-field write) once stored the value they already held, so
+	// `Self{v: 3}` into a float field wrote the integer's raw bytes into an f64 slot and read back
+	// 1.5e-323. Answering with the coerced value is what makes that unwriteable rather than merely fixed
+	// at three sites: the check and the conversion are ONE call, in ONE place, for all three doors.
+	//
+	// A MANAGED field returns its value untouched — there is no scalar widening on a pointer, and the
+	// move-in the callers perform is a separate decision made downstream.
+	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
 		if payloadClassIsManaged(class) 'managed'
 			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
-		end 'managed' else 'scalarField'
-			let got = self.tagOf(value)
-			let declaredTag = maxonTypeTag(fieldType)
-			match checkDeclaredType(got, declared: declaredTag) 'declared'
-				ok then break 'declared'
-				mismatch then throw ParseError.assignTypeMismatch(String.from(anchor.value), got: typeTagName(got), expected: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
-				narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
-				// A FUNCTION VALUE into a NON-function struct FIELD (P1.5-A1) — the struct-literal twin of the
-				// assignment site, noun "field". A function value into a function-typed field agrees above.
-				functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("field", name: String.from(anchor.value), heldType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
-			end 'declared'
-		end 'scalarField'
+			return value
+		end 'managed'
+
+		// The SAME verdict-plus-coercion the assignment doors ask, noun "field" — which is what it always
+		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
+		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
+		return try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), noun: "field")
 	end 'requireFieldType'
 
 	// ⭐ **REJECT A DOUBLE-MOVE OF ONE VALUE INTO TWO OWNING FIELDS (P1.6-B2)** — the move-only guard that
@@ -17924,9 +18010,24 @@ export type Parser
 	// Emit one default's `literal` and record it as slot `index`'s value. Split out so the payload
 	// is bound by the match arm that proved there IS one, rather than read back out of the union
 	// through an accessor with a `none` case to mishandle.
+	//
+	// ⭐ **THE DEFERRED HALF OF THE FIELD-DEFAULT WIDENING.** `readStructFieldInto` records a default in the
+	// field's own representation whenever it can decide — but it is shared with the declaration sweep, which
+	// may not read the alias registry, so a field declared `as Weight = 3` (a ranged FLOAT alias) recorded a
+	// raw INTEGER against a `named` tag the sweep read as integral. Here the whole program IS known:
+	// `fieldTypeOf` resolves that alias to `float`, and `fieldDeclaredTagOf` — the RAW tag, deliberately
+	// un-retagged — is what says the recorded payload was never widened. Left unpaid it wrote the integer's
+	// bytes into an f64 slot.
+	//
+	// ⚠ The two conditions are BOTH necessary and neither is redundant. A CONCRETE `float` field was already
+	// widened at the declaration, so its raw tag is `float` and `widensIntToFloat` is false — it must not be
+	// converted a second time. And a `named` field that is an INT alias resolves to `named`, not `float`, so
+	// it is not converted at all.
 	function fillFieldDefault(layout StructLayout, index FieldIndex, payload ParsedInt, fieldValues ValueIdArray, filled BoolArray, range SourceRange)
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-		let value = self.emitLiteral(payload, valueType: self.fieldStorageType(declared), range: range)
+		let recorded = self.signatures.fieldDeclaredTagOf(layout.name, index: index)
+		let bits = intToFloatBits(payload) if widensIntToFloat(recorded, declared: maxonTypeTag(declared)) else payload
+		let value = self.emitLiteral(bits, valueType: self.fieldStorageType(declared), range: range)
 
 		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
 		try filled.set(index, value: true) otherwise panic("fillFieldDefault: filled.set OOB at {index} — the column is sized to the layout's field count")
@@ -21066,8 +21167,10 @@ export type Parser
 		end 'arrayFieldStore'
 
 		let valueStart = self.pos
-		let value = try self.parseExpression(func, block: block)
-		try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames), value: value, anchor: fieldTok)
+		let parsed = try self.parseExpression(func, block: block)
+		// The COERCED value is what the store writes — `count = 3` into a `float` field stores the widened
+		// f64. Same door as the struct literal and the `p.v = 3` spelling.
+		let value = try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames), value: parsed, anchor: fieldTok)
 
 		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
 		// (`name = n`) must drop its old value and MOVE the new one in (a borrowed String is promoted, a
@@ -21219,8 +21322,10 @@ export type Parser
 		// discipline, for its reason. The value's start is captured so `emitFieldWrite` can decide, for a
 		// MANAGED field, whether the new value is a bare-local reference to poison.
 		let valueStart = self.pos
-		let value = try self.parseExpression(func, block: block)
-		try self.requireFieldType(step.layout, index: index, fieldType: self.signatures.fieldTypeOf(step.layout.name, index: index, into: self.artifact.typeNames), value: value, anchor: step.lastFieldTok)
+		let parsed = try self.parseExpression(func, block: block)
+		// The COERCED value is what the store writes — `p.v = 3` into a `float` field stores the widened
+		// f64. Same door as the struct literal and the bare self-field spelling.
+		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.signatures.fieldTypeOf(step.layout.name, index: index, into: self.artifact.typeNames), value: parsed, anchor: step.lastFieldTok)
 
 		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'
@@ -22941,15 +23046,15 @@ export type Parser
 	end 'foldConstBinOp'
 
 	// The f64 BIT PATTERN of a constant in a float fold: a float carries its bits; an INT is PROMOTED
-	// to its f64 value first — the compile-time equivalent of `Parser.promoteToFloat`'s `cvtsi2sd`, so
-	// `1 + 2.0` folds to 3.0 and not to a summed bit pattern. `0.0 + payload` is the host's int→f64
-	// conversion; `floatToBits` captures the resulting bits.
+	// to its f64 value first (`TypeRules.intToFloatBits`, the compile-time `cvtsi2sd`), so `1 + 2.0`
+	// folds to 3.0 and not to a summed bit pattern. Idempotent, exactly as `promoteToFloat` is, so a
+	// caller never has to work out which side it is holding.
 	function constFloatBits(value ConstValue) returns ParsedInt
 		if tagIsFloat(value.tag) 'alreadyFloat'
 			return value.payload
 		end 'alreadyFloat'
 
-		return __Builtins.floatToBits(0.0 + value.payload)
+		return intToFloatBits(value.payload)
 	end 'constFloatBits'
 
 	// ⭐ THE SHIFT RULE, asked of a constant. Every part of the answer comes from TypeRules — the fill,

@@ -1,0 +1,21 @@
+// Test: float-to-int-self-field-rejected
+type Reading
+	export var value as int = 0
+
+	export function bump() returns int
+		value = 3.7
+		return 0
+	end 'bump'
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	var r = Reading.make()
+	return r.bump()
+end 'main'
+---
+CompilerError:
+error E3009: <fragment>:6:3: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)

@@ -187,6 +187,103 @@ end 'main'
 ```
 
 
+<!-- test: float-struct-field -->
+⭐ **A STRUCT FIELD DECLARED `float`** — stored at construction, overwritten by a write, and read back
+into an arithmetic expression. Nothing in this suite had a float FIELD before, which is exactly why
+the field doors were the last place an int reached an f64 slot unconverted: every float test kept its
+floats in locals, parameters and returns.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+type Particle
+	export var mass as float
+	export var velocity as float
+
+	export static function make(mass float, velocity float) returns Self
+		return Self{mass: mass, velocity: velocity}
+	end 'make'
+
+	export function momentum() returns float
+		return self.mass * self.velocity
+	end 'momentum'
+end 'Particle'
+
+function main() returns ExitCode
+	var p = Particle.make(2.5, velocity: 4.0)
+	p.velocity = 6.0
+	return trunc(p.momentum())
+end 'main'
+```
+```exitcode
+15
+```
+
+
+<!-- test: float-alias-struct-field -->
+The same struct with its fields declared through a ranged FLOAT typealias. It is not a spelling
+variant: a `float(low to high)` alias reaches a field as a bare NAME, and a name is the one form the
+whole-program declaration sweep cannot resolve — it is handed the index it is still building. Read as
+an ordinary `named` type the alias is an INTEGER, so this exact program was `E3009: cannot implicitly
+convert 'float' to 'int'` on the perfectly legal `Self{mass: 2.5}`.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Weight = float(f64.min to f64.max)
+
+type Particle
+	export var mass as Weight
+	export var velocity as Weight
+
+	export static function make(mass Weight, velocity Weight) returns Self
+		return Self{mass: mass, velocity: velocity}
+	end 'make'
+
+	export function momentum() returns Weight
+		return self.mass * self.velocity
+	end 'momentum'
+end 'Particle'
+
+function main() returns ExitCode
+	var p = Particle.make(2.5, velocity: 4.0)
+	p.velocity = 6.0
+	return trunc(p.momentum())
+end 'main'
+```
+```exitcode
+15
+```
+
+
+<!-- test: float-alias-struct-field-int-default -->
+The two halves of that alias meeting each other: the field's type resolves to `float`, so its
+DECLARED DEFAULT — recorded by the same sweep, against the same unresolved name — must be widened to
+the f64 bit pattern before it fills the slot. Fixing the field's TYPE alone turns this program from a
+clean rejection into a silent 1.5e-323.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Weight = float(f64.min to f64.max)
+
+type Particle
+	export var mass as Weight = 3
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Particle'
+
+function main() returns ExitCode
+	let p = Particle.make()
+	if p.mass == 3.0 'exact'
+		return trunc(p.mass * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+
 <!-- disabled-test: float-print-negative-and-repeat -->
 <!-- P1.2 String — `print` + the `{}` interpolation that calls mrt_f64_to_string. The x64 SSA-destruction hazard this case regresses is covered at THIS rung by specs-shv2/float-compare-branch.md, which reaches the same unordered else edge through an ExitCode instead of a formatted string. -->
 ```maxon

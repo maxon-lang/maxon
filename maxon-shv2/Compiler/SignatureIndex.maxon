@@ -1003,7 +1003,7 @@ end 'classifyUnionPayload'
 // A ranged-int alias payload is a scalar of its underlying width. A float-underlying alias would be a
 // float payload, rejected the same way a bare `float` is.
 function aliasPayloadClass(underlying MaxonType) returns PayloadClass
-	if maxonTypeTag(underlying) == ValueTypeTag.float 'floatAlias'
+	if tagIsFloat(maxonTypeTag(underlying)) 'floatAlias'
 		return PayloadClass.floatPayload
 	end 'floatAlias'
 	return PayloadClass.scalar(underlying)
@@ -3347,6 +3347,27 @@ export type ProgramSignatures
 		return try self.typeAliases.underlyingInAnyFile(name)
 	end 'aliasUnderlyingInAnyFile'
 
+	// Is `name` a ranged FLOAT typealias (`typealias Weight = float(f64.min to f64.max)`)? The `bool` half
+	// of `aliasUnderlyingInAnyFile`, and the sibling of `isFunctionAlias`/`isGenericAlias` — the three
+	// questions `fieldTypeOf` asks of a field declared with a bare NAME, whose meaning the declaration
+	// SWEEP that recorded the layout could not yet know.
+	//
+	// ⚠ An INT alias is deliberately NOT re-tagged by any of them: `named` already reads as an integer
+	// everywhere (`tagIsIntegral`), and its NAME is what carries the range and the signedness that
+	// `valueIsUnsigned` and the range checks read off it. A FLOAT alias is the one `named` type whose
+	// VALUE lives in a different register file, so it is the one that cannot be left overloaded.
+	//
+	// Bare-name, exactly as `isFunctionAlias`/`isGenericAlias` are and for `classifyUnionPayload`'s
+	// reason: a `StructLayout` does not record the file its fields were declared in, so there is no
+	// reader file to resolve from.
+	export function isFloatAlias(name ByteArray) returns bool
+		if let underlying = try self.aliasUnderlyingInAnyFile(name) 'rangedAlias'
+			return tagIsFloat(maxonTypeTag(underlying))
+		end 'rangedAlias'
+
+		return false
+	end 'isFloatAlias'
+
 	// --- Inner + per-instance ranged aliases (P1.6-C) ---
 
 	// Is `name` a BASE-TEMPLATE inner alias ("Wrapper.Idx") — the shared-body form a generic method's bare
@@ -4786,10 +4807,37 @@ export type ProgramSignatures
 			if self.isGenericAlias(name) 'genericAlias'
 				return MaxonType.genericInstance(self.genericAliasInstance(name))
 			end 'genericAlias'
+			// ⭐ A RANGED FLOAT-ALIAS-typed field (`export var mass as Weight`) arrives as a `named` for the
+			// same reason the two above do — the SWEEP recorded this layout before any alias was known — and
+			// it is the one `named` whose VALUE is a genuine f64. Left overloaded it reads as an INTEGER
+			// (`tagIsIntegral`), which made `Self{mass: 2.5}` a false E3009 on legal code while `Self{mass: 3}`
+			// was admitted unconverted into a slot the store then wrote as an i64. Re-tagged here, in the ONE
+			// door a field's type comes out of, so the construction check, the field READ, the field WRITE and
+			// the store-width query all see the float and cannot disagree about it.
+			//
+			// It returns the bare primitive and interns nothing: a `float` carries no name (`typeNameIdOf` is
+			// `UnnamedTypeId`), so there is nothing for `into` to adopt. The RANGE is dropped exactly as
+			// `TypeResolution.resolveNamedType` drops it — a float alias has no range check today.
+			if self.isFloatAlias(name) 'floatAlias'
+				return MaxonType.float
+			end 'floatAlias'
 		end 'maybeAlias'
 
 		return self.adoptType(declared, into: into)
 	end 'fieldTypeOf'
+
+	// The field's declared type EXACTLY AS THE DECLARATION SWEEP RECORDED IT — `fieldTypeOf` minus the
+	// alias re-tagging, and as a bare TAG, so it needs no interner and allocates nothing.
+	//
+	// It exists for one question, and it is a question about the sweep's own blind spot: was this field
+	// declared with a ranged ALIAS? A field's LITERAL DEFAULT is recorded by the same sweep, against this
+	// raw tag, so a field declared `as Weight = 3` recorded an INTEGER payload that `fieldTypeOf` now says
+	// is an f64 slot. `Parser.fillFieldDefault` is where that deferred conversion is paid, and this is what
+	// tells it a conversion is owed.
+	export function fieldDeclaredTagOf(structName ByteArray, index FieldIndex) returns ValueTypeTag
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldDeclaredTagOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		return maxonTypeTag(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldDeclaredTagOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`"))
+	end 'fieldDeclaredTagOf'
 
 	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
 	// payload-bearing (boxed) union? Drives the struct's `__destruct_<T>` drop CASCADE: every field this

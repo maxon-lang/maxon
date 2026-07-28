@@ -274,3 +274,310 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:14:9: argument type mismatch for 'x': expected 'bool', got 'int'
 ```
+
+<!-- test: int-literal-to-float-return -->
+⭐ **THE DOC STATES THE RULE FOR THREE SITES AND EVERY CASE ABOVE EXERCISES ONE.** Each widening test
+above goes through a call ARGUMENT; the one return-direction case is the NARROWING half. So the
+`return` half of "the rule is not special to arguments" was stated and never run — and it did not
+work: the value agreed, nothing converted it, and the raw i64 reached the backend where the f64
+return register is. Measured before this case existed: `panic … a register-to-register move from rax
+to xmm0 crosses register files`.
+
+Every case below asserts a computed VALUE and not merely that the program compiles, because that is
+the shape of the bug — `42` here is `3.0 * 14.0`, which an unconverted `3` cannot produce.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+function widen() returns Float
+	return 3
+end 'widen'
+
+function main() returns ExitCode
+	return trunc(widen() * 14.0)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-expression-to-float-return -->
+The returned value need not be a literal: an integer EXPRESSION meets the declared `float` under the
+same rule, exactly as `expression-to-float-param` does at the argument site.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+function widen(a int, b int) returns Float
+	return a + b
+end 'widen'
+
+function main() returns ExitCode
+	return trunc(widen(20, b: 22) + 0.5)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-literal-to-float-field-literal -->
+A struct LITERAL is a coercion site: the field declares the type and the value has to meet it. This
+compiled and RAN before the conversion existed, storing the integer's raw bytes in an f64 slot —
+`3` read back as 1.5e-323, so `r.raw() == 3.0` was false and the program returned 7.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+type Reading
+	export var value as float
+
+	export static function make() returns Self
+		return Self{value: 3}
+	end 'make'
+
+	export function raw() returns float
+		return self.value
+	end 'raw'
+end 'Reading'
+
+function main() returns ExitCode
+	let r = Reading.make()
+	if r.raw() == 3.0 'exact'
+		return trunc(r.raw() * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-literal-to-float-field-write -->
+The same field, reached by a WRITE rather than by construction. It is the same rule and it must not
+answer differently for the way the source spelled it.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+type Reading
+	export var value as float = 0.0
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	var r = Reading.make()
+	r.value = 3
+	if r.value == 3.0 'exact'
+		return trunc(r.value * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-literal-to-float-self-field -->
+And the third spelling of that one write: the bare field name inside an instance method.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+type Reading
+	export var value as float = 0.0
+
+	export function bump() returns int
+		value = 3
+		return 0
+	end 'bump'
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	var r = Reading.make()
+	let done = r.bump()
+	if r.value == 3.0 'exact'
+		return trunc(r.value * 14.0) + done
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-literal-to-float-field-default -->
+A field DEFAULT is a coercion site too, and the one that holds a parse-time constant rather than a
+value: `as float = 3` records the f64 bit pattern of 3.0, not the integer 3.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+type Reading
+	export var value as float = 3
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	let r = Reading.make()
+	if r.value == 3.0 'exact'
+		return trunc(r.value * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-literal-to-float-global -->
+A top-level `var` keeps the type its initializer gave it, so a later store of an integer widens into
+the slot rather than overwriting an f64 with eight bytes of two's complement.
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+var scale = 0.0
+
+function main() returns ExitCode
+	scale = 3
+	if scale == 3.0 'exact'
+		return trunc(scale * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-literal-to-float-local -->
+A LOCAL `var` keeps its declared type across a rebind for the same reason. Before the coercion the
+binding silently became an int — `scale == 3.0` on the very next line reported "cannot compare int
+with float" against a legal program, and the same rebind inside a loop fed an i64 and an f64 into one
+header phi (a cross-register-file panic in the x64 emitter).
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+```maxon
+function main() returns ExitCode
+	var scale = 0.0
+	scale = 3
+	if scale == 3.0 'exact'
+		return trunc(scale * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: float-to-int-field-literal-rejected -->
+⭐ **THE OTHER DIRECTION IS STILL REFUSED AT EVERY ONE OF THOSE DOORS**, and that is what makes the
+widening above safe to add: a rule that promoted in both directions would be a far worse bug than the
+one it replaced. Six rejections, one message.
+```maxon
+type Reading
+	export var value as int
+
+	export static function make() returns Self
+		return Self{value: 3.7}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	let r = Reading.make()
+	return r.value
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-literal-rejected.test:6:15: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: float-to-int-field-write-rejected -->
+```maxon
+type Reading
+	export var value as int = 0
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	var r = Reading.make()
+	r.value = 3.7
+	return r.value
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-write-rejected.test:12:4: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: float-to-int-self-field-rejected -->
+```maxon
+type Reading
+	export var value as int = 0
+
+	export function bump() returns int
+		value = 3.7
+		return 0
+	end 'bump'
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	var r = Reading.make()
+	return r.bump()
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-self-field-rejected.test:6:3: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: float-to-int-field-default-rejected -->
+```maxon
+type Reading
+	export var value as int = 3.7
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Reading'
+
+function main() returns ExitCode
+	let r = Reading.make()
+	return r.value
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-field-default-rejected.test:3:13: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: float-to-int-global-rejected -->
+```maxon
+var counter = 0
+
+function main() returns ExitCode
+	counter = 3.7
+	return counter
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-global-rejected.test:5:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: float-to-int-local-rejected -->
+```maxon
+function main() returns ExitCode
+	var counter = 0
+	counter = 3.7
+	return counter
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-local-rejected.test:4:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
