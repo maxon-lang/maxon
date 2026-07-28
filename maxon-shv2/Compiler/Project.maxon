@@ -157,10 +157,36 @@ export type VarInfo
 	//
 	// Constructed 0, and left 0 for every binding kind no borrow can name, where nothing reads it.
 	export var lastUseToken as TokenIndex
+	// ⭐ **DOES THIS NAME DENOTE MODULE STORAGE — a top-level `var` — RATHER THAN A BINDING OF THIS
+	// FRAME?** True only for the E3070 subject stand-in `Parser.topLevelBorrowSubjectOf` mints.
+	//
+	// ⚠ **IT IS READ TO SUPPRESS THE `boundValue` TEST, NOT MERELY TO LABEL THE BINDING.** A stand-in
+	// has no SSA value at all, so its `boundValue` is 0 — and 0 is `self`'s own parameter id, the very
+	// coincidence `receiverOwnerMask`'s ⚠ block records three measured miscompiles from. Without this
+	// bit `Parser.receiverStorageMask` would read a global's write as a write of parameter 0's storage
+	// and refuse every call that hands that parameter anywhere: a false rejection with no compile error.
+	//
+	// False for every binding a `Scope` holds, which is every other constructor here.
+	export var namesModuleStorage as bool
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
 	end 'create'
+
+	// ⭐⭐ **THE E3070 SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
+	// on, minted and interned by `Parser.topLevelBorrowSubjectOf`.
+	//
+	// It exists because a global has no `VarInfo` anywhere: `Scope` holds this frame's bindings, and the
+	// parser mints a FRESH receiver `VarInfo` at every access to a global (`dispatchOnManagedReceiver`,
+	// whose `boundValue` is that access's own load). Keying a subject on those would file one storage
+	// under a new object at every mention — the same defect a self-field alias would have had, which
+	// `Scope` cures for a local by holding ONE object per name.
+	//
+	// ⚠ Its `boundValue`/`slot` are 0 and MUST NOT be read: `namesModuleStorage` is what says so, and it
+	// is the bit every reader of `boundValue` in the E3070 path tests first.
+	export static function createModuleStorageSubject(name ByteArray, varType MaxonType) returns VarInfo
+		return Self{name: name, varType: varType, mutable: true, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: true}
+	end 'createModuleStorageSubject'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
 	// instance-method entry. It materializes NO stack slot and aliases NO SSA value — a read is a
@@ -175,11 +201,11 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0}
+		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false, lastUseToken: 0}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -187,7 +213,7 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false}
 	end 'createValueBinding'
 
 	// The value binding a PARAMETER gets — `createValueBinding` plus the one bit that distinguishes it
@@ -200,7 +226,7 @@ export type VarInfo
 	// re-read the constant would take that flag out of the caller's hands — exactly the defeat that
 	// tripwire's comment warns about.
 	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0, namesModuleStorage: false}
 	end 'createParameterBinding'
 end 'VarInfo'
 

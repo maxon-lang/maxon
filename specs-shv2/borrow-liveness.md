@@ -689,6 +689,36 @@ end 'main'
 error E3070: specs/fragments/borrow-liveness/match-gives-carries-the-borrow.test:14:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 11)
 ```
 
+<!-- test: match-gives-merges-every-arms-borrow -->
+### … and it carries EVERY arm's borrow, not just one
+One binding, two subjects: each arm retargets its own pending borrow onto the same phi, so `s` really
+does hold an element of both arrays and both writes must be refused. The claim loop is what makes
+this work — stopping it at its first match would wave one of the two through as a use-after-free.
+```maxon
+enum Mode
+	first
+	second
+end 'Mode'
+
+function main() returns ExitCode
+	var a = ["alpha string long enough for the heap allocation path"]
+	var b = ["beta string long enough for the heap allocation path"]
+	let m = Mode.first
+	let s = match m 'pick'
+		first gives try a.get(0) otherwise ""
+		second gives try b.get(0) otherwise ""
+	end 'pick'
+	a.clear()
+	b.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/match-gives-merges-every-arms-borrow.test:15:4: cannot mutate 'a' via 'clear' while it is borrowed by 's' (borrowed at line 12)
+error E3070: specs/fragments/borrow-liveness/match-gives-merges-every-arms-borrow.test:16:4: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 13)
+```
+
 <!-- test: propagating-try-carries-the-borrow -->
 ### A PROPAGATING `try` binds the accessor's own value
 No merge, no phi, nothing to retarget — the borrow is the value the binding takes. The third of the
@@ -1175,4 +1205,177 @@ end 'main'
 ```
 ```stdout
 44 42
+```
+
+<!-- test: module-storage-source -->
+### A top-level `var` is a borrow source
+Module storage differs from a local in WHERE the record is anchored and in nothing a borrow can see.
+The subject was `Scope`-only until this case: `g.clear()` compiled clean and faulted with
+**0xC0000005**, on a program the oracle refuses with this exact diagnostic.
+```maxon
+var g = ["hello world this is a long string for heap allocation"]
+
+function main() returns ExitCode
+	let s = try g.get(0) otherwise ""
+	g.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/module-storage-source.test:6:4: cannot mutate 'g' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+```
+
+<!-- test: module-storage-rebind -->
+### … and rebinding one frees what the borrow points at
+The global store DECREFS the record the slot held (`emitCheckedGlobalStore`), so it is the local
+rebind door one anchoring out. Measured **0xC0000005** before it existed.
+```maxon
+typealias StringArray = Array with String
+
+var g = ["hello world this is a long string for heap allocation"]
+
+function main() returns ExitCode
+	let s = try g.get(0) otherwise ""
+	g = StringArray.create()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/module-storage-rebind.test:8:2: cannot mutate 'g' via '=' while it is borrowed by 's' (borrowed at line 7)
+```
+
+<!-- test: module-storage-to-a-mutating-callee -->
+### … and handing one to a callee that writes it
+The call-argument door reaches module storage through the same subject derivation as a local. The
+oracle ACCEPTS this program — its borrow check is over var slots, which a global is not, and it
+retains anyway — so this is the refusing-direction divergence one storage class over.
+```maxon
+typealias StringArray = Array with String
+
+var g = ["hello world this is a long string for heap allocation"]
+
+function grow(dest StringArray)
+	dest.clear()
+end 'grow'
+
+function main() returns ExitCode
+	let s = try g.get(0) otherwise ""
+	grow(g)
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/module-storage-to-a-mutating-callee.test:12:2: cannot mutate 'g' via 'grow' while it is borrowed by 's' (borrowed at line 11)
+```
+
+<!-- test: forin-over-module-storage -->
+### … and a `for … in` over one borrows its element lexically
+The loop element's borrow reaches module storage too. Measured before this: the body read the
+free-poison byte and printed `4557430888798830399`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var g = ["hello world this is a long string for heap allocation"]
+
+function main() returns ExitCode
+	var total = 0 as Integer
+	for it in g 'scan'
+		g.clear()
+		total = total + it.byteLength()
+	end 'scan'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/forin-over-module-storage.test:9:5: cannot mutate 'g' via 'clear' while it is borrowed by 'it' (borrowed at line 8)
+```
+
+<!-- test: module-storage-borrow-expires -->
+### The over-rejection guard for the four above
+A read-only callee does not end the borrow, and once the borrowing name's last use is past, the
+global is writable again — the same NLL rule a local subject obeys, which is the point of admitting
+module storage to the SUBJECT space rather than to a rule of its own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+var g = ["hello world this is a long string for heap allocation"]
+
+function peek(src StringArray) returns Integer
+	return src.count()
+end 'peek'
+
+function main() returns ExitCode
+	let s = try g.get(0) otherwise ""
+	let n = peek(g)
+	print("[{s}] {n}\n")
+	g.clear()
+	print("{g.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation] 1
+0
+```
+
+<!-- test: method-writing-a-string-or-set-field-is-not-a-conflict -->
+### A method that writes a `String` or a `Set` field of the receiver is not a conflict
+The over-rejection guard for the two rows of `IrFunction`'s mask table that run the OTHER way: a
+`String` or `Set` receiver write sets E3019's mask and deliberately NOT the storage column, because
+neither can free an ARRAY element and an array element is the only borrow E3070 tracks. Recording
+them would refuse both calls here, on a program that is perfectly safe.
+
+⚠ E3019's own answer about those two receivers is unchanged and must stay so — `tagIt(msg)` on a
+`let` String argument is still refused. The two masks are asked of the same write and answer
+differently; this case pins the E3070 half.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+typealias IntSet = Set with Integer
+
+type Bag
+	export var items as StringArray
+	export var name as String
+	export var seen as IntSet
+
+	static function create() returns Self
+		return Self{items: StringArray.create(), name: "tag", seen: IntSet.create()}
+	end 'create'
+
+	function mark()
+		name.append("!")
+	end 'mark'
+
+	function note(v Integer)
+		seen.insert(v)
+	end 'note'
+
+	function seenCount() returns Integer
+		return seen.count()
+	end 'seenCount'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.mark()
+	b.note(7)
+	print("{s.byteLength()} {b.name} {b.seenCount()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+44 tag! 1
 ```

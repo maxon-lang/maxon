@@ -53,10 +53,17 @@
 // because nothing CAPS it: a narrow bound here would be a runtime panic on a large machine-generated
 // body rather than a diagnostic, and a bound is narrowed only when it is provable.
 //
-// ⭐ It is minted by resolving a NAME through `Scope` at the instant of the record, so it carries
-// the two properties a name string cannot: a body that SHADOWS the source's name declares a
-// different `VarInfo` and gets a different subject (correctly writable), and a self-field's two
-// spellings (`items`, `self.items`) reach the ONE alias `VarInfo` and so share one subject.
+// ⭐ It is minted by resolving a NAME to its BINDING at the instant of the record
+// (`Parser.borrowSubjectBindingOf`), so it carries the two properties a name string cannot: a body
+// that SHADOWS the source's name declares a different `VarInfo` and gets a different subject
+// (correctly writable), and a self-field's two spellings (`items`, `self.items`) reach the ONE alias
+// `VarInfo` and so share one subject.
+//
+// ⚠ **THE SUBJECT SPACE IS WIDER THAN `Scope`.** A top-level `var` is storage a body borrows out of
+// and writes exactly as it does a local, and it has no `VarInfo` anywhere — so one is INTERNED per
+// name for the file (`VarInfo.createModuleStorageSubject`). Leaving module storage out was a
+// reachable use-after-free on four spellings; `specs-shv2/borrow-liveness.md`'s `module-storage-*`
+// cases pin each of them.
 export typealias BorrowSubjectId = int(0 to u64.max)
 
 // The `via '<x>'` text for a mutation that is a REBIND of the source binding rather than a method

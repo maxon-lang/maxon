@@ -873,6 +873,14 @@ let sharedEmptyImmutableGlobalReads = ImmutableGlobalReadSet.create()
 // stays empty and safe across the per-file parse fan-out.
 let sharedEmptyIterationLocks = VarInfoArray.create()
 
+// The module-level shared EMPTY table of E3070 module-storage subject stand-ins, held as the initial value
+// of `Parser.topLevelBorrowSubjects` AND as the COW anchor `topLevelBorrowSubjectOf` keys on —
+// `sharedEmptyIterationLocks`'s pattern, for its reason and with its invariant. It is never mutated (the
+// minting path REPLACES the field with a fresh map before its first upsert), so it stays empty and is safe
+// across the per-file parse fan-out; and a `Parser` is built per top-level constant, so an unconditional
+// `create()` in the constructor would be one map per constant in the program.
+let sharedEmptyTopLevelBorrowSubjects = VarInfoMap.create()
+
 // The NAME-keyed twin delivered to SemanticCheck for a function that has range checks but constructs no
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
@@ -3021,6 +3029,12 @@ export type Parser
 	var artifact as FileParseArtifact
 	// Per-function symbol table (empty at M1 — no locals). Reset per function.
 	var scope as Scope
+	// ⭐ **THE E3070 SUBJECT STAND-IN FOR EVERY TOP-LEVEL `var` THIS FILE NAMES** (`VarInfo.
+	// createModuleStorageSubject`). FILE-scoped and never reset, deliberately: a global's storage is the
+	// same storage in every function of the file, and per-function `BorrowFacts` key on the stand-in's
+	// IDENTITY, so one object per name is exactly what makes `g.get(0)` in one statement and `g.clear()` in
+	// the next the same subject. Points at `sharedEmptyTopLevelBorrowSubjects` until the first mint.
+	var topLevelBorrowSubjects as VarInfoMap
 	// Per-function ValueId allocator for the values this function's ops define.
 	// Re-seeded at `paramCount` per function (params implicitly own 0..paramCount-1
 	// by Std-ABI convention), so ids are dense and function-local. The parser is
@@ -3480,6 +3494,7 @@ export type Parser
 			namespace: namespace,
 			artifact: FileParseArtifact.create(filePath),
 			scope: Scope.create(),
+			topLevelBorrowSubjects: sharedEmptyTopLevelBorrowSubjects,
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
 			loops: LoopContextArray.create(),
@@ -8377,7 +8392,9 @@ export type Parser
 	function parseAssignment(func IrFunction, block IrBlock) throws ParseError
 		// The target's own token index, captured before the cursor leaves it, so the E3070 subject below comes
 		// through the shared `borrowSubjectNameAt` rather than off `nameTok.value` — one derivation of "which
-		// storage does this write go through", asked identically at all six doors.
+		// storage does this write go through", asked identically at every door. It is handed on to
+		// `parseTopLevelAssignment` as well: the module-storage rebind is the same write one anchoring out,
+		// and deriving it there off the token's TEXT would be that one derivation written down twice.
 		let nameIndex = self.pos
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
@@ -8398,7 +8415,7 @@ export type Parser
 			// error, and a DIFFERENT error from "undefined"). LOCAL FIRST, exactly as
 			// `parseVariableReference` resolves a read: a local `var` shadows a top-level one, so the
 			// top level is consulted only once the name has failed to resolve as a local.
-			try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok)
+			try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok, nameIndex: nameIndex)
 			return
 		end 'undeclared'
 
@@ -8646,9 +8663,9 @@ export type Parser
 	// statement is the only asker of, so the `mutable` bit rides the lookup and the refusal happens here.
 	// Without it `let xs = [1, 2]` would silently accept `xs = [3, 4]` — an accepted write that should have
 	// been refused, which is a wrong answer rather than a compile error.
-	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token) throws ParseError
+	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token, nameIndex TokenIndex) throws ParseError
 		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath) 'global'
-			found(label, valueType, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, label: label, valueType: valueType, mutable: mutable)
+			found(label, valueType, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, nameIndex: nameIndex, label: label, valueType: valueType, mutable: mutable)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
 		end 'global'
 	end 'parseTopLevelAssignment'
@@ -8662,10 +8679,19 @@ export type Parser
 	// choose between E2013 and E2004. This one is holding the resolution that proves the name is declared,
 	// so the question is already answered and re-asking it through a kind-filtered door would report a
 	// declared name as undefined.
-	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, mutable bool) throws ParseError
+	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, nameIndex TokenIndex, label ByteArray, valueType MaxonType, mutable bool) throws ParseError
 		if not mutable 'immutableGlobal'
 			throw assignToImmutableError(nameTok)
 		end 'immutableGlobal'
+
+		// ⭐ **E3070's REBIND DOOR FOR MODULE STORAGE — the same write as `arr = other`, one anchoring out.**
+		// The store below DECREFS the record the slot was holding (`emitCheckedGlobalStore`), so every element
+		// borrowed out of it is freed: MEASURED **0xC0000005** on `let s = try g.get(0) otherwise ""` +
+		// `g = StringArray.create()` + `print("{s}")`. The subject comes through `borrowSubjectNameAt` like
+		// every other door's, off the target's own token — the derivation, not the token's text.
+		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
+			self.noteBorrowSubjectWrite(func, subjectName: self.borrowSubjectNameAt(nameIndex), display: ReassignMutationDisplay, anchor: nameTok, mutatesSubject: true)
+		end 'mayConflictWithABorrow'
 
 		try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
 	end 'storeToGlobal'
@@ -12054,13 +12080,18 @@ export type Parser
 	// reasons which are one reason: the subject of `self.items.clear()` is `items`, and blaming `self` sent
 	// the reader to a parameter nothing could be done about (`iterationSubjectNameAt`); and E3070's door at
 	// the same call site needs the identical answer — so it is derived ONCE, by `borrowSubjectNameAt`, and
-	// handed to both. Empty in, empty out: a chain over no local binding locks nothing.
+	// handed to both. Empty in, empty out: a chain over no nameable storage locks nothing.
+	//
+	// ⚠ It resolves through `borrowSubjectBindingOf` and NOT `scope.getInfo`, because the subject space is
+	// wider than `Scope`: a MODULE-storage subject has a stand-in `VarInfo` that no scope holds, and
+	// `getInfo` panics on a name it does not have. A stand-in is never pushed by `lockIterationSource`
+	// (which locks only what `Scope` holds), so it correctly answers "not locked" by identity.
 	function iterationLockNameOf(subjectName ByteArray) returns ByteArray
-		if subjectName.isEmpty() 'notALocalBinding'
+		if subjectName.isEmpty() 'namesNoStorage'
 			return EmptySourceText
-		end 'notALocalBinding'
+		end 'namesNoStorage'
 
-		if not self.bindingIsIterationLocked(self.scope.getInfo(subjectName)) 'writable'
+		if not self.bindingIsIterationLocked(self.borrowSubjectBindingOf(subjectName)) 'writable'
 			return EmptySourceText
 		end 'writable'
 
@@ -12076,10 +12107,94 @@ export type Parser
 	// *"is an element of it still referenced?"* (`borrowSubjectIdOf`). Written twice, a chain shape taught to
 	// one and not the other would leave a write locked under one key and checked under another — which is
 	// precisely the divergence `iterationSubjectNameAt`'s ⚠ block records as a measured segfault.
+	//
+	// ⭐⭐ **A TOP-LEVEL `var` IS STORAGE THIS BODY CAN NAME TOO, and leaving it out was a REACHABLE
+	// USE-AFTER-FREE.** `var g = [...]` at module scope with `let s = try g.get(0) otherwise ""` then
+	// `g.clear()` compiled clean and faulted with **0xC0000005** — the oracle reports E3070 on that very
+	// program. The same array reached through `grow(g)`, a rebind `g = <fresh>` (whose store decrefs the
+	// record the slot held — `emitCheckedGlobalStore`) and `for it in g` each faulted the same way. A
+	// global differs from a local in WHERE the record is anchored and in nothing a borrow can see.
+	//
+	// ⚠ **LOCAL FIRST, which is what keeps a shadowing local a DIFFERENT subject** — the same order
+	// `parseAssignment` resolves an assignment target in, and the reason `shadowed-source-is-writable`
+	// compiles. A name that reaches the second test is one no binding of this frame holds.
 	function borrowSubjectNameAt(baseIndex TokenIndex) returns ByteArray
 		let baseName = self.iterationSubjectNameAt(baseIndex)
-		return baseName if self.scope.contains(baseName) else EmptySourceText
+		if self.scope.contains(baseName) 'bindingOfThisFrame'
+			return baseName
+		end 'bindingOfThisFrame'
+
+		return baseName if self.namesWritableModuleStorage(baseName) else EmptySourceText
 	end 'borrowSubjectNameAt'
+
+	// Does `name` denote a top-level `var` — module storage a body can BORROW an element out of and can
+	// WRITE? An immutable top-level binding is excluded on purpose rather than for tidiness: every write
+	// door refuses it already (E2013 at `storeToGlobal`, E3019 at `noteReceiverWrite`), so it can never be
+	// half of a conflict, and admitting it would mint borrows and subjects no diagnostic could ever read.
+	//
+	// ⚠ **THE BOOL GATE IN FRONT OF THE RESOLUTION IS THE COST**, and it is `managedTopLevelBaseAt`'s for
+	// its reason: `globalDeclFor` BOXES a union per call, while this runs on every array-method and
+	// struct-method receiver in the program. `namesManagedTopLevel` is a set membership test and a `false`
+	// from it is final, so a program with no top-level managed binding — the whole scale corpus — never
+	// reaches the box.
+	function namesWritableModuleStorage(name ByteArray) returns bool
+		if not self.signatures.namesManagedTopLevel(name) 'notAManagedTopLevelName'
+			return false
+		end 'notAManagedTopLevelName'
+
+		return match self.signatures.globalDeclFor(name, readerFilePath: self.filePath) 'global'
+			found(_, _, mutable) gives mutable
+			notFound gives false
+		end 'global'
+	end 'namesWritableModuleStorage'
+
+	// ⭐⭐ **THE BINDING A SUBJECT NAME DENOTES — THE ONE RESOLUTION, and the only place the two kinds of
+	// storage are told apart.** A name `Scope` holds is that binding; anything else reaching here is a
+	// top-level `var` (`borrowSubjectNameAt` admits nothing else) and gets its interned stand-in.
+	//
+	// Every asker of "which storage is this?" comes through here — the subject id, the storage mask, and
+	// the iteration lock — so a third kind of storage taught to one of them is taught to all three.
+	function borrowSubjectBindingOf(subjectName ByteArray) returns VarInfo
+		if self.scope.contains(subjectName) 'bindingOfThisFrame'
+			return self.scope.getInfo(subjectName)
+		end 'bindingOfThisFrame'
+
+		return self.topLevelBorrowSubjectOf(subjectName)
+	end 'borrowSubjectBindingOf'
+
+	// ⭐ **ONE STAND-IN PER TOP-LEVEL NAME, INTERNED FOR THE FILE** — see
+	// `VarInfo.createModuleStorageSubject` for what it stands in for and why identity on the parser's
+	// per-access receiver bindings would not do. Interning is what makes `g.get(0)` on line 4 and
+	// `g.clear()` on line 5 the SAME subject.
+	//
+	// COPY-ON-WRITE off the shared empty (`sharedEmptyTopLevelBorrowSubjects`), the
+	// `sharedEmptyIterationLocks` pattern with its invariant: a `Parser` is built per top-level constant by
+	// `SignatureIndex.walkConstInitializer`, so an unconditional `create()` in the constructor would be one
+	// map per constant in the program, and the overwhelming majority of files name no writable global at a
+	// borrow subject at all.
+	function topLevelBorrowSubjectOf(subjectName ByteArray) returns VarInfo
+		let existing = try self.topLevelBorrowSubjects.get(subjectName) otherwise 'mint'
+			if self.topLevelBorrowSubjects is sharedEmptyTopLevelBorrowSubjects 'firstSubjectInThisFile'
+				self.topLevelBorrowSubjects = VarInfoMap.create()
+			end 'firstSubjectInThisFile'
+
+			let minted = VarInfo.createModuleStorageSubject(subjectName, varType: self.moduleStorageTypeOf(subjectName))
+			self.topLevelBorrowSubjects.upsert(subjectName, value: minted)
+			return minted
+		end 'mint'
+		return existing
+	end 'topLevelBorrowSubjectOf'
+
+	// The declared type of the top-level `var` `subjectName` names, read through the ONE home of that
+	// question. A `notFound` is impossible rather than merely unexpected — `borrowSubjectNameAt` admits a
+	// name only past `namesWritableModuleStorage`, which resolves through this very lookup — so it panics
+	// rather than inventing a type nothing declared.
+	function moduleStorageTypeOf(subjectName ByteArray) returns MaxonType
+		match self.signatures.globalDeclFor(subjectName, readerFilePath: self.filePath) 'global'
+			found(_, valueType, _) then return valueType
+			notFound then panic("moduleStorageTypeOf: '{String.from(subjectName)}' is not a top-level binding — a subject name reaches here only past `namesWritableModuleStorage`, which asks this same lookup")
+		end 'global'
+	end 'moduleStorageTypeOf'
 
 	// ⭐ **THE FUNCTION'S BORROW FACTS, COPY-ON-WRITTEN off the shared empty before the first write.** A body
 	// that borrows nothing keeps the shared instance for its whole life and allocates not one array — the
@@ -12119,9 +12234,9 @@ export type Parser
 	//
 	// A linear scan over a list whose length is the number of DISTINCT storages this body borrows from or
 	// writes — a handful — and it is only ever entered once a borrow exists (`noteBorrowSubjectWrite`'s gate).
-	// Callers must have established `scope.contains(subjectName)`, which `borrowSubjectNameAt` is.
+	// Callers must have established that the name denotes storage, which `borrowSubjectNameAt` is.
 	function borrowSubjectIdOf(func IrFunction, subjectName ByteArray) returns BorrowSubjectId
-		let binding = self.scope.getInfo(subjectName)
+		let binding = self.borrowSubjectBindingOf(subjectName)
 		var facts = self.borrowFactsOf(func)
 		for k in 0 upto facts.subjects.count() 'seen'
 			if (try facts.subjects.get(k) otherwise panic("borrowSubjectIdOf: subjects.get OOB at {k} inside count()")) is binding 'match'
@@ -12237,8 +12352,15 @@ export type Parser
 
 		// Scanned from the END, because the borrow a name claims is almost always the one its own initializer
 		// just minted; and the claimed entry is REMOVED, which keeps the list down to the accessors no name
-		// took. A value id is defined once, so at most one entry can match — the loop runs on to prove it
-		// rather than to find a second.
+		// took.
+		//
+		// ⚠ **IT RUNS ON PAST THE FIRST MATCH, AND THAT IS LOAD-BEARING RATHER THAN BELT-AND-BRACES.** A
+		// MERGE retargets EVERY arm's pending borrow onto the one phi (`finalizeMatchGives` calls
+		// `retargetPendingBorrow` per give), so `let s = match m 'p' first gives try a.get(0) otherwise ""
+		// second gives try b.get(0) otherwise "" end 'p'` leaves TWO entries carrying the phi's id — one per
+		// SUBJECT — and `s` genuinely borrows out of both. MEASURED: both `a.clear()` and `b.clear()` are
+		// refused, and a `return` here would silently drop whichever arm was minted first, waving one of them
+		// through as a use-after-free. `borrow-liveness.md:match-gives-merges-every-arms-borrow` pins it.
 		var k = facts.pending.count()
 		while k > 0 'findTheValueThisNameBinds'
 			k = k - 1
@@ -12260,9 +12382,14 @@ export type Parser
 	end 'attachPendingBorrows'
 
 	// ⭐⭐ **RECORD A WRITE THAT GOES THROUGH A BORROW SUBJECT — the SECOND predicate over the one derivation.**
-	// Called at exactly the doors `bindingIsIterationLocked` is, for exactly the same reason: a write can NAME
-	// the array through a binding receiver, a field chain, a self-field alias, a rebind of the binding, or a
+	// Called at every door `bindingIsIterationLocked` is, for exactly the same reason: a write can NAME the
+	// array through a binding receiver, a field chain, a self-field alias, a rebind of the binding, or a
 	// self-field store, and each one alone leaves a use-after-free open.
+	//
+	// ⚠ It is called at ONE door the lock is not — the MODULE-STORAGE rebind (`storeToGlobal`) — and that is
+	// a difference in SUBJECT SPACE, not in the rule: the lock only ever holds bindings `Scope` gave it, so
+	// a top-level `var` cannot be iteration-locked, while a borrow out of one is an ordinary borrow (see
+	// `borrowSubjectNameAt`, which is where the two subject spaces meet).
 	//
 	// ⚠ **THE `borrows.count()` GATE IS NOT DEFENSIVE, IT IS THE COST.** Two of these doors sit on the hot
 	// statement path (every assignment, every container method call). A write ABOVE every borrow's activation
@@ -12281,7 +12408,7 @@ export type Parser
 		func.borrowFacts.mutations.push(MutationSite.createContainerWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: subjectName, token: self.pos, line: anchor.line, column: anchor.column, display: display))
 	end 'noteBorrowSubjectWrite'
 
-	// ⭐ **THE SIXTH DOOR: a borrow subject handed to a CALLEE.** `grow(arr)` destroys the element the caller
+	// ⭐ **THE CALL-ARGUMENT DOOR: a borrow subject handed to a CALLEE.** `grow(arr)` destroys the element the caller
 	// borrowed exactly as `arr.clear()` does (measured: the oracle reports E3070 and shv2 segfaulted), and it
 	// is the one write the parser cannot settle — whether `grow` mutates what it was handed depends on its
 	// BODY, possibly in another file. So the site is recorded with the callee and the argument's column and
@@ -20217,19 +20344,6 @@ export type Parser
 	// with a parameter's id. ⭐ It is `paramMaskOfValue` and no longer inline: E3070's `receiverStorageMask`
 	// asks the identical question of the identical value, and so does the self-field STORE door, so what had
 	// exactly ONE asker now has three.
-	// Is this DECLARED type an `Array` instance? Asked by the self-field store door, which holds a
-	// `MaxonType` rather than a value.
-	//
-	// ⚠ **THE TAG TEST IS NOT OPTIONAL, AND LEAVING IT OUT IS A WRONG ANSWER RATHER THAN A LOOSE ONE.**
-	// `TypeNameId` and `GenericInstanceId` share a numeric space, so `isArrayInstance` asked of a name that
-	// is not an instance at all can answer TRUE by coincidence — MEASURED: without it an `Integer` field's
-	// store marked the whole receiver written, and `b.add(42)` was refused while `b.items` was borrowed, a
-	// program the oracle compiles and runs (it prints `44 42`). It is the same two-part test
-	// `parseFieldChainCall` makes of a receiver's VALUE, asked here of a type.
-	function typeIsArrayInstance(t MaxonType) returns bool
-		return maxonTypeTag(t) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(t))
-	end 'typeIsArrayInstance'
-
 	function receiverOwnerMask(func IrFunction, binding VarInfo) returns MutatedParamMask
 		if binding.isSelfField 'ownedByTheTypeNotTheCaller'
 			return NoMutatedParams
@@ -20256,6 +20370,16 @@ export type Parser
 			return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("receiverStorageMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and the two paths that could hold an alias without a receiver are refused earlier (a closure body gets a FRESH scope and a self-field access inside one is E2015; a `static function` installs no alias at all)"))
 		end 'fieldOfTheEnclosingReceiver'
 
+		// ⚠ **MODULE STORAGE REACHES NO PARAMETER, AND THE ARM IS EXPLICIT FOR `receiverOwnerMask`'s OWN
+		// REASON.** A top-level `var` is addressed by `.data` label, never handed to this body — a callee
+		// that writes it writes it BY NAME, which is a site recorded in the callee, not a fact about any
+		// argument. The stand-in's `boundValue` is 0 and 0 is `self`'s parameter id, so falling through to
+		// the value test would mark parameter 0's storage written off that coincidence and refuse every
+		// call handing it on: a false rejection with no compile error. See `VarInfo.namesModuleStorage`.
+		if binding.namesModuleStorage 'moduleStorageNotTheCallers'
+			return NoMutatedParams
+		end 'moduleStorageNotTheCallers'
+
 		return paramMaskOfValue(func, value: binding.boundValue)
 	end 'receiverStorageMask'
 
@@ -20281,8 +20405,21 @@ export type Parser
 			return NoMutatedParams
 		end 'noNamedStorage'
 
-		return self.receiverStorageMask(func, binding: self.scope.getInfo(subjectName))
+		return self.receiverStorageMask(func, binding: self.borrowSubjectBindingOf(subjectName))
 	end 'subjectStorageMask'
+
+	// Is this DECLARED type an `Array` instance? Asked by the self-field store door, which holds a
+	// `MaxonType` rather than a value.
+	//
+	// ⚠ **THE TAG TEST IS NOT OPTIONAL, AND LEAVING IT OUT IS A WRONG ANSWER RATHER THAN A LOOSE ONE.**
+	// `TypeNameId` and `GenericInstanceId` share a numeric space, so `isArrayInstance` asked of a name that
+	// is not an instance at all can answer TRUE by coincidence — MEASURED: without it an `Integer` field's
+	// store marked the whole receiver written, and `b.add(42)` was refused while `b.items` was borrowed, a
+	// program the oracle compiles and runs (it prints `44 42`). It is the same two-part test
+	// `parseFieldChainCall` makes of a receiver's VALUE, asked here of a type.
+	function typeIsArrayInstance(t MaxonType) returns bool
+		return maxonTypeTag(t) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(t))
+	end 'typeIsArrayInstance'
 
 	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__arr_resize` lengthens by publishing a longer
 	// `length@8` over slots `__arr_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
@@ -23809,7 +23946,7 @@ export type Parser
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSubpHandleOp'
 
-	// ⭐⭐ **E3070's SEVENTH DOOR: THE RECEIVER, WHICH IS AN ARGUMENT AND HAD NO ONE ASKING.** `b.wipe()`
+	// ⭐⭐ **E3070's RECEIVER DOOR: THE RECEIVER IS AN ARGUMENT, AND IT HAD NO ONE ASKING.** `b.wipe()`
 	// destroys the element a caller borrowed out of `b.items` exactly as `wipe(b.items)` does, and the two
 	// differ only in which column the array arrives in — so the receiver is offered to the conflict check as
 	// the ARGUMENT 0 that `parseCallNamed` has already made it. Measured before this door existed: the
