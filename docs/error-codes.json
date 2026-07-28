@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "0bbbc0f0ea383ff9",
+  "sourceHash": "dfc4db6325dcafa4",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -458,8 +458,17 @@
       "tag": "E2061",
       "name": "GenericBarePrimitiveArg",
       "stage": "parser",
-      "doc": "A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',\n'Array with float' -- where the ranged-typealias rule requires a declared domain\n('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule\nevery other type position already enforces, reaching the one position that never did.\n'bool' is DELIBERATELY ADMITTED and is not this error: it is already a constrained type with\nnothing to range. So are 'String', a user 'type'/'enum', a type PARAMETER, a nested instance\nand a ranged alias -- this names ONLY the two bare numeric keywords.\nDistinct from E3011 (unknownType), which means the name resolves to NOTHING; here it resolves\nto a real type that is forbidden in this position.",
+      "doc": "A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',\n'Array with float' -- where the ranged-typealias rule requires a declared domain\n('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule\nevery other type position already enforces, reaching the one position that never did.\n'bool' is DELIBERATELY ADMITTED and is not this error: it is already a constrained type with\nnothing to range. So are 'String', a user 'type'/'enum', a type PARAMETER, a nested instance\nand a ranged alias -- this names ONLY the two bare numeric keywords.\nDistinct from E3011 (unknownType), which means the name resolves to NOTHING; here it resolves\nto a real type that is forbidden in this position.\nDistinct from E2062: a bare 'float' is BOTH a bare primitive and a float, and E2062 claims it,\nbecause THIS code's advice (\"declare a ranged typealias\") is true for 'int' and a trap for\n'float'. So this code only ever names 'int'.",
       "emittedBy": {"shv2": "genericBarePrimitiveArg"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2062,
+      "tag": "E2062",
+      "name": "GenericFloatTypeArgUnsupported",
+      "stage": "parser",
+      "doc": "A generic type argument resolves to 'float' -- bare ('Box with float') or through a ranged\nfloat typealias ('typealias Real = float(...)' then 'Box with Real'). shv2 DICTIONARY-PASSES\nrather than monomorphizing, so a type parameter is one opaque 8-byte GENERAL-PURPOSE slot; a\nfloat value is born in a floating-point register and has no way to travel through it. Reaching\nthe backend, it panicked on the x64 emitter's cross-register-file assertion.\nA DELIBERATE DIVERGENCE FROM BOTH REFERENCES, which accept it because they MONOMORPHIZE (the\ninstantiation gets a genuine f64 slot). It is a compiler limitation, not a language rule, and\nthe message says so rather than naming a workaround -- there is none at this milestone.\nIt is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias\nadvice, which would direct the reader into the very panic this refusal exists to close.",
+      "emittedBy": {"shv2": "genericFloatTypeArg"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

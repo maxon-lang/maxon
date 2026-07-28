@@ -116,7 +116,21 @@ export enum ErrorCode
 	// and a ranged alias -- this names ONLY the two bare numeric keywords.
 	// Distinct from E3011 (unknownType), which means the name resolves to NOTHING; here it resolves
 	// to a real type that is forbidden in this position.
+	// Distinct from E2062: a bare 'float' is BOTH a bare primitive and a float, and E2062 claims it,
+	// because THIS code's advice ("declare a ranged typealias") is true for 'int' and a trap for
+	// 'float'. So this code only ever names 'int'.
 	genericBarePrimitiveArg = "E2061"
+	// A generic type argument resolves to 'float' -- bare ('Box with float') or through a ranged
+	// float typealias ('typealias Real = float(...)' then 'Box with Real'). shv2 DICTIONARY-PASSES
+	// rather than monomorphizing, so a type parameter is one opaque 8-byte GENERAL-PURPOSE slot; a
+	// float value is born in a floating-point register and has no way to travel through it. Reaching
+	// the backend, it panicked on the x64 emitter's cross-register-file assertion.
+	// A DELIBERATE DIVERGENCE FROM BOTH REFERENCES, which accept it because they MONOMORPHIZE (the
+	// instantiation gets a genuine f64 slot). It is a compiler limitation, not a language rule, and
+	// the message says so rather than naming a workaround -- there is none at this milestone.
+	// It is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias
+	// advice, which would direct the reader into the very panic this refusal exists to close.
+	genericFloatTypeArg = "E2062"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"

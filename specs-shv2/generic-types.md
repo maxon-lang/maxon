@@ -1485,14 +1485,16 @@ end 'main'
 error E2061: <fragment>:8:29: Cannot use bare type 'int' as a type argument; use a ranged typealias instead (e.g. typealias MyType = int(...))
 ```
 
-<!-- test: error.bare-float-type-arg -->
-The SAME missing rule's other symptom, and the loud one: a bare `float` argument reached the x64
-emitter and PANICKED there — *"a register-to-register move from xmm0 to rcx crosses register files"*.
-A type parameter is an opaque 8-byte GPR slot under shv2's dictionary-passing model, so `create(1.5)`
-handed a value born in XMM to a formal fixed in a general-purpose register, and the backend's
-coloring assertion was the first thing in the compiler to notice. No `where` constraint, no
-comparison and no method call are needed to reach it — the instantiation and one call are the whole
-reproducer. One rule, refused in the front end, makes that backend shape unreachable.
+<!-- test: error.float-type-arg -->
+⭐ **A FLOAT TYPE ARGUMENT IS REFUSED HOWEVER IT IS SPELLED (E2062), AND THAT IS A DELIBERATE
+DIVERGENCE FROM BOTH REFERENCE COMPILERS.** They accept it because they MONOMORPHIZE — the
+instantiation gets a genuine f64 slot and the question never arises. shv2 DICTIONARY-PASSES: a type
+parameter is one opaque 8-byte GENERAL-PURPOSE slot, so a float value, which is born in a
+floating-point register, has no way to travel through it. Reaching the backend it PANICKED —
+*"a register-to-register move from xmm0 to rcx crosses register files"* — with no `where` constraint,
+no comparison and no method call needed; the instantiation and one call are the whole reproducer.
+This is a compiler limitation, not a language rule, so the message names no workaround: at this
+milestone there is none.
 ```maxon
 type Box uses T
 	export var value as T
@@ -1507,7 +1509,51 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2061: <fragment>:8:31: Cannot use bare type 'float' as a type argument; use a ranged typealias instead (e.g. typealias MyType = float(...))
+error E2062: <fragment>:8:31: Cannot use 'float' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+```
+
+<!-- test: error.float-alias-type-arg -->
+⭐ **THE CASE THAT PROVES THE PANIC IS UNREACHABLE, AND THE REASON E2062 IS ASKED BEFORE E2061.**
+A ranged FLOAT typealias reaches the identical backend assertion — the alias is not the problem, the
+float is — so refusing only the bare keyword would have left the crash reachable through the very
+declaration E2061 recommends. Which is also why a bare `float`, which satisfies BOTH rules, is
+claimed by this one: "use a ranged typealias instead" is true for `int` and a trap for `float`, and a
+compiler must not route a reader into a panic with its own diagnostic. The message names the ALIAS
+the source wrote, not `float`, so a reader of the line `Box with Real` is told about `Real`.
+```maxon
+typealias Real = float(f64.min to f64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias FloatBox = Box with Real
+function main() returns ExitCode
+	let b = FloatBox.create(1.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2062: <fragment>:9:31: Cannot use 'Real' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+```
+
+<!-- test: error.float-type-arg-builtin-generic -->
+Both float spellings again on a BUILTIN base, where the panic was equally reachable (`Array with Real`
+died in the same emitter): the rule is about the ARGUMENT, so `Array` reaches it through the same
+`parseGenericArgNode` a declared generic does. Only the FIRST offending argument in a file is shown
+here because each alias is its own declaration — two declarations, two diagnostics.
+```maxon
+typealias Real = float(f64.min to f64.max)
+typealias RealArray = Array with Real
+typealias FloatArray = Array with float
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2062: <fragment>:3:34: Cannot use 'Real' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+error E2062: <fragment>:4:35: Cannot use 'float' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
 ```
 
 <!-- test: error.bare-type-arg-builtin-generic -->

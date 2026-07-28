@@ -5997,25 +5997,33 @@ export type Parser
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
 
-	// ⭐ **WHAT A TYPE ARGUMENT MAY BE — TWO RULES, ONE PER TAG SHAPE, AND THE ORDER IS NOT ARBITRARY.**
+	// ⭐ **WHAT A TYPE ARGUMENT MAY BE — THREE RULES, AND THE ORDER IS LOAD-BEARING, NOT TIDINESS.**
 	//
-	// **1. It may not be a BARE NUMERIC KEYWORD (E2061).** A bare `int`/`float` is minted CONCRETE by
-	// `parseTypeReference`, so it is answered FIRST, before the `named` cascade it never enters.
+	// **1. It may not resolve to `float` (E2062)** — bare or through a ranged float alias. A COMPILER
+	// limitation, not a language rule: dictionary-passing gives a type parameter a general-purpose slot,
+	// which a float cannot travel in. ONE rule with ONE message, decided at TWO points, and each placement
+	// is forced. The BARE keyword goes before rule 2, because a bare `float` satisfies rule 2 as well and
+	// rule 2's workaround is a trap for it. The ALIAS goes after rule 3 — a name must denote something
+	// before it can denote a float, and rule 3's answer already carries the domain, so asking there is free
+	// where asking separately is a heap box per argument.
 	//
-	// **2. If it NAMES something, that name must denote a type (E3011).** `checkGenericInstance` validated
+	// **2. It may not be a BARE NUMERIC KEYWORD (E2061).** A bare `int` is minted CONCRETE by
+	// `parseTypeReference`, so it too is answered before the `named` cascade it never enters.
+	//
+	// **3. If it NAMES something, that name must denote a type (E3011).** `checkGenericInstance` validated
 	// the BASE and the ARITY and nothing else, so `typealias BadArray = Array with UnknownType` COMPILED,
 	// RAN and returned an answer — a silent acceptance of a program naming a type the program does not have,
 	// which is the one class of defect a suite cannot catch by being green. The runnable oracle rejects it,
 	// and so does this.
 	//
-	// Rule 2 asks `denotedNamedType` — the ONE cascade `TypeResolution` and both `as`-cast sites ask — so an
+	// Rule 3 asks `denotedNamedType` — the ONE cascade `TypeResolution` and both `as`-cast sites ask — so an
 	// argument and a cast target can never come to disagree about what a name means. Only a `named` type can
 	// be in question THERE: `parseTypeReference` has already answered every spelling it settles syntactically
 	// (`Self`, the enclosing type's own name, `String`, a type PARAMETER, a bare inner alias, a
 	// generic-instance alias, a function alias, the primitive keywords) with a concrete arm, and a
 	// `typeParameter`/`genericInstance`/`structRef` argument is exactly the legal case that must not be
-	// refused. Which is precisely why rule 1 cannot be expressed as an extra arm of that cascade — the tag it
-	// rejects is one the cascade is never reached for.
+	// refused. Which is precisely why rules 1 and 2 cannot be expressed as extra arms of that cascade — the
+	// tags they reject are ones the cascade is never reached for.
 	//
 	// ⚠ **RECORDED, NOT THROWN, AND NOT COMPUTED AT ALL UNTIL THE INDEX IS WHOLE-PROGRAM** — the same two
 	// rules `checkGenericInstance` states beside it, for the same reason and off the same gate
@@ -6035,24 +6043,43 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		// ⭐ **A BARE `int` / `float` IS NOT A TYPE ARGUMENT (E2061)** — the ranged-typealias rule reaching
-		// the one type position that never enforced it. Everywhere else a numeric domain must be DECLARED
-		// (`typealias Integer = int(i64.min to i64.max)`); a `with` clause let the keyword straight through.
-		// `bool` is DELIBERATELY ADMITTED — it is already a constrained type, with no range to name — as are
-		// `String`, a user type, a type PARAMETER, a nested instance and a ranged alias. So the test is on the
-		// TAG, and it is the FIRST thing asked: a bare keyword is minted CONCRETE by `parseTypeReference`
-		// (`MaxonType.integer`/`.float`, never `named`), so it never reached the name cascade below — which
-		// is exactly what hid it. `int` was silently ACCEPTED; `float` reached the backend and PANICKED there
-		// (`X64Backend`'s cross-register-file assertion), because a type parameter is an opaque 8-byte GPR
-		// slot under dictionary-passing and `create(1.5)` hands it a value born in XMM.
-		//
-		// ⚠ **REFUSING THE BARE SPELLING DOES NOT MAKE THAT PANIC UNREACHABLE, and this rule does not claim
-		// to.** `Box with Real` over a ranged FLOAT alias reaches the identical panic (MEASURED: same
-		// assertion, same stack) — a float type argument is simply not representable in the opaque-`T` model,
-		// whatever it is spelled. So the workaround this message names works for `int` and NOT for `float`.
-		// That is a separate mechanism (a float register class for descriptor-typed values) and its own rung.
 		let tag = maxonTypeTag(argType)
-		if tag == ValueTypeTag.integer or tag == ValueTypeTag.float 'barePrimitive'
+
+		// ⭐ **A FLOAT TYPE ARGUMENT IS REFUSED, HOWEVER IT IS SPELLED (E2062).** shv2 DICTIONARY-PASSES
+		// rather than monomorphizing, so a type parameter is one opaque 8-byte GENERAL-PURPOSE slot; a float
+		// is born in XMM and has no way to travel through it. Both spellings reach the same x64
+		// cross-register-file assertion — MEASURED: bare `Box with float` and `Box with Real` over
+		// `typealias Real = float(f64.min to f64.max)` panic identically — so refusing only the bare keyword
+		// would leave the panic reachable through the very alias E2061 recommends.
+		//
+		// ⚠ **THE BARE ARM IS ASKED BEFORE E2061, AND THAT ORDER IS THE POINT, not a tidy-up.** A bare
+		// `float` satisfies BOTH rules, and E2061's advice ("declare a ranged typealias") is TRUE for `int`
+		// and a TRAP for `float`. Asking float first is what stops this compiler from routing a reader into a
+		// crash with its own diagnostic. The ALIAS spelling is decided further down instead, off the name
+		// cascade's own answer — see there for why that is the cheap place and not merely the late one.
+		//
+		// ⚠ **A DELIBERATE DIVERGENCE FROM BOTH REFERENCES**, which accept a float type argument because
+		// they MONOMORPHIZE — the instantiation gets a genuine f64 slot and the question never arises. This
+		// is a COMPILER limitation, not a language rule, so the message names no workaround: at this
+		// milestone there is none. It retires when a float register class for descriptor-typed values lands,
+		// and until then the diagnostic is what makes that a decision someone takes rather than a panic
+		// someone trips over.
+		if tag == ValueTypeTag.float 'bareFloatArg'
+			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(typeTagName(tag)), tok: argTok)
+			return
+		end 'bareFloatArg'
+
+		// ⭐ **A BARE `int` IS NOT A TYPE ARGUMENT (E2061)** — the ranged-typealias rule reaching the one
+		// type position that never enforced it. Everywhere else a numeric domain must be DECLARED
+		// (`typealias Integer = int(i64.min to i64.max)`); a `with` clause let the keyword straight through,
+		// and it was silently ACCEPTED. `bool` is DELIBERATELY ADMITTED — it is already a constrained type,
+		// with no range to name — as are `String`, a user type, a type PARAMETER, a nested instance, and the
+		// ranged INT alias this message names, which is verified to work.
+		//
+		// It is a TAG test, and it has to be: a bare keyword is minted CONCRETE by `parseTypeReference`
+		// (`MaxonType.integer`, never `named`), so it never reached the name cascade below — which is
+		// exactly what hid it.
+		if tag == ValueTypeTag.integer 'barePrimitive'
 			// ⚠ **REPORTED AT THE OFFENDING ARGUMENT, NOT AT THE ALIAS NAME — a deliberate divergence from the
 			// oracle**, which passes its `aliasNameToken` (`RejectBarePrimitiveTypeArgs`, all three call
 			// sites) and so points at the name LEFT of the `=`, away from the token that has to change. Two
@@ -6069,11 +6096,45 @@ export type Parser
 
 		let nameId = typeNameIdOf(argType)
 		let name = self.internedName(nameId)
-		_ = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise 'undeclared'
+		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId) otherwise 'undeclared'
 			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name)), tok: argTok)
 			return
 		end 'undeclared'
+
+		// ⭐ **THE FLOAT RULE'S SECOND SPELLING (E2062), READ OFF THE CASCADE'S OWN ANSWER** — a ranged FLOAT
+		// alias, whose `named` tag says nothing about the domain behind it. It is asked HERE, after E3011
+		// rather than beside the bare arm above, for two reasons and both are load-bearing:
+		//
+		// **1. A name must denote something before it can denote a float.** The domain of a name the program
+		// does not declare is a question with no answer, and E3011 is the honest verdict.
+		//
+		// **2. HERE IT COSTS NOTHING, WHERE ASKING SEPARATELY COST ONE HEAP BOX PER ARGUMENT.**
+		// `denotedNamedType` erases a plain ranged alias to its UNDERLYING primitive, so the answer is
+		// already in its result — and this call was being made anyway, its value discarded into `_`. The
+		// obvious alternative, `resolveFloatAliasType`, reaches the registry through `aliasOf`, which hands
+		// back a payload union Maxon HEAP-BOXES per call; `denotedNamedType` deliberately goes through
+		// `aliasUnderlyingInAnyFile` instead, whose header states that exact reason ("hands back the
+		// primitive rather than a `DeclaredAlias` that would be heap-boxed per call"). MEASURED on the scale
+		// ladder: the separate lookup cost **+16 / +30 / +58 allocations of 16 bytes** over three rungs — one
+		// box per named type argument, linear in the program — and reading it off the cascade is delta-ZERO.
+		//
+		// A declared `enum`/`union` erases to `integer` here (a float-BACKED enum too — its bits ARE an i64)
+		// and a struct stays `structRef`, so `float` reaches this test only from a genuine float alias.
+		if maxonTypeTag(denoted) == ValueTypeTag.float 'floatAliasArg'
+			// Named by the ALIAS the source wrote, not by `float`: a reader told "cannot use 'float'" about a
+			// line that says `Real` would have to work out which of its aliases is meant.
+			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(String.from(name)), tok: argTok)
+			return
+		end 'floatAliasArg'
 	end 'checkGenericArgType'
+
+	// The ONE wording of "a float type argument is not supported yet", shared by the two spellings that
+	// reach it — the bare `float` keyword and a ranged float alias. They are decided at different points of
+	// `checkGenericArgType` (one syntactically, one off the name cascade) and must not be free to drift into
+	// two texts for one rule; `spelling` is the only thing that legitimately differs between them.
+	function floatTypeArgMessage(spelling String) returns String
+		return "Cannot use '{spelling}' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through"
+	end 'floatTypeArgMessage'
 
 	// ⭐ **CHECK A `Base with Args` INSTANTIATION (P1.6-A/B2)** — reads the whole-program index (complete in
 	// the real parse). Two rejections, in the order the reader most wants to hear them, each RECORDED as a
