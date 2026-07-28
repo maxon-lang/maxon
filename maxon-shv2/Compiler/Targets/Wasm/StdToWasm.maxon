@@ -352,7 +352,9 @@ end 'requireIndirectlyReachableParamsAreMachineWords'
 function bakeFuncTableIndexRelocs(rdataImage ByteArray, globalData GlobalDataTable, calleeFuncIdx CalleeFuncIdxMap)
 	for reloc in globalData.pendingRdataRelocs 'each'
 		let funcIdx = try calleeFuncIdx.get(reloc.funcName) otherwise panic("bakeFuncTableIndexRelocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references function '{String.from(reloc.funcName)}', which is in no wasm function index — it was never installed (a DCE-root gap where the slot's owner was built), so it has no table slot to name")
-		patchQword(rdataImage, offset: globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel, value: funcIdx)
+		// The slot's ADDRESS comes from the shared `rdataFuncSlotOffset` the x64 baker uses, because only the
+		// VALUE below is target-specific — see that function.
+		patchQword(rdataImage, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: funcIdx)
 	end 'each'
 end 'bakeFuncTableIndexRelocs'
 
@@ -537,11 +539,11 @@ function buildIndirectCallTypeIdxMap(module StdModule, builder WasmModuleBuilder
 	return map
 end 'buildIndirectCallTypeIdxMap'
 
-// If `op` is a `callIndirect`, intern the functype for its SIGNATURE into `map`; ignore any other op. The
-// two-arm range match leans on the band-append invariant: `callIndirect` is the LAST StdOp variant, so
-// `const to funcAddr` covers every other variant and a newly-appended one FAILS TO COMPILE here rather than
-// being silently swept into the ignore arm. Only body ops carry a `callIndirect` (never a terminator), so
-// scanning `block.opRefs` alone is complete.
+// If `op` is one of the THREE indirect calls — a `callIndirect` or either fused witness call — intern the
+// functype for its SIGNATURE into `map`; ignore any other op. The range arms lean on the band-append
+// invariant: every StdOp variant is covered by name or by a named band, so a newly-appended one FAILS TO
+// COMPILE here rather than being silently swept into an ignore arm. Only body ops carry one of the three
+// (never a terminator), so scanning `block.opRefs` alone is complete.
 function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder WasmModuleBuilder)
 	match op 'k'
 		const to funcAddr then break 'k'

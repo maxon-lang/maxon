@@ -278,6 +278,109 @@ end 'main'
 0
 ```
 
+<!-- test: where-clauses.int-actual-for-float-formal -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+An INTEGRAL actual supplied for a `float` interface FORMAL is widened at the witness dispatch, exactly as a
+direct call's argument is (`LowerMaxonToStd.widenIntArgsToFloatParams`). A witness dispatch has no callee
+signature to look the parameter up in, so nothing used to widen it and the fused `witnessCall`'s
+`argFloatMask` — read off the already-typed argument VALUES — declared the argument a GPR/i64 against an
+impl declaring XMM/f64. **x64 compiled clean and answered WRONG** (`movRegImm32 rdx, 2` ahead of
+`callMem [rbx + 24]`, so `k * 2.0` multiplied whatever was left in xmm0) and **wasm trapped `indirect call
+type mismatch`**. `scale(2)` must therefore read `4.0`, and the second dispatch pins that a genuine `float`
+actual is still passed through untouched (`promoteToFloat` is idempotent).
+```maxon
+typealias Coord = int(0 to 1000)
+
+interface Scaled
+	function scale(k float) returns float
+end 'Scaled'
+
+type Point implements Scaled
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function scale(k float) returns float
+		return k * 2.0
+	end 'scale'
+end 'Point'
+
+type Box uses T where T is Scaled
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function fromInt() returns float
+		return self.item.scale(2)
+	end 'fromInt'
+	export function fromFloat() returns float
+		return self.item.scale(1.5)
+	end 'fromFloat'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(7))
+	if b.fromInt() == 4.0 and b.fromFloat() == 3.0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: where-clauses.float-formal-among-int-formals -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The formal→actual MAPPING under the widening above, which a one-off would silently break: the receiver is
+`args[0]` and interface formal `j` is `args[j+1]`, so in `combine(a int, k float, b int)` exactly the MIDDLE
+actual is widened and its two integral neighbours are passed through. Widening the wrong position puts a
+double where the impl declares an `int` (and leaves the `int` where it declares a double), which is a wrong
+answer on x64 and an `indirect call type mismatch` on wasm — neither of which a single-float-formal test can
+see. `1 + 3 + 5` reads `9.0`.
+```maxon
+typealias Coord = int(0 to 1000)
+
+interface Mixed
+	function combine(a int, k float, b int) returns float
+end 'Mixed'
+
+type Point implements Mixed
+	export var x as Coord
+	export static function create(x Coord) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function combine(a int, k float, b int) returns float
+		return k + (a as float) + (b as float)
+	end 'combine'
+end 'Point'
+
+type Box uses T where T is Mixed
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns float
+		return self.item.combine(1, 3, 5)
+	end 'go'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(7))
+	if b.go() == 9.0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: where-clauses.error.instantiate-nonconforming -->
 A concrete argument that does not implement the constrained interface is rejected at the instantiation (E3017).
 ```maxon

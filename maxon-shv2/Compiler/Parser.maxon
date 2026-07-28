@@ -15540,7 +15540,7 @@ export type Parser
 		// `Self` arms cannot fire for an operator: `Equatable`/`Comparable` each declare one value-returning
 		// method, and `resultUsed` is true because a comparison is only ever parsed for its verdict.
 		let dispatchResult = try self.mintWitnessDispatchResult(target, receiverParamPos: paramPos, methodTok: opTok, resultUsed: true)
-		self.emitWitnessDispatch(dispatchResult, args: args, target: target, isVoid: false, range: SourceRange.ofToken(opTok))
+		self.emitWitnessDispatch(dispatchResult, args: args, target: target, isVoid: false, range: SourceRange.ofToken(opTok), siteTok: opTok)
 
 		// The verdict. `==` is the dispatch's own bool and `!=` negates that SAME dispatch, so the two can never
 		// disagree about what equality means (the `emitStringCompare` shape); the four ordering operators read
@@ -18487,7 +18487,7 @@ export type Parser
 
 		let range = SourceRange.between(methodTok, last: rparenTok)
 		let result = try self.mintWitnessDispatchResult(target, receiverParamPos: receiverParamPos, methodTok: methodTok, resultUsed: resultUsed)
-		self.emitWitnessDispatch(result, args: args, target: target, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName), range: range)
+		self.emitWitnessDispatch(result, args: args, target: target, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName), range: range, siteTok: methodTok)
 		return result
 	end 'parseWitnessMethodOnValue'
 
@@ -18496,12 +18496,88 @@ export type Parser
 	// `lastWitnessDispatch*` record are written for BOTH by construction rather than remembered at each. A
 	// dispatch whose record was missed would leave a `try` on it typing its `(e)` binding off a stale clause;
 	// keeping the emit and the record in one place is what makes that unrepresentable.
-	function emitWitnessDispatch(result ValueId, args ValueIdArray, target WitnessDispatchTarget, isVoid bool, range SourceRange)
+	function emitWitnessDispatch(result ValueId, args ValueIdArray, target WitnessDispatchTarget, isVoid bool, range SourceRange, siteTok Token)
+		let placed = self.floatWidenedWitnessArgs(target, args: args, siteTok: siteTok)
+
 		self.lastWitnessDispatchIndex = self.artifact.module.ops.count()
 		self.lastWitnessDispatchName = target.methodName
 		self.lastWitnessDispatchThrows = target.throwsClause
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: isVoid, isThrowing: throwsClauseIsThrowing(target.throwsClause)), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: placed, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: isVoid, isThrowing: throwsClauseIsThrowing(target.throwsClause)), range: range)
 	end 'emitWitnessDispatch'
+
+	// ⭐⭐ **WIDEN AN INTEGRAL ACTUAL SUPPLIED FOR A `float` INTERFACE FORMAL — the witness twin of
+	// `LowerMaxonToStd.widenIntArgsToFloatParams`, and it was MISSING.** A DIRECT call gets this from the
+	// callee's resolved signature at the Maxon→Std boundary; a witness dispatch has no callee to look up, so
+	// its arguments reached the fused `witnessCall` exactly as written — and the op's `argFloatMask`
+	// (`LowerMaxonToStd.argFloatMaskOf`) is read off those already-typed arg VALUES, not off the interface.
+	// An `int` actual for a `float` formal therefore declared the argument a GPR/i64 while the conforming impl
+	// declares it XMM/f64:
+	//
+	// **MEASURED (both on `interface Scaled { function scale(k float) returns float }` with
+	// `self.item.scale(2)`): x64 compiled clean and returned the WRONG ANSWER** — `movRegImm32 rdx, 2` ahead of
+	// `callMem [rbx + 24]`, so the callee's `mulsd xmm0, …` multiplied whatever was left in xmm0 — **and wasm
+	// trapped `indirect call type mismatch`**, since `call_indirect` checks the declared functype against the
+	// target's own exactly. The wasm half is the hole `requireIndirectlyReachableParamsAreMachineWords` cannot
+	// see: it refuses a narrow (i32) parameter, but an f64 one is legal and only DIVERGES when the call site's
+	// float mask disagrees — which is precisely what this widening removes.
+	//
+	// It runs in `emitWitnessDispatch` because that is the ONE door both dispatch forms come through, so the
+	// `.method()` and comparison-OPERATOR forms cannot acquire different argument placement. `promoteToFloat`
+	// is idempotent, so a genuine `float` actual passes through untouched and emits nothing.
+	//
+	// ⚠ It is deliberately ARITY-TOLERANT and walks the ACTUALS, not the formals: a witness dispatch's arity
+	// is not checked at this rung (`self.item.scale()` with no argument compiles), so an actual with no formal
+	// is left exactly as it was rather than read past the end of `paramTypeNames`.
+	function floatWidenedWitnessArgs(target WitnessDispatchTarget, args ValueIdArray, siteTok Token) returns ValueIdArray
+		// FAST PATH, for `widenIntArgsToFloatParams`'s reason: only a `float` FORMAL can force a widening and
+		// almost no interface method has one, so every other dispatch returns its arguments verbatim — no array
+		// built, no op emitted, and the whole conformance corpus stays byte-identical.
+		if not self.witnessTargetHasFloatFormal(target) 'noFloatFormal'
+			return args
+		end 'noFloatFormal'
+
+		var placed = ValueIdArray.create()
+
+		// `args[0]` is the BORROWED receiver, which fills no formal — interface formal `j` is `args[j+1]`, the
+		// same mapping `requireGenuineSelfArgs` walks. It is copied across before the loop so the loop body
+		// never has to subtract from an index that could be 0.
+		placed.push(try args.get(0) otherwise panic("floatWidenedWitnessArgs: a witness dispatch's args are empty — `args[0]` is the receiver, pushed by both dispatch forms before any actual"))
+
+		for j in 0 upto args.count() - 1 'eachActual'
+			let actual = try args.get(j + 1) otherwise panic("floatWidenedWitnessArgs: args.get OOB at {j + 1} below count {args.count()}")
+
+			if not self.witnessFormalIsFloat(target, formalIndex: j) 'noWiden'
+				placed.push(actual)
+				continue
+			end 'noWiden'
+
+			placed.push(self.promoteToFloat(actual, opTok: siteTok))
+		end 'eachActual'
+
+		return placed
+	end 'floatWidenedWitnessArgs'
+
+	// Does ANY formal of the dispatched interface method declare `float`? The fast-path predicate above, kept
+	// beside the per-formal test so the two read the same constant.
+	function witnessTargetHasFloatFormal(target WitnessDispatchTarget) returns bool
+		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
+			if self.witnessFormalIsFloat(target, formalIndex: j) 'found'
+				return true
+			end 'found'
+		end 'eachFormal'
+		return false
+	end 'witnessTargetHasFloatFormal'
+
+	// Is interface formal `formalIndex` declared `float`? An index past the declared formals is an ARITY
+	// mismatch, not a float formal — see `floatWidenedWitnessArgs`. The name is spelled by
+	// `FloatConformerName`, the same constant `interfaceReturnMaxonType` reads it by.
+	function witnessFormalIsFloat(target WitnessDispatchTarget, formalIndex ElementCount) returns bool
+		if formalIndex >= target.paramTypeNames.count() 'noSuchFormal'
+			return false
+		end 'noSuchFormal'
+
+		return (try target.paramTypeNames.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypeNames.get OOB at {formalIndex} below count {target.paramTypeNames.count()}")).equals(FloatConformerName)
+	end 'witnessFormalIsFloat'
 
 	// Resolve `<receiver>.<method>()` against the enclosing type's `where` constraints (P1.7a slice 2a): find the
 	// constraint on the receiver's type parameter whose interface declares `method`, returning its slot index,
@@ -18602,17 +18678,21 @@ export type Parser
 	// would let the two drift apart again. It cannot be routed through that cascade wholesale: this function
 	// answers for the VALUE column, where a ranged alias deliberately keeps its `named` identity (see
 	// `castConvertsPerInstance`), while the cascade erases it for the SIGNATURE column.
+	// ⚠ Every name below is spelled by the CANONICAL constant `IrInterface` already exports for it, never by a
+	// fresh `b"…"` — `BoolConformerName`'s own header says a second spelling of one of these "is the same fact
+	// and so must not become a second constant", and these four are the same four names the interface
+	// declarations, the conformance answer and the synthesized impl symbols are all keyed by.
 	function interfaceReturnMaxonType(returnTypeName ByteArray) returns MaxonType
-		if returnTypeName.equals(b"bool") 'boolReturn'
+		if returnTypeName.equals(BoolConformerName) 'boolReturn'
 			return MaxonType.boolean
 		end 'boolReturn'
-		if returnTypeName.equals(b"int") 'intReturn'
+		if returnTypeName.equals(IntConformerName) 'intReturn'
 			return MaxonType.integer
 		end 'intReturn'
-		if returnTypeName.equals(b"float") 'floatReturn'
+		if returnTypeName.equals(FloatConformerName) 'floatReturn'
 			return MaxonType.float
 		end 'floatReturn'
-		if returnTypeName.equals(b"String") 'stringReturn'
+		if returnTypeName.equals(StringConformerName) 'stringReturn'
 			return MaxonType.string
 		end 'stringReturn'
 		if returnTypeName.equals(ExitCodeBuiltinName) 'exitCodeReturn'

@@ -152,9 +152,19 @@ export function bakeFuncAbs64Relocs(rdata ByteArray, globalData GlobalDataTable,
 	let funcOffsets = buildDebugSymbolIndex(debugSymbols)
 	for reloc in globalData.pendingRdataRelocs 'each'
 		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("bakeFuncAbs64Relocs: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
-		patchQword(rdata, offset: globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel, value: textBaseVa + funcOffset)
+		patchQword(rdata, offset: rdataFuncSlotOffset(globalData, reloc: reloc), value: textBaseVa + funcOffset)
 	end 'each'
 end 'bakeFuncAbs64Relocs'
+
+// ⭐ **WHERE a `funcAbs64InRdata` relocation's 8 bytes LIVE in the `.rdata` image — ONE fact, read by BOTH
+// bakers.** The thesis of the two-baker split (P1.7a slice 2b-iv-B) is that only the VALUE in the slot is
+// target-specific: `bakeFuncAbs64Relocs` writes a `.text` VA and `StdToWasm.bakeFuncTableIndexRelocs` a
+// funcref-table index. The DESTINATION is not, so spelling it twice is the one way the twins could still
+// drift — and the drift would be a wrong byte offset on ONE target only, corrupting a witness blob or a
+// layout descriptor with no diagnostic anywhere, because a slot is 8 opaque bytes to every reader.
+export function rdataFuncSlotOffset(globalData GlobalDataTable, reloc PendingRdataReloc) returns ByteOffset
+	return globalData.rdataOffsetOf(reloc.rdataLabel) + reloc.offsetInLabel
+end 'rdataFuncSlotOffset'
 
 // ⭐ **REFUSE a `.text`-address-in-`.rdata` relocation on a backend that cannot patch it** — the loud guard
 // for MachO (arm64-macOS). wasm no longer needs it: it BAKES these slots, as a funcref-table index

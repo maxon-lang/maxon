@@ -1008,8 +1008,11 @@ export type WasmModuleBuilder
 		self.dataSegments.push(WasmDataSegment.create(base, bytes: bytes))
 	end 'addDataSegment'
 
-	// Declare that the module needs the function-value funcref table + element segment (P1.5-A1). Called
-	// once by `buildWasmCoreModule` when the Std module contains an indirect call. The table is sized to
+	// Declare that the module needs the function-value funcref table + element segment (P1.5-A1). Called once
+	// by `buildWasmCoreModule` when the Std module contains an indirect call OR a `.rdata` slot naming a
+	// function — a witness-table method slot or a layout descriptor's `destroyFunc@40`/`copyFunc@32`, which
+	// hold a TABLE INDEX on this target (`StdToWasm.bakeFuncTableIndexRelocs`, P1.7a slice 2b-iv-B) and so need
+	// the table to exist even when no op in the module is itself an indirect call. The table is sized to
 	// hold every function and the element segment lists them in index order (`emitTableSection` /
 	// `emitElementSection`), so table[i] == function i and a function's table index equals its wasm funcIdx.
 	export function enableFuncrefTable()

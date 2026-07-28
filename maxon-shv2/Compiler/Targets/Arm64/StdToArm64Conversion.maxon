@@ -492,10 +492,11 @@ type StdToArm64Lowering
 			osFreePages then panic("lowerStdToArm64: `osFreePages` is x64-windows only — the green-thread substrate is x64-windows-gated at this rung")
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
-			// P1.7a slice 2a: witness tables ride the x64 `funcAbs64InRdata` relocation, which arm64 refuses
-			// (`requireNoFuncAbs64Relocs`) — constrained-type-parameter dispatch is x64-only at this slice (2b).
-			witnessCall then panic("lowerStdToArm64: a `witnessCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses; constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
-			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses, and the dual-register error capture has no arm64 lowering; THROWING constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
+			// P1.7a slice 2a: witness tables ride the `funcAbs64InRdata` relocation, which arm64 refuses
+			// (`requireNoFuncAbs64Relocs`). The x64 writers bake it as a `.text` VA and the wasm backend as a
+			// funcref-table index (slice 2b-iv-B), so arm64 is the ONE target left without it.
+			witnessCall then panic("lowerStdToArm64: a `witnessCall` op has no arm64 lowering — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses (x64 bakes a `.text` VA, wasm a funcref-table index); constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
+			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op has no arm64 lowering — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses (x64 bakes a `.text` VA, wasm a funcref-table index), and the dual-register error capture has no arm64 lowering; THROWING constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — it is emitted only
 			// inside the x64-windows-gated IOCP runtime, so arm64 rejects rather than inventing an untested lowering.
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
