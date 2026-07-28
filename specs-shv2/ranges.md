@@ -296,7 +296,7 @@ e
 ```
 
 <!-- disabled-test: ranges.create-iterator -->
-<!-- P1.8 first-class `Range` VALUE + the iterator protocol -->
+<!-- NOT the range gap, which this case never reaches. MEASURED: `E2015 Unsupported: `try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '(')` — a parser restriction on `try` over a parenthesised operand. The first-class `Range` VALUE + iterator protocol is the blocker BEHIND it, and stays unmeasured until `try` accepts this shape (its siblings below DO get the stated error) -->
 A range used outside a for-in header is a first-class value with `createIterator()`.
 ```maxon
 function main() returns ExitCode
@@ -390,4 +390,83 @@ end 'main'
 ```
 ```exitcode
 10
+```
+
+<!-- test: ranges.float-bounds-refused -->
+A counted range's loop variable is a counter stepped by 1, so its bounds must be INTEGERS.
+A `float` range is refused at the bound, not at the backend: before this was checked it reached
+the x64 emitter and panicked (*"rax is in the gpr register file where the xmm file is required"*),
+an internal error against a program the runnable oracle refuses cleanly.
+```maxon
+function main() returns ExitCode
+	var trips = 0
+	for x in 1.0 to 3.0 'l'
+		trips = trips + 1
+	end 'l'
+	return trips as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/ranges/ranges.float-bounds-refused.test:4:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'float'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+```
+
+<!-- test: ranges.bool-bounds-refused -->
+The same for a `bool` range, which was SILENTLY ACCEPTED and ran two trips incrementing a bool.
+Nothing in the lowering rejected it: the other bad domains happened to land on a comparison type
+error, which is `emitCompare` refusing two operands and says nothing about the step.
+```maxon
+function main() returns ExitCode
+	var trips = 0
+	for b in false to true 'l'
+		trips = trips + 1
+	end 'l'
+	return trips as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/ranges/ranges.bool-bounds-refused.test:4:11: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'bool'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+```
+
+<!-- test: ranges.mixed-bounds-blames-the-float-half -->
+Each bound is asked separately and anchored on its own half, so a mixed range names the side that
+is wrong — here the END bound, at the `to`.
+```maxon
+function main() returns ExitCode
+	var trips = 0
+	for x in 1 to 3.5 'l'
+		trips = trips + 1
+	end 'l'
+	return trips as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/ranges/ranges.mixed-bounds-blames-the-float-half.test:4:13: Unsupported: a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a 'float'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it
+```
+
+<!-- test: ranges.ranged-alias-parameter-bound-stays-legal -->
+The check is `tagIsIntegral`, not `== integer`, and this is the program that pins the difference: a
+ranged-alias bound arriving as a PARAMETER carries the `named` tag until TypeResolution collapses
+it. The narrow spelling would refuse this legal program (the measured false refusal
+`requireSetKeyMatchesType` records). A char literal is an integer codepoint here, so it passes too.
+```maxon
+typealias Row = int(0 to 63)
+
+function sumTo(lastRow Row) returns Row
+	var total = 0 as Row
+	for r in 0 to lastRow 'l'
+		total = total + r
+	end 'l'
+	return total
+end 'sumTo'
+
+function main() returns ExitCode
+	var chars = 0
+	for c in 'a' to 'e' 'k'
+		chars = chars + 1
+	end 'k'
+	return (sumTo(5) + chars) as ExitCode
+end 'main'
+```
+```exitcode
+20
 ```

@@ -216,6 +216,16 @@ export let ArrGetName = b"__arr_get"
 //     remove (the bootstrap says so by setting `IsBoundsCheckSafe = true`, `2-Parser.cs:13237`).
 //   • `__arr_get`'s NULL-slot arm throws to route a `try … otherwise` to its fallback. In a loop that
 //     same throw would silently TRUNCATE the iteration — a wrong answer wearing a diagnostic's clothes.
+//
+// ⚠⚠ **THE THIRD BULLET RESTS ON A GUARANTEE HELD IN ANOTHER FILE, AND THIS IS WHERE IT IS NAMED.**
+// Dropping the NULL-slot arm is only safe while no index in `[0, count)` can hold an empty managed
+// slot, and the reason none can is that GROWING an array of managed elements is refused at COMPILE
+// time — `ParseError.arrayResizeManagedElement` / E3106, rendered in `Queries.maxon`, because a grown
+// slot holds no element and Maxon has no default constructor. `push` always writes, and `[count,
+// capacity)` is always zeroed. So the invariant is real, but it is a PARSER rule protecting a RUNTIME
+// omission with nothing between them: relax that refusal and this read is a null deref, in a function
+// whose own text would still look correct. If managed `resize` ever grows, THIS FUNCTION NEEDS THE
+// NULL-SLOT ARM BACK — and `requireArrayResizeHasZeroElement` carries the pointer back here.
 // It shares `emitSlotAddr` + `emitLoadElem` with `buildArrGet`, so the slot arithmetic and the
 // little-endian element load are still written down once.
 export let ArrGetUncheckedName = b"__arr_get_unchecked"

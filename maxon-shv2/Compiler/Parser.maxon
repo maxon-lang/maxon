@@ -2647,9 +2647,15 @@ typealias ImmutableGlobalReadSet = Set with ValueId
 // and `parseContinueStatement` has no construct to branch on.
 type LoopContext
 	export var label as ByteArray
-	export var headerId as BlockId
-	// Where a `continue` targeting this loop branches — the header for a `while`, the STEP block for a
-	// `for`. See the header above for why it is a field rather than `headerId` doing double duty.
+	// ⭐ **WHERE A COMPLETED ITERATION GOES** — the header for a `while` (the condition is re-evaluated
+	// on the back edge), the STEP block for a `for` (whose increment must run first). Read by BOTH
+	// `continue` and each parser's fall-through back edge, which is what makes it one fact rather than
+	// two agreeing spellings.
+	//
+	// ⚠ There is deliberately no separate header field beside it. There was, and NOTHING EVER READ IT:
+	// write-only state whose value COINCIDED with this one for `while` and not for `for`, so a future
+	// reader reaching for the obvious-sounding name would have got `while` right, `for` wrong, and no
+	// diagnostic either way. The exit is a field below because it is genuinely a different destination.
 	export var continueTargetId as BlockId
 	export var exitId as BlockId
 	export var phiVars as LoopPhiVarArray
@@ -2662,8 +2668,8 @@ type LoopContext
 	// `BlockMark.ownedCount`, because nothing is pushed between recording it and opening the body.
 	export var ownedFloor as BindingMark
 
-	export static function create(label ByteArray, headerId BlockId, continueTargetId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns LoopContext
-		return Self{label: label, headerId: headerId, continueTargetId: continueTargetId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor}
+	export static function create(label ByteArray, continueTargetId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns LoopContext
+		return Self{label: label, continueTargetId: continueTargetId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor}
 	end 'create'
 end 'LoopContext'
 
@@ -2992,15 +2998,18 @@ export type Parser
 	// ⭐⭐ **THE BINDINGS AN ENCLOSING `for … in` IS CURRENTLY ITERATING THROUGH** — innermost last, pushed
 	// by `lockIterationSource` around each `for` body and popped after it. THE ONE FACT behind the borrow's
 	// safety obligation, and the reason it is a list on the parser rather than a flag flipped on the binding:
-	// THREE different write doors have to refuse, and only a single shared fact keeps them from drifting (see
-	// `bindingIsIterationLocked` for the three, and for what each one would let through on its own).
+	// FIVE different write doors have to refuse, and only a single shared fact keeps them from drifting (see
+	// `bindingIsIterationLocked` for the five, and for what each one would let through on its own).
 	//
 	// It holds the binding a write must go THROUGH, which for a field-chain source (`for it in b.items`) is
 	// the chain's BASE (`b`) rather than the array itself — a re-read of `b.items` in the body mints a fresh
-	// ValueId for the same record, so nothing about the array's own VALUE can identify it.
+	// ValueId for the same record, so nothing about the array's own VALUE can identify it. `self.items`
+	// resolves to the FIELD's alias rather than to the receiver, so the storage has ONE key however the
+	// source and the write spelled it (`iterationSubjectNameAt`, which is where that was measured).
 	//
-	// Membership is by OBJECT IDENTITY (`VarInfo` is a heap `type`), so a body that SHADOWS the source's name
-	// declares a different record and is correctly not locked.
+	// Membership is by OBJECT IDENTITY for a local (`VarInfo` is a heap `type`), so a body that SHADOWS the
+	// source's name declares a different record and is correctly not locked — and by LAYOUT INDEX for a
+	// field of the enclosing `self`, whose store door holds an index and no binding.
 	var iterationLockedBindings as VarInfoArray
 	// The token index of the `end` most recently consumed by `parseBlockBody`. It exists for
 	// the drift guard `assertScanAligned`, which both `parseWhileStatement` and `parseIfStatement`
@@ -11316,7 +11325,7 @@ export type Parser
 		// `break`/`continue` releases exactly what the body declares (see LoopContext.ownedFloor).
 		// A `while`'s continue target IS its header: the condition is re-evaluated on the back edge,
 		// so there is no increment to run first and no step block to run it in.
-		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, continueTargetId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
+		self.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
 
 		// The body is a lexical BLOCK: its declarations are gone — and its `var`s off
 		// `mutableVars` — before the back-edge args below are read, so those args name the
@@ -11328,12 +11337,19 @@ export type Parser
 
 		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 
-		// Normal back-edge: a body that falls through returns to the header with its
-		// (possibly reassigned) current values. A body that always returns/breaks/
-		// continues on every path leaves `bodyEnd` terminated — no fall-through edge.
+		// Normal back-edge: a body that falls through goes wherever a COMPLETED iteration goes, with
+		// its (possibly reassigned) current values. A body that always returns/breaks/continues on
+		// every path leaves `bodyEnd` terminated — no fall-through edge.
+		//
+		// ⭐ **THE TARGET IS `ctx.continueTargetId`, DERIVED, NOT THE HEADER SPELLED AGAIN.** "Where a
+		// normally-completing iteration lands" is ONE fact, and `continue` already reads it off the
+		// context (`parseContinueStatement`); writing `header.id` here too made it a fact stated twice
+		// per construct, agreeing only by coincidence. For a `while` the two ARE the header — which is
+		// exactly why the duplicate stayed invisible — and for a `for` the fall-through must reach the
+		// STEP block or the counter never advances.
 		if not bodyEnd.isTerminated() 'fallsBack'
-			self.recordBranchEdge(bodyEnd, targetId: header.id, argIds: self.edgeArgsFor(phiVars, preLoop: false))
-			self.emitBranch(bodyEnd, targetId: header.id)
+			self.recordBranchEdge(bodyEnd, targetId: ctx.continueTargetId, argIds: self.edgeArgsFor(phiVars, preLoop: false))
+			self.emitBranch(bodyEnd, targetId: ctx.continueTargetId)
 		end 'fallsBack'
 
 		self.wireLoopExit(condExit, exit: exit, ctx: ctx)
@@ -11451,6 +11467,15 @@ export type Parser
 			limit = try self.parseExpression(func, block: self.currentBlock)
 		end 'rangeHeader'
 
+		// ⭐ **A COUNTED RANGE'S BOUNDS MUST BE INTEGERS**, asked here — the moment both are in hand and
+		// before a single block of the loop exists, so a refused program emits no op. See
+		// `requireCountableRangeBound`: without it a `float` range PANICKED in the x64 emitter and a
+		// `bool` range was silently accepted.
+		if isRange 'countedRange'
+			try self.requireCountableRangeBound(source, anchor: self.tokenAt(sourceStart))
+			try self.requireCountableRangeBound(limit, anchor: self.tokenAt(testAnchorIndex))
+		end 'countedRange'
+
 		// ⭐⭐ **ONLY THE ARRAY FORM LOCKS ITS SOURCE, AND THE FORK IS WHERE THAT IS DECIDED.** The lock
 		// exists for ONE reason — the array form hands the body a BORROWED element the array still owns,
 		// so a mutation that reallocates or clears it leaves that borrow dangling. A RANGE has no borrow
@@ -11557,7 +11582,7 @@ export type Parser
 
 		// `ownedFloor` is the owned-binding height NOW — above the iteration source's own binding, so a
 		// `break` releases the body's declarations and leaves the source for the exit (see below).
-		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
+		self.loops.push(LoopContext.create(loopLabelTok.value, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
 
 		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
 
@@ -11567,9 +11592,11 @@ export type Parser
 		let ctx = try self.loops.pop() otherwise panic("parseForStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 		self.releaseIterationSource(sourceLock)
 
+		// The step block, read off the context rather than spelled again — see `parseWhileStatement`'s
+		// fall-through for why the two loop parsers share that derivation.
 		if not bodyEnd.isTerminated() 'fallsToStep'
-			self.recordBranchEdge(bodyEnd, targetId: step.id, argIds: self.edgeArgsFor(phiVars, preLoop: false))
-			self.emitBranch(bodyEnd, targetId: step.id)
+			self.recordBranchEdge(bodyEnd, targetId: ctx.continueTargetId, argIds: self.edgeArgsFor(phiVars, preLoop: false))
+			self.emitBranch(bodyEnd, targetId: ctx.continueTargetId)
 		end 'fallsToStep'
 
 		// ⭐ **THE STEP BLOCK IS A MERGE, so it carries phis of its own.** Its predecessors are the
@@ -11622,6 +11649,34 @@ export type Parser
 		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — P1.8 slice A iterates an `Array` and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; String / byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
 	end 'requireIterableArray'
 
+	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableArray`, and
+	// the rung shipped without it.** A counted range is an INDEX PHI stepped by `emitMachineWordAdd`, a
+	// raw i64 add; a bound of any other domain hands that add something it cannot step, and the failure
+	// was never a diagnostic:
+	//   • `for x in 1.0 to 3.0` reached the x64 emitter and PANICKED — *"rax is in the gpr register file
+	//     where the xmm file is required"* (`X64Backend.maxon:1387`), an internal error against a program
+	//     the runnable oracle refuses cleanly (`E3005: Range expressions require int or Character, got
+	//     'Float'`);
+	//   • `for b in false to true` was silently ACCEPTED and ran two trips, incrementing a BOOL.
+	// Everything else happened to land on a comparison type error (`"a" to "c"`, `1 to 3.5`) — which is
+	// luck, not a rule: it is `emitCompare` refusing two operands, and it says nothing about the STEP.
+	//
+	// ⚠ **The test is `tagIsIntegral`, NOT `== ValueTypeTag.integer`** — see `requireSetKeyMatchesType`'s
+	// header for the measured false refusal the narrow spelling caused. A ranged alias (`typealias Row =
+	// int(0 to 63)`) carries `named` until TypeResolution collapses it, and `for r in 0 to lastRow` where
+	// `lastRow` is such a parameter must stay legal. A char literal is an integer codepoint here
+	// (`ranges.character-range`), so `'a' to 'e'` passes for the reason it prints as one.
+	//
+	// Both bounds are asked, each anchored on its own half — the START on the source's first token, the
+	// END on the `to`/`upto`, so a mixed range names the side that is wrong.
+	function requireCountableRangeBound(bound ValueId, anchor Token) throws ParseError
+		if tagIsIntegral(self.tagOf(bound)) 'countable'
+			return
+		end 'countable'
+
+		throw ParseError.unsupported("a counted `for … in <lo> to|upto <hi>` range needs INTEGER bounds — got a '{typeTagName(self.tagOf(bound))}'. The loop variable is a counter stepped by 1, which no other domain has a meaning for; iterate a `float`/`String` by indexing an `Array` over it", line: anchor.line, column: anchor.column)
+	end 'requireCountableRangeBound'
+
 	// ⭐⭐ **MAKE THE ITERATED SOURCE UNWRITABLE FOR THE BODY** — the borrow's safety obligation, and the
 	// reason `for n in arr 'l' … arr.push(9) … end` is **E3019** rather than a use-after-free. The loop
 	// variable holds an element the ARRAY still owns, so a body that makes the array destroy it
@@ -11651,8 +11706,9 @@ export type Parser
 		// items.clear() … end` inside a method reached the free-poison byte (0x3F) in a probe before it
 		// was. The alias's `VarInfo` is installed once at method entry, so `scope.getInfo` hands back the
 		// same object the write door resolves — see `selfFieldIsWritable`, which is where that door asks.
-		let baseTok = self.tokenAt(sourceStart)
-		let baseName = self.baseBindingName(baseTok)
+		// The name comes through `iterationSubjectNameAt` and NOT `baseBindingName`, because the subject
+		// of `for it in self.items` is the FIELD, not the receiver — see that function.
+		let baseName = self.iterationSubjectNameAt(sourceStart)
 		if not self.scope.contains(baseName) 'notALocalBinding'
 			return false
 		end 'notALocalBinding'
@@ -11665,6 +11721,37 @@ export type Parser
 		self.iterationLockedBindings.push(self.scope.getInfo(baseName))
 		return true
 	end 'lockIterationSource'
+
+	// ⭐⭐ **THE SCOPE NAME OF THE STORAGE A CHAIN AT `baseIndex` IS WRITTEN THROUGH — THE ONE
+	// DERIVATION**, shared by the site that TAKES the iteration lock (`lockIterationSource`) and the
+	// site that CONSULTS it for a field-chain write (`iterationLockNameAt`). A divergence between the
+	// two is a use-after-free rather than a compile error, and it WAS one.
+	//
+	// ⚠ **`self.items` RESOLVES TO THE FIELD, NOT TO THE RECEIVER**, and that is the whole reason this
+	// is not `baseBindingName`. A self-field's storage has TWO source spellings (`items`, `self.items`)
+	// and FOUR write spellings, and `baseBindingName` answers `SelfParamName` for half of them — so the
+	// lock and the doors keyed on two different objects for one storage and half the combinations
+	// silently missed. MEASURED, before this: `for it in self.items 'l' items = IntArray.create() end`
+	// SEGFAULTED (0xC0000005) and `for it in self.items 'l' items.clear() end` was silently ACCEPTED,
+	// while the very same programs spelled `for it in items` were correctly E2013/E3019.
+	//
+	// Nothing is lost by not naming the receiver: `self` is a PARAMETER and no write can go through it
+	// (`requireMutableBinding`), so it was never the subject. And the field's name resolves to the one
+	// alias `VarInfo` every spelling reaches, because a local may NOT shadow a self-field name inside a
+	// method (`Scope.declareBinding`, E3006) — the name is unambiguous by construction, not by luck.
+	function iterationSubjectNameAt(baseIndex TokenIndex) returns ByteArray
+		let baseTok = self.tokenAt(baseIndex)
+		if baseTok.kind != TokenKind.self 'namesItself'
+			return baseTok.value
+		end 'namesItself'
+
+		if self.kindAt(baseIndex + 1) == TokenKind.dot and self.kindAt(baseIndex + 2) == TokenKind.identifier 'selfRootedChain'
+			return self.tokenAt(baseIndex + 2).value
+		end 'selfRootedChain'
+
+		// A bare `self` with no hop denotes the receiver itself, which is what `baseBindingName` says.
+		return SelfParamName
+	end 'iterationSubjectNameAt'
 
 	// Is the iteration source at `sourceStart` a plain NAME or a FIELD CHAIN rooted at one — the two
 	// shapes whose base binding is what a write has to go through? It is exactly such a chain when the
@@ -11685,7 +11772,7 @@ export type Parser
 	end 'releaseIterationSource'
 
 	// ⭐⭐ **IS `binding` BEING ITERATED BY AN ENCLOSING `for … in`?** THE one fact, and it is read at
-	// exactly the FOUR doors a write can NAME the iterated array through. Each one alone leaves a
+	// exactly the FIVE doors a write can NAME the iterated array through. Each one alone leaves a
 	// use-after-free open, which is why they share this rather than each carrying its own flag:
 	//   • `immutableReceiverNameOf` — `arr.clear()` on the source binding itself, and the same binding
 	//     handed to a callee that mutates it (`grow(arr)`, whose blame name this also supplies);
@@ -11693,10 +11780,19 @@ export type Parser
 	//     binding question at all (the shape the first 0x3F probe found);
 	//   • `selfFieldIsWritable` — `items.clear()` on a bare self-field alias, whose receiver binding is
 	//     MINTED FRESH per access and so cannot be found by identity (the second 0x3F probe);
-	//   • `requireMutableBinding` — `arr = other`, which drops the record the loop is still walking.
+	//   • `requireMutableBinding` — `arr = other`, which drops the record the loop is still walking;
+	//   • `emitCheckedSelfFieldStore` — `items = other` / `self.items = other`, the SAME rebinding one
+	//     indirection out. It was the door this rung shipped without and it SEGFAULTED (0xC0000005 on
+	//     every one of the four source×write spellings); see that function.
 	//
-	// Identity, not name: a body that shadows the source's name declares a different `VarInfo` and is
-	// correctly writable. A linear scan over a list whose length is the enclosing `for` nesting depth.
+	// ⭐ **TWO KEYS, ONE LIST — and which key is used is DERIVED from the binding, never chosen by a
+	// caller.** A LOCAL is matched by OBJECT IDENTITY, so a body that shadows the source's name declares
+	// a different `VarInfo` and is correctly writable. A FIELD OF THE ENCLOSING `self` is matched by its
+	// LAYOUT INDEX (`selfFieldIsIterationLocked`), because `emitCheckedSelfFieldStore` holds an index and
+	// no alias at all, and because the alias is the only object identity available to the other doors.
+	// Every live entry belongs to the function being parsed (`iterationLockedBindings` is reset per
+	// function), and a function belongs to one type, so an index cannot mean a field of another layout.
+	// A linear scan over a list whose length is the enclosing `for` nesting depth.
 	//
 	// ⚠⚠ **WHAT IT DOES NOT COVER, AND WHY THAT IS NOT THIS CONSTRUCT'S BUG.** The lock stops a write
 	// the loop's own source NAMES. It cannot stop one that reaches the array without naming it — a field
@@ -11722,6 +11818,10 @@ export type Parser
 	// materializes the backing record the loop reads its length from. Answering `false` off a `count()`
 	// makes the common path free and leaves the walk for the loops that actually have a lock.
 	function bindingIsIterationLocked(binding VarInfo) returns bool
+		if binding.isSelfField 'fieldOfTheEnclosingSelf'
+			return self.selfFieldIsIterationLocked(binding.fieldIndex)
+		end 'fieldOfTheEnclosingSelf'
+
 		if self.iterationLockedBindings.count() == 0 'noEnclosingForIn'
 			return false
 		end 'noEnclosingForIn'
@@ -11734,21 +11834,43 @@ export type Parser
 		return false
 	end 'bindingIsIterationLocked'
 
+	// ⭐ **IS FIELD `index` OF THE ENCLOSING `self` BEING ITERATED?** The INDEX-keyed half of the one
+	// lock above, split out for the door that has an index and no binding: the self-field STORE
+	// (`emitCheckedSelfFieldStore`), which both `items = x` and `self.items = x` converge on. Reading the
+	// same list under the key that door actually holds is what keeps the two spellings from needing two
+	// rules — the shape that let four spellings of one write disagree in the first place.
+	function selfFieldIsIterationLocked(index FieldIndex) returns bool
+		if self.iterationLockedBindings.count() == 0 'noEnclosingForIn'
+			return false
+		end 'noEnclosingForIn'
+
+		for locked in self.iterationLockedBindings 'each'
+			if locked.isSelfField and locked.fieldIndex == index 'match'
+				return true
+			end 'match'
+		end 'each'
+		return false
+	end 'selfFieldIsIterationLocked'
+
 	// The E3019 blame name for a write reached through a FIELD CHAIN (`b.items.push(x)`) — non-empty only
 	// while an enclosing `for` is iterating through that base. It asks the iteration lock and NOT
 	// `immutableReceiverNameOf`, deliberately: shv2 rules that a container held in a FIELD may be written
 	// through a `let` base (`receiverOwnerMask`'s header records the measurement and the ruling), so
 	// routing the chain through the general rule would newly reject programs the corpus pins.
 	function iterationLockNameAt(baseIndex TokenIndex) returns ByteArray
-		let baseTok = self.tokenAt(baseIndex)
-		let baseName = self.baseBindingName(baseTok)
+		// The SUBJECT's name, not the base token's: `self.items.clear()` is a write to `items`, and
+		// blaming `self` sent the reader to a parameter nothing can be done about. Same derivation the
+		// lock was taken through, which is the point (`iterationSubjectNameAt`).
+		let baseName = self.iterationSubjectNameAt(baseIndex)
 		if not self.scope.contains(baseName) 'notALocalBinding'
 			return EmptySourceText
 		end 'notALocalBinding'
+
 		if not self.bindingIsIterationLocked(self.scope.getInfo(baseName)) 'writable'
 			return EmptySourceText
 		end 'writable'
-		return baseTok.value
+
+		return baseName
 	end 'iterationLockNameAt'
 
 	// The index of the `end` token that closes the block statement opening at `startIndex`,
@@ -18051,8 +18173,8 @@ export type Parser
 	// INVERTED restatement is the shape that lets a `var` field become one a method may push onto but no callee
 	// may be handed, with nothing in either site to say the other exists.
 	//
-	// ⭐⭐ **AND AN ITERATED FIELD IS NOT WRITABLE, WHATEVER THE FIELD DECLARES.** This is the fourth
-	// reader of the iteration lock, and it needs its own arm rather than sharing
+	// ⭐⭐ **AND AN ITERATED FIELD IS NOT WRITABLE, WHATEVER THE FIELD DECLARES.** This is one of the five
+	// readers of the iteration lock, and it needs its own arm rather than sharing
 	// `immutableReceiverNameOf`'s, because `methodReceiverBinding` MINTS A FRESH `VarInfo` for the alias:
 	// the lock is keyed on object identity (so a shadowing declaration is correctly not locked), and that
 	// fresh object is not the one the lock holds. Asking HERE — where the alias's own binding is still in
@@ -19516,6 +19638,14 @@ export type Parser
 	// parallel state column and never reads a slot it did not write) is built through exactly that path.
 	// `arrayElementIsManaged` already answers false for a type parameter, so the carve-out needs no second
 	// test written here.
+	//
+	// ⚠⚠ **A SECOND THING NOW DEPENDS ON THIS REFUSAL, IN ANOTHER FILE (P1.8 slice A).**
+	// `__arr_get_unchecked` — the element read a `for x in arr` loop makes — DROPPED the empty-slot arm
+	// `__arr_get` carries, and is safe only because no index in `[0, count)` can hold a NULL managed slot.
+	// That is true precisely because this rule refuses the one operation that would create one. If this
+	// refusal is ever relaxed, that read becomes a null deref in a function whose own text still looks
+	// correct: `ArrayRuntime.maxon`'s `ArrGetUncheckedName` header states the obligation from its end,
+	// and this note is the pointer back, so neither side can be changed without meeting the other.
 	function requireArrayResizeHasZeroElement(giid GenericInstanceId, methodTok Token) throws ParseError
 		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
 			return
@@ -20058,6 +20188,22 @@ export type Parser
 	// The right-hand side is parsed AFTER the rejection, so a refused program emits no op —
 	// `emitCheckedGlobalStore`'s discipline, and its name, for its reason.
 	function emitCheckedSelfFieldStore(func IrFunction, block IrBlock, receiver ValueId, layout StructLayout, index FieldIndex, fieldTok Token, range SourceRange) throws ParseError
+		// ⭐⭐ **AN ITERATED FIELD REFUSES THE STORE WHATEVER IT WAS DECLARED (P1.8 slice A)** — this is the
+		// FIFTH door of the iteration lock, and the rung shipped without it. `for it in items 'l' items =
+		// IntArray.create() … end` drops the record the loop is still walking, and the header re-reads
+		// `__arr_count` off it on the very next trip: MEASURED 0xC0000005 on all four spellings of one
+		// program (`items`/`self.items` as the source × `items = …`/`self.items = …` as the write), where
+		// the local twin `arr = other` was already E2013 through `requireMutableBinding`. Asked FIRST, and
+		// keyed on the INDEX rather than a binding, because that is what BOTH callers hold and neither
+		// carries an alias — see `selfFieldIsIterationLocked`.
+		//
+		// The same E2013 the local spelling gets, and the same code and wording the runnable oracle emits
+		// for the bare form (measured: `cannot assign to immutable variable: 'items'`). It is one rule
+		// about one storage; it must not answer differently for the way the source spelled it.
+		if self.selfFieldIsIterationLocked(index) 'iteratedField'
+			throw assignToImmutableError(fieldTok)
+		end 'iteratedField'
+
 		if not layout.fieldIsMutable(index) 'immutableField'
 			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
 		end 'immutableField'

@@ -85,6 +85,27 @@ end 'main'
 error E3082: specs/fragments/empty-block/empty-for-range.test:4:2: empty block: 'loop'
 ```
 
+<!-- test: empty-otherwise -->
+The block-form `try … otherwise` handler is parsed by the same `parseBlockBody` as the four above, so
+it is refused by the same check. Pinned because it is the one construct the check reaches that no
+other test in this file covers: deleting the check left the other five red and this one silent.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(1)
+	var n = 0
+	n = try a.get(0) otherwise 'oops'
+	end 'oops'
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3082: specs/fragments/empty-block/empty-otherwise.test:10:2: empty block: 'oops'
+```
+
 <!-- test: valid-nonempty-if -->
 ```maxon
 function main() returns ExitCode

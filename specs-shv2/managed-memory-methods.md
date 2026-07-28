@@ -539,7 +539,7 @@ end 'main'
 ```
 
 <!-- disabled-test: clear-then-resize-managed-no-double-free -->
-<!-- E3106 `requireArrayResizeHasZeroElement` — `a.resize(4)` on a managed-element array is refused outright, exactly as its `shrink-then-resize-managed-no-double-free` sibling below. The for-in loops in it compile -->
+<!-- TWO independent blockers, and the first hides the second. (1) E3106 `requireArrayResizeHasZeroElement` — `a.resize(4)` on a managed-element array is refused outright, exactly as its `shrink-then-resize-managed-no-double-free` sibling below. (2) With that line deleted, MEASURED: `error E2015: Unsupported: String method 'count'` — P1.2 wave D provides only `append`/`byteLength`. Fixing E3106 alone will NOT make this test run. The for-in loops in it do compile (measured separately) -->
 `clear()` RELEASES the elements; `resize()` back over those slots must not restore the
 length over the dead pointers, or the array's destructor decrefs each of them a second
 time. Every regrown slot must read as EMPTY.

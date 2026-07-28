@@ -730,7 +730,7 @@ c
 ```
 
 <!-- disabled-test: byteview-iteration -->
-<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view source needs a cursor protocol (E2015 names the gap) -->
+<!-- P1.2 wave D String METHODS — and NOT the `for` gap, which this case never reaches. MEASURED: `E2015 Unsupported: String method 'bytes' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+`, raised on the RECEIVER before the `for` is parsed. String ITERATION (P1.8b/c, the cursor protocol) is a SECOND blocker behind it, and stays unmeasured until the method exists — do not read this marker as `for`-only -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
