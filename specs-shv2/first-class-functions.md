@@ -2784,6 +2784,76 @@ end 'main'
 error E3005: <fragment>:11:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'
 ```
 
+<!-- test: first-class-function.nested-function-type-agrees-by-shape -->
+A function type whose own PARAMETER is a function type. The rule is the same one level down — RESOLVED
+shape, not the alias NAME — so `Outer = function(f InnerA)` accepts a function declared `(f InnerB)`
+when `InnerA` and `InnerB` resolve alike. Comparing the nested types by name instead refuses a program
+both reference compilers accept, and prints both sides identically while doing it.
+
+⚠ NOT a wasm case, and the reason is a BACKEND defect rather than anything about this rule: passing a
+function value into a parameter whose function type has a function-typed parameter emits a wasm module
+that fails validation (`expected i64 but nothing on stack`). It reproduces byte-for-byte on the parent
+commit, with the SAME alias on both sides and with no indirect call anywhere, so it is neither this
+rule's nor newly reachable — it is filed for its own rung.
+<!-- targets: x64-windows, x64-linux -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias InnerA = function(x Integer) returns Integer
+typealias InnerB = function(x Integer) returns Integer
+typealias Outer = function(f InnerA) returns Integer
+
+function dbl(x Integer) returns Integer
+	return x * 2
+end 'dbl'
+
+function runner(f InnerB) returns Integer
+	return f(21)
+end 'runner'
+
+// The door under test is the ARGUMENT one: `runner` is an `fn(InnerB) returns Integer` arriving where an
+// `Outer` — an `fn(InnerA) returns Integer` — is declared.
+function drive(o Outer) returns Integer
+	return o(dbl)
+end 'drive'
+
+function main() returns ExitCode
+	return drive(runner) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.error.nested-function-type-mismatch -->
+The other half of the same descent: when the nested function types genuinely DISAGREE the door must
+refuse, because `runner`'s own body calls its parameter through `InnerB`'s signature while the caller
+supplied an `InnerA` — the wrong answer lands one level in, where nothing else looks. The diagnostic
+names the nested types, which is what makes it readable at all.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+typealias InnerA = function(x Integer) returns Integer
+typealias InnerB = function(x Real) returns Real
+typealias Outer = function(f InnerA) returns Integer
+
+function runner(f InnerB) returns Integer
+	return 1
+end 'runner'
+
+function drive(o Outer) returns Integer
+	return 2
+end 'drive'
+
+function main() returns ExitCode
+	return drive(runner) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:9: argument type mismatch for 'o': expected 'fn(InnerA) returns int', got 'fn(InnerB) returns int'
+```
+
 <!-- test: first-class-function.error.indirect-call-too-few-args -->
 An indirect call that supplies fewer arguments than the function type declares. The missing argument
 was read out of whatever the register held — `f(3)` against `a + b` returned 3 — and the arity a

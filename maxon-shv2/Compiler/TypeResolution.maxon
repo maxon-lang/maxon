@@ -165,32 +165,31 @@ end 'functionAliasNameId'
 // The two registries are DISJOINT by construction — `Parser.requireUnreservedName`/`checkTypeSymbolNamespace`
 // keep a type name and a function name from colliding — so the order they are tried in cannot matter.
 //
-// `undeclared` is the honest answer for a name in neither, and every caller must handle it rather than assume:
-// see `hasDeclaredFunctionShape` for the allocation-free question, asked first on the hot paths.
+// `undeclared` is the honest answer for a name in neither, and every caller must handle it rather than assume.
 export union DeclaredFunctionShape
 	declared(shape FunctionShape)
 	undeclared
 end 'DeclaredFunctionShape'
 
-export function declaredFunctionShapeOf(funcSignatures FuncSignatureMap, funcReturnTypes FuncReturnTypeMap, aliasShapes FunctionShapeMap, name ByteArray) returns DeclaredFunctionShape
-	if let sig = try funcSignatures.get(name) 'declaredFn'
-		let returnType = try funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
+// The registries this reads travel as one `FunctionTypeRegistry` — see there for why all four move together.
+export function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
+	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
+		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
 		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType))
 	end 'declaredFn'
 
-	if let aliasShape = try aliasShapes.get(name) 'alias'
+	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
 		return DeclaredFunctionShape.declared(aliasShape)
 	end 'alias'
 
 	return DeclaredFunctionShape.undeclared
 end 'declaredFunctionShapeOf'
 
-// The `bool` half of `declaredFunctionShapeOf`, and a HOT-PATH one for the reason
-// `ProgramSignatures.isFunctionAlias` is: a `DeclaredFunctionShape` is a Maxon union VALUE and so a heap
-// box, and a caller that only wants to know whether the question is answerable must not pay for one.
-export function hasDeclaredFunctionShape(funcSignatures FuncSignatureMap, aliasShapes FunctionShapeMap, name ByteArray) returns bool
-	return funcSignatures.contains(name) or aliasShapes.contains(name)
-end 'hasDeclaredFunctionShape'
+// The registry a `Project` denotes, assembled where a pass first needs one. It copies four references and
+// nothing else, so it is not a cache and cannot go stale against the project it was taken from within a pass.
+export function functionTypeRegistryOf(project Project) returns FunctionTypeRegistry
+	return FunctionTypeRegistry.create(project.funcSignatures, funcReturnTypes: project.funcReturnTypes, aliasShapes: project.functionAliasShapes, typeNames: project.typeNames)
+end 'functionTypeRegistryOf'
 
 // ⭐ **DO TWO FUNCTION TYPES AGREE? THE ONE ANSWER, for every door a function value passes through.** Same
 // arity, and position for position the same RESOLVED type — which is exactly what a call through the value
@@ -202,29 +201,41 @@ end 'hasDeclaredFunctionShape'
 // for `fn(Real) returns Real` — the very silent wrong answer this exists to close. Nor is it the NOMINAL
 // display comparison `checkValueMergeSignatures` makes; see FunctionShape for why a door and a merge ask
 // different questions and get different rules.
-export function functionShapesAgree(declared FunctionShape, got FunctionShape) returns bool
+export function functionShapesAgree(registry FunctionTypeRegistry, declared FunctionShape, got FunctionShape) returns bool
+	return shapesAgreeUnder(registry, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs)
+end 'functionShapesAgree'
+
+// The rule proper, carrying the pairs of function-type names already under comparison further down the
+// same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
+// argument the three call sites never have to know about.
+function shapesAgreeUnder(registry FunctionTypeRegistry, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray) returns bool
 	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
 		return false
 	end 'arity'
 
 	for i in 0 upto declared.paramTypes.count() 'eachParam'
-		let declaredParam = try declared.paramTypes.get(i) otherwise panic("functionShapesAgree: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
-		let gotParam = try got.paramTypes.get(i) otherwise panic("functionShapesAgree: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
-		if not resolvedTypesMatch(declaredParam, got: gotParam) 'paramMismatch'
+		let declaredParam = try declared.paramTypes.get(i) otherwise panic("shapesAgreeUnder: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
+		let gotParam = try got.paramTypes.get(i) otherwise panic("shapesAgreeUnder: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
+		if not resolvedTypesMatch(registry, declared: declaredParam, got: gotParam, pending: pending) 'paramMismatch'
 			return false
 		end 'paramMismatch'
 	end 'eachParam'
 
-	return returnSlotsMatch(declared.returnType, got: got.returnType)
-end 'functionShapesAgree'
+	return returnSlotsMatch(registry, declared: declared.returnType, got: got.returnType, pending: pending)
+end 'shapesAgreeUnder'
+
+// The pending list a top-level comparison starts from. ONE object for the whole compile and NEVER mutated
+// (`pendingWithPair` builds a fresh array), the same pay-for-use discipline `sharedEmptyBorrowFacts` carries:
+// a nested function type is rare, so the overwhelming majority of comparisons must allocate nothing at all.
+let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create()
 
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
 // a function that writes none reads whatever was there.
-function returnSlotsMatch(declared MaxonReturnType, got MaxonReturnType) returns bool
+function returnSlotsMatch(registry FunctionTypeRegistry, declared MaxonReturnType, got MaxonReturnType, pending FunctionTypePairArray) returns bool
 	match declared 'declaredSlot'
 		void then return isVoidReturnType(got)
-		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(declaredValue, got: returnedValueType(got))
+		value(declaredValue) then return not isVoidReturnType(got) and resolvedTypesMatch(registry, declared: declaredValue, got: returnedValueType(got), pending: pending)
 	end 'declaredSlot'
 end 'returnSlotsMatch'
 
@@ -253,11 +264,22 @@ end 'returnedValueType'
 // Which tags carry an identity is stated as an exhaustive match rather than a list of "interesting" ones,
 // so a tag added to `ValueTypeTag` cannot default into "compare the tag only" and silently let two distinct
 // types agree.
-function resolvedTypesMatch(declared MaxonType, got MaxonType) returns bool
+function resolvedTypesMatch(registry FunctionTypeRegistry, declared MaxonType, got MaxonType, pending FunctionTypePairArray) returns bool
 	let declaredTag = maxonTypeTag(declared)
 	if declaredTag != maxonTypeTag(got) 'differentTag'
 		return false
 	end 'differentTag'
+
+	// ⭐ **A NESTED FUNCTION TYPE IS COMPARED BY SHAPE, exactly as the outer one is.** It is the same rule
+	// one level down, and it has to be: `typealias Outer = function(f InnerA) returns Integer` accepting
+	// `function runner(f InnerB)` is legal (both reference compilers accept it) when `InnerA` and `InnerB`
+	// resolve alike, and REFUSING it is not merely strict — the diagnostic renders both sides as the same
+	// string, so it reads as a type failing to match itself. The converse matters just as much: if the two
+	// nested types genuinely differ, `runner`'s own body calls `f` through `InnerB`'s signature while the
+	// caller supplied an `InnerA`, and the wrong answer lands one level in where nothing else looks.
+	if declaredTag == ValueTypeTag.function 'nestedFunctionType'
+		return nestedFunctionTypesAgree(registry, declaredId: typeNameIdOf(declared), gotId: typeNameIdOf(got), pending: pending)
+	end 'nestedFunctionType'
 
 	let identifiedByName = match declaredTag 'k'
 		// Every one of these IS its own type: there is nothing else about an `int`, a `float`, a `bool`, an
@@ -270,10 +292,7 @@ function resolvedTypesMatch(declared MaxonType, got MaxonType) returns bool
 		// `integer`; comparing its id costs nothing and is the correct answer if one does.)
 		named gives true
 		structRef gives true
-		// A `function`-tagged type inside a function type is a function value parameter/return, whose id
-		// names its own function type. Compared by NAME id here rather than by shape: a function type
-		// nested inside another is not in the corpus, and a structural descent would need a recursion guard
-		// against a self-referential alias that this rung has no case to justify.
+		// Handled above, by descent — a `function`-tagged type never reaches this table.
 		function gives true
 		// A type PARAMETER's id is its POSITION and a generic INSTANCE's is its whole-program
 		// `GenericInstanceId`; two function types agree only if they take the same instances in the same
@@ -283,6 +302,78 @@ function resolvedTypesMatch(declared MaxonType, got MaxonType) returns bool
 
 	return not identifiedByName or typeNameIdOf(declared) == typeNameIdOf(got)
 end 'resolvedTypesMatch'
+
+// Do the two function types these ids govern agree? The nested half of `functionShapesAgree`, and the same
+// question, so it resolves both ids to shapes and asks that.
+//
+// The SAME id short-circuits to agreement before anything is looked up, which is what keeps this free on
+// every ordinary program: a nested function parameter almost always spells the same alias on both sides, and
+// that case allocates nothing and touches no registry. It is also what makes the cycle guard cheap — a
+// SELF-referential alias meets itself here and never descends at all.
+function nestedFunctionTypesAgree(registry FunctionTypeRegistry, declaredId TypeNameId, gotId TypeNameId, pending FunctionTypePairArray) returns bool
+	if declaredId == gotId 'sameFunctionType'
+		return true
+	end 'sameFunctionType'
+
+	let declaredName = functionTypeNameOf(registry, nameId: declaredId)
+	let gotName = functionTypeNameOf(registry, nameId: gotId)
+	if pairIsUnderComparison(pending, declaredName: declaredName, gotName: gotName) 'cycle'
+		return true
+	end 'cycle'
+
+	return shapesAgreeUnder(registry, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName))
+end 'nestedFunctionTypesAgree'
+
+// ⭐ **THE NAME BEHIND A `function`-TAGGED TYPE'S ID — the ONE reader.** Every consumer of a function type
+// holds an id (a value's `valueNameIds` entry, a declared `MaxonType.function`, a nested parameter) and needs
+// the NAME, because that is what the registries are keyed by. All of them read it here: the ids are remapped
+// project-global at merge, so one table answers for all three passes and none of them can resolve it its own
+// way. SemanticCheck and LowerMaxonToStd each had a private copy of exactly this before.
+export function functionTypeNameOf(registry FunctionTypeRegistry, nameId TypeNameId) returns ByteArray
+	return try registry.typeNames.nameOf(nameId) otherwise panic("functionTypeNameOf: type-name id {nameId} is not in the project interner — a function type's name id is remapped project-global at merge (mergeArtifact)")
+end 'functionTypeNameOf'
+
+// ⭐ **THE SHAPE A GOVERNING NAME MUST HAVE — the ONE "it exists" wrapper**, for the four sites that require
+// one: an indirect call's callee (asked once by SemanticCheck to check the arguments and once by the lowering
+// to widen them), each end of a function-type door, and a function type nested inside another. `side` names
+// which in the panic, so an invariant break says whether it was the callee, the place, the value or a nested
+// parameter whose type went missing.
+//
+// It PANICS rather than reporting, and that is a statement about the parser rather than about the program:
+// a `function` TAG is minted only from a name one of the three producers declares
+// (`Parser.parseTypeReference` for a function alias, `emitFunctionRef` for a function,
+// `parseClosureExpression` for a lifted closure), and every caller has already established that both its tags
+// are `function`. A missing shape therefore means a producer was added without a registry entry, which is a
+// compiler bug and never user input.
+export function requireFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray, side String) returns FunctionShape
+	match declaredFunctionShapeOf(registry, name: name) 'shape'
+		declared(shape) then return shape
+		undeclared then panic("requireFunctionShapeOf: the {side} function type's governing name '{String.from(name)}' names neither a declared function/closure nor a function typealias — a `function` tag is minted only from one of the three (Parser.parseTypeReference / emitFunctionRef / parseClosureExpression)")
+	end 'shape'
+end 'requireFunctionShapeOf'
+
+// Is this pair of names already being compared further up the same descent (see `FunctionTypePair`)? A linear
+// scan, because the list holds one entry per level of function-type NESTING actually descended into — which
+// is at most one on every program in the corpus and is bounded by the program's distinct function types.
+function pairIsUnderComparison(pending FunctionTypePairArray, declaredName ByteArray, gotName ByteArray) returns bool
+	for pair in pending 'eachPending'
+		if pair.declaredName == declaredName and pair.gotName == gotName 'match'
+			return true
+		end 'match'
+	end 'eachPending'
+	return false
+end 'pairIsUnderComparison'
+
+// `pending` plus this pair, as a FRESH array — `sharedEmptyFunctionTypePairs` and every list above this one
+// in the descent must stay untouched, because a sibling parameter compared after this one is not under it.
+function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, gotName ByteArray) returns FunctionTypePairArray
+	var extended = FunctionTypePairArray.create()
+	for pair in pending 'eachPending'
+		extended.push(pair)
+	end 'eachPending'
+	extended.push(FunctionTypePair.create(declaredName, gotName: gotName))
+	return extended
+end 'pendingWithPair'
 
 // ⭐ **THE THIRD DECLARATION SITE.** A program names a type in exactly three places — a PARAMETER,
 // a RETURN type, and a FIELD — and until P1.1a wave 3 this pass walked only the first two. So a

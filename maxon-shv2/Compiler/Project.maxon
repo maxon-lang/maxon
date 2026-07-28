@@ -1546,6 +1546,41 @@ end 'FuncSignature'
 // validation) and lowerCall (label→positional arg slotting).
 export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 
+// ⭐ **THE THREE REGISTRIES A FUNCTION TYPE'S SHAPE IS LOOKED UP IN, PLUS THE INTERNER THAT NAMES IT — ONE
+// CARRIER.** `TypeResolution.declaredFunctionShapeOf` answers "what shape is the function type this
+// governing NAME denotes?" from `funcSignatures`+`funcReturnTypes` (a declared function or lifted closure)
+// or `functionAliasShapes` (a function typealias), and a `MaxonType.function(id)` carries the id rather
+// than the name, so `typeNames` is what turns one into the other. They travel together because every site
+// that asks the question needs all four: SemanticCheck's doors, its indirect-call check, and the lowering's
+// argument widening. Three loose parameters at each of those sites is three chances to pass a stale half.
+export type FunctionTypeRegistry
+	export let funcSignatures as FuncSignatureMap
+	export let funcReturnTypes as FuncReturnTypeMap
+	export let aliasShapes as FunctionShapeMap
+	export let typeNames as TypeNameInterner
+
+	export static function create(funcSignatures FuncSignatureMap, funcReturnTypes FuncReturnTypeMap, aliasShapes FunctionShapeMap, typeNames TypeNameInterner) returns FunctionTypeRegistry
+		return Self{funcSignatures: funcSignatures, funcReturnTypes: funcReturnTypes, aliasShapes: aliasShapes, typeNames: typeNames}
+	end 'create'
+end 'FunctionTypeRegistry'
+
+// ⭐ **ONE PAIR OF FUNCTION-TYPE NAMES CURRENTLY UNDER COMPARISON** — the cycle guard a STRUCTURAL descent
+// into a nested function type needs. shv2 accepts a self-referential function alias
+// (`typealias SelfFn = function(f SelfFn) returns Integer` compiles; the bootstrap refuses it as E2012), and
+// two aliases may name each other, so comparing `A` against `B` can reach `A` against `B` again. Meeting a
+// pair already under comparison is AGREEMENT: two recursive types are equal exactly when assuming they are
+// equal contradicts nothing below, which is the only answer a cycle has and the one that cannot false-reject.
+export type FunctionTypePair
+	export let declaredName as ByteArray
+	export let gotName as ByteArray
+
+	export static function create(declaredName ByteArray, gotName ByteArray) returns FunctionTypePair
+		return Self{declaredName: declaredName, gotName: gotName}
+	end 'create'
+end 'FunctionTypePair'
+
+export typealias FunctionTypePairArray = Array with FunctionTypePair
+
 // ⭐ **A RECORDED FUNCTION-VALUE MERGE awaiting whole-program signature agreement (P1.5 #81).** A ternary
 // or match EXPRESSION whose arms are function values (`unary if c else binary`) needs every arm to name a
 // function of the SAME type, but the parser cannot check it: a forward-referenced or cross-file arm's

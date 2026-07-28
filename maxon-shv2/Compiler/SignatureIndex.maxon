@@ -1116,9 +1116,13 @@ end 'payloadValueTypeOf'
 // `typeNames` — pass the interner the type's ids live in (`project.typeNames` at the whole-program merge
 // site). Fed PRE-RESOLUTION types (a ranged alias is still `named(Integer)`), which is exactly why the check
 // that uses it drains before `resolveTypes` erases those names to `integer`.
+// ⚠ A `function`-tagged type is rendered by its ALIAS NAME for the same reason a `named` one is, and it is
+// not cosmetic: `typeTagName(function)` is the bare word `function`, so a function type nested inside another
+// printed as `fn(function) returns int` on BOTH sides of a mismatch — a diagnostic saying a type does not
+// match itself. Its id names the alias exactly as a `named` type's does.
 export function maxonTypeName(t MaxonType, typeNames TypeNameInterner) returns String
 	let tag = maxonTypeTag(t)
-	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedType'
+	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef or tag == ValueTypeTag.function 'namedType'
 		return String.from(try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("maxonTypeName: type-name id {typeNameIdOf(t)} is not in the interner — pass the interner the type's ids live in"))
 	end 'namedType'
 	return typeTagName(tag)

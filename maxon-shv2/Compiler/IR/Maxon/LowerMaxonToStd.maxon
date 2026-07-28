@@ -339,16 +339,12 @@ type MaxonToStdLowering
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
-	// Whole-program declared return types, and the resolved shape of every function TYPEALIAS. The two
-	// halves `declaredFunctionShapeOf` needs beside `funcSignatures` to answer "what type was this function
-	// VALUE declared with?" — the question `widenIndirectCallArgs` asks per indirect call, and the same one
-	// SemanticCheck asked of the same call before it. Copied out of `Project` at `create` like every other
-	// registry here, so the lowering still holds no `Project`.
-	var funcReturnTypes as FuncReturnTypeMap
-	var functionAliasShapes as FunctionShapeMap
-	// The merged type-name table, for resolving a function value's governing NAME id back to its name — the
-	// key `declaredFunctionShapeOf` takes. `valueNameIds` below carries the id; this is what reads it.
-	var typeNames as TypeNameInterner
+	// What `declaredFunctionShapeOf` answers "what type was this function VALUE declared with?" from — the
+	// question `indirectCalleeParamTypes` asks per indirect call, and the same one SemanticCheck asked of the
+	// same call before it. Held as the ONE carrier the check holds (`FunctionTypeRegistry`) rather than as
+	// its four halves, so the two sites cannot come to hold different ones. Copied out of `Project` at
+	// `create` like every other registry here, so the lowering still holds no `Project`.
+	var functionTypes as FunctionTypeRegistry
 	// The whole-program signature index (`queryProgramSignatures`) — P1.6-B1's source for a generic
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
 	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
@@ -437,7 +433,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, funcReturnTypes: project.funcReturnTypes, functionAliasShapes: project.functionAliasShapes, typeNames: project.typeNames, signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1350,21 +1346,17 @@ type MaxonToStdLowering
 	// `SemanticCheck.checkIndirectCall` used to prove the arity and the argument types — so the check and
 	// the lowering cannot come to disagree about which signature this call binds against.
 	function indirectCalleeParamTypes(callee ValueId) returns MaxonTypeArray
-		let calleeName = self.functionValueName(callee)
-		match declaredFunctionShapeOf(self.funcSignatures, funcReturnTypes: self.funcReturnTypes, aliasShapes: self.functionAliasShapes, name: calleeName) 'shape'
-			declared(shape) then return shape.paramTypes
-			// Unreachable for the reason `SemanticCheck.functionTypeShapeOf` states in full: the parser
-			// proved the governing name declared when it typed this call's result.
-			undeclared then panic("indirectCalleeParamTypes: the callee value's governing name '{String.from(calleeName)}' names neither a declared function/closure nor a function typealias — Parser.functionValueReturnType proved it one of the three before this op was emitted")
-		end 'shape'
+		// The SAME `requireFunctionShapeOf` SemanticCheck asked of this same call — one door, so the check
+		// and the lowering cannot come to disagree about which signature the call binds against.
+		return requireFunctionShapeOf(self.functionTypes, name: self.functionValueName(callee), side: "called").paramTypes
 	end 'indirectCalleeParamTypes'
 
 	// The NAME governing a function value's type, from the per-value name column of the function being
-	// lowered — the twin of `SemanticCheck.functionValueGoverningName`, reading the same column through the
-	// same merged interner.
+	// lowered — the twin of `SemanticCheck.functionValueGoverningName`, reading the same column and turning
+	// the id into a name through the one shared `TypeResolution.functionTypeNameOf`.
 	function functionValueName(value ValueId) returns ByteArray
 		let nameId = try self.valueNameIds.get(value) otherwise panic("functionValueName: value v{value} in '{String.from(self.currentFuncName)}' has no recorded type name — the two type columns are minted in lockstep and `lower` re-points both per function")
-		return try self.typeNames.nameOf(nameId) otherwise panic("functionValueName: type-name id {nameId} is not in the project interner — a function value's name id is remapped project-global at merge (mergeArtifact)")
+		return functionTypeNameOf(self.functionTypes, nameId: nameId)
 	end 'functionValueName'
 
 	// Bit k set iff argument k is a float (an f64, routed to a float argument register) — the per-argument

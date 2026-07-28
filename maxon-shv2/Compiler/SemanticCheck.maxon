@@ -1235,7 +1235,7 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex OpIndex
 	// which resolves the same governing name against the same three producers (a lifted closure, a function
 	// alias, a declared function) and panics if it is none of them. So an `indirectCall` op cannot exist
 	// with a callee whose type nothing declares.
-	let shape = functionTypeShapeOf(project, name: calleeName, side: "called")
+	let shape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: calleeName, side: "called")
 
 	// The trailing uniform-ABI env pointer is the compiler's, not the program's (see IndirectCallEnvArgCount).
 	let suppliedCount = args.count() - IndirectCallEnvArgCount
@@ -1256,18 +1256,12 @@ end 'checkIndirectCallArgs'
 // The NAME that governs a function value's type — the FUNCTION it refers to (a `functionRef`, or a lifted
 // closure) or the function TYPEALIAS the place it came from was declared with. It is the value's own
 // `named` column entry, because `MaxonType.function(id)` carries exactly that (see MaxonType's `function`
-// arm); the parser reads the same fact through its file-local interner in `functionValueReturnType`.
+// arm); the parser reads the same fact through its file-local interner in `functionValueReturnType`. The id
+// becomes the name through `TypeResolution.functionTypeNameOf`, the one reader every pass shares.
 function functionValueGoverningName(project Project, func IrFunction, value ValueId) returns ByteArray
 	let nameId = try func.valueNameIds.get(value) otherwise panic("functionValueGoverningName: value v{value} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-	return functionTypeNameOf(project, nameId: nameId)
+	return functionTypeNameOf(functionTypeRegistryOf(project), nameId: nameId)
 end 'functionValueGoverningName'
-
-// The name behind a `function`-tagged type's id, from the merged interner. The same read whether the id came
-// from a VALUE's name column or from a declared `MaxonType.function`, which is the point: both carry the
-// governing name of a function type and both must resolve it the same way.
-function functionTypeNameOf(project Project, nameId TypeNameId) returns ByteArray
-	return try project.typeNames.nameOf(nameId) otherwise panic("functionTypeNameOf: type-name id {nameId} is not in the project interner — a function type's name id is remapped project-global at merge (mergeArtifact)")
-end 'functionTypeNameOf'
 
 // ⭐ **DRAIN THE FUNCTION-TYPE DOORS — the whole-program half of a rule the parser can only record.** Each
 // entry is a function VALUE that met a function-typed place (a cast, a `return`, an assignment); the two
@@ -1279,11 +1273,11 @@ function checkFunctionTypeDoors(project Project)
 	end 'eachDoor'
 end 'checkFunctionTypeDoors'
 
-// One door. Both governing names resolve — see `functionTypeShapeOf`.
+// One door. Both governing names resolve — see `TypeResolution.requireFunctionShapeOf`.
 function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
-	let declared = functionTypeShapeOf(project, name: door.declaredName, side: "declared")
-	let got = functionTypeShapeOf(project, name: door.gotName, side: "arriving")
-	if functionShapesAgree(declared, got: got) 'agree'
+	let declared = requireFunctionShapeOf(functionTypeRegistryOf(project), name: door.declaredName, side: "declared")
+	let got = requireFunctionShapeOf(functionTypeRegistryOf(project), name: door.gotName, side: "arriving")
+	if functionShapesAgree(functionTypeRegistryOf(project), declared: declared, got: got) 'agree'
 		return
 	end 'agree'
 
@@ -1307,23 +1301,6 @@ function functionTypeDoorSite(door PendingFunctionTypeDoor) returns String
 		variable to field gives "assigning to {functionTypeDoorNoun(door.door)} '{String.from(door.placeName)}'"
 	end 'd'
 end 'functionTypeDoorSite'
-
-// The resolved shape behind a governing name, for the three sites that require one to exist: an indirect
-// call's callee, and each end of a function-type door. `side` names which one in the panic, so an invariant
-// break says whether it was the callee, the place or the value whose type went missing.
-//
-// It PANICS rather than reporting, and that is a statement about the parser rather than about the program:
-// a `function` TAG is minted only from a name one of the three producers declares
-// (`Parser.parseTypeReference` for a function alias, `emitFunctionRef` for a function,
-// `parseClosureExpression` for a lifted closure), and every caller here has already established that both
-// its tags are `function`. A missing shape therefore means a producer was added without a registry entry,
-// which is a compiler bug and never user input.
-function functionTypeShapeOf(project Project, name ByteArray, side String) returns FunctionShape
-	match declaredFunctionShapeOf(project.funcSignatures, funcReturnTypes: project.funcReturnTypes, aliasShapes: project.functionAliasShapes, name: name) 'shape'
-		declared(shape) then return shape
-		undeclared then panic("functionTypeShapeOf: the {side} function type's governing name '{String.from(name)}' names neither a declared function/closure nor a function typealias — a `function` tag is minted only from one of the three (Parser.parseTypeReference / emitFunctionRef / parseClosureExpression)")
-	end 'shape'
-end 'functionTypeShapeOf'
 
 // ⭐ **THE RUNTIME ENTRIES A SOURCE-WRITTEN BUILTIN LOWERS TO THAT ONLY x64-WINDOWS CAN PROVIDE.** The
 // exact set `requireTargetSupportsCallee` refuses below (E3104), and the deliberate counterpart of
@@ -1941,9 +1918,9 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// below answers `ok` for it (two `function` tags agree), which is how `use(intish)` reached the backend
 	// with a callee returning an integer where the call site read the float return register.
 	if paramTag == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionArg'
-		let declaredShape = functionTypeShapeOf(project, name: functionTypeNameOf(project, nameId: typeNameIdOf(paramType)), side: "declared")
-		let gotShape = functionTypeShapeOf(project, name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
-		if not functionShapesAgree(declaredShape, got: gotShape) 'signatureMismatch'
+		let declaredShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared")
+		let gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
+		if not functionShapesAgree(functionTypeRegistryOf(project), declared: declaredShape, got: gotShape) 'signatureMismatch'
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{formatFnTypeDisplay(declaredShape.paramTypes, returnType: declaredShape.returnType, typeNames: project.typeNames)}', got '{formatFnTypeDisplay(gotShape.paramTypes, returnType: gotShape.returnType, typeNames: project.typeNames)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'signatureMismatch'
