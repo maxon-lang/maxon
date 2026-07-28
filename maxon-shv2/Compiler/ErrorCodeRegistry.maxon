@@ -107,6 +107,16 @@ export enum ErrorCode
 	// A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'
 	// where 'type Pair uses A, B' expects two (P1.6-A).
 	genericArityMismatch = "E2056"
+	// A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',
+	// 'Array with float' -- where the ranged-typealias rule requires a declared domain
+	// ('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule
+	// every other type position already enforces, reaching the one position that never did.
+	// 'bool' is DELIBERATELY ADMITTED and is not this error: it is already a constrained type with
+	// nothing to range. So are 'String', a user 'type'/'enum', a type PARAMETER, a nested instance
+	// and a ranged alias -- this names ONLY the two bare numeric keywords.
+	// Distinct from E3011 (unknownType), which means the name resolves to NOTHING; here it resolves
+	// to a real type that is forbidden in this position.
+	genericBarePrimitiveArg = "E2061"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"

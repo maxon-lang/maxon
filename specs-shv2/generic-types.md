@@ -1460,3 +1460,185 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Map', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
 ```
+
+<!-- test: error.bare-int-type-arg -->
+⭐ **A BARE `int` IS NOT A TYPE ARGUMENT (E2061).** Everywhere else in the language a numeric
+domain has to be DECLARED — that is the whole of the ranged-typealias rule — and a `with` clause
+was the one type position that let the keyword through. It was silently ACCEPTED: `parseTypeReference`
+mints a bare keyword as a CONCRETE tag, so it never entered the name cascade that validates every
+other spelling, and the check that guards that cascade returned before seeing it. The oracle refuses
+it (`RejectBarePrimitiveTypeArgs`), and the fix the message names is the declaration the rule wanted
+all along.
+```maxon
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with int
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2061: <fragment>:8:29: Cannot use bare type 'int' as a type argument; use a ranged typealias instead (e.g. typealias MyType = int(...))
+```
+
+<!-- test: error.bare-float-type-arg -->
+The SAME missing rule's other symptom, and the loud one: a bare `float` argument reached the x64
+emitter and PANICKED there — *"a register-to-register move from xmm0 to rcx crosses register files"*.
+A type parameter is an opaque 8-byte GPR slot under shv2's dictionary-passing model, so `create(1.5)`
+handed a value born in XMM to a formal fixed in a general-purpose register, and the backend's
+coloring assertion was the first thing in the compiler to notice. No `where` constraint, no
+comparison and no method call are needed to reach it — the instantiation and one call are the whole
+reproducer. One rule, refused in the front end, makes that backend shape unreachable.
+```maxon
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias FloatBox = Box with float
+function main() returns ExitCode
+	let b = FloatBox.create(1.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2061: <fragment>:8:31: Cannot use bare type 'float' as a type argument; use a ranged typealias instead (e.g. typealias MyType = float(...))
+```
+
+<!-- test: error.bare-type-arg-builtin-generic -->
+The rule is about the ARGUMENT, so it does not care what the base is: a BUILTIN generic (`Array`,
+whose runtime record shv2 synthesizes rather than declaring) reaches the identical check, because
+every `Base with Args` — builtin base or declared base — parses its arguments through the one
+`parseGenericArgNode`. `Array with Int` over a declared `typealias Int = int(...)` is the spelling
+every array spec in this suite already uses.
+```maxon
+typealias IntArray = Array with int
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2061: <fragment>:2:33: Cannot use bare type 'int' as a type argument; use a ranged typealias instead (e.g. typealias MyType = int(...))
+```
+
+<!-- test: error.bare-type-arg-nested -->
+A NESTED argument is checked by the same call, which is what makes one edit cover every reachable
+position: `parseGenericArgNode` recurses into an inner `with` and every LEAF it reaches — at any
+depth — goes through `checkGenericArgType`. The diagnostic points at the offending `int` rather
+than at the alias name, so a reader of a deeply nested instantiation is told WHICH argument is
+wrong and not merely that one of them is.
+```maxon
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias BadNest = Box with (Box with int)
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2061: <fragment>:8:40: Cannot use bare type 'int' as a type argument; use a ranged typealias instead (e.g. typealias MyType = int(...))
+```
+
+<!-- test: bool-type-arg-admitted -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+⭐ **`bool` IS DELIBERATELY NOT A BARE PRIMITIVE**, and this is the case that keeps the rule narrow.
+There is no range to declare for it — it is already a constrained type, its domain is its two
+values — so demanding a `typealias` over it would demand a declaration the grammar cannot even
+spell. The oracle excludes it for exactly this reason (`MlirType.IsBarePrimitive` names only the
+numerics). It must stay admitted through BOTH kinds of base: a declared generic `type`, and the
+builtin `Array`.
+```maxon
+type Sizer uses T
+	export var v as T
+	export static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+	export function get() returns T
+		return self.v
+	end 'get'
+end 'Sizer'
+typealias BoolSizer = Sizer with bool
+typealias BoolArray = Array with bool
+function main() returns ExitCode
+	let s = BoolSizer.create(true)
+	var a = BoolArray.create()
+	a.push(s.get())
+	return a.count() - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: string-and-user-type-args-admitted -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The other admitted shapes, and the reason the rule tests the TAG rather than the token: a `String`,
+a user `type` and a NESTED instance each reach `checkGenericArgType` with a concrete tag that is not
+`integer` or `float`, so the bare-primitive arm passes them straight to the name cascade that was
+always there. These are the 900-odd `with String` / `with <UserType>` arguments the rest of the
+suite is built on; the rule may not touch one of them.
+```maxon
+type Leaf
+	export var s as String
+	export static function make(t String) returns Self
+		return Self{s: t}
+	end 'make'
+end 'Leaf'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias StringBox = Box with String
+typealias LeafBox = Box with Leaf
+typealias LeafBoxBox = Box with (Box with Leaf)
+function main() returns ExitCode
+	let sb = StringBox.create("hello")
+	let lb = LeafBox.create(Leaf.make("a"))
+	let nested = LeafBoxBox.create(LeafBox.create(Leaf.make("b")))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: ranged-alias-type-arg-admitted -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The workaround the E2061 message NAMES, demonstrated: a ranged `typealias` over `int` is an
+ordinary `named` type argument, and it works — so the diagnostic tells the reader something true
+and one edit away. It reaches the check as `named`, falls past the bare-primitive arm, and is
+resolved by the same `denotedNamedType` cascade every other name goes through.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function get() returns T
+		return self.value
+	end 'get'
+end 'Box'
+typealias IntBox = Box with Integer
+typealias IntArray = Array with Integer
+function main() returns ExitCode
+	let b = IntBox.create(42)
+	var a = IntArray.create()
+	a.push(b.get())
+	return (try a.get(0) otherwise 0) - 42
+end 'main'
+```
+```exitcode
+0
+```

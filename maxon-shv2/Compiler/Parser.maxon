@@ -5997,18 +5997,25 @@ export type Parser
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
 
-	// ⭐ **A TYPE ARGUMENT MUST NAME A TYPE THAT EXISTS.** `checkGenericInstance` validated the BASE and the
-	// ARITY and nothing else, so `typealias BadArray = Array with UnknownType` COMPILED, RAN and returned an
-	// answer — a silent acceptance of a program naming a type the program does not have, which is the one
-	// class of defect a suite cannot catch by being green. The runnable oracle rejects it, and so does this.
+	// ⭐ **WHAT A TYPE ARGUMENT MAY BE — TWO RULES, ONE PER TAG SHAPE, AND THE ORDER IS NOT ARBITRARY.**
 	//
-	// It asks `denotedNamedType` — the ONE cascade `TypeResolution` and both `as`-cast sites ask — so an
+	// **1. It may not be a BARE NUMERIC KEYWORD (E2061).** A bare `int`/`float` is minted CONCRETE by
+	// `parseTypeReference`, so it is answered FIRST, before the `named` cascade it never enters.
+	//
+	// **2. If it NAMES something, that name must denote a type (E3011).** `checkGenericInstance` validated
+	// the BASE and the ARITY and nothing else, so `typealias BadArray = Array with UnknownType` COMPILED,
+	// RAN and returned an answer — a silent acceptance of a program naming a type the program does not have,
+	// which is the one class of defect a suite cannot catch by being green. The runnable oracle rejects it,
+	// and so does this.
+	//
+	// Rule 2 asks `denotedNamedType` — the ONE cascade `TypeResolution` and both `as`-cast sites ask — so an
 	// argument and a cast target can never come to disagree about what a name means. Only a `named` type can
-	// be in question: `parseTypeReference` has already answered every spelling it settles syntactically
+	// be in question THERE: `parseTypeReference` has already answered every spelling it settles syntactically
 	// (`Self`, the enclosing type's own name, `String`, a type PARAMETER, a bare inner alias, a
 	// generic-instance alias, a function alias, the primitive keywords) with a concrete arm, and a
 	// `typeParameter`/`genericInstance`/`structRef` argument is exactly the legal case that must not be
-	// refused.
+	// refused. Which is precisely why rule 1 cannot be expressed as an extra arm of that cascade — the tag it
+	// rejects is one the cascade is never reached for.
 	//
 	// ⚠ **RECORDED, NOT THROWN, AND NOT COMPUTED AT ALL UNTIL THE INDEX IS WHOLE-PROGRAM** — the same two
 	// rules `checkGenericInstance` states beside it, for the same reason and off the same gate
@@ -6028,7 +6035,35 @@ export type Parser
 			return
 		end 'indexStillBuilding'
 
-		if maxonTypeTag(argType) != ValueTypeTag.named 'alreadyConcrete'
+		// ⭐ **A BARE `int` / `float` IS NOT A TYPE ARGUMENT (E2061)** — the ranged-typealias rule reaching
+		// the one type position that never enforced it. Everywhere else a numeric domain must be DECLARED
+		// (`typealias Integer = int(i64.min to i64.max)`); a `with` clause let the keyword straight through.
+		// `bool` is DELIBERATELY ADMITTED — it is already a constrained type, with no range to name — as are
+		// `String`, a user type, a type PARAMETER, a nested instance and a ranged alias. So the test is on the
+		// TAG, and it is the FIRST thing asked: a bare keyword is minted CONCRETE by `parseTypeReference`
+		// (`MaxonType.integer`/`.float`, never `named`), so it never reached the name cascade below — which
+		// is exactly what hid it. `int` was silently ACCEPTED; `float` reached the backend and PANICKED there
+		// (`X64Backend`'s cross-register-file assertion), because a type parameter is an opaque 8-byte GPR
+		// slot under dictionary-passing and `create(1.5)` hands it a value born in XMM.
+		//
+		// ⚠ **REFUSING THE BARE SPELLING DOES NOT MAKE THAT PANIC UNREACHABLE, and this rule does not claim
+		// to.** `Box with Real` over a ranged FLOAT alias reaches the identical panic (MEASURED: same
+		// assertion, same stack) — a float type argument is simply not representable in the opaque-`T` model,
+		// whatever it is spelled. So the workaround this message names works for `int` and NOT for `float`.
+		// That is a separate mechanism (a float register class for descriptor-typed values) and its own rung.
+		let tag = maxonTypeTag(argType)
+		if tag == ValueTypeTag.integer or tag == ValueTypeTag.float 'barePrimitive'
+			// ⚠ **REPORTED AT THE OFFENDING ARGUMENT, NOT AT THE ALIAS NAME — a deliberate divergence from the
+			// oracle**, which passes its `aliasNameToken` (`RejectBarePrimitiveTypeArgs`, all three call
+			// sites) and so points at the name LEFT of the `=`, away from the token that has to change. Two
+			// reasons the argument wins: the E3011 arm below already reports at `argTok`, so one function
+			// would otherwise answer one question from two columns; and no corpus case asserts the column.
+			let spelling = typeTagName(tag)
+			self.recordArtifactDiagnostic(ErrorCode.genericBarePrimitiveArg, message: "Cannot use bare type '{spelling}' as a type argument; use a ranged typealias instead (e.g. typealias MyType = {spelling}(...))", tok: argTok)
+			return
+		end 'barePrimitive'
+
+		if tag != ValueTypeTag.named 'alreadyConcrete'
 			return
 		end 'alreadyConcrete'
 

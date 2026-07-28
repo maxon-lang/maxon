@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "c154d6cf0ce28982",
+  "sourceHash": "0bbbc0f0ea383ff9",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -452,6 +452,15 @@
       "doc": "'__line__' or '__file__' appeared somewhere other than a function parameter's default\nvalue -- in an ordinary expression, or as a struct FIELD default, which is a different\nthing despite the shared '= <expr>' spelling.\nThese two are a CALLING CONVENTION, not a reflection facility: each expands at the CALL\nSITE, and a parameter default is the only position that has a call site to expand\nagainst. A field default expands at a struct literal and an ordinary expression expands\nnowhere, so neither has an answer to give.\nRaised at TWO grammar positions, from one rule: the expression position catches it when\nthe token is evaluated, and the field-default position catches it when the tokens are\nCAPTURED. The capture-side check is not merely a better error location -- without it a\nfield default nobody triggers is never expanded, and the misuse would go undiagnosed.",
       "emittedBy": {"csharp": "ParserCallerLocationOutsideDefault"},
       "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 2061,
+      "tag": "E2061",
+      "name": "GenericBarePrimitiveArg",
+      "stage": "parser",
+      "doc": "A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',\n'Array with float' -- where the ranged-typealias rule requires a declared domain\n('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule\nevery other type position already enforces, reaching the one position that never did.\n'bool' is DELIBERATELY ADMITTED and is not this error: it is already a constrained type with\nnothing to range. So are 'String', a user 'type'/'enum', a type PARAMETER, a nested instance\nand a ranged alias -- this names ONLY the two bare numeric keywords.\nDistinct from E3011 (unknownType), which means the name resolves to NOTHING; here it resolves\nto a real type that is forbidden in this position.",
+      "emittedBy": {"shv2": "genericBarePrimitiveArg"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 3001,
