@@ -441,6 +441,60 @@ end 'main'
 1
 ```
 
+<!-- test: crlf-index-and-search-arithmetic -->
+### Index and Search Arithmetic Never Assumes One Byte Per Character
+`charAt`, `indexAfter`, `indexBefore`, `findFirst`, `findLast` and `slice(start, length:)` each
+have a byte offset and a grapheme index to relate. Six of them once did it by ARITHMETIC whenever
+the string's ASCII flag was set, instead of asking where the cluster ends. This string is
+all-ASCII, so that flag WAS set — and it holds a CR+LF, which is two bytes and one cluster
+(UAX #29 GB3), so every one of the six answered differently from `count()`.
+
+`x` `\r\n` `y` `z` — five bytes, four clusters, with the two-byte one in the middle.
+```maxon
+function main() returns ExitCode
+	let s = "x\r\nyz"
+	print("clusters={s.count()} bytes={s.byteLength()}\n")
+
+	// indexAfter steps OVER the cluster, and charAt reports its full width.
+	var i = s.startIndex()
+	i = try s.indexAfter(i) otherwise panic("indexAfter past x")
+	print("afterX bytePos={i.bytePos()} width={s.charAt(i).toString().byteLength()}\n")
+	i = try s.indexAfter(i) otherwise panic("indexAfter past the cluster")
+	print("afterCluster bytePos={i.bytePos()} charIndex={i.charIndex()}\n")
+
+	// The searches report a GRAPHEME index beside the byte offset, and past a cluster
+	// those two numbers differ.
+	let f = try s.findFirst("z") otherwise panic("findFirst")
+	print("findFirst charIndex={f.charIndex()} bytePos={f.bytePos()}\n")
+	let l = try s.findLast("y") otherwise panic("findLast")
+	print("findLast charIndex={l.charIndex()} bytePos={l.bytePos()}\n")
+
+	// indexBefore lands on the START of the cluster, never on its LF half. It steps back from
+	// the SEARCH result, not from the walk above: a walk that splits the cluster arrives at a
+	// different byte, and then `indexBefore` is being asked a different question rather than
+	// answering the same one wrongly. `findFirst`'s byte offset is the same number either way.
+	let back = try s.indexBefore(l) otherwise panic("indexBefore")
+	print("back bytePos={back.bytePos()} charIndex={back.charIndex()}\n")
+
+	// Slicing by grapheme LENGTH counts the cluster once and takes both its bytes.
+	let two = s.slice(s.startIndex(), length: 2)
+	print("slice2 bytes={two.byteLength()} clusters={two.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+clusters=4 bytes=5
+afterX bytePos=1 width=2
+afterCluster bytePos=3 charIndex=2
+findFirst charIndex=3 bytePos=4
+findLast charIndex=2 bytePos=3
+back bytePos=1 charIndex=1
+slice2 bytes=3 clusters=2
+```
+
 <!-- test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon
@@ -910,6 +964,14 @@ s=Hello arr[0]=74
 <!-- test: tobytearray-survives-the-source-growing -->
 The independence runs both ways: growing the STRING after taking the bytes must not disturb them.
 `append` detaches the string to a fresh buffer, and the array keeps the bytes it was given.
+
+⚠ THE SECOND ROUND IS THE ONE THAT BITES, AND THE FIRST ONE ON ITS OWN DID NOT. Five bytes is
+short enough that the string's grow does not free a block whose head the allocator then writes
+through, so this case passed for a long time while the contract it states was false: an array
+that merely VIEWED the string's buffer read the freed block after a real reallocation, and its
+first eight bytes came back zeroed. The second round owns its buffer before the array is taken
+(a literal is read-only data, which is never freed) and is long enough to be reallocated rather
+than carried inline. A pinned rule is only as strong as the shape it is pinned on.
 ```maxon
 function main() returns ExitCode
 	let who = "ello"
@@ -917,7 +979,15 @@ function main() returns ExitCode
 	let arr = s.toByteArray()
 	s.append("!!!")
 	let b0 = try arr.get(0) otherwise panic("get")
-	print("s={s} arr.count={arr.count()} arr[0]={b0}")
+	print("s={s} arr.count={arr.count()} arr[0]={b0}\n")
+
+	var big = "0123456789abcdefghijABCDEFGHIJ"
+	big.append("+")
+	let bigArr = big.toByteArray()
+	big.append("TAIL")
+	let f0 = try bigArr.get(0) otherwise panic("get 0")
+	let f8 = try bigArr.get(8) otherwise panic("get 8")
+	print("big.count={bigArr.count()} big[0]={f0} big[8]={f8}\n")
 	return 0
 end 'main'
 ```
@@ -926,4 +996,5 @@ end 'main'
 ```
 ```stdout
 s=Hello!!! arr.count=5 arr[0]=72
+big.count=31 big[0]=48 big[8]=56
 ```

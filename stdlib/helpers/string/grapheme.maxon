@@ -18,6 +18,26 @@ typealias BreakProperty = int(0 to 13)
 // ByteCount, GraphemeCount, BytePos exported by stdlib/String.maxon.
 typealias RegionalIndicatorCount = int(0 to u64.max)
 
+typealias Utf8Byte = int(0 to u8.max)
+
+// The lowest byte that is NOT a single-byte UTF-8 codepoint: at or above it, a byte either begins or
+// continues a multi-byte sequence.
+let AsciiLimit = 128 as Utf8Byte
+
+// U+000D and U+000A. GB3 joins CR to a following LF, which makes `<CR><LF>` the ONE grapheme cluster
+// that spans two ASCII bytes — the whole reason `String.singleByteGraphemesFlag` has to be stronger
+// than "is ASCII", and the reason ten methods that read the old `isAsciiFlag` as "one byte per
+// character" split the cluster.
+//
+// ⚠ `String.CarriageReturnByte` states this byte a second time, because its classifier tests every
+// byte of every string at construction and a cross-file call per byte is not affordable (a second
+// WALK of the same bytes measured +90% on that path; a call per byte is worse). The two are held
+// together by a CHECK rather than by derivation: `specs/string-type-2`'s
+// `crlf-is-one-grapheme-when-iterating` fails if either side stops treating CR specially — dropping
+// GB3 here makes `count()` say 4, and dropping CR from the classifier makes it say 4 the other way.
+let CarriageReturnByte = 13 as Utf8Byte
+let LineFeedByte = 10 as Utf8Byte
+
 // ============================================
 // Find grapheme end helpers (UAX #29)
 // ============================================
@@ -36,13 +56,13 @@ export function findGraphemeEnd(s String, startPos BytePos) returns BytePos
 	let firstByte = try s.byteAt(startPos) otherwise 'firstByteErr'
 		panic("grapheme: firstByte OOB — caller guarantees startPos < len")
 	end 'firstByteErr'
-	if firstByte < 128 'isAscii'
-		if firstByte == 13 'isCR'
+	if firstByte < AsciiLimit 'isAscii'
+		if firstByte == CarriageReturnByte 'isCR'
 			if startPos + 1 < len 'hasNext'
 				let nextByte = try s.byteAt(startPos + 1) otherwise 'nextByteErr'
 					panic("grapheme: nextByte OOB — startPos+1 < len checked above")
 				end 'nextByteErr'
-				if nextByte == 10 'isCRLF'
+				if nextByte == LineFeedByte 'isCRLF'
 					return startPos + 2
 				end 'isCRLF'
 			end 'hasNext'
@@ -52,7 +72,7 @@ export function findGraphemeEnd(s String, startPos BytePos) returns BytePos
 			let nextByte = try s.byteAt(startPos + 1) otherwise 'nextByteErr2'
 				panic("grapheme: nextByte OOB — startPos+1 < len checked above")
 			end 'nextByteErr2'
-			if nextByte >= 128 'nextIsMultibyte'
+			if nextByte >= AsciiLimit 'nextIsMultibyte'
 				// Decode the next codepoint and check if it's Extend, ZWJ, or SpacingMark
 				let nextCp = utf8DecodeAt(s, pos: startPos + 1)
 				let nextGbp = graphemeBreakProperty(nextCp)

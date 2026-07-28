@@ -36,6 +36,14 @@ let AsciiLimit = 128 as Byte
 
 // U+000D. The ONE ASCII byte that is not a grapheme cluster on its own: GB3 joins it to a following
 // LF. That is the whole reason `singleByteGraphemesFlag` is stronger than "is ASCII".
+//
+// ⚠ SECOND COPY. `helpers/string/grapheme.maxon` — where GB3 is IMPLEMENTED — states both of these
+// bytes too, and it is the authority. This copy exists because `scanSingleByteGraphemes` tests every
+// byte of every string as it is constructed, and neither derivation is affordable there: a
+// cross-file call per byte is worse than the second WALK that measured +90% on that path. What holds
+// the two together is a CHECK, not a comment — `specs/string-type-2`'s
+// `crlf-is-one-grapheme-when-iterating` goes red if either side stops treating CR specially. Verify
+// it by sabotage before trusting it, as this rung's review did.
 let CarriageReturnByte = 13 as Byte
 
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
@@ -132,18 +140,24 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// The UTF-8 bytes as a NEW, INDEPENDENT `ByteArray`. Writing to it never touches this string,
 	/// and this string growing never touches it.
 	///
-	/// The independence is the CONTRACT; the copy-on-write view behind it is an optimisation and
-	/// nothing more. Reads cost nothing and share the bytes; the first write detaches to a private
-	/// buffer. So the source can be ANYTHING — a `.rodata` literal, a fused string, a slice — and
-	/// the answer is the same, which is the point: there is one rule, not a rule per representation.
-	/// (A literal could not share for writes even if we wanted it to: literals are interned, so one
-	/// write through a shared literal would rewrite every other occurrence of it in the program.)
+	/// The independence is the CONTRACT; sharing the bytes is an optimisation and nothing more. So
+	/// the source can be ANYTHING — a `.rodata` literal, a fused string, a slice — and the answer is
+	/// the same, which is the point: there is one rule, not a rule per representation. (A literal
+	/// could not share for writes even if we wanted it to: literals are interned, so one write
+	/// through a shared literal would rewrite every other occurrence of it in the program.)
 	///
-	/// This comment used to read "zero-copy, shares backing memory", unqualified, and that stopped
-	/// being true when the envelope collapse made construction a slice-VIEW — a slice copies on
-	/// write. Nothing caught it because nothing pinned it. `specs/string-type-2` does now.
+	/// ⚠ IT SLICES, and for the same reason `clone()` does — see that method. `ByteArray.init(managed)`
+	/// alone was a capacity=-1 VIEW straight onto this string's buffer, and that is only safe when the
+	/// buffer is not OWNED: an owner's next `append` mm_raw_free's the block, and the array was left
+	/// reading it. The second half of the sentence above — "this string growing never touches it" —
+	/// was therefore FALSE for a heap string, and `specs/string-type-2` pinned it at five bytes, short
+	/// enough that the freed block still held its bytes. `managed.slice` is the one operation that
+	/// knows the difference: it COPIES an owned buffer and views an rdata/slice one.
 	export function toByteArray() returns ByteArray
-		return ByteArray.init(managed)
+		let ownBytes = try managed.slice(0, byteLength()) otherwise 'toByteArraySliceErr'
+			panic("String.toByteArray: slice 0..byteLength() is in bounds by construction")
+		end 'toByteArraySliceErr'
+		return ByteArray.init(ownBytes)
 	end 'toByteArray'
 
 	/// The UTF-8 bytes as a `__ManagedMemory` an intrinsic can take: a real record, at a real address,
@@ -195,11 +209,22 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// same record, so the caller's `append` would mutate the original. That was the Stage 0 bug —
 	/// `let b = a.toLower()` lowercased `a`.
 	///
-	/// This used to slice first (`String{managed: managed.slice(0, len), ...}`), which built the view
-	/// TWICE — a slice record, then a String viewing the slice — for one COW view of the same bytes.
-	/// Constructing straight from `managed` is the same thing in one allocation.
+	/// ⚠ IT GOES THROUGH `sliceBytes`, AND THE EXTRA RECORD IS THE POINT — DO NOT "OPTIMISE" IT BACK.
+	/// It once constructed `String{managed: managed, ...}` straight, on the grounds that a slice
+	/// record plus a String viewing it was two allocations for "the same thing". It is not the same
+	/// thing. `String{managed: X, ...}` builds a capacity=-1 VIEW of X's buffer whatever X is, while
+	/// `managed.slice` COPIES when the source OWNS its buffer (capacity >= 0) and only views an
+	/// rdata/slice source. That copy is the entire invariant behind an owned buffer: nothing outside
+	/// the owner may hold a pointer into it, because the owner's next `append` calls
+	/// `maxon_string_ensure_cap`, which mm_raw_free's the block. Straight construction broke it, and
+	/// the clone read freed memory the moment the original grew — measured, `var a = <owned>;
+	/// let c = a.clone(); a.append("TAIL")` left `c` reading the freed block (eight zeroed bytes then
+	/// stale contents), exit 0. `a.append(a.clone())` corrupted the appended half the same way.
+	///
+	/// A literal is rdata, so it still costs one view and no copy — the shape that dominates the
+	/// stdlib's own `clone()` calls (the `return self, unchanged` early-outs below).
 	export function clone() returns String
-		return String{managed: managed, singleByteGraphemesFlag: singleByteGraphemesFlag}
+		return sliceBytes(0, endPos: byteLength(), singleByteGraphemes: singleByteGraphemesFlag)
 	end 'clone'
 
 	/// THE byte-access primitives, and the only way anything inside `String` is allowed to read a
