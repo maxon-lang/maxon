@@ -1,0 +1,32 @@
+// Test: ranges.single-element-inclusive
+function main() returns ExitCode
+		var count = 0
+		for _ in 5 to 5 'loop'
+				count = count + 1
+		end 'loop'
+		return count
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 5
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc lessEqual, loop
+    x64.jmp forexit
+  loop:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.popReg rbp
+    x64.ret
+}

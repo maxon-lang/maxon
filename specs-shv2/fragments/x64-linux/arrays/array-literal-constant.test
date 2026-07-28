@@ -1,0 +1,57 @@
+// Test: array-literal-constant
+let numbers = [1, 2, 3, 4, 5]
+
+function main() returns ExitCode
+	var sum = 0
+	for n in numbers 'loop'
+		sum = sum + n
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __data_numbers@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.leaRegGlobal rax, __data_numbers
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_count
+    x64.cmpRegReg r13, r8
+    x64.jcc less, loop
+    x64.jmp forexit
+  loop:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_get_unchecked
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

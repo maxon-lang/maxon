@@ -1,0 +1,88 @@
+// Test: ranges.ranged-alias-parameter-bound-stays-legal
+typealias Row = int(0 to 63)
+
+function sumTo(lastRow Row) returns Row
+	var total = 0 as Row
+	for r in 0 to lastRow 'l'
+		total = total + r
+	end 'l'
+	return total
+end 'sumTo'
+
+function main() returns ExitCode
+	var chars = 0
+	for c in 'a' to 'e' 'k'
+		chars = chars + 1
+	end 'k'
+	return (sumTo(5) + chars) as ExitCode
+end 'main'
+---
+ExitCode: 20
+---
+func @sumTo {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg rax, rcx
+    x64.jcc lessEqual, l
+    x64.jmp forexit
+  l:
+    x64.leaRegRegReg r8, r8, rax
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 63
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rax, 97
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 101
+    x64.jcc lessEqual, k
+    x64.jmp forexit
+  k:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect sumTo
+    x64.leaRegRegReg r8, r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
