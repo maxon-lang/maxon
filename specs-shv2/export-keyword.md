@@ -210,8 +210,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: export-typealias-in-type-field -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- test: export-typealias-in-type-field -->
 ```maxon
 // --- file: api/types.maxon
 typealias Integer = int(i64.min to i64.max)

@@ -70,8 +70,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: struct-array-get-loop-function -->
-<!-- P1.8 for-in -->
+<!-- test: struct-array-get-loop-function -->
 Struct elements in array survive after being read in a loop inside a standalone function.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

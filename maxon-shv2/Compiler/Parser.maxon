@@ -685,6 +685,14 @@ export union ParseError implements Error
 	// the slot empty. `elementType` names the element, which is the whole point of refusing HERE: the
 	// runtime cannot name it and the caller cannot see it.
 	arrayResizeManagedElement(elementType String, line LineNumber, column ColumnNumber)
+	// ⭐ A LABELLED CONTROL-FLOW BLOCK WITH NO STATEMENTS IN IT — `if c 'x' end 'x'`, and the same for
+	// `else`, `while`, `for` and a block-form `otherwise` handler. Renders as **E3082**, positioned at
+	// the closing `end` (which is where the missing statements would have gone) and naming the block's
+	// LABEL. A function body is deliberately exempt — `function doNothing() end 'doNothing'` is legal —
+	// which falls out of where the check lives: `parseBlockBody` parses every NESTED block and nothing
+	// else. `label` is the block's own label, taken from its opening token rather than from the `end`'s
+	// optional one, so a block closed by a bare `end` still names itself.
+	emptyBlock(label String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
@@ -838,6 +846,18 @@ let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 // structure per function. `Set.contains` on a zero-capacity set returns before it hashes anything, so the
 // programs that never mark also never pay to ask.
 let sharedEmptyImmutableGlobalReads = ImmutableGlobalReadSet.create()
+
+// The module-level shared EMPTY iteration-lock stack (P1.8 slice A), held as the initial value of
+// `iterationLockedBindings` AND as the COW anchor its per-function reset points at —
+// `sharedEmptyInstanceAliasMap`'s pattern, for its reason and with its invariant. It is not a micro-
+// optimization: a `Parser` is built PER TOP-LEVEL CONSTANT by `SignatureIndex.walkConstInitializer`, so
+// an unconditional `create()` in the constructor is one allocation per constant in the program.
+// MEASURED, A/B against the parent built in the same worktree: it billed `phase:signatures`
+// +96/+165/+303/+579/+1131/+2235 allocations across the doubling ladder — perfectly linear, and for a
+// stack that is EMPTY unless a `for … in` body is being parsed. `lockIterationSource` copy-on-writes a
+// fresh array the first time it must push, keyed on this instance's `is`-identity, so the shared one
+// stays empty and safe across the per-file parse fan-out.
+let sharedEmptyIterationLocks = VarInfoArray.create()
 
 // The NAME-keyed twin delivered to SemanticCheck for a function that has range checks but constructs no
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
@@ -1056,6 +1076,14 @@ let ParametersAreMutable = false
 // by TEXT and skips the load + declaration for that slot. A constant because it is a language fact
 // (`_` means discard), spelled once.
 let DiscardBindingName = b"_"
+
+// How many `.field` HOPS a token-level field-chain walk must find (`Parser.fieldChainEndAfter`). A
+// chain-METHOD call needs at least two (`b.ops.push(1)`) — the ONE-hop `b.push(1)` is the binding-
+// receiver path's, which `methodCallsAt` takes — while a `for … in` source lock accepts any chain at
+// all, a bare name (zero hops) included.
+typealias FieldHopCount = int(0 to 255)
+let ChainMethodMinHops = 2 as FieldHopCount
+let AnyFieldHops = 0 as FieldHopCount
 
 // The label of the placeholder block a Parser holds before it has parsed a function. It
 // belongs to no function and is registered in no module; `parseFunction` replaces it
@@ -2551,9 +2579,14 @@ typealias ReachingMoveEdgeArray = Array with ReachingMoveEdge
 type LoopPhiVar
 	export var binding as VarInfo
 	export var phiId as ValueId
+	// The binding's value on the PREHEADER edge — the one edge into the header that comes from OUTSIDE
+	// the loop. It is captured at mint time because installing the phi (`binding.boundValue = phiId`)
+	// overwrites the very field it would otherwise be read from, and the preheader's block-arg list is
+	// built AFTER every phi has been minted (`edgeArgsFor(preLoop: true)`).
+	export var entryValue as ValueId
 
-	export static function create(binding VarInfo, phiId ValueId) returns LoopPhiVar
-		return Self{binding: binding, phiId: phiId}
+	export static function create(binding VarInfo, phiId ValueId, entryValue ValueId) returns LoopPhiVar
+		return Self{binding: binding, phiId: phiId, entryValue: entryValue}
 	end 'create'
 end 'LoopPhiVar'
 
@@ -2604,14 +2637,19 @@ typealias ImmutableGlobalReadSet = Set with ValueId
 //
 // This mirrors v1's parser loop stack (maxon-selfhosted Parser.parseWhileStatement:
 // same cond/header + body + exit block shape, same entry→header branch and
-// condBr(then=body, else=exit)). One field v1 carries that this does not: a separate
-// `continueBlockId`. In a `while`, `continue` re-evaluates the condition, so its target
-// IS the header (`headerId` here); v1 splits the two only for `for` loops, whose
-// `continue` jumps to a STEP block that runs the increment before the header. When
-// `for` lands (M5), this gains that split; at M4b `continue` → `headerId` is exact.
+// condBr(then=body, else=exit)). It carries v1's separate continue target too
+// (`continueTargetId`): in a `while`, `continue` re-evaluates the condition, so its
+// target IS the header; a `for`'s `continue` must run the STEP block's increment first,
+// or the counter never advances and the loop spins forever (v1 Parser.maxon:10137-10139
+// and the reference bootstrap 2-Parser.cs:13150-13153 both carry that comment, both
+// having hit it). A `while` sets it to its own header, so there is exactly ONE rule here
+// and `parseContinueStatement` has no construct to branch on.
 type LoopContext
 	export var label as ByteArray
 	export var headerId as BlockId
+	// Where a `continue` targeting this loop branches — the header for a `while`, the STEP block for a
+	// `for`. See the header above for why it is a field rather than `headerId` doing double duty.
+	export var continueTargetId as BlockId
 	export var exitId as BlockId
 	export var phiVars as LoopPhiVarArray
 	// True once at least one `break` targeted this loop — the exit then merges the
@@ -2623,12 +2661,18 @@ type LoopContext
 	// `BlockMark.ownedCount`, because nothing is pushed between recording it and opening the body.
 	export var ownedFloor as BindingMark
 
-	export static function create(label ByteArray, headerId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns LoopContext
-		return Self{label: label, headerId: headerId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor}
+	export static function create(label ByteArray, headerId BlockId, continueTargetId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns LoopContext
+		return Self{label: label, headerId: headerId, continueTargetId: continueTargetId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor}
 	end 'create'
 end 'LoopContext'
 
 typealias LoopContextArray = Array with LoopContext
+
+// The name of the internal binding a `for … in` over an OWNED array TEMPORARY moves that temporary
+// into (`parseForStatement`). It is never installed in a `Scope`, so no source line can name it; the
+// `__` prefix is what says so anyway, since `requireUnreservedName` bars every declaration from that
+// space. It exists only so `emitScopeDrops` — which drops BINDINGS — reaches the record.
+let IterationSourceBindingName = b"__for_source"
 
 // The value a match arm produces, if any: `none` for a `then` (statement) arm, `value` for a
 // `gives` (expression) arm. A union rather than a `ValueId` plus a bool — for the reason
@@ -2944,6 +2988,19 @@ export type Parser
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
 	var loops as LoopContextArray
+	// ⭐⭐ **THE BINDINGS AN ENCLOSING `for … in` IS CURRENTLY ITERATING THROUGH** — innermost last, pushed
+	// by `lockIterationSource` around each `for` body and popped after it. THE ONE FACT behind the borrow's
+	// safety obligation, and the reason it is a list on the parser rather than a flag flipped on the binding:
+	// THREE different write doors have to refuse, and only a single shared fact keeps them from drifting (see
+	// `bindingIsIterationLocked` for the three, and for what each one would let through on its own).
+	//
+	// It holds the binding a write must go THROUGH, which for a field-chain source (`for it in b.items`) is
+	// the chain's BASE (`b`) rather than the array itself — a re-read of `b.items` in the body mints a fresh
+	// ValueId for the same record, so nothing about the array's own VALUE can identify it.
+	//
+	// Membership is by OBJECT IDENTITY (`VarInfo` is a heap `type`), so a body that SHADOWS the source's name
+	// declares a different record and is correctly not locked.
+	var iterationLockedBindings as VarInfoArray
 	// The token index of the `end` most recently consumed by `parseBlockBody`. It exists for
 	// the drift guard `assertScanAligned`, which both `parseWhileStatement` and `parseIfStatement`
 	// run to check the `end` the parser really closed the last body with against the one
@@ -3369,6 +3426,7 @@ export type Parser
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
 			loops: LoopContextArray.create(),
+			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
 			blockExtentEnds: sharedEmptyBlockExtentEnds,
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
@@ -6956,6 +7014,10 @@ export type Parser
 		// function's SSA space, so a move-out would null the wrong slot.
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
+		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
+		// at the shared empty rather than allocating (see `sharedEmptyIterationLocks`).
+		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
@@ -7767,7 +7829,9 @@ export type Parser
 			return try self.parseIfStatement(func, block: block)
 		end 'ifStmt' else if self.at(TokenKind.while) 'whileStmt'
 			return try self.parseWhileStatement(func, block: block)
-		end 'whileStmt' else if self.at(TokenKind.match) 'matchStmt'
+		end 'whileStmt' else if self.at(TokenKind.for) 'forStmt'
+			return try self.parseForStatement(func, block: block)
+		end 'forStmt' else if self.at(TokenKind.match) 'matchStmt'
 			return try self.parseMatchStatement(func, block: block)
 		end 'matchStmt' else if self.at(TokenKind.break) 'breakStmt'
 			try self.parseBreakStatement(block)
@@ -8048,15 +8112,30 @@ export type Parser
 
 	// Parse a lexical block's statements into `block`, through its closing `end [label]`.
 	// The ONE place a block body is parsed, so the scope frame is opened and closed in
-	// one place too: an `if` body, an `else` body and a `while` body all come through
-	// here. The caller has already consumed the block's opening label.
+	// one place too: an `if` body, an `else` body, a `while`/`for` body and a block-form
+	// `otherwise` handler all come through here. The caller has already consumed the
+	// block's opening label and passes it as `label`.
 	//
 	// Returns the block the body's last statement left control in (which is `block`
 	// itself only for straight-line code — a nested `if` moves control into its
 	// continuation).
-	function parseBlockBody(func IrFunction, block IrBlock) returns IrBlock throws ParseError
-		let mark = self.openBlock()
+	//
+	// ⭐ **AN EMPTY LABELLED BLOCK IS E3082**, and it is checked HERE because this is the one routine
+	// that sees a NESTED block's statements — which is also exactly why a FUNCTION body is exempt
+	// (`function doNothing() end 'doNothing'` is legal, `empty-block.md`'s `valid-empty-function`).
+	// The exemption is therefore structural rather than a carve-out anyone has to remember. The check
+	// runs before the scope frame opens, so the throw leaves no half-opened block behind, and it is
+	// anchored on the closing `end` — where the missing statements would have gone. A body holding
+	// only a COMMENT reads as empty, because the lexer emits no token for one; the spec's own
+	// documentation example is exactly that program.
+	function parseBlockBody(func IrFunction, block IrBlock, label ByteArray) returns IrBlock throws ParseError
 		self.skipNewlines()
+		if self.at(TokenKind.end) 'emptyBlock'
+			let endTok = self.current()
+			throw ParseError.emptyBlock(String.from(label), line: endTok.line, column: endTok.column)
+		end 'emptyBlock'
+
+		let mark = self.openBlock()
 		let bodyEnd = try self.parseStatements(func, block: block)
 
 		// ⭐ **DROP THE BLOCK'S OWN OWNED BINDINGS ON FALL-THROUGH** — a `let s = build(i)` inside an
@@ -8455,7 +8534,11 @@ export type Parser
 	// as wrong on its own. The bootstrap is the cautionary tale: it spells this rule at FOUR sites
 	// and reads `VarInfo.Mutable` in three unrelated places.
 	function requireMutableBinding(binding VarInfo, nameTok Token) throws ParseError
-		if not binding.mutable 'immutable'
+		// ⭐ A binding an enclosing `for … in` is iterating may not be REBOUND either: the loop keeps
+		// walking the record it captured in its preheader, and rebinding the name drops that record
+		// (`reassignBindingValue`) while the header is still reading its length. The same one fact the
+		// two receiver doors read — see `bindingIsIterationLocked`.
+		if not binding.mutable or self.bindingIsIterationLocked(binding) 'immutable'
 			throw assignToImmutableError(nameTok)
 		end 'immutable'
 	end 'requireMutableBinding'
@@ -9880,7 +9963,7 @@ export type Parser
 			end 'bindScalarE'
 		end 'scalarError'
 
-		let errEnd = try self.parseBlockBody(func, block: errBlock)
+		let errEnd = try self.parseBlockBody(func, block: errBlock, label: labelTok.value)
 		self.scope.popScope()
 
 		// Release the caught box on whichever edge leaves the handler — a `__destruct_<U>`/decref on a live
@@ -10906,7 +10989,7 @@ export type Parser
 		// statement parser fills the block; the finalizers wire its terminator) — a
 		// `let` binding cannot be forwarded to a mutating parameter (E3019).
 		var thenBlock = self.newBlock(func, label: thenLabel.value, line: thenLabel.line)
-		var thenEnd = try self.parseBlockBody(func, block: thenBlock)
+		var thenEnd = try self.parseBlockBody(func, block: thenBlock, label: thenLabel.value)
 
 		// Snapshot the then-branch's exit values and move state, then rewind BOTH to the entry state so the
 		// else/false path is parsed against the pre-`if` values and pre-`if` ownership, not the then-branch's.
@@ -10946,8 +11029,8 @@ export type Parser
 			return try self.parseIfStatement(func, block: elseBlock)
 		end 'elseIf'
 
-		try self.consume(TokenKind.charLiteral)
-		return try self.parseBlockBody(func, block: elseBlock)
+		let elseLabelTok = try self.consume(TokenKind.charLiteral)
+		return try self.parseBlockBody(func, block: elseBlock, label: elseLabelTok.value)
 	end 'parseElseBody'
 
 	// Finalize an `if` with no `else`: the false path flows straight to the
@@ -11199,29 +11282,9 @@ export type Parser
 
 		var header = self.newBlock(func, label: b"whilehdr", line: whileTok.line)
 
-		// Mint the header phis for the carried bindings, in declaration order, capturing each
-		// one's PRE-LOOP value as it goes — `preheaderVals` is the preheader→header block-arg
-		// list, so it is positional over `phiVars` (NOT over `mutableVars`, which now holds
-		// bindings this loop does not carry). Reading `boundValue` before the phi overwrites
-		// it is what keeps the two in step within the single pass.
-		//
-		// Index-based so each binding is a MUTABLE reference — a `for x in …` loop variable is
-		// immutable, and installing the phi writes through the binding.
-		var phiVars = LoopPhiVarArray.create()
-		var preheaderVals = ValueIdArray.create()
-		for k in 0 upto self.mutableVars.count() 'mkPhi'
-			var binding = try self.mutableVars.get(k) otherwise panic("parseWhileStatement: mutableVars.get OOB at {k}")
-			if not assigned.contains(binding.name) 'neverAssigned'
-				continue
-			end 'neverAssigned'
+		let phiVars = self.mintLoopHeaderPhis(header, assigned: assigned)
 
-			preheaderVals.push(binding.boundValue)
-			let phiId = self.mintPhiForBinding(header, binding: binding)
-			phiVars.push(LoopPhiVar.create(binding, phiId: phiId))
-			binding.boundValue = phiId
-		end 'mkPhi'
-
-		self.recordBranchEdge(block, targetId: header.id, argIds: preheaderVals)
+		self.recordBranchEdge(block, targetId: header.id, argIds: self.edgeArgsFor(phiVars, preLoop: true))
 		self.emitBranch(block, targetId: header.id)
 
 		// Condition, evaluated in the header — so `continue` and the back edge, which both
@@ -11250,12 +11313,14 @@ export type Parser
 
 		// `ownedFloor` is the owned-binding height NOW, before the body opens its block — so a
 		// `break`/`continue` releases exactly what the body declares (see LoopContext.ownedFloor).
-		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
+		// A `while`'s continue target IS its header: the condition is re-evaluated on the back edge,
+		// so there is no increment to run first and no step block to run it in.
+		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, continueTargetId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
 
 		// The body is a lexical BLOCK: its declarations are gone — and its `var`s off
 		// `mutableVars` — before the back-edge args below are read, so those args name the
 		// loop's own phi bindings and never a body-local shadow.
-		var bodyEnd = try self.parseBlockBody(func, block: body)
+		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
 
 		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
 		self.assertScanAligned("parseWhileStatement", predictedEnd: bodyEndIndex)
@@ -11266,13 +11331,410 @@ export type Parser
 		// (possibly reassigned) current values. A body that always returns/breaks/
 		// continues on every path leaves `bodyEnd` terminated — no fall-through edge.
 		if not bodyEnd.isTerminated() 'fallsBack'
-			self.recordBranchEdge(bodyEnd, targetId: header.id, argIds: self.edgeArgsFor(phiVars))
+			self.recordBranchEdge(bodyEnd, targetId: header.id, argIds: self.edgeArgsFor(phiVars, preLoop: false))
 			self.emitBranch(bodyEnd, targetId: header.id)
 		end 'fallsBack'
 
 		self.wireLoopExit(condExit, exit: exit, ctx: ctx)
 		return exit
 	end 'parseWhileStatement'
+
+	// ⭐ **MINT ONE HEADER PHI PER CARRIED BINDING** — the front half BOTH loop statements run, and the
+	// only place a loop-carried phi is created. `assigned` is the construct's carried set, read off the
+	// tokens by its caller (see `parseWhileStatement`'s header for why it must be known up front); the
+	// phis follow `mutableVars` DECLARATION order, which is what makes a merge inside the body mint its
+	// own phis in the same order (`assignedBindingsIn`).
+	//
+	// Each binding's PRE-LOOP value is captured into the `LoopPhiVar` as it goes, because installing the
+	// phi overwrites `boundValue` — that snapshot is what `edgeArgsFor(preLoop: true)` reads to build the preheader
+	// edge, and reading it here, inside the single forward pass, is what keeps the two positional.
+	//
+	// Index-based so each binding is a MUTABLE reference — a `for x in …` loop variable is immutable,
+	// and installing the phi writes through the binding.
+	function mintLoopHeaderPhis(header IrBlock, assigned AssignedNameSet) returns LoopPhiVarArray
+		var phiVars = LoopPhiVarArray.create()
+		for k in 0 upto self.mutableVars.count() 'mkPhi'
+			var binding = try self.mutableVars.get(k) otherwise panic("mintLoopHeaderPhis: mutableVars.get OOB at {k}")
+			if not assigned.contains(binding.name) 'neverAssigned'
+				continue
+			end 'neverAssigned'
+
+			let entryValue = binding.boundValue
+			let phiId = self.mintPhiForBinding(header, binding: binding)
+			phiVars.push(LoopPhiVar.create(binding, phiId: phiId, entryValue: entryValue))
+			binding.boundValue = phiId
+		end 'mkPhi'
+		return phiVars
+	end 'mintLoopHeaderPhis'
+
+	// ⭐⭐ **PARSE A `for` LOOP (P1.8 slice A).** Three source spellings, ONE lowering:
+	//
+	//     for <name> in <lo> to   <hi> 'label'    — a counted range, INCLUSIVE of `hi`
+	//     for <name> in <lo> upto <hi> 'label'    — the same, EXCLUSIVE of `hi`
+	//     for <name> in <arraySource>  'label'    — an INDEX COUNTER over the array record
+	//
+	// FOUR blocks, and the fourth is the one `while` does not have:
+	//
+	//     preheader → evaluate the source ONCE → br header(idx0, …carried)
+	//     header    → idx <= hi ? body : exit          (`<` for `upto`; for an array, `idx < count`)
+	//     body      → bind the loop variable; <user statements>; br step
+	//     step      → br header(idx + 1, …carried)     ← `continue` targets THIS, not the header
+	//     exit
+	//
+	// ⭐ **THE STEP BLOCK IS MANDATORY.** Every path that continues the loop — the body's tail and every
+	// `continue` — lands there, so the counter advances exactly once per iteration however the body was
+	// left. Without it a `continue` re-enters the header with the counter unchanged and the loop spins
+	// forever; both reference compilers hit that and both wrote a comment about it (v1
+	// `Parser.maxon:10137-10139`, bootstrap `2-Parser.cs:13150-13153`), and so did shv2's own
+	// `LoopContext` before this rung existed.
+	//
+	// ⭐ **THE ARRAY FORM IS AN INDEX COUNTER, NOT AN ITERATOR OBJECT** — the reference bootstrap's fast
+	// path (`2-Parser.cs:13143-13244`), taken over v1's heap cursor (`Parser.maxon:10205-10373`) for
+	// three measured reasons: v1's cursor snapshots `source.buffer` and dangles when the source is freed
+	// at its last use (`LowerMaxonToStd.maxon:9750-9760`), it double-retains and leaked the backing of
+	// every scope-local collection (`:9789-9800`), and it costs two heap allocations per loop. shv2
+	// could not use v1's shape anyway: its `Array` is a hand-synthesized builtin with no
+	// `createIterator`, and there is no `Iterable`/associated-type machinery for one to conform to.
+	//
+	// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER**, never snapshotted into the preheader. The header
+	// comparison against the real length IS the bounds check, which is what lets the element read below
+	// be the UNCHECKED one; a stale snapshot would let that read run off the end of the buffer.
+	//
+	// ⭐ **THE ELEMENT IS A BORROW** (`emitArrayElementAccessor(owned: false)`) — the array keeps
+	// ownership and its own `__arr_decref` walk destroys it, exactly as `get`/`first`/`last` already
+	// yield (`dispatchArrayMethod`). The loop variable is therefore enrolled in NEITHER `ownedBindings`
+	// NOR `pendingTempDrops`, and the loop costs zero refcount traffic per iteration. The reference
+	// bootstrap RETAINS instead (`MaxonToStandardConversion.ManagedMemory.cs:309-358`); shv2 has exactly
+	// ONE door for reading an array element and it borrows, so retaining here would be a second
+	// ownership rule for the same read. v1 borrows too (`Parser.maxon:10337`, `markBorrowSlot`).
+	function parseForStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		let forIndex = self.pos
+		let forTok = try self.consume(TokenKind.for)
+
+		// Decided from the tokens, before anything is emitted — see `parseWhileStatement`'s header.
+		let bodyEndIndex = self.blockStatementEndIndex(forIndex, continuesAtElse: false)
+		let assigned = self.namesAssignedIn(forIndex, endIndex: bodyEndIndex)
+
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
+		try self.consume(TokenKind.in)
+
+		// ⭐ **THE `for` STATEMENT'S OWN LEXICAL FRAME.** Two things live in it and must be gone at the
+		// loop's `end`: the loop VARIABLE (`block-scoping.md`'s `for-iterator-not-accessible-after` pins
+		// that reading it after the loop is E2004) and, when the source is a fresh OWNED array, the
+		// internal binding that owns it. It is opened BEFORE the source is parsed so the owned mark sits
+		// below anything the source enrols.
+		let forMark = self.openBlock()
+
+		// ⭐ **THE SOURCE IS EVALUATED ONCE, IN THE PREHEADER** — both range bounds, or the array record.
+		// Measured against the runnable oracle, which stores the end bound in a `__range_end_N` local
+		// ahead of the header (`2-Parser.cs:13490`) rather than re-evaluating it per trip: a bound that
+		// calls a side-effecting function is called exactly once.
+		let sourceTempFloor = self.pendingTempDrops.count()
+		let sourceStart = self.pos
+		let source = try self.parseExpression(func, block: block)
+
+		// Taken BEFORE the loop variable is declared, so `for arr in arr` locks the SOURCE binding and
+		// not the loop variable that is about to shadow its name.
+		let sourceLock = self.lockIterationSource(sourceStart)
+
+		// `to` / `upto` after the first expression is what makes this a RANGE. The operator's token INDEX
+		// is carried (not the `Token` itself — a `var` may not alias an immutable aggregate binding,
+		// E3078) so the loop test below can anchor its type diagnostic on the operator the user wrote;
+		// an array form has no such operator and anchors on the `for`.
+		var isRange = false
+		var rangeInclusive = false
+		var limit = source
+		var testAnchorIndex = forIndex
+		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeHeader'
+			isRange = true
+			rangeInclusive = self.at(TokenKind.to)
+			testAnchorIndex = self.pos
+			self.advance()
+			limit = try self.parseExpression(func, block: self.currentBlock)
+		end 'rangeHeader'
+
+		if not isRange 'arraySource'
+			try self.requireIterableArray(source, forTok: forTok)
+
+			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
+			// / `for x in build()` produces a record the statement owns; left in `pendingTempDrops` it
+			// would be dropped by the FIRST `return` inside the body (which drains the WHOLE list,
+			// `emitHandoffExitDrops`) and then LEAK on the fall-through path, because the list is empty
+			// by the time the exit block drains it. As a binding it is dropped exactly once on every
+			// exit: the loop's own `end` (`emitScopeDrops` below), a `return`/`throw` out of the body
+			// (the whole binding stack, with the list restored afterwards so this path still drops it),
+			// and never by a `break` (whose floor is the BODY's height, above this one).
+			//
+			// ⚠ The gate is `pendingTempsContain`, NOT `valueIsOwnedHeap`, and the difference is a
+			// DOUBLE FREE: `var arr = IntArray.create()` is an owned VALUE whose drop a binding already
+			// owes, so adopting it here too emitted two `__arr_decref`s into the exit block (measured —
+			// `for-in-iteration` segfaulted). The pending list is exactly the owned values NO binding
+			// owns (see `pendingTempsContain`), which is the question being asked.
+			if self.pendingTempsContain(source) 'ownSourceTemp'
+				self.removeFromPendingTemps(source)
+				self.ownedBindings.push(VarInfo.createValueBinding(IterationSourceBindingName, varType: self.typeOf(source), mutable: false, boundValue: source))
+			end 'ownSourceTemp'
+		end 'arraySource'
+
+		// Every OTHER temporary the source expression built — an interpolation handed to a factory call
+		// — belongs to this statement and dies here, in the preheader, exactly as a `while` condition's
+		// does. It is released BEFORE the loop rather than at the exit for the reason above: a `return`
+		// inside the body would otherwise take the whole list with it.
+		self.drainPendingTemps(sourceTempFloor, anchor: forTok)
+
+		var header = self.newBlock(func, label: b"forhdr", line: forTok.line)
+
+		// ⭐ **THE INDEX PHI IS A HEADER BLOCK-ARG, NOT A CARRIED BINDING**, and it is minted FIRST so
+		// `header.blockArgs` reads [index, …carried]. It is DEFINED in the header, which dominates the
+		// body, the step and the exit, so no other edge has to carry it: only the preheader's entry edge
+		// and the step's back edge name it, and both are built right here. That is what lets
+		// `break`/`continue` and `wireLoopExit` go on using `edgeArgsFor` unchanged.
+		//
+		// A RANGE's index IS the user's loop variable, so it takes the START bound's type (a ranged
+		// alias stays one). An ARRAY's index is a compiler-owned counter and is a plain integer.
+		let indexTag = self.tagOf(source) if isRange else ValueTypeTag.integer
+		let indexNameId = self.valueNameId(source) if isRange else UnnamedTypeId
+		let indexPhi = self.mintPhi(header, tag: indexTag, nameId: indexNameId)
+
+		let phiVars = self.mintLoopHeaderPhis(header, assigned: assigned)
+
+		// The preheader is `currentBlock`, not `block`: a short-circuit `and`/`or` inside a bound leaves
+		// control in a fresh merge block, and the entry edge belongs on the block control is actually in.
+		var firstIndex = source
+		if not isRange 'arrayCounterStartsAtZero'
+			firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+		end 'arrayCounterStartsAtZero'
+		self.recordBranchEdge(self.currentBlock, targetId: header.id, argIds: self.loopHeaderArgs(firstIndex, carried: self.edgeArgsFor(phiVars, preLoop: true)))
+		self.emitBranch(self.currentBlock, targetId: header.id)
+
+		// The loop test, in the header. For a range it is the user's own comparison against the upper
+		// bound and goes through `emitCompare`, so `for i in 1 to "x"` is the ordinary comparison type
+		// error; for an array it is `idx < __arr_count(arr)`, both operands compiler-minted integers.
+		self.currentBlock = header
+		var bound = limit
+		if not isRange 'lengthReadLive'
+			bound = self.emitRuntimeCall(ArrCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+		end 'lengthReadLive'
+		let testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
+		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(testAnchorIndex))
+
+		let loopLabelTok = try self.consume(TokenKind.charLiteral)
+
+		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
+		var step = self.newBlock(func, label: b"forstep", line: loopLabelTok.line)
+		var exit = self.newBlock(func, label: b"forexit", line: forTok.line)
+		self.emitCondBranch(header, cond: cond, thenId: body.id, elseId: exit.id, ifTok: forTok)
+
+		// The loop variable: the index itself for a range, a BORROWED element read for an array. `_` is
+		// the discard (`DiscardBindingName`) and binds nothing at all — declaring it would make an
+		// ordinary `_ = f()` discard statement inside the body a write to a `let`.
+		self.currentBlock = body
+		var loopValue = indexPhi
+		if not isRange 'readElement'
+			loopValue = self.emitArrayElementAccessor(ArrGetUncheckedName, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), owned: false, range: SourceRange.ofToken(nameTok))
+		end 'readElement'
+		if not nameTok.value.equals(DiscardBindingName) 'bindLoopVariable'
+			// Declared in the `for`'s OWN frame (not the body's), so it is in scope for the whole body
+			// and gone at the loop's `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
+			_ = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, value: loopValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		end 'bindLoopVariable'
+
+		// `ownedFloor` is the owned-binding height NOW — above the iteration source's own binding, so a
+		// `break` releases the body's declarations and leaves the source for the exit (see below).
+		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, continueTargetId: step.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
+
+		var bodyEnd = try self.parseBlockBody(func, block: body, label: loopLabelTok.value)
+
+		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
+		self.assertScanAligned("parseForStatement", predictedEnd: bodyEndIndex)
+
+		let ctx = try self.loops.pop() otherwise panic("parseForStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
+		self.releaseIterationSource(sourceLock)
+
+		if not bodyEnd.isTerminated() 'fallsToStep'
+			self.recordBranchEdge(bodyEnd, targetId: step.id, argIds: self.edgeArgsFor(phiVars, preLoop: false))
+			self.emitBranch(bodyEnd, targetId: step.id)
+		end 'fallsToStep'
+
+		// ⭐ **THE STEP BLOCK IS A MERGE, so it carries phis of its own.** Its predecessors are the
+		// body's fall-through AND every `continue`, and a carried `var` assigned before a `continue`
+		// holds a different value on each — the same shape the exit has for `break` (`wireLoopExit`).
+		// The INDEX needs none: it is defined in the header, which dominates the step.
+		self.currentBlock = step
+		for k in 0 upto ctx.phiVars.count() 'mkStepPhi'
+			var pv = try ctx.phiVars.get(k) otherwise panic("parseForStatement: phiVars.get OOB at {k}")
+			pv.binding.boundValue = self.mintPhiForBinding(step, binding: pv.binding)
+		end 'mkStepPhi'
+		let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+		let nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+		self.recordBranchEdge(step, targetId: header.id, argIds: self.loopHeaderArgs(nextIndex, carried: self.edgeArgsFor(phiVars, preLoop: false)))
+		self.emitBranch(step, targetId: header.id)
+
+		// The header carries the two-way branch, so it is the exit's false-edge source. Run AFTER the
+		// step wiring: `wireLoopExit` settles each carried binding's POST-loop value, and the step loop
+		// above sets those same fields to its own phis on the way through.
+		self.wireLoopExit(header, exit: exit, ctx: ctx)
+
+		// The loop variable and the iteration source's binding both leave scope here — the drops for the
+		// latter land in the exit block, which every non-terminating path through the loop reaches.
+		self.currentBlock = exit
+		self.emitScopeDrops(forMark.ownedCount, anchor: forTok)
+		self.closeBlock(forMark)
+		return exit
+	end 'parseForStatement'
+
+	// The block-arg list an edge into a `for` HEADER carries: the index value FIRST (the header's own
+	// block-arg 0 — see `parseForStatement`), then one slot per carried binding. Both edges that name
+	// the header go through here, so the index can never end up in a different slot on one of them.
+	function loopHeaderArgs(indexValue ValueId, carried ValueIdArray) returns ValueIdArray
+		var vals = ValueIdArray.create()
+		vals.push(indexValue)
+		for v in carried 'each'
+			vals.push(v)
+		end 'each'
+		return vals
+	end 'loopHeaderArgs'
+
+	// ⭐ **WHAT A `for … in` MAY ITERATE THIS SLICE.** An `Array` instance — the only container whose
+	// element read is a random-access index, which is what the counter lowering requires. Everything
+	// else is a clean E2015 naming the gap rather than a silent acceptance: a String, a byte/codepoint
+	// view, a `Set` and a `Map` each need a cursor protocol shv2 has not built.
+	function requireIterableArray(source ValueId, forTok Token) throws ParseError
+		if self.tagOf(source) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(source)) 'array'
+			return
+		end 'array'
+		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — P1.8 slice A iterates an `Array` and the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`; String / byte-view / codepoint / `Set` / `Map` iteration needs a cursor protocol that arrives with the later P1.8 slices", line: forTok.line, column: forTok.column)
+	end 'requireIterableArray'
+
+	// ⭐⭐ **MAKE THE ITERATED SOURCE UNWRITABLE FOR THE BODY** — the borrow's safety obligation, and the
+	// reason `for n in arr 'l' … arr.push(9) … end` is **E3019** rather than a use-after-free. The loop
+	// variable holds an element the ARRAY still owns, so a body that makes the array destroy it
+	// (`clear`/`set`/`resize`/`remove`), or that rebinds the source out from under the loop, would leave
+	// the borrow pointing at freed memory. The runnable oracle refuses the same program with the same
+	// code, and the reference bootstrap locks the same thing across the body (`2-Parser.cs:13377-13390`).
+	//
+	// It records the binding a write would have to go THROUGH, which is the source itself for a bare name
+	// and the chain's BASE for `for it in b.items` — the array's own value cannot identify it, because a
+	// re-read of `b.items` inside the body mints a fresh ValueId for the same record.
+	//
+	// ⚠ **A UAF WAS MEASURED THROUGH EXACTLY THAT SECOND SHAPE**, which is why the lock is a list here and
+	// not the two writability bits flipped on the binding: `for it in b.items 'scan' b.items.clear();
+	// t = t + it.value end` returned **63 (0x3F, the free-poison byte)** where the answer is 5, because a
+	// field-chain receiver never asks `immutableReceiverNameOf` at all (shv2 deliberately permits
+	// `self.items.push(v)` through a `let`). The reference bootstrap's lock has the same reach and the same
+	// hole — it keys on a VARIABLE name — and gets away with it only because it RETAINS the element.
+	//
+	// A source with no binding at all (a literal, a call result) locks nothing, and needs to: nothing else
+	// can name that record, so no statement in the body can reach it.
+	function lockIterationSource(sourceStart TokenIndex) returns bool
+		if not self.sourceNamesABase(sourceStart) 'notAName'
+			return false
+		end 'notAName'
+
+		// A SELF-FIELD ALIAS is locked like any other binding, and it has to be: `for it in items 'l'
+		// items.clear() … end` inside a method reached the free-poison byte (0x3F) in a probe before it
+		// was. The alias's `VarInfo` is installed once at method entry, so `scope.getInfo` hands back the
+		// same object the write door resolves — see `selfFieldIsWritable`, which is where that door asks.
+		let baseTok = self.tokenAt(sourceStart)
+		let baseName = self.baseBindingName(baseTok)
+		if not self.scope.contains(baseName) 'notALocalBinding'
+			return false
+		end 'notALocalBinding'
+
+		// COPY-ON-WRITE off the shared empty before the first push — see `sharedEmptyIterationLocks`.
+		if self.iterationLockedBindings is sharedEmptyIterationLocks 'firstLockInThisFunction'
+			self.iterationLockedBindings = VarInfoArray.create()
+		end 'firstLockInThisFunction'
+
+		self.iterationLockedBindings.push(self.scope.getInfo(baseName))
+		return true
+	end 'lockIterationSource'
+
+	// Is the iteration source at `sourceStart` a plain NAME or a FIELD CHAIN rooted at one — the two
+	// shapes whose base binding is what a write has to go through? It is exactly such a chain when the
+	// shared walk ends where the source's own tokens did (the cursor); a call, a literal or an operator
+	// expression ends elsewhere and locks nothing. `AnyFieldHops`, because a BARE name is the common
+	// case and is every bit as lockable as `b.items`.
+	function sourceNamesABase(sourceStart TokenIndex) returns bool
+		return self.fieldChainEndAfter(sourceStart, minHops: AnyFieldHops) == self.pos
+	end 'sourceNamesABase'
+
+	// Undo `lockIterationSource` once the body is parsed — the source is writable again on the next line.
+	// The list is a stack (a nested `for` pushes above this one and pops first), so the release is a pop.
+	function releaseIterationSource(locked bool)
+		if not locked 'nothingLocked'
+			return
+		end 'nothingLocked'
+		_ = try self.iterationLockedBindings.pop() otherwise panic("releaseIterationSource: the iteration lock stack is empty — every lock is pushed by `lockIterationSource` and popped exactly once here")
+	end 'releaseIterationSource'
+
+	// ⭐⭐ **IS `binding` BEING ITERATED BY AN ENCLOSING `for … in`?** THE one fact, and it is read at
+	// exactly the FOUR doors a write can NAME the iterated array through. Each one alone leaves a
+	// use-after-free open, which is why they share this rather than each carrying its own flag:
+	//   • `immutableReceiverNameOf` — `arr.clear()` on the source binding itself, and the same binding
+	//     handed to a callee that mutates it (`grow(arr)`, whose blame name this also supplies);
+	//   • `parseFieldChainCall` — `b.items.clear()`, whose receiver is a VALUE and so never asks the
+	//     binding question at all (the shape the first 0x3F probe found);
+	//   • `selfFieldIsWritable` — `items.clear()` on a bare self-field alias, whose receiver binding is
+	//     MINTED FRESH per access and so cannot be found by identity (the second 0x3F probe);
+	//   • `requireMutableBinding` — `arr = other`, which drops the record the loop is still walking.
+	//
+	// Identity, not name: a body that shadows the source's name declares a different `VarInfo` and is
+	// correctly writable. A linear scan over a list whose length is the enclosing `for` nesting depth.
+	//
+	// ⚠⚠ **WHAT IT DOES NOT COVER, AND WHY THAT IS NOT THIS CONSTRUCT'S BUG.** The lock stops a write
+	// the loop's own source NAMES. It cannot stop one that reaches the array without naming it — a field
+	// chain handed to a mutating callee (`wipe(b.items)`), or a method of the enclosing struct that
+	// clears its own field (`b.wipe()`, which shv2 rules does not implicate the caller — see
+	// `receiverOwnerMask`). Both destroy the element the loop borrowed, and both read 0x3F.
+	//
+	// **They are the PRE-EXISTING borrow-on-get hazard, not a for-in one, and the proof is that neither
+	// needs a loop:** `let it = try arr.get(0) otherwise …` then `arr.clear()` then `it.value` reads the
+	// same 0x3F with no `for` in the program. `for … in` reads its element through the SAME door
+	// (`emitArrayElementAccessor(owned: false)`) under the SAME rule, so it inherits that hazard and
+	// adds none. Its cure is the thesis decision PLAN.md's P1.7 Slice 3a residual (a) already names —
+	// incref-on-get, copy-on-get, or E3070 borrow-liveness — and it is not a loop's to make. The
+	// runnable oracle ACCEPTS both uncovered programs (measured: `wipe(b.items)` returns 5), because it
+	// RETAINS the element; refusing them here would diverge from it on a legal program while the other
+	// half of the same class stayed open.
+	//
+	// ⚠ **THE EMPTY CHECK IS NOT DEFENSIVE, IT IS THE COST.** Two of the three readers run on the hot
+	// statement path (every assignment, every container method call), and the list is empty in every
+	// function that contains no `for … in` at all — which, on the scale corpus, is all of them. Entering
+	// the walk regardless billed **+270 allocations at rung 0 rising to +2,564 at rung 5** (linear, A/B
+	// against the parent built in the same worktree): a `for x in <Array>` over an EMPTY array still
+	// materializes the backing record the loop reads its length from. Answering `false` off a `count()`
+	// makes the common path free and leaves the walk for the loops that actually have a lock.
+	function bindingIsIterationLocked(binding VarInfo) returns bool
+		if self.iterationLockedBindings.count() == 0 'noEnclosingForIn'
+			return false
+		end 'noEnclosingForIn'
+
+		for locked in self.iterationLockedBindings 'each'
+			if locked is binding 'match'
+				return true
+			end 'match'
+		end 'each'
+		return false
+	end 'bindingIsIterationLocked'
+
+	// The E3019 blame name for a write reached through a FIELD CHAIN (`b.items.push(x)`) — non-empty only
+	// while an enclosing `for` is iterating through that base. It asks the iteration lock and NOT
+	// `immutableReceiverNameOf`, deliberately: shv2 rules that a container held in a FIELD may be written
+	// through a `let` base (`receiverOwnerMask`'s header records the measurement and the ruling), so
+	// routing the chain through the general rule would newly reject programs the corpus pins.
+	function iterationLockNameAt(baseIndex TokenIndex) returns ByteArray
+		let baseTok = self.tokenAt(baseIndex)
+		let baseName = self.baseBindingName(baseTok)
+		if not self.scope.contains(baseName) 'notALocalBinding'
+			return EmptySourceText
+		end 'notALocalBinding'
+		if not self.bindingIsIterationLocked(self.scope.getInfo(baseName)) 'writable'
+			return EmptySourceText
+		end 'writable'
+		return baseTok.value
+	end 'iterationLockNameAt'
 
 	// The index of the `end` token that closes the block statement opening at `startIndex`,
 	// found by counting block openers against `end`s — the same depth-counted token walk
@@ -11369,8 +11831,8 @@ export type Parser
 	//     or an `else` (an `else if` chain); a ternary `if` follows an operand (`ifBeginsStatement`).
 	//   • a block `else` closes a then-branch — it follows that branch's `end` and its one optional
 	//     label (`elseFollowsBlockEnd`); a ternary `else` follows the condition operand.
-	// `while` (statement-only) and `match` (statement OR expression) always close with their own
-	// `end`, so both unconditionally open a block.
+	// `while` and `for` (statement-only) and `match` (statement OR expression) always close with their
+	// own `end`, so all three unconditionally open a block.
 	//
 	// `else`'s pre-ternary subtlety is still live: a plain `else 'label'` opens a block body of its
 	// own, but an `else if` does NOT — the else branch simply IS a nested `if` statement
@@ -11386,7 +11848,7 @@ export type Parser
 	// list of regions that settle their own.
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
-		if kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
+		if kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for 'alwaysOpens'
 			return not self.keywordIsMatchCaseName(index)
 		end 'alwaysOpens'
 
@@ -11674,18 +12136,20 @@ export type Parser
 		var ctx = try self.resolveControlTarget("break", kwTok: breakTok)
 		ctx.hasBreak = true
 		self.dropLoopBodyOwned(block, ctx: ctx, anchor: breakTok)
-		self.recordBranchEdge(block, targetId: ctx.exitId, argIds: self.edgeArgsFor(ctx.phiVars))
+		self.recordBranchEdge(block, targetId: ctx.exitId, argIds: self.edgeArgsFor(ctx.phiVars, preLoop: false))
 		self.emitBranch(block, targetId: ctx.exitId)
 	end 'parseBreakStatement'
 
-	// Parse `continue ['label']` (M4b): branch to the target loop's HEADER (a back-
-	// edge), carrying the current phi-var values so the header phis see this path.
+	// Parse `continue ['label']` (M4b): branch to the target loop's CONTINUE TARGET, carrying the
+	// current phi-var values so that block's phis see this path. For a `while` the target is the
+	// header (the condition is re-evaluated on the back edge); for a `for` it is the STEP block, whose
+	// increment must run before the header or the counter never advances — see `LoopContext`.
 	function parseContinueStatement(block IrBlock) throws ParseError
 		let continueTok = try self.consume(TokenKind.continue)
 		let ctx = try self.resolveControlTarget("continue", kwTok: continueTok)
 		self.dropLoopBodyOwned(block, ctx: ctx, anchor: continueTok)
-		self.recordBranchEdge(block, targetId: ctx.headerId, argIds: self.edgeArgsFor(ctx.phiVars))
-		self.emitBranch(block, targetId: ctx.headerId)
+		self.recordBranchEdge(block, targetId: ctx.continueTargetId, argIds: self.edgeArgsFor(ctx.phiVars, preLoop: false))
+		self.emitBranch(block, targetId: ctx.continueTargetId)
 	end 'parseContinueStatement'
 
 	// Resolve the loop a `break`/`continue` targets. No label → the innermost loop.
@@ -11755,14 +12219,22 @@ export type Parser
 		return bindings
 	end 'assignedBindingsIn'
 
-	// The current SSA value of each phi binding, in phi order — an in-edge's block-arg
-	// list (a back-edge to the header, or a break to the exit). Read off the BINDING, so
-	// a `break` out of a block that shadows a loop-carried `var` still carries the
-	// loop's own binding to the exit phi, not the shadow's value.
-	function edgeArgsFor(phiVars LoopPhiVarArray) returns ValueIdArray
+	// One slot per carried binding, in phi order — the block-arg list of EVERY edge in a loop's phi
+	// model. `preLoop` picks which value each slot carries, and that is the only thing the two kinds of
+	// edge disagree about:
+	//   • the PREHEADER edge (`preLoop: true`) carries the value captured OUTSIDE the loop, which
+	//     `LoopPhiVar.entryValue` holds because installing the phi overwrote `boundValue`;
+	//   • every edge from INSIDE (a back-edge, a `continue` to the step block, a `break` to the exit)
+	//     carries the binding's value right now — read off the BINDING, so a `break` out of a block that
+	//     SHADOWS a loop-carried `var` still carries the loop's own binding, not the shadow's value.
+	//
+	// ONE walk, because what must never drift is the POSITIONAL contract (in `phiVars` order, exactly one
+	// entry per element, no filtering): a second copy that grew a filter would misalign one edge against
+	// the header's block-args, which is a silent miscompile rather than a compile error.
+	function edgeArgsFor(phiVars LoopPhiVarArray, preLoop bool) returns ValueIdArray
 		var vals = ValueIdArray.create()
 		for pv in phiVars 'each'
-			vals.push(pv.binding.boundValue)
+			vals.push(pv.entryValue if preLoop else pv.binding.boundValue)
 		end 'each'
 		return vals
 	end 'edgeArgsFor'
@@ -14985,7 +15457,10 @@ export type Parser
 			// an `Array` instance; a non-array `.method` in postfix position is left for the caller exactly as
 			// before (a plain struct's method call reaches the binding path, not this loop).
 			if self.at(TokenKind.dot) and self.tagOf(current) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(current)) 'arrayMethod'
-				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: resultUsed)
+				// A postfix receiver is a VALUE the expression just built — a literal, a call result, a
+				// slice — so there is no binding for an iteration lock to name (the field-chain door is
+				// the one that has one, and it passes it).
+				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: resultUsed, immutableReceiverName: EmptySourceText)
 				continue
 			end 'arrayMethod'
 
@@ -16246,14 +16721,14 @@ export type Parser
 		let totalLen = self.sumPartLengths(partLens, range: range)
 
 		let overhead = self.emitLiteral(StringInterpOverheadBytes, valueType: MaxonType.integer, range: range)
-		let allocSize = self.emitInterpArith(totalLen, rhs: overhead, range: range)
+		let allocSize = self.emitMachineWordAdd(totalLen, rhs: overhead, range: range)
 		let result = self.emitBoxAlloc(allocSize, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(result)
 
 		// The inline byte region begins right after the record. Copy each part in at a cursor that advances
 		// by the part's length; the NUL at `buffer[totalLen]` is already zero (the slab zeroes the payload).
 		let recordBytes = self.emitLiteral(StringRecordBytes as ParsedInt, valueType: MaxonType.integer, range: range)
-		let inlineBuf = self.emitInterpArith(result, rhs: recordBytes, range: range)
+		let inlineBuf = self.emitMachineWordAdd(result, rhs: recordBytes, range: range)
 		var cursor = inlineBuf
 		for i in 0 upto partBufs.count() 'copyParts'
 			let buf = try partBufs.get(i) otherwise panic("emitStringInterp: partBufs.get OOB at {i} — partBufs and partLens grow in lockstep")
@@ -16263,7 +16738,7 @@ export type Parser
 			copyArgs.push(buf)
 			copyArgs.push(length)
 			_ = self.emitRuntimeCall(StrCopyName, args: copyArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			cursor = self.emitInterpArith(cursor, rhs: length, range: range)
+			cursor = self.emitMachineWordAdd(cursor, rhs: length, range: range)
 		end 'copyParts'
 
 		self.emitStoreStringField(result, offset: StringBufferOffset, value: inlineBuf, range: range)
@@ -16302,21 +16777,22 @@ export type Parser
 		var total = try partLens.get(0) otherwise panic("sumPartLengths: an interpolation materialized no parts — parseStringInterpolation only reaches emitStringInterp after materializing at least one interpolated part")
 		for i in 1 upto partLens.count() 'sum'
 			let length = try partLens.get(i) otherwise panic("sumPartLengths: partLens.get OOB at {i}")
-			total = self.emitInterpArith(total, rhs: length, range: range)
+			total = self.emitMachineWordAdd(total, rhs: length, range: range)
 		end 'sum'
 		return total
 	end 'sumPartLengths'
 
-	// `lhs + rhs` as raw i64 pointer/length arithmetic — the interpolation's cursor advance, buffer offset
-	// and size math. It emits `MaxonOp.binOp(add)` DIRECTLY, bypassing `emitBinOp`'s operand type rules,
-	// because the operands are a String pointer (`result + StringRecordBytes`) or lengths the interpolation
-	// controls, not a source-level `a + b`. The result is integer-tagged (a machine word); the Std tier
-	// reads a String lhs as its i64 pointer (`valueTagToStdType`), so the `add` is a clean i64 add.
-	function emitInterpArith(lhs ValueId, rhs ValueId, range SourceRange) returns ValueId
+	// `lhs + rhs` as raw i64 MACHINE-WORD arithmetic — the interpolation's cursor advance, buffer offset
+	// and size math, and a `for` loop's index step. It emits `MaxonOp.binOp(add)` DIRECTLY, bypassing
+	// `emitBinOp`'s operand type rules, because the operands are compiler-owned words (a String pointer
+	// `result + StringRecordBytes`, a byte length, a loop counter) rather than a source-level `a + b`
+	// whose two sides must be shown to agree. The result is integer-tagged; the Std tier reads a String
+	// lhs as its i64 pointer (`valueTagToStdType`), so the `add` is a clean i64 add either way.
+	function emitMachineWordAdd(lhs ValueId, rhs ValueId, range SourceRange) returns ValueId
 		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: MaxonBinOp.add), range: range)
 		return result
-	end 'emitInterpArith'
+	end 'emitMachineWordAdd'
 
 	// Load an 8-byte field of a String record — `buffer@0`, `length@8`. Integer-tagged: the values are a raw
 	// pointer and a byte count. The `rec` addr is a String pointer, read by the Std tier as an i64.
@@ -17559,7 +18035,17 @@ export type Parser
 	// question about the same field. They were derived twice — once as `mutable:`, once as `not …` — and an
 	// INVERTED restatement is the shape that lets a `var` field become one a method may push onto but no callee
 	// may be handed, with nothing in either site to say the other exists.
+	//
+	// ⭐⭐ **AND AN ITERATED FIELD IS NOT WRITABLE, WHATEVER THE FIELD DECLARES.** This is the fourth
+	// reader of the iteration lock, and it needs its own arm rather than sharing
+	// `immutableReceiverNameOf`'s, because `methodReceiverBinding` MINTS A FRESH `VarInfo` for the alias:
+	// the lock is keyed on object identity (so a shadowing declaration is correctly not locked), and that
+	// fresh object is not the one the lock holds. Asking HERE — where the alias's own binding is still in
+	// hand — covers both of this function's askers at once, which is the reason it is a function.
 	function selfFieldIsWritable(binding VarInfo, nameTok Token) returns bool throws ParseError
+		if self.bindingIsIterationLocked(binding) 'iterated'
+			return false
+		end 'iterated'
 		return (try self.enclosingLayout(nameTok)).fieldIsMutable(binding.fieldIndex)
 	end 'selfFieldIsWritable'
 
@@ -18433,7 +18919,15 @@ export type Parser
 	// oracle** (measured). Deriving it from the value would silently accept that. The flag distinguishes
 	// "this binding IS the parameter" from "this binding holds the parameter's value"; the ValueId
 	// cannot. Do not "simplify" it away.
+	//
+	// ⭐ **AN ITERATED BINDING IS UNWRITABLE WHATEVER IT WAS DECLARED** — checked FIRST, because the
+	// question a `for … in` body asks is not "was this declared `let`?" but "would this write free the
+	// element the loop is borrowing?" (see `bindingIsIterationLocked`). A `var` and a PARAMETER both
+	// answer "writable" to the two tests below and both would destroy the borrow.
 	function immutableReceiverNameOf(binding VarInfo, baseTok Token) returns ByteArray
+		if self.bindingIsIterationLocked(binding) 'iterated'
+			return baseTok.value
+		end 'iterated'
 		if binding.mutable or binding.isParameter 'writable'
 			return EmptySourceText
 		end 'writable'
@@ -18444,13 +18938,15 @@ export type Parser
 	// or any array-valued expression, reached from the postfix loop and the `try` target. The cursor sits on
 	// the `.`; the receiver `arr` is already parsed (and, for a literal, already an owned pending temp that
 	// drops at statement end).
-	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		// A receiver that is not a binding is WRITABLE: it is a fresh literal, a call result or a field
 		// read, and no `let` promises anything about it. There is also no name a rejection could blame,
-		// which is exactly what the empty answer says. It denotes no PARAMETER either, so a write through it
-		// mutates none: `NoMutatedParams`.
-		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: EmptySourceText, receiverOwner: NoMutatedParams)
+		// which is exactly what the empty answer says — so the callers that reach a genuinely anonymous
+		// receiver pass the empty name, and the FIELD-CHAIN caller passes the one name that can still
+		// refuse: the chain's base while a `for … in` is iterating through it (`iterationLockNameAt`).
+		// It denotes no PARAMETER either way, so a write through it mutates none: `NoMutatedParams`.
+		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, receiverOwner: NoMutatedParams)
 	end 'parseArrayMethodOnValue'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
@@ -18706,22 +19202,37 @@ export type Parser
 	// stops the chain at the array field, so the last hop is the method. The base must be a live local (or a
 	// captured enclosing struct), the same gate `methodCallsAt` uses.
 	function fieldChainMethodCallAt(index TokenIndex) returns bool
+		let chainEnd = self.fieldChainEndAfter(index, minHops: ChainMethodMinHops)
+		if chainEnd == index or self.kindAt(chainEnd) != TokenKind.leftParen 'notChainMethod'
+			return false
+		end 'notChainMethod'
+		let baseTok = self.tokenAt(index)
+		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
+	end 'fieldChainMethodCallAt'
+
+	// The token index just PAST a field-access chain starting at `index` — a `base` (an identifier or
+	// `self`) followed by `.field` hops — or `index` itself when the tokens there are not such a chain
+	// with at least `minHops` hops.
+	//
+	// THE ONE WALK over that shape, and it is shared because a divergence between its two askers is a
+	// USE-AFTER-FREE rather than a compile error: `fieldChainMethodCallAt` decides that a WRITE goes
+	// through a chain, and `sourceNamesABase` decides that a `for … in` LOCKS that chain's base against
+	// exactly that write (`bindingIsIterationLocked`). Teach one a new chain shape and not the other and
+	// the lock silently stops covering the door it was built to cover.
+	function fieldChainEndAfter(index TokenIndex, minHops FieldHopCount) returns TokenIndex
 		let baseKind = self.kindAt(index)
 		if baseKind != TokenKind.identifier and baseKind != TokenKind.self 'notABase'
-			return false
+			return index
 		end 'notABase'
+
 		var q = index + 1
 		var hops = 0
 		while self.kindAt(q) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.identifier 'hop'
 			hops = hops + 1
 			q = q + 2
 		end 'hop'
-		if hops < 2 or self.kindAt(q) != TokenKind.leftParen 'notChainMethod'
-			return false
-		end 'notChainMethod'
-		let baseTok = self.tokenAt(index)
-		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
-	end 'fieldChainMethodCallAt'
+		return q if hops >= minHops else index
+	end 'fieldChainEndAfter'
 
 	// Resolve a field chain to its final field and apply the trailing call, returning its result — an ARRAY
 	// field's METHOD (`b.ops.push(1)`, a borrowed load; the struct owns and drops it) or a FUNCTION-typed field's
@@ -18736,9 +19247,13 @@ export type Parser
 	// `rewriteLastCallToTryCall` (`rejectTryTarget`), so both callers stay correct. Any other final field followed
 	// by `(` is neither an array method nor callable and is refused.
 	function parseFieldChainCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
+		// The chain's BASE token, captured before the chain is resolved — it is the only thing that can
+		// name the storage a write through this receiver reaches, and `for it in b.items` locks exactly it
+		// (`iterationLockNameAt`).
+		let baseIndex = self.pos
 		let receiver = try self.parseFieldAccess()
 		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
-			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed)
+			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed, immutableReceiverName: self.iterationLockNameAt(baseIndex))
 		end 'arrayReceiver'
 		// A `function`-typed field takes its trailing `(args)` and a TYPE-PARAMETER field takes its
 		// `.method(…)`, and BOTH are hops `parsePostfix` already knows how to apply — a function value through
@@ -20843,6 +21358,10 @@ export type Parser
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
+		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
+		// at the shared empty rather than allocating (see `sharedEmptyIterationLocks`).
+		self.iterationLockedBindings = sharedEmptyIterationLocks
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()

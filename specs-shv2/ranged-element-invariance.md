@@ -100,11 +100,11 @@ error E3005: specs/fragments/ranged-element-invariance/wide-element-rejected-whe
 ```
 
 <!-- disabled-test: same-range-aliases-remain-interchangeable -->
-<!-- P1.8 for-in (E2015 `for statement`) AND generic-instance identity is NOMINAL in shv2: `Array with
-     Small` and `Array with AlsoSmall` intern under their NAMES, so two aliases spelling the same range
-     are two instances and the call is rejected E3005 where the reference accepts it (measured: oracle
-     returns 42, shv2 reports `expected 'Array_Small', got 'Array_AlsoSmall'`). Both blockers are
-     independent of element size — the rejection fires at 8 bytes too. -->
+<!-- Generic-instance identity is NOMINAL in shv2: `Array with Small` and `Array with AlsoSmall`
+     intern under their NAMES, so two aliases spelling the same range are two instances and the call is
+     rejected E3005 where the reference accepts it (measured: oracle returns 42, shv2 reports
+     `expected 'Array_Small', got 'Array_AlsoSmall'`). Independent of element size — the rejection fires
+     at 8 bytes too. The `for v in col` loop in the case is no longer a blocker (P1.8 slice A). -->
 Two aliases spelling the SAME range are the same type — same invariant, same width — and must still be
 accepted. The fix must not over-reject.
 ```maxon

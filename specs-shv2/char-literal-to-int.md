@@ -142,7 +142,7 @@ end 'main'
 ```
 
 <!-- disabled-test: char-literal-codepoint-iteration -->
-<!-- P1.8 `String.codepoints()` + `for-in` -->
+<!-- P1.8b/c `String.codepoints()` — the `for` statement itself landed in P1.8 slice A; a codepoint VIEW source has not -->
 ### Character literal comparison during codepoint iteration
 
 ```maxon

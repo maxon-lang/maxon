@@ -18,7 +18,7 @@ When an array of managed structs is populated across multiple function calls, an
 ## Tests
 
 <!-- disabled-test: managed-array-push-across-calls -->
-<!-- P1.8 for-in -->
+<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
 ### Push managed elements across separate function calls, then reassign
 Simulates the pattern from the query engine: recordDependency pushes elements
 between clearDepsFor calls.
@@ -148,7 +148,7 @@ end 'main'
 ```
 
 <!-- disabled-test: managed-array-interleaved-push-clear -->
-<!-- P1.8 for-in -->
+<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
 ### Interleaved push and clear cycles on same array field
 Multiple rounds of push-then-reassign, each round the old array is freed.
 ```maxon

@@ -1045,8 +1045,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: rc-for-in-elem-decrefed -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- test: rc-for-in-elem-decrefed -->
 In a for-in loop over a struct array each element reference is decref'd at the end of the loop body.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -433,8 +433,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: array-literal-constant -->
-<!-- P1.8 for-in -->
+<!-- test: array-literal-constant -->
 ```maxon
 let numbers = [1, 2, 3, 4, 5]
 
@@ -508,8 +507,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: string-array-literal-iterate -->
-<!-- P1.8 for-in -->
+<!-- test: string-array-literal-iterate -->
 ```maxon
 function main() returns ExitCode
 	let arr = ["aaa", "bbb", "ccc"]
@@ -524,8 +522,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: string-array-literal-top-level -->
-<!-- P1.8 for-in + module-level String array -->
+<!-- test: string-array-literal-top-level -->
 ```maxon
 var names = ["alice", "bob"]
 
@@ -541,8 +538,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: string-array-literal-top-level-pass-to-function -->
-<!-- P1.8 for-in -->
+<!-- test: string-array-literal-top-level-pass-to-function -->
 ```maxon
 var items = ["hello"]
 

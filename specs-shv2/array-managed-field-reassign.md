@@ -22,7 +22,7 @@ The critical invariant is that during destructor cleanup of the old array, the b
 ## Tests
 
 <!-- disabled-test: reassign-array-of-struct-with-string-enum -->
-<!-- P1.8 for-in -->
+<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
 ### Reassign Array Field Containing Structs with String Enums
 Filters an array of structs (each containing an enum with String associated values)
 into a new array, then reassigns the field. The old array's destructor must safely
@@ -83,7 +83,7 @@ end 'main'
 ```
 
 <!-- disabled-test: reassign-array-field-simple-managed -->
-<!-- P1.8 for-in -->
+<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
 ### Reassign Array Field with Simple Managed Structs
 Array of structs with String fields, filtered and reassigned.
 ```maxon
@@ -135,7 +135,7 @@ end 'main'
 ```
 
 <!-- disabled-test: reassign-array-field-multiple-times -->
-<!-- P1.8 for-in -->
+<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
 ### Reassign Array Field Multiple Times
 Repeatedly filter and reassign an array field to stress destructor cleanup.
 ```maxon

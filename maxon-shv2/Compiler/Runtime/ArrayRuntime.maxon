@@ -204,6 +204,21 @@ let EaseDivisor = 4 as ParsedInt
 export let ArrCreateName = b"__arr_create"
 export let ArrPushName = b"__arr_push"
 export let ArrGetName = b"__arr_get"
+
+// ⭐ **THE ELEMENT READ A `for x in arr` LOOP MAKES (P1.8 slice A) — NON-THROWING, and that is the whole
+// reason it is a second entry point rather than a call to `__arr_get`.** Three facts force it:
+//   • `__arr_get` is DECLARED THROWING, and a bare call to one is E3057 BY DESIGN
+//     (`SemanticCheck.validatePlainCall`) — a loop has no `try` to attach and no fallback value to
+//     supply for a managed element.
+//   • the loop HEADER already IS the bounds check: it compares the counter against a length re-read
+//     LIVE from the record on every trip, so a second per-iteration `index >= length` test plus an
+//     error-flag branch is exactly the protocol overhead both reference compilers' fast paths exist to
+//     remove (the bootstrap says so by setting `IsBoundsCheckSafe = true`, `2-Parser.cs:13237`).
+//   • `__arr_get`'s NULL-slot arm throws to route a `try … otherwise` to its fallback. In a loop that
+//     same throw would silently TRUNCATE the iteration — a wrong answer wearing a diagnostic's clothes.
+// It shares `emitSlotAddr` + `emitLoadElem` with `buildArrGet`, so the slot arithmetic and the
+// little-endian element load are still written down once.
+export let ArrGetUncheckedName = b"__arr_get_unchecked"
 export let ArrSetName = b"__arr_set"
 export let ArrCountName = b"__arr_count"
 export let ArrCapacityName = b"__arr_capacity"
@@ -353,6 +368,7 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrCreate(module)
 	buildArrPush(module)
 	buildArrGet(module)
+	buildArrGetUnchecked(module)
 	buildArrSet(module)
 	buildArrCount(module)
 	buildArrCapacity(module)
@@ -1227,6 +1243,32 @@ function buildArrGet(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrGet'
+
+// `__arr_get_unchecked(arr, index) -> value` — the for-in element read. See `ArrGetUncheckedName` for
+// why the bounds check and the empty-slot check are absent rather than missing: the loop header holds
+// both. Its ONE caller is `Parser.parseForStatement`, which supplies a counter it minted itself and
+// compared against a live `__arr_count` in the same iteration.
+function buildArrGetUnchecked(module StdModule)
+	var func = IrFunction.createFromStd(ArrGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	// `emitLoadElem` adds its own byte loop and branches to this exit on completion, so the block must
+	// exist before it runs — the same order `emitLoadElemAndOkReturn` creates its `checkDtor` in.
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: index, elementSize: es, ids: ids)
+	let value = emitLoadElem(module, func: func, cur: entry, exit: done, addr: slot, size: es, ids: ids)
+	module.setTerminator(done, op: StdOp.ret(value))
+
+	module.functions.push(func)
+end 'buildArrGetUnchecked'
 
 // `__arr_set(arr, index, value) -> (_, flag)` — bounds-checked element write (throws indexOutOfBounds).
 function buildArrSet(module StdModule)

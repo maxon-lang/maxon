@@ -14,7 +14,7 @@ original 77-fragment spec so each batch stays under the per-worker test timeout.
 ## Tests
 
 <!-- disabled-test: heap-string-data-access -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)
@@ -124,7 +124,7 @@ end 'main'
 ```
 
 <!-- disabled-test: heap-string-iteration -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 ```maxon
 function main() returns ExitCode
 	let s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
@@ -145,7 +145,7 @@ end 'main'
 ```
 
 <!-- disabled-test: string-double-iteration -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 Iterating the same string twice yields the same count both times.
 ```maxon
 function main() returns ExitCode
@@ -408,7 +408,7 @@ end 'main'
 ```
 
 <!-- disabled-test: grapheme-iteration-emoji -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 ### Grapheme Iteration with Emoji
 ```maxon
 function main() returns ExitCode
@@ -431,7 +431,7 @@ a🎉b
 ```
 
 <!-- disabled-test: grapheme-iteration-flag -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 ### Grapheme Iteration with Flag Emoji
 ```maxon
 function main() returns ExitCode
@@ -454,7 +454,7 @@ end 'main'
 ```
 
 <!-- disabled-test: grapheme-iteration-zwj -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
 function main() returns ExitCode
@@ -477,7 +477,7 @@ end 'main'
 ```
 
 <!-- disabled-test: codepoints-view -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
 ### Codepoints View
 ```maxon
 function main() returns ExitCode

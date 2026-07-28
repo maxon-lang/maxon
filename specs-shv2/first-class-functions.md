@@ -734,8 +734,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: first-class-function.field-void-statement -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- test: first-class-function.field-void-statement -->
 A field whose signature returns nothing is called as a statement, with no result to
 bind. This is the shape a table of handlers or compiler passes keyed by a struct field
 takes: each entry stores a function, and driving the table calls it for its effect.

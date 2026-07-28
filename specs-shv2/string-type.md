@@ -710,7 +710,7 @@ hello world
 ```
 
 <!-- disabled-test: for-in-string -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view source needs a cursor protocol (E2015 names the gap) -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -730,7 +730,7 @@ c
 ```
 
 <!-- disabled-test: byteview-iteration -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view source needs a cursor protocol (E2015 names the gap) -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"

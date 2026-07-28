@@ -1,0 +1,45 @@
+// Test: ranges.break-in-range
+function main() returns ExitCode
+		var last = 0
+		for i in 1 to 100 'loop'
+				last = i
+				if i == 5 'done'
+						break
+				end 'done'
+		end 'loop'
+		return last
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc lessEqual, loop
+    x64.jmp critsplit
+  loop:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc equal, done
+    x64.jmp ifcont
+  done:
+    x64.movRegReg r8, rcx
+    x64.jmp forexit
+  ifcont:
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.xchgRegReg rcx, rax
+    x64.jmp forhdr
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp forexit
+  forexit:
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,32 @@
+// Test: ranges.basic-inclusive
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 5 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 15
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc lessEqual, loop
+    x64.jmp forexit
+  loop:
+    x64.leaRegRegReg r8, r8, rax
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.popReg rbp
+    x64.ret
+}

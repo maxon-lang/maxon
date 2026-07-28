@@ -21,8 +21,7 @@ end 'check'
 
 ## Tests
 
-<!-- disabled-test: empty-if -->
-<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) -->
+<!-- test: empty-if -->
 ```maxon
 function main() returns ExitCode
 	if true 'check'
@@ -34,8 +33,7 @@ end 'main'
 error E3082: specs/fragments/empty-block/empty-if.test:4:2: empty block: 'check'
 ```
 
-<!-- disabled-test: empty-else -->
-<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) -->
+<!-- test: empty-else -->
 ```maxon
 function main() returns ExitCode
 	if true 'then'
@@ -49,8 +47,7 @@ end 'main'
 error E3082: specs/fragments/empty-block/empty-else.test:6:2: empty block: 'otherwise'
 ```
 
-<!-- disabled-test: empty-while -->
-<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) -->
+<!-- test: empty-while -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -63,8 +60,7 @@ end 'main'
 error E3082: specs/fragments/empty-block/empty-while.test:5:2: empty block: 'loop'
 ```
 
-<!-- disabled-test: empty-for-in -->
-<!-- P1.8 for-in — the case pins a `for`-binding scope/emptiness error, but shv2 rejects the `for` statement itself first (E2015) -->
+<!-- test: empty-for-in -->
 ```maxon
 function main() returns ExitCode
 	let arr = [1, 2, 3]
@@ -77,8 +73,7 @@ end 'main'
 error E3082: specs/fragments/empty-block/empty-for-in.test:5:2: empty block: 'loop'
 ```
 
-<!-- disabled-test: empty-for-range -->
-<!-- P1.8 for-in over a range (and E3082) -->
+<!-- test: empty-for-range -->
 ```maxon
 function main() returns ExitCode
 	for i in 0 to 10 'loop'

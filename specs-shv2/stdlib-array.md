@@ -313,8 +313,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: for-in-iteration -->
-<!-- P1.8 for-in -->
+<!-- test: for-in-iteration -->
 Iterate over array using for-in loop.
 
 ```maxon
@@ -343,8 +342,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: for-in-double-iteration -->
-<!-- P1.8 for-in -->
+<!-- test: for-in-double-iteration -->
 Iterating the same array twice produces the same results.
 
 ```maxon
@@ -377,8 +375,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: for-in-nested -->
-<!-- P1.8 for-in -->
+<!-- test: for-in-nested -->
 Nested for-in loops on the same array must not corrupt each other's iteration state.
 
 ```maxon
@@ -654,8 +651,7 @@ firstsecond
 0
 ```
 
-<!-- disabled-test: string-array-iteration -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- test: string-array-iteration -->
 Iterate over an array of strings.
 
 ```maxon
@@ -723,7 +719,7 @@ end 'main'
 ```
 
 <!-- disabled-test: push-self-assignment -->
-<!-- P1.8 for-in -->
+<!-- `arr = arr.push(1)` — a VOID array mutator in value position (E2004 `Function 'push' does not return a value`); the oracle's mutators hand the receiver back. Not a for-in blocker: the `for n in arr` loop in it compiles -->
 Test that `arr = arr.push(value)` pattern works correctly.
 This pattern was previously broken due to incorrect refcount handling when the
 same variable appears on both sides of an assignment with a mutating method call.

@@ -539,7 +539,7 @@ end 'main'
 ```
 
 <!-- disabled-test: clear-then-resize-managed-no-double-free -->
-<!-- P1.8 for-in — the parser rejects a `for` statement outright: E2015 "Unsupported: for statement" -->
+<!-- E3106 `requireArrayResizeHasZeroElement` — `a.resize(4)` on a managed-element array is refused outright, exactly as its `shrink-then-resize-managed-no-double-free` sibling below. The for-in loops in it compile -->
 `clear()` RELEASES the elements; `resize()` back over those slots must not restore the
 length over the dead pointers, or the array's destructor decrefs each of them a second
 time. Every regrown slot must read as EMPTY.

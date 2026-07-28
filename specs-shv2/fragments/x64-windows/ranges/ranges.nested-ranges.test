@@ -1,0 +1,48 @@
+// Test: ranges.nested-ranges
+function main() returns ExitCode
+		var sum = 0
+		for i in 1 to 3 'outer'
+				for j in 1 to 3 'inner'
+						sum = sum + i * j
+				end 'inner'
+		end 'outer'
+		return sum
+end 'main'
+---
+ExitCode: 36
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc lessEqual, outer
+    x64.jmp forexit
+  outer:
+    x64.movRegImm32 rcx, 1
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc lessEqual, inner
+    x64.jmp forexit
+  inner:
+    x64.movRegReg rdx, rax
+    x64.imulRegReg rdx, rax, rcx
+    x64.leaRegRegReg r8, r8, rdx
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp forhdr
+  forexit:
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.popReg rbp
+    x64.ret
+}
