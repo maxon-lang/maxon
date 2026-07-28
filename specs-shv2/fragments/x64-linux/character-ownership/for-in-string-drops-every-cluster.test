@@ -1,0 +1,434 @@
+// Test: for-in-string-drops-every-cluster
+function fallthroughTrips(s String) returns int
+	var n = 0
+	for c in s 'a'
+		n = n + 1 if c == c else n
+	end 'a'
+	return n
+end 'fallthroughTrips'
+
+function continueTrips(s String) returns int
+	var n = 0
+	for c in s 'b'
+		n = n + 1 if c == c else n
+		if n > 0 'always'
+			continue
+		end 'always'
+	end 'b'
+	return n
+end 'continueTrips'
+
+function breakTrips(s String) returns int
+	var n = 0
+	for c in s 'd'
+		n = n + 1 if c == c else n
+		if n == 2 'stop'
+			break
+		end 'stop'
+	end 'd'
+	return n
+end 'breakTrips'
+
+function returnFromLoop(s String) returns int
+	var n = 0
+	for c in s 'e'
+		n = n + 1 if c == c else n
+		if n == 3 'out'
+			return n
+		end 'out'
+	end 'e'
+	return n
+end 'returnFromLoop'
+
+function discardTrips(s String) returns int
+	var n = 0
+	for _ in s 'f'
+		n = n + 1
+	end 'f'
+	return n
+end 'discardTrips'
+
+function main() returns ExitCode
+	let s = "aé中!xéy"
+	var total = 0
+	var i = 0
+	while i < 200 'rep'
+		total = total + fallthroughTrips(s) + continueTrips(s) + breakTrips(s) + returnFromLoop(s) + discardTrips(s)
+		i = i + 1
+	end 'rep'
+	if total != 5200 'wrongTotal'
+		return 1
+	end 'wrongTotal'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @fallthroughTrips {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, a
+    x64.jmp forexit
+  a:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __gr_end
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __char_at
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg r13, r14
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @continueTrips {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, b
+    x64.jmp forexit
+  b:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __gr_end
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __char_at
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r12, 0
+    x64.jcc greater, always
+    x64.jmp ifcont
+  always:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.jmp forstep
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg r13, r14
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @breakTrips {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, d
+    x64.jmp critsplit
+  d:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __gr_end
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __char_at
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r12, 2
+    x64.jcc equal, stop
+    x64.jmp ifcont
+  stop:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r12
+    x64.jmp forexit
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg r13, r14
+    x64.jmp forhdr
+  critsplit:
+    x64.movRegReg r8, r12
+    x64.jmp forexit
+  forexit:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @returnFromLoop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, e
+    x64.jmp forexit
+  e:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __gr_end
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __char_at
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r12, 3
+    x64.jcc equal, out
+    x64.jmp ifcont
+  out:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_decref
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg r13, r14
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @discardTrips {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.cmpRegReg r13, rax
+    x64.jcc less, f
+    x64.jmp forexit
+  f:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __gr_end
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __char_at
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_decref
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg r13, r14
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r13, 200
+    x64.jcc less, rep
+    x64.jmp whileexit
+  rep:
+    x64.movRegReg rcx, rbx
+    x64.callDirect fallthroughTrips
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect continueTrips
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect breakTrips
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect returnFromLoop
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect discardTrips
+    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r12, 5200
+    x64.jcc notEqual, wrongTotal
+    x64.jmp ifcont
+  wrongTotal:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
