@@ -687,6 +687,13 @@ end 'main'
 string-backed enum yields a `String` here, while the integer-backed default
 yields an integer. Both spellings appear in one program so neither can be
 satisfied by a constant answer.
+
+⚠ The two addends are deliberately SMALL, so the sum lands inside the narrowest
+`ExitCode` any host has. `ExitCode` is `int(0 to u32.max)` on Windows but
+`int(0 to 255)` on Linux, macOS and wasi (`stdlib/Process.maxon`), so a larger
+sum is not merely truncated on POSIX — the range check fires and the program
+panics before it can return at all. This test returned 309 until 2026-07-27 and
+was therefore red on every non-Windows target.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -701,11 +708,11 @@ enum Status
 end 'Status'
 
 function over(x Wide) returns Wide
-	return x + 100
+	return x + 10
 end 'over'
 
 function over(x String) returns Wide
-	return x.count() + 200
+	return x.count() + 20
 end 'over'
 
 function main() returns ExitCode
@@ -715,7 +722,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-309
+39
 ```
 
 <!-- test: enum-struct-backing-field-argument -->

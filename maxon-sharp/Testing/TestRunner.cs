@@ -726,24 +726,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // Check Required IR by compiling fresh with all pipeline stages.
       // Use a dedicated temp exe so we never overwrite the cached exe.
       if (successExpectation.RequiredIR != null) {
-        Compiler.SourceFile[] irSources;
-        string? irTempDir = null;
-        if (fragment.SourceFiles != null) {
-          irTempDir = Path.Combine(Path.GetTempPath(), $"maxon-ir-{Guid.NewGuid():N}");
-          Directory.CreateDirectory(irTempDir);
-          // Spec-fragment multi-file: RootPath = the tempDir holding the split
-          // files (decision #2 in the directory-as-module redesign plan).
-          var multiFileRoot = irTempDir;
-          irSources = [.. fragment.SourceFiles.Select(f => {
-            var path = Path.Combine(irTempDir, f.FileName);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, f.Source);
-            return new Compiler.SourceFile(path, f.Source, multiFileRoot);
-          })];
-        } else {
-          // Spec-fragment single-file: RootPath = the fragment directory.
-          irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source, Path.GetDirectoryName(fragment.FilePath))];
-        }
+        var (irSources, irTempDir) = BuildTestSources(fragment.SourceFiles, fragment.FilePath, fragment.Source);
         var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
         SetCompileFlags();
         var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
@@ -997,30 +980,52 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     Compiler.Compiler.Testing = true;
   }
 
+  /// <summary>
+  /// Build the compiler's source array for one spec test — the ONE place that knows a test may be
+  /// several files, and how a multi-file one reaches the compiler (split into a temp directory,
+  /// which becomes the module RootPath; decision #2 in the directory-as-module redesign).
+  ///
+  /// ⚠ WRITTEN ONCE BECAUSE THE THIRD COPY WAS WRONG AND SILENT. Three call sites needed this —
+  /// the run's RequiredIR check, <see cref="CompileToExecutable"/>, and
+  /// <see cref="UpdateRequiredInSpecFiles"/> — and the third built a SINGLE `SourceFile` holding
+  /// the merged multi-file text under the fragment's own `<name>.test` filename. A test whose
+  /// sources include a `*.test.maxon` file then failed to compile with E2058 ("a 'test'
+  /// declaration is only allowed in a file whose name ends in '.test.maxon'"), which that path
+  /// discarded without a word — so `--update-required` could never regenerate those blocks and
+  /// never said so. `test-declaration/survives-dead-function-elimination` was unregenerable for
+  /// exactly that reason.
+  ///
+  /// Returns the sources and, for a multi-file test, the temp directory the caller must delete.
+  /// </summary>
+  private static (Compiler.SourceFile[] Sources, string? TempDir) BuildTestSources(
+      List<(string FileName, string Source)>? sourceFiles, string singleFilePath, string singleFileSource) {
+    if (sourceFiles == null) {
+      // Spec-fragment single-file: RootPath = the fragment directory.
+      return ([new Compiler.SourceFile(singleFilePath, singleFileSource, Path.GetDirectoryName(singleFilePath))], null);
+    }
+
+    var tempDir = Path.Combine(Path.GetTempPath(), $"maxon-test-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tempDir);
+    // Spec-fragment multi-file: RootPath = tempDir (decision #2).
+    Compiler.SourceFile[] sources = [.. sourceFiles.Select(f => {
+      var path = Path.Combine(tempDir, f.FileName);
+      Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+      File.WriteAllText(path, f.Source);
+      return new Compiler.SourceFile(path, f.Source, tempDir);
+    })];
+    return (sources, tempDir);
+  }
+
   private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath, Compiler.CompileTarget? target = null) {
     try {
-      Compiler.SourceFile[] sources;
-      string? tempDir = null;
       // Map from per-file path to (fragmentPath, lineOffset) so multi-file
       // error messages can be rewritten to point at the merged fragment
       // file with line numbers matching the spec's expected stderr.
       Dictionary<string, (string FragmentPath, int LineOffset)>? splitFileMap = null;
 
-      if (fragment.SourceFiles != null) {
-        tempDir = Path.Combine(Path.GetTempPath(), $"maxon-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tempDir);
+      var (sources, tempDir) = BuildTestSources(fragment.SourceFiles, fragment.FilePath, fragment.Source);
+      if (tempDir != null) {
         splitFileMap = ComputeSplitFileMap(fragment, tempDir);
-        // Spec-fragment multi-file: RootPath = tempDir (decision #2).
-        var multiFileRoot = tempDir;
-        sources = [.. fragment.SourceFiles.Select(f => {
-          var path = Path.Combine(tempDir, f.FileName);
-          Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-          File.WriteAllText(path, f.Source);
-          return new Compiler.SourceFile(path, f.Source, multiFileRoot);
-        })];
-      } else {
-        // Spec-fragment single-file: RootPath = the fragment directory.
-        sources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source, Path.GetDirectoryName(fragment.FilePath))];
       }
 
       try {
@@ -1687,6 +1692,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // Parse with targetKey so success.RequiredIR contains the current target's block (or unqualified fallback)
     var specs = SpecParser.ParseDirectory(_specDir, targetKey, _includeNetwork);
     var updatedSpecs = 0;
+    // Split-file directories for multi-file tests, removed once every spec has been rewritten.
+    var tempSourceDirs = new List<string>();
 
     Directory.CreateDirectory(_tempDir);
 
@@ -1704,8 +1711,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
         var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
         var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
-        // Spec-fragment single-file: RootPath = the fragment directory (decision #2).
-        var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment, Path.GetDirectoryName(fragmentPath)) };
 
         // Find the test marker once (shared by both RequiredIR and stderr updates)
         var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";
@@ -1755,12 +1760,30 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
         if (test.Expectation is not SuccessExpectation success) continue;
 
+        // Built ONCE for this test — the RequiredIR, stderr and mm-trace regenerations below all
+        // compile the same sources, and for a multi-file test that means one split-out temp
+        // directory rather than three. Collected for deletion at the end of the method: the three
+        // blocks run in sequence with no `continue` between them, so per-block cleanup would only
+        // be re-deriving that ordering.
+        var (sources, sourcesTempDir) = BuildTestSources(test.SourceFiles, fragmentPath, sourceWithComment);
+        if (sourcesTempDir != null) tempSourceDirs.Add(sourcesTempDir);
+
         // Update RequiredIR for current target
         if (success.RequiredIR != null || HasAnyRequiredIRBlock(specContent, markerMatch)) {
           var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_ir.exe");
           try {
             SetCompileFlags();
             var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: _target);
+
+            // ⚠ A FAILED REGENERATION IS REPORTED, NEVER SWALLOWED. This used to fall straight
+            // through: the block kept its stale contents and the run said nothing, so the only
+            // symptom was the same test failing again afterwards for a reason `--update-required`
+            // had already discovered and discarded.
+            if (!irResult.Success || irResult.AllStagesIr == null) {
+              Logger.Error(LogCategory.Testing,
+                $"--update-required: could not regenerate RequiredIR for '{specName}/{test.Name}' — " +
+                $"it does not compile for {targetKey}, so the pinned block is unchanged and stale.");
+            }
 
             if (irResult.Success && irResult.AllStagesIr != null) {
               var newRequiredIR = irResult.AllStagesIr.Trim();
@@ -1919,6 +1942,10 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
         File.WriteAllText(spec.FilePath, specContent.Replace("\r\n", "\n"));
         updatedSpecs++;
       }
+    }
+
+    foreach (var dir in tempSourceDirs) {
+      try { Directory.Delete(dir, recursive: true); } catch { }
     }
 
     if (updatedSpecs > 0) {

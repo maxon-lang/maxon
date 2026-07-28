@@ -290,6 +290,14 @@ Nothing in the program calls a test, so dead-function elimination would drop it.
 roots instead. The pinned IR is the assertion — the snapshot in section 3 of a fragment is
 never verified, so only a `RequiredIR` block actually proves the symbol survived to codegen,
 under both its mangled name and, here, its file namespace.
+
+⚠ `ExitCode` is SHADOWED, and it has to be: pinning IR makes every type in the program's
+signature part of the assertion, and the stdlib's `ExitCode` is host-width — `u32` under
+`int(0 to u32.max)` on Windows, `u8` under `int(0 to 255)` on Linux, macOS and wasi
+(`stdlib/Process.maxon`). A `=== standard` block naming one of them is a HOST fact recorded
+in the tier that is supposed to have none, so it read `-> u32` and failed on arm64-macos
+against an identical compiler. A fixed range makes the pinned tiers say the same thing
+everywhere. Do not "simplify" this back to the stdlib alias.
 ```maxon
 // --- file: kept.test.maxon
 test 'is kept alive'
@@ -297,6 +305,8 @@ test 'is kept alive'
 end 'is kept alive'
 
 // --- file: main.maxon
+typealias ExitCode = int(0 to 125)
+
 function main() returns ExitCode
 	return 0
 end 'main'
@@ -304,7 +314,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredIR
+```RequiredIR:x64-windows
 === maxon
 module {
   func @__test_is_kept_alive() {
@@ -329,7 +339,7 @@ module {
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
     %3 = arith.constant {value = 0 : i64}
     func.return %3
@@ -346,7 +356,7 @@ module {
     x64.xor eax, eax
     x64.ret
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.xor eax, eax
     x64.ret
