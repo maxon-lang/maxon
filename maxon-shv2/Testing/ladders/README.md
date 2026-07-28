@@ -36,6 +36,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genfsprobe.sh <iterations> <out>` | ⚠ **the odd one out: a program to RUN, not one to compile** | what one `File.delete` / `File.exists` / `FilePath.changeExtension` COSTS, in nanoseconds and in allocations — so a per-compile cost paid in SYSCALLS can be priced at all. See below. |
 | `genfor.sh <loops> <depth> <accesses> <array\|range\|noloop> <out>` | `loops/depth` functions, each one NEST of `depth` `for` loops with `accesses` binding accesses per level | `for … in` (P1.8 slice A) and the four doors of its ITERATION LOCK. `ScaleCorpus` generates **no `for` at all** — the construct did not parse until that commit — so every column of a default run reads a flat Δ0 for it. **Its knobs are independent** (program size is `loops × accesses`, so `depth` moves alone) and `noloop` is the CONTROL: the same accesses through the same doors with not one `for` in the program. See below. |
 | `genstring.sh <n> <sites-*\|data-*> <out>` | ⚠ **TWO families, and `<n>` means a different thing in each**: `sites-*` is a COMPILE ladder (`<n>` = method CALL SITES, four per function); `data-*` is a RUN ladder (`<n>` = DOUBLINGS of the subject string, the program timing only the operation and printing a CSV line) | the seven byte/ASCII `String` methods (P1.8 Slice C). `ScaleCorpus` emits **not one** of `startsWith`/`endsWith`/`contains`/`toLower`/`toUpper`/`replace`/`split` at any rung — dump it and the complete method-call inventory is `create push count get append scaleBy probe byteLength slice reserve clone firstVal` — so the family is structurally invisible to a default run. ⚠ **It is NOT blind to `String`**, which is the trap: 756 `==` sites plus `append`/`byteLength`/interpolation across the six rungs mean a Slice C change to the SHARED `__str_eq` loop DOES read, and that non-zero looks like coverage of a rung it does not cover. `sites-control` is the CONTROL (the P1.2 surface only, no Slice C method), and `data-appendloop` measures the P1.2 `append` this generator has to route around. See below. |
+| `genfnval.sh <aliases> <sites> <arity> <indirect\|direct> <out>` | `aliases` function typealiases with a matching callee each, called through a function VALUE `sites` times per alias, plus a `return` door and an argument door per alias | FUNCTION VALUES and their DECLARED TYPES — `resolveFunctionAliasShapes`, `declaredFunctionShapeOf`, `checkIndirectCall`, `checkFunctionTypeDoors` and `indirectCalleeParamTypes`. `--emit-corpus` finds **ZERO `typealias = function(…)` and ZERO function references** in all 465 generated files, so every column of a default run reads a flat Δ0 for the whole mechanism. `direct` is the CONTROL: the same declarations, bodies and CALL COUNT, called by NAME. See below. |
 
 ### `genstring.sh` — the two questions, and the ONE that was not about Slice C at all
 
@@ -203,6 +204,41 @@ E2015 (the 64th slot is the dispatch's own receiver). That cap is the finding, n
 bounded by 64 for every program the compiler accepts, so `reverse`'s P²/2 term cannot exceed ~2,048
 comparisons per call. **A quadratic in a variable the type system caps at 64 is a constant**, and this
 is the ladder that establishes which one.
+
+### `genfnval.sh` — a mechanism the corpus contains ZERO of, and a control that is NOT byte-identical
+
+**The corpus cannot express this one at all**, and that is checked rather than assumed: `--emit-corpus`
+over all 465 generated files finds **no `typealias … = function(…)` and no function reference, at every
+rung**, so `resolveFunctionAliasShapes`, `declaredFunctionShapeOf`, `checkIndirectCall`,
+`checkFunctionTypeDoors` and `indirectCalleeParamTypes` each run **exactly zero times** in a default
+`scale-test`. A Δ0 there measures the instrument, not the compiler.
+
+**The three knobs are separable, and the quadratic they exist to refute needs two of them to show.**
+`<aliases>` moves the size of `functionAliasShapes`, the length of `resolveFunctionAliasShapes`' one
+loop, and the DOOR count (each alias contributes a `return` door and an argument door) — and, since it
+also moves the function count, it is the "whole program doubles" knob. `<sites>` moves indirect CALL
+SITES at a fixed alias count. `<arity>` is `P` in `functionShapesAgree`, `paramFloatMask` and
+`widenIntArgsToFloatParams`. **A per-call-site scan over the alias registry would cost `sites × aliases`
+and so read ×4.00 when `<aliases>` doubles** (which doubles the sites with it); it reads ×2.00, because
+`declaredFunctionShapeOf` is two hash-map gets.
+
+⚠ **`direct` IS A SHAPE CONTROL, NOT A BYTE-IDENTICAL ONE, and it cannot be** — unlike
+`genwitnessargs.sh`'s label-order control. A DIRECT call's second and later arguments MUST be labelled
+(E2053); an INDIRECT call's are positional and CANNOT be, because a function TYPE has no parameter names
+for them to name. So `direct` carries `aNNNN: ` per argument past the first. Read the subtraction as an
+upper bound and read RATIOS within a mode, which the label bytes cannot touch.
+
+⚠ **The function typealiases are DECLARED in both modes**, so `resolveFunctionAliasShapes` runs in both
+and the declaration cost cancels in the subtraction — leaving the CALL and DOOR paths alone. To price the
+declaration itself, compare `direct` against a run with `<aliases>` halved. (Measured 2026-07-28: the
+`phase:resolveTypes` delta is **identical to the digit in both modes**, +609/+1,193/+2,353/+4,665 across
+aliases 64→512, which is that cancellation working.)
+
+⚠⚠ **`<arity>` HAS A CEILING OF 13 AND IT IS A COMPILER DEFECT, NOT A DESIGN LIMIT.** An indirect call of
+arity ≥ 14 panics the register allocator (`RegisterAllocator.maxon:1173`, `chooseRegister: no free
+register`). Measured on `main` @9fa71cc79 as well as on the rung under test — arity 13 compiles and 14
+panics on both — and the same arity 16 through a DIRECT call compiles clean, so it is specific to the
+indirect path and is PRE-EXISTING. Reported to the coordinator, not worked around.
 
 ### `genmutchain.sh` — why three knobs and not one
 
