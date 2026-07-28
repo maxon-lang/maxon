@@ -221,34 +221,34 @@ func @String.equals {
     x64.movRegReg rbp, rsp
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
+    x64.cmpRegReg rax, rsi
+    x64.jcc equal, lenMatch
+    x64.jmp notEqual
+  lenMatch:
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.movRegImm32 rdi, 0
-    x64.cmpRegReg rax, rsi
-    x64.jcc equal, critsplit
-    x64.jmp notEqual
-  critsplit:
-    x64.jmp header
-  header:
-    x64.cmpRegReg rdi, rax
+    x64.movRegImm32 rsi, 0
+    x64.jmp cmphdr
+  cmphdr:
+    x64.cmpRegReg rsi, rax
     x64.jcc greaterEqual, allMatch
-    x64.jmp body
+    x64.jmp cmpbody
   allMatch:
     x64.movRegImm32 r8, 1
     x64.popReg rbp
     x64.ret
-  body:
-    x64.leaRegRegReg rsi, rcx, rdi
-    x64.loadRegBaseDisp.byte rsi, [rsi + 0]
-    x64.leaRegRegReg r8, rdx, rdi
+  cmpbody:
+    x64.leaRegRegReg rdi, rcx, rsi
+    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
+    x64.leaRegRegReg r8, rdx, rsi
     x64.loadRegBaseDisp.byte r8, [r8 + 0]
     x64.movRegImm32 r9, 1
-    x64.leaRegRegReg rdi, rdi, r9
-    x64.cmpRegReg rsi, r8
+    x64.leaRegRegReg rsi, rsi, r9
+    x64.cmpRegReg rdi, r8
     x64.jcc equal, critsplit
     x64.jmp notEqual
   critsplit:
-    x64.jmp header
+    x64.jmp cmphdr
   notEqual:
     x64.movRegImm32 r8, 0
     x64.popReg rbp

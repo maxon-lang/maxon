@@ -1,0 +1,49 @@
+// Test: startsWith
+function main() returns ExitCode
+	let s = "hello world"
+	if s.startsWith("hello") 'c1'
+		print("1\n")
+	end 'c1'
+	if s.startsWith("world") 'c2'
+		print("0\n")
+	end 'c2'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_starts_with
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c1
+    x64.jmp ifcont
+  c1:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRdata rdx, [rip + __str_rec_7]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_starts_with
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c2
+    x64.jmp ifcont
+  c2:
+    x64.leaRegRdata rcx, [rip + __str_rec_9]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
