@@ -187,6 +187,50 @@ z
 a.b.c
 ```
 
+<!-- test: adjacent-and-overlapping-matches-count-once -->
+### A match is consumed WHOLE, and the sizing pass must agree with the building pass
+`replace` runs two passes over the same matches: one COUNTS them to size a single exactly-fitting
+allocation, the other re-walks them and writes. Both advance the cursor PAST the whole match, so
+`"aaaa".replace("aa", …)` is two matches and not three. ⚠ **Nothing but this agreement bounds the write** —
+if the counting pass ever stepped differently from the building pass the result would be sized for one
+number of matches and filled for another, which is a heap overrun or an under-filled buffer, not a crash.
+MEASURED: stepping the count pass by 1 instead of by the needle's length wrote 2 bytes into a 1-byte
+allocation and surfaced only as a one-character stdout diff. A replacement LONGER than the needle is what
+makes the divergence unmistakable here, because the two passes then disagree about the SIZE and not only
+about the count. `split` walks the same matches by the same rule, so `"aaa".split("aa")` is two parts.
+Expected output is the bootstrap oracle's.
+```maxon
+function main() returns ExitCode
+	let a = "aaaa"
+	print("[{a.replace("aa", with: "LONG")}]\n")
+	let b = "aaaaa"
+	print("[{b.replace("aa", with: "xyz")}]\n")
+	let c = "aaaaaa"
+	print("[{c.replace("aaa", with: "-")}]\n")
+	let d = "abababa"
+	print("[{d.replace("aba", with: "Q")}]\n")
+	let e = "aaa"
+	let p = e.split("aa")
+	print("{p.count()}\n")
+	for z in p 'l'
+		print("[{z}]")
+	end 'l'
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[LONGLONG]
+[xyzxyza]
+[--]
+[QbQ]
+2
+[][a]
+```
+
 <!-- test: split-many-segments -->
 ### A split that grows the result array well past its initial capacity
 ```maxon

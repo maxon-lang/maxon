@@ -1907,20 +1907,29 @@ function buildStrSplit(module StdModule)
 	let found = emitCmp(module, block: header, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(found, thenBlockId: pushSegment.id, elseBlockId: pushTail.id))
 
-	let segLen = emitBin(module, block: pushSegment, a: idx, b: pos, opcode: StdBinOpcode.sub, ids: ids)
-	let segAddr = emitBin(module, block: pushSegment, a: selfBuf, b: pos, opcode: StdBinOpcode.add, ids: ids)
-	emitPushSegment(module, block: pushSegment, arr: arr, segment: emitBuildOwnedInlineString(module, block: pushSegment, ids: ids, srcBuf: segAddr, srcLen: segLen, isAscii: selfAscii), ids: ids)
+	emitPushSliceSegment(module, block: pushSegment, arr: arr, srcBuf: selfBuf, from: pos, endPos: idx, isAscii: selfAscii, ids: ids)
 	let posNext = emitBin(module, block: pushSegment, a: idx, b: delimLen, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(pushSegment, op: StdOp.branch(header.id))
 	pushSegment.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(posNext)))
 
-	let tailLen = emitBin(module, block: pushTail, a: selfLen, b: pos, opcode: StdBinOpcode.sub, ids: ids)
-	let tailAddr = emitBin(module, block: pushTail, a: selfBuf, b: pos, opcode: StdBinOpcode.add, ids: ids)
-	emitPushSegment(module, block: pushTail, arr: arr, segment: emitBuildOwnedInlineString(module, block: pushTail, ids: ids, srcBuf: tailAddr, srcLen: tailLen, isAscii: selfAscii), ids: ids)
+	emitPushSliceSegment(module, block: pushTail, arr: arr, srcBuf: selfBuf, from: pos, endPos: selfLen, isAscii: selfAscii, ids: ids)
 	module.setTerminator(pushTail, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildStrSplit'
+
+// ⭐ **ONE SEGMENT OF THE RECEIVER — the bytes `[from, endPos)` — BUILT FRESH AND PUSHED.** `__str_split` has
+// exactly two producers of one and they differ ONLY in where the segment STOPS (`endPos`): the piece before a
+// delimiter ends at the match, the tail after the last one ends at `length@8`. They were that difference plus three
+// identical lines, with nothing making the three agree — and what those lines encode is the whole of
+// "a segment is an INDEPENDENT COPY, not a view of the receiver", which is what keeps `__arr_decref`'s
+// element walk from double-freeing the receiver's bytes. Written once, so a change to what a segment IS
+// (its `isAscii`, its record shape, its owner) cannot reach the interior segments and miss the tail.
+function emitPushSliceSegment(module StdModule, block IrBlock, arr ValueId, srcBuf ValueId, from ValueId, endPos ValueId, isAscii ValueId, ids ValueMinter)
+	let segLen = emitBin(module, block: block, a: endPos, b: from, opcode: StdBinOpcode.sub, ids: ids)
+	let segAddr = emitBin(module, block: block, a: srcBuf, b: from, opcode: StdBinOpcode.add, ids: ids)
+	emitPushSegment(module, block: block, arr: arr, segment: emitBuildOwnedInlineString(module, block: block, ids: ids, srcBuf: segAddr, srcLen: segLen, isAscii: isAscii), ids: ids)
+end 'emitPushSliceSegment'
 
 // Hand one finished segment to the array. `__arr_push` is void, but a Std `call` still defines a result
 // value, so the discarded id is minted here once rather than at each of `__str_split`'s three push sites.
