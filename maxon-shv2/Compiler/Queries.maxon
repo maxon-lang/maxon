@@ -437,6 +437,12 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		unknownLoopLabel(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing loop with label '{label}'", line: line, column: column, filePath: path)
 		firstArgNamed(line, column) then reportPositioned(project, code: ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
 		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
+		// P1.7a slice 2b-vi. The three codes AND the three messages are the ones a DIRECT call's slotting
+		// failure gets (`SemanticCheck.validateCall`), because it is the same rule met at a witness
+		// dispatch — see the `ParseError` arms' header for why the parser is what raises them.
+		witnessArgCountMismatch(callee, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(callee, expected: expected, got: got), line: line, column: column, filePath: path)
+		witnessUnknownArgLabel(callee, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(callee, label: label), line: line, column: column, filePath: path)
+		witnessDuplicateArg(callee, paramName, line, column) then reportPositioned(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(callee, paramName: paramName), line: line, column: column, filePath: path)
 		operandTypeMismatch(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
 		nonNumericOperands(left, right, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
 		nonNumericNegation(operand, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)

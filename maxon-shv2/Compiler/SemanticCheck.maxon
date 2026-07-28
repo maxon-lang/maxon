@@ -584,7 +584,7 @@ function addMutationEdges(project Project, callee ByteArray, args ValueIdArray, 
 			continue
 		end 'notOneOfOurParameters'
 
-		let pos = argSlotPosition(sig, argIndex: i, label: try argLabels.get(i) otherwise panic("addMutationEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
+		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("addMutationEdges: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
 		if pos >= sig.paramCount() 'unslottable'
 			continue
 		end 'unslottable'
@@ -1150,11 +1150,11 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, result 
 	end 'unknownFn'
 
 	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
-	match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, escapeSummary: escapeSummary, mutationSummary: mutationSummary, callRange: callRange, filePath: filePath)
-		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{String.from(callee)}' expects {expected} argument(s) but {got} were provided", line: callRange.line, column: callRange.column, filePath: filePath)
-		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: "'{String.from(callee)}' has no parameter named '{label}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
-		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{String.from(callee)}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: argArityMismatchMessage(String.from(callee), expected: expected, got: got), line: callRange.line, column: callRange.column, filePath: filePath)
+		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(String.from(callee), label: label), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
+		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: argDuplicateMessage(String.from(callee), paramName: paramName), argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 	end 'slot'
 end 'validateCall'
 
@@ -1354,7 +1354,7 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 			continue
 		end 'writableArgument'
 
-		let pos = argSlotPosition(sig, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
+		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
 		if pos >= sig.paramCount() or not paramIsMutated(mask, param: pos) 'notAWrittenPosition'
 			continue
 		end 'notAWrittenPosition'

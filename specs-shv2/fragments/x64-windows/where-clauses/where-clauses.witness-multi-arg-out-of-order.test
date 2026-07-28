@@ -1,35 +1,35 @@
-// Test: where-clauses.float-formal-among-int-formals
-typealias Coord = int(0 to 1000)
+// Test: where-clauses.witness-multi-arg-out-of-order
+typealias Code = int(0 to u32.max)
 
-interface Mixed
-	function combine(a int, k float, b int) returns float
-end 'Mixed'
+interface Mixer
+	function combine(a Code, k Code, b Code) returns Code
+end 'Mixer'
 
-type Point implements Mixed
-	export var x as Coord
-	export static function create(x Coord) returns Self
+type Point implements Mixer
+	export var x as Code
+	export static function create(x Code) returns Self
 		return Self{ x: x }
 	end 'create'
-	export function combine(a int, k float, b int) returns float
-		return k + (a as float) + (b as float)
+	export function combine(a Code, k Code, b Code) returns Code
+		return self.x + a * 100 + k * 10 + b
 	end 'combine'
 end 'Point'
 
-type Box uses T where T is Mixed
+type Box uses T where T is Mixer
 	export var item as T
 	export static function create(item T) returns Self
 		return Self{ item: item }
 	end 'create'
-	export function go() returns float
-		return self.item.combine(1, k: 3, b: 5)
+	export function go() returns Code
+		return self.item.combine(1, b: 5, k: 3)
 	end 'go'
 end 'Box'
 
 typealias PointBox = Box with Point
 
 function main() returns ExitCode
-	let b = PointBox.create(Point.create(7))
-	if b.go() == 9.0 'ok'
+	let bx = PointBox.create(Point.create(0))
+	if bx.go() == 135 'ok'
 		return 0
 	end 'ok'
 	return 1
@@ -64,10 +64,30 @@ func @Point.combine {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.cvtsi2sdRegReg xmm1, rdx
-    x64.addsdRegReg xmm0, xmm0, xmm1
-    x64.cvtsi2sdRegReg xmm1, rax
-    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.imulRegRegImm32 rdx, rdx, 100
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg r8, rax, r9
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -98,11 +118,26 @@ func @Box.go {
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.movRegImm32 rdx, 1
+    x64.movRegImm32 r9, 5
     x64.movRegImm32 rax, 3
-    x64.movRegImm32 rsi, 5
-    x64.cvtsi2sdRegReg xmm0, rax
-    x64.movRegReg rax, rsi
     x64.callMem [rbx + 24]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -116,7 +151,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rcx, 0
     x64.callDirect Point.create
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
@@ -126,14 +161,10 @@ func @main {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
-    x64.leaRegRdata rdx, [rip + __witness_Point.Mixed]
+    x64.leaRegRdata rdx, [rip + __witness_Point.Mixer]
     x64.movRegReg rcx, r12
     x64.callDirect Box.go
-    x64.movsdRegRip xmm1, [rip + __fconst_0]
-    x64.ucomisdRegReg xmm0, xmm1
-    x64.jcc parity, ifcont
-    x64.jmp fordered
-  fordered:
+    x64.cmpRegImm32 r8, 135
     x64.jcc equal, ok
     x64.jmp ifcont
   ok:

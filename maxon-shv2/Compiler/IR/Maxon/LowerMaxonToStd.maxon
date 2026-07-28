@@ -1101,7 +1101,7 @@ type MaxonToStdLowering
 		end 'compilerOwnCall'
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
-		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -1404,7 +1404,7 @@ type MaxonToStdLowering
 	// parameter — so the slotted args pass through as i64 without `finalizeCallArgs`.
 	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
-		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.emitAsyncSpawn(result, callee: callee, argIds: argIds, dstBlock: dstBlock)
 			arityMismatch then panic("lowerAsyncCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerAsyncCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -1815,7 +1815,7 @@ type MaxonToStdLowering
 		end 'compilerOwnTryCall'
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
-		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, result: result, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")

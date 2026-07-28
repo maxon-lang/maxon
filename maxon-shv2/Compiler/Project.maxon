@@ -1395,21 +1395,6 @@ export type FuncSignature
 		return self.paramNames.count()
 	end 'paramCount'
 
-	// The declaration index of the parameter named `name`, or `paramCount()` when
-	// no parameter carries that name (an unknown label). A linear scan over the
-	// name list — parameter counts are tiny, so no per-signature name→index map is
-	// worth its heap object (contrast v1's `nameToIndex`, which paid for one on
-	// every signature to serve method dispatch this milestone does not have).
-	export function indexOfParam(name ByteArray) returns ParamCount
-		for i in 0 upto self.paramNames.count() 'each'
-			let paramName = try self.paramNames.get(i) otherwise panic("FuncSignature.indexOfParam: paramNames.get OOB at {i}")
-			if paramName.equals(name) 'match'
-				return i
-			end 'match'
-		end 'each'
-		return self.paramNames.count()
-	end 'indexOfParam'
-
 	// Does parameter 0 name the receiver (`__self`) — i.e. is this an INSTANCE method rather than a free
 	// function or a receiverless static? THE one home of that fact (`parseTypeMember` records the receiver as
 	// this name; see there): SemanticCheck reads it to self-offset a call's arguments from the source
@@ -1477,28 +1462,67 @@ export union ArgSlotResult
 	duplicateArg(argIndex ParamCount, paramName String)
 end 'ArgSlotResult'
 
+// ⭐ **THE CODE AND THE WORDS EACH SLOTTING FAILURE EARNS — declared beside `ArgSlotResult` so the two
+// parties that render one cannot drift.** `SemanticCheck.validateCall` REPORTS these against a
+// `funcSignatures` entry; `Parser.slottedWitnessArgs` THROWS them against an interface method's
+// `paramNames` (P1.7a slice 2b-vi), which is in no signature registry because a witness dispatch has no
+// callee name to register. Two mechanisms, one rule — so the text lives here rather than at either site.
+// `callee` is already rendered: a qualified function name for a direct call, `<Interface>.<method>` for a
+// witness dispatch, which is what that call actually binds against.
+export function argArityMismatchMessage(callee String, expected ParamCount, got ParamCount) returns String
+	return "'{callee}' expects {expected} argument(s) but {got} were provided"
+end 'argArityMismatchMessage'
+
+export function argUnknownLabelMessage(callee String, label String) returns String
+	return "'{callee}' has no parameter named '{label}'"
+end 'argUnknownLabelMessage'
+
+export function argDuplicateMessage(callee String, paramName String) returns String
+	return "duplicate argument for parameter '{paramName}' of '{callee}'"
+end 'argDuplicateMessage'
+
+// The declaration index of the parameter named `name` in `paramNames`, or `paramNames.count()` when no
+// parameter carries that name (an unknown label). A linear scan — parameter counts are tiny, so no
+// per-signature name→index map is worth its heap object (contrast v1's `nameToIndex`, which paid for one
+// on every signature to serve method dispatch this milestone does not have).
+//
+// ⭐ **IT TAKES THE NAME LIST, NOT A SIGNATURE, BECAUSE THREE DIFFERENT RECORDS CARRY ONE** — a
+// `FuncSignature` (SemanticCheck and lowering), a `ParamConsumeInfo` (the parser's consume transfer, which
+// runs before any `FuncSignature` exists) and a `WitnessDispatchTarget` (an interface method, which is in no
+// registry at all). Each of those grew its own copy of this scan; the list is the only thing the scan reads,
+// so taking it directly is what collapses them to one.
+export function indexOfParamIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
+	for i in 0 upto paramNames.count() 'each'
+		let paramName = try paramNames.get(i) otherwise panic("indexOfParamIn: paramNames.get OOB at {i}")
+		if paramName.equals(name) 'match'
+			return i
+		end 'match'
+	end 'each'
+	return paramNames.count()
+end 'indexOfParamIn'
+
 // Slot a call's `args` (in source order, each paired with its `argLabels` entry — the
-// empty string for a positional argument) into the callee `sig`'s DECLARATION order.
-// A positional argument at index `i` fills parameter position `i`; a labelled argument
-// `name: value` fills the position of the parameter named `name`. The parser has
-// already enforced that only the first argument is positional. Returns the reordered
-// value list, or the first slotting error found (arity, unknown label, or two arguments
-// targeting one parameter). THE one place the label→position mapping lives — shared by
-// call validation and call lowering.
+// empty string for a positional argument) into the callee's DECLARATION order, given the
+// callee's `paramNames`. A positional argument at index `i` fills parameter position `i`;
+// a labelled argument `name: value` fills the position of the parameter named `name`. The
+// parser has already enforced the label GRAMMAR (which arguments may carry one). Returns
+// the reordered value list, or the first slotting error found (arity, unknown label, or two
+// arguments targeting one parameter). THE one place the label→position mapping lives — shared
+// by call validation, call lowering, the parser's consume transfer and witness dispatch.
 // ⭐ **THE LABEL→POSITION MAPPING ITSELF, allocation-free** — a positional argument at index `i` fills
 // parameter `i`; a labelled one fills the position of the parameter it names, which is
-// `sig.paramCount()` (one past the end) when no parameter has that name. That out-of-range answer is
-// `indexOfParam`'s own not-found convention and is DECODED by the two askers rather than re-derived:
+// `paramNames.count()` (one past the end) when no parameter has that name. That out-of-range answer is
+// `indexOfParamIn`'s own not-found convention and is DECODED by the askers rather than re-derived:
 // `slotCallArgs` turns it into `unknownLabel`, and the parameter-mutation edge builder skips the
 // argument (a call whose labels do not resolve is reported by `slotCallArgs`, not by the summary).
 //
 // It is factored out because the mutation summary needs the mapping WITHOUT the slotted array
 // (`SemanticCheck.addMutationEdges` asks "which parameter does source argument `i` fill?" for a handful
 // of arguments and would otherwise pay `slotCallArgs`'s two per-call buffers for every call in the
-// program) — and because a second hand-written copy of `label.isEmpty() ? i : indexOfParam(label)` is
+// program) — and because a second hand-written copy of `label.isEmpty() ? i : indexOfParamIn(label)` is
 // exactly the drift that would let a call be summarised against one slotting and checked against another.
 // ⭐⭐ **THE LABEL USUALLY NAMES THE PARAMETER AT ITS OWN POSITION, AND TESTING THAT FIRST IS WHAT
-// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `indexOfParam` is a scan of the whole name list, so a
+// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `indexOfParamIn` is a scan of the whole name list, so a
 // call written `f(a, b: b, c: c)` — Maxon's own spelling, labels in declaration order — costs
 // `1 + 2 + … + P` comparisons, i.e. **O(P²) per call**, and this mapping is asked once per argument by
 // `slotCallArgs`, again by `SemanticCheck.addMutationEdges`, and again by
@@ -1508,7 +1532,7 @@ end 'ArgSlotResult'
 //
 // ⚠ **IT IS EXACTLY EQUIVALENT, NOT AN APPROXIMATION, AND THE REASON IS THAT PARAMETER NAMES ARE
 // UNIQUE** — a repeated one is E2014 at the DECLARATION (`duplicate parameter name`, measured), so if
-// `paramNames[argIndex]` equals the label then `indexOfParam` cannot answer any position but
+// `paramNames[argIndex]` equals the label then `indexOfParamIn` cannot answer any position but
 // `argIndex`: there is no earlier match for it to find. A signature that DID carry a duplicate belongs
 // to an already-refused program, so the tie-break could only change which diagnostic that program
 // gets — the same reasoning `SemanticCheck.indexModuleFunctionsByName` states for first-index-wins.
@@ -1519,21 +1543,21 @@ end 'ArgSlotResult'
 // so the quadratic term is GONE rather than merely smaller. It also lands below the PRE-RUNG base
 // (39.6 ms at P = 64), which had the same scan and paid it once instead of twice. Allocations are
 // bit-identical on every rung of that ladder: this buys time and moves no memory.
-export function argSlotPosition(sig FuncSignature, argIndex ParamCount, label ByteArray) returns ParamCount
+export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, label ByteArray) returns ParamCount
 	if label.isEmpty() 'positional'
 		return argIndex
 	end 'positional'
 
-	let atOwnPosition = try sig.paramNames.get(argIndex) otherwise EmptySourceText
+	let atOwnPosition = try paramNames.get(argIndex) otherwise EmptySourceText
 	if atOwnPosition.equals(label) 'labelsInDeclarationOrder'
 		return argIndex
 	end 'labelsInDeclarationOrder'
 
-	return sig.indexOfParam(label)
+	return indexOfParamIn(paramNames, name: label)
 end 'argSlotPosition'
 
-export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray) returns ArgSlotResult
-	let paramCount = sig.paramCount()
+export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLabels ByteArrayArray) returns ArgSlotResult
+	let paramCount = paramNames.count()
 	if args.count() != paramCount 'arity'
 		return ArgSlotResult.arityMismatch(paramCount, got: args.count())
 	end 'arity'
@@ -1552,14 +1576,14 @@ export function slotCallArgs(sig FuncSignature, args ValueIdArray, argLabels Byt
 		let argId = try args.get(i) otherwise panic("slotCallArgs: args.get OOB at {i}")
 		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
 
-		let pos = argSlotPosition(sig, argIndex: i, label: label)
+		let pos = argSlotPosition(paramNames, argIndex: i, label: label)
 		if pos >= paramCount 'unknown'
 			return ArgSlotResult.unknownLabel(i, label: String.from(label))
 		end 'unknown'
 
 		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
 		if alreadyFilled 'dup'
-			let paramName = try sig.paramNames.get(pos) otherwise panic("slotCallArgs: paramNames.get OOB at {pos}")
+			let paramName = try paramNames.get(pos) otherwise panic("slotCallArgs: paramNames.get OOB at {pos}")
 			return ArgSlotResult.duplicateArg(i, paramName: String.from(paramName))
 		end 'dup'
 		try slotIds.set(pos, value: argId) otherwise panic("slotCallArgs: slotIds.set OOB at {pos}")

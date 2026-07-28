@@ -185,6 +185,20 @@ export union ParseError implements Error
 	// A call whose 2nd-or-later argument has NO `name:` label. Renders as E2053. The
 	// symmetric syntactic rule to `firstArgNamed`.
 	argMissingLabel(line LineNumber, column ColumnNumber)
+	// ⭐ **THE THREE SLOTTING FAILURES OF A WITNESS DISPATCH (P1.7a slice 2b-vi)** — arity, an unknown
+	// `name:` label, and two actuals targeting one formal. They render as E3036/E3037/E3038, the SAME
+	// three codes `SemanticCheck.validateCall` reports for a direct call, with the SAME words (built by
+	// `Project`'s `argArityMismatchMessage`/`argUnknownLabelMessage`/`argDuplicateMessage`, which is why
+	// there is one copy of them) — because it is one rule met at a second kind of call site.
+	//
+	// They are raised HERE rather than in SemanticCheck because a witness dispatch is in no signature
+	// registry: there is no callee NAME to look up, so the only pass holding both the interface method's
+	// `paramNames` and the call's arguments is the parser. (The stage is derived from a code's leading
+	// digit, not from which pass raises it; `requireGenuineSelfArgs` already raises an E3005 from here.)
+	// `callee` is `<Interface>.<method>` — what the call actually binds against.
+	witnessArgCountMismatch(callee String, expected ParamCount, got ParamCount, line LineNumber, column ColumnNumber)
+	witnessUnknownArgLabel(callee String, label String, line LineNumber, column ColumnNumber)
+	witnessDuplicateArg(callee String, paramName String, line LineNumber, column ColumnNumber)
 	// A VALUE-returning function whose body can fall off its end without returning.
 	// Renders as E3013, positioned at the function's name. Detected here, not in a
 	// later pass, because the parser is what knows the block its last statement left
@@ -1767,6 +1781,28 @@ export function pairArgs(first ValueId, second ValueId) returns ValueIdArray
 	args.push(second)
 	return args
 end 'pairArgs'
+
+// A witness dispatch's final argument list: the BORROWED receiver, then the user's actuals already in the
+// interface's declaration order (P1.7a slice 2b-vi). It is what re-establishes the `args[0]` = receiver /
+// interface formal `j` = `args[j+1]` convention after `slotCallArgs` — which knows only about the formals —
+// has done the reordering. `pairArgs`' variadic sibling, and the ONE place the receiver is put back.
+export function withWitnessReceiver(receiver ValueId, ordered ValueIdArray) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(receiver)
+	for id in ordered 'eachOrdered'
+		args.push(id)
+	end 'eachOrdered'
+	return args
+end 'withWitnessReceiver'
+
+// The span a witness dispatch's LABEL error is anchored on — the offending ARGUMENT's own, which is where
+// `SemanticCheck.reportArgError` anchors the direct call's twin (P1.7a slice 2b-vi). `parseCallArgs` pushes
+// one range per argument in lockstep and `slotCallArgs` only ever names an index it was handed, so an
+// out-of-range index is a compiler defect and not a program's. It is a named lookup rather than a bare `get`
+// at the throw sites because a `match` arm is a single expression and cannot bind the result to a `let`.
+export function witnessArgAnchor(argRanges SourceRangeArray, argIndex ParamCount) returns SourceRange
+	return try argRanges.get(argIndex) otherwise panic("witnessArgAnchor: argRanges.get OOB at {argIndex} below count {argRanges.count()} — the columns `parseCallArgs` fills are parallel by construction")
+end 'witnessArgAnchor'
 
 // A three-element call argument list — `__arr_set(arr, index, value)`'s triple. `pairArgs`' sibling.
 function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
@@ -16191,9 +16227,10 @@ export type Parser
 	// or E3005 when the parameter carries no constraint that PROVIDES THE OPERATOR'S PROTOCOL — `Equatable` for
 	// `==`/`!=`, `Comparable` for `<`/`>`/`<=`/`>=`.
 	//
-	// ⭐ **THE PROTOCOL IS FETCHED, NOT DESCRIBED.** The method name the constraints are searched for AND the
-	// result type the verdict reads are both taken off the interface `builtinInterface` synthesizes, so this
-	// function names ONE fact (which protocol the operator belongs to) instead of three parallel spellings of it.
+	// ⭐ **THE PROTOCOL IS FETCHED, NOT DESCRIBED.** The method name the constraints are searched for, the
+	// result type the verdict reads and the arity the operator can supply are ALL taken off the interface
+	// `builtinInterface` synthesizes, so this function names ONE fact (which protocol the operator belongs to)
+	// instead of four parallel spellings of it.
 	function requireOperatorWitness(paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
 		let isEquality = op == MaxonCmpOp.eq or op == MaxonCmpOp.ne
 		let protocol = requireBuiltinInterface(EquatableInterfaceName if isEquality else ComparableInterfaceName)
@@ -16202,7 +16239,7 @@ export type Parser
 		// The search itself runs by METHOD (the shared core `.equals()`/`.compare()` dispatch uses), so the hit
 		// still has to be PROVED to be the protocol's — see `requireProtocolResult`.
 		match try self.findWitnessDispatch(paramPos, methodName: method.name, errorTok: opTok) 'lookup'
-			found(target) then return try self.requireProtocolResult(target, protocolName: protocol.name, wantResult: method.returnTypeName, paramPos: paramPos, op: op, opTok: opTok)
+			found(target) then return try self.requireProtocolResult(target, protocolName: protocol.name, wantResult: method.returnTypeName, wantArity: method.paramNames.count(), paramPos: paramPos, op: op, opTok: opTok)
 			notFound then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
 		end 'lookup'
 	end 'requireOperatorWitness'
@@ -16229,8 +16266,19 @@ export type Parser
 	// emitted single-register against a callee returning through the dual-register error ABI, dropping the
 	// error exactly as the missing `witnessTryCall` did. Same E3005, because the author's cure is the same
 	// sentence.
-	function requireProtocolResult(target WitnessDispatchTarget, protocolName ByteArray, wantResult ByteArray, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		if not target.returnTypeName.equals(wantResult) or throwsClauseIsThrowing(target.throwsClause) 'notTheProtocol'
+	//
+	// ⚠⚠ **AND SO IS A METHOD OF THE WRONG ARITY (P1.7a slice 2b-vi), which was the THIRD hole in the same
+	// wall.** An operator has exactly one operand to give, so the number of formals is as much a part of
+	// "is this the protocol?" as the result type is — and `wantArity` is read off the SYNTHESIZED interface
+	// beside `wantResult`, never written as a literal, for the reason this function's header gives. It is
+	// not cosmetic: **MEASURED — `interface Weird { function equals(a Self, b Self) returns bool }` with
+	// `where T is Weird` compiled CLEAN and the impl read its unsupplied second `Self` formal out of an
+	// uninitialised argument register, dereferencing it** (a silent wrong answer, and a fault away from a
+	// crash). The `.method()` form cannot reach this — `slottedWitnessArgs` checks its arity against the
+	// interface — so the operator form was the last door left open, and closing it is what makes
+	// `requireGenuineSelfArgs`' missing-actual case unrepresentable.
+	function requireProtocolResult(target WitnessDispatchTarget, protocolName ByteArray, wantResult ByteArray, wantArity ParamCount, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
+		if not target.returnTypeName.equals(wantResult) or throwsClauseIsThrowing(target.throwsClause) or target.paramNames.count() != wantArity 'notTheProtocol'
 			throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocolName), line: opTok.line, column: opTok.column)
 		end 'notTheProtocol'
 
@@ -16246,19 +16294,23 @@ export type Parser
 	// (`T.equals(42)`, `T.compare(42)`) forms — their one shared arg-validation point. It also carries a SECOND
 	// guarantee for the asymmetric ordering operators: rejecting a non-`Self` actual is what proves the ordering
 	// dispatch's receiver is always the LEFT operand (see `emitTypeParamComparison`). `args[0]` is the receiver;
-	// interface formal `j` maps to `args[j+1]`. A missing actual is an arity concern left to the caller, not read
-	// past here.
+	// interface formal `j` maps to `args[j+1]`.
+	//
+	// ⭐ **EVERY FORMAL HAS AN ACTUAL BY THE TIME THIS RUNS, AND BOTH CALLERS NOW GUARANTEE IT (P1.7a slice
+	// 2b-vi).** It used to skip a formal with no actual, "an arity concern left to the caller" — and no caller
+	// had it: the `.method()` form performed no arity check at all, and the operator form supplies one actual
+	// to whatever arity the constraint's method declares. Both holes are closed (`slottedWitnessArgs` slots
+	// against the interface's `paramNames`; `requireProtocolResult` requires the protocol's own arity), so a
+	// missing actual is a compiler defect rather than a program's, and it panics instead of quietly passing an
+	// under-supplied dispatch through to the emit.
 	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError
 		for j in 0 upto target.paramTypeNames.count() 'eachFormal'
 			let formalTypeName = try target.paramTypeNames.get(j) otherwise panic("requireGenuineSelfArgs: paramTypeNames.get OOB at {j}")
 			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
 				continue
 			end 'notSelfFormal'
-			if j + 1 >= args.count() 'noActual'
-				continue
-			end 'noActual'
 
-			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: args.get OOB at {j + 1} below count {args.count()}")
+			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypeNames.count()} formals, so the caller's arity check did not run")
 			if not self.isReceiverTypeParamValue(actual, receiverParamPos: receiverParamPos) 'notSelfArg'
 				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParamPos)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
 			end 'notSelfArg'
@@ -17535,7 +17587,7 @@ export type Parser
 			// The label token anchors an unknown/duplicate-label diagnostic; captured before `consumeArgLabel`
 			// consumes it, exactly as `parseCallArgs` captures `argFirstTok`.
 			let labelTok = self.current()
-			let label = try self.consumeArgLabel(argIndex)
+			let label = try self.consumeArgLabel(argIndex, allowFirstNamed: false)
 			let slot = try self.payloadSlotFor(layout, payloads: payloads, argIndex: argIndex, label: label, labelTok: labelTok)
 
 			let alreadyFilled = try filled.get(slot) otherwise panic("parsePayloadArgs: filled.get OOB at slot {slot} — the columns are sized to the case's arity and payloadSlotFor returns an in-range slot")
@@ -19093,6 +19145,16 @@ export type Parser
 	// method's decl-order slot in that interface is the table index. Emits `MaxonOp.witnessDispatch`, which
 	// `lowerMaxonToStd` turns into the fused `StdOp.witnessCall`. The receiver is BORROWED (arg 0); its user
 	// arguments (none for `digest()`) follow it in `args`.
+	//
+	// ⭐ **ITS ARGUMENT LIST IS PARSED AND SLOTTED BY THE SAME DOORS EVERY OTHER CALL USES (P1.7a slice
+	// 2b-vi).** It used to be a bare comma loop of `parseValueExpression` — a third, unwritten spelling of
+	// "parse an argument list" that read no `name:` label, checked no arity and performed no label→position
+	// slotting. The same method therefore obeyed OPPOSITE rules depending on how it was reached: `add(1, 2)`
+	// was E2053 on the concrete receiver and accepted here, while `add(1, b: 2)` was accepted there and
+	// `E2004: Undefined variable 'b'` here. And the missing arity check was not cosmetic — an under-supplied
+	// dispatch read an UNINITIALISED REGISTER as its missing actual and returned it (measured: exit
+	// 1073754132 from a clean compile; with a ranged return type, a spurious `Range check failed` panic on a
+	// correct program). `parseCallArgs` + `slotCallArgs` fix all of it by deleting the second spelling.
 	function parseWitnessMethodOnValue(func IrFunction, receiver ValueId, resultUsed bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
@@ -19100,18 +19162,22 @@ export type Parser
 		let target = try self.resolveWitnessDispatch(receiverParamPos, methodTok: methodTok)
 
 		try self.consume(TokenKind.leftParen)
-		var args = ValueIdArray.create()
-		args.push(receiver)
-		if not self.at(TokenKind.rightParen) 'hasArgs'
-			while true 'argLoop'
-				args.push(try self.parseValueExpression(func))
-				if not self.at(TokenKind.comma) 'endArgs'
-					break
-				end 'endArgs'
-				try self.consume(TokenKind.comma)
-			end 'argLoop'
-		end 'hasArgs'
+		// FRESH columns holding the USER's arguments only — the borrowed receiver is prepended after
+		// slotting, not before it. `parseCallArgs` counts arguments from 0 against the SOURCE, so the
+		// receiver must not be in the array or the user's first argument would be judged as its second.
+		var userArgs = ValueIdArray.create()
+		var argLabels = ByteArrayArray.create()
+		var argRanges = SourceRangeArray.create()
+		// `argImmutableNames` is filled and DISCARDED: it exists to blame a binding for E3019 (an immutable
+		// argument at a MUTATING parameter), and a mutation summary is keyed by callee — which a witness
+		// dispatch has not got. Under dictionary-passing there is no one impl whose mutation of a parameter
+		// could be the answer, so the question is not merely unasked here, it is unaskable at this call.
+		var argImmutableNames = ByteArrayArray.create()
+		// The first argument's label is OPTIONAL at an interface / type-parameter receiver and MANDATORY
+		// from the second on — see `consumeArgLabel`.
+		try self.parseCallArgs(func, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: true)
 		let rparenTok = try self.consume(TokenKind.rightParen)
+		let args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
 
 		// A `Self`-typed formal (`equals(other Self)`) requires an argument that is a value of `T` — a concrete
 		// literal (`self.item.equals(42)`) would be marshalled into the `Self` pointer and faulted. The SAME
@@ -19123,6 +19189,44 @@ export type Parser
 		self.emitWitnessDispatch(result, args: args, target: target, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName), range: range, siteTok: methodTok)
 		return result
 	end 'parseWitnessMethodOnValue'
+
+	// ⭐ **THE USER'S ARGUMENTS IN THE INTERFACE'S DECLARATION ORDER, WITH THE BORROWED RECEIVER BACK AT
+	// `args[0]` (P1.7a slice 2b-vi)** — or the first slotting failure, as the SAME code a direct call's
+	// would get. The slotting itself is `Project.slotCallArgs`, the one home of the label→position mapping;
+	// nothing about labels is re-derived here.
+	//
+	// ⭐ **THE LABELS BIND AGAINST THE INTERFACE, NOT THE CONFORMER.** Under dictionary-passing the shared
+	// body has no concrete callee to ask — the same reason slice 2b-v types a `try`'s binding off the
+	// interface's `throws` clause — and it is forced by shv2's own conformance rule besides:
+	// `ConformanceCheck.signatureMatches` compares arity and TYPES only (it reads `paramNames` to format
+	// E3016 and never compares it), so two conformers may spell their parameters differently and only the
+	// interface's names are common to every one of them.
+	//
+	// The receiver is prepended AFTER slotting, restoring the `args[0]` = receiver / interface formal `j` =
+	// `args[j+1]` convention that `requireGenuineSelfArgs`, `floatWidenedWitnessArgs` and
+	// `emitWitnessDispatch` all index by — none of which is label-aware, and none of which needs to be.
+	function slottedWitnessArgs(target WitnessDispatchTarget, receiver ValueId, userArgs ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, methodTok Token) returns ValueIdArray throws ParseError
+		match slotCallArgs(target.paramNames, args: userArgs, argLabels: argLabels) 'slot'
+			ordered(ids) then return withWitnessReceiver(receiver, ordered: ids)
+			// The ARITY error blames the call, the two LABEL errors blame the offending argument — the same
+			// split `SemanticCheck.validateCall` makes, `methodTok` being this call's own anchor (it is what
+			// `SourceRange.between(methodTok, last: rparenTok)` starts the dispatch op's range at).
+			arityMismatch(expected, got) then throw ParseError.witnessArgCountMismatch(self.witnessCalleeName(target), expected: expected, got: got, line: methodTok.line, column: methodTok.column)
+			unknownLabel(argIndex, label) then throw ParseError.witnessUnknownArgLabel(self.witnessCalleeName(target), label: label, line: witnessArgAnchor(argRanges, argIndex: argIndex).line, column: witnessArgAnchor(argRanges, argIndex: argIndex).column)
+			duplicateArg(argIndex, paramName) then throw ParseError.witnessDuplicateArg(self.witnessCalleeName(target), paramName: paramName, line: witnessArgAnchor(argRanges, argIndex: argIndex).line, column: witnessArgAnchor(argRanges, argIndex: argIndex).column)
+		end 'slot'
+	end 'slottedWitnessArgs'
+
+	// What a witness dispatch's argument diagnostics BLAME: `<Interface>.<method>`, which is what the call
+	// actually binds against. A direct call names its callee; a dispatch has no callee name to name — the
+	// concrete impl is not known in the shared body, and naming one conformer's would be a lie at every
+	// other instantiation. The interface comes from the constraint the method was resolved through
+	// (`findWitnessDispatch` stored its index), so it is derived on the COLD path and costs a dispatch that
+	// compiles nothing.
+	function witnessCalleeName(target WitnessDispatchTarget) returns String
+		let constraint = try self.enclosingWhereConstraints.get(target.constraintIndex) otherwise panic("witnessCalleeName: enclosingWhereConstraints.get OOB at {target.constraintIndex} — the index came from `findWitnessDispatch`'s own walk of this array")
+		return "{String.from(constraint.interfaceName)}.{String.from(target.methodName)}"
+	end 'witnessCalleeName'
 
 	// ⭐ **THE ONE DOOR A `witnessDispatch` IS EMITTED THROUGH** — the `.method()` form and the comparison-
 	// OPERATOR form (`emitTypeParamComparison`) both come here, so the op's `isThrowing` stamp and the
@@ -19158,9 +19262,12 @@ export type Parser
 	// `.method()` and comparison-OPERATOR forms cannot acquire different argument placement. `promoteToFloat`
 	// is idempotent, so a genuine `float` actual passes through untouched and emits nothing.
 	//
-	// ⚠ It is deliberately ARITY-TOLERANT and walks the ACTUALS, not the formals: a witness dispatch's arity
-	// is not checked at this rung (`self.item.scale()` with no argument compiles), so an actual with no formal
-	// is left exactly as it was rather than read past the end of `paramTypeNames`.
+	// ⚠ **IT WAS ARITY-TOLERANT AND IS NOT ANY MORE (P1.7a slice 2b-vi).** A witness dispatch's arity was
+	// unchecked when this was written (`self.item.scale()` with no argument compiled), so it walked the
+	// ACTUALS and treated a formal-less actual as non-float rather than reading past `paramTypeNames`. Both
+	// dispatch forms now guarantee one actual per formal (see `requireGenuineSelfArgs`), so the two counts
+	// agree and walking the actuals is simply walking the formals — the loop is unchanged, and what changed
+	// is that `witnessFormalIsFloat` may now panic on an index it once absorbed.
 	function floatWidenedWitnessArgs(target WitnessDispatchTarget, args ValueIdArray, siteTok Token) returns ValueIdArray
 		// FAST PATH, for `widenIntArgsToFloatParams`'s reason: only a `float` FORMAL can force a widening and
 		// almost no interface method has one, so every other dispatch returns its arguments verbatim — no array
@@ -19201,15 +19308,13 @@ export type Parser
 		return false
 	end 'witnessTargetHasFloatFormal'
 
-	// Is interface formal `formalIndex` declared `float`? An index past the declared formals is an ARITY
-	// mismatch, not a float formal — see `floatWidenedWitnessArgs`. The name is spelled by
-	// `FloatConformerName`, the same constant `interfaceReturnMaxonType` reads it by.
+	// Is interface formal `formalIndex` declared `float`? Both askers stay within the declared formals — one
+	// loops the formals directly, the other loops actuals a checked arity has made equinumerous with them
+	// (see `floatWidenedWitnessArgs`) — so an out-of-range index is a compiler defect, not an arity mismatch
+	// to absorb. The name is spelled by `FloatConformerName`, the same constant `interfaceReturnMaxonType`
+	// reads it by.
 	function witnessFormalIsFloat(target WitnessDispatchTarget, formalIndex ElementCount) returns bool
-		if formalIndex >= target.paramTypeNames.count() 'noSuchFormal'
-			return false
-		end 'noSuchFormal'
-
-		return (try target.paramTypeNames.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypeNames.get OOB at {formalIndex} below count {target.paramTypeNames.count()}")).equals(FloatConformerName)
+		return (try target.paramTypeNames.get(formalIndex) otherwise panic("witnessFormalIsFloat: paramTypeNames.get OOB at {formalIndex} below count {target.paramTypeNames.count()} — a dispatch reaching here has one actual per formal")).equals(FloatConformerName)
 	end 'witnessFormalIsFloat'
 
 	// Resolve `<receiver>.<method>()` against the enclosing type's `where` constraints (P1.7a slice 2a): find the
@@ -19242,7 +19347,7 @@ export type Parser
 			let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
 			if methodIndex < iface.methods.count() 'declaresMethod'
 				let method = try iface.methods.get(methodIndex) otherwise panic("findWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
-				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName, paramTypeNames: method.paramTypeNames, throwsClause: method.throwsClause, methodName: methodName))
+				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName, paramTypeNames: method.paramTypeNames, throwsClause: method.throwsClause, methodName: methodName, paramNames: method.paramNames))
 			end 'declaresMethod'
 		end 'eachConstraint'
 
@@ -22639,7 +22744,7 @@ export type Parser
 			value(id, immutableName) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
 		end 'prependReceiver'
 
-		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -23072,9 +23177,11 @@ export type Parser
 	// the cursor on `)`. Each argument is an expression, optionally prefixed by a
 	// `name:` label — the FIRST argument must be positional and every later argument
 	// must be labelled (`consumeArgLabel` enforces both, positioned at the offending
-	// token). Whether a `name:` label actually matches a parameter is a SEMANTIC check
-	// (SemanticCheck, which has the callee's signature) — not the parser's job.
-	function parseCallArgs(func IrFunction, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
+	// token), except that `allowFirstNamed` lifts the first-argument rule for an
+	// interface / type-parameter receiver (see there). Whether a `name:` label actually
+	// matches a parameter is a check for whoever holds the callee's parameter names —
+	// SemanticCheck for a direct call, `slottedWitnessArgs` for a witness dispatch.
+	function parseCallArgs(func IrFunction, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, allowFirstNamed bool) throws ParseError
 		if self.at(TokenKind.rightParen) 'noArgs'
 			return
 		end 'noArgs'
@@ -23084,7 +23191,7 @@ export type Parser
 			// The argument's leading token — the label token when labelled, else the
 			// value's first token — anchors this argument's diagnostic span.
 			let argFirstTok = self.current()
-			let label = try self.consumeArgLabel(argIndex)
+			let label = try self.consumeArgLabel(argIndex, allowFirstNamed: allowFirstNamed)
 			let valueTok = self.current()
 			let valueStart = self.pos
 			// Cleared HERE, before the argument is parsed, so an argument whose one identifier token resolved
@@ -23138,21 +23245,34 @@ export type Parser
 	// must be positional — a label there is E2052; every later argument must be labelled —
 	// a bare value there is E2053. A `name:` label is two tokens (identifier + colon); a
 	// bare value leaves the cursor untouched. (Whether the label names a real parameter
-	// is checked later, in SemanticCheck.)
-	function consumeArgLabel(argIndex ParamCount) returns ByteArray throws ParseError
+	// is checked later — by SemanticCheck for a direct call, by `slottedWitnessArgs` for a
+	// witness dispatch.)
+	//
+	// ⭐ **`allowFirstNamed` RELAXES THE FIRST-ARGUMENT RULE FOR AN INTERFACE / TYPE-PARAMETER RECEIVER,
+	// AND NOTHING ELSE** (P1.7a slice 2b-vi). `specs/interface-dispatch.md` makes the E2052 check apply
+	// only to concrete-struct / enum / builtin receivers, so a witness dispatch's first argument may carry
+	// a label (`self.item.add(a: 1, b: 2)`) — the concrete receiver whose declaration would forbid it is
+	// exactly what the shared body does not know. v1 spells the same exemption the same way, as a flag on
+	// its method-call site (`Parser.maxon:14409`: "the receiver may be interface/type-param-typed, which
+	// permits a named first arg"). It is a PARAMETER rather than a fork of this function because the
+	// E2053 half is unrelaxed and must stay one copy: only the first argument's verdict moves.
+	function consumeArgLabel(argIndex ParamCount, allowFirstNamed bool) returns ByteArray throws ParseError
 		let labelTok = self.current()
 		let isNamed = labelTok.kind == TokenKind.identifier and self.peekKind() == TokenKind.colon
 
-		if argIndex == 0 'firstArg'
-			if isNamed 'firstNamed'
-				throw ParseError.firstArgNamed(labelTok.line, column: labelTok.column)
-			end 'firstNamed'
-			return EmptySourceText
-		end 'firstArg'
-
-		if not isNamed 'missingLabel'
+		if argIndex == 0 and isNamed and not allowFirstNamed 'firstNamed'
+			throw ParseError.firstArgNamed(labelTok.line, column: labelTok.column)
+		end 'firstNamed'
+		if argIndex > 0 and not isNamed 'missingLabel'
 			throw ParseError.argMissingLabel(labelTok.line, column: labelTok.column)
 		end 'missingLabel'
+
+		// Unlabelled past those two rejects means a legal POSITIONAL first argument; the cursor still sits
+		// on the value, so nothing is consumed.
+		if not isNamed 'positional'
+			return EmptySourceText
+		end 'positional'
+
 		try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.colon)
 		return labelTok.value
@@ -23196,7 +23316,7 @@ export type Parser
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
 		var argImmutableNames = ByteArrayArray.create()
-		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok)
@@ -23338,8 +23458,12 @@ export type Parser
 	end 'applyCallerConsume'
 
 	// Transfer every argument that lands at a consumed parameter position. Slots each SOURCE argument to its
-	// position (positional by index, labelled by name over the sweep's `paramNames`), exactly the mapping
-	// `slotCallArgs` uses — but at parse time, where the `FuncSignature` does not yet exist. A malformed call
+	// position through `argSlotPosition` ITSELF — the one home of the label→position mapping — over the
+	// sweep's own `paramNames`, because at parse time the `FuncSignature` does not yet exist. It used to
+	// re-spell the mapping inline (`i if label.isEmpty() else info.indexOfParam(label)`), which is exactly
+	// the drift `argSlotPosition`'s header warns of, and it lost that function's O(P) fast path with it;
+	// asking against a bare name LIST rather than a signature (P1.7a slice 2b-vi) is what made the shared
+	// door reachable from here at all. A malformed call
 	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
 	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
 	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
@@ -23352,7 +23476,7 @@ export type Parser
 		var consumedOwned = ValueIdArray.create()
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
-			let position = i as ParamCount if label.isEmpty() else info.indexOfParam(label)
+			let position = argSlotPosition(info.paramNames, argIndex: i, label: label)
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
 			// ⭐ A FEED position whose argument is an enrolled opaque owned binding is a SHARED-body forward MOVE
 			// (P1.7 slice 3b-v — the forward twin of the direct `self.items.push(item)`): the callee takes

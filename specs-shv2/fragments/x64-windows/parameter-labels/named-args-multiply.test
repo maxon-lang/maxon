@@ -1,0 +1,36 @@
+// Test: named-args-multiply
+
+typealias Integer = int(i64.min to i64.max)
+
+function multiply(x Integer, y Integer) returns Integer
+	return x * y
+end 'multiply'
+
+function main() returns ExitCode
+	return multiply(6, y: 7)
+end 'main'
+---
+ExitCode: 42
+---
+func @multiply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.imulRegReg r8, rcx, rdx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 6
+    x64.movRegImm32 rdx, 7
+    x64.callDirect multiply
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

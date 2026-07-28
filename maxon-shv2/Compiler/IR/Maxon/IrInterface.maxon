@@ -274,6 +274,13 @@ export type WitnessDispatchTarget
 	export let methodIndex as WitnessMethodIndex
 	export let returnTypeName as ByteArray
 	export let paramTypeNames as ByteArrayArray
+	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH (P1.7a slice 2b-vi)** — parallel to
+	// `paramTypeNames`, and the list `Project.slotCallArgs` slots the call's arguments against. It is the
+	// INTERFACE's parameter names, never a conformer's, and it has to be: under dictionary-passing the shared
+	// body has no concrete callee to ask, and `ConformanceCheck.signatureMatches` compares arity and TYPES
+	// only (it reads `paramNames` to format E3016 and never compares it), so several conformers may spell
+	// their parameters differently and only the interface's names are common to all of them.
+	export let paramNames as ByteArrayArray
 	// The interface method's declared `throws` (P1.7a slice 2b-v) — carried through the resolution so the
 	// dispatch site picks the throwing or non-throwing witness ABI, and so the `try` desugar can type the
 	// `(e)` binding it recovers. A witness method is in NO signature registry (there is no callee NAME to
@@ -283,8 +290,8 @@ export type WitnessDispatchTarget
 	// blames its callee name; a witness dispatch blames the interface method the user actually wrote.
 	export let methodName as ByteArray
 
-	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray) returns WitnessDispatchTarget
-		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName}
+	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray) returns WitnessDispatchTarget
+		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames}
 	end 'create'
 end 'WitnessDispatchTarget'
 
