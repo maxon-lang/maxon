@@ -3834,10 +3834,17 @@ export type Parser
 
 		let resume = self.pos
 		self.pos = 0
-		// ⚠ **BLOCK DEPTH, AND THE ONE ARM THAT NEEDS IT.** This loop walks EVERY token in the file,
-		// function bodies included, and that is what makes it robust: it cannot miss a `function`
-		// keyword however malformed the source around it is. `function` and `typealias` are reserved
-		// and appear nowhere but a declaration, so their arms need no context at all.
+		// ⚠ **BLOCK DEPTH, AND THE ONE ARM THAT NEEDS IT.** This loop walks every FREE-STANDING function's
+		// body, and that is what makes it robust: it cannot miss a `function` keyword however malformed the
+		// source around it is. `function` and `typealias` are reserved and appear nowhere but a declaration,
+		// so their arms need no context at all.
+		//
+		// ⚠ **IT DOES NOT WALK EVERY TOKEN, AND AN ARM ADDED HERE MUST KNOW THAT.** The `type`, `enum`/
+		// `union` and top-level-binding arms hand their whole construct to a `recordScanned*` routine and
+		// resume PAST its `end`, so a `type`'s method bodies never reach this loop body at all. A probe that
+		// must see every token belongs in its own walk (`fileNamesStringIndexProducer`), not here — a
+		// P1.8-B2 probe written as an arm here compiled, passed the whole suite, and took the compiler down
+		// on the first program that used the feature inside a method.
 		//
 		// **`let` and `var` are different — they are the most common statements in any body.** So they,
 		// and only they, are gated on depth 0. The counter tracks exactly shv2's block syntax:
@@ -3893,7 +3900,17 @@ export type Parser
 		// Like every probe here it reads TOKENS and cannot know the receiver is a String, so it OVER-registers;
 		// an unreferenced layout is a registry entry with no codegen behind it (every runtime function gates on
 		// `RuntimeUsage`).
-		var hasStringIndexProducer = false
+		//
+		// ⚠⚠ **IT MAY NOT RIDE THE DECLARATION WALK BELOW, BECAUSE THAT WALK DOES NOT SEE EVERY TOKEN.**
+		// `recordScannedType` consumes a whole `type` declaration — METHOD BODIES INCLUDED — and the loop
+		// resumes past its `end` (`recordScannedEnum` is the same). A producer inside a method body is
+		// therefore invisible to an arm written inside the loop, the layout goes unregistered, and the
+		// parser reaches the box with no shape for it. MEASURED, on three separate programs and two
+		// separate crash sites: `return text.slice(text.startIndex(), length: 2)` in a method took the
+		// compiler down at `stringIndexLayoutOrPanic`, and a method that merely BOUND an index took it down
+		// at `managedNameDropCallee` ("neither a declared struct nor a declared enum/union"). So the probe
+		// gets its OWN complete walk of the token array, which nothing can skip.
+		let hasStringIndexProducer = self.fileNamesStringIndexProducer()
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -3921,10 +3938,6 @@ export type Parser
 			if self.atByteViewCall() 'bytesToken'
 				hasByteViewCall = true
 			end 'bytesToken'
-
-			if self.atStringIndexProducer() 'stringIndexToken'
-				hasStringIndexProducer = true
-			end 'stringIndexToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
@@ -4100,6 +4113,33 @@ export type Parser
 	function atStringIndexProducer() returns bool
 		return self.atBuiltinMethodCall(StringStartIndexMethod) or self.atBuiltinMethodCall(StringEndIndexMethod) or self.atBuiltinMethodCall(StringFindFirstMethod) or self.atBuiltinMethodCall(StringFindLastMethod)
 	end 'atStringIndexProducer'
+
+	// ⭐ **DOES THIS FILE NAME A `StringIndex` PRODUCER ANYWHERE? — its OWN walk of the token array, and
+	// that is the whole point.** `foldDeclaredSignaturesInto`'s loop is a DECLARATION walk: three of its
+	// arms (`recordScannedType`, `recordScannedEnum`, `recordScannedBinding`) consume a construct whole
+	// and resume past its `end`, so the tokens inside a `type`'s method bodies never reach the loop body.
+	// Every other probe there is an over-approximation whose miss costs an un-interned generic instance
+	// the parser can still intern later; this one's miss costs the compiler's LIFE, because the layout is
+	// the only description of the box's shape and both the field read and the drop demand it.
+	//
+	// A question about the whole file is therefore answered by reading the whole file. It restores the
+	// cursor, so it is invisible to the caller, and it stops at the first hit — the answer is a bool.
+	function fileNamesStringIndexProducer() returns bool
+		let resume = self.pos
+		self.pos = 0
+		var found = false
+
+		while not self.isEof() 'scan'
+			if self.atStringIndexProducer() 'producer'
+				found = true
+				break
+			end 'producer'
+			self.advance()
+		end 'scan'
+
+		self.pos = resume
+		return found
+	end 'fileNamesStringIndexProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
@@ -20046,9 +20086,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let startTok = self.current()
 		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
-		try self.consume(TokenKind.comma)
-		let labelTok = try self.consume(TokenKind.identifier)
-		try self.consume(TokenKind.colon)
+		let labelTok = try self.consumeArgLabel()
 		let endBytePos = try self.parseStringSliceEnd(func, receiver: receiver, startBytePos: startBytePos, labelTok: labelTok, range: range)
 		try self.consume(TokenKind.rightParen)
 		return self.emitOwnedRuntimeResult(StrIndexSliceName, args: tripleArgs(receiver, second: startBytePos, third: endBytePos), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
@@ -21926,13 +21964,24 @@ export type Parser
 	// method names its label and inherits the same "must be labelled `<label>:`" diagnostic; the cursor is left
 	// on the token that begins the second argument's value.
 	function consumeArrayArgLabel(label ByteArray) throws ParseError
-		try self.consume(TokenKind.comma)
-		let labelTok = try self.consume(TokenKind.identifier)
+		let labelTok = try self.consumeArgLabel()
 		if not labelTok.value.equals(label) 'wrongLabel'
 			throw ParseError.unsupported("the second argument of a two-argument array method must be labelled `{String.from(label)}:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
 		end 'wrongLabel'
-		try self.consume(TokenKind.colon)
 	end 'consumeArrayArgLabel'
+
+	// `, <name> :` — the token shape an argument LABEL is spelled as, and the NAME token it carries.
+	// Written once because the two readers differ in their VERDICT, not in the shape: an array method
+	// asserts the ONE label it expects (`consumeArrayArgLabel`), while a `String`'s `slice` DISPATCHES on
+	// which of its two it got (`parseStringSliceEnd`) — and a second copy of "this is what a label looks
+	// like" is a copy that can come to disagree about it.
+	function consumeArgLabel() returns Token throws ParseError
+		try self.consume(TokenKind.comma)
+		let labelTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.colon)
+
+		return labelTok
+	end 'consumeArgLabel'
 
 	// `set`/`insert` — `( index , value: X )`: the index positional, the value labelled `value:`. Emits the
 	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The

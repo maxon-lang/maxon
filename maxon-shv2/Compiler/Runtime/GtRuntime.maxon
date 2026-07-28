@@ -355,10 +355,10 @@ let RunProcessStoreOverflowOrdinal = 1 as ParsedInt
 
 // The R10 error-flag VALUES the two throws emit and a successful `runProcess` clears — the ordinals biased by the
 // one `ErrorFlagOrdinalBias` (never a second literal, so the runtime encode cannot drift from the parser decode),
-// and `RunProcessNoError` (0) alongside a real exit code, exactly as `ArrayRuntime.NoErrorFlag` is for an accessor.
+// and the shared `MaxonDialect.NoErrorFlag` alongside a real exit code — the success value the bias reserves,
+// read from its one declaration rather than re-spelled `0` here (it used to be).
 let RunProcessSpawnFailedFlag = RunProcessSpawnFailedOrdinal + ErrorFlagOrdinalBias
 let RunProcessStoreOverflowFlag = RunProcessStoreOverflowOrdinal + ErrorFlagOrdinalBias
-let RunProcessNoError = 0 as ParsedInt
 
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -2330,7 +2330,7 @@ end 'buildGtSleep'
 // corruption), and then hand `WaitForMultipleObjects` a `pc > MAXIMUM_WAIT_OBJECTS` it refuses.
 //
 // ⭐ **A FULL STORE REPORTS the `storeOverflow` FLAG rather than aborting (P1.5 #93).** It returns
-// `RunProcessNoError` (0) when the child was parked and `RunProcessStoreOverflowFlag` when the store was full and
+// `NoErrorFlag` (0) when the child was parked and `RunProcessStoreOverflowFlag` when the store was full and
 // NOTHING was appended (the GT stays un-parked). Its sole caller `__gt_process_run` propagates that flag verbatim
 // as a `RunProcessError.storeOverflow` throw — so the seed's documented concurrency ceiling is now a RECOVERABLE
 // error, not a hard, safe bound abort (see `RunProcessErrorTypeName`, `ProcStoreCapacity`).
@@ -2396,7 +2396,7 @@ function buildGtProcAdd(module StdModule)
 	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
 	// The child was parked — report no error so the caller yields and later reaps.
 	let addedOk = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(addedOk, value: RunProcessNoError, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.const(addedOk, value: NoErrorFlag, valueType: StdType.i64))
 	module.setTerminator(doAdd, op: StdOp.ret(addedOk))
 
 	module.functions.push(func)
@@ -2547,7 +2547,7 @@ end 'buildGtProcCheck'
 //
 // ⭐ **A THROWING FUNCTION (P1.5 #93)** — its `throws RunProcessError` clause makes the x64/wasm backends give it
 // the dual-register `errorReturn` ABI (exit code in R8, error flag in R10), the same shape a throwing array
-// accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, RunProcessNoError)`, a
+// accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
 // `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`, and a full process store propagates
 // `__gt_proc_add`'s `storeOverflow` flag verbatim (`(0, flag)`). The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
@@ -2688,7 +2688,7 @@ function buildGtProcessRun(module StdModule)
 	module.setTerminator(spawnFailed, op: StdOp.errorReturn(spawnFailSentinel, errorFlagId: spawnFailFlag))
 
 	// spawnOk: close the (unneeded) thread handle, then park the current GT on the process. `__gt_proc_add` returns
-	// `RunProcessNoError` (parked) or the `storeOverflow` flag (store full, nothing appended) — on overflow →
+	// `NoErrorFlag` (parked) or the `storeOverflow` flag (store full, nothing appended) — on overflow →
 	// `overflowReturn` (throw), else → `parkOk` (hand control to the scheduler).
 	let hThread = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
@@ -2701,7 +2701,7 @@ function buildGtProcessRun(module StdModule)
 	let addResult = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(addResult, callee: GtProcAddName, args: args2(selfGt, second: hProcess)))
 	let addZeroConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(addZeroConst, value: RunProcessNoError, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.const(addZeroConst, value: NoErrorFlag, valueType: StdType.i64))
 	let addOverflowed = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.cmp(addOverflowed, lhs: addResult, rhs: addZeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
 	module.setTerminator(spawnOk, op: StdOp.condBranch(addOverflowed, thenBlockId: overflowReturn.id, elseBlockId: parkOk.id))
@@ -2769,9 +2769,9 @@ function buildGtProcessRun(module StdModule)
 	module.appendOp(reap, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
 	module.appendOp(reap, op: StdOp.osCloseHandle(reapHandle))
 	// A THROWING function's successful exit still writes BOTH registers (P1.5 #93) — the child's exit code in the
-	// primary, `RunProcessNoError` in the flag — so the `try` caller reads flag 0 and takes the success path.
+	// primary, `NoErrorFlag` in the flag — so the `try` caller reads flag 0 and takes the success path.
 	let reapNoError = ids.mint()
-	module.appendOp(reap, op: StdOp.const(reapNoError, value: RunProcessNoError, valueType: StdType.i64))
+	module.appendOp(reap, op: StdOp.const(reapNoError, value: NoErrorFlag, valueType: StdType.i64))
 	module.setTerminator(reap, op: StdOp.errorReturn(code, errorFlagId: reapNoError))
 
 	module.functions.push(func)

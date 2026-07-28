@@ -61,11 +61,13 @@ export let StrIndexFirstName = b"__strix_first"
 export let StrIndexLastName = b"__strix_last"
 export let StrIndexSliceName = b"__strix_slice"
 
-// The error flag both searches throw on a miss — an error case's `ordinal + 1`, so 1 is
-// `StringError.notFound` (ordinal 0 in `stdlib/String.maxon:6-9`). The same convention
-// `ArrayRuntime.ArrIndexOutOfBoundsFlag` follows, and the same `NoErrorFlag` 0 means success.
-let StrIndexNotFoundFlag = 1 as ParsedInt
-let StrIndexNoErrorFlag = 0 as ParsedInt
+// The error flag both searches throw on a miss — an error case's `ordinal + ErrorFlagOrdinalBias`
+// (`StringError.notFound` is ordinal 0 in `stdlib/String.maxon:6-9`). DERIVED from the one bias, exactly as
+// `ArrayRuntime.ArrIndexOutOfBoundsFlag` and `GtRuntime`'s two are, so the encode here cannot drift from the
+// parser's decode; the success value is the shared `MaxonDialect.NoErrorFlag` the bias reserves, read from
+// its one declaration rather than re-spelled `0` for this family.
+let StrIndexNotFoundOrdinal = 0 as ParsedInt
+let StrIndexNotFoundFlag = StrIndexNotFoundOrdinal + ErrorFlagOrdinalBias
 
 // The `throws` type name stamped on the two searching functions. It matches `StringError` in
 // `stdlib/String.maxon`, the enum a user `try s.findFirst(n) otherwise …` binds; for a runtime function it
@@ -301,7 +303,7 @@ function buildStringIndexSearch(module StdModule, name ByteArray, fromEnd bool)
 
 	let charIdx = ids.mint()
 	module.appendOp(found, op: StdOp.call(charIdx, callee: StrIndexByteToGraphemeName, args: twoArgs(hay, second: bytePos)))
-	let okFlag = emitConst(module, block: found, value: StrIndexNoErrorFlag, ids: ids)
+	let okFlag = emitConst(module, block: found, value: NoErrorFlag, ids: ids)
 	module.setTerminator(found, op: StdOp.errorReturn(emitStringIndexMakeCall(module, block: found, charIdx: charIdx, bytePos: bytePos, ids: ids), errorFlagId: okFlag))
 
 	// The primary value is unread on the throw edge (the desugar's phi takes the `otherwise` value

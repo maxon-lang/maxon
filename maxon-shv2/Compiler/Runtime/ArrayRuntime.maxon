@@ -169,11 +169,13 @@ end 'paddedByteArrayBlob'
 // agrees with the bootstrap's fixed behaviour on "a negative length is not an accepted value".
 
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
-// out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
-// `ArrayError.indexOutOfBounds`, ordinal 0). `try … otherwise` only tests `flag != 0`, so any nonzero
+// out-of-bounds index — the dual-register `errorReturn` flag, an error case's `ordinal + ErrorFlagOrdinalBias`
+// (`ArrayError.indexOutOfBounds` is ordinal 0). `try … otherwise` only tests `flag != 0`, so any nonzero
 // value routes to the handler; the specific code is the honest ordinal for the day a handler binds it.
-let ArrIndexOutOfBoundsFlag = 1 as ParsedInt
-let NoErrorFlag = 0 as ParsedInt
+// DERIVED from the one bias rather than spelled `1`, exactly as `GtRuntime`'s two `RunProcess*Flag`s are —
+// the success value it reserves is `MaxonDialect.NoErrorFlag`, which this file used to re-declare.
+let ArrIndexOutOfBoundsOrdinal = 0 as ParsedInt
+let ArrIndexOutOfBoundsFlag = ArrIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 
 // The growth policy — Go's `nextslicecap`, ported VERBATIM from `stdlib/Array.maxon:65-95`. Double below
 // `GrowthThreshold`, then ease toward 1.25× above it.

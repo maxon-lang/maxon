@@ -402,6 +402,52 @@ end 'main'
 77
 ```
 
+<!-- test: an-index-inside-a-type-method -->
+### The whole family works inside a `type`'s METHOD BODY
+The declaration sweep that registers the compiler-owned `StringIndex` layout walks TOKENS, and the
+declaration walk it used to ride hands a whole `type` — method bodies included — to
+`recordScannedType` and resumes past its `end`. So the four producers were invisible in exactly the
+place a String helper type puts them, and the layout went unregistered: `head` took the compiler down
+at `stringIndexLayoutOrPanic` (the field read) and `width` took it down at `managedNameDropCallee`
+(the scope-exit drop of a bound index). Both crash sites are here, because they are two different
+readers of the one missing entry.
+```maxon
+type Label
+	var text as String
+
+	export static function create(t String) returns Label
+		return Label{text: t}
+	end 'create'
+
+	export function head() returns String
+		return text.slice(text.startIndex(), length: 2)
+	end 'head'
+
+	export function width() returns int
+		let last = text.endIndex()
+		return last.charIndex()
+	end 'width'
+
+	export function upTo(needle String) returns String
+		let hit = try text.findFirst(needle) otherwise text.endIndex()
+		return text.slice(text.startIndex(), endIndex: hit)
+	end 'upTo'
+end 'Label'
+
+function main() returns ExitCode
+	var l = Label.create("aébcdé")
+	let needle = "cd"
+	print("{l.head()} {l.width()} {l.upTo(needle)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+aé 6 aéb
+```
+
 <!-- test: error.slice-needs-an-index-not-an-integer -->
 ### `slice`'s start must be a `StringIndex`
 ```maxon

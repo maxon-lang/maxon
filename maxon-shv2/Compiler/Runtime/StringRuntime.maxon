@@ -196,12 +196,17 @@ export let StrMapCaseName = b"__str_map_case"
 export let StrReplaceName = b"__str_replace"
 export let StrSplitName = b"__str_split"
 
-// ⭐ **`__str_find`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown error on
-// purpose.** The stdlib spells it `throws StringError.notFound` — a Maxon-tier mechanism a hand-built Std
-// graph has no access to (there is no error flag in a runtime function's ABI, and inventing one for a
-// search would be a whole calling convention). A byte position is non-negative by construction, so `-1`
-// is outside the answer domain rather than inside it, and every caller tests `>= 0`. Named, so the three
-// call sites and the one producer cannot drift on which number means "nothing here".
+// ⭐ **`__str_find`/`__str_rfind`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown
+// error on purpose.** The stdlib spells both searches `throws StringError.notFound`, and a Std graph CAN
+// throw — `StdOp.errorReturn`'s dual-register flag is exactly that, and `__strix_first`/`__strix_last` use
+// it one file over. What these two must not do is throw, because most of their callers are NOT throwing:
+// `contains` wants a bool, `replace` and `split` walk a tail until the search stops finding, and a `tryCall`
+// at each of those sites would be a control-flow join per iteration to answer a question the caller already
+// treats as ordinary. So the BYTE search answers in the byte domain and the LANGUAGE-level `findFirst`/
+// `findLast` do the one sentinel→throw translation, in `buildStringIndexSearch` and nowhere else.
+// A byte position is non-negative by construction, so `-1` is outside the answer domain rather than inside
+// it, and every caller tests `>= 0`. Named, so the call sites and the two producers cannot drift on which
+// number means "nothing here".
 let StrFindNotFound = -1 as ParsedInt
 
 // ASCII case folding: `A`..`Z` (65..90) and `a`..`z` (97..122) sit a fixed distance apart, so `toLower` and
