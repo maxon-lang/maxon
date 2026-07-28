@@ -1,0 +1,39 @@
+// Test: where-clauses.error.witness-too-many-args
+typealias Code = int(0 to u32.max)
+
+interface Adder
+	function add(a Code) returns Code
+end 'Adder'
+
+type Point implements Adder
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function add(a Code) returns Code
+		return self.x + a
+	end 'add'
+end 'Point'
+
+type Box uses T where T is Adder
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function go() returns Code
+		return self.item.add(1, b: 2)
+	end 'go'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(7))
+	if b.go() == 10 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E3036: <fragment>:24:20: 'Adder.add' expects 1 argument(s) but 2 were provided
