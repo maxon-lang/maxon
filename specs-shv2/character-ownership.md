@@ -526,3 +526,158 @@ end 'main'
 ```stdout
 3
 ```
+
+<!-- test: iterating-a-string-locks-its-source -->
+### `for c in s` locks `s`, exactly as the array form locks its array
+
+The loop evaluates its source ONCE into the preheader and re-reads `length@8` / `buffer@0` off that
+record every trip. Rebinding the variable inside the body decrefs the record the loop is still
+walking — it compiled clean and faulted with **0xC0000005** before the String form took the same
+`lockIterationSource` the array form has always taken. The runnable oracle reports E2013 here too.
+
+```maxon
+function main() returns ExitCode
+	var s = "abcdefgh"
+	var n = 0
+	for c in s 'each'
+		n = n + 1 if c == c else n
+		if n == 2 'swap'
+			s = "z"
+		end 'swap'
+	end 'each'
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: specs/fragments/character-ownership/iterating-a-string-locks-its-source.test:8:4: cannot assign to immutable variable: 's'
+```
+
+<!-- test: mutating-a-string-being-iterated-is-refused -->
+### A method that mutates the iterated String is refused too
+
+The other half of the same lock, and it is the half the missing lock was believed to buy. The oracle
+refuses this program with **E3019**, so keeping it legal was a divergence, not a feature.
+
+```maxon
+function main() returns ExitCode
+	var s = "ab"
+	let t = "c"
+	var n = 0
+	for c in s 'each'
+		n = n + 1 if c == c else n
+		s.append(t)
+	end 'each'
+	s = "done"
+	print("{n} {s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3019: specs/fragments/character-ownership/mutating-a-string-being-iterated-is-refused.test:8:5: cannot pass 's' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: a-character-array-takes-a-borrowed-literal -->
+### An `Array with Character` accepts a literal, exactly as an `Array with String` does
+
+A move into durable storage picks its protocol off the element's RECORD, not off its type: a borrowed
+byte record is COPIED into a fresh owned one. Asked as `tagIsText`, a Character element took the
+aggregate arm and `a.push('é')` was refused as *"a struct/union has no `clone`"* — on a value whose
+clone is `__str_clone`, and while the identical literal into a struct FIELD was accepted.
+
+```maxon
+typealias CharArray = Array with Character
+
+function build(s String) returns int
+	var a = CharArray.create()
+	a.push('é')
+	for c in s 'each'
+		a.push(c)
+	end 'each'
+	return a.count()
+end 'build'
+
+function main() returns ExitCode
+	var i = 0
+	var t = 0
+	while i < 200 'rep'
+		t = t + build("héllö")
+		i = i + 1
+	end 'rep'
+	print("{t}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1200
+```
+
+<!-- test: panic-takes-a-string-not-a-character -->
+### `panic` takes a String, exactly as `print` does
+
+The twin of `print-takes-a-string-not-a-character`, and it needs its own case: both doors ask
+`tagIsText`, and a `tagIsText` widened to answer for a Character left only ONE of the thirteen
+type-side sites red under sabotage.
+
+```maxon
+function main() returns ExitCode
+	let c = '中'
+	panic(c)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/character-ownership/panic-takes-a-string-not-a-character.test:4:2: 'panic' requires a String, but its argument is Character
+```
+
+<!-- test: an-array-literal-element-is-not-a-character -->
+### An array literal infers no element type from a Character
+
+The third type-side site sabotage left green, and the one whose wrong answer is SILENT: with
+`tagIsText` answering for a Character, `['é']` infers `Array with String` and stores Characters in it.
+
+```maxon
+function main() returns ExitCode
+	let a = ['é', 'ö']
+	print("{a.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/character-ownership/an-array-literal-element-is-not-a-character.test:3:11: Unsupported: an array literal element of type 'Character' — a literal's elements are an integer, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)
+```
+
+<!-- test: a-single-byte-literal-adopts-on-the-left-too -->
+### The LEFT operand's literal adopts the type as well
+
+`character-literal-adopts-the-character-type`'s `'é' == c` case cannot pin this: a MULTI-byte literal is
+already a `Character`, so it takes `characterizedOperand`'s early return and never reaches the
+materialization. Only a SINGLE-byte literal on the left does — and with the left operand asking its own
+tag instead of the other side's (a one-word transposition), the whole suite stayed **2113/0**.
+
+```maxon
+function main() returns ExitCode
+	var n = 0
+	for c in "banana" 'scan'
+		if 'a' == c 'hit'
+			n = n + 1
+		end 'hit'
+	end 'scan'
+	var m = 0
+	for c in "banana" 'scan2'
+		if 'a' != c 'miss'
+			m = m + 1
+		end 'miss'
+	end 'scan2'
+	print("{n} {m}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3
+```

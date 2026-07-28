@@ -2209,13 +2209,6 @@ function utf8ContinuationByte(codepoint ParsedInt, shift ParsedInt) returns Byte
 	return (Utf8ContinuationFloor or ((codepoint shr shift) and Utf8ContinuationMask)) as Byte
 end 'utf8ContinuationByte'
 
-// The three codepoint ceilings that pick a UTF-8 encoding's width, and the continuation byte's `0b10`
-// tag. `Utf8OneByteCeiling` doubles as the ASCII threshold (`AsciiCeiling` says the same of a source
-// BYTE; this one is about a CODEPOINT, which is why both exist).
-let Utf8OneByteCeiling = 128 as ParsedInt
-let Utf8TwoByteCeiling = 2048 as ParsedInt
-let Utf8ThreeByteCeiling = 65536 as ParsedInt
-let Utf8ContinuationFloor = 0x80 as ParsedInt
 
 // The byte a two-character escape `\<c>` denotes, or `unknown`.
 union EscapeByte
@@ -2295,18 +2288,10 @@ let HexEscapeDigits = 2 as ByteOffset
 let UniEscapeDigits = 4 as ByteOffset
 let EscapeMarkerBytes = 2 as ByteOffset
 
-// UTF-8 continuation/lead masks and thresholds (RFC 3629). `Utf8ContinuationMask` keeps the low 6 payload
-// bits of a continuation byte; the lead masks keep 5/4/3 payload bits of a 2/3/4-byte lead.
-let Utf8LeadTwoByteFloor = 0xC0 as ParsedInt
-let Utf8LeadThreeByteFloor = 0xE0 as ParsedInt
-let Utf8LeadFourByteFloor = 0xF0 as ParsedInt
-let Utf8ContinuationMask = 0x3F as ParsedInt
-let Utf8LeadTwoByteMask = 0x1F as ParsedInt
-let Utf8LeadThreeByteMask = 0x0F as ParsedInt
-let Utf8LeadFourByteMask = 0x07 as ParsedInt
-let Utf8ContinuationBits = 6 as ParsedInt
-let Utf8ThreeByteHighShift = 12 as ParsedInt
-let Utf8FourByteHighShift = 18 as ParsedInt
+// The UTF-8 masks, shifts, lead floors and codepoint ceilings this file's compile-time decoder
+// (`decodeUtf8Sequence`) and encoder (`appendUtf8Encoded`) read are declared ONCE, by
+// `Runtime/GraphemeRuntime.maxon`, alongside the runtime decoder that reads the same numbers — see that
+// file's header for why two copies of one encoding's bit layout is the shape that goes silently wrong.
 
 // The lowercase hex digits and the minimum width a `U+NNNN` codepoint renders at.
 let HexDigitsLower = "0123456789abcdef"
@@ -12073,14 +12058,29 @@ export type Parser
 			try self.requireIterableArray(source, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
 
-			// ⚠ **THE LOCK AND THE BORROW SUBJECT ARE THE ARRAY FORM'S ALONE.** A String hands the body a
-			// MINTED Character, not a slot the source keeps, so there is no borrow for a mutation to
-			// dangle — locking would refuse a legal `s.append(t)` inside `for c in s` for a danger that
-			// does not exist. (`s.append(t)` mid-iteration still reads the record's live `length@8` in
-			// the header, which is the array form's own live-length discipline; the CLUSTER already
-			// minted is a copy and cannot dangle behind a reallocation.)
+			// ⭐⭐ **THE LOCK IS EVERY COLLECTION FORM'S; ONLY THE BORROW SUBJECT IS THE ARRAY'S.** The
+			// String form shipped without the lock, on the reasoning that a String hands the body a MINTED
+			// Character rather than a slot the source keeps, so no mutation can dangle a borrow.
+			//
+			// ⚠ **THAT REASONING ANSWERS THE WRONG QUESTION, AND THE GAP WAS A REACHABLE SEGFAULT.** The
+			// lock does not only stop a mutation that destroys a borrowed ELEMENT; it stops a REBIND that
+			// destroys the RECORD THE LOOP ITSELF IS WALKING. `source` is the record evaluated once into
+			// the preheader, and every trip re-reads `length@8` and `buffer@0` off it — so `var s = "…"`
+			// with `s = "z"` in the body decrefs that record while the header still reads it. MEASURED:
+			// **0xC0000005** on `for c in s 'each' … s = "z" … end`, where the array twin is E2013.
+			//
+			// ⚠ **AND THE PROGRAM THE MISSING LOCK WAS MEANT TO KEEP LEGAL IS NOT LEGAL IN THE ORACLE
+			// EITHER.** `for c in s 'each' s.append(t) end` — the case the old comment named — is
+			// **E3019** on the runnable bootstrap, and the rebind is **E2013** there. Both halves of the
+			// full lock therefore MATCH the oracle; the exemption diverged from it on the one program it
+			// was protecting and segfaulted on the one it was not.
+			sourceLock = self.lockIterationSource(sourceStart)
+
+			// The BORROW SUBJECT stays the array form's alone, and for the reason the lock is not: a
+			// String's element is MINTED, so no live reference into the source outlives the read and
+			// E3070 has nothing to track (`attachPendingBorrows` is a no-op on a value that filed no
+			// pending borrow). Recording a subject here would enrol a borrow that does not exist.
 			if not isString 'arrayBorrowConcerns'
-				sourceLock = self.lockIterationSource(sourceStart)
 				elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
 			end 'arrayBorrowConcerns'
 
@@ -20455,7 +20455,11 @@ export type Parser
 			return value
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
-		let isString = tagIsText(maxonTypeTag(self.signatures.setKeyType(giid)))
+		// `tagIsByteRecord`, mirroring `moveElementIntoArray`: the flag names the fused-record COPY
+		// protocol, a question about the key's REPRESENTATION. It cannot yet see a Character — a
+		// `Set with Character` is refused where the instance is built, naming the gap — so this is a no-op
+		// today and spelled as the question it asks so the day that refusal lifts is not a leak.
+		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.setKeyType(giid)))
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
 	end 'moveKeyIntoSet'
 
@@ -21580,7 +21584,14 @@ export type Parser
 			return value
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
-		let isString = tagIsText(maxonTypeTag(self.signatures.arrayElementType(giid)))
+		// ⚠ `tagIsByteRecord`, NOT `tagIsText`: this flag selects the fused-record COPY protocol (promote a
+		// borrowed record into a fresh owned one) against the aggregate protocol (refuse — a struct has no
+		// clone), which is a question about the element's REPRESENTATION. A `Character` element answered
+		// `false` here and `a.push('é')` was refused as *"moving a borrowed struct/union value into durable
+		// storage … a struct/union has no `clone`"* — on a value that has exactly the clone that message
+		// says it lacks, while the identical literal into a struct FIELD was accepted (that door asks
+		// `classifyUnionPayload`, which already answers `isString: true` for a Character).
+		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.arrayElementType(giid)))
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
 	end 'moveElementIntoArray'
 

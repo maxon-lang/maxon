@@ -126,23 +126,52 @@ let MiscSymbolsHigh = 9983 as ParsedInt
 let DingbatsLow = 9984 as ParsedInt
 let DingbatsHigh = 10175 as ParsedInt
 
-// --- UTF-8 decoding constants (`stdlib/helpers/string/utf8.maxon`, verbatim) ---
+// ⭐⭐ **THE UTF-8 ENCODING'S BIT LAYOUT — THE ONE DECLARATION, `export`ed, exactly as `StringRuntime`
+// exports the fused record's field offsets** (`stdlib/helpers/string/utf8.maxon`, verbatim). The three
+// LEAD-BYTE floors that give a sequence its length, the three codepoint ceilings that pick an encoding's
+// width, and the masks/shifts that assemble a codepoint. The reference spells the masking as `mod 32` /
+// `mod 64` and the shifts as `* 64` / `* 4096`; here they are the equivalent `and`/`shl`, which is what
+// `Character.codepoint` (`stdlib/Character.maxon:127-146`) already uses for the identical decode — same
+// arithmetic, and the form a machine-word graph wants.
 //
-// The three LEAD-BYTE thresholds that give a sequence its length, and the masks/shifts that assemble the
-// codepoint. The reference spells the masking as `mod 32` / `mod 64` and the shifts as `* 64` / `* 4096`;
-// here they are the equivalent `and`/`shl`, which is what `Character.codepoint`
-// (`stdlib/Character.maxon:127-146`) already uses for the identical decode — same arithmetic, and the form
-// a machine-word graph wants.
-let Utf8AsciiLimit = 128 as ParsedInt
-let Utf8TwoByteLimit = 224 as ParsedInt
-let Utf8ThreeByteLimit = 240 as ParsedInt
-let Utf8ContinuationMask = 63 as ParsedInt
-let Utf8ContinuationBits = 6 as ParsedInt
-let Utf8LeadTwoByteMask = 31 as ParsedInt
-let Utf8LeadThreeByteMask = 15 as ParsedInt
-let Utf8LeadFourByteMask = 7 as ParsedInt
-let Utf8ThreeByteHighShift = 12 as ParsedInt
-let Utf8FourByteHighShift = 18 as ParsedInt
+// ⚠ **THIS FILE'S RUNTIME DECODER AND THE PARSER'S COMPILE-TIME ONE ARE TWO IMPLEMENTATIONS OF ONE
+// SPECIFICATION, AND THEY HELD TWO COPIES OF THE NUMBERS.** shv2 decodes UTF-8 in two places for two
+// genuinely different reasons — `Parser.decodeUtf8Sequence`/`appendUtf8Encoded` work on source bytes at
+// COMPILE time (a character literal, a `\uNNNN` escape), `__utf8_cp_at`/`__utf8_len_at` work on a record's
+// buffer at RUN time — and each had declared the same seven masks and shifts for itself, in a different
+// BASE (`0x3F` there, `63` here), plus a third spelling of 128 (`Utf8AsciiLimit` beside
+// `Utf8OneByteCeiling`) and two names apiece for 0xE0/0xF0. Nothing made the copies agree, and a
+// threshold corrected in one and not the other is exactly the failure `emitUtf8LeadLadder`'s header
+// describes one level down: a literal whose bytes the compiler writes one way and the segmenter reads
+// another, with no error raised anywhere. One declaration, read by both.
+export let Utf8ContinuationMask = 0x3F as ParsedInt
+export let Utf8ContinuationBits = 6 as ParsedInt
+export let Utf8LeadTwoByteMask = 0x1F as ParsedInt
+export let Utf8LeadThreeByteMask = 0x0F as ParsedInt
+export let Utf8LeadFourByteMask = 0x07 as ParsedInt
+export let Utf8ThreeByteHighShift = 12 as ParsedInt
+export let Utf8FourByteHighShift = 18 as ParsedInt
+
+// The LEAD-BYTE floors. `Utf8LeadThreeByteFloor`/`Utf8LeadFourByteFloor` are also the upper limits of the
+// 2-byte / 3-byte bands, which is how the DECODER reads them (`emitUtf8LeadLadder`'s `lead < limit`) —
+// one boundary, one number, whichever side of it a reader stands on.
+//
+// ⚠ `Utf8LeadTwoByteFloor` (0xC0) is the only one the runtime ladder does NOT test: the compile-time
+// decoder refuses a bare continuation byte as a lead, while the runtime one classifies 0x80..0xDF as a
+// 2-byte sequence, matching the reference. That is a real difference in what the two decoders CHECK, not
+// a difference in what the encoding IS, so it lives in the code and not in the numbers.
+export let Utf8LeadTwoByteFloor = 0xC0 as ParsedInt
+export let Utf8LeadThreeByteFloor = 0xE0 as ParsedInt
+export let Utf8LeadFourByteFloor = 0xF0 as ParsedInt
+
+// The CODEPOINT ceilings that pick an encoding's width, and the continuation byte's `0b10` tag.
+// `Utf8OneByteCeiling` doubles as the ASCII boundary — the same 128 both decoders fork on, and the
+// number `Parser.AsciiCeiling` states about a source BYTE rather than a codepoint.
+export let Utf8OneByteCeiling = 128 as ParsedInt
+export let Utf8TwoByteCeiling = 2048 as ParsedInt
+export let Utf8ThreeByteCeiling = 65536 as ParsedInt
+export let Utf8ContinuationFloor = 0x80 as ParsedInt
+
 let Utf8OneByteLength = 1 as ParsedInt
 let Utf8TwoByteLength = 2 as ParsedInt
 let Utf8ThreeByteLength = 3 as ParsedInt
@@ -428,9 +457,9 @@ end 'emitOrShifted'
 // LENGTH and its VALUE disagree: the scan then steps by the wrong width and every following cluster is
 // misread, with no error raised anywhere.
 function emitUtf8LeadLadder(module StdModule, func IrFunction, entry IrBlock, lead ValueId, oneByte IrBlock, twoByte IrBlock, threeByte IrBlock, ids ValueMinter) returns IrBlock
-	var afterAscii = emitLeadBelow(module, func: func, cur: entry, lead: lead, limit: Utf8AsciiLimit, taken: oneByte, ids: ids)
-	var afterTwo = emitLeadBelow(module, func: func, cur: afterAscii, lead: lead, limit: Utf8TwoByteLimit, taken: twoByte, ids: ids)
-	return emitLeadBelow(module, func: func, cur: afterTwo, lead: lead, limit: Utf8ThreeByteLimit, taken: threeByte, ids: ids)
+	var afterAscii = emitLeadBelow(module, func: func, cur: entry, lead: lead, limit: Utf8OneByteCeiling, taken: oneByte, ids: ids)
+	var afterTwo = emitLeadBelow(module, func: func, cur: afterAscii, lead: lead, limit: Utf8LeadThreeByteFloor, taken: twoByte, ids: ids)
+	return emitLeadBelow(module, func: func, cur: afterTwo, lead: lead, limit: Utf8LeadFourByteFloor, taken: threeByte, ids: ids)
 end 'emitUtf8LeadLadder'
 
 // Split `cur` on `lead < limit`: the THEN block is `taken`, the ELSE block is returned as the
@@ -769,7 +798,7 @@ function buildGraphemeEnd(module StdModule)
 	let lead = emitLoadByteAt(module, block: inRange, addr: leadAddr, ids: ids)
 	let one = emitConst(module, block: inRange, value: 1, ids: ids)
 	let nextPos = emitBin(module, block: inRange, a: startPos, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let asciiLimit = emitConst(module, block: inRange, value: Utf8AsciiLimit, ids: ids)
+	let asciiLimit = emitConst(module, block: inRange, value: Utf8OneByteCeiling, ids: ids)
 	let isAscii = emitCmp(module, block: inRange, a: lead, b: asciiLimit, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(inRange, op: StdOp.condBranch(isAscii, thenBlockId: asciiLead.id, elseBlockId: scanSetup.id))
 
