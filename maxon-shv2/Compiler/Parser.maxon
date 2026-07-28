@@ -6053,10 +6053,13 @@ export type Parser
 		// would leave the panic reachable through the very alias E2061 recommends.
 		//
 		// ⚠ **THE BARE ARM IS ASKED BEFORE E2061, AND THAT ORDER IS THE POINT, not a tidy-up.** A bare
-		// `float` satisfies BOTH rules, and E2061's advice ("declare a ranged typealias") is TRUE for `int`
-		// and a TRAP for `float`. Asking float first is what stops this compiler from routing a reader into a
-		// crash with its own diagnostic. The ALIAS spelling is decided further down instead, off the name
-		// cascade's own answer — see there for why that is the cheap place and not merely the late one.
+		// `float` satisfies BOTH rules — `tagIsBareNumericKeyword` genuinely admits it, which is what makes
+		// this a resolved OVERLAP rather than two disjoint tests in an arbitrary sequence — and E2061's
+		// advice ("declare a ranged typealias") is TRUE for `int` and a TRAP for `float`. Asking float first
+		// is what stops this compiler from routing a reader into a crash with its own diagnostic, and
+		// `error.float-type-arg` is the spec case that turns RED the moment the two arms are swapped. The
+		// ALIAS spelling is decided further down instead, off the name cascade's own answer — see there for
+		// why that is the cheap place and not merely the late one.
 		//
 		// ⚠ **A DELIBERATE DIVERGENCE FROM BOTH REFERENCES**, which accept a float type argument because
 		// they MONOMORPHIZE — the instantiation gets a genuine f64 slot and the question never arises. This
@@ -6064,7 +6067,7 @@ export type Parser
 		// milestone there is none. It retires when a float register class for descriptor-typed values lands,
 		// and until then the diagnostic is what makes that a decision someone takes rather than a panic
 		// someone trips over.
-		if tag == ValueTypeTag.float 'bareFloatArg'
+		if tagIsFloat(tag) 'bareFloatArg'
 			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(typeTagName(tag)), tok: argTok)
 			return
 		end 'bareFloatArg'
@@ -6079,7 +6082,14 @@ export type Parser
 		// It is a TAG test, and it has to be: a bare keyword is minted CONCRETE by `parseTypeReference`
 		// (`MaxonType.integer`, never `named`), so it never reached the name cascade below — which is
 		// exactly what hid it.
-		if tag == ValueTypeTag.integer 'barePrimitive'
+		//
+		// ⚠ **IT ASKS FOR THE WHOLE SET — `int` AND `float` — AND RELIES ON THE ARM ABOVE HAVING TAKEN THE
+		// FLOAT.** Narrowing this guard to `tagIsInteger` would state the rule as "the bare numeric keywords,
+		// minus whatever an earlier arm happened to claim", which reads identically whether the author knew
+		// about the overlap or never heard of it — and it would make the ordering above unfalsifiable, since
+		// two disjoint equality tests can be swapped with no effect at all. Stated whole, a swap is a
+		// behaviour change the suite catches.
+		if tagIsBareNumericKeyword(tag) 'barePrimitive'
 			// ⚠ **REPORTED AT THE OFFENDING ARGUMENT, NOT AT THE ALIAS NAME — a deliberate divergence from the
 			// oracle**, which passes its `aliasNameToken` (`RejectBarePrimitiveTypeArgs`, all three call
 			// sites) and so points at the name LEFT of the `=`, away from the token that has to change. Two
@@ -6120,7 +6130,7 @@ export type Parser
 		//
 		// A declared `enum`/`union` erases to `integer` here (a float-BACKED enum too — its bits ARE an i64)
 		// and a struct stays `structRef`, so `float` reaches this test only from a genuine float alias.
-		if maxonTypeTag(denoted) == ValueTypeTag.float 'floatAliasArg'
+		if tagIsFloat(maxonTypeTag(denoted)) 'floatAliasArg'
 			// Named by the ALIAS the source wrote, not by `float`: a reader told "cannot use 'float'" about a
 			// line that says `Real` would have to work out which of its aliases is meant.
 			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(String.from(name)), tok: argTok)

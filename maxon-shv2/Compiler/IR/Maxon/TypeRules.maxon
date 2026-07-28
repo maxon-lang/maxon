@@ -612,6 +612,23 @@ export function tagIsFloat(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.float
 end 'tagIsFloat'
 
+// ⭐ **THE TAGS A BARE NUMERIC KEYWORD IS MINTED UNDER** — `int` and `float`, the two spellings
+// `Parser.parseTypeReference` answers with a CONCRETE numeric arm rather than a `named` one. The
+// shv2 twin of the oracle's `IrType.IsBarePrimitive`, which likewise names only the numerics.
+//
+// ⚠ **`boolean` IS DELIBERATELY OUT.** A `bool` is minted concrete by the very same routine, so
+// "was this spelled as a keyword?" would sweep it in — but it is already a constrained type with no
+// range to declare, so the ranged-typealias rule this set exists to enforce has nothing to ask of
+// it. That exclusion is why this is an enumerated SET rather than the absence of some other tag.
+//
+// It is stated ONCE because the rule it feeds is decided against a SECOND rule that overlaps it: a
+// bare `float` is in this set AND is a float, and `Parser.checkGenericArgType` resolves that overlap
+// by ORDER. Were each site to spell its own subset, the site that had already subtracted the overlap
+// would look identical to the site that had never known about it.
+export function tagIsBareNumericKeyword(tag ValueTypeTag) returns bool
+	return tagIsInteger(tag) or tagIsFloat(tag)
+end 'tagIsBareNumericKeyword'
+
 // ⭐ **IS THIS TAG A GPR SCALAR AN `async`/`await` CAN CARRY?** (P1.5-B1a). The green-thread trampoline
 // passes arguments through the integer arg registers and captures the result from R8, so an async call's
 // arguments, the callee's parameters, and its result must all be integer/bool — a `float` travels in XMM,

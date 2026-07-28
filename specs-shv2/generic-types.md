@@ -1513,13 +1513,27 @@ error E2062: <fragment>:8:31: Cannot use 'float' as a type argument: a float typ
 ```
 
 <!-- test: error.float-alias-type-arg -->
-⭐ **THE CASE THAT PROVES THE PANIC IS UNREACHABLE, AND THE REASON E2062 IS ASKED BEFORE E2061.**
+⭐ **THE CASE THAT CLOSES THE SECOND SPELLING, AND THE REASON E2062 IS ASKED BEFORE E2061.**
 A ranged FLOAT typealias reaches the identical backend assertion — the alias is not the problem, the
 float is — so refusing only the bare keyword would have left the crash reachable through the very
 declaration E2061 recommends. Which is also why a bare `float`, which satisfies BOTH rules, is
 claimed by this one: "use a ranged typealias instead" is true for `int` and a trap for `float`, and a
 compiler must not route a reader into a panic with its own diagnostic. The message names the ALIAS
 the source wrote, not `float`, so a reader of the line `Box with Real` is told about `Real`.
+
+⚠ **IT CLOSES THE TYPE-ARGUMENT DOOR, NOT THE PANIC — and the difference is two lines of source.**
+Every spelling of a float TYPE ARGUMENT is refused above, but a float VALUE handed to a `T`-typed
+formal still reaches `X64Backend.emitRegRegMove` with no float in the type arguments at all:
+`typealias SBox = Box with String` then `SBox.create(1.5)` panics, as does the same call on a
+`Box with Integer`. That door is the OPPOSITE side of one thesis E2062's own message states — a
+float cannot travel through a type parameter's general-purpose slot — but it is a different
+mechanism (`tagIsIntegral` answers `false` for `typeParameter` precisely so that a float into a `T`
+does NOT read as a lossy conversion), it predates this rule, and this rule strictly shrank its
+reach. Closing it needs a ruling this rung does not have: whether a generic call site SUBSTITUTES
+its instance's type arguments — making `IntBox.create(1.5)` the ordinary E3009 the non-generic
+`takeInt(1.5)` already reports — or whether a float actual for an opaque formal is refused outright.
+Recorded here because the sentence that used to stand in this place said the panic was unreachable,
+and a reader who believed it would never look for the value door.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 type Box uses T
