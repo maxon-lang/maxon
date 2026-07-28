@@ -31,7 +31,45 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genclosure.sh <closures> <captures> <reads> <ranged\|plain> <out>` | `closures` functions, each with one closure capturing `captures` bindings read `reads` times each | **the only way to measure the capture path at all** — `ScaleCorpus` states outright that it generates no closures, so every `scale-test` column reads Δ0 for a change to it. Its three knobs are independent for `genmutchain.sh`'s reason; see below. |
 | `geninstances.sh <instances> <chain> <plain\|contested\|control> <out>` | `instances` generic instantiations, each with its own type argument; optionally a `chain` of `__`-prefixed declarations planted against instance 0 | the COMPILED-NAME path — `ProgramSignatures.mangleGenericInstance` and the `reservedIfDeclared` re-probe. Unlike closures the corpus *does* generate generics, so `scale-test` sees the per-instance cost; what it cannot express is a compiled name a DECLARATION also claims, or a re-probe deeper than one. See below. |
 | `genawait.sh <funcs> <ifs> <out>` | `funcs` await-bearing functions of `ifs` two-way branches each, the promise spawned before the thicket and awaited after it | the AWAIT-LINEARITY walk (`SemanticCheck.checkLinearAwaitInFunction`) and its per-function block table. `ScaleCorpus` lists async under **NOT GENERATED**, so this is the only way to measure it — see below. |
+| `genwitness.sh <conformers> <methods> <dispatch\|inert> <out>` | `conformers` types against a `methods`-method interface, every one dispatched through ONE shared `where T is Digest` generic body | the WITNESS-TABLE RELOCATION path — every `.rdata` slot that names a function, and the walks over `GlobalDataTable.pendingRdataRelocs` that bake and check them (`StdToWasm.bakeFuncTableIndexRelocs`, `StdToWasm.requireIndirectlyReachableParamsAreMachineWords`, `CodeResult.bakeFuncAbs64Relocs`). `ScaleCorpus` generates **no interface and no witness dispatch**, so that list is EMPTY at every rung of the standing ladder and every column reads a Δ0 that means *unreached*. See below. |
 | `genfsprobe.sh <iterations> <out>` | ⚠ **the odd one out: a program to RUN, not one to compile** | what one `File.delete` / `File.exists` / `FilePath.changeExtension` COSTS, in nanoseconds and in allocations — so a per-compile cost paid in SYSCALLS can be priced at all. See below. |
+
+### `genwitness.sh` — two knobs onto ONE list, and a control that turned out to be a different control
+
+**`relocs = conformers × methods`, and the two knobs reach that product from different sides.**
+`<conformers>` moves the number of witness TABLES and the program's type and function count with it;
+`<methods>` moves the SLOTS PER TABLE at a nearly fixed everything-else, which is the axis that
+separates *linear in relocations* from *linear in program size*. Both are needed: a ladder that only
+doubles types cannot tell the two apart, because it doubles them together.
+
+**The methods axis is where the reading is clean.** At a fixed 128 conformers, `wasm32-wasi`,
+`phase:encode` (which `buildWasmBackend` bills the WHOLE wasm backend to), relocations 256 → 512 →
+1024 → 2048, minimum of 3:
+
+| relocs | allocations | bytes | CPU ticks |
+|---:|---:|---:|---:|
+| 256 | 31,291 | 1,938,808 | 35,305,117 |
+| 512 | 44,924 | 2,609,176 | 44,251,973 |
+| 1,024 | 72,141 | 3,629,960 | 61,243,944 |
+| 2,048 | 126,586 | 6,050,501 | 99,285,247 |
+
+Read the ratios alone and every one is *below* ×2.00 and rising — which is a doubling term under a
+large fixed constant, not a sub-linear anything. Fit the line the two endpoints give and the constant
+comes out: **allocations = 17,677 + 53.18 × relocs, with residuals of +19 and +7 at the two interior
+points (0.04% and 0.01%)**. CPU fits the same shape to within 2.4%. A straight line in the reloc count,
+with the 128 types' own cost sitting in the intercept.
+
+⚠ **`inert` IS NOT THE CONTROL IT WAS WRITTEN TO BE, and the probe said so.** It was meant to build the
+witness tables without dispatching through them, so the two per-reloc walks could be priced with the
+per-call-site emitters held out. It cannot: **a witness table does not survive a program that never
+dispatches through it.** Change one `other int` to `other bool` and build for wasm — under `dispatch`
+the compile is REFUSED naming `__witness_P000000.Digest'+24`, under `inert` it compiles clean, and that
+silence is the reloc list reading empty. So `inert` is a whole-path control instead: byte-identical
+program size (30,298 bytes at 64×2 either way), zero tables, zero relocations, zero call sites, so
+subtracting it from `dispatch` is the entire witness cost with parse, lowering and register allocation
+of an equally large program cancelled out. To move relocations without moving call sites, turn
+`<methods>`. *(It also means neither walk can ever meet a slot whose callee DCE removed — which is the
+invariant both of their panics assert.)*
 
 ### `geninstances.sh` — the two things the corpus cannot claim a Δ0 about
 
