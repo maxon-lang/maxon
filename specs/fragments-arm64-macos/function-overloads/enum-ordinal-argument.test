@@ -1,0 +1,74 @@
+// Test: enum-ordinal-argument
+typealias Wide = int(i64.min to i64.max)
+
+enum Kind
+	alpha
+	beta
+end 'Kind'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let k = Kind.beta
+	return over(k.ordinal)
+end 'main'
+---
+ExitCode: 101
+---
+// CompiledIR
+module {
+  func @over$x_i64(x: i64) -> i64 {
+  entry:
+    arm64.mov x1, #100
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, eq
+    arm64.mov x5, #0
+    arm64.cmp x4, #0
+    arm64.csel x6, x5, x2, ne
+    arm64.mov x7, #1
+    arm64.cmp x1, x7
+    arm64.cset x8, eq
+    arm64.mov x9, #1
+    arm64.cmp x8, #0
+    arm64.csel x10, x9, x6, ne
+    arm64.mov x0, x10
+    arm64.bl over$x_i64
+    arm64.mov x11, #0
+    arm64.cmp x0, x11
+    arm64.cset x12, lt
+    arm64.mov x14, #255
+    arm64.cmp x0, x14
+    arm64.cset x15, gt
+    arm64.orr x1, x12, x15
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_18
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

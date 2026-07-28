@@ -1,0 +1,931 @@
+// Test: equal-resolves-across-its-overloads
+// --- file: main.maxon
+function main() returns ExitCode
+	let parts = "a,b,c".split(",")
+	let word = try parts.get(1) otherwise ""
+
+	try Expect.equal(parts.count(), expected: 3) otherwise ignore
+	try Expect.equal(word, expected: "b") otherwise ignore
+	try Expect.equal(parts.count() == 3, expected: true) otherwise ignore
+
+	try Expect.equal(parts.count(), expected: 99) otherwise ignore
+	try Expect.equal(word, expected: "zzz") otherwise ignore
+	try Expect.equal(parts.count() == 3, expected: false) otherwise ignore
+
+	print("done\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+done
+```
+Stderr: ```
+FAIL main.maxon:9: Expect.equal
+  expected: 99
+  received: 3
+FAIL main.maxon:10: Expect.equal
+  expected: "zzz"
+  received: "b"
+FAIL main.maxon:11: Expect.equal
+  expected: false
+  received: true
+```
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=448
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.adrp_add_global x2, __static_lit_7
+    arm64.mov x3, x2
+    arm64.mov x4, #32
+    arm64.add x5, x3, x4
+    arm64.str x5, [x29, #-24]
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x7, __static_lit_8
+    arm64.mov x8, x7
+    arm64.mov x9, #32
+    arm64.add x10, x8, x9
+    arm64.str x10, [x29, #-32]
+    arm64.ldr x11, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x12, [x29, #-24]
+    arm64.ldr x14, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl stdlib.String.split
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x15, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1
+    arm64.bl StringArray.get
+    arm64.str x0, [x29, #-48]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_success_0
+  otherwise_default_error_0:
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.str x5, [x29, #-16]
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_success_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_41
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_41
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x1, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl StringArray.count
+    arm64.adrp_add_global x3, __static_lit_9
+    arm64.mov x4, x3
+    arm64.mov x5, #32
+    arm64.add x6, x4, x5
+    arm64.str x6, [x29, #-64]
+    arm64.ldr x7, [x29, #-64]
+    arm64.str x0, [x29, #-184]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x8, __static_lit_10
+    arm64.mov x9, x8
+    arm64.mov x10, #32
+    arm64.add x11, x9, x10
+    arm64.str x11, [x29, #-72]
+    arm64.ldr x12, [x29, #-72]
+    arm64.ldr x0, [x29, #-72]
+    arm64.bl mm_incref
+    arm64.ldr x14, [x29, #-64]
+    arm64.ldr x15, [x29, #-72]
+    arm64.ldr x0, [x29, #-184]
+    arm64.ldr x2, [x29, #-64]
+    arm64.ldr x3, [x29, #-72]
+    arm64.mov x1, #3
+    arm64.mov x4, #5
+    arm64.bl stdlib.Expect.equal$actual_i64_expected_i64_message_String_file_String_line_i64
+    arm64.adrp_add_global x0, __static_lit_11
+    arm64.mov x2, x0
+    arm64.mov x0, #32
+    arm64.add x3, x2, x0
+    arm64.str x3, [x29, #-80]
+    arm64.ldr x0, [x29, #-80]
+    arm64.str x1, [x29, #-192]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-88]
+    arm64.ldr x0, [x29, #-88]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-96]
+    arm64.ldr x0, [x29, #-96]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-80]
+    arm64.ldr x2, [x29, #-88]
+    arm64.ldr x3, [x29, #-96]
+    arm64.mov x4, #6
+    arm64.bl stdlib.Expect.equal$actual_String_expected_String_message_String_file_String_line_i64
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x1, [x29, #-200]
+    arm64.bl StringArray.count
+    arm64.mov x1, #3
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x3, x1, x0
+    arm64.str x3, [x29, #-104]
+    arm64.ldr x0, [x29, #-104]
+    arm64.str x2, [x29, #-208]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-112]
+    arm64.ldr x0, [x29, #-112]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-104]
+    arm64.ldr x1, [x29, #-112]
+    arm64.ldr x0, [x29, #-208]
+    arm64.ldr x2, [x29, #-104]
+    arm64.ldr x3, [x29, #-112]
+    arm64.mov x1, #1
+    arm64.mov x4, #7
+    arm64.bl stdlib.Expect.equal$expected_message_file_line
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x1, [x29, #-216]
+    arm64.bl StringArray.count
+    arm64.adrp_add_global x1, __static_lit_9
+    arm64.mov x2, x1
+    arm64.mov x1, #32
+    arm64.add x3, x2, x1
+    arm64.str x3, [x29, #-120]
+    arm64.ldr x1, [x29, #-120]
+    arm64.str x0, [x29, #-224]
+    arm64.ldr x0, [x29, #-120]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-128]
+    arm64.ldr x0, [x29, #-128]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-120]
+    arm64.ldr x1, [x29, #-128]
+    arm64.ldr x0, [x29, #-224]
+    arm64.ldr x2, [x29, #-120]
+    arm64.ldr x3, [x29, #-128]
+    arm64.mov x1, #99
+    arm64.mov x4, #9
+    arm64.bl stdlib.Expect.equal$actual_i64_expected_i64_message_String_file_String_line_i64
+    arm64.adrp_add_global x0, __static_lit_12
+    arm64.mov x2, x0
+    arm64.mov x0, #32
+    arm64.add x3, x2, x0
+    arm64.str x3, [x29, #-136]
+    arm64.ldr x0, [x29, #-136]
+    arm64.str x1, [x29, #-232]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-144]
+    arm64.ldr x0, [x29, #-144]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-152]
+    arm64.ldr x0, [x29, #-152]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-136]
+    arm64.ldr x2, [x29, #-144]
+    arm64.ldr x3, [x29, #-152]
+    arm64.mov x4, #10
+    arm64.bl stdlib.Expect.equal$actual_String_expected_String_message_String_file_String_line_i64
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x1, [x29, #-240]
+    arm64.bl StringArray.count
+    arm64.mov x1, #3
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x3, x1, x0
+    arm64.str x3, [x29, #-160]
+    arm64.ldr x0, [x29, #-160]
+    arm64.str x2, [x29, #-248]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-168]
+    arm64.ldr x0, [x29, #-168]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-160]
+    arm64.ldr x1, [x29, #-168]
+    arm64.ldr x0, [x29, #-248]
+    arm64.ldr x2, [x29, #-160]
+    arm64.ldr x3, [x29, #-168]
+    arm64.mov x1, #0
+    arm64.mov x4, #11
+    arm64.bl stdlib.Expect.equal$expected_message_file_line
+    arm64.adrp_add_global x0, __static_lit_13
+    arm64.mov x2, x0
+    arm64.mov x0, #32
+    arm64.add x3, x2, x0
+    arm64.str x3, [x29, #-176]
+    arm64.ldr x0, [x29, #-176]
+    arm64.str x1, [x29, #-256]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-176]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-176]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_202
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_202
+    arm64.ldr x0, [x29, #-168]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_204
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_204
+    arm64.ldr x0, [x29, #-160]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_206
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_206
+    arm64.ldr x0, [x29, #-152]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_208
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_208
+    arm64.ldr x0, [x29, #-144]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_210
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_210
+    arm64.ldr x0, [x29, #-136]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_212
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_212
+    arm64.ldr x0, [x29, #-128]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_214
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_214
+    arm64.ldr x0, [x29, #-120]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_216
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_216
+    arm64.ldr x0, [x29, #-112]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_218
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_218
+    arm64.ldr x0, [x29, #-104]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_220
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_220
+    arm64.ldr x0, [x29, #-96]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_222
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_222
+    arm64.ldr x0, [x29, #-88]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_224
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_224
+    arm64.ldr x0, [x29, #-80]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_226
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_226
+    arm64.ldr x0, [x29, #-72]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_228
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_228
+    arm64.ldr x0, [x29, #-64]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_230
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_230
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_232
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_232
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_234
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_234
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_236
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_236
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_238
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_238
+    arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_240
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_240
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_242
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_242
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=448
+    arm64.ret
+  }
+  func @__module_init() {
+  entry:
+    arm64.adrp_add_global x0, __static_lit_0
+    arm64.mov x1, x0
+    arm64.mov x2, #80
+    arm64.str x2, [x1, #0]
+    arm64.mov x3, #2
+    arm64.str x3, [x1, #8]
+    arm64.mov x4, #0
+    arm64.str x4, [x1, #16]
+    arm64.mov x5, #4611686018427387904
+    arm64.str x5, [x1, #24]
+    arm64.adrp_add_rdata x6, __str_s13
+    arm64.mov x7, x6
+    arm64.str x7, [x1, #32]
+    arm64.mov x8, #4
+    arm64.str x8, [x1, #40]
+    arm64.mov x9, #-2
+    arm64.str x9, [x1, #48]
+    arm64.mov x10, #1
+    arm64.str x10, [x1, #56]
+    arm64.mov x11, #0
+    arm64.str x11, [x1, #64]
+    arm64.mov x12, #1
+    arm64.str x12, [x1, #72]
+    arm64.adrp_add_global x14, __static_lit_1
+    arm64.mov x15, x14
+    arm64.mov x0, #80
+    arm64.str x0, [x15, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x15, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x15, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x15, #24]
+    arm64.adrp_add_rdata x0, __str_s14
+    arm64.mov x1, x0
+    arm64.str x1, [x15, #32]
+    arm64.mov x0, #6
+    arm64.str x0, [x15, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x15, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x15, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x15, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x15, #72]
+    arm64.adrp_add_global x0, __static_lit_2
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_s15
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_3
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_s16
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #8
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_4
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_s17
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #8
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_5
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_s18
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #7
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_6
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_s19
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #5
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_7
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_0
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #5
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_8
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_1
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_2
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_3
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #10
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_11
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_4
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_12
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_5
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_13
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #2
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_6
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #5
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.global_load x0, [Expect.failureMarker.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_failureMarker
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_failureMarker
+  __cleanup_Expect_failureMarker:
+    arm64.global_load x0, [Expect.failureMarker]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_3
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_3
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_failureMarker
+  __cleanup_skip_Expect_failureMarker:
+    arm64.global_load x0, [Expect.libraryName.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_libraryName
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_libraryName
+  __cleanup_Expect_libraryName:
+    arm64.global_load x0, [Expect.libraryName]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_8
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_8
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_libraryName
+  __cleanup_skip_Expect_libraryName:
+    arm64.global_load x0, [Expect.detailIndent.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_detailIndent
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_detailIndent
+  __cleanup_Expect_detailIndent:
+    arm64.global_load x0, [Expect.detailIndent]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_13
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_13
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_detailIndent
+  __cleanup_skip_Expect_detailIndent:
+    arm64.global_load x0, [Expect.expectedLabel.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_expectedLabel
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_expectedLabel
+  __cleanup_Expect_expectedLabel:
+    arm64.global_load x0, [Expect.expectedLabel]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_18
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_18
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_expectedLabel
+  __cleanup_skip_Expect_expectedLabel:
+    arm64.global_load x0, [Expect.receivedLabel.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_receivedLabel
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_receivedLabel
+  __cleanup_Expect_receivedLabel:
+    arm64.global_load x0, [Expect.receivedLabel]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_23
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_23
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_receivedLabel
+  __cleanup_skip_Expect_receivedLabel:
+    arm64.global_load x0, [Expect.messageLabel.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_messageLabel
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_messageLabel
+  __cleanup_Expect_messageLabel:
+    arm64.global_load x0, [Expect.messageLabel]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_28
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_28
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_messageLabel
+  __cleanup_skip_Expect_messageLabel:
+    arm64.global_load x0, [Expect.equalName.__initialized]
+    arm64.cmp x0, #0
+    arm64.b.ne __maxon_global_cleanup.__cleanup_Expect_equalName
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_equalName
+  __cleanup_Expect_equalName:
+    arm64.global_load x0, [Expect.equalName]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_33
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_33
+    arm64.b __maxon_global_cleanup.__cleanup_skip_Expect_equalName
+  __cleanup_skip_Expect_equalName:
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct_GraphemeState(ptr: i64) {
+  entry:
+    arm64.b __destruct_GraphemeState.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.slice_cleanup_0
+    arm64.b __destruct_String.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_String.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_String.__skip_guarded_9
+    arm64.b __destruct_String.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.free_buf_0
+    arm64.b __destruct_String.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.raw_free_0
+    arm64.b __destruct_String.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_String.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_String.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_StringArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_StringArray.slice_cleanup_0
+    arm64.b __destruct_StringArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_StringArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_StringArray.__skip_guarded_9
+    arm64.b __destruct_StringArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_StringArray.free_buf_0
+    arm64.b __destruct_StringArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_StringArray.raw_free_0
+    arm64.b __destruct_StringArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_StringArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_StringArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

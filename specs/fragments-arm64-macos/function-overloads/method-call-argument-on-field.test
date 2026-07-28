@@ -1,0 +1,173 @@
+// Test: method-call-argument-on-field
+typealias Wide = int(i64.min to i64.max)
+
+type Leaf
+	export var tally as Wide
+
+	export static function make(tally Wide) returns Self
+		return Self{tally: tally}
+	end 'make'
+
+	export function size() returns Wide
+		return self.tally
+	end 'size'
+end 'Leaf'
+
+type Trunk
+	export var leaf as Leaf
+
+	export static function make(leaf Leaf) returns Self
+		return Self{leaf: leaf}
+	end 'make'
+end 'Trunk'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let t = Trunk.make(Leaf.make(7))
+	return over(t.leaf.size())
+end 'main'
+---
+ExitCode: 107
+---
+// CompiledIR
+module {
+  func @Leaf.make(tally: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #8
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Leaf.size(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Trunk.make(leaf: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_Trunk
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #9
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x2, [x3, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-16]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @over$x_i64(x: i64) -> i64 {
+  entry:
+    arm64.mov x1, #100
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #7
+    arm64.bl Leaf.make
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Trunk.make
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x2, [x29, #-24]
+    arm64.ldr x3, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl Leaf.size
+    arm64.bl over$x_i64
+    arm64.mov x4, #0
+    arm64.cmp x0, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #255
+    arm64.cmp x0, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_12
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_22
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_22
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Leaf(ptr: i64) {
+  entry:
+    arm64.b __destruct_Leaf.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Trunk(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Trunk.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Trunk.__skip_guarded_4
+    arm64.b __destruct_Trunk.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

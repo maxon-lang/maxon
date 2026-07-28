@@ -1,0 +1,70 @@
+// Test: implied-throws-accepts-bare-try
+// --- file: assertions.maxon
+export function assertTrue(ok bool) throws TestFailure
+	if not ok 'bad'
+		throw TestFailure.assertion
+	end 'bad'
+end 'assertTrue'
+
+// --- file: example.test.maxon
+test 'a bare try needs no otherwise'
+	try assertTrue(true)
+end 'a bare try needs no otherwise'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @assertTrue(ok: i1) {
+  entry:
+    arm64.mov x1, #1
+    arm64.eor x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.ne assertTrue.bad_0
+    arm64.b assertTrue.bad_0.after
+  bad_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  bad_0.after:
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @__test_a_bare_try_needs_no_otherwise() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.bl assertTrue
+    arm64.str x1, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne __test_a_bare_try_needs_no_otherwise.propagate_error_0
+    arm64.b __test_a_bare_try_needs_no_otherwise.try_continue_0
+  propagate_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  try_continue_0:
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---
