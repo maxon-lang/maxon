@@ -1082,6 +1082,7 @@ let DiscardBindingName = b"_"
 // receiver path's, which `methodCallsAt` takes — while a `for … in` source lock accepts any chain at
 // all, a bare name (zero hops) included.
 typealias FieldHopCount = int(0 to 255)
+
 let ChainMethodMinHops = 2 as FieldHopCount
 let AnyFieldHops = 0 as FieldHopCount
 
@@ -11434,10 +11435,6 @@ export type Parser
 		let sourceStart = self.pos
 		let source = try self.parseExpression(func, block: block)
 
-		// Taken BEFORE the loop variable is declared, so `for arr in arr` locks the SOURCE binding and
-		// not the loop variable that is about to shadow its name.
-		let sourceLock = self.lockIterationSource(sourceStart)
-
 		// `to` / `upto` after the first expression is what makes this a RANGE. The operator's token INDEX
 		// is carried (not the `Token` itself — a `var` may not alias an immutable aggregate binding,
 		// E3078) so the loop test below can anchor its type diagnostic on the operator the user wrote;
@@ -11454,8 +11451,26 @@ export type Parser
 			limit = try self.parseExpression(func, block: self.currentBlock)
 		end 'rangeHeader'
 
+		// ⭐⭐ **ONLY THE ARRAY FORM LOCKS ITS SOURCE, AND THE FORK IS WHERE THAT IS DECIDED.** The lock
+		// exists for ONE reason — the array form hands the body a BORROWED element the array still owns,
+		// so a mutation that reallocates or clears it leaves that borrow dangling. A RANGE has no borrow
+		// to protect: both bounds are snapshotted into the preheader above and the loop variable is the
+		// header phi, so a write to a bound's variable inside the body cannot reach the loop at all.
+		//
+		// ⚠ It was taken BEFORE this fork and that was a FALSE REJECT of a legal program: `for i in n
+		// upto 3 'l' n = n + 1 … end` locked `n` and reported **E2013**, where the runnable oracle
+		// compiles it and returns 3. The asymmetry is what named it a bug rather than a policy — the END
+		// bound's variable stayed writable, because only the FIRST expression starts at `sourceStart`, so
+		// one range had two rules for its two halves. Both directions are pinned by
+		// `specs-shv2/for-range-bound-mutation.md`, together with the array half, in ONE file: they are
+		// two outcomes of one decision and a spec that pinned only one would let the other drift back.
+		//
+		// Taken here, it is still well before the loop VARIABLE is declared, which is what keeps
+		// `for arr in arr` locking the SOURCE binding rather than the loop variable that shadows its name.
+		var sourceLock = false
 		if not isRange 'arraySource'
 			try self.requireIterableArray(source, forTok: forTok)
+			sourceLock = self.lockIterationSource(sourceStart)
 
 			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
 			// / `for x in build()` produces a record the statement owns; left in `pendingTempDrops` it

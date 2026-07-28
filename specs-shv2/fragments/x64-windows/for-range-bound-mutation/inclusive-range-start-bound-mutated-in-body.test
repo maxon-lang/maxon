@@ -1,0 +1,36 @@
+// Test: inclusive-range-start-bound-mutated-in-body
+function main() returns ExitCode
+	var n = 1
+	var total = 0
+	for i in n to 3 'l'
+		n = n + 1
+		total = total + i
+	end 'l'
+	return total
+end 'main'
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 r8, 0
+    x64.movRegReg rcx, rax
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc lessEqual, l
+    x64.jmp forexit
+  l:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegReg r8, r8, rax
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.popReg rbp
+    x64.ret
+}
