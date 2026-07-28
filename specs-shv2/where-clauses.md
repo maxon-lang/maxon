@@ -887,3 +887,97 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:25:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```
+
+<!-- test: where-clauses.error.operator-witness-wrong-formal-type -->
+A constraint whose method has the protocol's NAME, the protocol's RESULT and the protocol's ARITY but
+declares its formal as something other than `Self` is not the protocol either — the FOURTH hole in the same
+wall, and the twin of `operator-witness-wrong-arity` above. An operator's one operand is a value of `T`, so
+what the formal is TYPED is as much a part of "is this `Equatable`?" as how many there are.
+`requireGenuineSelfArgs` cannot cover it: it validates the actuals sitting at `Self` formals, and an
+interface like this one declares none. ⚠ **MEASURED before the check existed: this program compiled CLEAN
+and `self.a == self.b` handed the RECEIVER'S `T` POINTER to a formal the impl reads as an `int`, so
+`equals` compared a pointer against `7` and answered `false` for two equal values** — a silent wrong
+answer, on `main` as well as on the branch that added the arity half. The `float` twin is worse (the
+witness float-widening `cvtsi2sd`s that pointer) and a `String` formal is an outright type confusion, an
+unmanaged struct pointer read through a managed header. Same E3005, because the author's cure is the same
+sentence. Target-independent.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+interface WeirdEq
+	function equals(other Integer) returns bool
+end 'WeirdEq'
+
+type Thing implements WeirdEq
+	export var v as Integer
+	export static function create(v Integer) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function equals(other Integer) returns bool
+		return other == 7
+	end 'equals'
+end 'Thing'
+
+type Pair uses T where T is WeirdEq
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function eq() returns bool
+		return self.a == self.b
+	end 'eq'
+end 'Pair'
+
+typealias ThingPair = Pair with Thing
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
+```
+
+<!-- test: where-clauses.error.operator-witness-wrong-formal-type-comparable -->
+The `Comparable` half of `operator-witness-wrong-formal-type`, so the check is pinned for BOTH protocols
+rather than only the one it was found through — `<`/`>`/`<=`/`>=` read the same formals off the same
+synthesized interface, and a `compare` taking anything but `Self` is no more `Comparable` than a
+non-`Self` `equals` is `Equatable`. Target-independent.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+interface WeirdOrd
+	function compare(other Integer) returns Ordering
+end 'WeirdOrd'
+
+type Thing implements WeirdOrd
+	export var v as Integer
+	export static function create(v Integer) returns Self
+		return Self{ v: v }
+	end 'create'
+	export function compare(other Integer) returns Ordering
+		return Ordering.lessThan
+	end 'compare'
+end 'Thing'
+
+type Pair uses T where T is WeirdOrd
+	export var a as T
+	export var b as T
+	export static function create(a T, b T) returns Self
+		return Self{ a: a, b: b }
+	end 'create'
+	export function lt() returns bool
+		return self.a < self.b
+	end 'lt'
+end 'Pair'
+
+typealias ThingPair = Pair with Thing
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be constrained with 'where T is Comparable'
+```

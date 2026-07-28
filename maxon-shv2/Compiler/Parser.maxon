@@ -1274,7 +1274,7 @@ end 'floatBoundInFloatAlias'
 
 // True iff `names` already holds `name`. A linear scan — parameter lists are tiny (the
 // only caller is parameter-name duplicate detection), so no membership set is worth its
-// heap object (the same reasoning `FuncSignature.indexOfParam` documents).
+// heap object (the same reasoning `Project.indexOfParamIn` documents).
 function byteArrayContains(names ByteArrayArray, name ByteArray) returns bool
 	for existing in names 'each'
 		if existing.equals(name) 'match'
@@ -16228,18 +16228,19 @@ export type Parser
 	// `==`/`!=`, `Comparable` for `<`/`>`/`<=`/`>=`.
 	//
 	// ⭐ **THE PROTOCOL IS FETCHED, NOT DESCRIBED.** The method name the constraints are searched for, the
-	// result type the verdict reads and the arity the operator can supply are ALL taken off the interface
-	// `builtinInterface` synthesizes, so this function names ONE fact (which protocol the operator belongs to)
-	// instead of four parallel spellings of it.
+	// result type the verdict reads and the FORMALS the operator can fill are ALL taken off the interface
+	// `builtinInterface` synthesizes — the whole `InterfaceMethodSig` is handed on rather than picked apart
+	// into parallel `want*` arguments, so this function names ONE fact (which protocol the operator belongs
+	// to) instead of several parallel spellings of it.
 	function requireOperatorWitness(paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
 		let isEquality = op == MaxonCmpOp.eq or op == MaxonCmpOp.ne
 		let protocol = requireBuiltinInterface(EquatableInterfaceName if isEquality else ComparableInterfaceName)
 		let method = try protocol.methods.get(0) otherwise panic("requireOperatorWitness: the synthesized protocol '{String.from(protocol.name)}' declares no method — a comparison operator dispatches its SOLE method (`singleMethodInterface`), so `builtinInterface` must give it exactly one")
 
 		// The search itself runs by METHOD (the shared core `.equals()`/`.compare()` dispatch uses), so the hit
-		// still has to be PROVED to be the protocol's — see `requireProtocolResult`.
+		// still has to be PROVED to be the protocol's — see `requireProtocolShape`.
 		match try self.findWitnessDispatch(paramPos, methodName: method.name, errorTok: opTok) 'lookup'
-			found(target) then return try self.requireProtocolResult(target, protocolName: protocol.name, wantResult: method.returnTypeName, wantArity: method.paramNames.count(), paramPos: paramPos, op: op, opTok: opTok)
+			found(target) then return try self.requireProtocolShape(target, protocolName: protocol.name, want: method, paramPos: paramPos, op: op, opTok: opTok)
 			notFound then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
 		end 'lookup'
 	end 'requireOperatorWitness'
@@ -16267,23 +16268,34 @@ export type Parser
 	// error exactly as the missing `witnessTryCall` did. Same E3005, because the author's cure is the same
 	// sentence.
 	//
-	// ⚠⚠ **AND SO IS A METHOD OF THE WRONG ARITY (P1.7a slice 2b-vi), which was the THIRD hole in the same
-	// wall.** An operator has exactly one operand to give, so the number of formals is as much a part of
-	// "is this the protocol?" as the result type is — and `wantArity` is read off the SYNTHESIZED interface
-	// beside `wantResult`, never written as a literal, for the reason this function's header gives. It is
-	// not cosmetic: **MEASURED — `interface Weird { function equals(a Self, b Self) returns bool }` with
-	// `where T is Weird` compiled CLEAN and the impl read its unsupplied second `Self` formal out of an
-	// uninitialised argument register, dereferencing it** (a silent wrong answer, and a fault away from a
-	// crash). The `.method()` form cannot reach this — `slottedWitnessArgs` checks its arity against the
-	// interface — so the operator form was the last door left open, and closing it is what makes
-	// `requireGenuineSelfArgs`' missing-actual case unrepresentable.
-	function requireProtocolResult(target WitnessDispatchTarget, protocolName ByteArray, wantResult ByteArray, wantArity ParamCount, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		if not target.returnTypeName.equals(wantResult) or throwsClauseIsThrowing(target.throwsClause) or target.paramNames.count() != wantArity 'notTheProtocol'
+	// ⚠⚠ **AND SO ARE THE FORMALS — BOTH HOW MANY AND WHAT TYPE — WHICH WERE THE THIRD AND FOURTH HOLES IN
+	// THE SAME WALL (P1.7a slice 2b-vi; the type half found in its review).** An operator has exactly one
+	// operand to give and that operand is a value of `T`, so the formal LIST is as much a part of "is this
+	// the protocol?" as the result type is. Both halves are one question, asked once, against the
+	// SYNTHESIZED interface's own `paramTypeNames` — never written as a literal `1` or a literal `Self`, for
+	// the reason this function's header gives. Neither is cosmetic; both were MEASURED silent wrong answers:
+	//
+	// - **ARITY.** `interface Weird { function equals(a Self, b Self) returns bool }` under `where T is
+	//   Weird` compiled CLEAN and the impl read its unsupplied second `Self` formal out of an uninitialised
+	//   argument register, dereferencing it (a fault away from a crash).
+	// - **FORMAL TYPE.** `interface WeirdEq { function equals(other int) returns bool }` under `where T is
+	//   WeirdEq` compiled CLEAN and `self.item == self.other` handed the RECEIVER'S `T` POINTER to a formal
+	//   the impl reads as an `int` — `equals(other int) { return other == 7 }` answered `false` for two
+	//   equal values (measured on `main` as well as on this branch). `requireGenuineSelfArgs` cannot cover
+	//   it: it validates the actuals at `Self` formals, and this interface declares none. The `float` twin
+	//   is worse — `floatWidenedWitnessArgs` sees a `float` formal and `cvtsi2sd`s the pointer — and a
+	//   `String` formal is a type confusion, an unmanaged struct pointer read through a managed header.
+	//
+	// The `.method()` form reaches neither: `slottedWitnessArgs` checks its arity against the interface, and
+	// its `Self` formals really are `Self`. The operator form was the last door left open, and closing the
+	// arity half is what makes `requireGenuineSelfArgs`' missing-actual case unrepresentable.
+	function requireProtocolShape(target WitnessDispatchTarget, protocolName ByteArray, want InterfaceMethodSig, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
+		if not target.returnTypeName.equals(want.returnTypeName) or throwsClauseIsThrowing(target.throwsClause) or not interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames) 'notTheProtocol'
 			throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocolName), line: opTok.line, column: opTok.column)
 		end 'notTheProtocol'
 
 		return target
-	end 'requireProtocolResult'
+	end 'requireProtocolShape'
 
 	// ⭐ **REJECT ANY NON-`Self` VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT (P1.7a slice 2b).** A
 	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s and `Comparable.compare`'s `other
@@ -16300,7 +16312,7 @@ export type Parser
 	// 2b-vi).** It used to skip a formal with no actual, "an arity concern left to the caller" — and no caller
 	// had it: the `.method()` form performed no arity check at all, and the operator form supplies one actual
 	// to whatever arity the constraint's method declares. Both holes are closed (`slottedWitnessArgs` slots
-	// against the interface's `paramNames`; `requireProtocolResult` requires the protocol's own arity), so a
+	// against the interface's `paramNames`; `requireProtocolShape` requires the protocol's own formals), so a
 	// missing actual is a compiler defect rather than a program's, and it panics instead of quietly passing an
 	// under-supplied dispatch through to the emit.
 	function requireGenuineSelfArgs(target WitnessDispatchTarget, args ValueIdArray, what String, receiverParamPos TypeParamId, errorTok Token) throws ParseError

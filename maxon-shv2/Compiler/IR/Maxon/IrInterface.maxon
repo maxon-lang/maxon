@@ -307,6 +307,31 @@ end 'WitnessDispatchLookup'
 
 // The decl-order index of the method named `methodName` in `iface` (P1.7a slice 2a), or `methods.count()`
 // (the "not declared by this interface" sentinel) when absent — the witness-table slot the dispatch reads.
+// Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
+// by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered
+// by ONE renderer (`Parser.renderInterfaceTypeName`) that spells the enclosing interface `Self` either way,
+// so a byte comparison is exact and no canonicalization is owed.
+//
+// ⚠ NOT `ConformanceCheck.signatureMatches`, and the two must not be merged: that one asks whether an IMPL
+// satisfies an interface method, so it substitutes `Self` for the conformer's own name and collapses ranged
+// aliases to their underlying primitive. This one asks whether one INTERFACE method is another — both sides
+// already in the interface's own vocabulary, where `Self` means `Self`.
+export function interfaceFormalsMatch(a ByteArrayArray, b ByteArrayArray) returns bool
+	if a.count() != b.count() 'arityDiffers'
+		return false
+	end 'arityDiffers'
+
+	for i in 0 upto a.count() 'eachFormal'
+		let left = try a.get(i) otherwise panic("interfaceFormalsMatch: a.get OOB at {i} below count {a.count()}")
+		let right = try b.get(i) otherwise panic("interfaceFormalsMatch: b.get OOB at {i} below count {b.count()}")
+		if not left.equals(right) 'differs'
+			return false
+		end 'differs'
+	end 'eachFormal'
+
+	return true
+end 'interfaceFormalsMatch'
+
 export function interfaceMethodIndex(iface IrInterface, methodName ByteArray) returns WitnessMethodIndex
 	for i in 0 upto iface.methods.count() 'each'
 		let method = try iface.methods.get(i) otherwise panic("interfaceMethodIndex: methods.get OOB at {i} below count {iface.methods.count()}")

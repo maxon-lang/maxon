@@ -32,6 +32,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `geninstances.sh <instances> <chain> <plain\|contested\|control> <out>` | `instances` generic instantiations, each with its own type argument; optionally a `chain` of `__`-prefixed declarations planted against instance 0 | the COMPILED-NAME path — `ProgramSignatures.mangleGenericInstance` and the `reservedIfDeclared` re-probe. Unlike closures the corpus *does* generate generics, so `scale-test` sees the per-instance cost; what it cannot express is a compiled name a DECLARATION also claims, or a re-probe deeper than one. See below. |
 | `genawait.sh <funcs> <ifs> <out>` | `funcs` await-bearing functions of `ifs` two-way branches each, the promise spawned before the thicket and awaited after it | the AWAIT-LINEARITY walk (`SemanticCheck.checkLinearAwaitInFunction`) and its per-function block table. `ScaleCorpus` lists async under **NOT GENERATED**, so this is the only way to measure it — see below. |
 | `genwitness.sh <conformers> <methods> <dispatch\|inert> <out>` | `conformers` types against a `methods`-method interface, every one dispatched through ONE shared `where T is Digest` generic body | the WITNESS-TABLE RELOCATION path — every `.rdata` slot that names a function, and the walks over `GlobalDataTable.pendingRdataRelocs` that bake and check them (`StdToWasm.bakeFuncTableIndexRelocs`, `StdToWasm.requireIndirectlyReachableParamsAreMachineWords`, `CodeResult.bakeFuncAbs64Relocs`). `ScaleCorpus` generates **no interface and no witness dispatch**, so that list is EMPTY at every rung of the standing ladder and every column reads a Δ0 that means *unreached*. See below. |
+| `genwitnessargs.sh <conformers> <methods> <args> <decl\|reverse> <out>` | the same shape as `genwitness.sh`, but every interface method takes `args` LABELLED parameters | the ARGUMENT LIST behind a witness call's parentheses (P1.7a slice 2b-vi) — `parseWitnessMethodOnValue` → `parseCallArgs` → `slottedWitnessArgs` → `slotCallArgs` → `argSlotPosition`. `genwitness.sh` holds that arity at ONE, so it cannot see this axis at all; `ScaleCorpus` has **zero `where`** in it and cannot see either. `decl`/`reverse` is the LABEL-ORDER control. See below. |
 | `genfsprobe.sh <iterations> <out>` | ⚠ **the odd one out: a program to RUN, not one to compile** | what one `File.delete` / `File.exists` / `FilePath.changeExtension` COSTS, in nanoseconds and in allocations — so a per-compile cost paid in SYSCALLS can be priced at all. See below. |
 | `genfor.sh <loops> <depth> <accesses> <array\|range\|noloop> <out>` | `loops/depth` functions, each one NEST of `depth` `for` loops with `accesses` binding accesses per level | `for … in` (P1.8 slice A) and the four doors of its ITERATION LOCK. `ScaleCorpus` generates **no `for` at all** — the construct did not parse until that commit — so every column of a default run reads a flat Δ0 for it. **Its knobs are independent** (program size is `loops × accesses`, so `depth` moves alone) and `noloop` is the CONTROL: the same accesses through the same doors with not one `for` in the program. See below. |
 
@@ -133,6 +134,41 @@ before, 216 / 380 / 712 after).
 ⚠ **Compile it with `--target=x64-windows` on a non-x64 host.** The green-thread substrate an `async`
 lowers to is x64-windows-gated at this rung, so an arm64/wasm build panics in the BACKEND — after the
 front-end phase this ladder measures, but with no `--metrics` file written.
+
+### `genwitnessargs.sh` — the arity axis, and a control that is the same program TO THE BYTE
+
+**`genwitness.sh` holds argument count at ONE**, so every cost behind a witness call's parentheses is
+invisible to it — and `ScaleCorpus` cannot stand in, because `--emit-corpus` over all 465 generated
+files holds 276 `interface`, 276 `implements`, 270 `uses` and **zero `where`**. A witness dispatch needs
+`where T is <Interface>`, so `parseWitnessMethodOnValue` runs **exactly zero times** in the standing
+ladder and every column reads a Δ0 that means *unreached*. This generator adds the missing knob.
+
+The three size knobs are separable, and they must be, because they reach different costs:
+
+- `<conformers>` moves witness TABLES and instantiations — **not** call sites. Under dictionary-passing
+  there is ONE shared body however many instantiations exist, so `phase:parse` does not move on this
+  knob. Turning it and watching parse stay flat is the cheapest proof that dictionary-passing is what
+  is being measured.
+- `<methods>` moves slots per table AND dispatch CALL SITES, so it is the axis the per-call-site
+  constant rides.
+- `<args>` is `P` in `slotCallArgs` — the length of the `paramNames` list each call's labels are
+  slotted against. The axis slice 2b-vi created.
+
+⭐⭐ **`<decl|reverse>` IS THE LABEL-ORDER CONTROL, AND THE TWO ARE THE SAME PROGRAM TO THE BYTE.** Every
+argument is written `aNNNN: 1` — fixed-width label, fixed literal — so reversing them permutes
+equal-length chunks and changes nothing about size, tokens, IR or codegen. The only difference is
+whether `argSlotPosition`'s O(P) fast path (test `paramNames[argIndex]` before scanning) HITS or MISSES,
+so **subtracting `decl` from `reverse` is the label SCAN and nothing else.**
+
+⚠ **The scan ALLOCATES NOTHING**, so the allocation columns read flat however quadratic it is — read the
+CPU column, which exists for exactly this. The allocation columns still earn their place: they price the
+per-call-site buffers, which the CPU column cannot separate from the scan.
+
+⚠⚠ **`<args>` is capped at 63 by the LANGUAGE, not by this script** — `<args>` = 64 is refused with
+E2015 (the 64th slot is the dispatch's own receiver). That cap is the finding, not a usage note: `P` is
+bounded by 64 for every program the compiler accepts, so `reverse`'s P²/2 term cannot exceed ~2,048
+comparisons per call. **A quadratic in a variable the type system caps at 64 is a constant**, and this
+is the ladder that establishes which one.
 
 ### `genmutchain.sh` — why three knobs and not one
 
