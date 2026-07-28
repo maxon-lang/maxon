@@ -1597,6 +1597,13 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   prints `git apply --stat` and the command, so it is safe to run against a clean tree.
   ⇒ Fix wants: a timeout on every remote probe, per-lane preflight isolation, and a fallback message that reports what
   was actually observed rather than guessing.
+  ⚠ **THIS NO LONGER COSTS A RUNG — but it is NOT fixed** (user ruling, 2026-07-27). **The two remote arm64 lanes are
+  OUT of the per-rung cross-target gate**: `cross-target-gate.sh` now skips them unless `--mac` is passed, and the
+  targets are **synced periodically BY HAND** (`scripts/cross-target-gate.sh --mac --require-mac`). The reason is this
+  entry — the expense and the hang are both properties of the REMOTE hop, not of arm64 — so a rung no longer waits on
+  another machine. **The three defects above still hold on the manual sync run**, which is now the only thing that
+  trips them, and the arm64 lanes are **UNVERIFIED between syncs**, not proven good: golden rot on an unrun lane is a
+  measured, recurring fact here (the 317 stale C# fragments; the x64-linux 288-stale/~489-absent entry above).
 - **✅ THE WITNESS LABEL JOIN IS INJECTIVE — CLOSED 2026-07-27 (main `55053c207`; x64 1793/0, wasm 1597/0).**
   Filed 2026-07-26 by the P1.7 disjointness rung's independent review, which went looking for whether the newly
   reserved instance names could collide with a witness label and found **the same defect one namespace over, needing

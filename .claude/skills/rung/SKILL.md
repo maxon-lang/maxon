@@ -1,6 +1,6 @@
 ---
 name: rung
-description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, independent review, optimization pass, gate battery, cross-target gate (all targets, non-native over ssh), rebase, fast-forward merge, push. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
+description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, independent review, optimization pass, gate battery, cross-target gate (every LOCAL target; remote/arm64 is synced separately by hand), rebase, fast-forward merge, push. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
 ---
 
 # Run one rung of the plan
@@ -320,40 +320,54 @@ size, so the check was re-deriving a known answer at full suite cost. Run the su
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
 | Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks |
-| Cross-target | **step 10** — every target the compiler claims, not just this host's. Unreachable ⇒ SKIP (say which); ran-and-failed ⇒ **RED** |
+| Cross-target | **step 10** — every **locally runnable** target, not just this host's. The remote arm64 lanes are NOT in the rung gate (synced by hand — see step 10). Not run ⇒ SKIP (say which); ran-and-failed ⇒ **RED** |
 
-## 10. The CROSS-TARGET gate — every target the compiler claims, once, before it lands
+## 10. The CROSS-TARGET gate — every LOCAL target, once, before it lands
 
 **Step 8's battery proved the rung on exactly ONE target: whichever one this host happens to be.**
-Everything else the compiler emits — `arm64-macos`, `arm64-linux`, `x64-linux`, `wasm32-wasi` — stays
-unverified until somebody eventually runs it, and *"somebody eventually"* is how **317 stale
-`specs/fragments-arm64-macos/` goldens** came to sit on `main` unnoticed, through a run of rungs that
-were all green on x64-windows. **A green suite on one target is evidence about one target.**
+Everything else the compiler emits stays unverified until somebody eventually runs it, and *"somebody
+eventually"* is how **317 stale `specs/fragments-arm64-macos/` goldens** came to sit on `main` unnoticed,
+through a run of rungs that were all green on x64-windows. **A green suite on one target is evidence
+about one target.**
 
 ```
-scripts/cross-target-gate.sh --mac-host=user@mac > temp/cross-target.log 2>&1; echo "exit=$?"
-tail -20 temp/cross-target.log        # the matrix; the FIVE suites behind it are in the same file
+scripts/cross-target-gate.sh > temp/cross-target.log 2>&1; echo "exit=$?"
+tail -20 temp/cross-target.log        # the matrix; the suites behind it are in the same file
 ```
 
-Add `--csharp` if the rung touched `maxon-sharp/`. **Redirect it** — this one runs five suites, so a
+Add `--csharp` if the rung touched `maxon-sharp/`. **Redirect it** — this one runs several suites, so a
 piped run that goes red costs *minutes* to re-run just to read what a file already had. Here `tail` is
 fine for the matrix precisely *because* the file is there for everything behind it.
 
 It builds both compilers, then runs the shv2 suite **per target**, each behind the runner that target
-needs — WSL for the Linux ELF, the vendored wasmtime for the wasm component, and `ssh` to a macOS host
-for the two arm64 targets (natively for `arm64-macos`, inside OrbStack for `arm64-linux`). It prints a
-matrix, one row per target.
+needs — natively for the host, WSL for the Linux ELF, the vendored wasmtime for the wasm component. It
+prints a matrix, one row per target.
 
 **Run it ONCE, here — on the final tree, after review and optimization, before the merge.** It does not
 belong on every commit: it is minutes of work whose answer only changes when the rung is finished.
-Running it *before* the merge is the point — the branch tip is shipped to the Mac as a **`git bundle`**,
-so nothing has to be pushed to be tested and no rung branch leaks onto `origin`.
+
+### ⛔ The REMOTE (arm64/Mac) lanes are NOT part of this gate — they are synced by hand (user, 2026-07-27)
+
+**`arm64-macos` and `arm64-linux` run over `ssh` to a Mac, and everything expensive about them is the
+REMOTE part, not the arm64 part**: a bundle transport, a second checkout's build, an OrbStack guest, and
+a machine that can be asleep, wedged, or behind flaky mDNS. **They cost the rung more than they caught** —
+one wedged `orb run` preflight alone burned ~95 minutes and produced *no verdict at all*. So the rung no
+longer waits on another machine.
+
+- **The gate skips them by default and SAYS SO** — two SKIP rows with the reason, so a green run can
+  never be read as full cross-target coverage.
+- **The sync is a separate, periodic, manual run:** `scripts/cross-target-gate.sh --mac --require-mac`
+  (or `bash scripts/remote-mac.sh --host=<user@mac> --shv2` for the native macOS lane alone, which
+  bypasses the OrbStack preflight). `--require-mac` makes an unreachable Mac a FAILURE there, which is
+  right when reaching it *was* the point. **Not your call to schedule as part of a rung.**
+- ⚠ **This is a deliberate COVERAGE TRADE, not a claim arm64 is fine.** Golden rot on an unrun lane is a
+  measured, recurring fact in this repo. **Do not describe a rung as cross-target verified on arm64.**
 
 | | |
 |---|---|
-| **Unreachable ⇒ SKIP, and the gate still passes** | A laptop asleep in another room must not block a rung. |
+| **Not run ⇒ SKIP, and the gate still passes** | A missing runner — or a lane that is deliberately out of scope — must not block a rung. |
 | **But a SKIP is reported, never folded into the green** | It means **UNVERIFIED**, not *proven good*. **Name the skipped targets in the rung report** — the one thing worse than not testing arm64 is believing you did. |
-| **A target that RUNS and FAILS is RED** | A rung-halting gate — **HALT AND ASK**, exactly like any other red gate. No flag softens it, and you never turn it green by dropping a target. |
+| **A target that RUNS and FAILS is RED** | A rung-halting gate — **HALT AND ASK**, exactly like any other red gate. No flag softens it, and you never turn it green by dropping a target. **This holds on the manual sync run too**: a red arm64 lane found by a periodic sync is still a real defect, and is fixed, not filed as *"the sync was red."* |
 
 ⚠ **Golden churn from this gate is real and belongs in the commit** — a non-native fragment that moves
 is a codegen change on that target. ⚠ **But a FILTERED run's fragments are not authoritative:** the

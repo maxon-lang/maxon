@@ -53,9 +53,10 @@ GATE_RESULT="FAIL"
 trap 'echo "remote-mac: RESULT=$GATE_RESULT"' EXIT
 
 # The Mac this checkout is normally paired with. A FALLBACK, not a policy: $MAXON_MAC_HOST and
-# --host= both still win, so another machine needs no edit here. It exists because the arm64 lanes
-# are the two this host cannot run natively, and a gate that skips them by DEFAULT — merely because
-# nobody exported a variable — reports "unverified" on the exact targets most likely to rot.
+# --host= both still win, so another machine needs no edit here. It exists so that ASKING for the
+# arm64 lanes is one decision, not two: since 2026-07-27 they are out of the per-rung gate and are
+# synced by hand, so the ask is explicit (`cross-target-gate.sh --mac`, or running this script) — but
+# having asked, you should not also have to remember a hostname to get a verdict.
 DEFAULT_MAC_HOST="estern@Joyces-Macbook-Pro.local"
 
 HOST="${MAXON_MAC_HOST:-$DEFAULT_MAC_HOST}"

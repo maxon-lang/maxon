@@ -7,13 +7,26 @@
 # closes that gap by running every supported target that can be reached from here, and by SAYING SO
 # when one cannot.
 #
-#   target        suite(s)          how it runs                       reachable from a Windows host
-#   ------        --------          -----------                       ----------------------------
-#   x64-windows   C# + shv2         natively                          always (this IS the host)
-#   x64-linux     shv2              WSL2 (static ELF, raw syscalls)   if WSL is installed
-#   wasm32-wasi   shv2              vendored wasmtime                 if vendor/wasmtime is present
-#   arm64-macos   C# + shv2         ssh -> the Mac, natively          if the Mac is awake
-#   arm64-linux   shv2              ssh -> the Mac -> OrbStack VM     if the Mac is awake
+#   target        suite(s)          how it runs                       in the rung gate?
+#   ------        --------          -----------                       -----------------
+#   x64-windows   C# + shv2         natively                          YES (this IS the host)
+#   x64-linux     shv2              WSL2 (static ELF, raw syscalls)   YES, if WSL is installed
+#   wasm32-wasi   shv2              vendored wasmtime                 YES, if vendor/wasmtime is present
+#   arm64-macos   C# + shv2         ssh -> the Mac, natively          NO — opt in with --mac
+#   arm64-linux   shv2              ssh -> the Mac -> OrbStack VM     NO — opt in with --mac
+#
+# ⭐ THE REMOTE LANES ARE OPT-IN, BECAUSE A REMOTE MACHINE IS NOT A GATE (user, 2026-07-27).
+#
+# The two arm64 lanes go over `ssh` to a Mac, and everything that makes them slow is the REMOTE part,
+# not the arm64 part: a bundle transport, a second checkout's build, an OrbStack guest, and a machine
+# that can be asleep, wedged, or on the other side of flaky mDNS. Measured, they cost the rung more
+# than they were catching — one wedged `orb run` preflight alone burned ~95 minutes and produced no
+# verdict at all. So they are no longer part of the per-rung gate. **They are SYNCED PERIODICALLY, BY
+# HAND** — `scripts/cross-target-gate.sh --mac` (or `remote-mac.sh` directly) — and when they run,
+# they run under exactly the same rules as before: ran-and-failed is RED.
+#
+# ⚠ That is a deliberate COVERAGE TRADE, not a claim the arm64 targets are fine. Their rows still
+# print, as SKIP with the reason, so a run of this gate can never be mistaken for full coverage.
 #
 # ⭐ BEST EFFORT MEANS UNREACHABLE IS NOT FAILURE — AND IS NOT SUCCESS EITHER.
 #
@@ -26,8 +39,13 @@
 # skill's HALT list), and no flag softens it.
 #
 # Usage:
-#   scripts/cross-target-gate.sh [--filter=PAT] [--mac-host=user@host] [--require-mac] [--no-mac]
-#                                [--csharp]
+#   scripts/cross-target-gate.sh [--filter=PAT] [--csharp]
+#                                [--mac] [--mac-host=user@host] [--require-mac]
+#
+# --mac turns the two remote arm64 lanes back on — that is the periodic manual sync. --mac-host= and
+# --require-mac each imply it, since naming a host or demanding it is already asking for the run.
+# --require-mac additionally makes an UNREACHABLE Mac a FAILURE rather than a skip, which is what you
+# want on a sync run: the whole point of the invocation was to reach it.
 #
 # --csharp additionally runs the (slow, ~3100-case) C# bootstrap suite on every host that can. Turn
 # it on when the rung touched `maxon-sharp/`; the rung's own gate battery already says to.
@@ -41,20 +59,22 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 FILTER=""
-# Same fallback `remote-mac.sh` carries, and for the same reason: without it the two arm64 targets
-# SKIP by default, and a skip reads as "unverified" on precisely the targets this host cannot check
-# for itself. $MAXON_MAC_HOST and --mac-host= both override it.
+# Same fallback `remote-mac.sh` carries: once you have asked for the remote lanes, the host should
+# not ALSO have to be spelled out. $MAXON_MAC_HOST and --mac-host= both override it. (It no longer
+# decides WHETHER the lanes run — --mac does. A default host used to be the thing standing between
+# the arm64 lanes and a silent skip; now the skip is the documented default and the flag is the ask.)
 MAC_HOST="${MAXON_MAC_HOST:-estern@Joyces-Macbook-Pro.local}"
 REQUIRE_MAC=0
-RUN_MAC=1
+# OFF by default: the remote lanes are the periodic manual sync, not a per-rung gate. See the header.
+RUN_MAC=0
 RUN_CSHARP=0
 
 for arg in "$@"; do
 	case "$arg" in
 		--filter=*)   FILTER="${arg#*=}" ;;
-		--mac-host=*) MAC_HOST="${arg#*=}" ;;
-		--require-mac) REQUIRE_MAC=1 ;;
-		--no-mac)     RUN_MAC=0 ;;
+		--mac)        RUN_MAC=1 ;;
+		--mac-host=*) MAC_HOST="${arg#*=}"; RUN_MAC=1 ;;
+		--require-mac) REQUIRE_MAC=1; RUN_MAC=1 ;;
 		--csharp)     RUN_CSHARP=1 ;;
 		*) echo "cross-target-gate: unknown argument '$arg'" >&2; exit 2 ;;
 	esac
@@ -178,9 +198,10 @@ fi
 # its exit code deliberately cannot distinguish "asleep" (0) from "green" (0).
 banner "arm64-macos + arm64-linux (ssh -> Mac)"
 if [ "$RUN_MAC" = 0 ]; then
-	echo "--no-mac given — skipping both arm64 targets."
-	skip_row "arm64-macos" "--no-mac"
-	skip_row "arm64-linux" "--no-mac"
+	echo "Remote lanes are opt-in and were not requested — skipping both arm64 targets."
+	echo "They are synced periodically by hand: scripts/cross-target-gate.sh --mac"
+	skip_row "arm64-macos" "remote, not requested (--mac)"
+	skip_row "arm64-linux" "remote, not requested (--mac)"
 elif [ -z "$MAC_HOST" ]; then
 	echo "No Mac host configured (--mac-host= or \$MAXON_MAC_HOST) — skipping both arm64 targets."
 	skip_row "arm64-macos" "no host configured"
@@ -232,8 +253,9 @@ fi
 
 if [ "$SKIPPED" -gt 0 ]; then
 	# Stated as a limit on COVERAGE, not as a warning to be scrolled past. The gate passed on what it
-	# could reach, and the rung's report should carry which targets went unverified.
-	echo "GREEN, with $SKIPPED target(s) SKIPPED — unreachable, so UNVERIFIED, not proven good."
+	# ran, and the rung's report should carry which targets went unverified. A skip is a skip whether
+	# the runner was absent or the lane was deliberately not requested — neither one is evidence.
+	echo "GREEN, with $SKIPPED target(s) SKIPPED — not run, so UNVERIFIED, not proven good."
 	echo "Say which in the rung report; do not describe this run as full cross-target coverage."
 	exit 0
 fi
