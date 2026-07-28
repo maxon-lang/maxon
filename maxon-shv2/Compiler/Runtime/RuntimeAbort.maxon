@@ -57,6 +57,14 @@ export enum RuntimeAbort
 	// COMPILER bug — where the alternative (a silent `retVoid`) would drop the element and leave `count`
 	// lying. Same "unreachable from source, abort not silence" class as `arrayElementSizeZero`.
 	setInsertNoFreeSlot = 76
+	// `__strix_slice`: the byte range `s.slice(start, endIndex: end)` resolved to is not a range of this
+	// string — a negative start, an INVERTED range, or an end past `length@8`. Reachable from source
+	// (`s.slice(idx, endIndex: s.startIndex())`, or an index taken from a LONGER string), and without the
+	// guard the negative length reaches `__mm_alloc` as an under-sized request followed by an
+	// out-of-buffer read. The reference dies on the same input: `String.sliceBytes` forwards to a throwing
+	// `managed.slice` under an `otherwise panic(…)`, so this abort matches the oracle's CLASS of answer
+	// (the process ends) though not its message — shv2's `mrt_panic` is x64-windows-only.
+	stringSliceInvalidRange = 77
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

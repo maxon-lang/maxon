@@ -1,0 +1,121 @@
+// Test: index-equality-and-ordering-read-the-grapheme-index
+function main() returns ExitCode
+	let s = "abcdefghijklm"
+	let start = s.startIndex()
+	let g = try s.findFirst("ghij") otherwise s.endIndex()
+	if start < g 'ordered'
+		print("lt\n")
+	end 'ordered' else 'notOrdered'
+		print("NOT lt\n")
+	end 'notOrdered'
+	if start == s.startIndex() 'same'
+		print("eq\n")
+	end 'same' else 'different'
+		print("NOT eq\n")
+	end 'different'
+	if g == start 'wrong'
+		print("BAD eq\n")
+	end 'wrong' else 'right'
+		print("ne\n")
+	end 'right'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __strix_make
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __strix_first
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __strix_end
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegReg rax, rcx
+    x64.jcc less, ordered
+    x64.jmp ifelse
+  ordered:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __strix_make
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.cmpRegReg rax, rcx
+    x64.setccReg equal, r13
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, same
+    x64.jmp ifelse
+  same:
+    x64.leaRegRdata rcx, [rip + __str_rec_9]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRdata rcx, [rip + __str_rec_11]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, wrong
+    x64.jmp ifelse
+  wrong:
+    x64.leaRegRdata rcx, [rip + __str_rec_13]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifelse:
+    x64.leaRegRdata rcx, [rip + __str_rec_15]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

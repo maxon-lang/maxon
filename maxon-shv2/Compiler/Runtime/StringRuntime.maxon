@@ -181,6 +181,14 @@ export let StrDecrefName = b"__str_decref"
 // calls `__str_decref` on every slot, and a slot holding a view of the receiver would double-free.
 export let StrRangeEqName = b"__str_range_eq"
 export let StrFindName = b"__str_find"
+
+// ⭐ **`__str_rfind(hay, needle)` — THE BACKWARD BYTE SEARCH (P1.8 Slice B2), `__str_find`'s mirror.** The
+// stdlib's `findLastIn` (`stdlib/String.maxon:1003-1028`), including its first-byte fast reject, scanning
+// DOWN from `hayLen - needleLen`. It is a BYTE search and needs no backward grapheme segmentation: the
+// grapheme index a `findLast` reports is derived from the byte position it lands on, by the SAME forward
+// `__strix_bidx` walk the forward search uses. It takes no start position where `__str_find` does — every
+// caller wants the whole haystack, and a backward window has no consumer to shape it.
+export let StrRFindName = b"__str_rfind"
 export let StrStartsWithName = b"__str_starts_with"
 export let StrEndsWithName = b"__str_ends_with"
 export let StrContainsName = b"__str_contains"
@@ -439,6 +447,11 @@ export type RuntimeUsage
 	// cannot see inside it" rule `__str_append` and `__str_clone` already follow.
 	export var usesStrRangeEq as bool
 	export var usesStrFind as bool
+	// The BACKWARD byte search (P1.8 Slice B2). Its own bit beside `usesStrFind`, following this file's
+	// one-bit-per-entry-point discipline: a program that only asks `s.contains(p)` must not carry a second
+	// search loop. It calls `__str_range_eq` inside its synthesized body, which this Maxon-module scan
+	// cannot see, so that need is declared by `closeStringMethodNeeds` exactly as `__str_find`'s is.
+	export var usesStrRFind as bool
 	export var usesStrStartsWith as bool
 	export var usesStrEndsWith as bool
 	export var usesStrContains as bool
@@ -488,9 +501,21 @@ export type RuntimeUsage
 	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
 	// (and the heap under it) exactly as `__str_split` declares them for its segments.
 	export var usesStrToBytes as bool
+	// ⭐ **THE P1.8 SLICE B2 `StringIndex` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
+	// existing discipline: a program that only asks `s.startIndex()` must carry neither the searches nor
+	// the segmenter under them. Each is set TRANSITIVELY by `recordCallUsage` from whichever entry point
+	// the module actually names (a `__strix_first` reference turns on `__strix_make`, `__strix_bidx` and
+	// `__str_find`, and `__strix_bidx` turns on `__gr_end` and the whole grapheme family under it).
+	export var usesStrIndexMake as bool
+	export var usesStrIndexEnd as bool
+	export var usesStrIndexByteToGrapheme as bool
+	export var usesStrIndexAdvance as bool
+	export var usesStrIndexFirst as bool
+	export var usesStrIndexLast as bool
+	export var usesStrIndexSlice as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -702,6 +727,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'strclone'
+	// ⚠ FIRST of the three family closures: the `StringIndex` family's members call into the OTHER two
+	// (`__gr_end`, `__str_find`/`__str_rfind`), so the bits it turns on must themselves be closed over by
+	// the closures below — see `closeStringIndexNeeds`.
+	recordStringIndexUsage(callee, usage: usage)
 	recordStringMethodUsage(callee, usage: usage)
 	recordGraphemeUsage(callee, usage: usage)
 	// The three MANAGED-element array copies (`__arr_slice_managed`/`__arr_clone_managed`/`__arr_append_managed`,
@@ -759,6 +788,75 @@ function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
 	closeGraphemeNeeds(usage)
 end 'recordGraphemeUsage'
 
+// ⭐ The P1.8 Slice B2 `StringIndex` family's arm of the callee → usage-bit map — the
+// `recordGraphemeUsage` twin, split out for the same reason: `recordCallUsage` stays a readable list of
+// families. Direct references only; what each referenced body in turn needs is closed by
+// `closeStringIndexNeeds`.
+function recordStringIndexUsage(callee ByteArray, usage RuntimeUsage)
+	if callee.equals(StrIndexMakeName) 'make'
+		usage.usesStrIndexMake = true
+	end 'make'
+	if callee.equals(StrIndexEndName) 'end'
+		usage.usesStrIndexEnd = true
+	end 'end'
+	if callee.equals(StrIndexByteToGraphemeName) 'bidx'
+		usage.usesStrIndexByteToGrapheme = true
+	end 'bidx'
+	if callee.equals(StrIndexAdvanceName) 'advance'
+		usage.usesStrIndexAdvance = true
+	end 'advance'
+	if callee.equals(StrIndexFirstName) 'first'
+		usage.usesStrIndexFirst = true
+	end 'first'
+	if callee.equals(StrIndexLastName) 'last'
+		usage.usesStrIndexLast = true
+	end 'last'
+	if callee.equals(StrIndexSliceName) 'slice'
+		usage.usesStrIndexSlice = true
+	end 'slice'
+	closeStringIndexNeeds(usage)
+end 'recordStringIndexUsage'
+
+// ⭐ **WHAT EACH `StringIndex` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
+// discovered, exactly as `closeStringMethodNeeds` and `closeGraphemeNeeds` declare their families'.
+// Run as a CLOSURE after every record so the answer cannot depend on the order in which the module
+// happens to name its entry points — and the order matters here more than in either sibling, because
+// this family reaches into BOTH of them (`__gr_end` below, `__str_find` beside).
+//
+// ⚠ It is run BEFORE the grapheme and string-method closures in `recordCallUsage`, so the bits it turns
+// on there are themselves closed over by those two. Turning on `usesGraphemeEnd` after
+// `closeGraphemeNeeds` had run would install `__gr_end` without the decoders and the classifier it calls.
+function closeStringIndexNeeds(usage RuntimeUsage)
+	// `__strix_end` counts the clusters; both searches turn a byte position into a grapheme index; and
+	// every one of the four producers mints its box through the one door.
+	if usage.usesStrIndexEnd 'countsClusters'
+		usage.usesGraphemeCount = true
+		usage.usesStrIndexMake = true
+	end 'countsClusters'
+	if usage.usesStrIndexFirst 'searchesForward'
+		usage.usesStrFind = true
+		usage.usesStrIndexByteToGrapheme = true
+		usage.usesStrIndexMake = true
+	end 'searchesForward'
+	if usage.usesStrIndexLast 'searchesBackward'
+		usage.usesStrRFind = true
+		usage.usesStrIndexByteToGrapheme = true
+		usage.usesStrIndexMake = true
+	end 'searchesBackward'
+	// Both conversions ARE the cluster walk (`emitGraphemeWalk`), so each pulls in the segmenter.
+	if usage.usesStrIndexByteToGrapheme or usage.usesStrIndexAdvance 'walksClusters'
+		usage.usesGraphemeEnd = true
+	end 'walksClusters'
+	// The box is one `__mm_alloc`; the slice builds a fused record and blits its bytes in.
+	if usage.usesStrIndexMake 'allocatesABox'
+		usage.usesHeap = true
+	end 'allocatesABox'
+	if usage.usesStrIndexSlice 'buildsAString'
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'buildsAString'
+end 'closeStringIndexNeeds'
+
 // ⭐ **WHAT EACH GRAPHEME BODY CALLS THAT THIS SCAN CANNOT SEE.** The family's members call each other from
 // inside their SYNTHESIZED Std bodies, which walk no Maxon module — so the dependency is DECLARED here
 // rather than discovered, exactly as `closeStringMethodNeeds` declares the String family's. Run as a
@@ -803,6 +901,9 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrFindName) 'find'
 		usage.usesStrFind = true
 	end 'find'
+	if callee.equals(StrRFindName) 'rfind'
+		usage.usesStrRFind = true
+	end 'rfind'
 	if callee.equals(StrStartsWithName) 'startswith'
 		usage.usesStrStartsWith = true
 	end 'startswith'
@@ -834,7 +935,7 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	if usage.usesStrContains or usage.usesStrReplace or usage.usesStrSplit 'needsFind'
 		usage.usesStrFind = true
 	end 'needsFind'
-	if usage.usesStrFind or usage.usesStrStartsWith or usage.usesStrEndsWith 'needsRangeEq'
+	if usage.usesStrFind or usage.usesStrRFind or usage.usesStrStartsWith or usage.usesStrEndsWith 'needsRangeEq'
 		usage.usesStrRangeEq = true
 	end 'needsRangeEq'
 	// `replace` and `split` answer a degenerate (empty) needle/delimiter with a CLONE of the receiver — the
@@ -888,6 +989,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrFind 'strfind'
 		buildStrFind(module)
 	end 'strfind'
+	if usage.usesStrRFind 'strrfind'
+		buildStrRFind(module)
+	end 'strrfind'
 	if usage.usesStrStartsWith 'strstartswith'
 		buildStrAffixPredicate(module, name: StrStartsWithName, atTail: false)
 	end 'strstartswith'
@@ -1511,7 +1615,10 @@ export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids 
 	// interpolation of a single part is (`StringInterpOverheadBytes` = record + NUL).
 	let overhead = emitConst(module, block: block, value: StringInterpOverheadBytes, ids: ids)
 	let allocSize = emitBin(module, block: block, a: byteLen, b: overhead, opcode: StdBinOpcode.add, ids: ids)
-	let zeroDtor = emitConst(module, block: block, value: 0, ids: ids)
+	// A fused String record owns nothing beyond the one allocation it IS, so nothing cascades — the same
+	// `TrivialDestructor` the parser passes at `emitBoxAlloc`, read from its one declaration rather than
+	// spelled as a bare 0 (`__strix_make` is the third reader of it).
+	let zeroDtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let newRec = ids.mint()
 	module.appendOp(block, op: StdOp.call(newRec, callee: MmAllocName, args: twoArgs(allocSize, second: zeroDtor)))
 
@@ -1682,6 +1789,87 @@ function buildStrFind(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrFind'
+
+// ⭐ **`__str_rfind(hay, needle) -> BytePos` — THE ABSOLUTE INDEX OF THE LAST OCCURRENCE, or
+// `StrFindNotFound`.** The stdlib's `findLastIn` (`stdlib/String.maxon:1003-1028`): scan DOWN from the last
+// position a match could start at, first-byte-reject each candidate, and verify a hit with
+// `__str_range_eq`. `__str_find`'s mirror in every respect but the direction, and it keeps the same
+// first-byte check for the same measured reason (`__str_range_eq` is a real call and nearly every
+// candidate mismatches on byte 0).
+//
+// ⭐ **THE DOWNWARD SCAN IS WHAT MAKES AN OVERLAPPING NEEDLE ANSWER THE RIGHTMOST START**, which is the
+// behaviour `find-last-overlapping` pins: `"aaa".findLast("aa")` is 1, not 0. A forward scan keeping the
+// last hit would give the same answer here but pay the whole haystack every time.
+//
+// ⚠ **THE EMPTY NEEDLE ANSWERS THE BYTE LENGTH, NOT 0**, and that is the stdlib's answer
+// (`findLastIn:1006-1008`) rather than a choice: the empty string occurs at every position, and the LAST
+// such position is the end. `__str_find`'s empty-needle arm answers its `startPos` for the same reason
+// read forwards. Both are answered before the loop because the loop loads `needle[0]`, which an empty
+// String's buffer has no byte for.
+//
+// ⚠ **THE LOOP BOUND GOES NEGATIVE FOR A NEEDLE LONGER THAN THE HAYSTACK**, and the header's `i < 0` test
+// answers that correctly on the first iteration — so there is no separate too-long case, exactly as
+// `__str_find`'s `i > last` needs none.
+function buildStrRFind(module StdModule)
+	var func = IrFunction.createFromStd(StrRFindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var emptyNeedle = module.addBlock(func, label: b"emptyNeedle")
+	var scan = module.addBlock(func, label: b"scan")
+	var header = module.addBlock(func, label: b"header")
+	var probe = module.addBlock(func, label: b"probe")
+	var verify = module.addBlock(func, label: b"verify")
+	var step = module.addBlock(func, label: b"step")
+	var found = module.addBlock(func, label: b"found")
+	var notFound = module.addBlock(func, label: b"notFound")
+
+	emitParams(module, block: entry, count: 2)
+	let hay = 0 as ValueId
+	let needle = 1 as ValueId
+
+	let hayLen = emitLoadField(module, block: entry, record: hay, offset: StringLengthOffset, ids: ids)
+	let hayBuf = emitLoadField(module, block: entry, record: hay, offset: StringBufferOffset, ids: ids)
+	let needleLen = emitLoadField(module, block: entry, record: needle, offset: StringLengthOffset, ids: ids)
+	let needleBuf = emitLoadField(module, block: entry, record: needle, offset: StringBufferOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: needleLen, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: emptyNeedle.id, elseBlockId: scan.id))
+
+	module.setTerminator(emptyNeedle, op: StdOp.ret(hayLen))
+
+	let firstByte = emitLoadByteAt(module, block: scan, addr: needleBuf, ids: ids)
+	let last = emitBin(module, block: scan, a: hayLen, b: needleLen, opcode: StdBinOpcode.sub, ids: ids)
+	module.setTerminator(scan, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	scan.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(last)))
+
+	let before = emitCmp(module, block: header, a: i, b: zero, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(before, thenBlockId: notFound.id, elseBlockId: probe.id))
+
+	let candidate = emitLoadByteIndexed(module, block: probe, base: hayBuf, index: i, ids: ids)
+	let firstMatches = emitCmp(module, block: probe, a: candidate, b: firstByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(probe, op: StdOp.condBranch(firstMatches, thenBlockId: verify.id, elseBlockId: step.id))
+
+	let hayAddr = emitBin(module, block: verify, a: hayBuf, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let whole = ids.mint()
+	module.appendOp(verify, op: StdOp.call(whole, callee: StrRangeEqName, args: threeArgs(hayAddr, second: needleBuf, third: needleLen)))
+	module.setTerminator(verify, op: StdOp.condBranch(whole, thenBlockId: found.id, elseBlockId: step.id))
+
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let iPrev = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iPrev)))
+
+	module.setTerminator(found, op: StdOp.ret(i))
+
+	let missing = emitConst(module, block: notFound, value: StrFindNotFound, ids: ids)
+	module.setTerminator(notFound, op: StdOp.ret(missing))
+
+	module.functions.push(func)
+end 'buildStrRFind'
 
 // ⭐ **`__str_starts_with` AND `__str_ends_with` FROM ONE BUILDER** — the stdlib's `startsWith` (`:368-374`)
 // and `endsWith` (`:376-383`), which are the SAME function apart from where the compared window begins:
@@ -2015,10 +2203,25 @@ end 'buildStrSplit'
 // element walk from double-freeing the receiver's bytes. Written once, so a change to what a segment IS
 // (its `isAscii`, its record shape, its owner) cannot reach the interior segments and miss the tail.
 function emitPushSliceSegment(module StdModule, block IrBlock, arr ValueId, srcBuf ValueId, from ValueId, endPos ValueId, isAscii ValueId, ids ValueMinter)
+	emitPushSegment(module, block: block, arr: arr, segment: emitSliceSegment(module, block: block, srcBuf: srcBuf, from: from, endPos: endPos, isAscii: isAscii, ids: ids), ids: ids)
+end 'emitPushSliceSegment'
+
+// ⭐ **THE BYTES `[from, endPos)` OF `srcBuf` AS A FRESH OWNED STRING** — the END-EXCLUSIVE half-open range
+// every String-slicing consumer means, and the whole of "a segment is an INDEPENDENT COPY, not a view".
+// Split out of `emitPushSliceSegment` for its THIRD consumer: `__str_split` pushes the result into an
+// array, and `__strix_slice` (`s.slice(a, endIndex: b)`) RETURNS it. Written once so a change to what a
+// slice IS — its `isAscii`, its record shape, its owner — cannot reach the split's segments and miss
+// `slice`'s result, which is exactly the drift that would let one of them alias the receiver's bytes and
+// double-free under `__str_decref`.
+//
+// ⚠ **IT DOES NOT VALIDATE THE RANGE.** `__str_split` derives both ends from its own scan and cannot
+// produce a bad one; `__strix_slice` takes them from the caller and checks them itself, aborting rather
+// than handing a negative length to `__mm_alloc`. The check belongs where an untrusted range enters.
+export function emitSliceSegment(module StdModule, block IrBlock, srcBuf ValueId, from ValueId, endPos ValueId, isAscii ValueId, ids ValueMinter) returns ValueId
 	let segLen = emitBin(module, block: block, a: endPos, b: from, opcode: StdBinOpcode.sub, ids: ids)
 	let segAddr = emitBin(module, block: block, a: srcBuf, b: from, opcode: StdBinOpcode.add, ids: ids)
-	emitPushSegment(module, block: block, arr: arr, segment: emitBuildOwnedInlineString(module, block: block, ids: ids, srcBuf: segAddr, srcLen: segLen, isAscii: isAscii), ids: ids)
-end 'emitPushSliceSegment'
+	return emitBuildOwnedInlineString(module, block: block, ids: ids, srcBuf: segAddr, srcLen: segLen, isAscii: isAscii)
+end 'emitSliceSegment'
 
 // Hand one finished segment to the array. `__arr_push` is void, but a Std `call` still defines a result
 // value, so the discarded id is minted here once rather than at each of `__str_split`'s three push sites.
@@ -2032,7 +2235,7 @@ end 'emitPushSegment'
 // `replace`'s two passes and `split`'s scan pass the same three values, and a haystack/needle swap between
 // two of those copies is a SILENT WRONG ANSWER (a search of the needle for the haystack still compiles, still
 // runs, and simply does not find things) rather than anything a compiler would catch.
-function emitStrFindCall(module StdModule, block IrBlock, hay ValueId, startPos ValueId, needle ValueId, ids ValueMinter) returns ValueId
+export function emitStrFindCall(module StdModule, block IrBlock, hay ValueId, startPos ValueId, needle ValueId, ids ValueMinter) returns ValueId
 	let idx = ids.mint()
 	module.appendOp(block, op: StdOp.call(idx, callee: StrFindName, args: threeArgs(hay, second: startPos, third: needle)))
 	return idx

@@ -1535,6 +1535,65 @@ function undeclaredNamedElementStorageBytes(name ByteArray) returns ByteOffset
 	return primitiveTypeByteSize(ValueTypeTag.named)
 end 'undeclaredNamedElementStorageBytes'
 
+// ⭐⭐ **THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2), AND WHY IT WEARS A RESERVED NAME.**
+//
+// The reference declares it as an ordinary two-field `type` (`stdlib/String.maxon:917-946`: `var charIdx as
+// GraphemeIndex`, `var bytePosition as BytePos`), so shv2 registers an ordinary two-field `StructLayout`
+// and gets the whole struct-value machinery for it — a binding's type, aggregate identity on a reassign,
+// and a scope-exit drop through the trivial-struct `__mm_decref` — with no new `ValueTypeTag` and no new
+// ownership rule. shv2 has struct VALUES; what it does not have is a `type` declaration for this one, and
+// this is that declaration, made by the compiler.
+//
+// ⚠ **IT IS NAMED `__StringIndex`, NOT `StringIndex`, AND THAT IS A SAFETY PROPERTY RATHER THAN A STYLE.**
+// The registry is a MAP keyed by name: a user program declaring its own `type StringIndex` would land in
+// the same bucket, and whichever write ran last would win — after which `s.startIndex()` mints a 16-byte
+// box the parser then reads through the USER's field table, at the user's offsets and widths. Silent
+// memory corruption, decided by file order. The `__` prefix makes the contest unrepresentable instead of
+// merely unlikely: `Parser.requireUnreservedName` refuses (E2051) every declaration of a `__`-prefixed
+// name, so no source can spell this one. It is the SAME reserved space `mangleGenericInstance` mints a
+// contested instance name into, applied one level up — and the cost is nil, because the corpus never
+// writes `StringIndex` in a type position at all (measured: zero occurrences across `specs/`). A
+// `StringIndex` is only ever a value flowing from `startIndex`/`endIndex`/`findFirst`/`findLast` into
+// `slice`/`charIndex()`/`bytePos()`/`==`, none of which name the type.
+// ⇒ The consequence to know: a `StringIndex` cannot cross a function boundary, because a parameter or
+// return type would have to name it. The reference allows that and shv2 does not, until the type gains a
+// user-visible spelling and, with it, a builtin-redeclaration diagnostic to defend it.
+export let StringIndexTypeName = b"__StringIndex"
+
+// Its two fields, in the reference's own declaration ORDER — which is the layout, since
+// `StructLayout.offsetOfField` derives an offset from the index. Both are `var` in the reference and
+// NEITHER is exported: the reference reaches them through the `charIndex()`/`bytePos()` accessors, and a
+// non-exported field is E3014 from anywhere but the declaring type, which here is nowhere. Immutable
+// because nothing writes a `StringIndex` after it is minted.
+let StringIndexCharIdxFieldName = b"charIdx"
+let StringIndexBytePosFieldName = b"bytePosition"
+
+// ⭐ **THE LAYOUT, AND THE CHECK THAT IT MATCHES THE BOX THE RUNTIME BUILDS.** Two readers describe this
+// one shape and they must not drift: the PARSER reads the fields through `emitFieldLoad`, which derives
+// offsets from this layout, while `__strix_make` WRITES them through `StringIndexRuntime`'s own
+// constants. The assertions below are what make that pair a checked invariant rather than a promise —
+// `buildStringRecordBytes`'s `appendRecordField` discipline, applied to a struct box.
+function stringIndexLayout() returns StructLayout
+	var layout = StructLayout.create(StringIndexTypeName)
+	layout.addField(StringIndexCharIdxFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none)
+	layout.addField(StringIndexBytePosFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none)
+
+	if layout.offsetOfField(StringIndexCharIdxFieldIndex) != StringIndexCharIdxOffset or layout.offsetOfField(StringIndexBytePosFieldIndex) != StringIndexBytePosOffset 'offsetDrift'
+		panic("stringIndexLayout: the struct layout puts `charIdx`/`bytePosition` at {layout.offsetOfField(StringIndexCharIdxFieldIndex)}/{layout.offsetOfField(StringIndexBytePosFieldIndex)} but `__strix_make` writes them at {StringIndexCharIdxOffset}/{StringIndexBytePosOffset} — the parser's field reads and the runtime's field writes have drifted")
+	end 'offsetDrift'
+	if layout.sizeBytes() as ParsedInt != StringIndexBoxBytes 'sizeDrift'
+		panic("stringIndexLayout: the struct layout is {layout.sizeBytes()} bytes but `__strix_make` allocates {StringIndexBoxBytes} — the box the runtime builds and the box the parser reads have drifted")
+	end 'sizeDrift'
+	return layout
+end 'stringIndexLayout'
+
+// The two fields' declaration indices — what `Parser.parseStringIndexMethodCall` hands `emitFieldLoad`,
+// and what the drift check above reads the offsets at. Named because an index IS the identity here (see
+// `StructLayout.offsetOfField`), so a bare `0`/`1` at a read site is exactly the magic value the rule
+// against them is for.
+export let StringIndexCharIdxFieldIndex = 0 as FieldIndex
+export let StringIndexBytePosFieldIndex = 1 as FieldIndex
+
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
 // per call (a `MaxonTypeArray` is owned by the instance it is interned into).
 function singletonInteger() returns MaxonTypeArray
@@ -3617,6 +3676,27 @@ export type ProgramSignatures
 	export function containsStruct(name ByteArray) returns bool
 		return self.structTypes.contains(name)
 	end 'containsStruct'
+
+	// ⭐ **REGISTER THE COMPILER-OWNED `StringIndex` TYPE (P1.8 slice B2).** Called by the declaration
+	// SWEEP when a file's tokens name one of the four methods that PRODUCE a `StringIndex`
+	// (`Parser.atStringIndexProducer`) — the same shape `internArrayByteInstance` and
+	// `internBuiltinIntegerInstance` are reached in, and for the same reason: the type has no declaration
+	// to register from, and a program that never takes a String index must not carry the entry. Idempotent,
+	// so the sweep is the WRITE and every parser read is a pure read; a per-file parse is therefore never
+	// the first to mutate the shared registry.
+	export function registerStringIndexType()
+		if self.structTypes.contains(StringIndexTypeName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+		self.structTypes.upsert(StringIndexTypeName, value: stringIndexLayout())
+	end 'registerStringIndexType'
+
+	// The compiler-owned `StringIndex` layout, for the parser's field reads. It PANICS rather than
+	// answering when the type is unregistered, because every caller reaches it through a value the parser
+	// itself minted with the `structRef` tag — which the sweep must already have registered the layout for.
+	export function stringIndexLayoutOrPanic() returns StructLayout
+		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — every StringIndex value is minted by a method the sweep's `atStringIndexProducer` scan sees, and that scan is what calls `registerStringIndexType`")
+	end 'stringIndexLayoutOrPanic'
 
 	// --- Generic-instance queries (P1.6-A) ---
 

@@ -395,6 +395,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// functions are appended to one module and the backend resolves calls by name.
 	installGraphemeRuntime(pipeline.stdModule, usage: usage)
 
+	// The `StringIndex` runtime (`__strix_*`, P1.8 slice B2) — installed the same already-lowered way,
+	// keyed on its OWN per-entry-point bits so a program that never takes a String index carries none of
+	// it. It sits after the grapheme install because its two conversions walk `__gr_end`; as above, the
+	// bit was settled by `scanRuntimeUsage` before any install ran, so the order is readability rather
+	// than a dependency.
+	installStringIndexRuntime(pipeline.stdModule, usage: usage)
+
 	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
 	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers

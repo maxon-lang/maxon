@@ -1,0 +1,379 @@
+// Runtime/StringIndexRuntime.maxon — the `StringIndex` box and the five `String` methods that traffic in
+// one: `startIndex` / `endIndex` / `findFirst` / `findLast` / `slice` (P1.8 slice B2).
+//
+// ⭐ **A `StringIndex` IS A TWO-WORD HEAP BOX, AND THAT IS THE REFERENCE'S OWN REPRESENTATION.**
+// `stdlib/String.maxon:917-946` declares `type StringIndex` with `var charIdx as GraphemeIndex` and
+// `var bytePosition as BytePos` — a Maxon `type`, i.e. a heap object — so a box here costs what the
+// oracle costs and answers every question it answers. It is an ordinary struct box in every respect:
+// `__mm_alloc`'d with a zero destructor, dropped by `__mm_decref` (`managedNameDropCallee`'s trivial-struct
+// arm), and its two fields are read through the SAME `emitFieldLoad` door a user struct's are.
+//
+// ⭐ **THE TYPE IS REGISTERED UNDER THE RESERVED NAME `__StringIndex`** (`SignatureIndex.stringIndexLayout`)
+// — see there for why the compiler-owned layout may not take the user-visible spelling.
+//
+// ⭐ **PORTED FROM `stdlib/String.maxon` AND `stdlib/helpers/string/grapheme.maxon`, WHICH IS THE ORACLE.**
+// Both reference compilers execute that same stdlib, so there is no divergence between them to resolve.
+// What changes is the SHAPE only: shv2 reads no stdlib, so each helper is a hand-built `StdOp` graph in the
+// manner of `StringRuntime`/`GraphemeRuntime`.
+//
+// ⚠ **THE ONE THING DELIBERATELY NOT PORTED: THE `hasSingleByteGraphemes()` FAST PATH.** The stdlib
+// collapses `byteIndexToGraphemeIndex` and `graphemeOffsetToBytePos` to arithmetic when the string is
+// classified one-byte-per-grapheme (`grapheme.maxon:384-404`, `:408-424`). shv2's record carries
+// `isAscii@40`, which is a DIFFERENT predicate: shv2 honours GB3, so `"\r\n"` is ONE cluster in an
+// all-ASCII string (`GraphemeRuntime`'s divergence 1) and `charIdx == bytePos` is then FALSE for every
+// position after a CRLF. Taking the flag as a licence would be the reference's own `isAsciiFlag`
+// shortcut reintroduced one file over — the exact bug that made its `count()` and its iterator disagree.
+// `__gr_count` does not have the shortcut either, for the same reason, so the family is consistent: every
+// byte↔grapheme conversion in shv2 walks `__gr_end`.
+
+// ⭐ **THE BOX'S FIELD OFFSETS AND ITS SIZE.** They are asserted against the registered `StructLayout`
+// (`SignatureIndex.stringIndexLayout`) rather than merely agreeing with it by inspection, because the
+// PARSER reads the fields through the layout (`emitFieldLoad`) and these graphs write them through these
+// constants — two readers of one shape, which is the pair this project keeps finding drifted.
+export let StringIndexCharIdxOffset = 0 as ByteOffset
+export let StringIndexBytePosOffset = 8 as ByteOffset
+export let StringIndexBoxBytes = 16 as ParsedInt
+
+// ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
+// signature slotting) but NOT `__mm_`-prefixed, so none of them widens the heap decision by its prefix;
+// each declares its own transitive floor in `recordCallUsage` exactly as the String and grapheme families
+// do.
+//
+//   * `__strix_make(charIdx, bytePos)` — mint a `StringIndex`. THE ONE DOOR the box is born through, so
+//     its two fields cannot be written in one order here and another there.
+//   * `__strix_end(strRec)` — `s.endIndex()`: the index one past the last cluster, i.e.
+//     `(count(), byteLength())`. The reference's `String.endIndex` (`stdlib/String.maxon:374-377`).
+//   * `__strix_bidx(strRec, byteIdx)` — the number of clusters before byte `byteIdx`
+//     (`byteIndexToGraphemeIndex`). What turns a byte position a SEARCH found into the grapheme index a
+//     `StringIndex` carries.
+//   * `__strix_advance(strRec, startBytePos, count)` — the byte position `count` clusters after
+//     `startBytePos` (`graphemeOffsetToBytePos`). What `slice(start, length: n)` needs.
+//   * `__strix_first(hay, needle)` / `__strix_last(hay, needle)` — the two searches, THROWING
+//     `StringError.notFound` through the dual-register `errorReturn` ABI exactly as the stdlib's
+//     `findFirst`/`findLast` do (`String.maxon:460-466`).
+//   * `__strix_slice(strRec, startBytePos, endBytePos)` — the END-EXCLUSIVE byte range as a fresh OWNED
+//     String (the reference's `sliceBytes`, `String.maxon:335-338`).
+export let StrIndexMakeName = b"__strix_make"
+export let StrIndexEndName = b"__strix_end"
+export let StrIndexByteToGraphemeName = b"__strix_bidx"
+export let StrIndexAdvanceName = b"__strix_advance"
+export let StrIndexFirstName = b"__strix_first"
+export let StrIndexLastName = b"__strix_last"
+export let StrIndexSliceName = b"__strix_slice"
+
+// The error flag both searches throw on a miss — an error case's `ordinal + 1`, so 1 is
+// `StringError.notFound` (ordinal 0 in `stdlib/String.maxon:6-9`). The same convention
+// `ArrayRuntime.ArrIndexOutOfBoundsFlag` follows, and the same `NoErrorFlag` 0 means success.
+let StrIndexNotFoundFlag = 1 as ParsedInt
+let StrIndexNoErrorFlag = 0 as ParsedInt
+
+// The `throws` type name stamped on the two searching functions. It matches `StringError` in
+// `stdlib/String.maxon`, the enum a user `try s.findFirst(n) otherwise …` binds; for a runtime function it
+// is documentation only — `funcSignatureResultValTypes` reads `throwsClauseIsThrowing` (throwing vs none),
+// never the name's bytes.
+let StringErrorTypeName = "StringError"
+
+// The THROWING `StringIndex` runtime callees. `__strix_first`/`__strix_last` return via the dual-register
+// `errorReturn` ABI and can throw `StringError.notFound`, so a call to one MUST become a `tryCall`. The
+// String-index twin of `ArrayRuntime.isThrowingArrayRuntimeCallee`; the three families are composed by
+// `isThrowingRuntimeCallee`, which is read at the ONE call site in the parser (E3055 accept) and the ONE in
+// SemanticCheck (E3057 reject), so the accept and the reject cannot name different sets.
+//
+// ⚠ This names two callees as throwing and `buildStringIndexSearch` stamps both their `throws` clauses —
+// from the SAME two `StrIndex*Name` constants, through one builder that cannot stamp one and not the other.
+// That is what `ArrayRuntime.verifyThrowingAccessorsMatchPredicate` had to check at install time for its
+// seven separately-built accessors; here the single builder makes the two facts one.
+export function isThrowingStringIndexRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(StrIndexFirstName) or callee.equals(StrIndexLastName)
+end 'isThrowingStringIndexRuntimeCallee'
+
+// Install the referenced `StringIndex` runtime functions into the lowered Std module. Called AFTER the
+// pipeline (like `installStringRuntime`), so these are appended already-lowered and never re-optimized.
+// Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
+export function installStringIndexRuntime(module StdModule, usage RuntimeUsage)
+	if usage.usesStrIndexMake 'make'
+		buildStringIndexMake(module)
+	end 'make'
+	if usage.usesStrIndexEnd 'end'
+		buildStringIndexEnd(module)
+	end 'end'
+	if usage.usesStrIndexByteToGrapheme 'bidx'
+		buildStringIndexByteToGrapheme(module)
+	end 'bidx'
+	if usage.usesStrIndexAdvance 'advance'
+		buildStringIndexAdvance(module)
+	end 'advance'
+	if usage.usesStrIndexFirst 'first'
+		buildStringIndexSearch(module, name: StrIndexFirstName, fromEnd: false)
+	end 'first'
+	if usage.usesStrIndexLast 'last'
+		buildStringIndexSearch(module, name: StrIndexLastName, fromEnd: true)
+	end 'last'
+	if usage.usesStrIndexSlice 'slice'
+		buildStringIndexSlice(module)
+	end 'slice'
+end 'installStringIndexRuntime'
+
+// ⭐ **`__strix_make(charIdx, bytePos) -> StringIndex` — THE ONE DOOR A `StringIndex` IS BORN THROUGH.**
+// One `__mm_alloc` of `StringIndexBoxBytes` with a zero destructor, then the two fields. Every producer
+// (`startIndex` at the parser, `__strix_end`, both searches) goes through it, so a field written at the
+// wrong offset is impossible rather than merely unlikely — the discipline `emitBuildOwnedInlineString`
+// gives the String record one file over.
+function buildStringIndexMake(module StdModule)
+	var func = IrFunction.createFromStd(StrIndexMakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let charIdx = 0 as ValueId
+	let bytePos = 1 as ValueId
+
+	let size = emitConst(module, block: entry, value: StringIndexBoxBytes, ids: ids)
+	// A `StringIndex` owns nothing, so nothing cascades — the SAME `TrivialDestructor` the parser passes
+	// at `emitBoxAlloc` for every other struct box, read from its one declaration rather than re-spelled
+	// as a bare 0 here.
+	let dtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
+	let box = ids.mint()
+	module.appendOp(entry, op: StdOp.call(box, callee: MmAllocName, args: twoArgs(size, second: dtor)))
+	emitStoreField(module, block: entry, record: box, offset: StringIndexCharIdxOffset, value: charIdx)
+	emitStoreField(module, block: entry, record: box, offset: StringIndexBytePosOffset, value: bytePos)
+	module.setTerminator(entry, op: StdOp.ret(box))
+
+	module.functions.push(func)
+end 'buildStringIndexMake'
+
+// `__strix_end(strRec) -> StringIndex` — the reference's `String.endIndex` (`stdlib/String.maxon:374-377`):
+// the cluster COUNT paired with the byte length, i.e. the position one past the last cluster.
+//
+// ⚠ **IT IS O(n), because `__gr_count` is** — the reference's `endIndex` calls `count()` too, and shv2's
+// `__gr_count` deliberately carries no ASCII shortcut (this file's header). `s.endIndex()` inside a loop
+// over `s` is therefore O(n²) in USER code, which is exactly what the reference does.
+function buildStringIndexEnd(module StdModule)
+	var func = IrFunction.createFromStd(StrIndexEndName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.call(count, callee: GraphemeCountName, args: argsOf(record)))
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitStringIndexMakeCall(module, block: entry, charIdx: count, bytePos: len, ids: ids)))
+
+	module.functions.push(func)
+end 'buildStringIndexEnd'
+
+// `idx = __strix_make(charIdx, bytePos)` — minted and appended in ONE step. Shared by the three graphs that
+// produce a box, so a swap of the two arguments between copies is unrepresentable rather than a silent
+// wrong answer (`emitStrFindCall`'s reason, one file over).
+function emitStringIndexMakeCall(module StdModule, block IrBlock, charIdx ValueId, bytePos ValueId, ids ValueMinter) returns ValueId
+	let box = ids.mint()
+	module.appendOp(block, op: StdOp.call(box, callee: StrIndexMakeName, args: twoArgs(charIdx, second: bytePos)))
+	return box
+end 'emitStringIndexMakeCall'
+
+// ⭐ **`__strix_bidx(strRec, byteIdx) -> GraphemeIndex`** — the reference's `byteIndexToGraphemeIndex`
+// (`grapheme.maxon:382-404`): how many clusters begin before byte `byteIdx`. Walk `__gr_end` from 0 and
+// count the steps, stopping at `byteIdx` OR at the end of the string — the second bound is what makes a
+// `byteIdx` past the end answer the cluster count rather than loop.
+//
+// ⚠ Its ASCII shortcut is deliberately NOT ported; see this file's header.
+function buildStringIndexByteToGrapheme(module StdModule)
+	var func = IrFunction.createFromStd(StrIndexByteToGraphemeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let byteIdx = 1 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	emitGraphemeWalk(module, func: func, entry: entry, record: record, startPos: zero, limit: byteIdx, limitIsBytePos: true, ids: ids)
+
+	module.functions.push(func)
+end 'buildStringIndexByteToGrapheme'
+
+// ⭐ **`__strix_advance(strRec, startBytePos, count) -> BytePos`** — the reference's
+// `graphemeOffsetToBytePos` (`grapheme.maxon:406-424`): the byte position `count` clusters after
+// `startBytePos`, clamped to the end of the string. What `s.slice(start, length: n)` turns its count into.
+//
+// ⚠ Its ASCII shortcut is deliberately NOT ported; see this file's header.
+function buildStringIndexAdvance(module StdModule)
+	var func = IrFunction.createFromStd(StrIndexAdvanceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 3)
+	let record = 0 as ValueId
+	let startBytePos = 1 as ValueId
+	let count = 2 as ValueId
+
+	emitGraphemeWalk(module, func: func, entry: entry, record: record, startPos: startBytePos, limit: count, limitIsBytePos: false, ids: ids)
+
+	module.functions.push(func)
+end 'buildStringIndexAdvance'
+
+// ⭐⭐ **ONE CLUSTER WALK, TWO ANSWERS — the two byte↔grapheme conversions are the SAME loop read from
+// opposite ends.** Both step `__gr_end` from a byte position carrying a step counter, both stop when the
+// string runs out, and they differ ONLY in which of the two loop-carried values is tested against the
+// caller's `limit` and which is returned:
+//
+//   * `__strix_bidx`  — stop when the BYTE POSITION reaches `limit`; return the STEP COUNT.
+//   * `__strix_advance` — stop when the STEP COUNT reaches `limit`; return the BYTE POSITION.
+//
+// The reference writes them as two functions with two copies of the walk (`grapheme.maxon:382-424`), and
+// they are two functions here too — but from one description, because a change to what "the next cluster
+// starts here" means must not reach one and miss the other. (`buildStrAffixPredicate`'s "one graph, two
+// symbols" parameterization, applied to a pair that differs by a projection rather than by an offset.)
+//
+// The end-of-string bound is tested SECOND, after the caller's limit, so a `limit` already reached returns
+// without a redundant length compare — and, for `advance`, so a `count` of 0 at the very end of the string
+// answers `startBytePos` rather than stepping.
+function emitGraphemeWalk(module StdModule, func IrFunction, entry IrBlock, record ValueId, startPos ValueId, limit ValueId, limitIsBytePos bool, ids ValueMinter)
+	var header = module.addBlock(func, label: b"header")
+	var checkLen = module.addBlock(func, label: b"checkLen")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let zeroSteps = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let pos = ids.mint()
+	let steps = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(steps, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(startPos, second: zeroSteps)))
+
+	let tested = graphemeWalkProjection(pos, steps: steps, wantBytePos: limitIsBytePos)
+	let reached = emitCmp(module, block: header, a: tested, b: limit, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(reached, thenBlockId: done.id, elseBlockId: checkLen.id))
+
+	let exhausted = emitCmp(module, block: checkLen, a: pos, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(checkLen, op: StdOp.condBranch(exhausted, thenBlockId: done.id, elseBlockId: body.id))
+
+	let nextPos = ids.mint()
+	module.appendOp(body, op: StdOp.call(nextPos, callee: GraphemeEndName, args: twoArgs(record, second: pos)))
+	let one = emitConst(module, block: body, value: 1, ids: ids)
+	let nextSteps = emitBin(module, block: body, a: steps, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(nextPos, second: nextSteps)))
+
+	module.setTerminator(done, op: StdOp.ret(graphemeWalkProjection(pos, steps: steps, wantBytePos: not limitIsBytePos)))
+end 'emitGraphemeWalk'
+
+// Which of the walk's two loop-carried values a caller means — the axis the two conversions differ on,
+// named once so `emitGraphemeWalk` reads it twice (the tested value, then its complement as the result)
+// and cannot pick a third answer.
+function graphemeWalkProjection(pos ValueId, steps ValueId, wantBytePos bool) returns ValueId
+	if wantBytePos 'bytePosition'
+		return pos
+	end 'bytePosition'
+	return steps
+end 'graphemeWalkProjection'
+
+// ⭐ **`__strix_first` AND `__strix_last` FROM ONE BUILDER** — the reference's `findFirst` and `findLast`
+// (`stdlib/String.maxon:460-466`), which are the same function apart from WHICH byte search they run:
+// both turn the found byte position into a `StringIndex` through the reference's own shared `indexAtByte`
+// (`:454-458`), and both throw `StringError.notFound` on a miss. That sharing is the reference's, kept.
+//
+// ⚠ **AN EMPTY NEEDLE IS NOT A MISS, AND THE TWO SEARCHES ANSWER IT DIFFERENTLY** — a fact of the byte
+// searches, not of this graph: `__str_find` answers its `startPos` (so `findFirst("")` is `(0, 0)`) and
+// `__str_rfind` answers the byte length (so `findLast("")` is the end index). Both are the stdlib's
+// (`findIn:983-985`, `findLastIn:1006-1008`), and both are non-throwing there too.
+function buildStringIndexSearch(module StdModule, name ByteArray, fromEnd bool)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(StringErrorTypeName))
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var found = module.addBlock(func, label: b"found")
+	var missing = module.addBlock(func, label: b"missing")
+
+	emitParams(module, block: entry, count: 2)
+	let hay = 0 as ValueId
+	let needle = 1 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let bytePos = emitStringSearchCall(module, block: entry, hay: hay, needle: needle, zero: zero, fromEnd: fromEnd, ids: ids)
+	let wasFound = emitCmp(module, block: entry, a: bytePos, b: zero, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(wasFound, thenBlockId: found.id, elseBlockId: missing.id))
+
+	let charIdx = ids.mint()
+	module.appendOp(found, op: StdOp.call(charIdx, callee: StrIndexByteToGraphemeName, args: twoArgs(hay, second: bytePos)))
+	let okFlag = emitConst(module, block: found, value: StrIndexNoErrorFlag, ids: ids)
+	module.setTerminator(found, op: StdOp.errorReturn(emitStringIndexMakeCall(module, block: found, charIdx: charIdx, bytePos: bytePos, ids: ids), errorFlagId: okFlag))
+
+	// The primary value is unread on the throw edge (the desugar's phi takes the `otherwise` value
+	// there), so a plain 0 is honest — `ArrayRuntime.emitOobReturn`'s convention.
+	let noBox = emitConst(module, block: missing, value: 0, ids: ids)
+	let notFoundFlag = emitConst(module, block: missing, value: StrIndexNotFoundFlag, ids: ids)
+	module.setTerminator(missing, op: StdOp.errorReturn(noBox, errorFlagId: notFoundFlag))
+
+	module.functions.push(func)
+end 'buildStringIndexSearch'
+
+// Which byte search a `StringIndex` search runs — the one axis `buildStringIndexSearch`'s two symbols
+// differ on. The forward form takes a start position (it is the same entry point `contains`/`replace`/
+// `split` walk a tail with); the backward one scans the whole haystack and needs none.
+function emitStringSearchCall(module StdModule, block IrBlock, hay ValueId, needle ValueId, zero ValueId, fromEnd bool, ids ValueMinter) returns ValueId
+	if fromEnd 'backward'
+		let last = ids.mint()
+		module.appendOp(block, op: StdOp.call(last, callee: StrRFindName, args: twoArgs(hay, second: needle)))
+		return last
+	end 'backward'
+	return emitStrFindCall(module, block: block, hay: hay, startPos: zero, needle: needle, ids: ids)
+end 'emitStringSearchCall'
+
+// ⭐ **`__strix_slice(strRec, startBytePos, endBytePos) -> String` — THE BYTES `[start, end)` AS A FRESH
+// OWNED STRING.** The reference's `sliceBytes` (`stdlib/String.maxon:335-338`), and END-EXCLUSIVE exactly
+// as that is: `slice(start, endIndex: e)` stops one byte before `e`'s position.
+//
+// ⭐ **IT COPIES. IT IS NOT A ZERO-COPY VIEW, AND THAT IS THE REFERENCE'S CURRENT ANSWER TOO.**
+// `stdlib/Internals.maxon:3814-3818`'s `__managed_mem_slice` allocates a fresh root header plus a fresh
+// buffer and copies the bytes in, holding NO reference to the source, and `String.maxon:293-298` records
+// why the stdlib moved away from view slicing: a view "PINNED the entire source string alive behind one
+// grapheme". So the result here is built through `emitSliceSegment` — the same producer `__str_split`'s
+// segments come from — and is independently droppable through `__str_decref` with nothing aliased.
+// ⚠ `specs-shv2/slice-memory.md`'s PROSE still describes the older view-plus-refcount design; its five
+// TESTS assert only stdout and exit code, and the runnable oracle passes all five on the copying
+// implementation. The tests are canonical; the prose is stale documentation, ported unchanged.
+//
+// ⚠ **THE RANGE IS CHECKED, AND A BAD ONE ABORTS RATHER THAN COMPUTING.** A negative start, an inverted
+// range or an end past the byte length would hand `emitSliceSegment` a negative or over-long length —
+// an under-sized `__mm_alloc` followed by an out-of-buffer read, i.e. silent corruption. It is reachable
+// from source (`s.slice(idx, endIndex: s.startIndex())`, or an index taken from a LONGER string), and the
+// reference answers the same input the same way: `sliceBytes` forwards to a throwing `managed.slice` under
+// an `otherwise panic(…)`, so the oracle dies on it too. shv2 dies through `emitRuntimeAbort`, the one
+// abort shape, with its own exit code.
+function buildStringIndexSlice(module StdModule)
+	var func = IrFunction.createFromStd(StrIndexSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var badRange = module.addBlock(func, label: b"badRange")
+	var build = module.addBlock(func, label: b"build")
+
+	emitParams(module, block: entry, count: 3)
+	let record = 0 as ValueId
+	let startPos = 1 as ValueId
+	let endPos = 2 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let isAscii = emitLoadField(module, block: entry, record: record, offset: StringIsAsciiOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let startNegative = emitCmp(module, block: entry, a: startPos, b: zero, pred: StdCmpPred.lt, ids: ids)
+	let inverted = emitCmp(module, block: entry, a: endPos, b: startPos, pred: StdCmpPred.lt, ids: ids)
+	let endPastEnd = emitCmp(module, block: entry, a: endPos, b: len, pred: StdCmpPred.gt, ids: ids)
+	let badStart = emitBin(module, block: entry, a: startNegative, b: inverted, opcode: StdBinOpcode.bitOr, ids: ids)
+	let anyBad = emitBin(module, block: entry, a: badStart, b: endPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	let violated = emitCmp(module, block: entry, a: anyBad, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: badRange.id, elseBlockId: build.id))
+
+	emitRuntimeAbort(module, func: func, block: badRange, abort: RuntimeAbort.stringSliceInvalidRange, ids: ids)
+
+	module.setTerminator(build, op: StdOp.ret(emitSliceSegment(module, block: build, srcBuf: buf, from: startPos, endPos: endPos, isAscii: isAscii, ids: ids)))
+
+	module.functions.push(func)
+end 'buildStringIndexSlice'

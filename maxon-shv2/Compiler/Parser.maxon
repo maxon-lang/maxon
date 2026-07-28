@@ -1799,7 +1799,28 @@ let StringContainsMethod = b"contains"
 let StringToLowerMethod = b"toLower"
 let StringToUpperMethod = b"toUpper"
 let StringReplaceMethod = b"replace"
+
 let StringSplitMethod = b"split"
+
+// ⭐ **THE P1.8 SLICE B2 `StringIndex` METHODS.** Four `String` methods PRODUCE a `StringIndex` — the two
+// ends and the two searches — `slice` CONSUMES two of them, and the index itself answers two accessors.
+// That producer/consumer split is not incidental: it is what the declaration sweep scans for
+// (`atStringIndexProducer`), because a program with no producer can hold no index and needs no layout.
+//
+// `charIndex`/`bytePos` are the reference's own accessor names (`stdlib/String.maxon:925-931`), and they
+// are METHODS rather than field reads there and here alike — the two fields are non-exported.
+let StringStartIndexMethod = b"startIndex"
+let StringEndIndexMethod = b"endIndex"
+let StringFindFirstMethod = b"findFirst"
+let StringFindLastMethod = b"findLast"
+let StringIndexCharIndexMethod = b"charIndex"
+let StringIndexBytePosMethod = b"bytePos"
+
+// The label `slice`'s SECOND argument gives when it is a grapheme COUNT rather than an end index:
+// `s.slice(start, length: 4)`. It is the LABEL, not the parameter's type, that tells the two `slice`
+// overloads apart — the oracle's own mangled name says so (`String.slice$endIndex`) — which is what lets
+// shv2 resolve them at all: `SignatureIndex` stores parameter NAMES and no parameter types.
+let SliceLengthArgLabel = b"length"
 
 // The argument slot a builtin-conformance dispatch spends on its RECEIVER (P1.7a direct dispatch). The
 // synthesized impls take `self` positionally in argument 0 — `int.compare(self, other)` — exactly as an
@@ -1906,12 +1927,18 @@ let ArrayRemoveMethod = b"remove"
 // returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
 // receiver, borrowing and preserving its argument. TRIVIAL elements only — a managed element needs a deep-clone
 // primitive shv2 does not have (P1.2 deferred `.clone` for managed values), so the managed cases are rejected.
-let ArraySliceMethod = b"slice"
+// ⚠ `slice` is NOT prefixed `Array`, because `String` spells the same method (P1.8 Slice B2) and a method
+// NAME is a token spelling, not a container's property. Two constants over one spelling would be the
+// one-fact-written-twice this project keeps paying for — the two dispatchers reach the same name here and
+// diverge only in what they DO with it (an `Array`'s slice throws and copies elements; a `String`'s takes
+// two `StringIndex`es and copies bytes).
+let SliceMethod = b"slice"
 let ArrayCloneMethod = b"clone"
 let ArrayAppendMethod = b"append"
 
-// The label `slice`'s SECOND argument gives its end index: `arr.slice(1, endIndex: 4)`.
-let ArrayEndIndexLabel = b"endIndex"
+// The label `slice`'s SECOND argument gives its end index: `arr.slice(1, endIndex: 4)`,
+// `s.slice(start, endIndex: idx)`. One label, both containers — `SliceMethod`'s reason.
+let EndIndexArgLabel = b"endIndex"
 
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
@@ -2208,7 +2235,6 @@ end 'appendUtf8Encoded'
 function utf8ContinuationByte(codepoint ParsedInt, shift ParsedInt) returns Byte
 	return (Utf8ContinuationFloor or ((codepoint shr shift) and Utf8ContinuationMask)) as Byte
 end 'utf8ContinuationByte'
-
 
 // The byte a two-character escape `\<c>` denotes, or `unknown`.
 union EscapeByte
@@ -3859,6 +3885,15 @@ export type Parser
 		// unreferenced instance has no descriptor or destructor synthesized (both gate on usage), so it
 		// costs a registry entry and no codegen.
 		var hasByteViewCall = false
+		// A `.startIndex` / `.endIndex` / `.findFirst` / `.findLast` — the four String methods that PRODUCE a
+		// `StringIndex` (P1.8 Slice B2), whose compiler-owned `StructLayout` the sweep registers. The
+		// PRODUCERS alone are the trigger and that is exact, not an approximation: `slice`, `charIndex()` and
+		// `bytePos()` all CONSUME an index, and an index can only have come from one of these four — there is
+		// no other way to make one, and no way to name the type in a signature (see `StringIndexTypeName`).
+		// Like every probe here it reads TOKENS and cannot know the receiver is a String, so it OVER-registers;
+		// an unreferenced layout is a registry entry with no codegen behind it (every runtime function gates on
+		// `RuntimeUsage`).
+		var hasStringIndexProducer = false
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -3886,6 +3921,10 @@ export type Parser
 			if self.atByteViewCall() 'bytesToken'
 				hasByteViewCall = true
 			end 'bytesToken'
+
+			if self.atStringIndexProducer() 'stringIndexToken'
+				hasStringIndexProducer = true
+			end 'stringIndexToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
@@ -3984,6 +4023,14 @@ export type Parser
 			_ = index.internBuiltinIntegerInstance(SetBuiltinBaseName)
 			_ = index.setInstanceForString()
 		end 'internSetFromLiteral'
+
+		// Register the compiler-owned `StringIndex` type if this file names a method that produces one
+		// (P1.8 Slice B2). After `foldFile`, exactly as the instance interns above are, so a user
+		// declaration folded from this file is already in the registry when the reserved name is added —
+		// and the two can never contest a bucket anyway (see `StringIndexTypeName`).
+		if hasStringIndexProducer 'registerStringIndex'
+			index.registerStringIndexType()
+		end 'registerStringIndex'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -4044,6 +4091,15 @@ export type Parser
 	function atByteViewCall() returns bool
 		return self.atBuiltinMethodCall(ByteViewMethod)
 	end 'atByteViewCall'
+
+	// A `.startIndex` / `.endIndex` / `.findFirst` / `.findLast` at the cursor — the four methods that
+	// PRODUCE a `StringIndex` (P1.8 Slice B2), for whose compiler-owned layout the sweep is the write.
+	// The four are asked in ONE predicate because they are one question ("can this file make an index?"),
+	// and a fifth producer added to `parseStringMethodCall` without a line here would register no layout —
+	// which is why `stringIndexLayoutOrPanic` panics rather than answering when the entry is missing.
+	function atStringIndexProducer() returns bool
+		return self.atBuiltinMethodCall(StringStartIndexMethod) or self.atBuiltinMethodCall(StringEndIndexMethod) or self.atBuiltinMethodCall(StringFindFirstMethod) or self.atBuiltinMethodCall(StringFindLastMethod)
+	end 'atStringIndexProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
@@ -4601,7 +4657,7 @@ export type Parser
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
-		return name.equals(ArraySliceMethod) or name.equals(ArrayCloneMethod) or name.equals(ArrayAppendMethod)
+		return name.equals(SliceMethod) or name.equals(ArrayCloneMethod) or name.equals(ArrayAppendMethod)
 	end 'arrayCopyMethodAt'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
@@ -17287,6 +17343,33 @@ export type Parser
 			return try self.emitStringCompare(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'byteRecordCompare'
 
+		// ⭐⭐ **A `StringIndex` COMPARES BY ITS GRAPHEME INDEX, AND ONLY BY THAT** — the reference's own
+		// `equals`/`compare` (`stdlib/String.maxon:933-946`) read `charIdx` and never `bytePosition`, so this
+		// is a PORT of a stated rule and not a shortcut. Handled at the TOP, beside the byte-record arm and
+		// before every rule below, because those rules would answer WRONGLY rather than not at all: two
+		// `structRef`s reach `comparableOperands`, which refuses them ("cannot compare struct with struct") —
+		// so `idx2 == s.endIndex()`, the commonest thing there is to do with an index and the one
+		// `string-type/find` pins, would be a type error against a perfectly good program.
+		//
+		// ⚠ **A GENERAL STRUCT `==` WOULD NOT HAVE SERVED, AND WOULD HAVE BEEN WRONG.** Whatever shape it
+		// took — a box-pointer compare or a memberwise one — it could not give this answer: two indices
+		// carrying the same `charIdx` are equal here even when their `bytePosition`s differ, which is
+		// precisely what an index into a DIFFERENT string can do. The type declares `equals` for a reason,
+		// and that reason is that its two fields do not both carry identity.
+		//
+		// ⭐ ALL SIX operators route here, not just `==`/`!=`: the reference declares
+		// `implements Equatable, Comparable` and its `compare` orders by the same one field, so `<` on two
+		// indices is a real question with the same answer shape. Restricting to equality would need a
+		// bespoke rejection for four operators the type genuinely has — vocabulary WITHHELD from its
+		// consumer, which is the opposite error to shipping it ahead of one.
+		//
+		// ⚠ Spelled as BOTH operands rather than either, exactly as the byte-record arm above is: the
+		// property is "both sides are indices". An index against anything else falls through to the
+		// mismatch gate below — a clean type error, not a compare of one field against a whole box.
+		if self.valueIsStringIndex(lhs) and self.valueIsStringIndex(rhs) 'stringIndexCompare'
+			return try self.emitStringIndexCompare(lhs, rhs: rhs, op: op, opTok: opTok)
+		end 'stringIndexCompare'
+
 		// ⭐ A `union` VALUE HAS NO COMPARISON — of ANY kind (E3066). Refused BEFORE `comparableOperands`,
 		// which would pass a `named`-vs-`named` pair (they agree) and lower to a compare of two BOX
 		// ADDRESSES — the same reference-equality wrong answer that rule already refuses for two structs.
@@ -17326,6 +17409,15 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
+
+	// Two `StringIndex`es compared through their `charIdx` fields — the reference's `equals`/`compare` bodies,
+	// which read that one field and never `bytePosition`. Two field loads and the ORDINARY integer `compare`
+	// op the operator would have produced on two ints, so every operator keeps its own meaning and none of
+	// them needs an arm here.
+	function emitStringIndexCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(opTok)
+		return try self.emitCompare(self.emitStringIndexField(lhs, index: StringIndexCharIdxFieldIndex, range: range), rhs: self.emitStringIndexField(rhs, index: StringIndexCharIdxFieldIndex, range: range), op: op, opTok: opTok)
+	end 'emitStringIndexCompare'
 
 	// The two String comparisons — the ONLY operators String has. `==` is the `__str_eq` runtime call
 	// (content equality: equal lengths, then equal bytes); `!=` is its logical negation, built from the
@@ -19495,6 +19587,15 @@ export type Parser
 			return try self.parseSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
 		end 'setMethod'
 
+		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) is dispatched to its
+		// own two accessors rather than through `requireStructBase` — which would accept the box (the layout
+		// IS registered) and then resolve the method name against `funcSignatures`, where no file declares
+		// `__StringIndex.charIndex`. It takes no `receiverOwner`: neither accessor writes its receiver, so
+		// there is no mutation to attribute to an owning parameter.
+		if self.isStringIndexType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType)) 'stringIndexMethod'
+			return try self.parseStringIndexMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
+		end 'stringIndexMethod'
+
 		// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
 		// synthesized conformance impl rather than through `requireStructBase`, which would reject an
 		// `int` as not a struct. The split is on the binding's declared TYPE reduced to its conformer
@@ -19889,8 +19990,101 @@ export type Parser
 			return try self.parseByteView(binding.boundValue, range: range)
 		end 'bytes'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, and the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`); `findFirst`/`findLast`/`slice` traffic in `StringIndex`, which arrives at P1.8 Slice B2, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
+		// ⭐ P1.8 Slice B2 — the `StringIndex` family. Four producers and one consumer; every one of them
+		// READS the receiver and writes a fresh value, so none takes `append`'s `noteReceiverWrite` path and
+		// a `let` receiver is fine throughout.
+		if methodTok.value.equals(StringStartIndexMethod) 'startIndex'
+			try self.consumeEmptyArgList()
+			return self.emitStringIndex(self.emitLiteral(0, valueType: MaxonType.integer, range: range), bytePos: self.emitLiteral(0, valueType: MaxonType.integer, range: range), range: range)
+		end 'startIndex'
+		if methodTok.value.equals(StringEndIndexMethod) 'endIndex'
+			try self.consumeEmptyArgList()
+			return self.emitOwnedRuntimeResult(StrIndexEndName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
+		end 'endIndex'
+		// The two searches are THROWING (`StringError.notFound`), so the runtime call must be the LAST op
+		// this arm emits — an enclosing `try` rewrites exactly that op (`rewriteLastCallToTryCall`).
+		// `emitOwnedRuntimeResult` emits nothing after the call, which is what makes it usable here.
+		if methodTok.value.equals(StringFindFirstMethod) 'findFirst'
+			return try self.parseStringSearch(func, binding: binding, callee: StrIndexFirstName, methodName: StringFindFirstMethod, range: range)
+		end 'findFirst'
+		if methodTok.value.equals(StringFindLastMethod) 'findLast'
+			return try self.parseStringSearch(func, binding: binding, callee: StrIndexLastName, methodName: StringFindLastMethod, range: range)
+		end 'findLast'
+		if methodTok.value.equals(SliceMethod) 'slice'
+			return try self.parseStringSlice(func, receiver: binding.boundValue, range: range)
+		end 'slice'
+
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`) and the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
 	end 'parseStringMethodCall'
+
+	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
+	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
+	// `StringError.notFound` on a miss. One home, so a third search cannot arrive with a different idea of
+	// any of those (`parseStringPredicate`'s arrangement, for its reason).
+	//
+	// The result is an OWNED `StringIndex` box on the SUCCESS path only; on the error path the callee's
+	// primary register is unread and the `otherwise` value takes its place, so nothing is dropped twice.
+	function parseStringSearch(func IrFunction, binding VarInfo, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
+		let needle = try self.parseStringArg(func, methodName: methodName)
+		return self.emitOwnedRuntimeResult(callee, args: pairArgs(binding.boundValue, second: needle), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
+	end 'parseStringSearch'
+
+	// ⭐⭐ **`s.slice(start, endIndex: e)` AND `s.slice(start, length: n)` — TWO OVERLOADS TOLD APART BY THE
+	// ARGUMENT LABEL, NEVER BY A PARAMETER TYPE.** That is the oracle's own arrangement — its mangled name
+	// for the first is `String.slice$endIndex` — and it is what makes the pair resolvable here at all:
+	// `SignatureIndex` stores parameter NAMES and no parameter types, so a type-directed overload choice has
+	// nothing to read. The label is a token this function has in hand.
+	//
+	// Both forms reduce to ONE runtime call over a half-open BYTE range, which is the whole point of doing
+	// the conversion here: `length:` turns its grapheme count into an end byte position through
+	// `__strix_advance` and then asks the identical question `endIndex:` asks. So there is one definition of
+	// what a String slice IS, and the `length:` form cannot come to disagree with it about end-exclusivity.
+	//
+	// The result is a FRESH OWNED String that aliases nothing (`__strix_slice` copies — see there), so it
+	// outlives its parent and drops through the ordinary `__str_decref`.
+	function parseStringSlice(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let startTok = self.current()
+		let startBytePos = self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: startTok), index: StringIndexBytePosFieldIndex, range: range)
+		try self.consume(TokenKind.comma)
+		let labelTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.colon)
+		let endBytePos = try self.parseStringSliceEnd(func, receiver: receiver, startBytePos: startBytePos, labelTok: labelTok, range: range)
+		try self.consume(TokenKind.rightParen)
+		return self.emitOwnedRuntimeResult(StrIndexSliceName, args: tripleArgs(receiver, second: startBytePos, third: endBytePos), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+	end 'parseStringSlice'
+
+	// The END BYTE POSITION `slice`'s second argument denotes, per its label — the one place the two
+	// overloads differ. `endIndex:` reads it off a second `StringIndex`; `length:` walks that many clusters
+	// forward from the start (`__strix_advance`, the reference's `graphemeOffsetToBytePos`). Any other label
+	// is a positioned reject rather than a silent reading of one form as the other.
+	function parseStringSliceEnd(func IrFunction, receiver ValueId, startBytePos ValueId, labelTok Token, range SourceRange) returns ValueId throws ParseError
+		if labelTok.value.equals(EndIndexArgLabel) 'byEndIndex'
+			let endTok = self.current()
+			return self.emitStringIndexField(try self.requireStringIndexValue(func, anchor: endTok), index: StringIndexBytePosFieldIndex, range: range)
+		end 'byEndIndex'
+		if labelTok.value.equals(SliceLengthArgLabel) 'byLength'
+			let countTok = self.current()
+			let count = try self.parseExpression(func, block: self.currentBlock)
+			if not tagIsInteger(self.tagOf(count)) 'notACount'
+				throw ParseError.builtinOperandType(String.from(SliceMethod), required: typeTagName(ValueTypeTag.integer), got: typeTagName(self.tagOf(count)), line: countTok.line, column: countTok.column)
+			end 'notACount'
+			return self.emitRuntimeCall(StrIndexAdvanceName, args: tripleArgs(receiver, second: startBytePos, third: count), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'byLength'
+
+		throw ParseError.unsupported("argument label '{String.from(labelTok.value)}' on `slice` — a `String`'s slice takes `endIndex:` (a second `StringIndex`, exclusive) or `length:` (a grapheme count)", line: labelTok.line, column: labelTok.column)
+	end 'parseStringSliceEnd'
+
+	// Parse one argument expression and require it to be a `StringIndex`, blaming the argument's own first
+	// token. `requireStringArgValue`'s twin, and it needs its own body because a `StringIndex` is not
+	// identified by a TAG — every struct shares `structRef` — but by the compiler-owned name behind it.
+	function requireStringIndexValue(func IrFunction, anchor Token) returns ValueId throws ParseError
+		let value = try self.parseExpression(func, block: self.currentBlock)
+		if not self.valueIsStringIndex(value) 'notAnIndex'
+			throw ParseError.builtinOperandType(String.from(SliceMethod), required: String.from(StringIndexTypeName), got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
+		end 'notAnIndex'
+		return value
+	end 'requireStringIndexValue'
 
 	// `s.startsWith(p)` / `s.endsWith(p)` / `s.contains(p)` — the three predicates, which differ ONLY in which
 	// runtime entry point they name: same receiver, same single String argument, same `bool` result. One home,
@@ -20003,6 +20197,87 @@ export type Parser
 		// consumer, and a non-throwing version would have to answer a non-ASCII cluster with a sentinel.
 		throw ParseError.unsupported("Character method '{String.from(methodTok.value)}' -- shv2 provides `bytes` and `byteLength`; `asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus", line: methodTok.line, column: methodTok.column)
 	end 'parseCharacterMethodCall'
+
+	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the reference's
+	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher for `parseCharacterMethodCall`'s
+	// reason: sharing the struct dispatcher would send these to `dispatchMethodOnBase`, which resolves a
+	// method NAME against `funcSignatures` — and no file declares `__StringIndex.charIndex`, so every call
+	// would be E3004 against a method that is right there in the type.
+	//
+	// Both are FIELD READS through the layout's own door (`emitFieldLoad`), not hand-written offsets: the
+	// registered `StructLayout` is where a `StringIndex`'s shape is stated for the front end, and reading it
+	// any other way would be a second copy of the offsets (`StringIndexRuntime`'s constants are the third
+	// reader, and `stringIndexLayout` asserts the two agree).
+	//
+	// The receiver must be LIVE (a moved-from index touched through a method is use-after-move, E3102),
+	// checked before the method name is resolved — `parseStringMethodCall`'s guard, for its reason. It takes
+	// no `resultUsed`: both methods return a value, so there is no void result for a value position to
+	// misuse.
+	function parseStringIndexMethodCall(binding VarInfo, baseTok Token) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(baseTok, last: methodTok)
+
+		if methodTok.value.equals(StringIndexCharIndexMethod) 'charIndex'
+			try self.consumeEmptyArgList()
+			return self.emitStringIndexField(binding.boundValue, index: StringIndexCharIdxFieldIndex, range: range)
+		end 'charIndex'
+		if methodTok.value.equals(StringIndexBytePosMethod) 'bytePos'
+			try self.consumeEmptyArgList()
+			return self.emitStringIndexField(binding.boundValue, index: StringIndexBytePosFieldIndex, range: range)
+		end 'bytePos'
+
+		throw ParseError.unsupported("`{String.from(StringIndexTypeName)}` method '{String.from(methodTok.value)}' -- shv2 provides `charIndex` and `bytePos`; the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter", line: methodTok.line, column: methodTok.column)
+	end 'parseStringIndexMethodCall'
+
+	// ⭐ **MINT A `StringIndex` — the parser's half of the one door.** `startIndex()` is the only producer the
+	// PARSER builds directly (its answer is two constants, so a runtime call would be a graph that computes
+	// nothing); the other three are runtime functions that mint through `__strix_make` themselves. Both
+	// halves reach the same entry point, so there is exactly one place a box's two fields are written.
+	//
+	// The result is an OWNED heap box, tracked so an unbound one drops at statement end and a bound one at
+	// scope exit — through the trivial-struct `__mm_decref` (`decrefCalleeFor`'s `structRef` arm, which
+	// reads the registered layout and finds no managed field).
+	function emitStringIndex(charIdx ValueId, bytePos ValueId, range SourceRange) returns ValueId
+		return self.emitOwnedRuntimeResult(StrIndexMakeName, args: pairArgs(charIdx, second: bytePos), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
+	end 'emitStringIndex'
+
+	// One field of a `StringIndex` box, read through the layout — the shared body of `charIndex()`,
+	// `bytePos()`, `slice`'s two byte-position reads and the `==` comparison. Five readers, one derivation
+	// of where a field lives.
+	function emitStringIndexField(box ValueId, index FieldIndex, range SourceRange) returns ValueId
+		return self.emitFieldLoad(box, layout: self.signatures.stringIndexLayoutOrPanic(), index: index, range: range)
+	end 'emitStringIndexField'
+
+	// The compiler-owned `StringIndex` name, adopted into THIS FILE's interner — which is what a value's
+	// name column holds (`mintValue`), so it must be the local id and not the whole-program one.
+	// Interning is idempotent, and it happens only in a file that actually mints an index.
+	function stringIndexNameId() returns TypeNameId
+		return self.artifact.typeNames.intern(StringIndexTypeName)
+	end 'stringIndexNameId'
+
+	// ⭐ **IS THIS THE `StringIndex` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so it
+	// is the interned NAME behind the tag, which is the same identity `aggregateNameOf` publishes for a
+	// reassign check. The `structRef` test is not merely a fast path: a non-struct tag carries
+	// `UnnamedTypeId` in the name column, which no interner is obliged to hold.
+	//
+	// Its two askers read the two DIFFERENT records a type can live in, which is why the shared body takes
+	// the pair rather than either one: `dispatchMethodOnBinding` asks a BINDING's declared type (a
+	// self-field alias holds no value, so its `boundValue` is the receiver's box and would answer for the
+	// wrong type), and `emitCompare`/`slice` ask a VALUE's columns (a call result is bound to no name).
+	function isStringIndexType(tag ValueTypeTag, nameId TypeNameId) returns bool
+		if not tagIsStructRef(tag) 'notAStructBox'
+			return false
+		end 'notAStructBox'
+		return self.internedName(nameId).equals(StringIndexTypeName)
+	end 'isStringIndexType'
+
+	function valueIsStringIndex(value ValueId) returns bool
+		return self.isStringIndexType(self.tagOf(value), nameId: self.valueNameId(value))
+	end 'valueIsStringIndex'
 
 	// `( )` — the empty argument list of a no-argument BUILTIN call, whichever family it belongs to: a String
 	// accessor (`byteLength`, `toLower`, `toUpper`), an array method (`count`, `first`, `pop`, `clear`, …), a
@@ -21105,7 +21380,7 @@ export type Parser
 			let index = try self.parseArrayOneArg(func)
 			return self.emitArrayElementAccessor(func, callee: ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
-		if methodTok.value.equals(ArraySliceMethod) 'slice'
+		if methodTok.value.equals(SliceMethod) 'slice'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArraySlice(func, arr: arr, giid: giid, range: range)
 		end 'slice'
@@ -21519,7 +21794,7 @@ export type Parser
 	function parseArraySlice(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let start = try self.parseExpression(func, block: self.currentBlock)
-		try self.consumeArrayArgLabel(ArrayEndIndexLabel)
+		try self.consumeArrayArgLabel(EndIndexArgLabel)
 		let endIndex = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.rightParen)
 		if self.signatures.arrayElementIsOpaque(giid) 'opaqueSlice'

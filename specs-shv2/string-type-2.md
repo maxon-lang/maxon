@@ -515,8 +515,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: slice-basic -->
-<!-- P1.8 Slice B `StringIndex` — NOT string methods generally (P1.8 Slice C shipped the byte methods). `slice` is grapheme-indexed BY ITS PARAMETERS: it takes two `StringIndex`es, produced here by `startIndex`/`endIndex`/`findFirst`, and shv2 has no `StringIndex`, no `StringError` and no `GraphemeCount` -->
+<!-- test: slice-basic -->
 ### Basic String Slicing
 ```maxon
 function main() returns ExitCode
@@ -535,8 +534,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: slice-full -->
-<!-- P1.8 Slice B `StringIndex` — see `slice-basic`: `slice` takes two `StringIndex`es, which shv2 has no type for -->
+<!-- test: slice-full -->
 ### Slice Entire String
 ```maxon
 function main() returns ExitCode
@@ -555,8 +553,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: slice-empty -->
-<!-- P1.8 Slice B `StringIndex` — see `slice-basic`: `slice` takes two `StringIndex`es, which shv2 has no type for -->
+<!-- test: slice-empty -->
 ### Empty Slice
 ```maxon
 function main() returns ExitCode
@@ -574,8 +571,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: slice-iteration -->
-<!-- P1.8 Slice B `StringIndex` — see `slice-basic`: `startIndex`/`findFirst`/`slice` all traffic in `StringIndex`, which shv2 has no type for. (The old marker blamed "P1.2 wave D provides only append/byteLength", which stopped being the measured blocker the moment Slice C added a method dispatcher — the gap is the INDEX TYPE.) String iteration (`for c in sub`) is a SECOND blocker behind it -->
+<!-- test: slice-iteration -->
 ### Iterate Over Sliced String
 ```maxon
 function main() returns ExitCode
@@ -643,8 +639,7 @@ test string
 TEST STRING
 ```
 
-<!-- disabled-test: cow-slice-independent -->
-<!-- P1.8: string methods -->
+<!-- test: cow-slice-independent -->
 ### Slice Is Independent After Parent Goes Out of Scope
 Demonstrates that sliced strings work correctly.
 ```maxon

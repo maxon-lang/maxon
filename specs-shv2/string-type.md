@@ -424,8 +424,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: find -->
-<!-- P1.8 Slice B `StringIndex` — NOT string methods generally (P1.8 Slice C shipped the byte-level search as `contains`). `findFirst` is blocked BY ITS RETURN TYPE: a `StringIndex` whose `charIdx` is a GRAPHEME index computed through full UAX#29 segmentation (`stdlib/helpers/string/grapheme.maxon:341-350`), and shv2 has no `StringIndex`, no `StringError` and no segmenter -->
+<!-- test: find -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -446,8 +445,7 @@ end 'main'
 -1
 ```
 
-<!-- disabled-test: find-last-basic -->
-<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
+<!-- test: find-last-basic -->
 ```maxon
 function main() returns ExitCode
 	let s = "abcabc"
@@ -465,8 +463,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: find-last-single -->
-<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
+<!-- test: find-last-single -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -483,7 +480,7 @@ end 'main'
 ```
 
 <!-- disabled-test: find-last-not-found -->
-<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
+<!-- P1.4b `try` IN CONDITION POSITION as a SUCCESS TEST — `if try s.findLast("xyz") 'found' … else`. NOT a `findLast` gap: P1.8 Slice B2 shipped `findLast`, and its five sibling cases here are enabled. The blocker is that shv2 has no `if try <throwing call>` form for ANY callee — the whole of `specs/if-try.md` is unported — measured on this very call shape: the bare `try` in a condition is E3059 ("try propagates 'E' but the enclosing function declares no 'throws'"), and past that an `if` over the call's non-bool result is E3005. Same blocker as `character-type`'s two `if try c.asciiValue()` cases -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -502,8 +499,7 @@ end 'main'
 NOT_FOUND
 ```
 
-<!-- disabled-test: find-last-at-end -->
-<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
+<!-- test: find-last-at-end -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -519,8 +515,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: find-last-at-start -->
-<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
+<!-- test: find-last-at-start -->
 ```maxon
 function main() returns ExitCode
 	let s = "abcdef"
@@ -536,8 +531,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: find-last-overlapping -->
-<!-- P1.8 Slice B `StringIndex` — see `find`: `findLast` returns a grapheme-indexed `StringIndex`, which shv2 has no type for -->
+<!-- test: find-last-overlapping -->
 ```maxon
 function main() returns ExitCode
 	let s = "aaa"
