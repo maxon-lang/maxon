@@ -766,3 +766,413 @@ end 'main'
 ```stdout
 [second long string for the heap allocation path]
 ```
+
+<!-- test: receiver-method-writing-its-own-field -->
+### A method that clears its OWN field frees what the caller borrowed
+`b.wipe()` destroys the element `s` holds exactly as `wipe(b.items)` does — the array just arrives in
+the RECEIVER column instead of an argument one. Answering it needs a second question of the callee:
+*"does this body write the storage this parameter points at?"*, which is **yes** here while E3019's
+*"does passing an immutable binding here make it an error?"* stays **no**. Measured before the split:
+the oracle prints 44 (it retains), shv2 ran and printed `4557430888798830399` out of freed memory.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function wipe()
+		items.clear()
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.wipe()
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/receiver-method-writing-its-own-field.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: receiver-method-explicit-self-spelling -->
+### … and the `self.items.clear()` spelling is the same write
+Both spellings converge on one door, so neither can be taught the rule separately.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function wipe()
+		self.items.clear()
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.wipe()
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/receiver-method-explicit-self-spelling.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: receiver-method-rebinding-its-own-field -->
+### … and REBINDING the field is a write of the receiver's storage too
+`items = <fresh>` inside the method drops the record the caller borrowed out of. It is recorded at the
+one self-field store, and only into the E3070 column — feeding E3019's from there turns
+`self-keyword.md:self-with-params` red, which is that door's pinned guard.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function wipe()
+		items = StringArray.create()
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.wipe()
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/receiver-method-rebinding-its-own-field.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: receiver-method-inside-a-for-loop -->
+### … and inside a `for … in` over the field it clears
+The loop element's borrow is lexical, so the call is refused wherever in the body it sits.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function wipe()
+		items.clear()
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	var total = 0 as Integer
+	for it in b.items 'scan'
+		b.wipe()
+		total = total + it.byteLength()
+	end 'scan'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/receiver-method-inside-a-for-loop.test:22:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 21)
+```
+
+<!-- test: receiver-method-writes-transitively -->
+### A method that CALLS one that clears the field inherits the write
+The second column rides the SAME least fixpoint over the SAME call-graph edges as the first, so
+transitivity needs no second rule: `wipe()` gains the receiver's bit from `reset()`.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function reset()
+		items.clear()
+	end 'reset'
+
+	function wipe()
+		self.reset()
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.wipe()
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively.test:24:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
+```
+
+<!-- test: receiver-method-that-writes-nothing -->
+### A method that does NOT write the field stays callable while the borrow is live
+The over-rejection guard for the five above, and the one this fix is one step away from breaking: a
+receiver is now an argument the conflict check sees, so a rule that blamed the receiver for merely
+BEING one would refuse every method call on `b`. Only a callee the summary says writes the storage
+counts.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function size() returns Integer
+		return items.count()
+	end 'size'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	let n = b.size()
+	print("{s.byteLength()} {n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+44 1
+```
+
+<!-- test: let-receiver-still-takes-mutating-methods -->
+### E3019's answer is UNCHANGED — a `let` receiver still takes a method that writes its own fields
+The other half of the split, and the one a merged mask would have destroyed: shv2 rules that a `let`
+on a struct binding does not reach inside the type's own methods (`self-keyword.md:self-with-params`
+pins the field-store door, `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` the
+container-method one). Both writes here are refused for E3070 only when a borrow is live — with none
+outstanding, the program compiles and runs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+	export var total as Integer
+
+	static function create() returns Self
+		return Self{items: StringArray.create(), total: 0}
+	end 'create'
+
+	function wipe()
+		items.clear()
+	end 'wipe'
+
+	function add(v Integer)
+		total = total + v
+	end 'add'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	b.add(42)
+	b.wipe()
+	print("{b.total} {b.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42 0
+```
+
+<!-- test: sibling-call-on-the-enclosing-self -->
+### A sibling call INSIDE the type reaches the same field, and must be refused there too
+`reset()` clears `items` while `s` borrows an element of it — the same use-after-free as `b.wipe()`,
+one level in. It needs its own answer because the receiver here is `self`, which stands for the WHOLE
+receiver, while the borrow was recorded against the FIELD's alias: a single site keyed on `self` would
+match nothing. Measured before this door: shv2 printed `4557430888798830399`, the oracle 44.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function reset()
+		items.clear()
+	end 'reset'
+
+	function bad() returns Integer
+		let s = try items.get(0) otherwise ""
+		reset()
+		return s.byteLength()
+	end 'bad'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	print("{b.bad()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/sibling-call-on-the-enclosing-self.test:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+```
+
+<!-- test: sibling-call-explicit-self-spelling -->
+### … and `self.reset()` is the same call
+Both spellings resolve the receiver to the same value, so one predicate answers for both.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function reset()
+		items.clear()
+	end 'reset'
+
+	function bad() returns Integer
+		let s = try items.get(0) otherwise ""
+		self.reset()
+		return s.byteLength()
+	end 'bad'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	print("{b.bad()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/sibling-call-explicit-self-spelling.test:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+```
+
+<!-- test: sibling-call-that-writes-nothing -->
+### A read-only sibling call stays legal while the borrow is live
+The over-rejection guard for the two above. A `self` receiver stands for every field of the enclosing
+receiver, so it records a site per borrowed field — and every one of them is still filtered by the
+whole-program summary, which says `size()` writes nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function size() returns Integer
+		return items.count()
+	end 'size'
+
+	function ok() returns Integer
+		let s = try items.get(0) otherwise ""
+		let n = self.size()
+		return s.byteLength() + n
+	end 'ok'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	print("{b.ok()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+45
+```
+
+<!-- test: method-writing-a-non-array-field-is-not-a-conflict -->
+### A method that writes a NON-ARRAY field of the receiver is not a conflict
+E3070 tracks an array element and nothing else, so only an ARRAY write can free one — the same line
+the `String` and `Set` receiver doors already draw. Ungated, `total = total + v` marked the whole
+receiver written and this legal program was refused; the oracle compiles and runs it.
+
+⚠ The gate needs the TYPE TAG and not just the name: a `TypeNameId` and a `GenericInstanceId` share a
+numeric space, so asking "is this an Array instance?" of a plain alias answered TRUE by coincidence,
+which is exactly how the false rejection arrived.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+	export var total as Integer
+
+	static function create() returns Self
+		return Self{items: StringArray.create(), total: 0}
+	end 'create'
+
+	function add(v Integer)
+		total = total + v
+	end 'add'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.add(42)
+	print("{s.byteLength()} {b.total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+44 42
+```

@@ -972,7 +972,14 @@ union ReceiverArg
 	// `immutableName` is the E3019 blame name for the receiver AS AN ARGUMENT — empty when it may be
 	// written through. It rides the receiver because `parseCallNamed` prepends the receiver at argument 0
 	// and the fourth argument column needs one entry per argument (`pushCallArg`).
-	value(id ValueId, immutableName ByteArray)
+	//
+	// `subjectName` is E3070's parallel fact about the same argument: the STORAGE the receiver denotes,
+	// empty when it denotes none. The two are NOT the same string and must not be merged — `immutableName`
+	// is non-empty only when the binding refuses a write, while a `var` receiver has a subject and no blame
+	// name at all, and `b.wipe()` on a `var b` is exactly the conflict this rung closes. It rides here for
+	// the reason the blame name does: `parseCallNamed` prepends the receiver as ARGUMENT 0, and a caller
+	// holding only the box has lost which binding it came from.
+	value(id ValueId, immutableName ByteArray, subjectName ByteArray)
 end 'ReceiverArg'
 
 // ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
@@ -1011,9 +1018,13 @@ type StructBase
 	// dispatched on this base prepends the box as ARGUMENT 0, and the argument's blame name is a fact
 	// about the BINDING the base came from — which is exactly what a caller holding only the box has lost.
 	export let immutableName as ByteArray
+	// E3070's parallel fact — the STORAGE this base denotes, empty when it denotes none. Travels with the
+	// box for the identical reason `immutableName` does, and is a DIFFERENT string from it: see
+	// `ReceiverArg.value`, which carries the same pair on to the call.
+	export let subjectName as ByteArray
 
-	export static function create(layout StructLayout, box ValueId, immutableName ByteArray) returns StructBase
-		return Self{layout: layout, box: box, immutableName: immutableName}
+	export static function create(layout StructLayout, box ValueId, immutableName ByteArray, subjectName ByteArray) returns StructBase
+		return Self{layout: layout, box: box, immutableName: immutableName, subjectName: subjectName}
 	end 'create'
 end 'StructBase'
 
@@ -12081,6 +12092,14 @@ export type Parser
 	// nearly every function in any program — answers `false` off one read of a permanently empty array and
 	// pays nothing else. The same reading `bindingIsIterationLocked`'s own empty check states, for the same
 	// reason: it is not defensive, it IS the cost.
+	//
+	// ⚠ **TWO SITES DERIVE THE SUBJECT FIRST ANYWAY, AND THAT IS MEASURED RATHER THAN OVERLOOKED.** A method
+	// call on an array or a struct resolves its subject unconditionally (`parseArrayMethodCall`,
+	// `dispatchMethodOnBinding`), because the name is needed to MINT a borrow as well as to record a write —
+	// and minting happens precisely when no borrow exists yet, so the gate cannot be hoisted in front of it.
+	// The optimizer measured the one variant that could be — gating the array-method derivation on
+	// `functionHoldsABorrow() or arrayElementIsManaged()` — and it read -19k +120k -228k -618k ticks,
+	// SIGN-FLIPPING across the ladder, i.e. inside the noise band. It does not ship.
 	function functionHoldsABorrow(func IrFunction) returns bool
 		return func.borrowFacts.borrows.count() > 0
 	end 'functionHoldsABorrow'
@@ -12299,13 +12318,29 @@ export type Parser
 			return
 		end 'notANameableStorage'
 
-		let subjectName = self.borrowSubjectNameAt(valueStart)
-		if subjectName.isEmpty() 'notALocalBinding'
+		self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: argLabel, subjectName: self.borrowSubjectNameAt(valueStart))
+	end 'noteBorrowSubjectCallArg'
+
+	// The recorder every call-ARGUMENT door shares, taking the subject ALREADY RESOLVED — which is the whole
+	// difference from `noteBorrowSubjectCallArg` above, and why it is a separate function rather than an
+	// overload: the SOURCE's arguments have to be shape-tested to find a subject, while the prepended
+	// RECEIVER was handed one by the base that produced it, and `self` supplies several. One record, one
+	// column convention, one settlement against the storage mask.
+	//
+	// The `functionHoldsABorrow` test is paid TWICE on the source-argument path (its caller asks first, to
+	// keep a `Scope` walk off the hot statement path — see `functionHoldsABorrow`). That is deliberate: this
+	// is the authority, and the caller's is the cost gate.
+	function recordCallArgMutationSite(func IrFunction, callee ByteArray, anchor Token, argColumn ParamCount, argLabel ByteArray, subjectName ByteArray)
+		if subjectName.isEmpty() 'namesNoStorage'
 			return
-		end 'notALocalBinding'
+		end 'namesNoStorage'
+
+		if not self.functionHoldsABorrow(func) 'nothingBorrowedYet'
+			return
+		end 'nothingBorrowedYet'
 
 		func.borrowFacts.mutations.push(MutationSite.createCallArgWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: subjectName, token: self.pos, line: anchor.line, column: anchor.column, callee: callee, argColumn: argColumn, argLabel: argLabel))
-	end 'noteBorrowSubjectCallArg'
+	end 'recordCallArgMutationSite'
 
 	// The index of the `end` token that closes the block statement opening at `startIndex`,
 	// found by counting block openers against `end`s — the same depth-counted token walk
@@ -18556,6 +18591,10 @@ export type Parser
 	// which differ only in where the binding came from — so the two spellings cannot come to disagree
 	// about which dispatch a `String`, an `Array`, a `Set` or a conformer receiver gets.
 	function dispatchMethodOnBinding(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		// The receiver's own token, captured before the cursor leaves it: a method call on a struct hands the
+		// receiver to E3070's conflict check as the implicit ARGUMENT 0 it is, and the subject comes through
+		// the one shared derivation (`borrowSubjectNameAt`) like every other door's.
+		let baseIndex = self.pos
 		// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
 		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
 		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
@@ -18600,7 +18639,7 @@ export type Parser
 		// load nothing has ever exercised.
 		self.advance()
 		try self.consume(TokenKind.dot)
-		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
+		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok, subjectName: self.borrowSubjectNameAt(baseIndex)), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
@@ -18805,7 +18844,7 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box))
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box, immutableName: base.immutableName, subjectName: base.subjectName), resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(base.box))
 		self.retypeInstanceMethodResult(result, receiver: base.box)
 		return result
 	end 'dispatchMethodOnBase'
@@ -18913,7 +18952,11 @@ export type Parser
 		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
 			throw ParseError.unsupported("a field access or method call on the captured '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields and methods)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
-		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
+		// E3070 exemption, and it is one this rung can prove rather than assume: capture is BY VALUE, so a
+		// method call on a CAPTURED receiver cannot reach a binding of the enclosing body, and a captured
+		// managed CONTAINER — the only thing a borrow could be taken out of — is refused outright at this rung
+		// (`capturedStructBase` admits only a struct). There is no storage here for a conflict to be about.
+		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
@@ -18948,7 +18991,10 @@ export type Parser
 		// per-container half of the rule is a constant `true` and everything else is the shared home's.
 		// It used to ask `not binding.mutable` on its own, which made a String PARAMETER receiver a false
 		// rejection: see `noteReceiverWrite` for the measurement.
-		try self.noteReceiverWrite(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: true)
+		// `receiverStorage: NoMutatedParams` is E3070's SCOPE, not an omission: only an ARRAY write can free
+		// an array element, so a `String` method writing its receiver cannot invalidate a borrow. Recording it
+		// would refuse `b.wipe()` while `b.items` is borrowed for a `wipe` that only appends to `b.name`.
+		try self.noteReceiverWrite(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: true)
 
 		if resultUsed 'voidResultUsed'
 			throw ParseError.voidCallResultUsed(String.from(StringAppendMethod), line: methodTok.line, column: methodTok.column)
@@ -19405,7 +19451,9 @@ export type Parser
 		// A `let`-bound set is not writable either — the same rule, through the same home the `String` and
 		// `Array` receivers ask (`noteReceiverWrite`). This dispatcher carried NO such guard, which
 		// accepted `let s = IntSet.create()` / `s.insert(1)` where the oracle raises E3019.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
+		// `receiverStorage: NoMutatedParams` for the reason the `String` dispatcher states: a `Set` write
+		// cannot free an ARRAY element, which is the only borrow E3070 tracks.
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
 
 		if methodTok.value.equals(SetCountMethod) 'count'
 			try self.parseArrayNoArgs()
@@ -19513,7 +19561,8 @@ export type Parser
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), borrowSubjectName: self.borrowSubjectNameAt(baseIndex), receiverOwner: receiverOwner)
+		let subjectName = self.borrowSubjectNameAt(baseIndex)
+		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), borrowSubjectName: subjectName, receiverOwner: receiverOwner, receiverStorage: self.subjectStorageMask(func, subjectName: subjectName))
 	end 'parseArrayMethodCall'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
@@ -19562,7 +19611,7 @@ export type Parser
 		// receiver pass the empty name, and the FIELD-CHAIN caller passes the one name that can still
 		// refuse: the chain's base while a `for … in` is iterating through it (`iterationLockNameAt`).
 		// It denotes no PARAMETER either way, so a write through it mutates none: `NoMutatedParams`.
-		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, borrowSubjectName: borrowSubjectName, receiverOwner: NoMutatedParams)
+		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, borrowSubjectName: borrowSubjectName, receiverOwner: NoMutatedParams, receiverStorage: self.subjectStorageMask(func, subjectName: borrowSubjectName))
 	end 'parseArrayMethodOnValue'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
@@ -19956,7 +20005,7 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
-	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -19966,7 +20015,7 @@ export type Parser
 		// the top-level managed `let` a CONSTANT rather than a value that silently mutates a copy at each
 		// read (`emitManagedConstant`).
 		let mutatesReceiver = arrayMethodMutatesReceiver(methodTok.value)
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
 
 		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
 		// the same instant. The rule above refuses a write through an immutable binding; this one records the
@@ -20101,7 +20150,15 @@ export type Parser
 	// are answered together rather than by two passes that would then have to agree for ever. A summary
 	// built by re-reading the LOWERED callee names (`__arr_push`, `__str_append`, `__set_insert`) would be
 	// precisely that second list, three tiers away from the one the parser already consults.
-	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner MutatedParamMask, methodTok Token, mutatesReceiver bool) throws ParseError
+	//
+	// ⭐⭐ **IT RECORDS TWO MASKS, BECAUSE ONE WRITE ANSWERS TWO QUESTIONS AND shv2 ANSWERS THEM
+	// DIFFERENTLY** — see `IrFunction`'s table, which is where the pair is defined. `receiverOwner` is
+	// E3019's ("does passing an immutable binding here make it an error?", NO for a self-field write, the
+	// ruling `self-keyword.md:self-with-params` pins); `receiverStorage` is E3070's ("does this body write
+	// what this parameter points at?", YES for the same write). Both are decided about the SAME receiver at
+	// the SAME instant off the SAME `mutatesReceiver` answer, which is why they are recorded together rather
+	// than by two passes that would then have to agree for ever.
+	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner MutatedParamMask, receiverStorage MutatedParamMask, methodTok Token, mutatesReceiver bool) throws ParseError
 		if not mutatesReceiver 'readOnlyMethod'
 			return
 		end 'readOnlyMethod'
@@ -20111,6 +20168,7 @@ export type Parser
 		end 'immutableReceiver'
 
 		func.writtenParamMask = func.writtenParamMask or receiverOwner
+		func.storageWrittenParamMask = func.storageWrittenParamMask or receiverStorage
 	end 'noteReceiverWrite'
 
 	// ⭐ **WHICH OF THE ENCLOSING FUNCTION'S PARAMETERS THIS RECEIVER'S RECORD BELONGS TO** — the bits
@@ -20156,20 +20214,75 @@ export type Parser
 	//
 	// The value test itself is exact rather than approximate: `bindParameters` reserves ids
 	// `0..paramCount-1` for the parameters and `mintValue` starts above them, so no body value can collide
-	// with a parameter's id. It is inline rather than its own helper because this is its ONE asker — the
-	// field-write door (`emitFieldWrite`) deliberately records nothing, so there is no second holder of a
-	// box for it to serve.
+	// with a parameter's id. ⭐ It is `paramMaskOfValue` and no longer inline: E3070's `receiverStorageMask`
+	// asks the identical question of the identical value, and so does the self-field STORE door, so what had
+	// exactly ONE asker now has three.
+	// Is this DECLARED type an `Array` instance? Asked by the self-field store door, which holds a
+	// `MaxonType` rather than a value.
+	//
+	// ⚠ **THE TAG TEST IS NOT OPTIONAL, AND LEAVING IT OUT IS A WRONG ANSWER RATHER THAN A LOOSE ONE.**
+	// `TypeNameId` and `GenericInstanceId` share a numeric space, so `isArrayInstance` asked of a name that
+	// is not an instance at all can answer TRUE by coincidence — MEASURED: without it an `Integer` field's
+	// store marked the whole receiver written, and `b.add(42)` was refused while `b.items` was borrowed, a
+	// program the oracle compiles and runs (it prints `44 42`). It is the same two-part test
+	// `parseFieldChainCall` makes of a receiver's VALUE, asked here of a type.
+	function typeIsArrayInstance(t MaxonType) returns bool
+		return maxonTypeTag(t) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(t))
+	end 'typeIsArrayInstance'
+
 	function receiverOwnerMask(func IrFunction, binding VarInfo) returns MutatedParamMask
 		if binding.isSelfField 'ownedByTheTypeNotTheCaller'
 			return NoMutatedParams
 		end 'ownedByTheTypeNotTheCaller'
 
-		if binding.boundValue >= func.paramCount 'notAParameter'
+		return paramMaskOfValue(func, value: binding.boundValue)
+	end 'receiverOwnerMask'
+
+	// ⭐⭐ **THE E3070 TWIN OF THE MASK ABOVE: WHICH PARAMETER'S STORAGE A WRITE THROUGH THIS RECEIVER
+	// REACHES.** It differs from `receiverOwnerMask` in EXACTLY ONE ARM — a SELF-FIELD alias — and that one
+	// arm is the whole point of there being two masks. See `IrFunction`'s table for the pair, and
+	// `receiverOwnerMask` above for why E3019 must keep answering NO there.
+	//
+	// `items.clear()` inside a method of `Bag` writes storage the CALLER can reach, because the caller
+	// handed `b` over as the receiver: `let s = try b.items.get(0) otherwise ""` then `b.wipe()` frees the
+	// element `s` holds. MEASURED before this arm existed — the oracle prints 44 (it RETAINS), shv2 ran and
+	// printed **4557430888798830399** out of freed memory, with no diagnostic anywhere.
+	//
+	// The receiver's parameter index is DERIVED (`self` resolved through the scope), not assumed to be 0:
+	// the convention that binds it there lives in `bindParameters`, and restating it here would be a second
+	// copy of it.
+	function receiverStorageMask(func IrFunction, binding VarInfo) returns MutatedParamMask
+		if binding.isSelfField 'fieldOfTheEnclosingReceiver'
+			return paramMaskOfValue(func, value: try self.scope.lookupValue(SelfParamName) otherwise panic("receiverStorageMask: a self-field alias is in scope but `self` is not — `declareSelfFieldAliases` and `bindParameters` both run at method entry before a body token is read, and the two paths that could hold an alias without a receiver are refused earlier (a closure body gets a FRESH scope and a self-field access inside one is E2015; a `static function` installs no alias at all)"))
+		end 'fieldOfTheEnclosingReceiver'
+
+		return paramMaskOfValue(func, value: binding.boundValue)
+	end 'receiverStorageMask'
+
+	// The shared arm of the two masks above: the parameter `value` IS, as a mask, or none when it is not a
+	// parameter at all. The parameter-ValueId convention (`bindParameters` reserves 0..paramCount-1) is what
+	// makes the test a comparison rather than a lookup — see `receiverOwnerMask`'s ⚠ block for why this is
+	// a question about the VALUE and `VarInfo.isParameter` is a different one about the BINDING.
+	function paramMaskOfValue(func IrFunction, value ValueId) returns MutatedParamMask
+		if value >= func.paramCount 'notAParameter'
 			return NoMutatedParams
 		end 'notAParameter'
 
-		return withMutatedParam(NoMutatedParams, param: binding.boundValue)
-	end 'receiverOwnerMask'
+		return withMutatedParam(NoMutatedParams, param: value)
+	end 'paramMaskOfValue'
+
+	// ⭐ **THE E3070 STORAGE MASK FOR A WRITE NAMED BY ITS SUBJECT** — the same answer `receiverStorageMask`
+	// gives, reached through the ONE subject derivation (`borrowSubjectNameAt`) that every E3070 door and the
+	// P1.8 iteration lock already share. It is what lets an array method reached through a FIELD CHAIN
+	// (`bag.items.clear()` inside `function wipe(bag Bag)`) record the write against `bag`, which the
+	// receiver-value path has no binding to find.
+	function subjectStorageMask(func IrFunction, subjectName ByteArray) returns MutatedParamMask
+		if subjectName.isEmpty() 'noNamedStorage'
+			return NoMutatedParams
+		end 'noNamedStorage'
+
+		return self.receiverStorageMask(func, binding: self.scope.getInfo(subjectName))
+	end 'subjectStorageMask'
 
 	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__arr_resize` lengthens by publishing a longer
 	// `length@8` over slots `__arr_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
@@ -20621,7 +20734,11 @@ export type Parser
 		let baseName = self.baseBindingName(baseTok)
 		if self.scope.contains(baseName) 'localBase'
 			let baseBinding = self.scope.getInfo(baseName)
-			let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
+			// ⚠ E3070 exemption with an EXPIRY: this base resolves a FIELD CHAIN, whose trailing call is
+			// refused today (a nested struct method `o.inner.m()` is E2015 at `parseFieldChainCall`), so no
+			// method dispatch can reach the empty subject from here. The rung that lands that call must pass
+			// `borrowSubjectNameAt` of the chain's base instead, or it inherits this exemption in silence.
+			let base = try self.requireStructBase(baseBinding, baseTok: baseTok, subjectName: EmptySourceText)
 			return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
 		end 'localBase'
 		// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure that captures
@@ -20793,6 +20910,23 @@ export type Parser
 		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
 			self.noteBorrowSubjectWrite(func, subjectName: fieldTok.value if self.scope.isSelfField(fieldTok.value) else EmptySourceText, display: ReassignMutationDisplay, anchor: fieldTok, mutatesSubject: true)
 		end 'mayConflictWithABorrow'
+
+		// ⭐ **AND IT IS A WRITE OF THE RECEIVER'S STORAGE, WHICH A CALLER CAN SEE** — `items = <fresh>` inside
+		// `b.wipe()` drops the record a caller borrowed an element out of, exactly as `items.clear()` does. It
+		// records ONLY the E3070 mask: `writtenParamMask` deliberately stays untouched here, because making a
+		// caller's `let b` an E3019 for a method that assigns its own field is the very ruling
+		// `self-keyword.md:self-with-params` pins (see `IrFunction`'s table).
+		//
+		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is E3070's SCOPE and the SAME line the String and Set
+		// dispatchers draw** (`noteReceiverWrite`'s two `receiverStorage: NoMutatedParams` call sites): only an
+		// ARRAY write can free an array element, and an array element is the only thing E3070 tracks. Ungated,
+		// `total = total + v` marked its whole receiver written, and a caller holding `let s = try
+		// b.items.get(0) otherwise ""` was refused `b.add(42)` — a legal program the oracle compiles and runs
+		// (measured: it prints `44 42`). The field type is read through the one accessor the type check below
+		// already asks.
+		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
+			func.storageWrittenParamMask = func.storageWrittenParamMask or paramMaskOfValue(func, value: receiver)
+		end 'arrayFieldStore'
 
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
@@ -21296,7 +21430,7 @@ export type Parser
 	// fact for the bare-name path and its comment states it exactly; the fact was written down
 	// once and needed in four places. Handing the box back from here is what makes the other three
 	// unable to get it wrong.
-	function requireStructBase(binding VarInfo, baseTok Token) returns StructBase throws ParseError
+	function requireStructBase(binding VarInfo, baseTok Token, subjectName ByteArray) returns StructBase throws ParseError
 		// The base binding must be LIVE before anything about it is resolved — a moved-from base is dead,
 		// so `p.x`, `p.x = …` and `p.m()` on it are use-after-move (E3102), reported here at the base
 		// token before the field/method is even looked up. This is the shared guard's second enforcing
@@ -21328,7 +21462,7 @@ export type Parser
 			throw ParseError.unsupported("a field access through '{String.from(baseTok.value)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)", line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
-		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok))
+		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
 	end 'requireStructBase'
 
 	// The `StructLayout` a struct-typed binding names — the guarded layout half of `requireStructBase`,
@@ -23117,7 +23251,10 @@ export type Parser
 		try self.requireNotInSelfCapture(anchor)
 		// `self` is a PARAMETER — a borrowed reference to the caller's record — so it is writable and has no
 		// blame name, which is exactly what keeps a sibling call inside a mutating method legal.
-		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none, immutableName: EmptySourceText)
+		// ⭐ The empty subject is not an exemption here — it is what makes `self` reach ALL of them. A bare
+		// sibling call names no ONE storage, and `noteReceiverBorrowSubjects` turns that plus the receiver's
+		// own value into one site per borrowed field of the enclosing receiver. See there.
+		return ReceiverArg.value(try self.scope.lookupValue(SelfParamName) otherwise return ReceiverArg.none, immutableName: EmptySourceText, subjectName: EmptySourceText)
 	end 'implicitSelfReceiver'
 
 	// Populate `siblingReceivers` (the enclosing type's member methods, bare name -> takesReceiver) unless it is
@@ -23241,7 +23378,7 @@ export type Parser
 		// token a diagnostic about the receiver has to point at.
 		match receiver 'prependReceiver'
 			none then break 'prependReceiver'
-			value(id, immutableName) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
+			value(id, immutableName, subjectName) then try self.prependReceiverArg(func, callee: callee, anchor: anchor, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 		end 'prependReceiver'
 
 		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
@@ -23671,6 +23808,68 @@ export type Parser
 		callArgs.push(handle)
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: resultTag, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSubpHandleOp'
+
+	// ⭐⭐ **E3070's SEVENTH DOOR: THE RECEIVER, WHICH IS AN ARGUMENT AND HAD NO ONE ASKING.** `b.wipe()`
+	// destroys the element a caller borrowed out of `b.items` exactly as `wipe(b.items)` does, and the two
+	// differ only in which column the array arrives in — so the receiver is offered to the conflict check as
+	// the ARGUMENT 0 that `parseCallNamed` has already made it. Measured before this door existed: the
+	// oracle prints 44, shv2 ran and printed **4557430888798830399** out of freed memory.
+	//
+	// It is settled against the STORAGE mask like every other call site, and that is what makes the door
+	// work at all: `wipe`'s `writtenParamMask` is 0 by the ruling `self-keyword.md:self-with-params` pins,
+	// while its `storageWrittenParamMask` carries the receiver's bit (see `IrFunction`'s table).
+	//
+	// The push and the record are ONE function because the receiver's argument COLUMN is what
+	// `argSlotPosition` maps to a parameter, and a site recorded beside a push that had not happened yet
+	// would name the wrong column. Recorded BEFORE the push, so `args.count()` is this argument's own index
+	// — the identical rule `parseCallArgs` states for the source's arguments.
+	function prependReceiverArg(func IrFunction, callee ByteArray, anchor Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
+		self.noteReceiverBorrowSubjects(func, callee: callee, anchor: anchor, argColumn: args.count(), id: id, subjectName: subjectName)
+		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
+	end 'prependReceiverArg'
+
+	// ⭐⭐ **WHICH STORAGES A RECEIVER STANDS FOR — and `self` stands for MORE THAN ONE.** An ordinary
+	// receiver denotes one binding, so it records one site. The ENCLOSING `self` denotes the whole receiver,
+	// and a borrow taken inside this same body was recorded against a FIELD's alias (`items`), never against
+	// `self` — so a single site keyed on the receiver would match no borrow and the call would be waved
+	// through. MEASURED, both spellings: `let s = try items.get(0) otherwise ""` then `reset()` or
+	// `self.reset()`, where `reset` clears `items`, printed **4557430888798830399** out of freed memory while
+	// the oracle printed 44.
+	//
+	// One site per self-field subject is exactly right rather than merely conservative: the callee writes
+	// through the receiver PARAMETER, and every field of that receiver is storage the parameter reaches. A
+	// callee that writes nothing is still filtered by the summary at the resolver, so a read-only sibling
+	// call stays legal. All the sites share one token, which the resolver's ordering check permits (it
+	// refuses a DECREASE, not a repeat).
+	function noteReceiverBorrowSubjects(func IrFunction, callee ByteArray, anchor Token, argColumn ParamCount, id ValueId, subjectName ByteArray)
+		if not subjectName.isEmpty() 'denotesOneNamedStorage'
+			self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: EmptySourceText, subjectName: subjectName)
+			return
+		end 'denotesOneNamedStorage'
+
+		if not self.receiverIsEnclosingSelf(id) 'denotesNoStorageThisBodyCanName'
+			return
+		end 'denotesNoStorageThisBodyCanName'
+
+		// The count is taken FIRST: `recordCallArgMutationSite` resolves each name back through
+		// `borrowSubjectIdOf`, which appends to this very list for a name it has not seen — and every name
+		// here is one it has, so it cannot grow, but reading the bound once says so rather than relying on it.
+		let subjectCount = func.borrowFacts.subjects.count()
+		for k in 0 upto subjectCount 'eachSubjectOfThisBody'
+			let subject = try func.borrowFacts.subjects.get(k) otherwise panic("noteReceiverBorrowSubjects: subjects.get OOB at {k} inside count()")
+			if subject.isSelfField 'fieldOfTheEnclosingReceiver'
+				self.recordCallArgMutationSite(func, callee: callee, anchor: anchor, argColumn: argColumn, argLabel: EmptySourceText, subjectName: subject.name)
+			end 'fieldOfTheEnclosingReceiver'
+		end 'eachSubjectOfThisBody'
+	end 'noteReceiverBorrowSubjects'
+
+	// Is this receiver value the ENCLOSING function's own `self` parameter? Derived from the binding rather
+	// than assumed of a token, so both spellings answer alike: `self.reset()` resolves `self` to that value
+	// and a bare sibling call (`reset()`) is given it by `implicitSelfReceiver`. False outside an instance
+	// method, where there is no receiver to be.
+	function receiverIsEnclosingSelf(id ValueId) returns bool
+		return id == (try self.scope.lookupValue(SelfParamName) otherwise return false)
+	end 'receiverIsEnclosingSelf'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves

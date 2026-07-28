@@ -315,7 +315,19 @@ function mutationSiteWrites(project Project, site MutationSite, mutationSummary 
 		return true
 	end 'settledAtTheParse'
 
-	let mask = mutationSummary.maskOf(site.callee)
+	// ⭐⭐ **THE STORAGE COLUMN, NOT E3019's** — the two ask different questions and shv2 answers them
+	// differently (`IrFunction`'s table). `Bag.wipe`'s `maskOf` is 0 by the ruling
+	// `self-keyword.md:self-with-params` pins, and reading it here is what let `b.wipe()` free a borrowed
+	// element in silence. Its `storageMaskOf` carries the receiver's bit, so the same call is refused.
+	//
+	// It is the storage column for EVERY call site, argument and receiver alike: E3070's question is always
+	// "does the callee write the array I handed it?", and that is the one this column answers.
+	//
+	// ⚠ **NOT because the storage mask contains the other one — it does not** (`IrFunction`'s table lists
+	// four divergences in both directions). `grow(arr)` is unaffected for a concrete reason instead: the
+	// ARRAY dispatcher records BOTH masks for a parameter receiver, so a plain mutating callee carries its
+	// bit in each. Do not restate this as containment; the `String`/`Set` rows go the other way.
+	let mask = mutationSummary.storageMaskOf(site.callee)
 	if mask == NoMutatedParams 'writesNoParameter'
 		return false
 	end 'writesNoParameter'

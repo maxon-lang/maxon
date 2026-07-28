@@ -437,11 +437,17 @@ typealias ModuleFuncIndexByName = Map with (ByteArray, FuncIndex)
 export type ParamMutationSummary
 	// One mask per function of the merged module, by function index. Zero for the overwhelming majority.
 	export let masks as MutatedParamMaskArray
+	// ⭐⭐ **THE SECOND COLUMN, ANSWERING THE SECOND QUESTION** — see `IrFunction`'s table, where the pair is
+	// defined and the ruling that separates them is cited. Same index space, same edges, same fixpoint; only
+	// the SEED differs, and it differs in exactly one case (a method writing a field of its own receiver).
+	// Two columns and one index rather than two summaries, for the reason the first one is a dense column
+	// and not a map: the name resolution is already paid for.
+	export let storageMasks as MutatedParamMaskArray
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as ModuleFuncIndexByName
 
-	export static function create(masks MutatedParamMaskArray, funcIndexByName ModuleFuncIndexByName) returns ParamMutationSummary
-		return Self{masks: masks, funcIndexByName: funcIndexByName}
+	export static function create(masks MutatedParamMaskArray, storageMasks MutatedParamMaskArray, funcIndexByName ModuleFuncIndexByName) returns ParamMutationSummary
+		return Self{masks: masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName}
 	end 'create'
 
 	// Which parameters a call to `callee` writes. `NoMutatedParams` for a name the module does not declare —
@@ -449,9 +455,25 @@ export type ParamMutationSummary
 	// E3004 — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a
 	// membership test first.
 	export function maskOf(callee ByteArray) returns MutatedParamMask
-		let index = try self.funcIndexByName.get(callee) otherwise return NoMutatedParams
-		return try self.masks.get(index) otherwise panic("ParamMutationSummary.maskOf: function index {index} for '{String.from(callee)}' is outside the mask column — both are built over `module.functions` in one pass")
+		return self.maskAt(self.masks, callee: callee)
 	end 'maskOf'
+
+	// Which parameters' ARRAY storage a call to `callee` writes — E3070's question, its own fields included.
+	// ⚠ NOT a superset of `maskOf` above and not a subset: the two diverge in FOUR places, in both
+	// directions, and `IrFunction`'s table enumerates them. Reading one where the other is meant is a wrong
+	// answer with no compile error, which is why they are two named accessors and not one with a flag.
+	export function storageMaskOf(callee ByteArray) returns MutatedParamMask
+		return self.maskAt(self.storageMasks, callee: callee)
+	end 'storageMaskOf'
+
+	// The one indexed read both columns share. `NoMutatedParams` for a name the module does not declare — a
+	// compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
+	// — the same "absence is the answer" `buildThrowsMap` uses, and the reason no caller needs a membership
+	// test first.
+	function maskAt(column MutatedParamMaskArray, callee ByteArray) returns MutatedParamMask
+		let index = try self.funcIndexByName.get(callee) otherwise return NoMutatedParams
+		return try column.get(index) otherwise panic("ParamMutationSummary.maskAt: function index {index} for '{String.from(callee)}' is outside the mask column — both are built over `module.functions` in one pass")
+	end 'maskAt'
 end 'ParamMutationSummary'
 
 // The reverse-call-graph edges, as three dense scalar columns plus the CSR key column. Edge `k` says:
@@ -515,14 +537,24 @@ end 'indexModuleFunctionsByName'
 function buildParamMutationSummary(project Project, module MaxonModule) returns ParamMutationSummary
 	let funcIndexByName = indexModuleFunctionsByName(module)
 
+	// ⭐⭐ **TWO SEEDS, ONE GRAPH, ONE FIXPOINT RUN TWICE.** The parser records both per-function facts at the
+	// same doors (`Parser.noteReceiverWrite`, `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical
+	// for both — "a callee that writes what it was handed makes its caller write what IT was handed" is one
+	// statement about one call graph — so the edges and the CSR are built ONCE and drained twice. That is
+	// also what makes the transitive case work without a second rule: `wipe()` calling a `reset()` that
+	// clears the receiver's field inherits the bit through the very same edge E3019's column travels.
 	var masks = MutatedParamMaskArray.create()
+	var storageMasks = MutatedParamMaskArray.create()
 	for func in module.functions 'seed'
 		masks.push(func.writtenParamMask)
+		storageMasks.push(func.storageWrittenParamMask)
 	end 'seed'
 
 	let edges = collectMutationEdges(project, module: module, funcIndexByName: funcIndexByName)
-	propagateMutationMasks(masks, edges: edges, byCallee: edges.byCallee(module.functions.count()))
-	return ParamMutationSummary.create(masks, funcIndexByName: funcIndexByName)
+	let byCallee = edges.byCallee(module.functions.count())
+	propagateMutationMasks(masks, edges: edges, byCallee: byCallee)
+	propagateMutationMasks(storageMasks, edges: edges, byCallee: byCallee)
+	return ParamMutationSummary.create(masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
 
 // Walk every call in the program and record one edge per argument that IS one of the caller's own

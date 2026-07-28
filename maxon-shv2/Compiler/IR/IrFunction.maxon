@@ -208,6 +208,50 @@ export type IrFunction
 	// closure nested inside a closure uses THAT function's counter (`<outer>$closure_0$closure_0`).
 	export var closureSubCounter as ClosureSubIndex
 
+	// ⭐⭐ **TWO MASKS OVER THE SAME BIT SPACE ASK TWO DIFFERENT QUESTIONS, AND shv2 ANSWERS THEM
+	// DIFFERENTLY. READ BOTH HEADERS BEFORE TOUCHING EITHER.**
+	//
+	// | question | mask |
+	// |---|---|
+	// | "does passing an immutable binding HERE make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write the storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	//
+	// ⚠ **NEITHER MASK CONTAINS THE OTHER. THEY DIVERGE IN FOUR PLACES, IN BOTH DIRECTIONS** — this list is
+	// exhaustive, and it is exhaustive on purpose, because "a superset" is the plausible summary and it is
+	// FALSE (measured: `function tagIt(s String) s.append("!") end` raises E3019 on a `let` argument while
+	// its storage bit is deliberately clear):
+	//
+	// | the write | `writtenParamMask` | `storageWrittenParamMask` | why |
+	// |---|---|---|---|
+	// | self-field alias (`items.clear()`) or self-field store (`items = …`) | no | **yes** | the ruling below |
+	// | field-chain array (`bag.items.clear()`) | no | **yes** | E3019 records no field write, by the same ruling |
+	// | `String` receiver that is a parameter | **yes** | no | a String write frees no ARRAY element |
+	// | `Set` receiver that is a parameter | **yes** | no | likewise |
+	//
+	// The last two are E3070's SCOPE and not an omission: an array element is the only borrow it tracks, so
+	// recording a `String`/`Set` write would refuse `b.wipe()` while `b.items` is borrowed for a `wipe` that
+	// only appends to `b.name`. ⚠ **Do not "simplify" E3019's call-site check to read the storage column** —
+	// it would silently stop diagnosing those two rows, with no compile error anywhere.
+	//
+	// They look alike and are not, and the divergence is a RULING the corpus pins. E3070 needs the opposite
+	// answer about the very same call, because `b.wipe()` clearing `self.items` frees an element a caller
+	// borrowed out of `b.items` (measured: the oracle prints 44, shv2 read freed memory and printed
+	// 4557430888798830399).
+	//
+	// ⚠ **ONE MASK CANNOT CARRY BOTH, AND EACH OF THE TWO DOORS HAS ITS OWN PINNED GUARD — SEEN RED, not
+	// assumed.** Feeding E3019's column from either door turns a committed case red, and they are DIFFERENT
+	// cases, because the two doors reach E3019 by different routes:
+	//
+	//   • the SELF-FIELD STORE (`Parser.emitCheckedSelfFieldStore`, `total = total + v`) is guarded by
+	//     `specs-shv2/self-keyword.md:self-with-params` — `let acc = Accumulator.create(0)` then
+	//     `acc.add(10)` must compile and return **42**. Sabotaged: three E3019s at `acc.add`/`acc.addTwice`.
+	//   • the SELF-FIELD ALIAS receiver (`Parser.receiverOwnerMask`, `items.clear()`) is guarded by
+	//     `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` and
+	//     `for-iterated-self-field:self-field-writable-after-the-loop`. Sabotaged: E3019 on both, and
+	//     `self-with-params` stays GREEN — it does not cover this door.
+	//
+	// So there are two columns, each named for its question, each pointing here.
+	//
 	// ⭐ **THE PARAMETERS THIS BODY ITSELF WRITES (E3019, the call-site half)** — bit `i` set iff a
 	// receiver-writing container method was called on parameter `i`'s record, or a field of `self` was
 	// assigned. Seeded by the PARSER, at the one site that already decides whether a receiver may be
@@ -217,6 +261,19 @@ export type IrFunction
 	// that writes what it was handed makes its caller write what IT was handed — and the closure is what
 	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
 	export var writtenParamMask as MutatedParamMask
+
+	// ⭐ **THE PARAMETERS WHOSE ARRAY STORAGE THIS BODY WRITES (E3070's half)** — bit `i` set iff the body
+	// writes an ARRAY reachable through parameter `i`, a field of its own receiver included. It is NOT a
+	// superset of `writtenParamMask` above and not a subset either; the table there enumerates all four
+	// divergences and why each one is the answer it is.
+	//
+	// Seeded by the PARSER at the same two doors — `Parser.noteReceiverWrite`, which already decides whether
+	// a receiver may be written at all, and `Parser.emitCheckedSelfFieldStore`, the one self-field store —
+	// and closed under the call graph by the SAME least fixpoint over the SAME edges
+	// (`buildParamMutationSummary`), so `wipe()` calling a `reset()` that clears the field inherits the bit.
+	// Read only by `BorrowCheck.mutationSiteWrites`, to answer "does handing this borrowed array — as an
+	// argument or as a RECEIVER — reach a write of it?". Zero for a Std-phase function.
+	export var storageWrittenParamMask as MutatedParamMask
 
 	// ⭐ **THE E3070 BORROW FACTS THIS BODY RECORDED (`BorrowCheck`)** — which storages it borrowed an
 	// element out of, which binding took each borrow, and every write it saw go through one. It rides
@@ -268,6 +325,7 @@ export type IrFunction
 			isPure: true,
 			closureSubCounter: 0,
 			writtenParamMask: 0,
+			storageWrittenParamMask: 0,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
 	end 'create'
@@ -304,6 +362,7 @@ export type IrFunction
 			isPure: true,
 			closureSubCounter: 0,
 			writtenParamMask: 0,
+			storageWrittenParamMask: 0,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
 	end 'createFromStd'
@@ -344,6 +403,7 @@ export type IrFunction
 			isPure: src.isPure,
 			closureSubCounter: src.closureSubCounter,
 			writtenParamMask: src.writtenParamMask,
+			storageWrittenParamMask: src.storageWrittenParamMask,
 			borrowFacts: src.borrowFacts
 		}
 	end 'shallowCopy'
