@@ -192,7 +192,6 @@ end 'main'
 into an arithmetic expression. Nothing in this suite had a float FIELD before, which is exactly why
 the field doors were the last place an int reached an f64 slot unconverted: every float test kept its
 floats in locals, parameters and returns.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 type Particle
 	export var mass as float
@@ -224,7 +223,6 @@ variant: a `float(low to high)` alias reaches a field as a bare NAME, and a name
 whole-program declaration sweep cannot resolve — it is handed the index it is still building. Read as
 an ordinary `named` type the alias is an INTEGER, so this exact program was `E3009: cannot implicitly
 convert 'float' to 'int'` on the perfectly legal `Self{mass: 2.5}`.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Weight = float(f64.min to f64.max)
@@ -262,7 +260,6 @@ clean rejection into a silent 1.5e-323.
 ⭐ **THIS IS THE CASE WHOSE ANSWER IS DECIDED BY THE RECORDED LITERAL'S TAG**, and its pair below is
 what proves the decision is self-supporting: the two defaults differ ONLY in the tag, and each must
 reach the slot as `3.0` and `2.5` respectively. Break the tag and exactly one of them goes wrong.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Weight = float(f64.min to f64.max)
@@ -294,7 +291,6 @@ was a false `E3009: cannot implicitly convert 'float' to 'int'` — a lossy-conv
 float meeting a float — because the declaration sweep reads an unresolved alias NAME as an integer.
 The verdict now waits for the whole-program index; the widening decision is a separate question the
 recorded tag answers, so neither half stands on the other.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Weight = float(f64.min to f64.max)
@@ -324,7 +320,6 @@ end 'main'
 `= 0` and `= 0.0` are the one pair the payload CANNOT tell apart — zero is the single fixed point of
 the int→f64 bit conversion — so they are the sharpest statement of why the literal's tag is recorded
 rather than inferred. Both must reach the slot as `0.0`.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Weight = float(f64.min to f64.max)

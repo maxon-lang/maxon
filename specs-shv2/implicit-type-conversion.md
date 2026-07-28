@@ -475,7 +475,7 @@ end 'main'
 <!-- test: float-to-int-field-literal-rejected -->
 ⭐ **THE OTHER DIRECTION IS STILL REFUSED AT EVERY ONE OF THOSE DOORS**, and that is what makes the
 widening above safe to add: a rule that promoted in both directions would be a far worse bug than the
-one it replaced. Six rejections, one message.
+one it replaced. Seven rejections, one message.
 ```maxon
 type Reading
 	export var value as int
