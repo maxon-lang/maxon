@@ -12,8 +12,7 @@ When an array grows, its backing buffer may be reallocated to a new address. Any
 
 ## Tests
 
-<!-- disabled-test: string-ref-survives-array-growth -->
-<!-- E3070 borrow-across-mutation — shv2 has no borrow-liveness (NLL) pass, so `arr.push(…)` while an element is borrowed compiles clean and the compile error this case pins never fires -->
+<!-- test: string-ref-survives-array-growth -->
 ### String reference borrow conflict detected
 Get a string from an array, then push elements. The borrow checker must reject this.
 ```maxon
@@ -41,8 +40,7 @@ end 'main'
 error E3070: specs/fragments/array-realloc-dangling-ref/string-ref-survives-array-growth.test:9:7: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
 ```
 
-<!-- disabled-test: struct-ref-survives-array-growth -->
-<!-- E3070 borrow-across-mutation — shv2 has no borrow-liveness (NLL) pass, so `arr.push(…)` while an element is borrowed compiles clean and the compile error this case pins never fires -->
+<!-- test: struct-ref-survives-array-growth -->
 ### Struct with string field borrow conflict detected
 Get a struct from an array, then grow the array. The borrow checker must reject this.
 ```maxon
@@ -87,8 +85,7 @@ end 'main'
 error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-array-growth.test:24:7: cannot mutate 'arr' via 'push' while it is borrowed by 'item' (borrowed at line 19)
 ```
 
-<!-- disabled-test: multiple-refs-survive-array-growth -->
-<!-- the same missing E3070 borrow-liveness pass as its two siblings (the multi-line array literal this case also used to trip over now parses — see `arrays.md`'s multi-line literal cases) -->
+<!-- test: multiple-refs-survive-array-growth -->
 ### Multiple references borrow conflict detected
 Get references to multiple elements, then grow the array. The borrow checker must reject this.
 ```maxon

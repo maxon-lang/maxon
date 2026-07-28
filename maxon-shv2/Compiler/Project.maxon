@@ -138,9 +138,28 @@ export type VarInfo
 	// PARAMETER's ValueId while being a `let`, and `a.push(9)` is E3019 in the oracle. See
 	// `Parser.immutableReceiverNameOf` for the measurement.
 	export var isParameter as bool
+	// ⭐ **THE TOKEN OF THIS BINDING'S LAST USE — the NON-LEXICAL half of E3070** (`BorrowCheck`).
+	// Written at `Parser.requireBindingLive`, the one chokepoint every USE of a local binding funnels
+	// through (a bare read, a field read or write through it, a method call on it), so "was this name
+	// read?" is answered exactly once in the parser and never re-derived.
+	//
+	// ⭐ It lives on the BINDING and not on the borrow record because a borrow is recorded when it is
+	// TAKEN and the last use happens later: a name copied onto the record at record time would be a
+	// second fact, free to disagree with the binding it describes. A `BorrowRecord` therefore holds
+	// the `VarInfo` itself and reads this through it.
+	//
+	// ⚠ **BOTH WRITERS MOVE IT FORWARD ONLY, AND THAT IS A CORRECTNESS RULE RATHER THAN TIDINESS.**
+	// `requireBindingLive` records an ordinary use at the cursor; `attachPendingBorrows` SEEDS it when a
+	// borrow is taken — to the activation for a `let`/`var` (so a name never read again is dead the instant
+	// it is bound, which is what makes `borrow-checker.md:borrow-nll-allowed` compile) and to the LOOP'S
+	// `end` for a `for … in` element, whose liveness is lexical. A writer that moved it BACKWARDS would
+	// expire a borrow the program is still holding — a use-after-free with no diagnostic anywhere.
+	//
+	// Constructed 0, and left 0 for every binding kind no borrow can name, where nothing reads it.
+	export var lastUseToken as TokenIndex
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0}
 	end 'create'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
@@ -156,11 +175,11 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false}
+		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false, lastUseToken: 0}
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -168,7 +187,7 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0}
 	end 'createValueBinding'
 
 	// The value binding a PARAMETER gets — `createValueBinding` plus the one bit that distinguishes it
@@ -181,7 +200,7 @@ export type VarInfo
 	// re-read the constant would take that flag out of the caller's hands — exactly the defeat that
 	// tripwire's comment warns about.
 	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0}
 	end 'createParameterBinding'
 end 'VarInfo'
 

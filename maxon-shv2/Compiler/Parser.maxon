@@ -7290,6 +7290,14 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
+		// E3070: the element accessors NO name took are dead the moment the body is — nothing later can bind
+		// their values, and `borrowFacts` rides the merged module for the rest of the compile. The COMPLETED
+		// borrows and the recorded writes stay; only this transient claim list goes. Guarded, so a body that
+		// borrowed nothing leaves the shared-empty facts untouched.
+		if func.borrowFacts.pending.count() > 0 'dropUnclaimedBorrows'
+			func.borrowFacts.pending = PendingBorrowArray.create()
+		end 'dropUnclaimedBorrows'
+
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
@@ -8167,6 +8175,10 @@ export type Parser
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
 		var binding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(boundValue), mutable: mutable, value: boundValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		// ⭐ E3070: the initializer's outstanding element borrows become THIS binding's, activated HERE — see
+		// `attachPendingBorrows` for why the binding and not the accessor is the activation point.
+		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
+
 		if mutable 'trackVar'
 			// Record `var`s in declaration order so loop headers can mint phis for every
 			// mutable binding in scope (M4b on-the-fly SSA). `let`s never join — they
@@ -8355,6 +8367,10 @@ export type Parser
 	// does not consider such a program valid — it just has nowhere to say so. shv2 says so here,
 	// at the statement that introduces the contradiction.
 	function parseAssignment(func IrFunction, block IrBlock) throws ParseError
+		// The target's own token index, captured before the cursor leaves it, so the E3070 subject below comes
+		// through the shared `borrowSubjectNameAt` rather than off `nameTok.value` — one derivation of "which
+		// storage does this write go through", asked identically at all six doors.
+		let nameIndex = self.pos
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 
@@ -8389,6 +8405,17 @@ export type Parser
 		end 'selfField'
 
 		try self.requireMutableBinding(binding, nameTok: nameTok)
+
+		// ⭐⭐ **E3070's REBIND DOOR — and shv2 must REFUSE where the oracle merely forgets the borrow.**
+		// `arr = other` drops the record `arr` held (`reassignBindingValue` decrefs it), so every element
+		// borrowed out of it is freed: MEASURED **0xC0000005** on `let s = try arr.get(0) otherwise ""` +
+		// `arr = StringArray.create()` + `print("{s}")`, where the oracle prints the string and exits 0. It
+		// gets away with it because it RETAINS on `get` and so simply KILLS the borrow at a reassignment
+		// (`BorrowCheckPass.cs:129-132`); shv2 takes no reference there, so killing the borrow would be
+		// unsound and the only two answers left are retain-on-get or refuse. This rung IS the refusal.
+		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
+			self.noteBorrowSubjectWrite(func, subjectName: self.borrowSubjectNameAt(nameIndex), display: ReassignMutationDisplay, anchor: nameTok, mutatesSubject: true)
+		end 'mayConflictWithABorrow'
 
 		let rhsStart = self.pos
 		let value = try self.parseExpression(func, block: block)
@@ -9757,6 +9784,11 @@ export type Parser
 
 		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
 		let phiId = self.mintPhi(cont, tag: self.tagOf(result), nameId: try self.valueNameIds.get(result) otherwise panic("finishValueTry: result has no name column"))
+
+		// ⭐ E3070: a `let s = try arr.get(0) otherwise …` binds THIS phi, not the accessor's result, so an
+		// element borrow riding the ok edge has to move onto it or the binding would claim nothing. Done
+		// where the phi is minted — the one place both values are in hand (`retargetPendingBorrow`).
+		self.retargetPendingBorrow(func, from: result, to: phiId)
 
 		// ⭐ **A MANAGED RESULT PHI IS OWNED — reconcile both edges to owned before wiring them in.** When the
 		// try-result owns heap, the phi is the sole owner of whichever value reaches the merge and is dropped
@@ -11635,9 +11667,16 @@ export type Parser
 		// Taken here, it is still well before the loop VARIABLE is declared, which is what keeps
 		// `for arr in arr` locking the SOURCE binding rather than the loop variable that shadows its name.
 		var sourceLock = false
+		// ⭐ **THE E3070 SUBJECT OF THE ELEMENT THIS LOOP WILL BORROW** — resolved HERE, beside the lock and
+		// off the same `sourceStart`, because both are answers about the SOURCE and both must be taken before
+		// the loop VARIABLE is declared: `for arr in arr` must key on the source binding, not on the loop
+		// variable that shadows its name. Empty for a range (no borrow) and for a source that names no
+		// binding, exactly as the lock is.
+		var elementBorrowSubject = EmptySourceText
 		if not isRange 'arraySource'
 			try self.requireIterableArray(source, forTok: forTok)
 			sourceLock = self.lockIterationSource(sourceStart)
+			elementBorrowSubject = self.borrowSubjectNameAt(sourceStart)
 
 			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
 			// / `for x in build()` produces a record the statement owns; left in `pendingTempDrops` it
@@ -11714,12 +11753,16 @@ export type Parser
 		self.currentBlock = body
 		var loopValue = indexPhi
 		if not isRange 'readElement'
-			loopValue = self.emitArrayElementAccessor(ArrGetUncheckedName, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), owned: false, range: SourceRange.ofToken(nameTok))
+			loopValue = self.emitArrayElementAccessor(func, callee: ArrGetUncheckedName, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(nameTok))
 		end 'readElement'
 		if not nameTok.value.equals(DiscardBindingName) 'bindLoopVariable'
 			// Declared in the `for`'s OWN frame (not the body's), so it is in scope for the whole body
 			// and gone at the loop's `end`. Immutable: `for-iterator-immutable` pins `item = …` as E2013.
-			_ = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, value: loopValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+			let loopBinding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(loopValue), mutable: false, value: loopValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+			// ⭐ E3070: the element this loop just read is a BORROW, and it is live for the BODY'S EXTENT
+			// rather than to the variable's last use — see `attachPendingBorrows`'s `liveUntil`. `_` binds
+			// nothing, so nothing can hold the element past its read and there is no borrow to record.
+			self.attachPendingBorrows(func, borrower: loopBinding, boundValue: loopValue, liveUntil: bodyEndIndex)
 		end 'bindLoopVariable'
 
 		// `ownedFloor` is the owned-binding height NOW — above the iteration source's own binding, so a
@@ -11999,21 +12042,239 @@ export type Parser
 	// `immutableReceiverNameOf`, deliberately: shv2 rules that a container held in a FIELD may be written
 	// through a `let` base (`receiverOwnerMask`'s header records the measurement and the ruling), so
 	// routing the chain through the general rule would newly reject programs the corpus pins.
-	function iterationLockNameAt(baseIndex TokenIndex) returns ByteArray
-		// The SUBJECT's name, not the base token's: `self.items.clear()` is a write to `items`, and
-		// blaming `self` sent the reader to a parameter nothing can be done about. Same derivation the
-		// lock was taken through, which is the point (`iterationSubjectNameAt`).
-		let baseName = self.iterationSubjectNameAt(baseIndex)
-		if not self.scope.contains(baseName) 'notALocalBinding'
+	// It takes the SUBJECT'S NAME already resolved rather than the base token's index, and that is two
+	// reasons which are one reason: the subject of `self.items.clear()` is `items`, and blaming `self` sent
+	// the reader to a parameter nothing could be done about (`iterationSubjectNameAt`); and E3070's door at
+	// the same call site needs the identical answer — so it is derived ONCE, by `borrowSubjectNameAt`, and
+	// handed to both. Empty in, empty out: a chain over no local binding locks nothing.
+	function iterationLockNameOf(subjectName ByteArray) returns ByteArray
+		if subjectName.isEmpty() 'notALocalBinding'
 			return EmptySourceText
 		end 'notALocalBinding'
 
-		if not self.bindingIsIterationLocked(self.scope.getInfo(baseName)) 'writable'
+		if not self.bindingIsIterationLocked(self.scope.getInfo(subjectName)) 'writable'
 			return EmptySourceText
 		end 'writable'
 
-		return baseName
-	end 'iterationLockNameAt'
+		return subjectName
+	end 'iterationLockNameOf'
+
+	// ⭐⭐ **THE STORAGE A CHAIN AT `baseIndex` NAMES, or empty when it names none** — `iterationSubjectNameAt`
+	// (THE one derivation of *which binding a write goes through*) plus the one test that says the name denotes
+	// storage this function body can reason about at all.
+	//
+	// **Two predicates share it, and that sharing IS the E3070 design.** The iteration lock asks of this name
+	// *"is this binding being iterated?"* (`iterationLockNameAt`, immediately above); the borrow set asks
+	// *"is an element of it still referenced?"* (`borrowSubjectIdOf`). Written twice, a chain shape taught to
+	// one and not the other would leave a write locked under one key and checked under another — which is
+	// precisely the divergence `iterationSubjectNameAt`'s ⚠ block records as a measured segfault.
+	function borrowSubjectNameAt(baseIndex TokenIndex) returns ByteArray
+		let baseName = self.iterationSubjectNameAt(baseIndex)
+		return baseName if self.scope.contains(baseName) else EmptySourceText
+	end 'borrowSubjectNameAt'
+
+	// ⭐ **THE FUNCTION'S BORROW FACTS, COPY-ON-WRITTEN off the shared empty before the first write.** A body
+	// that borrows nothing keeps the shared instance for its whole life and allocates not one array — the
+	// `sharedEmptyIterationLocks` pattern, with the same invariant: the shared instance is NEVER mutated, so
+	// it is safe across the per-file parse fan-out. Every writer below comes through here first.
+	// ⚠ **ASKED BEFORE A SUBJECT NAME IS DERIVED, AND THAT ORDER IS THE COST.** Deriving one costs a
+	// `Scope` hash lookup, and two of the write doors — the local rebind and the self-field store — sit on
+	// the hot statement path. A write ABOVE every borrow's activation can never conflict (the resolver
+	// rejects it on `activationToken > site.token`), so a function that has not yet completed a borrow —
+	// nearly every function in any program — answers `false` off one read of a permanently empty array and
+	// pays nothing else. The same reading `bindingIsIterationLocked`'s own empty check states, for the same
+	// reason: it is not defensive, it IS the cost.
+	function functionHoldsABorrow(func IrFunction) returns bool
+		return func.borrowFacts.borrows.count() > 0
+	end 'functionHoldsABorrow'
+
+	function borrowFactsOf(func IrFunction) returns BorrowFacts
+		if func.borrowFacts is sharedEmptyBorrowFacts 'firstFactInThisFunction'
+			func.borrowFacts = BorrowFacts.create()
+		end 'firstFactInThisFunction'
+		return func.borrowFacts
+	end 'borrowFactsOf'
+
+	// ⭐ **THE SUBJECT ID FOR `subjectName` — resolved through `Scope`, so the KEY is the binding and not the
+	// spelling.** A body that SHADOWS a borrowed array's name declares a different `VarInfo` and gets a
+	// different subject (correctly writable); a self-field's two spellings (`items`, `self.items`) both resolve
+	// to the ONE alias installed at method entry and share one subject. That is the same two-property key
+	// `bindingIsIterationLocked` matches by object identity, reached the same way.
+	//
+	// A linear scan over a list whose length is the number of DISTINCT storages this body borrows from or
+	// writes — a handful — and it is only ever entered once a borrow exists (`noteBorrowSubjectWrite`'s gate).
+	// Callers must have established `scope.contains(subjectName)`, which `borrowSubjectNameAt` is.
+	function borrowSubjectIdOf(func IrFunction, subjectName ByteArray) returns BorrowSubjectId
+		let binding = self.scope.getInfo(subjectName)
+		var facts = self.borrowFactsOf(func)
+		for k in 0 upto facts.subjects.count() 'seen'
+			if (try facts.subjects.get(k) otherwise panic("borrowSubjectIdOf: subjects.get OOB at {k} inside count()")) is binding 'match'
+				return k
+			end 'match'
+		end 'seen'
+
+		facts.subjects.push(binding)
+		return facts.subjects.count() - 1
+	end 'borrowSubjectIdOf'
+
+	// Record that the element accessor at `range` handed out a BORROW of `subjectName`. Pending until a
+	// binding takes it (`attachPendingBorrows`) — an accessor whose result no name holds is unreachable
+	// afterwards and borrows nothing that could dangle.
+	function mintPendingBorrow(func IrFunction, subjectName ByteArray, borrowValue ValueId, range SourceRange)
+		// The id is minted FIRST because `borrowSubjectIdOf` is what copy-on-writes the facts off the shared
+		// empty — so the push below is always into this function's own.
+		let subject = self.borrowSubjectIdOf(func, subjectName: subjectName)
+		func.borrowFacts.pending.push(PendingBorrow.create(subject, borrowValue: borrowValue, borrowLine: range.line))
+	end 'mintPendingBorrow'
+
+	// ⭐⭐ **MOVE A PENDING BORROW ONTO THE VALUE A `try` MERGE HANDS BACK.** `let s = try arr.get(0)
+	// otherwise ""` does not bind the accessor's result — it binds the CONTINUATION PHI the two edges meet
+	// at — so without this the binding would claim nothing and the borrow would silently vanish.
+	//
+	// It is called from the ONE site that mints that phi (`finishValueTry`), so the key and the value the
+	// source actually binds move together and cannot drift apart. The DIVERGING forms need no retarget and
+	// correctly get none: `otherwise return`/`throw`/`panic` leave the accessor's own result as the try's
+	// value, and so does a propagating `try`.
+	function retargetPendingBorrow(func IrFunction, from ValueId, to ValueId)
+		if func.borrowFacts.pending.count() == 0 'nothingPending'
+			return
+		end 'nothingPending'
+
+		// The entry is REBUILT rather than written through: a `for … in` element is an immutable binding and a
+		// field store through one is E2013, which is the language's rule and not a limitation to route around.
+		for k in 0 upto func.borrowFacts.pending.count() 'each'
+			let pending = try func.borrowFacts.pending.get(k) otherwise panic("retargetPendingBorrow: pending.get OOB at {k} inside count()")
+			if pending.borrowValue == from 'thisOne'
+				try func.borrowFacts.pending.set(k, value: PendingBorrow.create(pending.subject, borrowValue: to, borrowLine: pending.borrowLine)) otherwise panic("retargetPendingBorrow: pending.set OOB at {k}, the index just read")
+			end 'thisOne'
+		end 'each'
+	end 'retargetPendingBorrow'
+
+	// ⭐ **COMPLETE, AT THE BINDING, EVERY BORROW THE INITIALIZER JUST TOOK.** This is where the borrowing NAME
+	// and the ACTIVATION point exist, and activating here rather than at the accessor is what makes a mutation
+	// inside a `try … otherwise` HANDLER legal: the handler is parsed BEFORE this runs, so its writes sit below
+	// the activation and the ordering says "not borrowed yet" by construction rather than by a special case.
+	// Both references are emphatic about the same choice (`MaxonBorrowCheck.maxon:425-428`;
+	// `BorrowCheckPass.cs:72-80`).
+	//
+	// Everything pending belongs to THIS initializer: `parseStatement` drops what the previous statement left.
+	//
+	// ⭐⭐ **`liveUntil` IS WHERE THE TWO BORROW KINDS DIFFER, AND IT IS THE WHOLE DIFFERENCE.**
+	//
+	//   • A `let`/`var` binding passes **`self.pos`** — the activation itself, so a name never read again is
+	//     dead the instant it is bound and only a real later use extends it. That is NLL, and it is what
+	//     keeps `borrow-nll-allowed` compiling.
+	//   • A `for … in` ELEMENT passes the loop's **`end`** — its liveness is LEXICAL, the body's extent, and
+	//     ordinary NLL there is a use-after-free:
+	//
+	//         for it in arr 'l'
+	//             wipe(arr)        // the borrow must be live HERE …
+	//         end 'l'              // … even though `it` is never read again
+	//
+	//     The last use of `it` is at or before the write, so last-use liveness would call the borrow dead
+	//     and wave the program through — but the ITERATION keeps reading the record on every later trip
+	//     (`__arr_count` in the header, `__arr_get_unchecked` for the element), so the freed buffer is read
+	//     again. The body's extent IS that liveness, and it is exactly what P1.8 Slice A's lexical lock
+	//     already models, so the two halves of one `for` agree instead of one expiring under the other.
+	//
+	// `requireBindingLive` only ever moves a last use FORWARD, so an ordinary read of the loop variable
+	// inside the body cannot shorten the lexical extent back to itself.
+	function attachPendingBorrows(func IrFunction, borrower VarInfo, boundValue ValueId, liveUntil TokenIndex)
+		var facts = func.borrowFacts
+		if facts.pending.count() == 0 'borrowedNothing'
+			return
+		end 'borrowedNothing'
+
+		// Scanned from the END, because the borrow a name claims is almost always the one its own initializer
+		// just minted; and the claimed entry is REMOVED, which keeps the list down to the accessors no name
+		// took. A value id is defined once, so at most one entry can match — the loop runs on to prove it
+		// rather than to find a second.
+		var k = facts.pending.count()
+		while k > 0 'findTheValueThisNameBinds'
+			k = k - 1
+			let pending = try facts.pending.get(k) otherwise panic("attachPendingBorrows: pending.get OOB at {k} inside count()")
+			if pending.borrowValue != boundValue 'someOtherValue'
+				continue
+			end 'someOtherValue'
+
+			facts.borrows.push(BorrowRecord.create(pending.subject, borrower: borrower, activationToken: self.pos, borrowLine: pending.borrowLine))
+			_ = try facts.pending.remove(k) otherwise panic("attachPendingBorrows: pending.remove OOB at {k}, the index this loop just read")
+
+			// FORWARD-ONLY, the same rule `requireBindingLive` writes this field under. Both writers obey it,
+			// so a seed can never pull a live borrow's last use BACKWARDS — which would expire it early, and
+			// that is a use-after-free with no diagnostic anywhere.
+			if liveUntil > borrower.lastUseToken 'extendsTheBorrowersLife'
+				borrower.lastUseToken = liveUntil
+			end 'extendsTheBorrowersLife'
+		end 'findTheValueThisNameBinds'
+	end 'attachPendingBorrows'
+
+	// ⭐⭐ **RECORD A WRITE THAT GOES THROUGH A BORROW SUBJECT — the SECOND predicate over the one derivation.**
+	// Called at exactly the doors `bindingIsIterationLocked` is, for exactly the same reason: a write can NAME
+	// the array through a binding receiver, a field chain, a self-field alias, a rebind of the binding, or a
+	// self-field store, and each one alone leaves a use-after-free open.
+	//
+	// ⚠ **THE `borrows.count()` GATE IS NOT DEFENSIVE, IT IS THE COST.** Two of these doors sit on the hot
+	// statement path (every assignment, every container method call). A write ABOVE every borrow's activation
+	// can never conflict — the resolver would reject it on `activationToken > site.token` — so a function that
+	// has not yet completed a borrow records nothing, allocates nothing, and leaves its facts at the shared
+	// empty. That is the same reading `bindingIsIterationLocked`'s own empty check states, and the same reason.
+	function noteBorrowSubjectWrite(func IrFunction, subjectName ByteArray, display ByteArray, anchor Token, mutatesSubject bool)
+		if not mutatesSubject or subjectName.isEmpty() 'notAWriteThroughANamedBinding'
+			return
+		end 'notAWriteThroughANamedBinding'
+
+		if not self.functionHoldsABorrow(func) 'nothingBorrowedYet'
+			return
+		end 'nothingBorrowedYet'
+
+		func.borrowFacts.mutations.push(MutationSite.createContainerWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: subjectName, token: self.pos, line: anchor.line, column: anchor.column, display: display))
+	end 'noteBorrowSubjectWrite'
+
+	// ⭐ **THE SIXTH DOOR: a borrow subject handed to a CALLEE.** `grow(arr)` destroys the element the caller
+	// borrowed exactly as `arr.clear()` does (measured: the oracle reports E3070 and shv2 segfaulted), and it
+	// is the one write the parser cannot settle — whether `grow` mutates what it was handed depends on its
+	// BODY, possibly in another file. So the site is recorded with the callee and the argument's column and
+	// SemanticCheck settles it against the whole-program `ParamMutationSummary` (`mutationSiteWrites`), the
+	// same summary E3019's call-site half reads. Never a second copy of "which parameters does this callee
+	// write" — that question already has one home.
+	//
+	// The diagnostic anchors on the CALL, not the argument, which is the oracle's anchor (measured `10:2` for
+	// `\tgrow(arr)` — the callee token) and the anchor `checkImmutableArgToMutatingParam` already uses.
+	function noteBorrowSubjectCallArg(func IrFunction, callee ByteArray, anchor Token, argColumn ParamCount, argLabel ByteArray, valueStart TokenIndex)
+		if not self.functionHoldsABorrow(func) 'nothingBorrowedYet'
+			return
+		end 'nothingBorrowedYet'
+
+		// ⚠ **AN UNNAMED CALLEE IS A WITNESS DISPATCH, AND THE QUESTION IS UNASKABLE — NOT MERELY UNASKED.**
+		// The conflict this door records is "does the CALLEE write the storage this argument names?", answered
+		// from the by-callee mutation summary. Under dictionary-passing a witness dispatch resolves to no one
+		// impl, so there is no callee to key on (`parseWitnessMethodOnValue` passes empty, for the same reason
+		// it discards `argImmutableNames` — E3019 cannot ask there either). Refused HERE, explicitly, because
+		// recording a site whose summary lookup is guaranteed to miss would be a silent no-op wearing the shape
+		// of a check.
+		if callee.isEmpty() 'noSingleCallee'
+			return
+		end 'noSingleCallee'
+
+		// ⭐ **A FIELD CHAIN COUNTS, NOT ONLY A BARE NAME**, and it has to: `wipe(b.items)` destroys the
+		// element a `for it in b.items` — or a `let s = try b.items.get(0)` — is holding, and it is the one
+		// route P1.8 Slice A's lock structurally cannot reach (its five doors all NAME the array; this one
+		// hands it to a callee). The predicate is `sourceNamesABase`, THE shared walk `for … in` decides
+		// lockability with, so an argument shape the lock understands is an argument shape this door
+		// understands. E3019's own bare-name rule is untouched — it asks `argWasBareName`, a different
+		// question about a different blame.
+		if not self.sourceNamesABase(valueStart) 'notANameableStorage'
+			return
+		end 'notANameableStorage'
+
+		let subjectName = self.borrowSubjectNameAt(valueStart)
+		if subjectName.isEmpty() 'notALocalBinding'
+			return
+		end 'notALocalBinding'
+
+		func.borrowFacts.mutations.push(MutationSite.createCallArgWrite(self.borrowSubjectIdOf(func, subjectName: subjectName), subjectName: subjectName, token: self.pos, line: anchor.line, column: anchor.column, callee: callee, argColumn: argColumn, argLabel: argLabel))
+	end 'noteBorrowSubjectCallArg'
 
 	// The index of the `end` token that closes the block statement opening at `startIndex`,
 	// found by counting block openers against `end`s — the same depth-counted token walk
@@ -13303,6 +13564,17 @@ export type Parser
 			// direction, and it is the only sound one here — the alternative refuses nothing on the path that
 			// actually aliases.
 			self.propagateImmutableGlobalReadToPhi(phiId, gives: finalGives)
+
+			// ⭐ **AN E3070 ELEMENT BORROW SURVIVES THE MERGE TOO, and for the very same reason** — a borrow is
+			// keyed on the VALUE the accessor produced, and a merge MINTS A NEW VALUE, so without this a
+			// `let s = try arr.get(0) otherwise "" if c else "…"` (and the `match … gives` spelling one
+			// construct over) bound a phi no borrow was attached to and the following `arr.clear()` was waved
+			// through: MEASURED 0xC0000005 on both. This is the second of the THREE merges the parser has; the
+			// third is `finishValueTry`'s, hooked at its own `mintPhi`. A short-circuit's merge is excluded by
+			// its TYPE — its phi is a bool, and no bool is an element borrow.
+			for give in finalGives 'eachGive'
+				self.retargetPendingBorrow(func, from: give, to: phiId)
+			end 'eachGive'
 
 			result = MatchGiveValue.value(phiId)
 		end 'resultPhi'
@@ -15739,7 +16011,7 @@ export type Parser
 				// A postfix receiver is a VALUE the expression just built — a literal, a call result, a
 				// slice — so there is no binding for an iteration lock to name (the field-chain door is
 				// the one that has one, and it passes it).
-				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: resultUsed, immutableReceiverName: EmptySourceText)
+				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: resultUsed, immutableReceiverName: EmptySourceText, borrowSubjectName: EmptySourceText)
 				continue
 			end 'arrayMethod'
 
@@ -19201,10 +19473,16 @@ export type Parser
 	// `clear`/`insert`) in value position is E3059. The array record's ADDRESS is stable across a grow (only
 	// its `buffer@0` moves), so a mutating method never rebinds the receiver.
 	function parseArrayMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+		// ⭐ The receiver's own token, captured before the cursor leaves it — the E3070 subject comes through
+		// the SAME derivation the iteration lock's does (`borrowSubjectNameAt`), never off `binding`: a bare
+		// self-field receiver arrives here as a `VarInfo` MINTED FRESH per access (`methodReceiverBinding`),
+		// so identity on it would key one storage under a new object at every write. The NAME resolves to the
+		// one alias installed at method entry.
+		let baseIndex = self.pos
 		self.advance()
 		try self.consume(TokenKind.dot)
 		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner)
+		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), borrowSubjectName: self.borrowSubjectNameAt(baseIndex), receiverOwner: receiverOwner)
 	end 'parseArrayMethodCall'
 
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
@@ -19245,7 +19523,7 @@ export type Parser
 	// or any array-valued expression, reached from the postfix loop and the `try` target. The cursor sits on
 	// the `.`; the receiver `arr` is already parsed (and, for a literal, already an owned pending temp that
 	// drops at statement end).
-	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray) returns ValueId throws ParseError
+	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		// A receiver that is not a binding is WRITABLE: it is a fresh literal, a call result or a field
 		// read, and no `let` promises anything about it. There is also no name a rejection could blame,
@@ -19253,7 +19531,7 @@ export type Parser
 		// receiver pass the empty name, and the FIELD-CHAIN caller passes the one name that can still
 		// refuse: the chain's base while a `for … in` is iterating through it (`iterationLockNameAt`).
 		// It denotes no PARAMETER either way, so a write through it mutates none: `NoMutatedParams`.
-		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, receiverOwner: NoMutatedParams)
+		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, borrowSubjectName: borrowSubjectName, receiverOwner: NoMutatedParams)
 	end 'parseArrayMethodOnValue'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
@@ -19293,7 +19571,13 @@ export type Parser
 		var argImmutableNames = ByteArrayArray.create()
 		// The first argument's label is OPTIONAL at an interface / type-parameter receiver and MANDATORY
 		// from the second on — see `consumeArgLabel`.
-		try self.parseCallArgs(func, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: true)
+		//
+		// The callee is passed EMPTY, and E3070's call-argument door is unaskable here for the SAME reason
+		// `argImmutableNames` is discarded above: the borrow check asks whether the callee writes the storage
+		// this argument names, and that summary is keyed by callee. Under dictionary-passing a witness dispatch
+		// has no one impl to key on. `noteBorrowSubjectCallArg` refuses an unnamed callee explicitly rather
+		// than letting the summary lookup miss — see there.
+		try self.parseCallArgs(func, callee: EmptySourceText, anchor: methodTok, args: userArgs, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: true)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		let args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
 
@@ -19613,7 +19897,10 @@ export type Parser
 		let baseIndex = self.pos
 		let receiver = try self.parseFieldAccess()
 		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
-			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed, immutableReceiverName: self.iterationLockNameAt(baseIndex))
+			// ONE derivation, read ONCE: `iterationLockNameAt` opened with exactly this question, so handing it
+			// the answer keeps a chain from resolving its base through `Scope` twice per method call.
+			let subjectName = self.borrowSubjectNameAt(baseIndex)
+			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed, immutableReceiverName: self.iterationLockNameOf(subjectName), borrowSubjectName: subjectName)
 		end 'arrayReceiver'
 		// A `function`-typed field takes its trailing `(args)` and a TYPE-PARAMETER field takes its
 		// `.method(…)`, and BOTH are hops `parsePostfix` already knows how to apply — a function value through
@@ -19638,7 +19925,7 @@ export type Parser
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
-	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner MutatedParamMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
@@ -19647,7 +19934,13 @@ export type Parser
 		// `noteReceiverWrite`, the ONE home this rule has for every container, and it is what makes
 		// the top-level managed `let` a CONSTANT rather than a value that silently mutates a copy at each
 		// read (`emitManagedConstant`).
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: arrayMethodMutatesReceiver(methodTok.value))
+		let mutatesReceiver = arrayMethodMutatesReceiver(methodTok.value)
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, methodTok: methodTok, mutatesReceiver: mutatesReceiver)
+
+		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
+		// the same instant. The rule above refuses a write through an immutable binding; this one records the
+		// write it permits, against the borrows still outstanding on that storage (`noteBorrowSubjectWrite`).
+		self.noteBorrowSubjectWrite(func, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
@@ -19655,26 +19948,26 @@ export type Parser
 		// it); pop/remove MOVE the element OUT (the runtime nulls its slot), so their result is OWNED (P1.7 slice 3).
 		if methodTok.value.equals(ArrayGetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitArrayElementAccessor(ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, range: range)
+			return self.emitArrayElementAccessor(func, callee: ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		if methodTok.value.equals(ArraySetMethod) 'set'
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, throwing: true, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.parseArrayNoArgs()
-			return self.emitArrayElementAccessor(ArrFirstName, args: singletonArgs(arr), giid: giid, owned: false, range: range)
+			return self.emitArrayElementAccessor(func, callee: ArrFirstName, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'first'
 		if methodTok.value.equals(ArrayLastMethod) 'last'
 			try self.parseArrayNoArgs()
-			return self.emitArrayElementAccessor(ArrLastName, args: singletonArgs(arr), giid: giid, owned: false, range: range)
+			return self.emitArrayElementAccessor(func, callee: ArrLastName, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'last'
 		if methodTok.value.equals(ArrayPopMethod) 'pop'
 			try self.parseArrayNoArgs()
-			return self.emitArrayElementAccessor(ArrPopName, args: singletonArgs(arr), giid: giid, owned: true, range: range)
+			return self.emitArrayElementAccessor(func, callee: ArrPopName, args: singletonArgs(arr), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'pop'
 		if methodTok.value.equals(ArrayRemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitArrayElementAccessor(ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, range: range)
+			return self.emitArrayElementAccessor(func, callee: ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 		if methodTok.value.equals(ArraySliceMethod) 'slice'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
@@ -19928,7 +20221,31 @@ export type Parser
 	//     the concrete destructor (concrete element) or the descriptor-gated `__drop_type_param` (opaque element,
 	//     inert for a trivial instantiation). The enclosing method reserves the descriptor for the opaque drop —
 	//     `computeTypeDescriptorNeeds` seeds it off any `.pop()`/`.remove()` move-out in the shared body.
-	function emitArrayElementAccessor(callee ByteArray, args ValueIdArray, giid GenericInstanceId, owned bool, range SourceRange) returns ValueId
+	//
+	// ⭐⭐ **AND IT IS WHERE AN E3070 BORROW IS MINTED (`BorrowCheck`), off the `owned` flag that already
+	// answers the question.** `owned` IS *"does the caller take the element OUT, or look at it in place?"*, so
+	// `pop`/`remove` are excluded STRUCTURALLY rather than by a second hand-maintained method list — v1 keeps
+	// one (`MaxonBorrowCheck.maxon:42-44`) and shv2 deliberately does not port it, because
+	// `arrayMethodMutatesReceiver` is already the ONE such list and answers a different question.
+	//
+	// `borrowSubjectName` is the storage the element came out of, EMPTY when the receiver is anonymous (an
+	// array literal, a call result — nothing else can name that record, so no later statement can free it).
+	//
+	// ⭐ **THE `for … in` ELEMENT ENROLS TOO, and that is a USER RULING** (`parseForStatement` passes
+	// `borrowSubjectNameAt(sourceStart)` here). P1.8 Slice A's lock refuses every write that NAMES the
+	// iterated array; it structurally cannot refuse one that hands the array to a CALLEE
+	// (`wipe(b.items)`), and shv2 read the free-poison byte 0x3F on exactly that program. The oracle
+	// ACCEPTS it — it retains the element — so this refuses a program the oracle compiles, deliberately and
+	// in the only direction that is sound for a compiler that does not retain. See
+	// `bindingIsIterationLocked`'s ⚠⚠ block, which is what this closes, and `attachPendingBorrows`'s
+	// `liveUntil` for why the loop element's borrow is LEXICAL rather than last-use.
+	//
+	// ⚠ **AN OPAQUE `T` ELEMENT MINTS NO BORROW**, deliberately: a shared generic body is compiled ONCE, so it
+	// cannot know whether the instantiation's element owns heap, and a trivial one (`Array with Integer`) hands
+	// back a raw word that no mutation can dangle. Refusing there would reject a program the oracle — which
+	// monomorphizes — accepts. The managed instantiation's hazard is real and unclosed; it is the same
+	// descriptor-gated question `finishValueTry`'s opaque try-merge already defers.
+	function emitArrayElementAccessor(func IrFunction, callee ByteArray, args ValueIdArray, giid GenericInstanceId, owned bool, borrowSubjectName ByteArray, range SourceRange) returns ValueId
 		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing: the
 		// result is `integer` and is NEVER tracked owned, read or moved out (a decref of an integer would corrupt
 		// the count). An OPAQUE element is NOT trivial here — `typeIsManaged` is false for a `typeParameter`, but a
@@ -19941,7 +20258,11 @@ export type Parser
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
 		if owned 'moveOut'
 			self.trackOwnedTemp(result)
-		end 'moveOut'
+		end 'moveOut' else 'borrowsInPlace'
+			if not borrowSubjectName.isEmpty() and self.signatures.arrayElementIsManaged(giid) 'borrowsANamedSourcesElement'
+				self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: result, range: range)
+			end 'borrowsANamedSourcesElement'
+		end 'borrowsInPlace'
 		return result
 	end 'emitArrayElementAccessor'
 
@@ -20431,6 +20752,17 @@ export type Parser
 			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
 		end 'immutableField'
 
+		// ⭐ E3070's rebind door ONE INDIRECTION OUT — the same write as `arr = other`, reached through
+		// `items = other` / `self.items = other`, which both converge here. This is the ONE door that cannot
+		// ask `borrowSubjectNameAt`: it holds a field token and a layout index and no chain base at all
+		// (`self.items = x`'s base token is `self`). It needs no re-derivation either — `iterationSubjectNameAt`
+		// already rules that a self-field chain's subject is the FIELD's name and never the receiver, and
+		// `fieldTok` IS that token in both spellings. The `isSelfField` test is only for a store reached outside
+		// an instance method, where no alias is in scope and no borrow could have named one.
+		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
+			self.noteBorrowSubjectWrite(func, subjectName: fieldTok.value if self.scope.isSelfField(fieldTok.value) else EmptySourceText, display: ReassignMutationDisplay, anchor: fieldTok, mutatesSubject: true)
+		end 'mayConflictWithABorrow'
+
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
 		try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames), value: value, anchor: fieldTok)
@@ -20862,6 +21194,25 @@ export type Parser
 	// the struct-typed self-field base that DOES reach `requireStructBase` (and is refused there for the
 	// unrelated reason that its box has to be loaded out of the receiver first).
 	function requireBindingLive(binding VarInfo, nameTok Token) throws ParseError
+		// ⭐ **THE NON-LEXICAL HALF OF E3070 IS WRITTEN HERE, and this is why it is written HERE.** This is the
+		// one chokepoint every USE of a local binding funnels through — the bare read, a field read or write
+		// through it, a method call on it — which is exactly the set of events a borrow's lifetime ends at. A
+		// second site asking "was this name read?" would be the same defect the guard below documents, one
+		// question later: a use taught to one site and not the other lets a borrow expire while it is still
+		// live, and a mutation past it becomes a use-after-free the compiler waved through.
+		//
+		// Written BEFORE both early returns: a self-field alias and a scalar binding are uses too, and the
+		// exclusions below are about a MOVE, not about whether the name was read.
+		//
+		// ⚠ **ONLY EVER FORWARD.** The cursor is monotone through a function body, so the test is a no-op
+		// for every ordinary read — it is here for the ONE binding whose last use is seeded AHEAD of the
+		// parse, a `for … in` element's (`attachPendingBorrows`'s `liveUntil`). Without it the first read of
+		// the loop variable inside the body would pull that lexical extent back to itself and expire a
+		// borrow the iteration is still holding: a use-after-free.
+		if self.pos > binding.lastUseToken 'laterThanAnyUseSoFar'
+			binding.lastUseToken = self.pos
+		end 'laterThanAnyUseSoFar'
+
 		if binding.isSelfField 'selfFieldAlias'
 			return
 		end 'selfFieldAlias'
@@ -22862,7 +23213,7 @@ export type Parser
 			value(id, immutableName) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
 		end 'prependReceiver'
 
-		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
+		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -23299,7 +23650,12 @@ export type Parser
 	// interface / type-parameter receiver (see there). Whether a `name:` label actually
 	// matches a parameter is a check for whoever holds the callee's parameter names —
 	// SemanticCheck for a direct call, `slottedWitnessArgs` for a witness dispatch.
-	function parseCallArgs(func IrFunction, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, allowFirstNamed bool) throws ParseError
+	//
+	// `callee`/`anchor` name the call being parsed, for the E3070 borrow check: a free call
+	// whose argument names a borrowed collection is a mutation site only if the CALLEE writes
+	// that parameter's storage, so the site has to be recorded against a name, here, where the
+	// argument's own tokens are still in hand (`BorrowCheck.maxon`).
+	function parseCallArgs(func IrFunction, callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, allowFirstNamed bool) throws ParseError
 		if self.at(TokenKind.rightParen) 'noArgs'
 			return
 		end 'noArgs'
@@ -23325,6 +23681,11 @@ export type Parser
 			// travels as the companion argument the lowering appends at the function-typed parameter position
 			// (`LowerMaxonToStd.appendCalleeEnvArgs`), so the callee's `f(x)` reads the right env. No refusal
 			// here. (A capturing closure at a NON-function parameter is a type error caught by SemanticCheck.)
+			// ⭐ E3070's call-argument door, taken BEFORE the push so the column index it records is this
+			// argument's own — the receiver a method call prepended included, which is the index
+			// `argSlotPosition` maps to a parameter position (`noteBorrowSubjectCallArg`).
+			self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
+
 			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.bareArgImmutableName(valueTok, valueStart: valueStart))
 			argIndex = argIndex + 1
 
@@ -23434,7 +23795,7 @@ export type Parser
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
 		var argImmutableNames = ByteArrayArray.create()
-		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
+		try self.parseCallArgs(func, callee: calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, allowFirstNamed: false)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok)

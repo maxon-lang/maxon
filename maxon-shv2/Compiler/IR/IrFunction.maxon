@@ -218,6 +218,19 @@ export type IrFunction
 	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
 	export var writtenParamMask as MutatedParamMask
 
+	// ⭐ **THE E3070 BORROW FACTS THIS BODY RECORDED (`BorrowCheck`)** — which storages it borrowed an
+	// element out of, which binding took each borrow, and every write it saw go through one. It rides
+	// here for the reason `writtenParamMask` above does, and it is the SAME reason: the fact is the
+	// PARSER's (a binding exists nowhere else in shv2 — `let` mints no op), while the pass that must
+	// read it needs the whole program (the free-call half asks `ParamMutationSummary` whether the
+	// callee writes the parameter the array filled).
+	//
+	// ⚠ Points at `sharedEmptyBorrowFacts` until the body takes its first borrow, so a function that
+	// borrows nothing — which is nearly every function — costs one shared reference and no allocation.
+	// `Parser.borrowFactsOf` is the copy-on-write. Empty for a Std-phase function: the tier that reads
+	// it is upstream.
+	export var borrowFacts as BorrowFacts
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
@@ -254,7 +267,8 @@ export type IrFunction
 			outgoingArgSize: 0,
 			isPure: true,
 			closureSubCounter: 0,
-			writtenParamMask: 0
+			writtenParamMask: 0,
+			borrowFacts: sharedEmptyBorrowFacts
 		}
 	end 'create'
 
@@ -289,7 +303,8 @@ export type IrFunction
 			outgoingArgSize: 0,
 			isPure: true,
 			closureSubCounter: 0,
-			writtenParamMask: 0
+			writtenParamMask: 0,
+			borrowFacts: sharedEmptyBorrowFacts
 		}
 	end 'createFromStd'
 
@@ -328,7 +343,8 @@ export type IrFunction
 			outgoingArgSize: src.outgoingArgSize,
 			isPure: src.isPure,
 			closureSubCounter: src.closureSubCounter,
-			writtenParamMask: src.writtenParamMask
+			writtenParamMask: src.writtenParamMask,
+			borrowFacts: src.borrowFacts
 		}
 	end 'shallowCopy'
 

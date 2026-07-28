@@ -1,0 +1,319 @@
+// BorrowCheck — **E3070: A COLLECTION MAY NOT BE MUTATED WHILE AN ELEMENT BORROWED OUT OF IT IS
+// STILL LIVE.**
+//
+// `arr.get(i)` hands the caller the element POINTER and takes no reference for it
+// (`Parser.emitArrayElementAccessor(owned: false)`) — the array stays the sole owner and its
+// `__arr_decref` walk destroys the element. So a write that shortens or replaces the array
+// (`clear`, `push` past capacity, a rebind of the binding itself) frees a record the caller is
+// still holding: measured **0xC0000005** on `let s = try arr.get(0) otherwise ""` + `arr.clear()`
+// + `print("{s}")`, and on five further shapes of the same statement.
+//
+// ⭐⭐ **THIS IS THE SAME WRITE DOORS THE ITERATION LOCK ALREADY HARDENED (P1.8 slice A), ASKING A
+// SECOND QUESTION OF THE SAME BINDING.** The lock asks *"is this binding being iterated?"*; the
+// borrow set asks *"is an element of it still referenced?"*. Both are answered from ONE derivation
+// of **which storage a write goes through** — `Parser.iterationSubjectNameAt` — so a chain shape
+// taught to one is taught to the other, and a write cannot be locked under one key and checked
+// under another. That divergence was a segfault once already; see that function's ⚠ block.
+//
+// ⭐ **WHERE THIS DEPARTS FROM BOTH REFERENCES, AND WHY IT HAD TO.** `BorrowCheckPass.cs` and
+// `MaxonBorrowCheck.maxon` are the same algorithm, and both key a borrow on a VAR SLOT recovered
+// from `varDecl`/`varLoad`/`varStore` ops. **shv2 has none of those.** `let`/`var` bind a name to
+// the initializer's SSA `ValueId` in `Scope` at PARSE TIME (ARCHITECTURE.md, *Names, SSA, and
+// phis*), so `let x = 42` mints no op at all: an IR pass cannot see the bindings because the
+// bindings are not in the IR. The facts are therefore RECORDED BY THE PARSER, which is the only
+// place they exist, and DECIDED here, which is the only place the whole-program parameter-mutation
+// summary exists.
+//
+// Three consequences, each one an improvement on the references rather than a workaround:
+//
+//   • **Liveness is EXACT, not approximated.** Both references stand in "the highest physical op
+//     index this slot appeared at" for the last use. shv2 needs no stand-in: a use of a binding IS
+//     a `Scope` resolution (`Parser.requireBindingLive`, the one read chokepoint), and the token
+//     cursor is monotone in source order through a function body — the very order the references
+//     were approximating.
+//   • **`pop`/`remove` are excluded STRUCTURALLY, not by name.** The mint sits at the one door that
+//     already decides borrow-vs-move-out (`emitArrayElementAccessor`'s `owned` flag), so v1's
+//     hand-maintained `mutatingMethodNames` list (`MaxonBorrowCheck.maxon:42-44`) is not ported —
+//     `Parser.arrayMethodMutatesReceiver` is shv2's ONE such list and it already exists.
+//   • **NOTHING IS RECORDED UNTIL A FUNCTION ACTUALLY BORROWS.** Every mutation door reads
+//     `borrows.count()` first, and a function with no live borrow answers 0 after one read and
+//     allocates nothing — its `BorrowFacts` is still the shared empty. v1 rebuilds two arrays per
+//     call site (`expireDeadBorrows`, :1099-1114) and the bootstrap allocates a key list on EVERY
+//     op (`ExpireBorrows`, :164-171, with no empty-set guard); neither is ported. v1 is debugged,
+//     not fast.
+//
+// ⚠ **WHAT IS NOT MODELLED, AND IT IS THE REFERENCES' LIMIT TOO: a LOOP makes source order lie.**
+// A use textually BEFORE a mutation but inside the same loop body happens after it at run time,
+// and a token-ordered last use cannot say so. Both references approximate with a linear op index
+// and inherit exactly the same blind spot, so shv2 is no weaker; closing it needs a real liveness
+// analysis over the CFG, which is a different mechanism from this one.
+
+// The per-function id of a STORAGE a borrow reads an element of and a write goes through. Dense, and
+// in practice tiny — it counts the DISTINCT such storages of one function body — but the range is WIDE
+// because nothing CAPS it: a narrow bound here would be a runtime panic on a large machine-generated
+// body rather than a diagnostic, and a bound is narrowed only when it is provable.
+//
+// ⭐ It is minted by resolving a NAME through `Scope` at the instant of the record, so it carries
+// the two properties a name string cannot: a body that SHADOWS the source's name declares a
+// different `VarInfo` and gets a different subject (correctly writable), and a self-field's two
+// spellings (`items`, `self.items`) reach the ONE alias `VarInfo` and so share one subject.
+export typealias BorrowSubjectId = int(0 to u64.max)
+
+// The `via '<x>'` text for a mutation that is a REBIND of the source binding rather than a method
+// call on it (`arr = other`, `items = other`, `self.items = other`). Neither reference has one —
+// the bootstrap KILLS a borrow at a reassignment (`BorrowCheckPass.cs:129-132`, safe for it because
+// it retains the element) — so shv2 names the write with the operator the user wrote.
+export let ReassignMutationDisplay = b"="
+
+// ⭐ **AN ELEMENT BORROW THE PARSER HAS MINTED BUT NOT YET BOUND TO A NAME.** A borrow is minted at
+// the ACCESSOR (`arr.get(0)`) and completed at the BINDING (`let s = …`), which is where the
+// borrowing name and the activation point exist; an accessor whose result no binding takes is never
+// completed and is dropped.
+//
+// ⭐⭐ **IT IS KEYED ON THE VALUE THE ACCESSOR PRODUCED, and that is not a detail — it is the only
+// key that answers "did the element actually reach this name?".** Two measured defects come from
+// keying on POSITION instead:
+//
+//   • `let n = sizeOf(try arr.get(0) otherwise "")` binds an INTEGER computed from the element. The
+//     element reaches no name and nothing can dangle, but a position key hands the borrow to `n` and
+//     refuses the program — as it does to a counted range's loop variable, which is the header phi.
+//   • `let s = try arr.get(0) otherwise return 1` parses its handler by RE-ENTERING the statement
+//     parser mid-initializer, so a position key that resets per statement is wiped there: NO borrow
+//     is recorded at all and the following `arr.clear()` is waved through. Measured **0xC0000005**.
+//
+// A value id is unique within a function, so a stale pending borrow can never be claimed by a later
+// binding and no per-statement reset is needed for correctness at all.
+//
+// ⭐⭐ **THE COMPLETION IS WHAT MAKES A MUTATION INSIDE A `try … otherwise` HANDLER LEGAL**, and it
+// is the one thing both references are emphatic about (`MbcBorrow.activationIndex`, v1 :425-428;
+// `BorrowCheckPass.cs:72-80`). On the handler's path the get FAILED and the borrowing variable was
+// never bound, so there is no borrow to conflict with — and since the handler is parsed BEFORE the
+// binding completes, its tokens sit below the ACTIVATION and the ordering says so by construction.
+// Activating at the CALL instead would refuse `specs/borrow-checker.md:borrow-not-live-in-otherwise`.
+export type PendingBorrow
+	export let subject as BorrowSubjectId
+	// The SSA value the accessor defined. A binding claims this borrow iff the value it binds IS this
+	// one — after `Parser.retargetPendingBorrow` has moved it to the merge phi, which is what a
+	// `try … otherwise <value>` actually binds.
+	export let borrowValue as ValueId
+	// The accessor's own line — what the diagnostic reports as `borrowed at line N`.
+	export let borrowLine as LineNumber
+
+	export static function create(subject BorrowSubjectId, borrowValue ValueId, borrowLine LineNumber) returns PendingBorrow
+		return Self{subject: subject, borrowValue: borrowValue, borrowLine: borrowLine}
+	end 'create'
+end 'PendingBorrow'
+
+export typealias PendingBorrowArray = Array with PendingBorrow
+
+// A completed borrow: binding `borrower` holds an element of subject `subject` from `activationToken`
+// until its own last use.
+export type BorrowRecord
+	export let subject as BorrowSubjectId
+	// ⭐ **THE BORROWING BINDING, HELD BY REFERENCE** — the same discipline
+	// `Parser.iterationLockedBindings` states, and here for a second reason: the binding's
+	// `lastUseToken` is written by `Parser.requireBindingLive` long AFTER this record is made, so a
+	// name copied out at record time would be a second fact free to disagree with the binding it
+	// describes. `VarInfo` is a heap `type`, so this record observes every later use.
+	export let borrower as VarInfo
+	// The token at which the borrowing name came into scope. A write BELOW it — a `try` handler's,
+	// or anything earlier in the body — cannot conflict, because the borrow does not exist there yet.
+	export let activationToken as TokenIndex
+	export let borrowLine as LineNumber
+
+	export static function create(subject BorrowSubjectId, borrower VarInfo, activationToken TokenIndex, borrowLine LineNumber) returns BorrowRecord
+		return Self{subject: subject, borrower: borrower, activationToken: activationToken, borrowLine: borrowLine}
+	end 'create'
+end 'BorrowRecord'
+
+export typealias BorrowRecordArray = Array with BorrowRecord
+
+// A write the parser saw go through a borrow subject. Recorded ONLY while the enclosing function
+// already holds at least one completed borrow — a write above every borrow's activation can never
+// conflict, so recording one would be work with no question attached.
+//
+// ⚠ A record `type` rather than the dense scalar columns `MutationEdges` and `SourceRangeTable`
+// insist on, and the gate above is exactly why: those two are built over EVERY call / EVERY op in
+// the program, where a heap box per entry is a per-op allocation. This list is empty in every
+// function that borrows nothing, which is almost all of them.
+export type MutationSite
+	export let subject as BorrowSubjectId
+	// The name the SOURCE wrote at this write, which is what the diagnostic blames. It may differ
+	// from the spelling the borrow used (`items` vs `self.items`) while naming the one subject.
+	export let subjectName as ByteArray
+	export let token as TokenIndex
+	export let line as LineNumber
+	export let column as ColumnNumber
+	// The `via '<x>'` text: the METHOD name for a container write, the trimmed callee for a free
+	// call, `=` for a rebind.
+	export let display as ByteArray
+	// ⭐ **NON-EMPTY ⇒ THIS SITE IS ONLY A WRITE IF THE CALLEE SAYS SO.** A container method and a
+	// rebind are decided by the parser, which holds the whole question; `grow(arr)` is not — whether
+	// it writes depends on `grow`'s BODY, possibly in another file. Those sites carry the callee and
+	// the argument's column, and `mutationSiteWrites` settles them against the whole-program
+	// `ParamMutationSummary` — the SAME summary E3019's call-site half reads, never a second one.
+	export let callee as ByteArray
+	// The argument's index in the call op's OWN columns (a prepended method receiver included), which
+	// is the index `argSlotPosition` maps to a parameter position. Meaningless when `callee` is empty.
+	export let argColumn as ParamCount
+	export let argLabel as ByteArray
+
+	export static function createContainerWrite(subject BorrowSubjectId, subjectName ByteArray, token TokenIndex, line LineNumber, column ColumnNumber, display ByteArray) returns MutationSite
+		return Self{subject: subject, subjectName: subjectName, token: token, line: line, column: column, display: display, callee: EmptySourceText, argColumn: 0, argLabel: EmptySourceText}
+	end 'createContainerWrite'
+
+	export static function createCallArgWrite(subject BorrowSubjectId, subjectName ByteArray, token TokenIndex, line LineNumber, column ColumnNumber, callee ByteArray, argColumn ParamCount, argLabel ByteArray) returns MutationSite
+		return Self{subject: subject, subjectName: subjectName, token: token, line: line, column: column, display: calleeDisplayName(callee), callee: callee, argColumn: argColumn, argLabel: argLabel}
+	end 'createCallArgWrite'
+end 'MutationSite'
+
+export typealias MutationSiteArray = Array with MutationSite
+
+// ⭐ **THE PER-FUNCTION BORROW FACTS — written by the PARSER, read HERE.** They ride on `IrFunction`
+// for the reason `writtenParamMask` does: the parser holds the only view in which a binding exists,
+// and the merged module is the only place the whole program does.
+//
+// ⚠ **A FUNCTION THAT BORROWS NOTHING SHARES ONE OBJECT** (`sharedEmptyBorrowFacts`) and allocates
+// nothing at all, so every mutation door's `borrows.count() == 0` gate is one read against a
+// permanently empty array. It is COPY-ON-WRITE (`Parser.borrowFactsOf`) and the shared instance is
+// NEVER mutated — the same invariant `sharedEmptyIterationLocks` carries, and it must hold for the
+// same reason: the per-file parse fan-out shares it across threads.
+export type BorrowFacts
+	// The distinct storages this body borrows from or writes, in first-seen order — the id space
+	// `BorrowSubjectId` indexes. Parser working state; the resolver reads only its COUNT, as the key
+	// space the borrow buckets are built over.
+	export var subjects as VarInfoArray
+	export var pending as PendingBorrowArray
+	export var borrows as BorrowRecordArray
+	export var mutations as MutationSiteArray
+
+	export static function create() returns BorrowFacts
+		return Self{subjects: VarInfoArray.create(), pending: PendingBorrowArray.create(), borrows: BorrowRecordArray.create(), mutations: MutationSiteArray.create()}
+	end 'create'
+end 'BorrowFacts'
+
+// The one instance every function starts at — see `BorrowFacts`'s ⚠ block for the invariant.
+export let sharedEmptyBorrowFacts = BorrowFacts.create()
+
+// The `via '<x>'` text for a FREE call: the callee's UNQUALIFIED name, so `Bag.wipe` reads `wipe` and
+// a bare `grow` is unchanged. v1's `formatCalleeDisplay` (`MaxonBorrowCheck.maxon:1059-1076`) trims
+// the same way.
+//
+// ⚠ It goes through `splitQualifiedName`, the tree's ONE home for "where does a qualified name
+// divide". A hand-rolled scan here would be a FOURTH spelling of the separator, beside
+// `QualifiedAliasSeparatorByte`, `containsQualifier` and `Parser.MethodNameSeparatorBytes` — and a
+// divergence between them would be a wrong string in a diagnostic, not a compile error.
+//
+// ⚠ The bootstrap trims after the FIRST dot instead (`FormatMethodName`, :332-335), which on its own
+// namespaced names yields `StringArray.push` — a divergence with no corpus case either way, because
+// the only qualified callee that can mutate a borrow subject is a static taking the array as an
+// ordinary argument. shv2 follows v1: the unqualified name is what the user reads at the call.
+function calleeDisplayName(callee ByteArray) returns ByteArray
+	return match splitQualifiedName(callee) 'display'
+		parts(_, member) gives member
+		notQualified gives callee
+	end 'display'
+end 'calleeDisplayName'
+
+// The E3070 wire text, in ONE place. Byte-identical to both reference compilers' — the four
+// `maxoncstderr` goldens this rung enables pin every word of it.
+function borrowConflictMessage(subjectName ByteArray, display ByteArray, borrowerName ByteArray, borrowLine LineNumber) returns String
+	return "cannot mutate '{String.from(subjectName)}' via '{String.from(display)}' while it is borrowed by '{String.from(borrowerName)}' (borrowed at line {borrowLine})"
+end 'borrowConflictMessage'
+
+// ⭐ **THE ONE RESOLVER.** Every E3070 in the program comes out of `reportFirstLiveBorrow` below, so
+// there is exactly one message format and one anchor rule however the write was spelled.
+//
+// Run from `semanticCheck`, and it must be: the free-call half needs the whole-program
+// `ParamMutationSummary`, which does not exist until every file is parsed. It adds no `CompilePhase`
+// for that reason too — the timing tables and `docs/optimization-log.md` stay comparable.
+export function checkBorrowConflicts(project Project, module MaxonModule, mutationSummary ParamMutationSummary)
+	for func in module.functions 'eachFunc'
+		checkFunctionBorrowConflicts(project, func: func, mutationSummary: mutationSummary)
+	end 'eachFunc'
+end 'checkBorrowConflicts'
+
+function checkFunctionBorrowConflicts(project Project, func IrFunction, mutationSummary ParamMutationSummary)
+	let facts = func.borrowFacts
+	if facts.borrows.count() == 0 'borrowsNothing'
+		return
+	end 'borrowsNothing'
+
+	// ⭐ **THE BORROWS, BUCKETED BY SUBJECT — built ONCE per function, never per site.** A site then
+	// walks only the borrows of the storage it writes, instead of every borrow in the body. The
+	// bucket order is the borrows' own append order, which is activation order, which is what makes
+	// "blame the FIRST active borrow" (v1 :1118-1123) a property of the program rather than of a
+	// map's iteration: `multiple-refs-survive-array-growth` blames `'a'`, not `'c'`.
+	//
+	// Both references instead REBUILD their active set at every op — the bootstrap allocates a key
+	// list per op (`ExpireBorrows`, :164-171) and v1 two arrays per call site (`expireDeadBorrows`,
+	// :1099-1114). Nothing is allocated per site here.
+	var subjectKeys = CsrColumn.create()
+	var borrowRows = CsrColumn.create()
+	for i in 0 upto facts.borrows.count() 'eachBorrow'
+		subjectKeys.push(borrowAt(facts, index: i).subject)
+		borrowRows.push(i)
+	end 'eachBorrow'
+	let bySubject = buildCsr(subjectKeys, to: borrowRows, nodeCount: facts.subjects.count())
+
+	for s in 0 upto facts.mutations.count() 'eachSite'
+		let site = try facts.mutations.get(s) otherwise panic("checkFunctionBorrowConflicts: mutations.get OOB at {s}")
+		if not mutationSiteWrites(project, site: site, mutationSummary: mutationSummary) 'notAWriteAfterAll'
+			continue
+		end 'notAWriteAfterAll'
+
+		reportFirstLiveBorrow(project, func: func, facts: facts, bySubject: bySubject, site: site)
+	end 'eachSite'
+end 'checkFunctionBorrowConflicts'
+
+// Does this recorded site actually WRITE its subject? A container method and a rebind were settled
+// by the parser, which held the whole question. A call ARGUMENT was not: it writes iff the callee
+// writes the parameter it fills, which is what the whole-program summary answers — and it is
+// answered through the SAME `argSlotPosition` bridge `checkImmutableArgToMutatingParam` uses, so
+// the source-order column and the declaration-order mask are never bridged twice.
+function mutationSiteWrites(project Project, site MutationSite, mutationSummary ParamMutationSummary) returns bool
+	if site.callee.isEmpty() 'settledAtTheParse'
+		return true
+	end 'settledAtTheParse'
+
+	let mask = mutationSummary.maskOf(site.callee)
+	if mask == NoMutatedParams 'writesNoParameter'
+		return false
+	end 'writesNoParameter'
+
+	// An undeclared callee is E3004 from `validateCall`; there is no signature to slot against and no
+	// second diagnostic to add here.
+	let sig = try project.funcSignatures.get(site.callee) otherwise return false
+	let pos = argSlotPosition(sig, argIndex: site.argColumn, label: site.argLabel)
+	return pos < sig.paramCount() and paramIsMutated(mask, param: pos)
+end 'mutationSiteWrites'
+
+// Report the FIRST borrow of this site's subject that is already active and not yet dead, and stop —
+// one diagnostic per write, naming one borrow, exactly as both references do. Anchored on the WRITE,
+// which is the line:col the four goldens pin.
+function reportFirstLiveBorrow(project Project, func IrFunction, facts BorrowFacts, bySubject CsrGraph, site MutationSite)
+	for k in 0 upto bySubject.degree(site.subject) 'eachBorrowOfThisSubject'
+		let borrow = borrowAt(facts, index: bySubject.neighbour(site.subject, k: k))
+
+		// NOT YET BOUND at this write (a `try` handler's, or anything earlier in the body): the
+		// borrowing name does not exist there, so there is nothing to conflict with.
+		if borrow.activationToken > site.token 'notBorrowedYet'
+			continue
+		end 'notBorrowedYet'
+
+		// NON-LEXICAL LIFETIMES: the borrow ends at the borrowing binding's LAST USE, not at its
+		// scope's end. `lastUseToken` is seeded to the activation, so a binding never read again is
+		// dead the instant it is bound — which is what makes `borrow-nll-allowed` compile.
+		if borrow.borrower.lastUseToken <= site.token 'borrowAlreadyDead'
+			continue
+		end 'borrowAlreadyDead'
+
+		reportPositioned(project, code: ErrorCode.semanticBorrowConflict, message: borrowConflictMessage(site.subjectName, display: site.display, borrowerName: borrow.borrower.name, borrowLine: borrow.borrowLine), line: site.line, column: site.column, filePath: func.sourceFilePath)
+		return
+	end 'eachBorrowOfThisSubject'
+end 'reportFirstLiveBorrow'
+
+// The one indexed read of the borrow column, so the two walks above share its bound message.
+function borrowAt(facts BorrowFacts, index CsrIndex) returns BorrowRecord
+	return try facts.borrows.get(index) otherwise panic("BorrowCheck: borrows.get OOB at {index} — the subject buckets are built over this very column")
+end 'borrowAt'

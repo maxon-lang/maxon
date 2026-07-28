@@ -37,6 +37,11 @@ export function semanticCheck(project Project, module MaxonModule)
 	// call site to refuse an immutable binding handed to a parameter the callee writes.
 	let mutationSummary = buildParamMutationSummary(project, module: module)
 	checkCalls(project, module: module, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
+	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
+	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
+	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
+	// a `CompilePhase` of its own. See `BorrowCheck.checkBorrowConflicts`.
+	checkBorrowConflicts(project, module: module, mutationSummary: mutationSummary)
 	// E3099 (P1.5, OPEN #73): the DERIVED capturing-closure use invariant. Runs AFTER `checkCalls` so a call
 	// site the interprocedural check owns reports through that check's own, better-informed wording (it can
 	// name the callee) — this pass then finds only what no call site explains.
@@ -429,7 +434,7 @@ typealias ModuleFuncIndexByName = Map with (ByteArray, FuncIndex)
 // resolves its callee's name once (`funcIndexByName`, which the edge walk already needs) and reads the mask
 // off an i64 array. A map of masks would be a second index over the same key space, built by N upserts, to
 // answer a question the first one already answers.
-type ParamMutationSummary
+export type ParamMutationSummary
 	// One mask per function of the merged module, by function index. Zero for the overwhelming majority.
 	export let masks as MutatedParamMaskArray
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
