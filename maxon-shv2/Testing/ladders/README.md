@@ -33,6 +33,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genawait.sh <funcs> <ifs> <out>` | `funcs` await-bearing functions of `ifs` two-way branches each, the promise spawned before the thicket and awaited after it | the AWAIT-LINEARITY walk (`SemanticCheck.checkLinearAwaitInFunction`) and its per-function block table. `ScaleCorpus` lists async under **NOT GENERATED**, so this is the only way to measure it — see below. |
 | `genwitness.sh <conformers> <methods> <dispatch\|inert> <out>` | `conformers` types against a `methods`-method interface, every one dispatched through ONE shared `where T is Digest` generic body | the WITNESS-TABLE RELOCATION path — every `.rdata` slot that names a function, and the walks over `GlobalDataTable.pendingRdataRelocs` that bake and check them (`StdToWasm.bakeFuncTableIndexRelocs`, `StdToWasm.requireIndirectlyReachableParamsAreMachineWords`, `CodeResult.bakeFuncAbs64Relocs`). `ScaleCorpus` generates **no interface and no witness dispatch**, so that list is EMPTY at every rung of the standing ladder and every column reads a Δ0 that means *unreached*. See below. |
 | `genfsprobe.sh <iterations> <out>` | ⚠ **the odd one out: a program to RUN, not one to compile** | what one `File.delete` / `File.exists` / `FilePath.changeExtension` COSTS, in nanoseconds and in allocations — so a per-compile cost paid in SYSCALLS can be priced at all. See below. |
+| `genfor.sh <loops> <depth> <accesses> <array\|range\|noloop> <out>` | `loops/depth` functions, each one NEST of `depth` `for` loops with `accesses` binding accesses per level | `for … in` (P1.8 slice A) and the four doors of its ITERATION LOCK. `ScaleCorpus` generates **no `for` at all** — the construct did not parse until that commit — so every column of a default run reads a flat Δ0 for it. **Its knobs are independent** (program size is `loops × accesses`, so `depth` moves alone) and `noloop` is the CONTROL: the same accesses through the same doors with not one `for` in the program. See below. |
 
 ### `genwitness.sh` — two knobs onto ONE list, and a control that turned out to be a different control
 
@@ -192,6 +193,49 @@ add to a compile whose output is absent. **`guarded_delete_absent`** is the stan
 them: is `if exists then delete` cheaper than a bare failing `delete`? Measured, it is not enough to
 matter — 48.2 µs against 52.8 µs when the file is absent, and a whole extra 62.9 µs `exists` on top of
 the delete when it is present.
+
+### `genfor.sh` — a construct the corpus contains ZERO of, and a lock read on every binding access
+
+`ScaleCorpus` generates **no `for` loop at all**, and could not: the construct did not parse until
+P1.8 slice A. So a default `scale-test` run is blind to the whole rung in **every** column, CPU
+included — the lowering, `__arr_get_unchecked`, and the four doors that read
+`Parser.iterationLockedBindings` produce a flat Δ0 that measures the instrument.
+
+**Its knobs are independent**, for `genmutchain.sh`'s reason. Program size is `loops × accesses`,
+so `depth` moves **alone**: `genfor.sh D D <512/D> array` puts the whole nest in ONE function and
+holds the access count at exactly 512 while the nesting doubles (1,043 → 1,057 lines across depth
+1 → 8). That is the only recipe that can separate a depth term from a size term here, and it is
+the one below.
+
+⚠ **`noloop` IS THE READING THAT MATTERS.** The four doors sit on ordinary binding-access paths, so
+the question is not what a loop costs but what the lock costs a program that has no loops. Measured
+head against the parent rebuilt in the same worktree, 64 → 1,024 accesses:
+**`phase:parse`, `phase:lex`, `phase:signatures`, `phase:merge`, `phase:lowerMaxonToStd` and
+`phase:regalloc` are IDENTICAL TO THE DIGIT at all five rungs.** The entire delta is **+142
+allocations, FLAT** — `+108 unattributed` (building the `__arr_get_unchecked` Std graph) and
+`+28 phase:isel` (selecting it), once per compile. **Nothing per access, per binding, per statement
+or per function**, which is the claim the `count() == 0` guard in front of the walk exists to
+support. `scale-test` reads the same +142 flat across its own 32× ladder, on a completely different
+program.
+
+**And nothing here is superlinear.** `loops` 64 → 1,024 reads `phase:parse` allocations ×2.00 ×2.00
+×2.00 ×2.00 (CPU ×2.04 ×2.02 ×1.99 ×1.99); `range` mode, whose literal bounds leave the lock stack
+empty, reads ×2.00 in every phase in both columns. On the constant-size **depth** ladder
+`phase:parse` allocations go 6,541 / 6,674 / 6,940 / 7,469 — an excess over depth 1 of
+**133 / 399 / 928, i.e. 133 × (1, 3, 7)**, exactly ∝ (D−1). That is `namesAssignedIn`'s documented
+Θ(tokens × depth) scan, **linear in depth**, and the lock walk adds nothing on top of it.
+`phase:regalloc` jumps ×7.21 from depth 1 to 2 and then reads ×1.68 ×1.95 — a MODE CHANGE (the
+splitter engages at all once two loops nest), not a curve, and the identical shape appears on
+`while` nesting built against the parent binary.
+
+⚠ **DEPTH IS HARD-CAPPED NEAR 10, AND THE CAP IS THE ALLOCATOR'S, NOT THE PARSER'S.** Every `for`
+mints an index phi live across every loop nested inside it, so depth D holds D values at once and
+E5001 refuses: measured, depth 10 compiles and depth 11 is *"needs 1 more register(s) than are
+available"*. `gennest.sh` evades exactly this by giving every `while` level the SAME guard variable
+— a trick a `for` cannot use, because the counter is minted by the lowering and not by the program.
+**So the lock stack can never be deeper than ~10 in a program that compiles at all**, which bounds
+its linear scan by a constant the compiler itself enforces. Move the door count with `accesses` and
+`noloop` instead of reaching for depth.
 
 ## Reading one
 
