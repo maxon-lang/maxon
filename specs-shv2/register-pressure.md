@@ -829,3 +829,83 @@ end 'main'
 ```exitcode
 146
 ```
+
+<!-- test: dead-def-parameter-holds-a-register -->
+A DEAD DEF still costs a register, and the pressure model has to say so. `a14` is never read, so
+it is live at NO program point and no popcount over a live set can see it — yet `mov rax, [rbp+k]`
+CLOBBERS a register whatever becomes of the value, so the colorer must hand it one. Fourteen live
+parameters plus that one dead materialization is FIFTEEN registers against a pool of fourteen, at a
+single op. Before `addOpTransientPressure` counted it, the splitter found no overflow at all,
+declared the function relieved, and `chooseRegister` then panicked with every register blocked —
+the one demand a live-set model is structurally blind to. Result is `sum(1..14) = 105`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int) returns int
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15)
+end 'main'
+```
+```exitcode
+105
+```
+
+<!-- test: dead-def-parameter-at-the-pool-boundary -->
+The BOUNDARY below `dead-def-parameter-holds-a-register`, so a regression that moves the cliff is
+caught from both sides. Thirteen live parameters plus one dead materialization is exactly the pool
+of fourteen: it fits, nothing is split, and the fragment must show no store and no reload. Result
+is `sum(1..13) = 91`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14)
+end 'main'
+```
+```exitcode
+91
+```
+
+<!-- test: dead-def-mid-block-holds-a-register -->
+The same demand where the dead def is NOT a parameter, so the correction cannot be mistaken for a
+fact about the entry block. All fourteen parameters are read by the `return`, so all fourteen are
+live across `unused` — and `unused` itself is read by nothing. Its `lea` still writes a register,
+and with no operand of its own dying there (`a1` and `a2` are both read later) there is none to
+inherit, so the point genuinely wants fifteen. Result is `sum(1..14) = 105`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
+	let unused = a1 + a2
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14)
+end 'main'
+```
+```exitcode
+105
+```
+
+<!-- test: dead-def-parameter-past-the-arm64-pool -->
+The arm64 twin of the boundary. arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), so the dead-def
+cliff sits at 27 where x64's sits at 15 — twenty-six live parameters plus one dead materialization
+is one past the arm64 pool, and it panicked `chooseRegister` there for exactly the reason it did on
+x64. It is not gated to arm64: on x64 the same program is simply well past the pool and the
+splitter relieves it cold, which is worth pinning too. The trailing arguments are zero so the sum
+fits an exit code while the first twenty stay distinct — a swapped register still changes the
+answer. Result is `sum(1..20) = 210`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, a26 int) returns int
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, a26: 0)
+end 'main'
+```
+```exitcode
+210
+```

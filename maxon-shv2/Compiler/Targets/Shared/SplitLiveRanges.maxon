@@ -1601,7 +1601,7 @@ export type PressureIndex
 				// The transient is decided on the live-AFTER set, before the backward step — exactly where
 				// `analyzeBlockPressure` reads it.
 				classRowZero(transient)
-				addReuseTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: transient)
+				addOpTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: transient)
 
 				for classOrdinal in 0 upto RegClassCount 'snapshotBefore'
 					let class = regClassAt(classOrdinal)
@@ -2024,54 +2024,70 @@ function applyOneUseToPressure(index UseIndex, pressure PressureIndex, class Reg
 	pressure.addDelta(blockLocal, slot: slot, class: class, by: sign * operandContribution(true, liveAfter: liveOut or readAgainHere))
 end 'applyOneUseToPressure'
 
-// Restate the reuse-copy transient at the op sitting in `slot`, but ONLY when the split can have moved
-// it: the transient is `[the op's reuse input is live after it]`, so it is unchanged unless that input
-// IS one of the ids the split touched. An op whose reuse input the split never named keeps the number
-// the build measured for it.
-function refreshTransientAt(module TargetModule, liveness LivenessResult, pressure PressureIndex, blockLocal CfgIndex, slot PressureSlot, which ScannedValues, buf OperandList)
+// Restate the transient at the op sitting in `slot` — the incremental twin of `addOpTransientPressure`,
+// answering the same two questions off the USE INDEX rather than off a live row, because a repair has no
+// live row to read.
+//
+// ⚠ IT IS RE-DERIVED UNCONDITIONALLY, and the narrowing that used to stand here would now be WRONG. The
+// reuse-copy transient depends on ONE value (the reuse input), so an op whose reuse input the split
+// never named could be skipped; the DEAD-DEF transient depends on the op's def AND on every one of its
+// virtual uses — which is exactly the set of values that makes `refreshTransientsNaming` visit this op
+// at all. Every visit is therefore a genuine trigger and there is nothing left to narrow away.
+function refreshTransientAt(module TargetModule, liveness LivenessResult, pressure PressureIndex, blockLocal CfgIndex, slot PressureSlot, buf OperandList)
 	let op = try module.ops.get(pressure.opAtSlot(slot)) otherwise panic("refreshTransientAt: the op at slot {slot} is not in module.ops")
 	targetOpOperands(op, buf: buf)
-
-	var reuseInput = 0 as ValueId
-	var haveReuse = false
-	var destClass = RegClass.gpr
-	for o in buf 'eachOperand'
-		if not operandIsReuseDef(o) 'notAReuseDef'
-			continue
-		end 'notAReuseDef'
-		if haveReuse 'aSecondReuseDef'
-			// `addReuseTransientPressure` takes the FIRST reuse def whose input outlives the op, so with two
-			// of them the answer depends on an input this repair may know nothing about. No TargetOp defines
-			// more than one value, so this is unreachable — and it is asserted rather than assumed, because
-			// the day one does the transient would be repaired from the wrong operand, silently.
-			panic("refreshTransientAt: the op at slot {slot} of block {blockLocal} carries more than one reuse def — the incremental transient repair reads exactly one, because no TargetOp defines more than one value")
-		end 'aSecondReuseDef'
-		haveReuse = true
-		reuseInput = operandReuseInputValueId(o, buf: buf)
-		destClass = operandClass(o, classes: liveness.valueClass)
-	end 'eachOperand'
-
-	if haveReuse and not scannedValuesHold(which, valueId: reuseInput) 'notAValueThisSplitMoved'
-		return
-	end 'notAValueThisSplitMoved'
 
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		pressure.putTransient(blockLocal, slot: slot, class: regClassAt(classOrdinal), value: 0)
 	end 'eachClass'
-	if not haveReuse 'noTransientHere'
+
+	var haveDef = false
+	var defOperand = 0 as Operand
+	for o in buf 'eachOperand'
+		if not (operandIsDef(o) and operandIsVirtual(o)) 'notAVirtualDef'
+			continue
+		end 'notAVirtualDef'
+		if haveDef 'aSecondVirtualDef'
+			// `addOpTransientPressure` takes the FIRST virtual def, so with two of them the answer depends on
+			// an operand this repair may know nothing about. No TargetOp defines more than one value, so this
+			// is unreachable — and it is asserted rather than assumed, because the day one does the transient
+			// would be repaired from the wrong operand, silently.
+			panic("refreshTransientAt: the op at slot {slot} of block {blockLocal} carries more than one virtual def — the incremental transient repair reads exactly one, because no TargetOp defines more than one value")
+		end 'aSecondVirtualDef'
+		haveDef = true
+		defOperand = o
+	end 'eachOperand'
+
+	if not haveDef 'noTransientHere'
 		return
 	end 'noTransientHere'
 
-	let index = liveness.useIndex
-	if valueLiveAfterSlot(index, live: liveness.live, pressure: pressure, v: reuseInput, blockLocal: blockLocal, slot: slot) 'inputOutlivesTheOp'
-		pressure.putTransient(blockLocal, slot: slot, class: destClass, value: 1)
-	end 'inputOutlivesTheOp'
+	let defClass = operandClass(defOperand, classes: liveness.valueClass)
+	if operandIsReuseDef(defOperand) 'reuseDef'
+		if liveAfterSlot(liveness, pressure: pressure, v: operandReuseInputValueId(defOperand, buf: buf), blockLocal: blockLocal, slot: slot) 'inputOutlivesTheOp'
+			pressure.putTransient(blockLocal, slot: slot, class: defClass, value: 1)
+		end 'inputOutlivesTheOp'
+		return
+	end 'reuseDef'
+
+	if liveAfterSlot(liveness, pressure: pressure, v: operandValueId(defOperand), blockLocal: blockLocal, slot: slot) 'defLiveAfter'
+		return
+	end 'defLiveAfter'
+	for o in buf 'eachUse'
+		if (not operandIsDef(o)) and operandIsVirtual(o) 'virtualUse'
+			if not liveAfterSlot(liveness, pressure: pressure, v: operandValueId(o), blockLocal: blockLocal, slot: slot) 'thisOpFreesARegister'
+				return
+			end 'thisOpFreesARegister'
+		end 'virtualUse'
+	end 'eachUse'
+	pressure.putTransient(blockLocal, slot: slot, class: defClass, value: 1)
 end 'refreshTransientAt'
 
 // Is `v` live AFTER the op sitting in `slot`? The general form of the lookahead
 // `applyOneUseToPressure` gets for free: live-out of the block, or read again later in it.
-function valueLiveAfterSlot(index UseIndex, live LiveSets, pressure PressureIndex, v ValueId, blockLocal CfgIndex, slot PressureSlot) returns bool
-	if liveListHolds(live.liveOut(blockLocal), v: v) 'liveOnEveryExit'
+function liveAfterSlot(liveness LivenessResult, pressure PressureIndex, v ValueId, blockLocal CfgIndex, slot PressureSlot) returns bool
+	let index = liveness.useIndex
+	if liveListHolds(liveness.live.liveOut(blockLocal), v: v) 'liveOnEveryExit'
 		return true
 	end 'liveOnEveryExit'
 
@@ -2089,7 +2105,7 @@ function valueLiveAfterSlot(index UseIndex, live LiveSets, pressure PressureInde
 		record = index.nextUseOf(record)
 	end 'eachUse'
 	return false
-end 'valueLiveAfterSlot'
+end 'liveAfterSlot'
 
 // Restate each dirty block's EXIT leaf — its live-out population, which every suffix sum in that block
 // runs through. O(live-out) per block, which is what `sweepBlockPressure` pays merely to SEED itself.
@@ -2108,15 +2124,14 @@ end 'refreshExitLeaves'
 // a fresh id NOW, plus the ops it spliced in (which carry none — they are a store, a reload or a
 // constant materialization, none of them two-address).
 function refreshSplitTransients(module TargetModule, liveness LivenessResult, pressure PressureIndex, split SplitValues, buf OperandList)
-	let which = ScannedValues.split(split)
-	refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: split.victim, which: which, buf: buf)
+	refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: split.victim, buf: buf)
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
-		refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: f, which: which, buf: buf)
+		refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: f, buf: buf)
 	end 'eachFresh'
 end 'refreshSplitTransients'
 
 // Every op that names `v` as an operand — its def and its op uses — restated.
-function refreshTransientsNaming(module TargetModule, liveness LivenessResult, pressure PressureIndex, v ValueId, which ScannedValues, buf OperandList)
+function refreshTransientsNaming(module TargetModule, liveness LivenessResult, pressure PressureIndex, v ValueId, buf OperandList)
 	let index = liveness.useIndex
 	let useSites = index.useCount(v)
 	if useSites > 0 'used'
@@ -2125,7 +2140,7 @@ function refreshTransientsNaming(module TargetModule, liveness LivenessResult, p
 			let blockLocal = index.useBlockAt(record)
 			match index.useKindAt(record) 'kind'
 				edge then break 'kind'
-				op then refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: index.usePosAt(record)), which: which, buf: buf)
+				op then refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: index.usePosAt(record)), buf: buf)
 			end 'kind'
 			record = index.nextUseOf(record)
 		end 'eachUse'
@@ -2134,7 +2149,7 @@ function refreshTransientsNaming(module TargetModule, liveness LivenessResult, p
 	if index.defKindOf(v) != ValueDefKind.opDef 'noDefiningOp'
 		return
 	end 'noDefiningOp'
-	refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: index.defBlockOf(v), slot: pressure.defSlotOf(v), which: which, buf: buf)
+	refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: index.defBlockOf(v), slot: pressure.defSlotOf(v), buf: buf)
 end 'refreshTransientsNaming'
 
 // ==========================================================================
@@ -2353,7 +2368,6 @@ function roundUpToRunBoundary(n PressureSlot, runLength PressureSlot) returns Pr
 	let mask = runLength - 1
 	return (n + mask) and not mask
 end 'roundUpToRunBoundary'
-
 
 // Every buffer the per-split pressure sweep and victim choice need, allocated ONCE per FUNCTION and
 // reused by every iteration of the driver's loop. See the file header for why per-iteration
@@ -3212,11 +3226,11 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 			recordDefLiveAfter(defLiveAfter, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 		end 'theVerifiersOwnDerivation'
 
-		// The reuse-copy transient is decided on the live-AFTER set — BEFORE the backward step
-		// re-adds this op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it, through the
-		// same one implementation, so the two cannot disagree about which FILE it lands in.
+		// The op's transient is decided on the live-AFTER set — BEFORE the backward step re-adds this
+		// op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it, through the same one
+		// implementation, so the two cannot disagree about which FILE it lands in.
 		classRowZero(effective)
-		addReuseTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: effective)
+		addOpTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: effective)
 
 		if censusNeeded 'stepWithCensus'
 			stepCensusBackwardOverOp(liveRow, buf: buf, census: census, effPoolSizes: effPoolSizes, classes: liveness.valueClass, liveByClass: liveByClass, ids: censusIds, wasLive: censusWasLive)

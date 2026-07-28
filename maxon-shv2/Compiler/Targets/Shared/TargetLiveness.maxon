@@ -3065,19 +3065,20 @@ end 'ParamCrossForbid'
 
 // Process one op backward: fold its register clobbers into `forbidden` for values
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
-// pressure this op contributes — the live-before population, PLUS one for the reuse-copy
-// transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
+// pressure this op contributes — the live-before population, PLUS this op's transient
+// register (see `addOpTransientPressure`).
 function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	// This also fills `buf` with the op's operands, which everything below reads.
 	let clobberMask = opClobberMask(op, buf: buf, opFacts: opFacts)
 
-	// Read the reuse-copy transient BEFORE the backward step mutates `liveRow` — it still
-	// holds the live-AFTER set here, which is where "does the reuse input outlive the op?"
-	// is decided. `pressureOut` starts as the transient alone and the live-before population is
-	// added after the step, so the two halves are each counted in the file they actually occupy.
+	// Read the op's transient BEFORE the backward step mutates `liveRow` — it still holds the
+	// live-AFTER set here, which is where both "does the reuse input outlive the op?" and "is this
+	// def dead?" are decided. `pressureOut` starts as the transient alone and the live-before
+	// population is added after the step, so the two halves are each counted in the file they
+	// actually occupy.
 	classRowZero(pressureOut)
-	addReuseTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
+	addOpTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
 	if clobberMask != 0 'hasClobber'
 		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, wordsPerRow: wordsPerRow, liveBuf: liveBuf)
@@ -3098,8 +3099,8 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 
 	stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveByClass: liveByClass, classes: classes)
 
-	// This op's pressure, per file: the live-BEFORE population of that file, plus the reuse-copy
-	// transient already folded in above if its destination register belongs to that file.
+	// This op's pressure, per file: the live-BEFORE population of that file, plus the op's transient
+	// already folded in above if the register it holds belongs to that file.
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
 		classRowSet(pressureOut, class: class, value: classRowGet(pressureOut, class: class) + classRowGet(liveByClass, class: class))
@@ -3134,35 +3135,85 @@ export function opClobberMask(op TargetOp, buf OperandList, opFacts OpVariantFac
 	return mask
 end 'opClobberMask'
 
-// Add the REUSE-COPY TRANSIENT to `pressureOut`, in the FILE its destination register belongs to.
+// Add this op's TRANSIENT register demand to `pressureOut`, in the FILE the register belongs to: the
+// registers the colorer holds AT the op that are in NO live set, and which the op-boundary popcounts
+// therefore cannot see. There are two, they are mutually exclusive, and they are the same fact about
+// one operand — "this op's def needs a register that this op does not free":
 //
-// The allocator materializes `mov dest, input` BEFORE an op whose reuse INPUT is live AFTER it
-// (`allocateReuseDef`), so `dest` co-exists with everything live entering the op — a pressure of
-// |live-before-op| + 1 that the op-boundary popcounts alone would miss (the analogue of the dead-phi
-// undercount the block-level correction handles). `liveRow` must still be the live-AFTER set (call it
-// BEFORE the backward step, where a live-after input is present and a use has not yet been re-added).
-// Reuse-ness and the input value come from the operand model, never from hardcoded opcodes.
+//  • THE REUSE-COPY TRANSIENT. The allocator materializes `mov dest, input` BEFORE an op whose reuse
+//    INPUT is live AFTER it (`allocateReuseDef`), so `dest` co-exists with everything live entering
+//    the op — a pressure of |live-before-op| + 1.
 //
-// THE TRANSIENT IS THE DESTINATION'S REGISTER, so it belongs to the DESTINATION's file — not the
-// input's, and not "the pool". They are the same file for every two-address op, but the fact that
-// decides it is the one the copy actually allocates.
+//  • ⭐ THE DEAD-DEF TRANSIENT. A def that is live at NO program point still gets a real register:
+//    `mov rax, [rbp+96]` CLOBBERS rax whether or not anything ever reads the value, so the colorer
+//    must hand it one (`allocateDef` is called for every virtual def, dead or not). Being in neither
+//    the live-before nor the live-after set, such a value is invisible to every popcount — so the
+//    splitter saw no overflow, declared the function relieved, and the colorer then died with every
+//    register blocked. This is the OP-DEF twin of the DEAD-PHI reservation the block-level correction
+//    already carries; only the phi half existed. (Measured: a 15-parameter function whose LAST
+//    parameter is unused panicked `chooseRegister` on x64, and 27 on arm64 — one past each pool. Every
+//    `__fnref_` env-thunk is that shape by construction, its trailing `__env` parameter being
+//    materialized and never read, which is why an INDIRECT call panicked one arity EARLIER than a
+//    direct one: `specs-shv2/register-pressure.md`.)
 //
-// It ADDS to a row rather than returning a bool, so the splitter's peak-finder and this pass call the
-// ONE implementation and cannot disagree about where the transient lands — the two must agree or the
-// splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added: the first reuse
-// def whose input outlives is the copy the allocator emits.
-export function addReuseTransientPressure(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, pressureOut RegCountColumn)
+//    It is charged only when the op frees NO register of its own. A def may take the register of a use
+//    that DIES here (`allocateDef`'s `dyingRegs`), so `lea dead, a, b` with `a` dying costs nothing
+//    extra; with both uses live-after it costs one. And a def that is LIVE after the op is charged
+//    NOTHING here — it is already counted as live-before at the next op (or as live-out of the block),
+//    which is where this model has always billed it, so nothing that compiled before moves.
+//
+// `liveRow` must still be the live-AFTER set (call it BEFORE the backward step, where a live-after
+// input is present and a use has not yet been re-added). Def-ness, reuse-ness and the input value all
+// come from the operand model, never from hardcoded opcodes.
+//
+// THE TRANSIENT IS THE DEF'S REGISTER, so it belongs to the DEF's file — not the reuse input's, and
+// not "the pool". They are the same file for every two-address op, but the fact that decides it is the
+// one the allocation actually consumes.
+//
+// It ADDS to a row rather than returning a bool, so the splitter's peak-finder, the index build and
+// this pass call the ONE implementation and cannot disagree about where the transient lands — they
+// must agree or the splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added:
+// no `TargetOp` defines more than one value (asserted by `refreshTransientAt`, which repairs this same
+// quantity incrementally), so the FIRST virtual def decides the whole answer.
+export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, pressureOut RegCountColumn)
 	for o in buf 'each'
+		if not (operandIsDef(o) and operandIsVirtual(o)) 'notAVirtualDef'
+			continue
+		end 'notAVirtualDef'
+
+		let defClass = operandClass(o, classes: classes)
 		if operandIsReuseDef(o) 'reuseDef'
-			let inputId = operandReuseInputValueId(o, buf: buf)
-			if bitsetTest(liveRow, base: 0, bit: inputId) 'inputLiveAfter'
-				let destClass = operandClass(o, classes: classes)
-				classRowSet(pressureOut, class: destClass, value: classRowGet(pressureOut, class: destClass) + 1)
-				return
+			if bitsetTest(liveRow, base: 0, bit: operandReuseInputValueId(o, buf: buf)) 'inputLiveAfter'
+				classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
 			end 'inputLiveAfter'
+			return
 		end 'reuseDef'
+
+		if bitsetTest(liveRow, base: 0, bit: operandValueId(o)) 'defLiveAfter'
+			return
+		end 'defLiveAfter'
+		if anyVirtualUseDiesAt(buf, liveRow: liveRow) 'thisOpFreesARegister'
+			return
+		end 'thisOpFreesARegister'
+		classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
+		return
 	end 'each'
-end 'addReuseTransientPressure'
+end 'addOpTransientPressure'
+
+// Does any of `buf`'s VIRTUAL uses die at this op — i.e. is it absent from the live-AFTER row? That is
+// exactly the set `BlockDeaths` hands the colorer as `dyingRegs`, whose registers a def of the same op
+// may take. One dying use is enough: no `TargetOp` defines more than one value, so one freed register
+// covers the whole demand.
+function anyVirtualUseDiesAt(buf OperandList, liveRow BitWordArray) returns bool
+	for o in buf 'each'
+		if (not operandIsDef(o)) and operandIsVirtual(o) 'virtualUse'
+			if not bitsetTest(liveRow, base: 0, bit: operandValueId(o)) 'diesHere'
+				return true
+			end 'diesHere'
+		end 'virtualUse'
+	end 'each'
+	return false
+end 'anyVirtualUseDiesAt'
 
 // Transform a live/seen bitset ROW from live-AFTER an op to live-BEFORE it: remove the
 // op's virtual defs, then add its virtual uses. Defs are removed FIRST so a read-

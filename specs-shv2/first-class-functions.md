@@ -2902,3 +2902,134 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:11:10: argument type mismatch for 1: expected 'int', got 'String'
 ```
+
+<!-- test: first-class-function.indirect-call-arity-13 -->
+The BOUNDARY below the arity that used to panic, so a regression that moves the cliff is caught
+from both directions. A plain function reached as a VALUE is called through its `__fnref_` env
+thunk, whose signature is `(userargs, __env)` — so a 13-argument function value makes a
+14-parameter thunk, exactly the x64 pool, and it fits. Result is `sum(1..13) = 91`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Op13 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum13(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
+end 'sum13'
+
+function callIt(f Op13) returns Integer
+	return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum13) as ExitCode
+end 'main'
+```
+```exitcode
+91
+```
+
+<!-- test: first-class-function.indirect-call-arity-14 -->
+⭐ THE ARITY THAT PANICKED THE REGISTER ALLOCATOR — and the call site was never the reason. The
+thunk's trailing `__env` is materialized and then read by nothing, so it is a DEAD DEF: live at no
+program point, invisible to every popcount over a live set, and still occupying a real register
+(the load that produces it clobbers one whatever becomes of the value). Fourteen live forwarded
+arguments plus that one dead load is fifteen against a pool of fourteen — the splitter saw no
+overflow at all and `chooseRegister` died with every register blocked. A DIRECT call of the same
+arity was always fine, which is what made the boundary look like an indirect-call fact rather than
+the dead-def fact it is (see `specs-shv2/register-pressure.md`, where the same demand appears with
+no function value anywhere). Result is `sum(1..14) = 105`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Op14 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum14(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+end 'sum14'
+
+function callIt(f Op14) returns Integer
+	return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum14) as ExitCode
+end 'main'
+```
+```exitcode
+105
+```
+
+<!-- test: first-class-function.indirect-call-arity-20 -->
+Comfortably PAST the boundary, so a fix that merely shifted the cliff by one does not pass. Twenty
+forwarded arguments plus the dead `__env` is twenty-one against fourteen, relieved by cold splits
+in the thunk and in the caller alike. Result is `sum(1..20) = 210`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Op20 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum20(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19
+end 'sum20'
+
+function callIt(f Op20) returns Integer
+	return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum20) as ExitCode
+end 'main'
+```
+```exitcode
+210
+```
+
+<!-- test: first-class-function.indirect-call-arity-26 -->
+The arm64 twin: arm64 allocates from 26 GPRs, so its `__fnref_` thunk cliff is at 26 user
+arguments (27 thunk parameters) where x64's is at 14. It is not gated to arm64 — on x64 it is
+simply further past the pool, which is worth pinning on both lanes. The trailing arguments are zero
+so the sum fits an exit code while the first twenty stay distinct. Result is `sum(1..20) = 210`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Op26 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum26(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer, a20 Integer, a21 Integer, a22 Integer, a23 Integer, a24 Integer, a25 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
+end 'sum26'
+
+function callIt(f Op26) returns Integer
+	return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0, 0, 0, 0, 0, 0)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum26) as ExitCode
+end 'main'
+```
+```exitcode
+210
+```
+
+<!-- test: first-class-function.indirect-call-arity-20-computed-args -->
+The same arity with arguments that CANNOT be rematerialized, which is the case that pins the real
+relief path. Every other test here passes literals, and the splitter's cheapest tier re-emits a
+constant for free — so a caller full of literals is relieved without a single store, and only the
+thunk exercises a spill. Here each argument is `base + k`, a computed value the remat tier refuses,
+so the caller's twenty live arguments must be relieved by genuine cold splits. Result is
+`sum(1..20) = 210`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Op20 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum20(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19
+end 'sum20'
+
+function callIt(f Op20, base Integer) returns Integer
+	return f(base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7, base + 8, base + 9, base + 10, base + 11, base + 12, base + 13, base + 14, base + 15, base + 16, base + 17, base + 18, base + 19, base + 20)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum20, base: 0) as ExitCode
+end 'main'
+```
+```exitcode
+210
+```

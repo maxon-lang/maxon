@@ -1167,10 +1167,18 @@ function chooseRegister(v ValueId, classPool RegMask, blocked RegMask, dyingRegs
 		if classPool == 0 'noPoolForThisClass'
 			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. A file becomes allocatable by having its registers in `callerSavedMask` and/or `calleeSavedMask` (whose union IS the pool, and which `assertCalleeSavedListsMatchMasks` proves partition the file); `TargetDialect.callDirect`'s `implicitDefs` must equal the caller-saved half, or a value would silently survive a call in a register the callee clobbers.")
 		end 'noPoolForThisClass'
+		// ⚠ THE MESSAGE MUST NAME A CHECK THAT STILL EXISTS. It used to blame `analyzePressure`'s
+		// "reduced-pool check, `pool ∖ op.implicitDefs`" — a check Hall's condition SUBSUMED and deleted
+		// (`HallCondition.maxon`'s header), so it sent every reader of this panic to a pass that no longer
+		// had the code being blamed. It also led with the CONFINED story, which the masks routinely refute:
+		// a `blocked` of `fullRegisterMask()` against the whole `classPool` is plain FULL-POOL pigeonhole
+		// and has nothing to do with the callee-saved subset. So the mask decides which half to read, and
+		// each half names the routine that owns it.
+		//
 		// The confined-pool figure is per CLASS, not the whole callee-saved set: since Wave 2 that set
 		// spans both files (5 GPRs + 10 XMMs), and quoting 15 at a colorer that ran out of GPRs would
 		// name a number no value could ever have had.
-		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}, {liveness.classOf(v).name} pool {classPool}) — the cold-spill splitter (M5.3) is supposed to relieve EVERY over-pool point before coloring, including the REDUCED pool at a FIXED-REGISTER point (a value live across a call is confined to the {regMaskPopcount(classPool and calleeSavedMask())} callee-saved {liveness.classOf(v).name} register(s); an idiv reserves RAX/RDX for its own operands). Reaching this means the splitter left a point unrelieved — a SPLITTER BUG (its `analyzePressure` reduced-pool check, `pool ∖ op.implicitDefs`, missed this op), not a colorer limitation.")
+		panic("chooseRegister: no free register for value {v} ({liveness.classOf(v).name} pool {classPool}, blocked mask {blocked}) — the splitter is supposed to relieve EVERY over-pool point before coloring, which is what makes `colorFunction` unable to fail. Reaching this is a SPLITTER BUG, not a colorer limitation, and THE TWO MASKS SAY WHICH KIND. If `blocked` covers the whole pool, the point overflowed the FULL pool: that is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it. If `blocked` leaves some of the pool clear, value {v}'s own `forbidden` set excluded the rest and the point is CONFINED to a subset (a value live across a call is confined to the {regMaskPopcount(classPool and calleeSavedMask())} callee-saved {liveness.classOf(v).name} register(s); an idiv reserves RAX/RDX): `RegPoolCensus.screenViolates` plus `HallCondition`'s exact bipartite confirmation own that half. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` is the ONE place either is counted, and a demand it misses is one no popcount over a live set can ever see.")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
