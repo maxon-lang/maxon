@@ -386,6 +386,7 @@ type StdToArm64Lowering
 			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osRangePanic to switch gives 0
 			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPipeCreate to osReadWallClock gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
@@ -493,7 +494,8 @@ type StdToArm64Lowering
 			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 			// P1.7a slice 2a: witness tables ride the x64 `funcAbs64InRdata` relocation, which arm64 refuses
 			// (`requireNoFuncAbs64Relocs`) — constrained-type-parameter dispatch is x64-only at this slice (2b).
-			witnessCall then panic("lowerStdToArm64: a `witnessCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses; constrained-type-parameter dispatch on arm64 is P1.7a slice 2b")
+			witnessCall then panic("lowerStdToArm64: a `witnessCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses; constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
+			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op is x64-only — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses, and the dual-register error capture has no arm64 lowering; THROWING constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — it is emitted only
 			// inside the x64-windows-gated IOCP runtime, so arm64 rejects rather than inventing an untested lowering.
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
@@ -530,6 +532,7 @@ type StdToArm64Lowering
 			funcAddr then panic("lowerStdToArm64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 			witnessCall then panic("lowerStdToArm64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
+			witnessTryCall then panic("lowerStdToArm64: a `witnessCall` op appeared as a block terminator (lowering bug — a witness call is a value-producing body op)")
 			osRangePanic then panic("lowerStdToArm64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op; also x64-windows only)")
 			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")

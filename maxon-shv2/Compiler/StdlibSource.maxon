@@ -252,7 +252,7 @@ function markMaxonCallees(module MaxonModule, func IrFunction, byName StdlibFunc
 end 'markMaxonCallees'
 
 // The static reachability edge one `MaxonOp` names, if any. The arms RANGE over the whole union in
-// declaration order, ending at the current last variant (`witnessDispatch`), so a variant appended
+// declaration order, ending at the current last variant (`witnessTryDispatch`), so a variant appended
 // past it FAILS TO COMPILE here rather than being silently swallowed — the band-append invariant
 // working in the reviewer's favour (MaxonDialect's header), exactly as `markCalleeOf` relies on it.
 // A new variant that carries a callee name must be added as its own arm.
@@ -269,9 +269,9 @@ function markMaxonCalleeEdge(op MaxonOp, byName StdlibFuncIndexByName, reached B
 		// `indirectCall` calls through a code POINTER a `functionRef` above already credited.
 		indirectCall then break 'op'
 		asyncCall(_, callee, _, _, _, _) then markReachable(callee, byName: byName, reached: reached, worklist: worklist, names: names)
-		// `await` … `witnessDispatch`: an await consumes a promise VALUE, and a witness dispatch reads
+		// `await` … `witnessTryDispatch`: an await consumes a promise VALUE, and a witness dispatch reads
 		// an `.rdata` table — neither names a static Maxon callee here.
-		await to witnessDispatch then break 'op'
+		await to witnessTryDispatch then break 'op'
 	end 'op'
 end 'markMaxonCalleeEdge'
 
@@ -312,7 +312,7 @@ function userCodeCallsStdlib(module MaxonModule, stdlib FunctionNameSet) returns
 end 'userCodeCallsStdlib'
 
 // Whether one `MaxonOp` names a callee in `stdlib`. Same band structure — and same band-append protection
-// — as `markMaxonCalleeEdge` (a variant appended past `witnessDispatch` fails to compile here rather than
+// — as `markMaxonCalleeEdge` (a variant appended past `witnessTryDispatch` fails to compile here rather than
 // being silently swallowed).
 function opNamesStdlibCallee(op MaxonOp, stdlib FunctionNameSet) returns bool
 	return match op 'op'
@@ -323,7 +323,7 @@ function opNamesStdlibCallee(op MaxonOp, stdlib FunctionNameSet) returns bool
 		functionRef(_, funcName) gives stdlib.contains(funcName)
 		indirectCall gives false
 		asyncCall(_, callee, _, _, _, _) gives stdlib.contains(callee)
-		await to witnessDispatch gives false
+		await to witnessTryDispatch gives false
 	end 'op'
 end 'opNamesStdlibCallee'
 
@@ -480,7 +480,7 @@ end 'SubstrateFixpoint'
 // The band structure — and the band-append protection — is `markMaxonCalleeEdge`'s, the third member of
 // that family in this file. Each asks a different question of the SAME four callee-naming variants, and
 // each pays a different cost (this one runs only for a compile that calls into stdlib), which is why they
-// are separate matches; a variant appended past `witnessDispatch` fails to compile in all three rather
+// are separate matches; a variant appended past `witnessTryDispatch` fails to compile in all three rather
 // than being silently swallowed by any of them.
 function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
 	match op 'op'
@@ -491,7 +491,7 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		functionRef(_, funcName) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		indirectCall then break 'op'
 		asyncCall(_, callee, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
-		await to witnessDispatch then break 'op'
+		await to witnessTryDispatch then break 'op'
 	end 'op'
 end 'noteSubstrateEdge'
 

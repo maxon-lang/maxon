@@ -371,8 +371,10 @@ type RangeCheckEmitter
 				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
 				cmp to osFreePages then break 'c'
 				switch then break 'c'
-				// A witness call's result is a call return, not a foldable constant — nothing to record.
+				// A witness call's result is a call return, not a foldable constant — nothing to record, and
+				// neither of the throwing form's two results is one either.
 				witnessCall then break 'c'
+				witnessTryCall then break 'c'
 				// P1.5 dogfood slice 1a: the IOCP ops produce no ranged-typealias value to range-check.
 				osPipeCreate to osWriteFile then break 'c'
 				// The wall-clock read produces no ranged-typealias value to range-check.
@@ -456,8 +458,10 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		param to osFreePages gives false
 		// The jump table is a branch terminator, not a `ret` — it returns no value.
 		switch gives false
-		// A witness call is a body op, not a `ret` — it is not the return whose value this checks.
+		// A witness call is a body op, not a `ret` — it is not the return whose value this checks. Nor is the
+		// throwing form: it is a body op with two results, neither of them a return terminator.
 		witnessCall gives false
+		witnessTryCall gives false
 		// P1.5 dogfood slice 1a: an IOCP op is a body op, never a `ret`.
 		osPipeCreate to osWriteFile gives false
 		// The wall-clock read is a body op, never a `ret`.
@@ -518,8 +522,11 @@ function stdOpDefinesValue(op StdOp) returns bool
 		osFreePages gives false
 		// The jump table defines no value — a terminator branches, it does not produce a result.
 		switch gives false
-		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`.
+		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
+		// throwing form defines that result AND an error flag — reported here as `tryCall`'s two are, by its
+		// PRIMARY alone, since this pair of readers models one def per op.
 		witnessCall gives true
+		witnessTryCall gives true
 		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
 		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
 		osPipeCreate gives false
@@ -571,8 +578,10 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		osFreePages gives 0
 		// The jump table defines no value.
 		switch gives 0
-		// A witness call defines its result value, like `callIndirect`.
+		// A witness call defines its result value, like `callIndirect`. The throwing form reports its PRIMARY,
+		// exactly as `tryCall` reports its own and leaves the error flag out of this single-def model.
 		witnessCall(resultId, _, _, _, _, _) gives resultId
+		witnessTryCall(resultId, _, _, _, _, _, _) gives resultId
 		// P1.5 dogfood slice 1a: the value-defining IOCP ops return their captured RAX result id; the rest 0.
 		osPipeCreate gives 0
 		osIocpCreate(resultId) gives resultId

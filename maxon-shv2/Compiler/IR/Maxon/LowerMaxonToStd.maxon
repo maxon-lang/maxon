@@ -600,6 +600,9 @@ type MaxonToStdLowering
 			// match rather than binding `args` in this big one — the tail-slot-Array corruption `lowerIndirectCall`
 			// documents.
 			witnessDispatch then self.lowerWitnessDispatch(hlOp, dstBlock: dstBlock)
+			// The THROWING twin (P1.7a slice 2b-v) — the same dispatch plus the second `errorFlag` result, so it
+			// goes through its own small re-match for the same tail-slot-`Array` reason.
+			witnessTryDispatch then self.lowerWitnessTryDispatch(hlOp, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -632,7 +635,7 @@ type MaxonToStdLowering
 			asyncCall to tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
 			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
 			byteStringLiteral then panic("lowerMaxonToStd: a `byteStringLiteral` op appeared as a block terminator (parser bug — a byte-string literal is a value-producing body op, never a terminator)")
-			witnessDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
+			witnessDispatch to witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -1323,24 +1326,61 @@ type MaxonToStdLowering
 	// corruption `lowerIndirectCall` documents).
 	function lowerWitnessDispatch(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'w'
-			witnessDispatch(result, args, constraintIndex, methodIndex, isVoid) then self.appendWitnessCall(dstBlock, result: result, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)
+			witnessDispatch(result, args, constraintIndex, methodIndex, isVoid, _) then self.appendWitnessCall(dstBlock, result: result, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)
 			default panic("lowerWitnessDispatch: expected a `witnessDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessDispatch` here")
 		end 'w'
 	end 'lowerWitnessDispatch'
+
+	// ⭐ **LOWER A THROWING CONSTRAINED-TYPE-PARAMETER DISPATCH TO THE FUSED `StdOp.witnessTryCall` (P1.7a
+	// slice 2b-v).** `witnessTryDispatch : witnessDispatch :: tryCall : call`, so this is the non-throwing
+	// lowering plus the one thing a throwing call adds — the second `errorFlag` result captured from the
+	// dual-register error ABI. Re-matched in a SMALL match so `args` is bound in a single-call arm, never in
+	// `lowerOp`'s big one (the tail-slot-`Array` decref corruption `lowerIndirectCall` documents).
+	function lowerWitnessTryDispatch(hlOp MaxonOp, dstBlock IrBlock)
+		match hlOp 'w'
+			witnessTryDispatch(result, errorFlag, args, constraintIndex, methodIndex, isVoid) then self.appendWitnessTryCall(dstBlock, result: result, errorFlag: errorFlag, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)
+			default panic("lowerWitnessTryDispatch: expected a `witnessTryDispatch` op, got a different MaxonOp variant — `lowerOp` routes only `witnessTryDispatch` here")
+		end 'w'
+	end 'lowerWitnessTryDispatch'
 
 	// Build the Std `witnessCall`: forward the current function's witness parameter for `constraintIndex` as the
 	// table address, then capture the result exactly as `appendCallIndirect` does (an `isVoid` method leaves no
 	// result register to capture, so its `resultType` is `void`). A helper because `lowerWitnessDispatch`'s arm
 	// must hand `args` to a function and touch it no other way (see there and `lowerIndirectCall`).
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool)
-		if self.currentWitnessCount == 0 'noWitnessParam'
-			panic("appendWitnessCall: a witness dispatch in '{String.from(self.currentFuncName)}' but the function carries no witness parameters — the parser's reservation (an instance method of a constrained generic type) and this lowering's whole-program split disagree")
-		end 'noWitnessParam'
-		let witnessAddr = (self.witnessParamBase + constraintIndex) as ValueId
-
-		let resultType = StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
+		let witnessAddr = self.witnessParamFor(constraintIndex)
+		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
 	end 'appendWitnessCall'
+
+	// The throwing twin of `appendWitnessCall`, sharing its witness-address resolution and its result typing
+	// (`witnessCallResultType`) verbatim — the two differ ONLY in which Std op they append and in the second
+	// result the throwing one defines. A helper for the same reason its twin is one: `lowerWitnessTryDispatch`'s
+	// arm must hand `args` to a function and touch it no other way.
+	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool)
+		let witnessAddr = self.witnessParamFor(constraintIndex)
+		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witnessAddr, methodIndex: methodIndex, resultType: resultType, argFloatMask: self.argFloatMaskOf(args), args: args))
+	end 'appendWitnessTryCall'
+
+	// The witness PARAMETER of the enclosing generic function that carries constraint `constraintIndex`'s
+	// table — FORWARDED, exactly as `forwardCallerLayout` forwards the layout descriptor: a witness dispatch is
+	// only ever emitted inside a generic body, whose `T` witness arrived as a hidden parameter (the concrete
+	// `__witness_<Type>.<Iface>` was materialized at the CALL SITE and passed in). ONE home, shared by the
+	// throwing and non-throwing witness lowerings.
+	function witnessParamFor(constraintIndex WitnessSlotIndex) returns ValueId
+		if self.currentWitnessCount == 0 'noWitnessParam'
+			panic("witnessParamFor: a witness dispatch in '{String.from(self.currentFuncName)}' but the function carries no witness parameters — the parser's reservation (an instance method of a constrained generic type) and this lowering's whole-program split disagree")
+		end 'noWitnessParam'
+		return (self.witnessParamBase + constraintIndex) as ValueId
+	end 'witnessParamFor'
+
+	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
+	// an `isVoid` method (no result register to capture). Shared by both witness lowerings so the throwing and
+	// non-throwing forms cannot drift on how a result is typed.
+	function witnessCallResultType(result ValueId, isVoid bool) returns StdReturnType
+		return StdReturnType.void if isVoid else StdReturnType.value(self.stdTypeOf(result))
+	end 'witnessCallResultType'
 
 	// The Std type an indirect call CAPTURES its result in — normally the result value's own type. But a
 	// VOID function value (`let cb = doIt; cb()` at statement position, P1.5 #68) has NO result to capture:

@@ -326,7 +326,8 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction) 
 		// ⭐ A WITNESS DISPATCH IS A CALL WITH NO CALLEE NAME, so it escapes for BOTH subjects — see
 		// `directCallArgEscapes` for why the capturing-closure delegation stops here (P1.7a slice 2a).
 		// Its receiver + user args are all in `args`.
-		witnessDispatch(_, args, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
+		witnessDispatch(_, args, _, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
+		witnessTryDispatch(_, _, args, _, _, _) then return trackedValueInArray(args, subject: subject, func: func)
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -367,7 +368,7 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		// The jump table is a branch terminator — it escapes nothing (only `ret` of the value does).
 		switch then break 'term'
 		// A witness dispatch is a body op, never a terminator — it escapes nothing here (P1.7a slice 2a).
-		witnessDispatch then break 'term'
+		witnessDispatch to witnessTryDispatch then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesValue'
@@ -561,7 +562,7 @@ function collectMutationEdgesAt(project Project, op MaxonOp, func IrFunction, ca
 		sizeofType then break 'op'
 		byteStringLiteral then break 'op'
 		switch then break 'op'
-		witnessDispatch then break 'op'
+		witnessDispatch to witnessTryDispatch then break 'op'
 	end 'op'
 end 'collectMutationEdgesAt'
 
@@ -725,7 +726,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				sizeofType then break 'op'
 				byteStringLiteral then break 'op'
 				switch then break 'op'
-				witnessDispatch then break 'op'
+				witnessDispatch to witnessTryDispatch then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -763,7 +764,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				sizeofType then break 'op'
 				byteStringLiteral then break 'op'
 				switch then break 'op'
-				witnessDispatch then break 'op'
+				witnessDispatch to witnessTryDispatch then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -886,7 +887,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		byteStringLiteral then break 'op'
 		// The jump table reads an integer index, never a promise handle — unrelated to any await.
 		switch then break 'op'
-		witnessDispatch then break 'op'
+		witnessDispatch to witnessTryDispatch then break 'op'
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -919,7 +920,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		// arm fills several slots with one block, but the CFG has one edge to it).
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushMaxonSwitchSuccessors(into, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 		// A witness dispatch is a body op, never a terminator — it has no in-function successor (P1.7a slice 2a).
-		witnessDispatch then break 'term'
+		witnessDispatch to witnessTryDispatch then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -1012,8 +1013,15 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					switch then break 'op'
 					// A witness dispatch has no callee NAME to resolve — the parser already resolved the interface
 					// method against the type's `where` constraints (`resolveWitnessDispatch`), so there is nothing
-					// for this name-signature validation to say (P1.7a slice 2a).
-					witnessDispatch then break 'op'
+					// for this name-signature validation to say (P1.7a slice 2a). Its ONE remaining obligation is
+					// the throws rule every other call shape gets here: a dispatch of a THROWING interface method
+					// that is still a plain `witnessDispatch` was written without `try`, so its flag would be
+					// dropped — the mirror of `validatePlainCall`'s E3057, keyed on the stamp the op carries
+					// because there is no callee name to key it on (P1.7a slice 2b-v).
+					witnessDispatch(_, _, _, _, _, isThrowing) then requireTriedWitnessDispatch(project, func: func, opIndex: opIdx, isThrowing: isThrowing)
+					// A `witnessTryDispatch` IS the `try` — it is produced by nothing else — so the rule above is
+					// satisfied by its existence, exactly as a `tryCall` satisfies `validatePlainCall`'s.
+					witnessTryDispatch then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -1050,6 +1058,23 @@ function requireAsyncScalarParams(project Project, func IrFunction, opIndex OpIn
 		end 'nonScalarParam'
 	end 'eachParam'
 end 'requireAsyncScalarParams'
+
+// **E3057 for a witness dispatch of a THROWING interface method written without `try`** (P1.7a slice 2b-v) —
+// the witness twin of `validatePlainCall`'s user-function arm, and the same rule: a bare throwing call
+// branches on nothing, so the callee's error flag is discarded and its throw-path primary comes back as a
+// real answer. It reads a STAMP on the op rather than a signature registry because a witness method has no
+// callee name to look up (the parser resolved it against the enclosing type's `where` constraints, which is
+// where the interface's `throws` clause lives and the only place it is known).
+//
+// The diagnostic names the METHOD, which the op does not carry — but `project.opRanges` positions it exactly
+// on the dispatch the author wrote, and the wording matches the direct-call form the author already knows.
+function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex OpIndex, isThrowing bool)
+	if not isThrowing 'nonThrowing'
+		return
+	end 'nonThrowing'
+	let callRange = project.opRanges.get(opIndex)
+	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+end 'requireTriedWitnessDispatch'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
@@ -1633,7 +1658,7 @@ function closureEscapeReason(op MaxonOp) returns String
 		// no callee name to key an escape summary on and `checkCapturingClosureEscape` never sees the call.
 		// Refused rather than delegated to a decider that cannot run — before this arm it reached lowering and
 		// PANICKED (`maxonTypeToStdType`) on the environment it could not thread.
-		witnessDispatch then return "cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. {CapturingClosureEscapeSuffix}"
+		witnessDispatch to witnessTryDispatch then return "cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. {CapturingClosureEscapeSuffix}"
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a

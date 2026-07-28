@@ -711,7 +711,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		sizeofType gives AsyncCalleeLookup.none
 		byteStringLiteral gives AsyncCalleeLookup.none
 		switch gives AsyncCalleeLookup.none
-		witnessDispatch gives AsyncCalleeLookup.none
+		witnessDispatch to witnessTryDispatch gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -2437,6 +2437,46 @@ union TryHandler
 	fellThrough
 end 'TryHandler'
 
+// ⭐ **WHAT A `try` IS APPLIED TO — the ONE thing the whole desugar asks about its target (P1.7a slice
+// 2b-v).** Everything downstream of `rewriteLastCallToTryCall` wants exactly two facts: the NAME a
+// diagnostic blames (E3055/E3059, the void-result E3059) and the ERROR TYPE the target throws (which types
+// the `(e)` binding and decides whether the caught error is a heap box). A direct call and an awaited
+// promise answer the second by NAME — `ProgramSignatures.throwsOf` — which is why the desugar used to
+// thread a bare `callee ByteArray`. A WITNESS dispatch cannot: an interface method is in no signature
+// registry, and the only place its `throws` exists is the `where`-constraint resolution the parser just did.
+//
+// So the two shapes are kept as one union with two accessors (`tryTargetName`/`tryTargetThrows`) rather
+// than by widening the thread to a `(name, clause)` pair: `requireThrowingTryTarget` must ALSO distinguish
+// them — a name that no file declares is left to E3004, while a witness method that no file declares is
+// normal and its non-throwing case is a real E3055 — and a pair would have lost exactly that.
+union TryTarget
+	// A DIRECT call or an `await`ed promise: the callee NAME, which the signature index answers for.
+	named(callee ByteArray)
+	// A witness-dispatched interface method (P1.7a slice 2b-v): the method NAME for diagnostics, and the
+	// interface's own declared `throws` clause — the only carrier of that fact.
+	witness(methodName ByteArray, throwsClause ThrowsClause)
+end 'TryTarget'
+
+// The NAME a diagnostic blames for a `try` target — the first of the two questions the desugar asks it. A
+// direct/awaited callee blames its callee name; a witness dispatch blames the interface method the author
+// actually wrote (the witness table is a compiler artifact with no user spelling).
+function tryTargetName(target TryTarget) returns ByteArray
+	return match target 'kind'
+		named(callee) gives callee
+		witness(methodName, _) gives methodName
+	end 'kind'
+end 'tryTargetName'
+
+// **E3055 for a WITNESS `try` target** — a `try` on an interface method whose declaration carries no
+// `throws`. Unconditional, unlike its named twin: an interface method is in no signature registry, so there
+// is no "undeclared, leave it to E3004" case to exempt, and the clause is a fact the constraint resolution
+// already established.
+function requireThrowingWitnessTryTarget(methodName ByteArray, throwsClause ThrowsClause, tryTok Token) throws ParseError
+	if not throwsClauseIsThrowing(throwsClause) 'nonThrowing'
+		throw ParseError.tryOnNonThrowing(String.from(methodName), line: tryTok.line, column: tryTok.column)
+	end 'nonThrowing'
+end 'requireThrowingWitnessTryTarget'
+
 // The result of `captureEnclosing` (P1.5-A2b): a name that resolved into an enclosing frame yields
 // `captured` with the value read out of the env block; any other name is `notCaptured` and resolves
 // through the ordinary top-level path.
@@ -3164,6 +3204,21 @@ export type Parser
 	// `recordScannedType` are the writers); points at `sharedEmptyWhereConstraints` for an unconstrained
 	// type, so a non-generic (or unconstrained-generic) type declaration allocates nothing here.
 	var enclosingWhereConstraints as WhereConstraintArray
+	// ⭐ **THE PARSE-TIME FACTS OF THE MOST RECENTLY EMITTED `witnessDispatch` (P1.7a slice 2b-v)** — its op
+	// INDEX, the interface method's NAME, and the method's declared `throws`. A `try` is written BEFORE its
+	// target, so the only thing that can turn a dispatch into a throwing one is the in-place rewrite
+	// `rewriteLastCallToTryCall` performs afterwards (the same rewrite `call` -> `tryCall` uses) — and that
+	// rewrite holds only an op index. The name and the throws clause are facts of the CONSTRAINT RESOLUTION,
+	// which nothing but the parser has, so they are recorded here as the dispatch emits rather than made into
+	// op fields every dispatch would carry to answer a question only a `try` asks.
+	//
+	// ⚠ The record is matched to the op by INDEX, not trusted by position: `commitWitnessTryDispatchRewrite`
+	// panics unless `lastWitnessDispatchIndex` IS the op it is rewriting. It always is — a dispatch records at
+	// the instant it emits, and the rewrite runs on the op in the last opRef slot — but a future emit path that
+	// forgot to record would otherwise mis-type an `(e)` binding silently.
+	var lastWitnessDispatchIndex as OpIndex
+	var lastWitnessDispatchName as ByteArray
+	var lastWitnessDispatchThrows as ThrowsClause
 	// ⭐ The BARE MEMBER NAMES of the INNER ranged typealiases declared in the type currently being parsed
 	// (P1.6-C) — `{Idx}` inside `type Wrapper` with `typealias Idx = int(0 to u64.max)`, empty otherwise. It
 	// is how `parseTypeReference` resolves a bare `Idx` in a field/return/parameter position to the
@@ -3339,6 +3394,9 @@ export type Parser
 			enclosingType: EmptySourceText,
 			enclosingTypeParams: ByteArrayArray.create(),
 			enclosingWhereConstraints: sharedEmptyWhereConstraints,
+			lastWitnessDispatchIndex: 0,
+			lastWitnessDispatchName: EmptySourceText,
+			lastWitnessDispatchThrows: ThrowsClause.none,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			siblingReceivers: sharedEmptySiblingReceivers,
@@ -6369,11 +6427,15 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		let returnType = try self.parseOptionalReturnType()
-		// A `throws E` clause is consumed so a throwing interface method (`advance() throws IterationError`)
-		// parses; slice-1 conformance does not validate the throws relation (no enabled case needs it).
-		_ = try self.parseOptionalThrowsClause()
+		// ⭐ **THE `throws E` CLAUSE IS RECORDED, NOT DISCARDED (P1.7a slice 2b-v).** It decides which ABI a
+		// witness dispatch of this method uses — the dual-register `witnessTryCall` or the single-register
+		// `witnessCall` — and it is the ONLY place that fact exists: a witness method has no callee name for
+		// `ProgramSignatures.throwsOf` to answer about. Discarded (slice 1), a throwing interface method
+		// dispatched through a witness silently DROPPED its error flag: the caller's `otherwise` never ran and
+		// the impl's throw-path primary (0) came back as a real answer.
+		let throwsClause = try self.parseOptionalThrowsClause()
 
-		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic)
+		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic, throwsClause: throwsClause)
 	end 'parseInterfaceMethod'
 
 	// Render each of an interface method's parameter types to its source string, parallel to `paramTypes`.
@@ -9044,16 +9106,16 @@ export type Parser
 
 		let result = try self.parseTryCallTarget(func)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		let callee = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok)
+		let target = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok)
 
-		try self.requireThrowingTryTarget(callee, tryTok: tryTok)
+		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 
 		// A value-position `try` on a VOID callee has no value to yield (E3059).
 		if resultUsed and self.tagOf(result) == ValueTypeTag.void 'voidInValue'
-			throw ParseError.errorTypeMismatch("'{String.from(callee)}' does not return a value", line: tryTok.line, column: tryTok.column)
+			throw ParseError.errorTypeMismatch("'{String.from(tryTargetName(target))}' does not return a value", line: tryTok.line, column: tryTok.column)
 		end 'voidInValue'
 
-		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, callee: callee, resultUsed: resultUsed)
+		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, target: target, resultUsed: resultUsed)
 	end 'parseTry'
 
 	// Parse the throwing call target after `try` — a primary call form followed by its WHOLE POSTFIX CHAIN
@@ -9133,11 +9195,11 @@ export type Parser
 	end 'parseTryCallReceiver'
 
 	// Rewrite the just-emitted `call` op in `currentBlock` into a `tryCall` defining `errorFlag` as its
-	// second result. Returns the callee name (for the E3059/E3055 diagnostics). v1 rewrites the terminal
+	// second result. Returns the `TryTarget` the desugar asks its two questions of. v1 rewrites the terminal
 	// call in place for the same reason: it makes nested tries (`try consume(try get() otherwise 0)`)
 	// work — each inner try rewrites its OWN call, and the outer rewrites the last op after the whole
 	// parse, which is its own call.
-	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token) returns ByteArray throws ParseError
+	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token) returns TryTarget throws ParseError
 		let refCount = self.currentBlock.opRefs.count()
 		if refCount == 0 'noOp'
 			throw ParseError.unsupported("`try` must be applied to a call — the expression after `try` emitted no call", line: tryTok.line, column: tryTok.column)
@@ -9145,11 +9207,11 @@ export type Parser
 		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block")
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
-			call(result, callee, args, argLabels, argRanges, argImmutableNames) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+			call(result, callee, args, argLabels, argRanges, argImmutableNames) gives TryTarget.named(self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames))
 			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
 			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
 			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
-			await (result, promise) gives self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise)
+			await (result, promise) gives TryTarget.named(self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise))
 			// Only a DIRECT `call` or an `await` can be `try`ed. An `indirectCall`/`functionRef` (P1.5-A1) is
 			// never throwing — a throwing function cannot be a function value (E3101) — an `asyncCall` (a spawn)
 			// is not the throwing operation (the AWAIT is), and a `tryAwait` cannot be a fresh try target. All
@@ -9159,11 +9221,40 @@ export type Parser
 			sizeofType gives try self.rejectTryTarget(tryTok)
 			byteStringLiteral gives try self.rejectTryTarget(tryTok)
 			switch gives try self.rejectTryTarget(tryTok)
-			// A throwing witness dispatch (`try self.item.method()`) needs the dual-register `witnessTryCall`,
-			// which this slice does not build — the enabled interface methods do not throw. Reject cleanly.
-			witnessDispatch gives try self.rejectTryTarget(tryTok)
+			// A throwing WITNESS dispatch (`try self.item.digest()`, P1.7a slice 2b-v) — rewritten into the
+			// dual-register `witnessTryDispatch` defining the error flag, exactly as `call` becomes `tryCall`.
+			// Routed through a helper that RE-MATCHES the op in a SMALL match so `args` is bound in a
+			// single-call arm, never in this big one (the tail-slot-Array decref corruption `witnessDispatch`
+			// documents).
+			witnessDispatch gives self.commitWitnessTryDispatchRewrite(opIdx, flag: flag)
+			// A `witnessTryDispatch` in the last slot means an inner `try` already claimed this dispatch; it is
+			// no more a fresh try target than a `tryAwait` is.
+			witnessTryDispatch gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
+
+	// Replace the `witnessDispatch` op at `opIdx` with a `witnessTryDispatch` defining the second `errorFlag`
+	// result, and return the target the desugar reads — the interface method's NAME and its declared `throws`.
+	// The op carries NEITHER (both are parse-time facts of the constraint resolution, and an op field for
+	// them would be paid for by every dispatch to answer a question only a `try` asks), so the dispatch
+	// RECORDS them as it emits and this reads them back. The recording is exact: a dispatch records at the
+	// instant it emits its op, and this runs on the op in the LAST opRef slot — which is that same op,
+	// because nothing else can have emitted since. A non-throwing method rewritten here is E3055, reported
+	// by `requireThrowingTryTarget` off the `none` clause this hands it: the same route a non-throwing
+	// direct callee takes.
+	function commitWitnessTryDispatchRewrite(opIdx OpIndex, flag ValueId) returns TryTarget
+		// CHECKED BEFORE THE REWRITE, not after: a stale record would mean the target's name and throws clause
+		// belong to some OTHER dispatch, and rewriting first would leave a half-converted op behind the panic.
+		if self.lastWitnessDispatchIndex != opIdx 'staleRecord'
+			panic("commitWitnessTryDispatchRewrite: the `witnessDispatch` at {opIdx} is not the one `emitWitnessDispatch` recorded ({self.lastWitnessDispatchIndex}) — every witness dispatch must be emitted through that one door so its method name and throws clause reach the `try` desugar")
+		end 'staleRecord'
+
+		match try self.artifact.module.ops.get(opIdx) otherwise panic("commitWitnessTryDispatchRewrite: opIdx {opIdx} not in module.ops") 'w'
+			witnessDispatch(result, args, constraintIndex, methodIndex, isVoid, _) then try self.artifact.module.ops.set(opIdx, value: MaxonOp.witnessTryDispatch(result, errorFlag: flag, args: args, constraintIndex: constraintIndex, methodIndex: methodIndex, isVoid: isVoid)) otherwise panic("commitWitnessTryDispatchRewrite: module.ops.set OOB at {opIdx}")
+			default panic("commitWitnessTryDispatchRewrite: the op at {opIdx} is not a `witnessDispatch` — `rewriteLastCallToTryCall`'s match routes only that arm here")
+		end 'w'
+		return TryTarget.witness(self.lastWitnessDispatchName, throwsClause: self.lastWitnessDispatchThrows)
+	end 'commitWitnessTryDispatchRewrite'
 
 	// Replace the `call` op at `opIdx` with a `tryCall` defining the second `errorFlag` result, preserving
 	// every call field, and return the callee name.
@@ -9267,7 +9358,20 @@ export type Parser
 	//
 	// A callee NO file declares is left to SemanticCheck's E3004: a `try <typo>` is an unknown function, not a
 	// non-throwing one.
-	function requireThrowingTryTarget(callee ByteArray, tryTok Token) throws ParseError
+	//
+	// A WITNESS target answers from its OWN clause, and it has no "undeclared" escape. An interface method is
+	// in NO signature registry, so routing it through `calleeIsDeclared` would answer `false` and wave every
+	// non-throwing interface method through — this very hole, arriving from the other side. Its `throws` is a
+	// fact the constraint resolution already established, so the test is unconditional.
+	function requireThrowingTryTarget(target TryTarget, tryTok Token) throws ParseError
+		match target 'kind'
+			named(callee) then try self.requireThrowingNamedTryTarget(callee, tryTok: tryTok)
+			witness(methodName, throwsClause) then try requireThrowingWitnessTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
+		end 'kind'
+	end 'requireThrowingTryTarget'
+
+	// The NAMED half of the check above — a direct callee or an awaited one, asked of the signature index.
+	function requireThrowingNamedTryTarget(callee ByteArray, tryTok Token) throws ParseError
 		if isCompilerInternalCallee(callee) 'builtin'
 			if isThrowingRuntimeCallee(callee) 'throwingAccessor'
 				return
@@ -9278,17 +9382,17 @@ export type Parser
 		if self.calleeIsDeclared(callee) and not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
 			throw ParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
 		end 'nonThrowing'
-	end 'requireThrowingTryTarget'
+	end 'requireThrowingNamedTryTarget'
 
-	// The expression after `try` was not a call. Typed `returns ByteArray` so it slots into
+	// The expression after `try` was not a call. Typed `returns TryTarget` so it slots into
 	// `rewriteLastCallToTryCall`'s `match`, but it always throws.
-	function rejectTryTarget(tryTok Token) returns ByteArray throws ParseError
+	function rejectTryTarget(tryTok Token) returns TryTarget throws ParseError
 		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)` or `try obj.method(…)`; the expression after `try` is not a call", line: tryTok.line, column: tryTok.column)
 	end 'rejectTryTarget'
 
 	// Build the flag split + handler + merge for a parsed `tryCall`. `result` is the success value,
 	// `flag` its error flag, both defined by the `tryCall` in `currentBlock`.
-	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, callee ByteArray, resultUsed bool) returns ValueId throws ParseError
+	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool) returns ValueId throws ParseError
 		let entryBlock = self.currentBlock
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryTok))
 		let isErr = try self.emitCompare(flag, rhs: zero, op: MaxonCmpOp.ne, opTok: tryTok)
@@ -9354,7 +9458,7 @@ export type Parser
 		end 'forkTemps'
 
 		self.currentBlock = errBlock
-		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, callee: callee, resultUsed: resultUsed, tryTok: tryTok)
+		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, target: target, resultUsed: resultUsed, tryTok: tryTok)
 		var errEnd = self.currentBlock
 
 		return match handler 'h'
@@ -9571,12 +9675,12 @@ export type Parser
 
 	// Parse the `otherwise` handler (or its absence — a PROPAGATE) into the current (error) block, and
 	// report how it affects the merge. On entry `currentBlock` is the error block.
-	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, callee ByteArray, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
+	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
 		if not self.at(TokenKind.otherwise) 'propagate'
 			// Uncaught `try f()` / `try await p` — re-publish the callee's flag to this function's caller. The
 			// flag is re-emitted VERBATIM, so the propagated error type MUST match this function's `throws`
 			// type or the caller decodes one enum's ordinals as another's (E3059, checked here).
-			try self.checkPropagateType(func, callee: callee, tryTok: tryTok)
+			try self.checkPropagateType(func, throwsClause: self.tryTargetThrows(target), tryTok: tryTok)
 			self.emitScopeDrops(WholeFunctionScopeFloor, anchor: tryTok)
 			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.propagateError(flag), range: SourceRange.ofToken(tryTok))
 			return TryHandler.terminated
@@ -9586,11 +9690,11 @@ export type Parser
 
 		// Block forms own their caught box end-to-end (`parseOtherwiseBlock` enrols, binds and drops it).
 		if self.at(TokenKind.leftParen) 'bindingForm'
-			return try self.parseOtherwiseBinding(func, flag: flag, callee: callee)
+			return try self.parseOtherwiseBinding(func, flag: flag, target: target)
 		end 'bindingForm'
 
 		if self.at(TokenKind.charLiteral) 'blockForm'
-			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, callee: callee)
+			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, target: target)
 		end 'blockForm'
 
 		// ⭐ **THE NON-BLOCK FORMS DISCARD THE CAUGHT ERROR, SO ITS BOX MUST DROP HERE.** `otherwise ignore`,
@@ -9600,7 +9704,7 @@ export type Parser
 		// releases it, then drop it here for the non-terminating forms (`dropArmScopedOwned` frees it on a live
 		// exit, drains it either way). A SCALAR error owns no box, so `boxed` is false and this is inert — the
 		// existing scalar forms are untouched. (`otherwise panic` aborts the process before any free matters.)
-		let eType = self.tryErrorEnumType(callee)
+		let eType = self.tryErrorEnumType(self.tryTargetThrows(target))
 		let ownedFloor = self.ownedBindings.count()
 		if self.throwsTypeIsBoxedUnion(eType) 'enrolBox'
 			self.enrollCaughtBox(flag, eType: eType, binding: VarInfo.createValueBinding(EmptySourceText, varType: eType, mutable: false, boundValue: flag))
@@ -9705,14 +9809,14 @@ export type Parser
 		return TryHandler.value(otherwiseValue)
 	end 'parseUnboundOtherwiseForm'
 
-	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as the callee's
+	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as the TARGET's
 	// throws enum so `match e` recognizes it), then parse the labelled handler block. In a match arm this
 	// block form is E2049.
-	function parseOtherwiseBinding(func IrFunction, flag ValueId, callee ByteArray) returns TryHandler throws ParseError
+	function parseOtherwiseBinding(func IrFunction, flag ValueId, target TryTarget) returns TryHandler throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let eNameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.rightParen)
-		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, callee: callee)
+		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, target: target)
 	end 'parseOtherwiseBinding'
 
 	// ⭐ **ENROL A CAUGHT BOXED ERROR AS OWNED.** The flag IS the box pointer (the throw ENCODE wrote it
@@ -9731,7 +9835,7 @@ export type Parser
 	// Parse an `otherwise` handler BLOCK (`otherwise ['(e)'] 'label' … end 'label'`) into the error block.
 	// When `hasBinding`, `e = flag - 1` is declared in a fresh scope frame before the body. Both forms are
 	// E2049 in a match arm (the block label is where the arm-body single-statement rule is violated).
-	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, callee ByteArray) returns TryHandler throws ParseError
+	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, target TryTarget) returns TryHandler throws ParseError
 		if not self.at(TokenKind.charLiteral) 'noLabel'
 			let tok = self.current()
 			throw ParseError.matchMissingBlockId(tok.line, column: tok.column)
@@ -9745,7 +9849,7 @@ export type Parser
 		try self.consume(TokenKind.charLiteral)
 
 		var errBlock = self.currentBlock
-		let eType = self.tryErrorEnumType(callee)
+		let eType = self.tryErrorEnumType(self.tryTargetThrows(target))
 		let boxed = self.throwsTypeIsBoxedUnion(eType)
 
 		// The owned-binding height BEFORE the caught box is enrolled — a handler-local drop FLOOR, the try
@@ -9798,11 +9902,12 @@ export type Parser
 	// VERBATIM into the ENCLOSING function's error register, so if the propagated callee throws a DIFFERENT
 	// error type than the enclosing function declares, the caller decodes one enum's ordinals as another's
 	// tags — a silent miscompile a boxed union turns into a wild free. Refused when both types are named and
-	// differ. Shared by `try call()` and `try await p`: the awaited callee's throws type IS the promise's, and
-	// reaches here through the same `callee` the desugar threads. An enclosing NON-throwing function that
-	// propagates is a separate defect this does not diagnose.
-	function checkPropagateType(func IrFunction, callee ByteArray, tryTok Token) throws ParseError
-		match self.signatures.throwsOf(callee) 'calleeThrows'
+	// differ. Shared by every try shape — a direct call, `try await p` (the awaited callee's throws type IS
+	// the promise's) and a witness dispatch — because each answers `tryTargetThrows` and only the CLAUSE
+	// reaches here. An enclosing NON-throwing function that propagates is a separate defect this does not
+	// diagnose.
+	function checkPropagateType(func IrFunction, throwsClause ThrowsClause, tryTok Token) throws ParseError
+		match throwsClause 'calleeThrows'
 			none then break 'calleeThrows'
 			throwing(propagated) then try self.rejectPropagateAgainstEnclosing(func, propagated: propagated, tryTok: tryTok)
 		end 'calleeThrows'
@@ -9824,8 +9929,18 @@ export type Parser
 		end 'mismatch'
 	end 'rejectIfDifferentThrows'
 
-	function tryErrorEnumType(callee ByteArray) returns MaxonType
-		return match self.signatures.throwsOf(callee) 'k'
+	// The ERROR TYPE a `try` target throws — the second of the two questions the desugar asks its target, and
+	// the one the two shapes answer differently: a NAMED callee is looked up in the whole-program signature
+	// index; a WITNESS method carries its own clause, because no registry holds an interface method.
+	function tryTargetThrows(target TryTarget) returns ThrowsClause
+		return match target 'kind'
+			named(callee) gives self.signatures.throwsOf(callee)
+			witness(_, throwsClause) gives throwsClause
+		end 'kind'
+	end 'tryTargetThrows'
+
+	function tryErrorEnumType(throwsClause ThrowsClause) returns MaxonType
+		return match throwsClause 'k'
 			none gives MaxonType.integer
 			throwing(name) gives MaxonType.named(self.artifact.typeNames.intern(name.toByteArray()))
 		end 'k'
@@ -15413,7 +15528,7 @@ export type Parser
 		// `Self` arms cannot fire for an operator: `Equatable`/`Comparable` each declare one value-returning
 		// method, and `resultUsed` is true because a comparison is only ever parsed for its verdict.
 		let dispatchResult = try self.mintWitnessDispatchResult(target, receiverParamPos: paramPos, methodTok: opTok, resultUsed: true)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(dispatchResult, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: false), range: SourceRange.ofToken(opTok))
+		self.emitWitnessDispatch(dispatchResult, args: args, target: target, isVoid: false, range: SourceRange.ofToken(opTok))
 
 		// The verdict. `==` is the dispatch's own bool and `!=` negates that SAME dispatch, so the two can never
 		// disagree about what equality means (the `emitStringCompare` shape); the four ordering operators read
@@ -15482,8 +15597,16 @@ export type Parser
 	// because the author's cure is the same sentence: constrain the parameter with the protocol. (Constructed
 	// inline at both sites rather than through a shared factory — `throw self.helperReturningAParseError(…)`
 	// leaks the boxed union under the bootstrap's refcounting; see `nestedUnionPayloadMessage`.)
+	//
+	// ⚠ **A THROWING METHOD IS REFUSED HERE FOR THE SAME REASON A WRONG-RESULT ONE IS (P1.7a slice 2b-v).**
+	// `Equatable.equals` and `Comparable.compare` are synthesized non-throwing, so a user interface whose
+	// `equals` declares `throws E` is no more the protocol than one returning `7` is — and there is no
+	// spelling that would make it safe: an OPERATOR has nowhere to put a `try`, so the dispatch would be
+	// emitted single-register against a callee returning through the dual-register error ABI, dropping the
+	// error exactly as the missing `witnessTryCall` did. Same E3005, because the author's cure is the same
+	// sentence.
 	function requireProtocolResult(target WitnessDispatchTarget, protocolName ByteArray, wantResult ByteArray, paramPos TypeParamId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws ParseError
-		if not target.returnTypeName.equals(wantResult) 'notTheProtocol'
+		if not target.returnTypeName.equals(wantResult) or throwsClauseIsThrowing(target.throwsClause) 'notTheProtocol'
 			throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(paramPos)), interfaceName: String.from(protocolName), line: opTok.line, column: opTok.column)
 		end 'notTheProtocol'
 
@@ -18352,9 +18475,21 @@ export type Parser
 
 		let range = SourceRange.between(methodTok, last: rparenTok)
 		let result = try self.mintWitnessDispatchResult(target, receiverParamPos: receiverParamPos, methodTok: methodTok, resultUsed: resultUsed)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName)), range: range)
+		self.emitWitnessDispatch(result, args: args, target: target, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName), range: range)
 		return result
 	end 'parseWitnessMethodOnValue'
+
+	// ⭐ **THE ONE DOOR A `witnessDispatch` IS EMITTED THROUGH** — the `.method()` form and the comparison-
+	// OPERATOR form (`emitTypeParamComparison`) both come here, so the op's `isThrowing` stamp and the
+	// `lastWitnessDispatch*` record are written for BOTH by construction rather than remembered at each. A
+	// dispatch whose record was missed would leave a `try` on it typing its `(e)` binding off a stale clause;
+	// keeping the emit and the record in one place is what makes that unrepresentable.
+	function emitWitnessDispatch(result ValueId, args ValueIdArray, target WitnessDispatchTarget, isVoid bool, range SourceRange)
+		self.lastWitnessDispatchIndex = self.artifact.module.ops.count()
+		self.lastWitnessDispatchName = target.methodName
+		self.lastWitnessDispatchThrows = target.throwsClause
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.witnessDispatch(result, args: args, constraintIndex: target.constraintIndex, methodIndex: target.methodIndex, isVoid: isVoid, isThrowing: throwsClauseIsThrowing(target.throwsClause)), range: range)
+	end 'emitWitnessDispatch'
 
 	// Resolve `<receiver>.<method>()` against the enclosing type's `where` constraints (P1.7a slice 2a): find the
 	// constraint on the receiver's type parameter whose interface declares `method`, returning its slot index,
@@ -18386,7 +18521,7 @@ export type Parser
 			let methodIndex = interfaceMethodIndex(iface, methodName: methodName)
 			if methodIndex < iface.methods.count() 'declaresMethod'
 				let method = try iface.methods.get(methodIndex) otherwise panic("findWitnessDispatch: methods.get OOB at {methodIndex} below count {iface.methods.count()}")
-				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName, paramTypeNames: method.paramTypeNames))
+				return WitnessDispatchLookup.found(WitnessDispatchTarget.create(i, methodIndex: methodIndex, returnTypeName: method.returnTypeName, paramTypeNames: method.paramTypeNames, throwsClause: method.throwsClause, methodName: methodName))
 			end 'declaresMethod'
 		end 'eachConstraint'
 
@@ -18493,9 +18628,13 @@ export type Parser
 		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
 			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed)
 		end 'arrayReceiver'
-		if self.tagOf(receiver) == ValueTypeTag.function 'functionFieldReceiver'
+		// A `function`-typed field takes its trailing `(args)` and a TYPE-PARAMETER field takes its
+		// `.method(…)`, and BOTH are hops `parsePostfix` already knows how to apply — a function value through
+		// its indirect-call arm, an opaque `T` through its witness-dispatch arm. One arm for the two, because
+		// the answer is the same one: hand the resolved receiver back to the postfix loop.
+		if self.tagOf(receiver) == ValueTypeTag.function or self.tagOf(receiver) == ValueTypeTag.typeParameter 'postfixReceiver'
 			return try self.parsePostfix(func, value: receiver, resultUsed: resultUsed)
-		end 'functionFieldReceiver'
+		end 'postfixReceiver'
 		let tok = self.current()
 		throw ParseError.unsupported("a method call on a non-array field chain — a nested struct method (`o.inner.m()`) is a later slice", line: tok.line, column: tok.column)
 	end 'parseFieldChainCall'
@@ -19185,6 +19324,20 @@ export type Parser
 		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(fieldType)) 'arrayField'
 			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
 		end 'arrayField'
+
+		// ⭐ **A TYPE-PARAMETER FIELD ENDS THE CHAIN TOO (P1.7a slice 2b-v)** — `self.item.digest()` where
+		// `item` is a `T` constrained `where T is Digest`. The `.` after it opens a WITNESS-dispatched method
+		// call on the opaque value, not a further field access: the concrete type is unknown in the shared
+		// body, so `T` has no addressable sub-fields the chain could walk. The same rule the array field above
+		// states, for the other kind of value whose members are reached by method rather than by offset.
+		//
+		// It is not a nicety: without it, the ONLY spelling of a throwing witness dispatch — `try
+		// self.item.digest()`, which routes here because `fieldChainMethodCallAt` counts two hops — died on
+		// `structLayoutOfField`'s "not a struct" reject, so the feature was unusable in the very form the
+		// language requires for it.
+		if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'typeParameterField'
+			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
+		end 'typeParameterField'
 
 		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))

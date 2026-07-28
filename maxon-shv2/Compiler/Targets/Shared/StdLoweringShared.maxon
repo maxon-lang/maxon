@@ -468,6 +468,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		// A witness call classes its result by the `resultType` the op carries — the same register-file
 		// question as `callIndirect` (there is no callee NAME to look a return type up against).
 		witnessCall(resultId, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		// A THROWING witness call classes its primary result exactly as `witnessCall` does (off the `resultType`
+		// the op carries); its error-flag second result is an i64, which the column's `gpr` default already
+		// covers — the same split `tryCall`'s two results take.
+		witnessTryCall(resultId, _, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// P1.5 dogfood slice 1a: the five value-defining IOCP ops define GPR i64 results (kernel handles, the
 		// ReadFile BOOL, the GetLastError DWORD — all integers); the rest define nothing.
 		osPipeCreate then break 'result'

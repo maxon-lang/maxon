@@ -897,7 +897,30 @@ export union MaxonOp
 	// ⚠ Its `args` (an `Array with ValueId`) is bound only in a SMALL match (`lowerWitnessDispatch`), never
 	// destructured by `lowerMaxonToStd.lowerOp`'s big one — the same tail-slot-`Array`-corrupts-the-decref trap
 	// `indirectCall`/`switch` document.
-	witnessDispatch(result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+	//
+	// ⭐ **`isThrowing` IS THE E3057 EVIDENCE, AND IT HAS TO RIDE THE OP (P1.7a slice 2b-v).** A bare `call` to
+	// a throwing callee is caught by `SemanticCheck.validatePlainCall` asking `throwsMap` about the callee's
+	// NAME; a witness dispatch has no name to ask about — the method is resolved against the enclosing type's
+	// `where` constraints, which only the parser holds. So the parser stamps the interface method's
+	// throwing-ness here and `checkCalls` reads it, keeping the rule ("a throwing call needs `try`") in ONE
+	// place for both call shapes rather than making the witness form the exception.
+	witnessDispatch(result ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
+	// --- P1.7a slice 2b-v: the THROWING witness dispatch ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessDispatch`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm. `OpCategory.callFree` places it logically
+	// beside `call`/`tryCall`/`witnessDispatch`, independent of this tail position.
+	//
+	// ⭐ **`witnessTryDispatch : witnessDispatch :: tryCall : call`.** Identical operand shape plus the one
+	// thing a throwing call adds: a SECOND result, `errorFlag`, captured from the dual-register error ABI.
+	// The parser mints it exactly as it mints `tryCall`'s — `rewriteLastCallToTryCall` REWRITES the
+	// `witnessDispatch` the try target just emitted into this op, the same in-place rewrite that turns a
+	// `call` into a `tryCall` and an `await` into a `tryAwait`, so a nested `try` rewrites its own dispatch.
+	// It carries no `isThrowing`: reaching this op IS the evidence, since only a `try` produces it.
+	//
+	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
+	// `witnessDispatch`'s trap, unchanged.
+	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

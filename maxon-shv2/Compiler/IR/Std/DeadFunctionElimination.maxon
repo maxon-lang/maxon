@@ -227,6 +227,10 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		callIndirect to osWriteFile then break 'op'
 		// The wall-clock read names no Maxon function either — its callee is a Win32 import slot.
 		osReadWallClock then break 'op'
+		// The THROWING witness call names no Maxon function, exactly as `witnessCall` does not: both read a
+		// code pointer out of a `.rdata` witness table, and the DATA edge that keeps a witness impl live is
+		// counted by the witness-table walk, not here.
+		witnessTryCall then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

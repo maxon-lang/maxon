@@ -200,9 +200,17 @@ export type InterfaceMethodSig
 	// need not supply it as an instance method — the conformance check SKIPS it, matching
 	// the reference oracle (`if method.IsStatic continue`).
 	export let isStatic as bool
+	// ⭐ **THE METHOD'S DECLARED `throws` (P1.7a slice 2b-v)** — the fact that decides which ABI a
+	// witness dispatch of this method uses. A `throwing` clause makes the dispatch a dual-register
+	// `witnessTryCall` that a `try` must cover (E3057 without one); `none` makes it the single-register
+	// `witnessCall`, which a `try` may not cover (E3055). Both directions of the conformance relation are
+	// checked against it (`validateThrowsConformance`), because the CALLER's ABI is picked from the
+	// INTERFACE while the callee's is picked from the IMPL: the two must agree or the flag register is
+	// written by one end and not read by the other.
+	export let throwsClause as ThrowsClause
 
-	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool) returns InterfaceMethodSig
-		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic}
+	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause}
 	end 'create'
 end 'InterfaceMethodSig'
 
@@ -266,9 +274,17 @@ export type WitnessDispatchTarget
 	export let methodIndex as WitnessMethodIndex
 	export let returnTypeName as ByteArray
 	export let paramTypeNames as ByteArrayArray
+	// The interface method's declared `throws` (P1.7a slice 2b-v) — carried through the resolution so the
+	// dispatch site picks the throwing or non-throwing witness ABI, and so the `try` desugar can type the
+	// `(e)` binding it recovers. A witness method is in NO signature registry (there is no callee NAME to
+	// ask `throwsOf` about), so this is the only place the fact reaches the call site.
+	export let throwsClause as ThrowsClause
+	// The method NAME, for the E3055/E3057/E3059 diagnostics a witness `try` target reports. A direct call
+	// blames its callee name; a witness dispatch blames the interface method the user actually wrote.
+	export let methodName as ByteArray
 
-	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray) returns WitnessDispatchTarget
-		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames}
+	export static function create(constraintIndex WitnessSlotIndex, methodIndex WitnessMethodIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray) returns WitnessDispatchTarget
+		return Self{constraintIndex: constraintIndex, methodIndex: methodIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName}
 	end 'create'
 end 'WitnessDispatchTarget'
 
@@ -294,9 +310,11 @@ export function interfaceMethodIndex(iface IrInterface, methodName ByteArray) re
 	return iface.methods.count()
 end 'interfaceMethodIndex'
 
-// A nullary interface method (`hash()`, `toString()`, `clone()`).
+// A nullary interface method (`hash()`, `toString()`, `clone()`). Every SYNTHESIZED protocol method is
+// non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
+// runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false)
+	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
@@ -305,7 +323,7 @@ function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName
 	paramNames.push(paramName)
 	var paramTypeNames = ByteArrayArray.create()
 	paramTypeNames.push(paramTypeName)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized

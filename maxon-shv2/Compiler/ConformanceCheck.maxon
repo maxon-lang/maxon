@@ -264,7 +264,11 @@ function checkOneMethod(project Project, functionsByName FunctionByNameMap, conf
 		let implSig = try project.funcSignatures.get(qualifiedName) otherwise panic("checkOneMethod: '{String.from(qualifiedName)}' is in the module but has no funcSignatures entry")
 		if not signatureMatches(project, method: method, typeName: conformance.typeName, implFunc: implFunc, implSig: implSig) 'mismatch'
 			wrongSignature.push("{formatActualSignature(project, methodName: method.name, implFunc: implFunc, implSig: implSig)} (expected {formatInterfaceMethodSignature(method)})")
-		end 'mismatch'
+		end 'mismatch' else 'signatureOk'
+			// The THROWS relation is checked only once the structural signature agrees, mirroring the oracle's
+			// `else if (method.ThrowsTypeName != null)` branch: on a shape mismatch the throws question is noise.
+			validateThrowsConformance(project, conformance: conformance, collectedMethod: collectedMethod, implFunc: implFunc)
+		end 'signatureOk'
 		return
 	end 'present'
 
@@ -275,6 +279,50 @@ function checkOneMethod(project Project, functionsByName FunctionByNameMap, conf
 	end 'ownMethod'
 	missing.push("{expected} (from {String.from(collectedMethod.sourceInterfaceName)})")
 end 'checkOneMethod'
+
+// ⭐⭐ **THE THROWS RELATION BETWEEN AN INTERFACE METHOD AND ITS IMPL, CHECKED IN BOTH DIRECTIONS (P1.7a
+// slice 2b-v).** A witness dispatch picks its ABI from the INTERFACE — a `throws` method is dispatched as
+// the dual-register `witnessTryCall`, a non-throwing one as the single-register `witnessCall` — while the
+// callee returns through the ABI its OWN declaration chose. The two must agree, and only this check can
+// make them:
+//
+//   • **impl does not throw where the interface does** — the reference oracles' rule, wording and all
+//     (`ValidateThrowsConformance` / v1's `validateThrowsConformance`). The `try` at the dispatch would
+//     branch on an error-flag register the callee never wrote, i.e. on whatever the ABI left in R10.
+//   • **impl throws where the interface does not** — ⚠ **shv2's OWN rule; NEITHER reference has it**, and
+//     the divergence is deliberate. Both oracles check the relation only when the interface method declares
+//     `throws`, so an impl that throws under a non-throwing interface method is accepted by both. In shv2
+//     that program dispatches through the single-register `witnessCall` — the caller reads the primary
+//     register and nothing reads the flag — so a thrown error is SILENTLY DISCARDED and the impl's
+//     throw-path primary comes back as a real answer. That is precisely the defect this slice exists to fix,
+//     arriving from the other side, and it is not diagnosable anywhere else: at the dispatch the compiler
+//     sees only the interface, and at the impl it sees only the type.
+//
+// The two thrown TYPES are NOT required to match, which is both oracles' rule and is kept: the flag is
+// re-published verbatim, so a MISMATCH is caught where it can do harm — the `try`'s propagate path, whose
+// E3059 compares the caught type against the enclosing function's.
+function validateThrowsConformance(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, implFunc IrFunction)
+	let interfaceThrows = throwsClauseIsThrowing(collectedMethod.method.throwsClause)
+	let implThrows = throwsClauseIsThrowing(implFunc.throwsTypeName)
+	if interfaceThrows == implThrows 'agree'
+		return
+	end 'agree'
+
+	let message = missingThrowsMessage(conformance.typeName, collectedMethod: collectedMethod) if interfaceThrows else unexpectedThrowsMessage(conformance.typeName, collectedMethod: collectedMethod, implFunc: implFunc)
+	reportPositioned(project, code: ErrorCode.semanticPartialInterfaceImpl, message: message, line: conformance.nameLine, column: conformance.nameColumn, filePath: conformance.filePath)
+end 'validateThrowsConformance'
+
+// The interface requires a throws clause the impl does not declare — the oracles' wording verbatim.
+function missingThrowsMessage(typeName ByteArray, collectedMethod CollectedInterfaceMethod) returns String
+	let required = try throwsClauseName(collectedMethod.method.throwsClause) otherwise panic("missingThrowsMessage: the interface method's clause is `none` — only the throwing side reaches this message")
+	return "Method '{String.from(typeName)}.{String.from(collectedMethod.method.name)}' must throw '{required}' as required by interface '{String.from(collectedMethod.sourceInterfaceName)}'"
+end 'missingThrowsMessage'
+
+// The impl declares a throws clause the interface does not — shv2's own rule (see the header above).
+function unexpectedThrowsMessage(typeName ByteArray, collectedMethod CollectedInterfaceMethod, implFunc IrFunction) returns String
+	let declared = try throwsClauseName(implFunc.throwsTypeName) otherwise panic("unexpectedThrowsMessage: the impl's clause is `none` — only the throwing side reaches this message")
+	return "Method '{String.from(typeName)}.{String.from(collectedMethod.method.name)}' throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it non-throwing — a witness dispatch of a non-throwing interface method reads no error flag, so the error would be silently dropped"
+end 'unexpectedThrowsMessage'
 
 // Does the impl method's signature match the interface method's? Instance methods carry `__self` at
 // position 0, dropped on both sides; a `Self` in the interface substitutes the conforming type. Each side's

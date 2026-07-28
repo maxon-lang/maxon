@@ -1003,6 +1003,26 @@ export union StdOp
 	// arithmetic and a future POSIX backend supplies only the read. Full call-barrier metadata: it IS an
 	// indirect call once lowered, exactly like `osReadClock`.
 	osReadWallClock(ftPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- P1.7a slice 2b-v: the THROWING fused witness call ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past the P1.5 IOCP ops, per the band-append invariant: every
+	// stale `… to switch` / `… to osFreePages` full-tail range arm now FAILS TO COMPILE until it is
+	// consciously extended, which is the mechanism that finds every site obliged to classify or lower it. Its
+	// `category: call` places it logically in the call band, independent of this tail position.
+	//
+	// ⭐ **`witnessTryCall : witnessCall :: tryCall : call`.** It is `witnessCall` — the fused
+	// load-and-call whose callee is a MEMORY OPERAND, `(*[witnessAddr + 24 + 8*methodIndex])(args…)`, so the
+	// loaded function pointer never occupies a virtual register — plus the ONE thing `tryCall` adds to
+	// `call`: a second result, `errorFlagId`, captured from the dual-register error ABI (R10 / x9). Every
+	// other field (`resultType`, `argFloatMask`, `args`) and every metadata bit is `witnessCall`'s verbatim,
+	// so it shares that op's argument marshalling and result capture rather than re-deriving them.
+	//
+	// `resultId` and `errorFlagId` are DEFS; `witnessAddr` and `args` are USES. `args` stays LAST (the ONE
+	// managed field, receiver at index 0) — a second managed field on a union variant corrupts the
+	// bootstrap's synthesized destructor — and `errorFlagId` is a scalar `ValueId`, so the shape is
+	// unchanged in that respect. x64 only at this slice: arm64/wasm loudly refuse, exactly as they refuse
+	// `witnessCall` (the witness blob rides the x64 `funcAbs64InRdata` relocation).
+	witnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1149,6 +1169,10 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// the allocator would free its register before the OS call writes through it — the same obligation
 		// `osReadClock`'s two addresses carry. It defines nothing.
 		osReadWallClock(ftPtr) then referenced.insert(ftPtr)
+		// P1.7a slice 2b-v: the THROWING witness call reads exactly what `witnessCall` reads — the witness-table
+		// address and its arguments — through the SAME helper. Both its results (`resultId`, `errorFlagId`) are
+		// defs, exactly as `tryCall`'s two are.
+		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1296,6 +1320,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`'s arm: the out-param address is the one read, so it is the
 		// one rewrite. It defines nothing.
 		osReadWallClock(ftPtr) gives StdOp.osReadWallClock(remappedValue(ftPtr, subst: subst))
+		// The exact mirror of `collectStdOpUses`'s `witnessTryCall` arm: rewrite the witness-table address and the
+		// args; both results are defs and every remaining field is metadata carried through.
+		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 
