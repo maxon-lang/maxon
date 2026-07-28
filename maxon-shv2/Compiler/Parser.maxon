@@ -8646,14 +8646,17 @@ export type Parser
 		end 'mayConflictWithABorrow'
 
 		let rhsStart = self.pos
-		let value = try self.parseExpression(func, block: block)
+		let parsedValue = try self.parseExpression(func, block: block)
 		// Was the RHS a bare reference to a local (`s = t`)? Only then can this assignment MOVE an owned
 		// value out of a source binding; every other RHS is a consume. Captured off the token position
 		// so `reassignBindingValue` gates the poison's owned-set scan on it (see `rhsWasBareLocalReference`).
 		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 
-		let valueTag = self.tagOf(value)
+		// ⭐ AN ASSIGNMENT IS A CHARACTER-EXPECTING POSITION when the binding declares one, so a character
+		// literal RHS adopts that type — `found = 'z'` into a `Character` var. See `characterizedOperand`.
 		let declaredTag = maxonTypeTag(binding.varType)
+		let value = try self.characterizedOperand(parsedValue, expected: declaredTag, start: rhsStart, pastEnd: self.pos)
+		let valueTag = self.tagOf(value)
 
 		// ⭐ The binding KEEPS ITS DECLARED TYPE ACROSS A REBIND, so `x = 3` into a `var x = 0.0` rebinds
 		// to a WIDENED float and not to the raw integer. Without the coercion the binding silently became
@@ -9431,7 +9434,10 @@ export type Parser
 		// in. `return a or b` evaluates the `or` across three blocks and leaves control in
 		// the merge; terminating `block` instead would leave the merge unterminated (a
 		// backend panic) and put the `ret` on a path the value it returns does not reach.
-		let retVal = try self.parseExpression(func, block: block)
+		// ⭐ A `return` IS A CHARACTER-EXPECTING POSITION when the function declares one, so a character
+		// literal adopts that type — `return 'a'` from `returns Character`. See `characterizedOperand`.
+		let retStart = self.pos
+		let retVal = try self.characterizedOperand(try self.parseExpression(func, block: block), expected: maxonReturnTypeTag(func.maxonReturnType), start: retStart, pastEnd: self.pos)
 
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be RETURNED** — the env it carries is dropped at
 		// this frame's scope exit, so handing it back would leave the caller a closure whose environment is
@@ -16194,9 +16200,14 @@ export type Parser
 	// No arm rejects anything any more. The old "a comparison is not a value" throw is gone
 	// with the machinery that forced it.
 	function parseBinary(func IrFunction, minPrec InfixPrecedence) returns ValueId throws ParseError
+		// The LEFT operand's first token, remembered before it is parsed — the twin of `rhsStart` below,
+		// and read for the same kind of question: `characterizedOperand` needs to know whether an operand
+		// was written as a lone character LITERAL, which is a fact about its tokens, not about its value.
+		let leftStart = self.pos
 		var left = try self.parseCast(func)
 
 		while true 'climb'
+			let opIndex = self.pos
 			let opTok = self.current()
 
 			let prec = infixPrecedence(opTok.kind)
@@ -16232,8 +16243,13 @@ export type Parser
 			let right = try self.parseBinary(func, minPrec: prec + 1)
 			let rhsEnd = self.pos
 
+			// ⭐ A COMPARISON IS A CHARACTER-EXPECTING POSITION when its other side is a `Character`, so a
+			// character LITERAL on either side adopts that type — `c == 'a'` and `'a' == c` alike. Asked of
+			// both operands, each against what the OTHER is; see `characterizedOperand`.
 			if comparisonOperator(opTok.kind) 'comparison'
-				left = try self.emitCompare(left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
+				let leftValue = try self.characterizedOperand(left, expected: self.tagOf(right), start: leftStart, pastEnd: opIndex)
+				let rightValue = try self.characterizedOperand(right, expected: self.tagOf(leftValue), start: rhsStart, pastEnd: rhsEnd)
+				left = try self.emitCompare(leftValue, rhs: rightValue, op: infixCmpOp(opTok.kind), opTok: opTok)
 				continue
 			end 'comparison'
 
@@ -17711,6 +17727,52 @@ export type Parser
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 		end 'decoded'
 	end 'parseCharLiteral'
+
+	// ⭐⭐ **A CHARACTER LITERAL IN A CHARACTER-EXPECTING POSITION IS A `Character`** — literal-directed
+	// typing, asked at the one kind of site that can unambiguously ask for it.
+	//
+	// shv2 types a character literal BY ITS BYTE WIDTH (`parseCharLiteral`): one byte materializes as an
+	// `int`, wider as a `Character`. That rule is what lets `cp == '-'`, `cp - '0'` and `if c >= '0'` mean
+	// what they say without the context-dependent literal typing both reference compilers need for their
+	// `BuiltinCharLiteral` coercion. Its GAP is the other direction, and it was a shipped defect rather
+	// than a divergence: `c == 'a'` inside `for c in s` — the very next thing anyone writes after the loop
+	// itself — was refused as *"cannot compare Character with int"* where the oracle counts the a's.
+	//
+	// The cure is NOT general int↔Character coercion. It is exactly this: when a position unambiguously
+	// expects a Character and the operand is WRITTEN AS A CHARACTER LITERAL, the literal adopts that type.
+	// Its bytes are known at parse time, so nothing is inferred — the token is materialized as the other
+	// thing it could always have been, and every position that does not expect a Character is untouched
+	// (`char-literal-to-int.md`'s cases all compare against an `int`, and keep their integer literal).
+	//
+	// ⚠ **IT KEYS ON THE OPERAND BEING A LITERAL, NEVER ON THE TWO TAGS.** `s == c` stays a type error —
+	// a String binding is no character literal — so nothing here makes two different tags comparable, and
+	// `character-ownership.md`'s `string-and-character-do-not-compare` still pins it.
+	//
+	// ⚠ **THE ALREADY-EMITTED INTEGER `literal` OP IS LEFT BEHIND, UNREFERENCED.** The operand was parsed
+	// before its position's expectation was known, and a Character is a POINTER to a byte record where an
+	// int literal is the byte itself — so there is nothing to retag, only a different op to emit. The dead
+	// one costs a `const` that no reader names, which is precisely what `foldConstOperands`'s const DCE
+	// collects; it happens only on a character literal that meets a Character.
+	function characterizedOperand(value ValueId, expected ValueTypeTag, start TokenIndex, pastEnd TokenIndex) returns ValueId throws ParseError
+		if expected != ValueTypeTag.character or self.tagOf(value) == ValueTypeTag.character 'notACharacterPosition'
+			return value
+		end 'notACharacterPosition'
+
+		// The operand must be the character literal ITSELF and nothing else: exactly one token, and that
+		// token a `charLiteral`. A compound expression that merely CONTAINS one (`'a' + 1`) spans more
+		// than one token and is left alone, which is what keeps this a rule about literals.
+		if pastEnd != start + 1 or self.kindAt(start) != TokenKind.charLiteral 'notALoneLiteral'
+			return value
+		end 'notALoneLiteral'
+
+		let tok = self.tokenAt(start)
+		match decodeCharLiteral(tok.value) 'decoded'
+			byte(b) then return self.emitCharacterLiteral(byteSlice(b as Byte), range: SourceRange.ofToken(tok))
+			multiByte(bytes) then panic("characterizedOperand: the {bytes.count()}-byte literal '{String.from(tok.value)}' already materialized as a Character, so the tag guard above cannot have let it reach here")
+			empty then panic("characterizedOperand: an empty character literal is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
+			badEscape(text) then panic("characterizedOperand: the unknown escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
+		end 'decoded'
+	end 'characterizedOperand'
 
 	// ⭐ Append the `stringLiteral` op a multi-byte character literal materializes as, and mint a
 	// `character`-tagged value for it. It is the SAME op a String literal emits — one immortal `.rdata`

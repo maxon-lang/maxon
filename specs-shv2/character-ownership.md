@@ -422,3 +422,107 @@ end 'main'
 ```stdout
 中 3
 ```
+
+<!-- test: character-literal-adopts-the-character-type -->
+### A character literal in a Character-expecting position IS a Character
+
+shv2 types a character literal by its BYTE WIDTH — one byte is an `int`, wider is a `Character` — which
+is what keeps `cp == '-'` and `cp - '0'` meaning what they say. The gap that leaves is the other
+direction: `c == 'a'` inside `for c in s`, the very next thing anyone writes after the loop. A literal
+in a position that unambiguously expects a Character now adopts that type, on both sides of a
+comparison, on an assignment's right-hand side, and at a `return`.
+
+```maxon
+function firstAscii() returns Character
+	return 'a'
+end 'firstAscii'
+
+function main() returns ExitCode
+	var n = 0
+	for c in "banana" 'scan'
+		if c == 'a' 'hit'
+			n = n + 1
+		end 'hit'
+	end 'scan'
+
+	var m = 0
+	for c in "banana" 'scan2'
+		if c != 'a' 'miss'
+			m = m + 1
+		end 'miss'
+	end 'scan2'
+
+	var w = 0
+	for c in "héllö théré" 'scan3'
+		if 'é' == c 'lhs'
+			w = w + 1
+		end 'lhs'
+	end 'scan3'
+
+	var found = 'é'
+	found = 'z'
+	print("{n} {m} {w} {found} {firstAscii()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3 3 z a
+```
+
+<!-- test: an-int-position-keeps-its-integer-literal -->
+### A character literal meeting an `int` is still an int
+
+The rule is keyed on the position expecting a Character, never on the two tags — so nothing about
+`char-literal-to-int.md`'s codepoint arithmetic moves.
+
+```maxon
+function main() returns ExitCode
+	let cp = 45
+	var hits = 0
+	if cp == '-' 'dash'
+		hits = hits + 1
+	end 'dash'
+	if 'A' == 'A' 'bothLiterals'
+		hits = hits + 1
+	end 'bothLiterals'
+	let digit = 53 - '0'
+	print("{hits} {digit}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 5
+```
+
+<!-- disabled-test: character-literal-at-a-call-argument -->
+<!-- A CHARACTER LITERAL AT A `Character` PARAMETER. The other three Character-expecting positions (comparison, assignment, `return`) adopt the literal's type; a call ARGUMENT cannot yet, and the blocker is measured: the parse-time whole-program index records parameter NAMES but no parameter TYPES (`mixDeclaration` hashes a declaration's name and RETURN type only), so at the moment an argument is parsed there is nothing to ask what the parameter expects. Measured: `isTarget(c, target: 'a')` is `E3005: argument type mismatch for 'target': expected 'Character', got 'int'`, while the same call with a multi-byte literal (`target: 'ö'`) compiles — see `character-parameter-and-equality`. Closing it means giving `ProgramSignatures` a per-parameter fact, which is a whole-program query sitting under a per-file one (cost is O(functions x params) x files) whose hash keys every parse memo -->
+### Character literal at a call argument
+
+```maxon
+function isTarget(c Character, target Character) returns bool
+	return c == target
+end 'isTarget'
+
+function main() returns ExitCode
+	var hits = 0
+	for c in "banana" 'each'
+		if isTarget(c, target: 'a') 'match'
+			hits = hits + 1
+		end 'match'
+	end 'each'
+	print("{hits}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
