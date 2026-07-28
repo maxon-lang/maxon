@@ -243,9 +243,10 @@ end 'classRowTotal'
 
 // The register FILE a VIRTUAL operand's value lives in — its declared class.
 //
-// ⚠ ONLY VIRTUAL OPERANDS REACH HERE, AND THAT IS WHY IT NEEDS NO TARGET FILE. Both callers guard on
-// `operandIsVirtual` before asking (`recordDefLiveAfter` and `addReuseTransientPressure` — the census
-// tracks only value ids, never physical registers), so a PHYSICAL operand is a bug, not the "classify
+// ⚠ ONLY VIRTUAL OPERANDS REACH HERE, AND THAT IS WHY IT NEEDS NO TARGET FILE. Every caller guards on
+// `operandIsVirtual` before asking (`recordDefLiveAfter`, `addOpTransientPressure` and its
+// `anyVirtualUseDiesAt` — the census tracks only value ids, never physical registers), so a PHYSICAL
+// operand is a bug, not the "classify
 // a register number" case this used to also handle. It did so against the x64 boundary
 // unconditionally (`regClassOf(operandRegister(o).rawValue)`), which would misclassify an arm64 GPR in
 // x19..x28 and panic on an arm64 SIMD number (>31) that `X64Register.fromRawValue` cannot name — a
@@ -3156,11 +3157,20 @@ end 'opClobberMask'
 //    materialized and never read, which is why an INDIRECT call panicked one arity EARLIER than a
 //    direct one: `specs-shv2/register-pressure.md`.)
 //
-//    It is charged only when the op frees NO register of its own. A def may take the register of a use
-//    that DIES here (`allocateDef`'s `dyingRegs`), so `lea dead, a, b` with `a` dying costs nothing
-//    extra; with both uses live-after it costs one. And a def that is LIVE after the op is charged
-//    NOTHING here — it is already counted as live-before at the next op (or as live-out of the block),
-//    which is where this model has always billed it, so nothing that compiled before moves.
+//    It is charged only when the op frees NO register OF THE DEF'S OWN FILE. A def may take the
+//    register of a use that DIES here (`allocateDef`'s `dyingRegs`), so `lea dead, a, b` with `a` dying
+//    costs nothing extra; with both uses live-after it costs one. And a def that is LIVE after the op is
+//    charged NOTHING here — it is already counted as live-before at the next op (or as live-out of the
+//    block), which is where this model has always billed it, so nothing that compiled before moves.
+//
+//    ⚠ THE FILE IS PART OF "FREES A REGISTER", AND LEAVING IT OUT LEFT THE PANIC REACHABLE. `dyingRegs`
+//    names every dying operand's register whatever file it is in, but `allocateDef` ORs
+//    `fullRegisterMask() and not classPool` into `blocked`, so a def can only ever inherit one of its
+//    OWN file's. A dying XMM therefore frees nothing a dead GPR def can use: `cvttsd2si dead, x` with
+//    `x` dying still wants a fifteenth GPR, and a class-blind test scored it zero and walked the
+//    colorer straight back into `chooseRegister`'s panic — the same wrong answer this correction
+//    exists to remove, one register file over. (Measured both ways: 14 live ints + `x as int`, and 16
+//    live floats + `y as float`.)
 //
 // `liveRow` must still be the live-AFTER set (call it BEFORE the backward step, where a live-after
 // input is present and a use has not yet been re-added). Def-ness, reuse-ness and the input value all
@@ -3192,7 +3202,7 @@ export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, cl
 		if bitsetTest(liveRow, base: 0, bit: operandValueId(o)) 'defLiveAfter'
 			return
 		end 'defLiveAfter'
-		if anyVirtualUseDiesAt(buf, liveRow: liveRow) 'thisOpFreesARegister'
+		if anyVirtualUseDiesAt(buf, liveRow: liveRow, classes: classes, class: defClass) 'thisOpFreesARegister'
 			return
 		end 'thisOpFreesARegister'
 		classRowSet(pressureOut, class: defClass, value: classRowGet(pressureOut, class: defClass) + 1)
@@ -3200,17 +3210,18 @@ export function addOpTransientPressure(buf OperandList, liveRow BitWordArray, cl
 	end 'each'
 end 'addOpTransientPressure'
 
-// Does any of `buf`'s VIRTUAL uses die at this op — i.e. is it absent from the live-AFTER row? That is
-// exactly the set `BlockDeaths` hands the colorer as `dyingRegs`, whose registers a def of the same op
-// may take. One dying use is enough: no `TargetOp` defines more than one value, so one freed register
-// covers the whole demand.
-function anyVirtualUseDiesAt(buf OperandList, liveRow BitWordArray) returns bool
+// Does any of `buf`'s VIRTUAL uses OF `class` die at this op — i.e. is it absent from the live-AFTER
+// row? Those are the registers `BlockDeaths` hands the colorer as `dyingRegs` MINUS the ones
+// `allocateDef`'s class filter then puts straight back into `blocked`, so this is exactly the set a def
+// of `class` can actually inherit. One dying use is enough: no `TargetOp` defines more than one value,
+// so one freed register covers the whole demand.
+function anyVirtualUseDiesAt(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, class RegClass) returns bool
 	for o in buf 'each'
-		if (not operandIsDef(o)) and operandIsVirtual(o) 'virtualUse'
+		if (not operandIsDef(o)) and operandIsVirtual(o) and operandClass(o, classes: classes) == class 'virtualUseOfThisFile'
 			if not bitsetTest(liveRow, base: 0, bit: operandValueId(o)) 'diesHere'
 				return true
 			end 'diesHere'
-		end 'virtualUse'
+		end 'virtualUseOfThisFile'
 	end 'each'
 	return false
 end 'anyVirtualUseDiesAt'

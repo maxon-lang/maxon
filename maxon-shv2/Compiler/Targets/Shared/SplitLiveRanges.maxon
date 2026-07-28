@@ -2024,63 +2024,79 @@ function applyOneUseToPressure(index UseIndex, pressure PressureIndex, class Reg
 	pressure.addDelta(blockLocal, slot: slot, class: class, by: sign * operandContribution(true, liveAfter: liveOut or readAgainHere))
 end 'applyOneUseToPressure'
 
-// Restate the transient at the op sitting in `slot` — the incremental twin of `addOpTransientPressure`,
-// answering the same two questions off the USE INDEX rather than off a live row, because a repair has no
-// live row to read.
+// Restate the transient at the op sitting in `slot` — the incremental repair of the quantity
+// `addOpTransientPressure` decides.
+//
+// ⭐ IT DOES NOT DECIDE ANYTHING. It MATERIALIZES this op's live-AFTER row and hands it to
+// `addOpTransientPressure`, which is the ONE place a transient is defined. The only thing that
+// legitimately differs between the full build and a repair is HOW "is `v` live after this point?" is
+// answered — off a swept live row there, off the USE INDEX here, because a repair has no live row —
+// and that is now the only thing this function does.
+//
+// ⚠ IT USED TO RE-DERIVE THE DECISION ITSELF, and that is a fact written down twice, in two files,
+// where nothing made the copies agree: the same question ("is the def dead? does the op free a
+// register?") asked once against a bitset and once against the index. `VerifyIncrementalSplit` exists
+// to CATCH that divergence, but it is compiled out by default, so a clause added to one copy and not
+// the other ships as a wrong pressure figure and a colorer panic. The class filter on "frees a
+// register" had to be applied to both copies on the day it was found, which is the divergence
+// arriving on schedule.
+//
+// The row is materialized for THIS OP'S OPERANDS ONLY — every value the decision can consult (the def,
+// the reuse input, the virtual uses) is an operand of this op — and cleared again the same way, so it
+// stays O(operands) and the shared scratch row is zero on the way in and on the way out, exactly as
+// `sweepBlockPressure` requires and leaves it.
 //
 // ⚠ IT IS RE-DERIVED UNCONDITIONALLY, and the narrowing that used to stand here would now be WRONG. The
 // reuse-copy transient depends on ONE value (the reuse input), so an op whose reuse input the split
 // never named could be skipped; the DEAD-DEF transient depends on the op's def AND on every one of its
 // virtual uses — which is exactly the set of values that makes `refreshTransientsNaming` visit this op
 // at all. Every visit is therefore a genuine trigger and there is nothing left to narrow away.
-function refreshTransientAt(module TargetModule, liveness LivenessResult, pressure PressureIndex, blockLocal CfgIndex, slot PressureSlot, buf OperandList)
+function refreshTransientAt(module TargetModule, liveness LivenessResult, pressure PressureIndex, blockLocal CfgIndex, slot PressureSlot, sweep PressureSweepScratch)
+	var buf = sweep.buf
 	let op = try module.ops.get(pressure.opAtSlot(slot)) otherwise panic("refreshTransientAt: the op at slot {slot} is not in module.ops")
 	targetOpOperands(op, buf: buf)
 
+	// The value space grows with every split, so the shared row follows it before anything is set in it.
+	sweep.widenRow(liveness.wordsPerRow)
+	var liveRow = sweep.liveRow
+
+	var virtualDefs = 0 as RegCount
+	for o in buf 'materializeLiveAfter'
+		if not operandIsVirtual(o) 'physical'
+			continue
+		end 'physical'
+
+		if operandIsDef(o) 'aDef'
+			virtualDefs = virtualDefs + 1
+		end 'aDef'
+		if liveAfterSlot(liveness, pressure: pressure, v: operandValueId(o), blockLocal: blockLocal, slot: slot) 'liveAfterTheOp'
+			bitsetAdd(liveRow, base: 0, bit: operandValueId(o))
+		end 'liveAfterTheOp'
+	end 'materializeLiveAfter'
+
+	// `addOpTransientPressure` takes the FIRST virtual def and stops, so with two of them the answer
+	// depends on which one the operand model happens to list first. No TargetOp defines more than one
+	// value, so this is unreachable — and it is asserted rather than assumed, because the day one does,
+	// a transient would be decided from an arbitrary operand, silently. It rides the walk above, which
+	// already visits every operand, so it costs nothing to make.
+	if virtualDefs > 1 'aSecondVirtualDef'
+		panic("refreshTransientAt: the op at slot {slot} of block {blockLocal} carries {virtualDefs} virtual defs — `addOpTransientPressure` reads exactly one, because no TargetOp defines more than one value")
+	end 'aSecondVirtualDef'
+
+	classRowZero(sweep.opPressure)
+	addOpTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: sweep.opPressure)
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
-		pressure.putTransient(blockLocal, slot: slot, class: regClassAt(classOrdinal), value: 0)
+		let class = regClassAt(classOrdinal)
+		pressure.putTransient(blockLocal, slot: slot, class: class, value: classRowGet(sweep.opPressure, class: class) as PressureDelta)
 	end 'eachClass'
 
-	var haveDef = false
-	var defOperand = 0 as Operand
-	for o in buf 'eachOperand'
-		if not (operandIsDef(o) and operandIsVirtual(o)) 'notAVirtualDef'
-			continue
-		end 'notAVirtualDef'
-		if haveDef 'aSecondVirtualDef'
-			// `addOpTransientPressure` takes the FIRST virtual def, so with two of them the answer depends on
-			// an operand this repair may know nothing about. No TargetOp defines more than one value, so this
-			// is unreachable — and it is asserted rather than assumed, because the day one does the transient
-			// would be repaired from the wrong operand, silently.
-			panic("refreshTransientAt: the op at slot {slot} of block {blockLocal} carries more than one virtual def — the incremental transient repair reads exactly one, because no TargetOp defines more than one value")
-		end 'aSecondVirtualDef'
-		haveDef = true
-		defOperand = o
-	end 'eachOperand'
-
-	if not haveDef 'noTransientHere'
-		return
-	end 'noTransientHere'
-
-	let defClass = operandClass(defOperand, classes: liveness.valueClass)
-	if operandIsReuseDef(defOperand) 'reuseDef'
-		if liveAfterSlot(liveness, pressure: pressure, v: operandReuseInputValueId(defOperand, buf: buf), blockLocal: blockLocal, slot: slot) 'inputOutlivesTheOp'
-			pressure.putTransient(blockLocal, slot: slot, class: defClass, value: 1)
-		end 'inputOutlivesTheOp'
-		return
-	end 'reuseDef'
-
-	if liveAfterSlot(liveness, pressure: pressure, v: operandValueId(defOperand), blockLocal: blockLocal, slot: slot) 'defLiveAfter'
-		return
-	end 'defLiveAfter'
-	for o in buf 'eachUse'
-		if (not operandIsDef(o)) and operandIsVirtual(o) 'virtualUse'
-			if not liveAfterSlot(liveness, pressure: pressure, v: operandValueId(o), blockLocal: blockLocal, slot: slot) 'thisOpFreesARegister'
-				return
-			end 'thisOpFreesARegister'
-		end 'virtualUse'
-	end 'eachUse'
-	pressure.putTransient(blockLocal, slot: slot, class: defClass, value: 1)
+	// Back to zero in O(operands) — the row is SHARED with the full sweep, which requires it zero on
+	// entry, and a bit left standing here is a value the next block's sweep would believe live.
+	for o in buf 'clearLiveAfter'
+		if operandIsVirtual(o) 'virtual'
+			bitsetRemove(liveRow, base: 0, bit: operandValueId(o))
+		end 'virtual'
+	end 'clearLiveAfter'
 end 'refreshTransientAt'
 
 // Is `v` live AFTER the op sitting in `slot`? The general form of the lookahead
@@ -2123,15 +2139,15 @@ end 'refreshExitLeaves'
 // Re-derive the transients of every op the split can have moved one at: the ops that name the victim or
 // a fresh id NOW, plus the ops it spliced in (which carry none — they are a store, a reload or a
 // constant materialization, none of them two-address).
-function refreshSplitTransients(module TargetModule, liveness LivenessResult, pressure PressureIndex, split SplitValues, buf OperandList)
-	refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: split.victim, buf: buf)
+function refreshSplitTransients(module TargetModule, liveness LivenessResult, pressure PressureIndex, split SplitValues, sweep PressureSweepScratch)
+	refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: split.victim, sweep: sweep)
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
-		refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: f, buf: buf)
+		refreshTransientsNaming(module, liveness: liveness, pressure: pressure, v: f, sweep: sweep)
 	end 'eachFresh'
 end 'refreshSplitTransients'
 
 // Every op that names `v` as an operand — its def and its op uses — restated.
-function refreshTransientsNaming(module TargetModule, liveness LivenessResult, pressure PressureIndex, v ValueId, buf OperandList)
+function refreshTransientsNaming(module TargetModule, liveness LivenessResult, pressure PressureIndex, v ValueId, sweep PressureSweepScratch)
 	let index = liveness.useIndex
 	let useSites = index.useCount(v)
 	if useSites > 0 'used'
@@ -2140,7 +2156,7 @@ function refreshTransientsNaming(module TargetModule, liveness LivenessResult, p
 			let blockLocal = index.useBlockAt(record)
 			match index.useKindAt(record) 'kind'
 				edge then break 'kind'
-				op then refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: index.usePosAt(record)), buf: buf)
+				op then refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: index.usePosAt(record)), sweep: sweep)
 			end 'kind'
 			record = index.nextUseOf(record)
 		end 'eachUse'
@@ -2149,7 +2165,7 @@ function refreshTransientsNaming(module TargetModule, liveness LivenessResult, p
 	if index.defKindOf(v) != ValueDefKind.opDef 'noDefiningOp'
 		return
 	end 'noDefiningOp'
-	refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: index.defBlockOf(v), slot: pressure.defSlotOf(v), buf: buf)
+	refreshTransientAt(module, liveness: liveness, pressure: pressure, blockLocal: index.defBlockOf(v), slot: pressure.defSlotOf(v), sweep: sweep)
 end 'refreshTransientsNaming'
 
 // ==========================================================================
@@ -2788,7 +2804,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	for f in split.freshFrom upto split.freshTo 'eachFresh'
 		applyValueToPressure(liveness, pressure: scratch.pressure, v: f, adding: true)
 	end 'eachFresh'
-	refreshSplitTransients(module, liveness: liveness, pressure: scratch.pressure, split: split, buf: scratch.sweep.buf)
+	refreshSplitTransients(module, liveness: liveness, pressure: scratch.pressure, split: split, sweep: scratch.sweep)
 
 	// The three things the dirty-block sweep used to produce, each restated against what actually moved.
 	rebuildForbiddenOf(module, liveness: liveness, pressure: scratch.pressure, w: split.victim, paramCross: paramCross, dirty: dirty)

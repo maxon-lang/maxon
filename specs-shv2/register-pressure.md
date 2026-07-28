@@ -889,6 +889,93 @@ end 'main'
 105
 ```
 
+<!-- test: dead-def-inherits-only-its-own-register-file -->
+A dead def may inherit the register of a use that DIES at the same op — but only one of its OWN FILE.
+`dyingRegsAt` names every dying operand's register whatever file it is in, yet `allocateDef` ORs
+`fullRegisterMask() and not classPool` into `blocked`, so a dying XMM frees nothing a GPR def can take.
+Here `x as int` is a `cvttsd2si` whose GPR def is read by nothing and whose only dying operand is the
+FLOAT `x`: fourteen live parameters plus that dead GPR def still want fifteen GPRs, and scoring the
+dying float as "this op frees a register" put the colorer back into `chooseRegister`'s panic — the
+dead-def correction's own wrong answer, one register file over. Result is `sum(1..14) = 105`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, x float) returns int
+	let unused = x as int
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, x: 1.5)
+end 'main'
+```
+```exitcode
+105
+```
+
+<!-- test: dead-def-inherits-only-its-own-register-file-float -->
+<!-- targets: x64-windows, x64-linux -->
+The MIRROR of `dead-def-inherits-only-its-own-register-file`, so the correction is pinned in the file it
+is easier to forget. `y as float` is a `cvtsi2sd` whose XMM def is read by nothing and whose only dying
+operand is the INT `y`; sixteen live float parameters plus that dead XMM def want a seventeenth XMM
+against the sixteen-register float pool. A class-blind "does this op free a register?" scored the dying
+GPR as relief and panicked the colorer in the XMM file. Gated to x64 because it counts against x64's
+sixteen-deep float pool. Every argument is `1.0`, so the sum is `16.0`.
+```maxon
+function g(f0 float, f1 float, f2 float, f3 float, f4 float, f5 float, f6 float, f7 float, f8 float, f9 float, f10 float, f11 float, f12 float, f13 float, f14 float, f15 float, y int) returns float
+	let unused = y as float
+	return f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15
+end 'g'
+
+function main() returns ExitCode
+	return g(1.0, f1: 1.0, f2: 1.0, f3: 1.0, f4: 1.0, f5: 1.0, f6: 1.0, f7: 1.0, f8: 1.0, f9: 1.0, f10: 1.0, f11: 1.0, f12: 1.0, f13: 1.0, f14: 1.0, f15: 1.0, y: 3) as int as ExitCode
+end 'main'
+```
+```exitcode
+16
+```
+
+<!-- test: dead-def-past-the-arm64-pool-across-register-files -->
+The arm64 twin of `dead-def-inherits-only-its-own-register-file`, at the arm64 cliff: twenty-six live
+integer parameters plus a dead GPR def whose only dying operand is a float. It panicked `chooseRegister`
+on arm64 for exactly the reason the x64 case did, so the class filter is pinned on BOTH lanes of the
+shared pressure model rather than on the one that happened to be probed. Ungated: on x64 the same
+program is well past the pool and the splitter relieves it cold, which is worth pinning too. The
+trailing arguments are zero so the sum fits an exit code. Result is `sum(1..20) = 210`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, x float) returns int
+	let unused = x as int
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, x: 1.5)
+end 'main'
+```
+```exitcode
+210
+```
+
+<!-- test: dead-reuse-def-costs-one-copy-not-two -->
+The dead-def transient and the reuse-copy transient are the SAME register and must be charged ONCE.
+`a1 * a2` is a two-address `imul` whose dest is a REUSE of `a1`, and `a1` is live after (the `return`
+reads it), so the allocator materializes `mov dest, a1` before the op — and the dest is then read by
+nothing. That is one extra register at one point, not two: `addOpTransientPressure` answers in the reuse
+arm and stops, rather than charging the copy and then charging the dead def again. Double-charging would
+not crash, it would over-split — a store and a reload this program does not need. Result is
+`sum(1..14) = 105`.
+```maxon
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
+	let unused = a1 * a2
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14)
+end 'main'
+```
+```exitcode
+105
+```
+
 <!-- test: dead-def-parameter-past-the-arm64-pool -->
 The arm64 twin of the boundary. arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), so the dead-def
 cliff sits at 27 where x64's sits at 15 — twenty-six live parameters plus one dead materialization
