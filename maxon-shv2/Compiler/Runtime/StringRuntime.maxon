@@ -1239,9 +1239,29 @@ end 'buildBoolToString'
 // disagree about what a record owns. Leave it wrong and the external buffer is never freed (a leak, exit
 // 101) or an interior pointer is released (an over-release, also 101).
 //
-// Growth is EXACT (`requiredLen`): the specs pin the output, the byte length and the absence of a leak,
-// none of which a geometric policy would change — and exact size keeps the alloc/free count trivially
-// balanced. Geometric growth is a later optimization with no consumer here.
+// ⭐⭐ **GROWTH IS GEOMETRIC (`2 * requiredLen`), AND IT HAD TO BECOME SO: EXACT GROWTH MADE THE
+// COMMONEST STRING IDIOM IN THE LANGUAGE QUADRATIC.** Exact growth means the buffer is full the instant
+// it is published, so the NEXT append fails `capacity < requiredLen` again, reallocates, and re-copies
+// every byte written so far — `var s = ""` plus a loop of appends copies O(n²) bytes and makes one
+// allocation per append. MEASURED, before this, with `Testing/ladders/genstring.sh <n> data-appendloop`:
+// 2,048 → 32,768 chunks of 9 bytes read **×3.94 ×4.07 ×3.82 ×3.88** per doubling — a clean quadratic —
+// and the top rung took **5.0 seconds to build a 288 KB string**. Doubling the ask makes the copies
+// geometric and the whole build amortized O(n); the same ladder reads ×2 after.
+//
+// ⭐ **`2 * requiredLen` RATHER THAN `max(requiredLen, 2 * capacity)`, AND THE REASON IS THE BRANCH.**
+// `requiredLen = selfLen + otherLen >= selfLen`, so doubling it is unconditionally big enough for both the
+// bytes being written now and a growth factor over what was there before — no comparison, no extra block,
+// no phi, in a runtime graph that gets real register allocation. A `max` would buy a tighter bound on one
+// enormous single append and pay for it on every ordinary one.
+//
+// ⚠ **NOTHING ELSE READS `capacity@16` AS "THE SIZE OF THE ALLOCATION"** — that is what makes an
+// over-allocation safe rather than merely convenient. `emitBufferNotOwned` asks only its SIGN, and
+// `2 * requiredLen` of a non-negative sum stays non-negative; `emitBufferCannotHold` asks only whether it
+// is below the next `requiredLen`; and the release path takes `buffer@0` (the pointer `__mm_alloc`
+// returned) through `emitOwedAllocationBase`, so `__mm_free` reclaims whatever was actually allocated and
+// never consults this field. `length@8` remains the byte count every reader uses, so the slack bytes are
+// invisible to `print`, to `==`, and to every method in this file. The alloc/free COUNT is still trivially
+// balanced — one allocation per detach, as before; there are simply far fewer detaches.
 function buildStrAppend(module StdModule)
 	var func = IrFunction.createFromStd(StrAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -1282,15 +1302,18 @@ function buildStrAppend(module StdModule)
 	let base = emitOwedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: selfPtr, slots: stringBufferSlots(), ids: ids)
 
 	// baseJoin: allocate a fresh external buffer (destructor 0 — raw bytes), copy the live bytes across,
-	// and publish it. `parent@32` returns to `NoOwedAllocation`: a record that has just copied its bytes
+	// and publish it. The ask is GEOMETRIC — see the growth note above — and the SAME value is both
+	// allocated and published as `capacity@16`, so the field says exactly how far the next append may
+	// write in place. `parent@32` returns to `NoOwedAllocation`: a record that has just copied its bytes
 	// into an allocation of its own owes nothing to anyone else, exactly as `__arr_cow_detach` leaves it.
 	let zeroDtor = emitConst(module, block: baseJoin, value: 0, ids: ids)
+	let grownLen = emitBin(module, block: baseJoin, a: requiredLen, b: requiredLen, opcode: StdBinOpcode.add, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(requiredLen, second: zeroDtor)))
+	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(grownLen, second: zeroDtor)))
 	let copied = ids.mint()
 	module.appendOp(baseJoin, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(newBuf, second: selfBuf, third: selfLen)))
 	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringBufferOffset, value: newBuf)
-	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringCapacityOffset, value: requiredLen)
+	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringCapacityOffset, value: grownLen)
 	let noParent = emitConst(module, block: baseJoin, value: NoOwedAllocation, ids: ids)
 	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringParentPtrOffset, value: noParent)
 	module.setTerminator(baseJoin, op: StdOp.branch(blit.id))

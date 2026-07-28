@@ -35,6 +35,40 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genwitnessargs.sh <conformers> <methods> <args> <decl\|reverse> <out>` | the same shape as `genwitness.sh`, but every interface method takes `args` LABELLED parameters | the ARGUMENT LIST behind a witness call's parentheses (P1.7a slice 2b-vi) — `parseWitnessMethodOnValue` → `parseCallArgs` → `slottedWitnessArgs` → `slotCallArgs` → `argSlotPosition`. `genwitness.sh` holds that arity at ONE, so it cannot see this axis at all; `ScaleCorpus` has **zero `where`** in it and cannot see either. `decl`/`reverse` is the LABEL-ORDER control. See below. |
 | `genfsprobe.sh <iterations> <out>` | ⚠ **the odd one out: a program to RUN, not one to compile** | what one `File.delete` / `File.exists` / `FilePath.changeExtension` COSTS, in nanoseconds and in allocations — so a per-compile cost paid in SYSCALLS can be priced at all. See below. |
 | `genfor.sh <loops> <depth> <accesses> <array\|range\|noloop> <out>` | `loops/depth` functions, each one NEST of `depth` `for` loops with `accesses` binding accesses per level | `for … in` (P1.8 slice A) and the four doors of its ITERATION LOCK. `ScaleCorpus` generates **no `for` at all** — the construct did not parse until that commit — so every column of a default run reads a flat Δ0 for it. **Its knobs are independent** (program size is `loops × accesses`, so `depth` moves alone) and `noloop` is the CONTROL: the same accesses through the same doors with not one `for` in the program. See below. |
+| `genstring.sh <n> <sites-*\|data-*> <out>` | ⚠ **TWO families, and `<n>` means a different thing in each**: `sites-*` is a COMPILE ladder (`<n>` = method CALL SITES, four per function); `data-*` is a RUN ladder (`<n>` = DOUBLINGS of the subject string, the program timing only the operation and printing a CSV line) | the seven byte/ASCII `String` methods (P1.8 Slice C). `ScaleCorpus` emits **not one** of `startsWith`/`endsWith`/`contains`/`toLower`/`toUpper`/`replace`/`split` at any rung — dump it and the complete method-call inventory is `create push count get append scaleBy probe byteLength slice reserve clone firstVal` — so the family is structurally invisible to a default run. ⚠ **It is NOT blind to `String`**, which is the trap: 756 `==` sites plus `append`/`byteLength`/interpolation across the six rungs mean a Slice C change to the SHARED `__str_eq` loop DOES read, and that non-zero looks like coverage of a rung it does not cover. `sites-control` is the CONTROL (the P1.2 surface only, no Slice C method), and `data-appendloop` measures the P1.2 `append` this generator has to route around. See below. |
+
+### `genstring.sh` — the two questions, and the ONE that was not about Slice C at all
+
+**The `sites-*` family answers the mandate's question and answers it dully**: predicates, case, replace and
+split all read **×1.90–×1.99 per doubling of the call-site count out to 2,048 sites**, in allocations, bytes
+and CPU alike, converging on ×2.00 from below the way a linear term under a fixed per-compile constant does.
+Nothing in the parser dispatch, the eight runtime graphs or the `RuntimeUsage` closure is superlinear in the
+number of call sites, and `sites-control` A/B'd against the parent compiler is **+0 allocations on a program
+with no `String` in it at all** — the family levies no per-call-op tax on programs that never use it.
+
+**The `data-*` family is where the readings are.** All four realistic shapes are linear — `split` **×2.04**
+across a 16× span of SEGMENTS (so its search genuinely advances rather than restarting at 0 per segment, and
+`__arr_push`'s growth is amortized), `replace` **×1.96** across 16× MATCHES (the two-pass count really is
+sizing one allocation), `toUpper` **×2.00** and a realistic `contains` **×2.04** in haystack bytes. Two are not:
+
+- **`data-findquad` — `__str_find` IS A NAIVE SEARCH and has a genuine O(hay × needle) term.** Measured
+  **×3.92 ×4.15 ×3.95 ×4.14** on the worst case that defeats the first-byte fast reject: an all-`a` haystack
+  against an all-`a` needle with one trailing `b`, at HALF the haystack's length. ⚠ **It needs a needle whose
+  LENGTH SCALES WITH THE HAYSTACK** — a fixed needle makes this a constant factor and no curve appears, which
+  is exactly why `data-find` (a needle absent from the haystack) reads a clean ×2 and is not evidence about
+  this. Filed, not fixed: a real fix is a two-way/KMP search, and `stdlib/String.maxon`'s `findIn` — the
+  reference both other compilers run — has the same shape.
+- **`data-appendloop` — NOT A SLICE C SHAPE, and it was the biggest thing here.** `__str_append` used to
+  reallocate to the EXACT required length, so `var s = ""` plus a loop of appends re-copied everything at
+  every step: **×3.94 ×4.07 ×3.82 ×3.88**, and **5.0 seconds to build a 288 KB string** from 32,768 chunks.
+  Growth is geometric (`2 * requiredLen`) as of the same commit that added this generator, and the same ladder
+  now reads **×1.82 ×2.21 ×1.77 ×1.94** with the top rung at **0.98 ms** — a 5,118× fall on the shape, for a
+  flat +103 allocations per compile.
+
+⚠ **The `data-*` setup builds its subject with SELF-append (`s.append(s)`), not a chunk loop**, and that is
+load-bearing rather than cute: it doubles the length per step, so the setup is O(final length) whatever the
+append policy is. Written against a chunk loop, every one of the readings above would have carried the
+`appendloop` quadratic inside it.
 
 ### `genwitness.sh` — two knobs onto ONE list, and a control that turned out to be a different control
 

@@ -821,10 +821,12 @@ abcabc
 Appending nothing must change nothing observable, and must leave the receiver in a state a LATER append can
 still grow correctly. Both halves are load-bearing and neither is obvious: a String whose bytes are INLINE
 in its own record cannot be written in place at all (its buffer is part of its box), so even an empty append
-detaches it onto a private buffer sized to the exact length — after which the next append has NO slack and
-must grow again. A `capacity` test that only asked whether the length increased would let that second append
-blit past the buffer it just sized, so this case is what pins the growth test to the capacity rather than to
-the length. shv2-authored (the corpus has no empty-append case); the expected output is the bootstrap
+detaches it onto a private buffer — and `u`, which detaches at length ZERO, gets a buffer of zero bytes
+(`__str_append` asks for `2 * requiredLen`, and twice nothing is nothing), so its next append has no slack
+and must grow again. A `capacity` test that only asked whether the length increased would let that second
+append blit past the buffer it just sized, so this case is what pins the growth test to the capacity rather
+than to the length — and it is the one shape that still reaches a second consecutive detach now that growth
+is geometric. shv2-authored (the corpus has no empty-append case); the expected output is the bootstrap
 oracle's.
 ```maxon
 function main() returns ExitCode
