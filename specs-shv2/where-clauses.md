@@ -981,3 +981,56 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be constrained with 'where T is Comparable'
 ```
+
+<!-- disabled-test: witness-mutation-of-let-argument-refused -->
+<!-- P1.7a-witness-mutation: E3019 is never ASKED at a witness dispatch. `parseWitnessMethodOnValue`
+     fills `argImmutableNames` and discards it, because the mutation summary is keyed by CALLEE and a
+     witness dispatch has no single callee to ask — under dictionary-passing any conformer could be the
+     impl. Answering it needs a design ruling (mutability declared on the interface method, or the union
+     over every registered conformer), so it is a rung of its own, not a fix smuggled into 2b-vi.
+     MEASURED on `main` @153d04620 AND on this branch, identically: the program below compiles with NO
+     diagnostic and exits 9 — the `let` array really is grown, and the caller sees the grown array with
+     its count and elements intact. So this is an OVER-ACCEPTANCE, not a miscompile and not memory-
+     unsafe; that is why it could be deferred at all. The blame position below is the one the transitive
+     rule produces for the concrete case (`specs-shv2/parameter-mutation.md` transitive-let-array-error)
+     and is PROJECTED, not observed — no compiler emits it yet. Re-derive it when the rung lands. -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+interface Grower
+	function grow(dest IntArray)
+end 'Grower'
+
+type Pusher implements Grower
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{ n: n }
+	end 'create'
+	export function grow(dest IntArray)
+		dest.push(9)
+	end 'grow'
+end 'Pusher'
+
+type Box uses T where T is Grower
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function run(dest IntArray)
+		self.item.grow(dest)
+	end 'run'
+end 'Box'
+
+typealias PusherBox = Box with Pusher
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let b = PusherBox.create(Pusher.create(1))
+	b.run(a)
+	return try a.get(0) otherwise 55
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:33:2: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+```
