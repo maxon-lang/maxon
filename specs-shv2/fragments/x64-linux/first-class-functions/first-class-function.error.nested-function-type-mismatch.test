@@ -1,0 +1,22 @@
+// Test: first-class-function.error.nested-function-type-mismatch
+
+typealias Integer = int(i64.min to i64.max)
+typealias Real = float(f64.min to f64.max)
+typealias InnerA = function(x Integer) returns Integer
+typealias InnerB = function(x Real) returns Real
+typealias Outer = function(f InnerA) returns Integer
+
+function runner(f InnerB) returns Integer
+	return 1
+end 'runner'
+
+function drive(o Outer) returns Integer
+	return 2
+end 'drive'
+
+function main() returns ExitCode
+	return drive(runner) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:18:9: argument type mismatch for 'o': expected 'fn(InnerA) returns int', got 'fn(InnerB) returns int'
