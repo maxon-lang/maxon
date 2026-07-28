@@ -8858,6 +8858,27 @@ export type Parser
 			return value
 		end 'noWidening'
 
+		// ⚠⚠ **THE RULE CANNOT TELL THE TWO `named` KINDS APART, AND ONLY AN INVARIANT HELD ELSEWHERE DOES.**
+		// `widensIntToFloat` answers TRUE for a `named` value meeting a `float`, because `tagIsIntegral`
+		// answers TRUE for every `named`. That is exactly RIGHT for a ranged INT alias — `var z = 0.0` then
+		// `z = aCount` must convert — and CATASTROPHIC for a ranged FLOAT alias, whose value is already an
+		// f64: a `cvtsi2sd` over its bit pattern is a silent wrong answer by ~300 orders of magnitude, not a
+		// diagnostic. One tag, two representations, and the RULE sees only the tag.
+		//
+		// What actually keeps them apart is that no float-alias VALUE ever carries a `named` tag: every
+		// producer lifts it to `float` first — `resolveFloatAliasType` at a parameter binding, a call result
+		// and a closure capture, `ProgramSignatures.fieldTypeOf`'s float-alias arm at a field. So a `named`
+		// float alias arriving HERE means a producer was added without that lift, which is a compiler bug and
+		// never a program's.
+		//
+		// It is a PANIC and not a comment because the comment is what failed: `widensIntToFloat`'s own header
+		// offered the `ok` verdict as the safeguard, and the verdict is no safeguard at all —
+		// `checkDeclaredType(named, float)` answers `ok` and hands the conversion straight through. The next
+		// rung to mint a float-alias value gets a named site instead of a number.
+		if self.tagOf(value) == ValueTypeTag.named and self.namedIsFloatAlias(self.valueNameId(value)) 'unliftedFloatAlias'
+			panic("Parser.coerceToDeclared: value v{value} is tagged `named` for the ranged FLOAT alias '{String.from(self.internedName(self.valueNameId(value)))}' and reached the int->float widening — every producer of a float-alias value must lift its tag through `resolveFloatAliasType` or `ProgramSignatures.fieldTypeOf` first, or this emits a `cvtsi2sd` over an f64 bit pattern")
+		end 'unliftedFloatAlias'
+
 		return self.promoteToFloat(value, opTok: anchor)
 	end 'coerceToDeclared'
 

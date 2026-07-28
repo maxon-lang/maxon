@@ -348,10 +348,21 @@ end 'checkDeclaredType'
 // literal (the host's own int→f64). Both are idempotent, so neither caller has to work out whether it is
 // already holding a float.
 //
-// ⚠ **PRECONDITION: the verdict is already `ok`.** This asks the DIRECTION and nothing else, so it must
-// never be the gate on its own. `tagIsIntegral` answers `true` for a `named` ranged alias — a tag that is
-// overloaded by design — and only `checkDeclaredType` knows whether such a value may meet the declared
-// type at all. Asked ahead of the verdict, this would convert values the language rejects outright.
+// ⚠ **PRECONDITION 1: the verdict is already `ok`.** This asks the DIRECTION and nothing else, so it must
+// never be the gate on its own. Asked ahead of the verdict, it would convert values the language rejects
+// outright.
+//
+// ⚠⚠ **PRECONDITION 2, AND THE VERDICT DOES NOT SUPPLY IT: the VALUE's tag must already be lifted.**
+// `tagIsIntegral` answers `true` for EVERY `named` ranged alias, float ones included, so this answers
+// `true` for a float-alias value meeting a `float` — and `checkDeclaredType(named, float)` answers `ok`,
+// so the verdict waves it through. An int alias converting is correct; a FLOAT alias converting is a
+// `cvtsi2sd` over an f64 bit pattern, a silent wrong answer. The rule cannot separate them: `named` is
+// one tag over both representations, and this file has no alias registry to ask.
+//
+// What separates them is a PARSER invariant — every producer of a float-alias value lifts its tag to
+// `float` (`Parser.resolveFloatAliasType`, `ProgramSignatures.fieldTypeOf`) — and `Parser.coerceToDeclared`
+// PANICS if an unlifted one reaches it. Do not restate that safeguard as "the verdict handles it": it does
+// not, and saying so here is what a reader would believe.
 //
 // ⚠ **AND IT IS NOT THE COMPARISON RULE.** `p.v == 3` stays E3005 (`Parser.emitCompare` states why): a
 // promotion inside a comparison is invisible, because the result is a bool either way. Only the sites
