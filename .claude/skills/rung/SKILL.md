@@ -1,6 +1,6 @@
 ---
 name: rung
-description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, independent review, optimization pass, gate battery, cross-target gate (every LOCAL target; remote/arm64 is synced separately by hand), rebase, fast-forward merge, push. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
+description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, scale-test ladder read (optimizer agent on trigger), independent review, gate battery, cross-target gate (every LOCAL target; remote/arm64 is synced separately by hand), rebase, fast-forward merge, push. Prefer a WIDER WAVE over slicing. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
 ---
 
 # Run one rung of the plan
@@ -124,6 +124,22 @@ mkdir -p temp
 grep -n '^FAIL' temp/shv2-spec.log               # expect no hits
 ```
 
+> ### ⚠ ALWAYS BUILD. The SUITE is the part you may skip — never the BUILD.
+>
+> **`bin/maxon.exe` and `maxon-shv2.exe` are BOTH gitignored, and nothing rebuilds them** — not a
+> checkout, not a rebase, not a worktree. A stale binary is the single most common way this step
+> starts from a lie, and it lies in *both* directions. *(Measured 2026-07-27 on a clean `main`: the
+> tree's `maxon-shv2.exe` read **71 FAILED**; a 13 s rebuild read **1922/0**. The same day, `bin/maxon.exe`
+> was stale against `maxon-sharp/` sources on that same clean tree.)* The build is 13 s. It is never
+> the thing to save.
+>
+> **The SUITE (17 s) is skippable in exactly one case, and it is the same argument step 11 already
+> makes:** if `origin/main` has not moved since the previous rung's step-8 battery, and the tree is
+> clean, then this is byte-for-byte the tree that battery ran on and re-running it only re-derives a
+> known-green answer. Check it explicitly — `git fetch origin && git status --short && git rev-parse
+> HEAD origin/main` — and **say in the rung report which baseline you are standing on.** If anything
+> moved, or you cannot show it did not, run the suite.
+
 ⚠ **REDIRECT EVERY SUITE RUN TO A FILE — never pipe one through `head`/`tail`/`grep`.** A pipe decides
 what to keep *before* you know what failed, so the failure detail is gone by the time you want it and the
 only way back is a **second full run**. Redirected, the whole run is on disk the instant it ends: grep it
@@ -161,6 +177,19 @@ the one who must state this plan to the user and integrate against it. **You own
 > CHECK — a wrong `file:line` fails the moment the implementer opens the file, and a wrong spec port list
 > fails when the specs do not go RED before the wave (step 2's ⭐ section). A cheaper model on a
 > judgment-free, verifiable, highest-volume job is the trade this step was built for.
+>
+> ### ⭐ ONE SURVEY PER RUNG FAMILY — a slice does NOT re-survey
+>
+> **The survey belongs to the RUNG, not to the slice.** P1.7's ten slices each re-read the same v1
+> register-allocator and array files to re-derive the same facts; that is nine fan-outs bought and
+> thrown away. **Run the survey ONCE, when the rung is first opened**, write it into the plan (the
+> per-layer table below IS the durable form), and cut each slice's brief from it — the same way step
+> 5 cuts each agent's brief from the plan rather than making the agent re-derive one.
+>
+> **Re-survey only what actually moved:** a slice that reaches a mechanism the original survey did not
+> cover gets a *targeted* survey of that mechanism, not a fresh sweep of both references. And if a
+> slice discovers the survey was WRONG at the code, that is the step-5 STOP condition — it invalidates
+> the plan for every remaining slice, not just that one.
 >
 > ⚠ **Do NOT extend this to `maxon-rung-implementer`, `maxon-rung-optimizer`, or
 > `maxon-rung-reviewer`.** Their model is declared in their own frontmatter and it is not Sonnet —
@@ -223,10 +252,47 @@ section). Survey `/specs` yourself and hand the list down.
 - **Never plan to disable a case the rung should pass.** For each one that stays disabled, name the
   **missing mechanism** and the rung that supplies it.
 
-**A rung may be too big for one wave, and the survey — the length of that spec list included — is what
-tells you.** If it is, **SLICE it and say so**: land the cheap, high-unlock, low-risk part first (P1.0d's
-front-end slice unlocked 1080 corpus cases with no new IR ops and no codegen), and keep the deep part (a
-new register bank for floats) as its own slice. **Each slice runs the full loop below.**
+### ⭐⭐ WIDEN THE WAVE BEFORE YOU SLICE — they are different axes, and only one is expensive
+
+**A rung may be too big for one wave. There are TWO ways to answer that, and this skill used to name
+only one — which is why rungs have been sliced far harder than they need to be** (P1.7 ran **ten**
+slices; P1.8 was cut A/B/C/D before a line was written).
+
+| | |
+|---|---|
+| **Widening the WAVE** — more agents, in parallel, in ONE loop | Costs one more brief. The loop below runs **once**: one survey, one contract, one optimizer, one reviewer, one gate battery, one cross-target run, one merge, one PLAN.md update. Bounded by integration at ~4–5 agents |
+| **SLICING the rung** — sequential slices, each its own loop | **Multiplies the entire loop.** Every slice pays a fresh survey, a fresh optimizer agent, a fresh reviewer agent, a full gate battery, a cross-target run, a rebase/merge/push and a PLAN.md edit — plus a coordinator plan-and-integrate cycle, which is the serial bottleneck |
+
+**A slice is the most expensive thing this process can buy, and until now its price was written down
+nowhere while two separate lines argued for more of them.** Both of those lines are monotone — a survey
+always finds more, and a spec port list only ever gets longer — so an agent applying them faithfully
+slices every time. That is the bug.
+
+**⇒ Default to ONE rung with a WIDER WAVE. Slice only when the wave cannot absorb the work**, which
+means one of exactly three things:
+
+1. **A hard dependency** — part B codes against a contract part A defines (new IR ops, a new dialect
+   op, a layout descriptor). B cannot start until A's contract is real, so parallelism is unavailable.
+2. **A risk split** — one part lands unattended, the other needs a **design ruling** or is likely to
+   HALT. Slicing keeps the cheap, certain unlock from being held hostage. *(This is P1.0d's precedent,
+   and note what actually justified it: the front-end part needed **no new IR ops and no codegen** —
+   a mechanism boundary, not a size boundary. It unlocked 1080 corpus cases on its own.)*
+3. **The exclusive file lists genuinely collide** — two parts must both own the same file, so they
+   cannot be concurrent agents at all (rule 1: one file, one owner, per wave).
+
+**⛔ NOT reasons to slice:**
+
+- **A long spec port list.** Spec count is not risk. Two hundred cases over ONE mechanism is one rung
+  with one wave — the list is the acceptance criteria, not a workload estimate.
+- **"The rung is N mechanisms."** N mechanisms with disjoint file lists is an N-agent wave.
+- **Wanting a green checkpoint sooner.** That is what the wave's per-agent `--filter` runs are for.
+- **The survey came back big.** The survey's job is to find everything; it has no opinion on batching.
+
+**If you do slice, say which of the three reasons applies, per slice, in the plan.** A slice without
+one of those three named is a slice that should have been another agent in the same wave.
+
+**Each slice runs the full loop below — that is exactly why there should be few of them.** What a
+slice does NOT re-run is the survey: see the sharing rule in the box at the top of this step.
 
 ## 3. Write the contract (if the rung needs new IR ops)
 
@@ -264,16 +330,57 @@ Every brief MUST carry:
 silently redesign. The plan is a contract too, and a plan that survives contact only because nobody said
 otherwise is worth nothing.
 
-## 6. Optimize — `maxon-rung-optimizer`
+## 6. Optimize — the LADDER READ is per rung; the `maxon-rung-optimizer` AGENT is TRIGGERED
 
-Hunts **unscalable (superlinear) algorithms**, read off `scale-test`'s doubling ladder. Commits separately
-on the same branch.
+**Two different things, and only one of them belongs on every rung.**
 
-**Scope the pass to the rung.** A rung that adds a new pass, a new IR op, or a new collection the compiler
-indexes by gets the full superlinear hunt. A pure front-end slice that adds none of those gives the hunt
-structurally nothing to find — there `scale-test` is informational, so the optimizer confirms no new
-superlinear structure crept in, reads one `scale-test`, and is done. It still runs; it just does not
-over-invest where there is nothing to invest in.
+### 6a. The `scale-test` read — ALWAYS, and it is YOURS (≈17 s)
+
+**Run `scale-test`, read the doubling ladder, and record what moved and WHY in
+`docs/optimization-log.md`.** This never batches to a phase boundary, and the reason is not thoroughness
+— it is that **attribution is only available now.** The instrument sees exactly WHAT moved and can never
+see why; ten rungs later, neither can you. The memory columns are exact and bit-for-bit reproducible, so
+any movement is real; the CPU column moves only outside its noise band.
+
+**≈17 s, since `DefaultRepeatCount` became 1** (user ruling 2026-07-27). It had been 3 — measured 51 s
+and 48 s — and the repeats were buying this read nothing: the per-phase **allocation tables are
+BYTE-IDENTICAL** at `--repeat=1` and `--repeat=3`, which is what the runner's own header already
+promised. Cost is linear in the count, so 3 → 1 is 51 s → 17 s.
+
+⚠ **Raise it back with `--repeat=3` when you are A/B-ing two binaries' CPU** — there the effect can be
+a few percent and a single sample cannot carry it. ⚠ **And CPU rows in `docs/optimization-log.md` from
+before 2026-07-27 are MINIMA while later ones are single samples**, so they sit ~10% apart for no
+reason in the compiler; the changeover is recorded in the log at that date. **Do not read that step as
+a regression.**
+
+### 6b. The `maxon-rung-optimizer` AGENT — when a trigger fires
+
+**A full superlinear hunt over a rung that added no algorithm has nothing to find.** Spend the agent when
+at least one of these is true:
+
+- the rung adds **a pass**, **an IR op**, or **a collection the compiler indexes by**;
+- **6a's ALLOCATION ladder shows a ratio ≳ 2.4 per doubling that you cannot explain** — an unexplained
+  bend is the strongest possible trigger, and it is *why* 6a is not batchable. ⚠ **Read the trigger off
+  the ALLOCATION column, not the CPU one.** Allocations are exact and bit-for-bit reproducible, so a
+  bend there is a fact. The CPU column at the default `--repeat=1` is a single sample: measured, its
+  per-phase exponents wobble up to **±0.5** run to run (`pruneDeadBlockArgs` read 1.91 and 2.41 on the
+  same unchanged compiler), so **a bare CPU ratio would spawn an optimizer agent to chase noise.** If
+  the bend is CPU-only — which is the real case the column exists for, since a cost that allocates
+  nothing is invisible to memory — **re-run with `--repeat=3` and confirm it reproduces before
+  spending the agent**;
+- the rung touches something the **"Measured debt"** list in PLAN.md's Workstream O names a re-measure
+  trigger for.
+
+Otherwise: state in the rung report that no trigger fired, and carry the hunt to **the phase-boundary
+sweep** — one optimizer agent over everything the phase landed, which sees cross-rung interactions a
+per-rung pass structurally cannot.
+
+⚠ **This is a batching decision, not a lowering of the bar. It does not touch the FIX rule:** a
+superlinearity you can *trigger on a realistic input* is still **fixed, not filed**, whoever finds it and
+whenever. And the two biggest finds in this repo's history — the `regalloc:splitting` quadratic and the
+cascade fixpoint duals — were both **read off the ladder**, which is the part that stays per-rung.
+
+When the agent does run, it commits separately on the same branch.
 
 ## 7. Review — `maxon-rung-reviewer`
 
@@ -284,7 +391,13 @@ Hunts **duplication** first, then latent bugs. Commits separately on the same br
 > a helper inlined at three call sites. **The duplication-focused review must be the LAST quality gate
 > before the merge**, and it reviews the optimizer's diff as well as the implementer's.
 
-**Both are mandatory, and both must be agents that did not write the code** (user directive). The
+**THE REVIEW IS MANDATORY ON EVERY RUNG — it does not batch, it is not triggered, and it is never
+skipped.** *(Step 6b makes the OPTIMIZER agent conditional. That is a batching decision about a hunt
+with nothing to find on a rung that added no algorithm. It says nothing about this step: the reviewer
+is the gate that has actually fired — a reachable SEGFAULT at P1.4b Wave 2c, a reachable PANIC at P1.7,
+the owned-String leak at P1.2 — every one in code an Opus implementer had just called done.)*
+
+**And whenever either runs, it must be an agent that did NOT write the code** (user directive). The
 independence is the point: the P1.0a review found two resource leaks and a cross-process duplicated
 selection rule that the author, re-reading their own work, had not seen.
 
@@ -310,6 +423,33 @@ size, so the check was re-deriving a known answer at full suite cost. Run the su
 
 **Check exit codes. Never grep for success.** Exit **101** = memory leak.
 
+### ⭐⭐ THE SPEC SUITE IS THE TESTING MECHANISM. A hand-run snippet is DISCOVERY, never EVIDENCE.
+
+**Probing is how the leak gate and the reachable-defect rule find things** — a `let m = f()` no
+committed test runs is exactly what step 9 asks you to go looking for, and `run_program` is the right
+tool for the looking. **But the probe is where the work STARTS, not where it ends.** The rule:
+
+> **A probe that finds something becomes a SPEC. A probe that finds nothing becomes a spec, or it never
+> happened.**
+
+- **A defect found by hand is reproduced as a failing spec case in `specs-shv2/` FIRST** — that is the
+  RED — and the fix is proven the moment that case goes GREEN. Never "fixed, then re-ran my snippet."
+  A snippet proves the bug is gone from your terminal; a spec proves it is gone from every future rung.
+- **"I verified it manually" is not a gate result and does not appear in a rung report.** It is
+  unreviewable, unrepeatable, and invisible to the cross-target lanes — a hand-run x64 snippet says
+  nothing about wasm or the Linux ELF, whereas a spec case runs on all three for free in step 10.
+- **The same holds for an agent's own claims** — an implementer or reviewer reporting "I confirmed X by
+  running a test program" has given you an anecdote. Ask where the case is. **If the behaviour is worth
+  checking twice, it is worth a spec; if it is not worth a spec, it was not worth checking.**
+- ⚠ **The exception is genuinely un-spec-able signal, and it is narrow:** a timing/scale measurement
+  (that is `scale-test`, step 6a), a `dump_ir` read while forming a hypothesis, or a debugger session.
+  Those inform the work; they never *stand in* for a case.
+
+**Why this is a speed issue and not just a rigor one:** hand-testing is re-run by hand on every
+iteration, by every agent, forever, and it decays to nothing the moment the session ends. A spec case is
+written once and then runs 1,900-strong in 17 seconds, on three targets, unattended, for the rest of the
+project. **Manual testing is the slowest possible way to check the same thing twice.**
+
 ## 9. The gate battery
 
 | Gate | |
@@ -319,7 +459,7 @@ size, so the check was re-deriving a known answer at full suite cost. Run the su
 | Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen** |
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
-| Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks |
+| Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks. ⇒ **and the probe that found it becomes a COMMITTED SPEC** — see step 8. That is what turns this gate's one-off discovery into coverage the next rung inherits |
 | Cross-target | **step 10** — every **locally runnable** target, not just this host's. The remote arm64 lanes are NOT in the rung gate (synced by hand — see step 10). Not run ⇒ SKIP (say which); ran-and-failed ⇒ **RED** |
 
 ## 10. The CROSS-TARGET gate — every LOCAL target, once, before it lands
@@ -331,13 +471,28 @@ through a run of rungs that were all green on x64-windows. **A green suite on on
 about one target.**
 
 ```
-scripts/cross-target-gate.sh > temp/cross-target.log 2>&1; echo "exit=$?"
+scripts/cross-target-gate.sh --skip-build --skip-host > temp/cross-target.log 2>&1; echo "exit=$?"
 tail -20 temp/cross-target.log        # the matrix; the suites behind it are in the same file
 ```
 
 Add `--csharp` if the rung touched `maxon-sharp/`. **Redirect it** — this one runs several suites, so a
 piped run that goes red costs *minutes* to re-run just to read what a file already had. Here `tail` is
 fine for the matrix precisely *because* the file is there for everything behind it.
+
+**`--skip-build --skip-host` is the RUNG invocation, and it costs no coverage.** Run straight, this
+script rebuilds both compilers and re-runs the HOST suite — all three of which step 8 just did on this
+identical tree. *(Measured 2026-07-27: `dotnet build` 45 s + `maxon build maxon-shv2` 13 s + host suite
+17 s, against x64-linux 52 s and wasm 27 s. Better than half the gate was re-derivation.)* Neither flag
+weakens anything: `--skip-build` **refuses outright** if any source is newer than the binary it would
+have built (it checks — it does not take your word for it), and `--skip-host` prints the host lane as
+**`PRIOR`**, not `SKIP`, naming what covered it. Drop both flags if you are running this gate on its own
+rather than after a step-8 battery.
+
+⚠ **NEVER run two suites in one tree at once** — not two lanes, not a gate alongside a hand-run suite.
+The runner shares `.spec-tmp`, and a race there produces a **FALSE RED** in a lane that is actually
+green. *(Measured while building this very gate path: an overlapping second run turned x64-linux into
+`FAIL exit 1`; run alone, the same tree and binary passed 1816/0.)* A red lane is a rung-halting gate,
+so a false one is expensive — if a lane goes red, **re-run that lane alone before reporting it.**
 
 It builds both compilers, then runs the shv2 suite **per target**, each behind the runner that target
 needs — natively for the host, WSL for the Linux ELF, the vendored wasmtime for the wasm component. It
@@ -398,6 +553,30 @@ Update `maxon-shv2/PLAN.md`: a rung's deliverable is the set of `disabled-test:`
 step 2, the rung is **not** complete (status **◑**, not ✅), and each residual must be written into the
 appropriate PLAN.md section (a future rung, a workstream residual, or the bootstrap-oracle / "Measured
 debt" notes), not left implicit. Record anything durable in memory.
+
+**Write the rung's DETAIL row. Do NOT hand-update the "Status at a glance" index — that is a
+PHASE-BOUNDARY job.** The index is a second copy of facts the detail rows already hold, and maintaining
+it per rung buys nothing but drift: as of 2026-07-27 its caption read *"snapshot 2026-07-22, suite head
+**1162/0**"* while the detail rows said **→1906** and the tree measured **1922/0** — three spellings of
+one number, which is this project's signature bug in its own plan. Its caption already concedes the
+detail wins. **So: per rung, update the detail. Per phase, regenerate the index from the detail rows in
+one pass** — and prefer any change that makes it *derived* rather than *transcribed*.
+
+## 13. At the PHASE boundary — the batched work
+
+**Four things are deliberately NOT per-rung, because doing them per rung buys re-derivation rather than
+coverage.** Run them once when a phase closes (or when a rung family finishes):
+
+| | |
+|---|---|
+| **The optimizer SWEEP** | One `maxon-rung-optimizer` over everything the phase landed — it sees cross-rung interactions a per-rung pass structurally cannot. Per-rung, the agent runs only on a **step 6b trigger**; the 20 s ladder READ stays per rung, always |
+| **The PLAN.md index table** | Regenerated in one pass from the detail rows (step 12) |
+| **The REMOTE arm64/Mac sync** | `scripts/cross-target-gate.sh --mac --require-mac` — already manual and periodic (step 10). A phase boundary is the natural moment. **A red lane here is a real defect, fixed, not filed as "the sync was red"** |
+| **The stale-golden sweep** | The measured rot: 288 stale + ~489 *absent* x64-linux goldens, and 317 stale arm64 C#-suite goldens. ⚠ **A MISSING golden never fails** — absence is invisible to every gate, so it can only be found by going to look |
+
+⚠ **Nothing that catches a DEFECT batches.** The reviewer, the leak/probe gate, the RED spec baseline,
+the host suite and the ladder read all stay per rung — a rung that lands wrong is the one failure this
+process exists to prevent, and every one of those has actually fired.
 
 ---
 

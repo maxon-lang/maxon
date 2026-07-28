@@ -72,8 +72,9 @@
 // shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
 // would report nothing at all about the five rungs that had already climbed.
 //
-// EACH RUNG IS COMPILED `--repeat` TIMES (`DefaultRepeatCount` of them unless asked otherwise), AND
-// THE TWO KINDS OF COLUMN TAKE OPPOSITE THINGS FROM THAT:
+// EACH RUNG IS COMPILED `--repeat` TIMES (`DefaultRepeatCount` — ONE — unless asked otherwise), AND
+// THE TWO KINDS OF COLUMN TAKE OPPOSITE THINGS FROM THAT. That asymmetry is why the default is 1 and
+// why raising it is a real thing to do; see `DefaultRepeatCount` for the measurement behind both:
 //
 //   - MEMORY needs exactly ONE repetition and gains nothing whatever from a second. Allocations,
 //     frees and bytes are bit-for-bit reproducible, so every repeat returns the same digits. They
@@ -85,13 +86,18 @@
 //     A mean would be dragged by a single stall, and a stall is exactly the thing that is not the
 //     compiler.
 //
-// The repeats therefore owe the memory columns something other than a second measurement: they are
-// CROSS-CHECKED FOR EQUALITY. Every phase's allocs/frees/bytes, and the emitted code size, must be
-// IDENTICAL in every repeat, and a difference is a BROKEN RUN rather than a number to average away —
-// a compiler that allocates differently for the same input has made every row of the trend log
-// suspect, and that log's whole claim is that a movement in those columns is real. The check costs
-// nothing and only a repeated compile can make it; the one-shot runner this replaced structurally
-// could not.
+// WHEN THERE IS MORE THAN ONE REPEAT, they owe the memory columns something other than a second
+// measurement: they are CROSS-CHECKED FOR EQUALITY. Every phase's allocs/frees/bytes, and the emitted
+// code size, must be IDENTICAL in every repeat, and a difference is a BROKEN RUN rather than a number
+// to average away — a compiler that allocates differently for the same input has made every row of
+// the trend log suspect, and that log's whole claim is that a movement in those columns is real. The
+// check costs nothing beyond the repeat itself, and only a repeated compile can make it.
+//
+// ⚠ AT THE DEFAULT OF 1 THIS CHECK DOES NOT RUN — there is nothing to compare against. That is the
+// deliberate cost of the default (see `DefaultRepeatCount`), and `--repeat=2` is the cheapest way to
+// buy it back. It is not the only line of defence: the fragment goldens prove byte-identical codegen
+// across ~1,900 spec tests every suite run, which is a far stronger determinism gate — it simply does
+// not look at allocation COUNTS, which is precisely the gap this check covered.
 
 // A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
 // directory.
@@ -263,11 +269,40 @@ export typealias RepeatCount = int(1 to 25)
 export let MinRepeatCount = 1 as RepeatCount
 export let MaxRepeatCount = 25 as RepeatCount
 
-// THREE, and the number is a judgement about NOISE, not a budget. One sample cannot tell a stall
-// from a cost; two cannot tell which of a disagreeing pair was the disturbed one; three is where a
-// minimum starts being stable in practice. It is paid on every rung, so it is the smallest count
-// that does the job rather than the most reassuring one.
-export let DefaultRepeatCount = 3 as RepeatCount
+// ONE (user ruling, 2026-07-27) — because the routine per-rung read is a MEMORY read, and MEASURED,
+// the repeats buy that read NOTHING.
+//
+// This was THREE, on a judgement about noise: one sample cannot tell a stall from a cost, two cannot
+// tell which of a disagreeing pair was disturbed, three is where a minimum starts being stable. That
+// reasoning is still correct ABOUT THE CPU COLUMN. What it got wrong is who pays: it is charged to
+// every rung of every run, while the column it defends is the one column this instrument reads
+// second.
+//
+// Measured on the same tree, `--repeat=3` vs `--repeat=1`:
+//   - the per-phase ALLOCATION tables are BYTE-IDENTICAL. Not close — identical, as the section
+//     above already promised they would be. The default was buying the memory columns nothing.
+//   - the run costs 51 s vs 17 s. Exactly 3x, because the cost is linear in this number.
+//   - the CPU column is where it shows: a single sample reads ~+9-10% higher at rung 5 (lex +9.7%,
+//     parse +10.2%, regalloc +8.9%), and per-phase exponents wobble up to +-0.5 (pruneDeadBlockArgs
+//     1.91 -> 2.41, semanticCheck 1.85 -> 2.32, runtimeAugment 1.95 -> 1.11).
+//
+// Against the only question a DOUBLING ladder asks — x2 is linear, x4 is quadratic — a +-0.5 wobble
+// still leaves 100% of margin, which is why 1 is enough for the routine read.
+//
+// ⚠ RAISE IT WHEN YOU ARE COMPARING TWO BINARIES' CPU. An A/B is exactly the case the minimum was
+// built for: there the effect under test can be a few percent, so a single sample cannot carry it.
+// (`--repeat=3` and `--repeat=5` are what the 2026-07-28 `phase:signatures` investigation ran, and
+// interleaving — not sample count alone — is what finally settled it.)
+//
+// ⚠ TWO THINGS ARE GENUINELY GIVEN UP HERE, and neither is hidden:
+//   1. The cross-repeat EQUALITY CHECK below cannot run at 1 — a repeated compile is the only thing
+//      that can make it. Codegen determinism is still gated, far more strongly, by the fragment
+//      goldens over ~1,900 spec tests; what goes unchecked is ALLOCATION-COUNT determinism, which
+//      those goldens do not see. `--repeat=2` restores the check for anyone who wants it.
+//   2. CPU rows logged before this date are MINIMA and rows after it are single samples, so they sit
+//      ~10% apart for no reason in the compiler. The changeover is recorded in
+//      docs/optimization-log.md at the date; do not read that step as a regression.
+export let DefaultRepeatCount = 1 as RepeatCount
 
 // The outcome of parsing `--repeat=<n>`. A union rather than a throw, for `--rungs`'s reason: the
 // caller is inside the argument loop and must neither diverge nor invent a value — `invalid` is

@@ -38,8 +38,27 @@
 # A target that RUNS and FAILS is a red gate — that is a rung-halting condition (see the rung
 # skill's HALT list), and no flag softens it.
 #
+# ⭐ THE RUNG PATH DOES NOT REDO WHAT STEP 8 JUST DID (2026-07-27).
+#
+# Run straight, this script rebuilds both compilers and runs the HOST suite — all three of which the
+# rung's own step-8 battery performed moments earlier, on the identical tree. Measured on that tree:
+# `dotnet build` + `maxon build maxon-shv2` (13 s) + the host suite (17 s) against a whole local
+# matrix of ~2.5 min. That is most of the gate spent re-deriving a known answer.
+#
+# So the rung path passes `--skip-build --skip-host`, and NEITHER weakens the matrix:
+#
+#   --skip-build  refuses outright if a SOURCE IS NEWER than the binary it would have built. It does
+#                 not trust you; it checks. (Measured 2026-07-27: a stale `maxon-shv2.exe` on a clean
+#                 tree read 71 FAILED, and a 13 s rebuild read 1922/0. A flag that merely believed
+#                 the caller would have shipped that.)
+#   --skip-host   prints the host row as PRIOR, not SKIP — the lane WAS verified, by step 8, on this
+#                 tree. SKIP means unverified and inflates the skip count; PRIOR means covered
+#                 elsewhere and names by what. Conflating them would be this repo's own signature
+#                 bug: one fact, two spellings.
+#
 # Usage:
 #   scripts/cross-target-gate.sh [--filter=PAT] [--csharp]
+#                                [--skip-build] [--skip-host]
 #                                [--mac] [--mac-host=user@host] [--require-mac]
 #
 # --mac turns the two remote arm64 lanes back on — that is the periodic manual sync. --mac-host= and
@@ -68,6 +87,10 @@ REQUIRE_MAC=0
 # OFF by default: the remote lanes are the periodic manual sync, not a per-rung gate. See the header.
 RUN_MAC=0
 RUN_CSHARP=0
+# Both OFF by default: run straight, this script is self-contained and assumes nothing was built or
+# run before it. The rung path turns them on because step 8 did both. See the header.
+SKIP_BUILD=0
+SKIP_HOST=0
 
 for arg in "$@"; do
 	case "$arg" in
@@ -76,6 +99,8 @@ for arg in "$@"; do
 		--mac-host=*) MAC_HOST="${arg#*=}"; RUN_MAC=1 ;;
 		--require-mac) REQUIRE_MAC=1; RUN_MAC=1 ;;
 		--csharp)     RUN_CSHARP=1 ;;
+		--skip-build) SKIP_BUILD=1 ;;
+		--skip-host)  SKIP_HOST=1 ;;
 		*) echo "cross-target-gate: unknown argument '$arg'" >&2; exit 2 ;;
 	esac
 done
@@ -102,6 +127,7 @@ SPEC_FILTER=()
 ROWS=()
 FAILED=0
 SKIPPED=0
+PRIOR=0
 
 row() { ROWS+=("$1|$2|$3"); }
 
@@ -115,6 +141,41 @@ skip_row() {
 	SKIPPED=$((SKIPPED + 1))
 }
 
+# A lane this run did not execute because something else ALREADY covered this exact tree. It is not
+# a SKIP — a skip means UNVERIFIED, and counting a covered lane as one would understate the matrix
+# just as badly as folding a real skip into the green overstates it. The detail must name the cover.
+prior_row() {
+	row "$1" "PRIOR" "$2"
+	PRIOR=$((PRIOR + 1))
+}
+
+# --- The --skip-build freshness guard ---
+#
+# Same contract the maxon-dev MCP server holds over its own binary: a tool that answers confidently
+# from stale code is worse than one that refuses. `--skip-build` is the only way into this script
+# without a build, so it is the only place the check can live.
+assert_fresh() {
+	local binary="$1" label="$2"
+	shift 2
+
+	if [ ! -x "$binary" ]; then
+		echo "cross-target-gate: --skip-build, but $label ($binary) does not exist." >&2
+		echo "  Drop --skip-build, or build it first." >&2
+		exit 2
+	fi
+
+	local newer
+	newer="$(find "$@" -type f \( -name '*.maxon' -o -name '*.cs' \) -newer "$binary" -print -quit 2>/dev/null)"
+
+	if [ -n "$newer" ]; then
+		echo "cross-target-gate: --skip-build, but $label is STALE — a source is newer than the binary." >&2
+		echo "  binary: $binary" >&2
+		echo "  newer:  $newer" >&2
+		echo "  Drop --skip-build. Every verdict below it would be about code you are not shipping." >&2
+		exit 2
+	fi
+}
+
 banner() {
 	echo
 	echo "=============================================================="
@@ -123,39 +184,55 @@ banner() {
 }
 
 # --- Build once. Every local target runs the SAME two binaries; only `--target` differs. ---
-banner "Building (bootstrap, then shv2)"
+if [ "$SKIP_BUILD" = 1 ]; then
+	banner "Build SKIPPED (--skip-build) — verifying the existing binaries are not stale"
 
-if ! dotnet build maxon-sharp; then
-	echo "cross-target-gate: the bootstrap failed to build — nothing downstream can be trusted." >&2
-	row "ALL" "FAIL" "bootstrap build failed"
-	printf '%s\n' "${ROWS[@]}"
-	exit 1
-fi
+	assert_fresh "$MAXON" "the bootstrap" maxon-sharp
+	assert_fresh "$SHV2" "shv2" maxon-shv2 stdlib
 
-if ! "$MAXON" build maxon-shv2; then
-	echo "cross-target-gate: shv2 failed to build." >&2
-	row "ALL" "FAIL" "shv2 build failed"
-	printf '%s\n' "${ROWS[@]}"
-	exit 1
+	echo "Both binaries are newer than every source under maxon-sharp/, maxon-shv2/ and stdlib/."
+else
+	banner "Building (bootstrap, then shv2)"
+
+	if ! dotnet build maxon-sharp; then
+		echo "cross-target-gate: the bootstrap failed to build — nothing downstream can be trusted." >&2
+		row "ALL" "FAIL" "bootstrap build failed"
+		printf '%s\n' "${ROWS[@]}"
+		exit 1
+	fi
+
+	if ! "$MAXON" build maxon-shv2; then
+		echo "cross-target-gate: shv2 failed to build." >&2
+		row "ALL" "FAIL" "shv2 build failed"
+		printf '%s\n' "${ROWS[@]}"
+		exit 1
+	fi
 fi
 
 # --- x64-windows / the host's own target ---
 HOST_TARGET="x64-windows"
 [ "$IS_WINDOWS" = 0 ] && HOST_TARGET="$(uname -m)-host"
 
-banner "$HOST_TARGET (native) — shv2 suite"
-if "$SHV2" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"}; then
-	row "$HOST_TARGET" "PASS" "shv2 suite"
+if [ "$SKIP_HOST" = 1 ]; then
+	banner "$HOST_TARGET (native) — PRIOR (--skip-host)"
+	echo "The host lane is the one target the rung's step-8 battery already proved, on this tree."
+	prior_row "$HOST_TARGET" "shv2 suite — covered by the step-8 battery"
+	[ "$RUN_CSHARP" = 1 ] && prior_row "$HOST_TARGET/csharp" "C# suite — covered by the step-8 battery"
 else
-	fail_row "$HOST_TARGET" "shv2 suite (exit $?)"
-fi
-
-if [ "$RUN_CSHARP" = 1 ]; then
-	banner "$HOST_TARGET (native) — C# bootstrap suite"
-	if "$MAXON" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"}; then
-		row "$HOST_TARGET/csharp" "PASS" "C# suite"
+	banner "$HOST_TARGET (native) — shv2 suite"
+	if "$SHV2" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"}; then
+		row "$HOST_TARGET" "PASS" "shv2 suite"
 	else
-		fail_row "$HOST_TARGET/csharp" "C# suite (exit $?)"
+		fail_row "$HOST_TARGET" "shv2 suite (exit $?)"
+	fi
+
+	if [ "$RUN_CSHARP" = 1 ]; then
+		banner "$HOST_TARGET (native) — C# bootstrap suite"
+		if "$MAXON" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"}; then
+			row "$HOST_TARGET/csharp" "PASS" "C# suite"
+		else
+			fail_row "$HOST_TARGET/csharp" "C# suite (exit $?)"
+		fi
 	fi
 fi
 
@@ -257,6 +334,13 @@ if [ "$SKIPPED" -gt 0 ]; then
 	# the runner was absent or the lane was deliberately not requested — neither one is evidence.
 	echo "GREEN, with $SKIPPED target(s) SKIPPED — not run, so UNVERIFIED, not proven good."
 	echo "Say which in the rung report; do not describe this run as full cross-target coverage."
+	exit 0
+fi
+
+if [ "$PRIOR" -gt 0 ]; then
+	# Distinct from the SKIP wording above on purpose: these lanes ARE verified, just not by this
+	# run. Saying "every supported target tested" would be true of the tree and false of the run.
+	echo "GREEN — every supported target covered ($PRIOR lane(s) PRIOR: proved by the step-8 battery on this tree)."
 	exit 0
 fi
 
