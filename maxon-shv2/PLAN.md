@@ -3591,14 +3591,64 @@ against (user has ruled before: *fix the bootstrap so it stays a solid reference
 work). **shv2 does NOT inherit these** (it diverges deliberately, usually stricter); each needs the full C#
 suite as its gate:
 
-- **⛔ A REPEATED SELF-APPEND SILENTLY TRUNCATES, AND EXITS 0** (found by P1.8 Slice C's review,
-  coordinator-reproduced 2026-07-28). `var s = "abc"` · `s.append(s)` · print · `s.append(s)` · print:
-  the bootstrap prints `A=abcabc|6`, then prints `B=abcabc` and **stops** — no `byteLength`, no later
-  statement, **exit code 0**. shv2 answers correctly (`B=abcabcabcabc|12`, and execution continues).
-  ⚠ **The consequence for this project is bigger than the bug**: the bootstrap cannot serve as the
-  differential oracle for repeated self-append, so every differential check on that shape must avoid it
-  or it is comparing against a known-wrong answer. Slice C's nine probes were all steered clear of it
-  for exactly this reason.
+- **✅ THREE STRING BUGS IN THE ORACLE — ALL FIXED 2026-07-28** (main `95756de83` + `95551bffb`, C#
+  suite **3175 → 3181/0**, codegen neutrality proven by experiment). User-directed: *"we should fix the
+  bootstrap too."* All three are the SAME failure — **a fact stated in two places, drifted, with the
+  test that would catch it written on a shape too small to fail.**
+  1. **`"ASCII ⇒ one byte per grapheme"` was FALSE for CR+LF, and ten methods believed it.**
+     `isAsciiFlag` promised *"every byte < 0x80"*; `charAt`/`indexAfter`/`indexBefore`/`findFirst`/
+     `findLast`/`slice`-by-length/`trim`/`trimStart`/`trimEnd`/`advance` all read it as *"one byte per
+     character"*. `"\r\n"` is ONE cluster under GB3, so all ten split it — measured `count=3 trips=4`.
+     ⭐ **Cured at the FIELD, not with ten guards**: `singleByteGraphemesFlag` = ASCII **and CR-free**.
+     **CR-free rather than CRLF-free is load-bearing** — "no CR" is a PER-BYTE property, so it survives
+     slicing *and* concatenation, where the other spelling is defeated by `"a\r"` + `"\nb"`.
+     ⚠ `trim` was **right by coincidence** (CR and LF are each independently whitespace) — the worst
+     kind of site, because it stays green until a `CharacterSet` holds one and not the other.
+  2. **A repeated self-append read FREED MEMORY.** `LowerManagedMemAppend` captured `other.buffer`
+     *before* `maxon_string_ensure_cap`; when `other` IS `self`, that is the block ensure_cap frees.
+     ⚠⚠ **THE COORDINATOR'S ORIGINAL FILING OF THIS BUG WAS WRONG AND IS CORRECTED HERE.** It said the
+     program *"prints `B=abcabc` and STOPS — no `byteLength`, no later statement, exit 0"*, i.e. a silent
+     truncation. **It does no such thing.** Re-measured to a FILE and hexdumped, the real bytes are
+     `B=abcabc\0\0\0\0\0\0|12\nC=done\n`, exit 0 — `byteLength()` is correctly 12, execution continues,
+     and nothing is truncated. **Six of the twelve bytes are NUL, read out of the freed buffer.**
+     ⭐ **The "truncation" was the INSTRUMENT: the MCP surfaces stdout as a string and a NUL ends it.**
+     ⇒ **A NUL in program output truncates the CAPTURE, not the PROGRAM.** Redirect to a file and
+     `od -c` it before believing output stopped.
+  3. **`String.clone()` returned a VIEW, so the clone read freed memory the moment the source grew**
+     (found by the review, coordinator-reproduced). `String{managed: X, …}` builds a `capacity=-1` view
+     of X's buffer *whatever X is*; `managed.slice` **copies** when the source owns its buffer, and that
+     copy is the entire invariant. **`Array.clone()` always went through `managed.slice`; `String.clone()`
+     was "optimised" off it** with a comment claiming *"the same thing in one allocation"*. It is not.
+     `toByteArray()` had it too — and ⚠ **`specs/string-type-2.md` PINNED THE EXACT PROMISE and passed
+     anyway**, because its string was five bytes, short enough that the freed block still held them.
+     Not a spec encoding a bug: **a correct rule pinned on too small a shape.**
+     ⚠ Coordinator note: the obvious repro also MISSES it — a string *literal* lives in rdata, so the
+     view stays valid. The bug needs an **owned heap** buffer (`var a = ""` then `append`).
+  ⇒ **The oracle is now trustworthy for CRLF iteration, self-append and clone**, and its `"a\r\nb"`
+  answer (`count=3 trips=3 widest=2`) now MATCHES shv2's — P1.8 Slice B's licensed divergence has
+  become plain agreement.
+
+- **⛔ `String.from(bytes)` / `String.init(managed)` HAND BACK A VIEW OF A BUFFER THE CALLER KEEPS**
+  (filed by the oracle rung's review, 2026-07-28 — **not** fixed there, because it is a CONTRACT question,
+  not a bug). `var raw = <ByteArray>` · `let s = String.from(raw)` · `raw.push(…)` ⇒ `s` reads freed
+  memory. ⚠ **This is a DIFFERENT family from the `clone()`/`toByteArray()` bugs fixed above**: those are
+  *self-derived accessors*, which must copy; these are *hand-over constructors*, **documented** as
+  zero-copy, and `Array.init` / `Vector.init` / `Character.init` share the shape. Closing it means buffer
+  refcounting (**which is what shv2 chose** — see P1.7's COW slices) or copy-on-view with a measured cost
+  on Json/Subprocess/Console. **Needs a ruling before a rung.**
+
+- **⬜ `maxon_cow_struct_detach` IS EMITTED INTO EVERY BINARY (x64 AND arm64) AND CALLED BY NOTHING**
+  (filed by the oracle rung's review). Dead runtime code in every program the bootstrap produces — and
+  pointedly, **it is exactly the machinery that would have DETECTED the `refcount > 1` sharing that the
+  `String.clone()` bug rode on.** Either wire it up or delete it; carrying an unreachable guard is the
+  shape that lets the thing it guards against ship.
+
+- **⬜⭐ `int(0 to u64.max)` COMPARES **SIGNED**, so `u64.max` ORDERS AS −1** (filed by the oracle rung,
+  2026-07-28; present at HEAD before and after it). Measured: `"abcd".slice(startIndex(), length: u64.max)`
+  returns `""` rather than `"abcd"`, a silent wrong answer on both the fast and slow paths. ⚠ **Not a
+  String bug — it is bootstrap-wide and affects every `int(0 to u64.max)`**, which is the most common
+  ranged typealias in the stdlib. The oracle rung's new fast paths deliberately decline those inputs
+  (`count > 0`) so they cannot turn it into a panic, but nothing fixes it.
 
 - **🔴🔴 AN UN-AWAITED GREEN THREAD HANGS THE PROCESS AT EXIT — FOREVER, WITH NO DEBUGGER INVOLVED.** Surfaced by P4d-2b's review; **reproduced and SHARPENED by the coordinator**. `__gt_cleanup`'s drain waits `WaitForSingleObject(__io_done_event, INFINITE)` when threads are alive and nothing is runnable (`X86CodeEmitter.Runtime.cs:~5871-5883`, plus its arm64 twin). ⚠ **The review framed this as "a program whose un-awaited thread is still SLEEPING when `main` returns"; the measurement says the sleep is NOT the ingredient.** Three variants of one program, `MAXON_MAX_PROCS=1`, no debugger: an un-awaited thread sleeping **3000 ms** → **HUNG 3/3** (killed at 12 s); the same thread sleeping only **10 ms**, so it FINISHES well before `main` returns → **HUNG 2/2** (killed at 8 s); the **identical program that AWAITS it** → **exit 1 in 126 ms**. ⇒ **The defect is being un-awaited, not being un-finished.** Nothing ever signals `__io_done_event` for a thread nobody awaits, so the drain blocks on a wait that cannot be satisfied. ⚠ **The language makes this HARD to write but not impossible, which is why it has survived**: the bootstrap rejects the two obvious shapes — a bare `async f()` statement is **E2001** and a never-used `let p = async f()` is **E3012** — so the reproduction needs a *conditional* await (`if n > 100 … await p`, false at runtime), which is an ordinary pattern, not a contrivance. **Fix direction (review's, and it is right):** a bounded wait so the drain loop re-reaches `__gt_timer_check` and its own liveness re-check, rather than an unsatisfiable INFINITE. **Both backends.** ⚠ Note the interaction with the held-thread wedge P4d-2b fixed: that one had the SAME shape (a thread off every queue ⇒ drain never finds it ⇒ INFINITE), and was cured on the agent side by not holding once `__sched_shutdown_flag` is set. **This one has no debugger to teach — the runtime must not offer an unsatisfiable wait in the first place.**
 
