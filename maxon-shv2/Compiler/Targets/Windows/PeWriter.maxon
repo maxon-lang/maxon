@@ -647,9 +647,10 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// Patch each dense-`match` jump table's `.rdata` slots to `targetBlockRva − tableBaseRva` now that both
 	// sections' RVAs are fixed (the image is fixed-base, so an RVA delta IS the runtime address delta).
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textRva, rdataAddr: rdataRva)
-	// Bake each managed-opaque descriptor's `destroyFunc@40` with the element destructor's absolute `.text` VA
-	// — a fixed-base image, so `ImageBase + textRva + funcOffset` IS the runtime address (P1.7 slice 3b-ii).
-	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, target: target, textBaseVa: ImageBase + textRva)
+	// Bake every `.rdata` slot holding a `.text` address — a witness-table method slot, or a managed-opaque
+	// descriptor's `destroyFunc@40`/`copyFunc@32` — with the target's absolute `.text` VA. A fixed-base image,
+	// so `ImageBase + textRva + funcOffset` IS the runtime address (P1.7 slice 3b-ii / P1.7a slice 2a).
+	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, textBaseVa: ImageBase + textRva)
 
 	// AddressOfEntryPoint = the entry stub's RVA. `mainCallFixupOffset` carries
 	// mrt_start's `.text` offset (0, since augmentWithRuntime lays it out first).

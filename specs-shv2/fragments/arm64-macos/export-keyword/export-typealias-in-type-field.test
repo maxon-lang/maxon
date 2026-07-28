@@ -1,0 +1,127 @@
+// Test: export-typealias-in-type-field
+// --- file: api/types.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export typealias IntArray = Array with Integer
+
+export type Container
+	export var items as IntArray
+
+	export static function create() returns Self
+		return Container{items: IntArray.create()}
+	end 'create'
+
+	export function add(n Integer)
+		items.push(n)
+	end 'add'
+
+	export function sum() returns Integer
+		var total = 0
+		for item in items 'loop'
+			total = total + item
+		end 'loop'
+		return total
+	end 'sum'
+end 'Container'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	var c = Container.create()
+	c.add(20)
+	c.add(22)
+	return c.sum()
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Container.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 20
+    arm64.movRegReg x0, x19
+    arm64.bl Container.add
+    arm64.movImm x1, 22
+    arm64.movRegReg x0, x19
+    arm64.bl Container.add
+    arm64.movRegReg x0, x19
+    arm64.bl Container.sum
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Container
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Container.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Container.add {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.bl __arr_push
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Container.sum {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
+    arm64.movImm x21, 0
+    arm64.b forhdr
+  forhdr:
+    arm64.movRegReg x0, x20
+    arm64.bl __arr_count
+    arm64.cmp x21, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b forexit
+  loop:
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x1, x21
+    arm64.bl __arr_get_unchecked
+    arm64.add x19, x19, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x21, x21, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,91 @@
+// Test: float-alias-struct-field-zero-defaults
+
+typealias Weight = float(f64.min to f64.max)
+
+type Particle
+	export var mass as Weight = 0
+	export var vel as Weight = 0.0
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Particle'
+
+function main() returns ExitCode
+	let p = Particle.make()
+	if p.mass == 0.0 'zeroMass'
+		if p.vel == 0.0 'zeroVel'
+			return trunc((p.mass + p.vel + 4.2) * 10.0)
+		end 'zeroVel'
+	end 'zeroMass'
+	return 7
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Particle.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, d9
+    arm64.storeSlotReg slot0, d8
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.fpLoadRdata d9, [rdata + __fconst_0]
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], d8
+    arm64.storeBaseDispReg.word64 [x0 + 8], d9
+    arm64.loadRegSlot d8, slot0
+    arm64.loadRegSlot d9, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Particle.make
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, zeroMass
+    arm64.b ifcont
+  zeroMass:
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 8]
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cbnz x1, zeroVel
+    arm64.b ifcont
+  zeroVel:
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 d1, [x0 + 8]
+    arm64.fadd d0, d0, d1
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fadd d0, d0, d1
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fmul d0, d0, d1
+    arm64.fcvtzs x19, d0
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x19, 7
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

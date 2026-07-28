@@ -285,7 +285,6 @@ to xmm0 crosses register files`.
 
 Every case below asserts a computed VALUE and not merely that the program compiles, because that is
 the shape of the bug — `42` here is `3.0 * 14.0`, which an unconverted `3` cannot produce.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Float = float(f64.min to f64.max)
@@ -305,7 +304,6 @@ end 'main'
 <!-- test: int-expression-to-float-return -->
 The returned value need not be a literal: an integer EXPRESSION meets the declared `float` under the
 same rule, exactly as `expression-to-float-param` does at the argument site.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Float = float(f64.min to f64.max)
@@ -326,7 +324,6 @@ end 'main'
 A struct LITERAL is a coercion site: the field declares the type and the value has to meet it. This
 compiled and RAN before the conversion existed, storing the integer's raw bytes in an f64 slot —
 `3` read back as 1.5e-323, so `r.raw() == 3.0` was false and the program returned 7.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 type Reading
 	export var value as float
@@ -355,7 +352,6 @@ end 'main'
 <!-- test: int-literal-to-float-field-write -->
 The same field, reached by a WRITE rather than by construction. It is the same rule and it must not
 answer differently for the way the source spelled it.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 type Reading
 	export var value as float = 0.0
@@ -380,7 +376,6 @@ end 'main'
 
 <!-- test: int-literal-to-float-self-field -->
 And the third spelling of that one write: the bare field name inside an instance method.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 type Reading
 	export var value as float = 0.0
@@ -411,7 +406,6 @@ end 'main'
 <!-- test: int-literal-to-float-field-default -->
 A field DEFAULT is a coercion site too, and the one that holds a parse-time constant rather than a
 value: `as float = 3` records the f64 bit pattern of 3.0, not the integer 3.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 type Reading
 	export var value as float = 3
@@ -436,7 +430,6 @@ end 'main'
 <!-- test: int-literal-to-float-global -->
 A top-level `var` keeps the type its initializer gave it, so a later store of an integer widens into
 the slot rather than overwriting an f64 with eight bytes of two's complement.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 var scale = 0.0
 
@@ -457,7 +450,6 @@ A LOCAL `var` keeps its declared type across a rebind for the same reason. Befor
 binding silently became an int — `scale == 3.0` on the very next line reported "cannot compare int
 with float" against a legal program, and the same rebind inside a loop fed an i64 and an f64 into one
 header phi (a cross-register-file panic in the x64 emitter).
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var scale = 0.0

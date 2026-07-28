@@ -2526,7 +2526,6 @@ An INT LITERAL passed at a `float` parameter of a function value. A DIRECT call 
 DECLARED parameter types of the function type the call goes through. Without that the raw i64 `2`
 travels in a GPR to a callee reading `xmm0`, and `v * 2.0` multiplies whatever was left there —
 a silent wrong answer, not a crash.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Real = float(f64.min to f64.max)
@@ -2554,7 +2553,6 @@ end 'main'
 The same widening where the callee value is a bare FUNCTION REFERENCE rather than a function-typed
 parameter — its declared type is the function's own signature, not an alias's, so the two must reach
 the same answer through one lookup.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Ratio = float(0.0 to 1000.0)
@@ -2575,7 +2573,6 @@ end 'main'
 <!-- test: first-class-function.int-literal-widens-through-closure -->
 The third callee kind: a LIFTED CLOSURE, whose declared parameter types are its own. The closure
 declares `x Ratio`, so the literal `3` widens exactly as it does for a named function.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Ratio = float(0.0 to 1000.0)
@@ -2594,7 +2591,6 @@ The formal→actual MAPPING, pinned rather than "some argument widened": an int 
 parameter must STAY an integer while an int literal at a `float` parameter must widen. Each failure
 mode has its own answer — widening the wrong one makes `n == 3` compare an f64 bit pattern (5), and
 widening neither leaves `x` an integer whose f64 reading is ~2.5e-323 (0).
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Ratio = float(0.0 to 1000.0)
@@ -2624,7 +2620,6 @@ end 'main'
 <!-- test: first-class-function.matching-signature-cast-accepted -->
 A cast to a function type whose signature MATCHES stays legal and stays a no-op — the guard against
 an over-strict signature rule, which would otherwise refuse every cast a program legitimately writes.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Real = float(f64.min to f64.max)
@@ -2648,7 +2643,6 @@ A closure passed into a parameter declared with a function typealias. Its declar
 are the alias's, and its RETURN type is INFERRED — `float`, where the alias spells `Ratio` — so a
 signature rule that compared the two by NAME would refuse a program both reference compilers accept.
 The rule compares the RESOLVED representation, which is what the call ABI actually depends on.
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Ratio = float(0.0 to 1000.0)

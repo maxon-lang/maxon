@@ -891,8 +891,10 @@ export union StdOp
 	// so it shares that op's argument-marshaling and result-capture lowering verbatim. `witnessAddr` is a
 	// VALUE USE (the table address must be live at the call); `methodIndex` is metadata (the slot). `args`
 	// stays LAST (the ONE managed field, receiver at index 0), scalars first — the same allocation-flat shape
-	// `callIndirect` documents (a second managed field breaks the bootstrap's synthesized destructor). x64
-	// only at this slice: arm64/wasm loudly refuse (the witness blob rides the x64 `funcAbs64InRdata` reloc).
+	// `callIndirect` documents (a second managed field breaks the bootstrap's synthesized destructor).
+	// Lowered by ALL FOUR backends as of P1.7a slice 2b-iv-C — the witness blob's `funcAbs64InRdata` slots
+	// are baked as a `.text` VA by the fixed-base writers, as a funcref-table index by wasm, and as a dyld
+	// chained-fixup rebase by the always-PIE arm64-macOS.
 	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import primitives ---
 	//
@@ -1020,8 +1022,8 @@ export union StdOp
 	// `resultId` and `errorFlagId` are DEFS; `witnessAddr` and `args` are USES. `args` stays LAST (the ONE
 	// managed field, receiver at index 0) — a second managed field on a union variant corrupts the
 	// bootstrap's synthesized destructor — and `errorFlagId` is a scalar `ValueId`, so the shape is
-	// unchanged in that respect. x64 only at this slice: arm64/wasm loudly refuse, exactly as they refuse
-	// `witnessCall` (the witness blob rides the x64 `funcAbs64InRdata` relocation).
+	// unchanged in that respect. Lowered by ALL FOUR backends as of P1.7a slice 2b-iv-C, exactly as
+	// `witnessCall` is; each fills the witness blob's slots in the form its image format can carry.
 	witnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 

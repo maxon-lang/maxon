@@ -1,0 +1,89 @@
+// Test: int-literal-to-float-field-literal
+type Reading
+	export var value as float
+
+	export static function make() returns Self
+		return Self{value: 3}
+	end 'make'
+
+	export function raw() returns float
+		return self.value
+	end 'raw'
+end 'Reading'
+
+function main() returns ExitCode
+	let r = Reading.make()
+	if r.raw() == 3.0 'exact'
+		return trunc(r.raw() * 14.0)
+	end 'exact'
+	return 7
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Reading.make {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, d8
+    arm64.movImm x0, 3
+    arm64.scvtf d8, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], d8
+    arm64.loadRegSlot d8, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Reading.raw {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Reading.make
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Reading.raw
+    arm64.fpLoadRdata d1, [rdata + __fconst_0]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cbnz x0, exact
+    arm64.b ifcont
+  exact:
+    arm64.movRegReg x0, x19
+    arm64.bl Reading.raw
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fmul d0, d0, d1
+    arm64.fcvtzs x20, d0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -335,11 +335,12 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// format is target-neutral, so ONE call serves both the x64 and arm64 ELF paths — the ELF is static
 	// (fixed load address), so a VA delta IS the runtime delta.
 	patchJumpTables(codeResult.rdata, relocs: codeResult.jumpTableRelocs, globalData: codeResult.globalData, textAddr: textVAddr, rdataAddr: rodataVAddr)
-	// Bake each managed-opaque descriptor's `destroyFunc@40` with the element destructor's absolute `.text` VA
-	// (`textVAddr + funcOffset`) — the ELF twin of PeWriter's fixed-base bake. `bakeFuncAbs64Relocs` is wired
-	// for x64 only, so an arm64-linux image with a non-empty reloc list refuses loudly rather than shipping a
-	// zero slot (P1.7 slice 3b-ii — arm64 managed-opaque arrays are deferred); empty is a no-op for both CPUs.
-	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, target: target, textBaseVa: textVAddr)
+	// Bake every `.rdata` slot holding a `.text` address — a witness-table method slot, or a managed-opaque-`T`
+	// descriptor's `destroyFunc@40`/`copyFunc@32` — with the target's absolute `.text` VA (`textVAddr +
+	// funcOffset`), the ELF twin of PeWriter's fixed-base bake. This ELF is static (`ET_EXEC`, fixed load
+	// address), which is the bake's whole precondition, so it serves BOTH CPUs unchanged: arm64-linux takes
+	// exactly the same path x64-linux does. Only PIE images need the rebase channel instead (see MachOWriter).
+	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, textBaseVa: textVAddr)
 
 	var elf = ByteArray.create()
 	elf.reserve(dataFileOffset + dataSegmentSize)

@@ -9,26 +9,27 @@
 // patchers this compiler already carries in BinaryHelpers.
 //
 // It handles what the CodeResult carries: __text, rdata (float constants + String
-// literal records) in __const, top-level `var` globals in __data, GOT imports, and
-// — since P1.2 string buffers (M2b) — the DYLD_CHAINED_PTR_64_OFFSET *rebases* a PIE
-// image needs for the one absolute pointer the scalar/string core bakes: a String
-// literal's `buffer@0`. A managed-opaque-`T` descriptor's `destroyFunc@40` function-pointer
-// (P1.7 slice 3b-ii) would reuse the same chain machinery, but arm64-macOS managed-opaque
-// arrays are deferred — so `writeMachO` REFUSES a non-empty `pendingRdataRelocs`
-// (`requireNoFuncAbs64Relocs`) rather than ship a zero slot. `symdata`/`covdata` are empty
-// and their arms panic too — the day one is emitted is a loud failure, not a wrong
-// address.
+// literal records + witness tables) in __const, top-level `var` globals in __data, GOT
+// imports, and the DYLD_CHAINED_PTR_64_OFFSET *rebases* a PIE image needs for EVERY
+// absolute pointer baked into rdata. `symdata`/`covdata` are empty and their arms panic —
+// the day one is emitted is a loud failure, not a wrong address.
 //
-// ⭐ THE STRING `buffer@0` REBASE (M2b). Unlike PeWriter's fixed-base image
-// (`patchStringBufferFixups` bakes `ImageBase + rdataRva + blobOffset`), macOS arm64 is
-// always ASLR/PIE: there is no fixed base to bake. So a String LITERAL's `buffer@0` — the
-// absolute address of its byte blob — becomes a dyld rebase: the slot stores the blob's
-// OFFSET from the image base and dyld re-adds the slid base at load. For that the record
-// must live where fixup chains reach, so __const MOVED from read-only __TEXT to the
-// writable __DATA segment (`writeMachoStringBufferRebases` + `buildMachoDataPageStarts`
-// thread the rebases through the rdata pages, alongside the import binds on the __got
-// page). Before this, a String literal's buffer read 0 at runtime (write(NULL) is a silent
-// no-op; __str_copy segfaults) and every String spec test was gated to x64-windows.
+// ⭐ THE rdata REBASES (M2b for String buffers; P1.7a slice 2b-iv-C for function pointers).
+// Unlike PeWriter's fixed-base image (`patchStringBufferFixups` bakes `ImageBase + rdataRva
+// + blobOffset`), macOS arm64 is always ASLR/PIE: there is no fixed base to bake. So an
+// absolute pointer in rdata becomes a dyld rebase — the slot stores the target's OFFSET
+// from the image base and dyld re-adds the slid base at load. Two mechanisms need it:
+// a String LITERAL's `buffer@0` (the address of its byte blob), and a `funcAbs64InRdata`
+// slot (a WITNESS-TABLE method slot, or a managed-opaque-`T` descriptor's
+// `destroyFunc@40`/`copyFunc@32`) whose target is a `.text` function. Both are threaded by
+// the ONE `writeMachoRdataRebases` — see there for why merging them is a correctness
+// requirement and not a tidy-up — with `buildMachoDataPageStarts` naming each page's head.
+//
+// For that the records must live where fixup chains reach, so __const MOVED from read-only
+// __TEXT to the writable __DATA segment. Before the String half, a literal's buffer read 0
+// at runtime (write(NULL) is a silent no-op; __str_copy segfaults) and every String spec
+// test was gated to x64-windows; before the function-pointer half, every `where`-constrained
+// dispatch was gated off arm64 for the same shape of reason.
 
 // --- Page sizes ---
 // Segments are 16 KiB-aligned (the arm64 macOS VM page); the code signature hashes
@@ -318,23 +319,50 @@ function sortMachoRebases(offsets ByteOffsetArray, targets ByteOffsetArray)
 	end 'outer'
 end 'sortMachoRebases'
 
-// Turn every String `buffer@0` fixup into a DYLD_CHAINED_PTR_64_OFFSET rebase PATCHED INTO the
-// rdata image, and return the rebased slot offsets ASCENDING so the caller can build the __DATA
-// page_start table. `constImageOffset` is __const's offset from the image base (its file offset —
-// __TEXT sits at file 0 = the image base, and __DATA follows contiguously so vmaddr = base + fileoff);
-// added to a blob's rdata offset it gives the blob's image-base-relative rebase target.
+// ⭐ **TURN EVERY ABSOLUTE POINTER IN THE rdata IMAGE INTO A DYLD_CHAINED_PTR_64_OFFSET REBASE**, patched
+// over its placeholder, and return the rebased slot offsets ASCENDING so the caller can build the __DATA
+// page_start table. Every rebase target is an OFFSET FROM THE IMAGE BASE and dyld re-adds the slid base as
+// it walks the chain. Two mechanisms feed it, and the two offsets that convert them are the callers' only
+// difference:
 //
-// The same literal used more than once records the SAME `(record, blob)` pair each time, so the
-// fixup list holds duplicates. They are collapsed after sorting — threading one slot twice would
-// give the first copy a `next` of 0 (delta to itself), ending the chain and dropping every later
-// rebase on the page.
-function writeMachoStringBufferRebases(rdata ByteArray, globalData GlobalDataTable, constImageOffset MachineWord) returns ByteOffsetArray
+//   - a String LITERAL's `buffer@0` → its byte blob, at `constImageOffset + blobRdataOffset`;
+//   - a `funcAbs64InRdata` SLOT → a `.text` function, at `textImageOffset + funcCodeOffset`. Three carriers
+//     ride this one: a WITNESS-TABLE METHOD SLOT (`LowerMaxonToStd.ensureWitnessTable` — the common one; it
+//     needs no generics beyond a `where` clause), and a managed-opaque-`T` `Array` descriptor's
+//     `destroyFunc@40` / `copyFunc@32`.
+//
+// `constImageOffset` and `textImageOffset` are those sections' offsets from the image base, which here are
+// simply their FILE offsets: __TEXT sits at file 0 = the image base and __DATA follows contiguously, so
+// vmaddr = base + fileoff throughout.
+//
+// ⚠⚠ **BOTH KINDS ARE MERGED BEFORE THE SORT, AND THAT IS THE WHOLE REASON THIS IS ONE FUNCTION.** A page
+// carries ONE chain and `page_start` can name only ONE head, so two independent writers threading the same
+// rdata pages would each believe itself the head: the second's slots would be orphaned — never rebased,
+// left holding a raw chain entry — and a witness slot that is never rebased is a CALL THROUGH A GARBAGE
+// POINTER with no diagnostic anywhere. Sorting the union is what makes the chain total over the page.
+//
+// The same literal used more than once records the SAME `(record, blob)` pair each time, so the fixup list
+// holds duplicates. They are collapsed after sorting — threading one slot twice would give the first copy a
+// `next` of 0 (delta to itself), ending the chain and dropping every later rebase on the page. A duplicate
+// offset carrying a DIFFERENT target is not a duplicate at all but two mechanisms claiming one slot, so it
+// panics rather than silently keeping whichever sorted first.
+function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, constImageOffset MachineWord, textImageOffset MachineWord) returns ByteOffsetArray
 	var offsets = ByteOffsetArray.create()
 	var targets = ByteOffsetArray.create()
-	for fixup in globalData.stringBufferFixups 'collect'
+	for fixup in globalData.stringBufferFixups 'collectStringBuffers'
 		offsets.push(globalData.rdataOffsetOf(fixup.recordLabel) + StringBufferOffset)
 		targets.push(constImageOffset + globalData.rdataOffsetOf(fixup.blobLabel))
-	end 'collect'
+	end 'collectStringBuffers'
+
+	// The PIE counterpart of the fixed-base `bakeFuncAbs64Relocs`: same slots, same resolution through the
+	// debug-symbol index, and the same LOUD failure when a target function is in no symbol — a DCE-root gap
+	// where the slot's owner was built, which must never become a rebase to a stale offset.
+	let funcOffsets = buildDebugSymbolIndex(debugSymbols)
+	for reloc in globalData.pendingRdataRelocs 'collectFuncSlots'
+		let funcOffset = try funcOffsets.get(reloc.funcName) otherwise panic("writeMachoRdataRebases: .rdata slot '{reloc.rdataLabel}'+{reloc.offsetInLabel} references .text function '{String.from(reloc.funcName)}', which is in no debug symbol — it was never installed (a DCE-root gap where the slot's owner was built), so its address cannot be resolved")
+		offsets.push(rdataFuncSlotOffset(globalData, reloc: reloc))
+		targets.push(textImageOffset + funcOffset)
+	end 'collectFuncSlots'
 
 	sortMachoRebases(offsets, targets: targets)
 
@@ -342,32 +370,37 @@ function writeMachoStringBufferRebases(rdata ByteArray, globalData GlobalDataTab
 	var slots = ByteOffsetArray.create()
 	var slotTargets = ByteOffsetArray.create()
 	for (iter, slotOffset) in offsets.withIterator() 'dedup'
-		let target = try targets.get(iter.index()) otherwise panic("writeMachoStringBufferRebases: offsets/targets fell out of lockstep at {iter.index()}")
+		let target = try targets.get(iter.index()) otherwise panic("writeMachoRdataRebases: offsets/targets fell out of lockstep at {iter.index()}")
 		var isDuplicate = false
 		if slots.count() > 0 'checkPrev'
-			let prev = try slots.get(slots.count() - 1) otherwise panic("writeMachoStringBufferRebases: slots.get(last) failed with count {slots.count()}")
+			let prev = try slots.get(slots.count() - 1) otherwise panic("writeMachoRdataRebases: slots.get(last) failed with count {slots.count()}")
 			isDuplicate = prev == slotOffset
 		end 'checkPrev'
-		if not isDuplicate 'fresh'
+		if isDuplicate 'sameSlot'
+			let keptTarget = try slotTargets.get(slotTargets.count() - 1) otherwise panic("writeMachoRdataRebases: slotTargets.get(last) failed with count {slotTargets.count()}")
+			if keptTarget != target 'conflict'
+				panic("writeMachoRdataRebases: rdata slot {slotOffset} is claimed by two rebases with different targets ({keptTarget} and {target}) — a String `buffer@0` and a `funcAbs64InRdata` slot have been laid out at the same offset, so one mechanism is overwriting the other's pointer")
+			end 'conflict'
+		end 'sameSlot' else 'fresh'
 			slots.push(slotOffset)
 			slotTargets.push(target)
 		end 'fresh'
 	end 'dedup'
 
-	// Thread each slot into its page's chain and patch the rebase over the record's placeholder.
+	// Thread each slot into its page's chain and patch the rebase over the placeholder.
 	let count = slots.count()
 	for i in 0 upto count 'write'
-		let slotOffset = try slots.get(i) otherwise panic("writeMachoStringBufferRebases: i < count but slots.get({i}) failed")
-		let target = try slotTargets.get(i) otherwise panic("writeMachoStringBufferRebases: slotTargets.get({i}) failed")
+		let slotOffset = try slots.get(i) otherwise panic("writeMachoRdataRebases: i < count but slots.get({i}) failed")
+		let target = try slotTargets.get(i) otherwise panic("writeMachoRdataRebases: slotTargets.get({i}) failed")
 		if slotOffset mod DyldChainedNextStride != 0 'misaligned'
-			panic("writeMachoStringBufferRebases: rebased slot at rdata offset {slotOffset} is not {DyldChainedNextStride}-byte aligned — a String record fell off the 8-byte cursor (the StringRuntime blob pad broke)")
+			panic("writeMachoRdataRebases: rebased slot at rdata offset {slotOffset} is not {DyldChainedNextStride}-byte aligned — a String record fell off the 8-byte cursor (the StringRuntime blob pad broke), or a witness table was emitted unaligned")
 		end 'misaligned'
 		if target > DyldChainedRebaseTargetMask 'targetTooLarge'
-			panic("writeMachoStringBufferRebases: rebase target offset {target} does not fit in {DyldChainedRebaseTargetBits} bits — the image outgrew the DYLD_CHAINED_PTR_64_OFFSET reach")
+			panic("writeMachoRdataRebases: rebase target offset {target} does not fit in {DyldChainedRebaseTargetBits} bits — the image outgrew the DYLD_CHAINED_PTR_64_OFFSET reach")
 		end 'targetTooLarge'
 		var nextField = 0
 		if i + 1 < count 'hasNext'
-			let followingOffset = try slots.get(i + 1) otherwise panic("writeMachoStringBufferRebases: i+1 < count but slots.get({i + 1}) failed")
+			let followingOffset = try slots.get(i + 1) otherwise panic("writeMachoRdataRebases: i+1 < count but slots.get({i + 1}) failed")
 			// `next` links only within a page; a cross-page successor ends this chain.
 			if followingOffset / MachoPageSize == slotOffset / MachoPageSize 'samePage'
 				nextField = (followingOffset - slotOffset) / DyldChainedNextStride
@@ -378,7 +411,7 @@ function writeMachoStringBufferRebases(rdata ByteArray, globalData GlobalDataTab
 	end 'write'
 
 	return slots
-end 'writeMachoStringBufferRebases'
+end 'writeMachoRdataRebases'
 
 // Build the __DATA page_start table from the ascending rebase slot offsets: one entry per rdata
 // page (the in-page offset of the first rebase on it, or START_NONE) followed by the __got page,
@@ -652,12 +685,6 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 		panic("writeMachO: covdata is non-empty but the arm64-macos writer emits no coverage section yet")
 	end 'hasCovdata'
 
-	// A managed-opaque-`T` `Array` descriptor's `destroyFunc@40` reloc is wired for x64 only (P1.7 slice
-	// 3b-ii). arm64-macOS managed-opaque arrays are deferred and the target boundary keeps such programs off
-	// this writer, so a non-empty list here is a boundary bug — refuse loudly rather than ship a zero slot
-	// (a per-element leak). On macOS the slot would additionally need a dyld chained REBASE, not a bake.
-	requireNoFuncAbs64Relocs(codeResult.globalData, backend: "writeMachO (arm64-macos)")
-
 	let hasRdata = rdataSize > 0
 	let hasPrelude = preludeSize > 0
 
@@ -711,10 +738,11 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
 	let linkeditVmAddr = dataSegmentVmAddr + alignUp(dataSegmentFileSize, alignment: MachoPageSize)
 
-	// Turn the String `buffer@0` fixups into dyld rebases patched into the rdata image, then build
-	// the __DATA page_start table (rdata pages + the got page) and the chained-fixups payload that
-	// threads both the rebases and the import binds.
-	let rebaseSlots = writeMachoStringBufferRebases(codeResult.rdata, globalData: codeResult.globalData, constImageOffset: dataSegmentFileOff)
+	// Turn every absolute pointer in the rdata image — String `buffer@0` fixups and `funcAbs64InRdata`
+	// slots alike — into dyld rebases patched into that image, then build the __DATA page_start table
+	// (rdata pages + the got page) and the chained-fixups payload that threads both the rebases and the
+	// import binds. `textSectionOffset` is __text's offset from the image base, since __TEXT is at file 0.
+	let rebaseSlots = writeMachoRdataRebases(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, constImageOffset: dataSegmentFileOff, textImageOffset: textSectionOffset)
 	let dataPageStarts = buildMachoDataPageStarts(rebaseSlots, rdataPages: rdataPages)
 	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, pageStarts: dataPageStarts)
 	let chainedFixupsOff = linkeditFileOff

@@ -27,9 +27,10 @@ synthesized `String.hash`/`String.equals`. The witness receiver (`self.item`) an
 BORROWED: the container owns the `String` and drops it exactly once at scope exit, so hashing or comparing a
 boxed `String` neither double-frees nor leaks it.
 
-The witness dispatch rides the rdata function-pointer relocation, which the x64 writers bake as a `.text`
-VA and the wasm backend as a funcref-table index, so these cases run on x64 and wasm (as the
-`primitive-conformance` and `where-clauses` witness cases do); arm64 still refuses it.
+The witness dispatch rides the rdata function-pointer relocation, which EVERY target now fills — the
+fixed-base writers bake a `.text` VA, wasm a funcref-table index, and arm64-macOS a dyld chained-fixup
+rebase — so these cases run everywhere and carry no target marker (as the `primitive-conformance` and
+`where-clauses` witness cases do).
 
 Direct `s.hash()` on a concrete `String` value and `Character` conformance are separate future slices and are
 NOT covered here. `Set with String` keys — which reuse exactly this `String` `Hashable`/`Equatable`
@@ -38,7 +39,6 @@ conformance — ship in P1.7b and are covered by `set-string`.
 ## Tests
 
 <!-- test: string-conformance.hash-values -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A `String` argument's `Hashable` witness dispatches `element.hash()` to the synthesized `String.hash` — djb2
 over the bytes. Three boxed Strings are constructed, hashed, and dropped at scope exit: the empty string
 (`5381`), `"abc"` (`193485963`), and `"hi"` (`5863446`).
@@ -76,7 +76,6 @@ end 'main'
 ```
 
 <!-- test: string-conformance.equals-via-constraint -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A `String` argument's `Equatable` witness dispatches `element.equals(other)` to the synthesized
 `String.equals` — content equality. The boxed `String` and the two `other` arguments are borrowed, so `b`
 stays live and droppable across both comparisons.
@@ -109,7 +108,6 @@ end 'main'
 ```
 
 <!-- test: string-conformance.hashable-and-equatable -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The hash-collection key shape — a parameter constrained with `where T is Hashable and Equatable` dispatches
 BOTH witnesses on a `String` argument, each to its synthesized impl.
 ```maxon
@@ -147,7 +145,6 @@ end 'main'
 ```
 
 <!-- test: string-conformance.eq-with-equatable -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The `==` OPERATOR on an Equatable-constrained type parameter lowers to the Equatable witness dispatch — for a
 `String` argument that is the synthesized `String.equals`, so `b.eq("abc")` is true and the `if` returns 1.
 ```maxon
@@ -178,7 +175,6 @@ end 'main'
 ```
 
 <!-- test: string-conformance.hash-in-loop-no-leak -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A boxed `String` constructed, hashed through the `Hashable` witness, and dropped every iteration of a
 100-iteration loop — the standing leak/double-free probe. If the witness receiver were consumed rather than
 borrowed the per-iteration drop would double-free the freed payload; if the box failed to drop it the run

@@ -492,11 +492,12 @@ type StdToArm64Lowering
 			osFreePages then panic("lowerStdToArm64: `osFreePages` is x64-windows only — the green-thread substrate is x64-windows-gated at this rung")
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToArm64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
-			// P1.7a slice 2a: witness tables ride the `funcAbs64InRdata` relocation, which arm64 refuses
-			// (`requireNoFuncAbs64Relocs`). The x64 writers bake it as a `.text` VA and the wasm backend as a
-			// funcref-table index (slice 2b-iv-B), so arm64 is the ONE target left without it.
-			witnessCall then panic("lowerStdToArm64: a `witnessCall` op has no arm64 lowering — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses (x64 bakes a `.text` VA, wasm a funcref-table index); constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
-			witnessTryCall then panic("lowerStdToArm64: a `witnessTryCall` op has no arm64 lowering — the witness table rides the `funcAbs64InRdata` relocation the arm64 writer refuses (x64 bakes a `.text` VA, wasm a funcref-table index), and the dual-register error capture has no arm64 lowering; THROWING constrained-type-parameter dispatch on arm64 is P1.7a slice 2b-iv-C")
+			// P1.7a slice 2b-iv-C: constrained-type-parameter dispatch, the third and last target to get it.
+			// Both writers now fill the witness table's `funcAbs64InRdata` slots — ELF bakes an absolute `.text`
+			// VA (the image is static/ET_EXEC, so the x64 bake is CPU-invariant) and Mach-O threads each slot
+			// into its dyld chained-fixup chain as a PIE rebase, the same channel a String `buffer@0` rides.
+			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
+			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — it is emitted only
 			// inside the x64-windows-gated IOCP runtime, so arm64 rejects rather than inventing an untested lowering.
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
@@ -893,15 +894,69 @@ type StdToArm64Lowering
 	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
 		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(TargetVReg.virtual(calleeReg)))
-		// A VALUE callee's result is captured from d0/x0 into `resultId`. A VOID callee (a raw element
-		// destructor) leaves nothing to capture — `resultId` is a dead slot with no def, so no capture move
-		// is emitted and it never enters liveness/coloring. Native already ignored an unread indirect
-		// result, so making the destructor call truly void is neutral for the code emitted here.
+		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
+	end 'lowerCallIndirect'
+
+	// Capture the primary result of a call made through a POINTER — an indirect call or either witness form.
+	// A VALUE callee's result comes from d0/x0 into `resultId`. A VOID callee (a raw element destructor, a
+	// void interface method) leaves nothing to capture — `resultId` is a dead slot with no def, so no move is
+	// emitted and it never enters liveness/coloring. Shared by the three so they cannot drift on the result
+	// register, exactly as `emitArgMovesByFloatMask` keeps them from drifting on argument slotting.
+	function captureIndirectResult(resultId ValueId, resultType StdReturnType, dstRef BlockRef)
 		match resultType 'r'
 			void then break 'r'
 			value(inner) then self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64IndirectResultRegister(inner))))
 		end 'r'
-	end 'lowerCallIndirect'
+	end 'captureIndirectResult'
+
+	// ⭐ **LOWER THE FUSED `witnessCall` (P1.7a slice 2b-iv-C).** arm64 has no memory-operand call, so where
+	// x64 emits one `call qword [witnessAddr + 24 + 8*i]` (`callMem`), arm64 spells the same thing in two:
+	// `ldr x16, [witnessAddr, #slotOffset]` then `blr x16`. This is the SAME shape the GOT-indirect import
+	// call already uses (`arm64EmitImportCall`: `adrp x16` / `ldr x16, [x16]` / `blr x16`), so the idiom is
+	// the backend's established one rather than a new invention.
+	//
+	// ⚠ **THE LOAD IS EMITTED AFTER THE ARGUMENT MOVES, AND THE ORDER IS A CORRECTNESS REQUIREMENT.** x16 is
+	// the IP scratch: it is outside the allocatable pool precisely so the ENCODER may clobber it at will (a
+	// large `movImm`, an out-of-reach displacement, a spill/reload address). Loading the callee before the
+	// argument setup would leave it live across every one of those, and the clobber would be a jump to a
+	// garbage address with no diagnostic. Emitting it between the last argument move and the `blr` leaves it
+	// live across exactly ONE instruction boundary and nothing may be inserted there — the same discipline
+	// `lowerDivMod` states for its `sdiv`/`msub` quotient.
+	//
+	// `witnessAddr` — a normal virtual — is what stays live across the argument moves instead, which is safe
+	// for the reason x64's twin gives about `callMem`'s base register: each argument move is a PHYSICAL def,
+	// and liveness adds every such def to `forbiddenPhys` for the values live across it, so the table address
+	// can never be coloured onto an argument register the moves have already written.
+	function lowerWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
+		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, argFloatMask: argFloatMask, dstRef: dstRef)
+		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
+	end 'lowerWitnessCall'
+
+	// The argument marshalling, the slot load and the `blr` — everything a witness call does BEFORE its
+	// results are captured. ONE home, shared by the throwing and non-throwing forms so the two cannot drift
+	// on the slot offset or on argument slotting; a divergence there would be a silently mis-dispatched
+	// method, not a compile error.
+	function emitWitnessCallSequence(witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
+		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
+		let callee = arm64PhysReg(Arm64Scratch)
+		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(callee, base: TargetVReg.virtual(witnessAddr), disp: memoryDisplacement(witnessMethodSlotOffset(methodIndex)), width: X64AccessWidth.word64))
+		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(callee))
+	end 'emitWitnessCallSequence'
+
+	// ⭐ **LOWER THE THROWING FUSED `witnessTryCall` (P1.7a slice 2b-iv-C)** — `lowerWitnessCall` plus the one
+	// thing `lowerTryCall` adds to `lowerCall`: the error flag captured from **x9** (`Arm64FlagReturnReg`).
+	// The two capture moves are a PARALLEL COPY and are resequenced by the same target-agnostic machinery
+	// `lowerTryCall`'s pair is (`colorAndDropSelfMoves`), which keys on a call op followed by two
+	// virtual-dest/physical-src moves — `arm64BranchLinkReg` is a call, so the fused witness call satisfies
+	// that test as `arm64BranchLink` does, and a result/flag colouring cycle is broken rather than collapsed.
+	//
+	// A VOID throwing method captures nothing for its primary, leaving the flag capture alone after the call —
+	// a single move, with no cycle to break, which is correct: one move cannot overwrite its own source.
+	function lowerWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, dstRef BlockRef)
+		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, argFloatMask: argFloatMask, dstRef: dstRef)
+		self.captureIndirectResult(resultId, resultType: resultType, dstRef: dstRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: arm64PhysReg(Arm64FlagReturnReg)))
+	end 'lowerWitnessTryCall'
 
 	// Place each argument given a per-argument float mask (bit k set iff argument k is a float) — the arm64
 	// twin of x64's `emitArgMovesByFloatMask` — into its file's ABI register (d0..d7 for a float, x0..x7

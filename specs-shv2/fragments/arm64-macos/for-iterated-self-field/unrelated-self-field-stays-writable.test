@@ -1,0 +1,126 @@
+// Test: unrelated-self-field-stays-writable
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type Bag
+	export var items as IntArray
+	export var seen as Int
+
+	static function create() returns Self
+		var a = IntArray.create()
+		a.push(5)
+		a.push(7)
+		return Self{items: a, seen: 0}
+	end 'create'
+
+	function sum() returns Int
+		var total = 0
+		for it in self.items 'scan'
+			seen = seen + 1
+			total = total + it
+		end 'scan'
+		return total + seen
+	end 'sum'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	return b.sum() as ExitCode
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Bag.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 5
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 7
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x20, 0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @Bag.sum {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
+    arm64.movImm x22, 0
+    arm64.xchgRegReg x20, x22
+    arm64.b forhdr
+  forhdr:
+    arm64.movRegReg x0, x21
+    arm64.bl __arr_count
+    arm64.cmp x20, x0
+    arm64.cset x0, lt
+    arm64.cbnz x0, scan
+    arm64.b forexit
+  scan:
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x20
+    arm64.bl __arr_get_unchecked
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x19 + 8], x1
+    arm64.add x22, x22, x0
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.add x0, x22, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Bag.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Bag.sum
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __destruct_Bag
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

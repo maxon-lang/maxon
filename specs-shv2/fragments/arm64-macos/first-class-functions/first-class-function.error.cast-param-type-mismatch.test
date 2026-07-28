@@ -1,0 +1,17 @@
+// Test: first-class-function.error.cast-param-type-mismatch
+
+typealias Real = float(f64.min to f64.max)
+typealias Integer = int(i64.min to i64.max)
+typealias FloatFn = function(x Real) returns Real
+
+function intParam(x Integer) returns Real
+	return x * 2.0
+end 'intParam'
+
+function main() returns ExitCode
+	let f = intParam as FloatFn
+	return trunc(f(1)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3009: <fragment>:12:19: function type mismatch in cast: expected 'fn(float) returns float', got 'fn(int) returns float'

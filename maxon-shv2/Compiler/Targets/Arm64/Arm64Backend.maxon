@@ -1421,9 +1421,10 @@ end 'arm64SectionOffsetOfReloc'
 // which section a kind names; this one applies it. `arm64*` kinds reach the read-only constant
 // section (float islands, String literal records); `dataSection*` kinds reach the top-level `var`
 // globals. Every other arm is named and PANICS: the x64 kinds cannot appear in an arm64 image, and
-// `symdata`/`covdata` are not emitted at this milestone. (A managed-opaque descriptor's `.rdata`-internal
-// `destroyFunc@40` slot is not an `RdataRelocKind` — it rides `GlobalDataTable.pendingRdataRelocs`, and
-// arm64 refuses it loudly via `requireNoFuncAbs64Relocs`, since arm64 managed-opaque arrays are deferred.)
+// `symdata`/`covdata` are not emitted at this milestone. (A witness-table method slot, and a
+// managed-opaque descriptor's `destroyFunc@40`/`copyFunc@32`, are not `RdataRelocKind`s at all — they ride
+// `GlobalDataTable.pendingRdataRelocs`, filled by `bakeFuncAbs64Relocs` on the static arm64-linux ELF and
+// by `writeMachoRdataRebases` as a dyld rebase on the always-PIE arm64-macOS.)
 // Naming them one by one makes the day one is emitted a loud failure rather than a silently unpatched
 // displacement — PeWriter's discipline.
 //

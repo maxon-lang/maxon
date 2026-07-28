@@ -1423,7 +1423,6 @@ error E2051: <fragment>:4:6: identifier '__Array_Foo' is reserved: declarations 
 
 
 <!-- test: witness-label-two-pairs-that-underscore-join-alike -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The witness half of the same non-injective join, and the one with no diagnostic to fall back on.
 `(A_B, C)` and `(A, B_C)` both spelled `__witness_A_B_C`, so the second pair's mint found the first
 pair's table already emitted and handed it back: `HoldB.go` dispatched through `HoldC`'s table and
@@ -1495,7 +1494,6 @@ end 'main'
 
 
 <!-- test: witness-label-the-other-pair-settles-the-label-first -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same two pairs with the OTHER one settling the shared label, which is what shows the old answer was
 not merely wrong but arbitrary. The declarations are in the opposite order AND the two dispatches are
 evaluated in the opposite order — and it is the DISPATCH order that decided, because the table is minted
@@ -1568,7 +1566,6 @@ end 'main'
 
 
 <!-- test: witness-label-three-pairs-that-underscore-join-alike -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The witness twin of `error.three-instantiations-compile-to-one-name`: `_` splits `A_B_C_D` three ways, so
 `(A_B_C, D)`, `(A_B, C_D)` and `(A, B_C_D)` all spelled one label. Unlike the instantiation trio — which
 is reported twice and never compiles — this one built clean and returned **111**: three distinct
@@ -1666,7 +1663,6 @@ end 'main'
 
 
 <!-- test: witness-label-one-conformer-two-interfaces-and-a-third-pair -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ONE conformer with TWO interfaces, which is the pair the head-is-the-conformer argument alone does not
 separate. `A implements B, B_C` needs two tables — `__witness_A.B` and `__witness_A.B_C` — and they stay
 distinct under either separator, because their heads agree and only the tails differ. The third pair is

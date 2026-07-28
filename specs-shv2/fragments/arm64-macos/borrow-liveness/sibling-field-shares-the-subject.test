@@ -1,0 +1,22 @@
+// Test: sibling-field-shares-the-subject
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+	export var other as StringArray
+
+	static function create() returns Self
+		return Self{items: ["hello world this is a long string for heap allocation"], other: ["a second array entirely, sharing only its base binding"]}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	let s = try b.items.get(0) otherwise ""
+	b.other.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:16:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 15)

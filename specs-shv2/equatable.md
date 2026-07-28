@@ -11,8 +11,8 @@ category: type-system
 `Equatable` is a standard-library interface for types that can be compared for equality. A type conforms with
 `implements Equatable` and an `equals(other Self) returns bool` method; a call is `a.equals(b)`. A generic
 parameter constrained with `where T is Equatable` dispatches `element.equals(other)` through the runtime
-witness — for a primitive `int` argument, to the synthesized `int.equals` (a witness case, so x64 and
-wasm; arm64 still refuses the witness relocation).
+witness — for a primitive `int` argument, to the synthesized `int.equals`. Every target fills the witness
+relocation, so these cases run everywhere and carry no target marker.
 
 ## Tests
 
@@ -249,7 +249,6 @@ end 'main'
 ```
 
 <!-- test: equatable.primitive-via-constraint -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A primitive `int` argument satisfies `where T is Equatable`: `self.a.equals(self.b)` dispatches through the
 witness to the synthesized `int.equals`.
 ```maxon

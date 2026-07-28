@@ -28,7 +28,6 @@ NOT covered here.
 ## Tests
 
 <!-- test: create-insert-count -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Three distinct `String` keys inserted into a `.create()`d set; the count is 3 and every key is owned and
 dropped at scope exit (the leak gate stays green).
 ```maxon
@@ -47,7 +46,6 @@ end 'main'
 ```
 
 <!-- test: insert-duplicate-no-leak -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A duplicate `String` insert is a no-op on the count — the set keeps its existing copy and DROPS the new key,
 so the run neither leaks (the new key never freed) nor double-frees (the new key freed AND the stored key
 freed at scope exit are two distinct allocations). Count stays 3.
@@ -68,7 +66,6 @@ end 'main'
 ```
 
 <!-- test: contains-true -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 `contains` compares by String content (the `Equatable` witness), and its argument is BORROWED — a fresh
 `"bob"` allocation that drops at statement end while the stored `"bob"` stays owned by the set.
 ```maxon
@@ -89,7 +86,6 @@ end 'main'
 ```
 
 <!-- test: contains-false -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A key never inserted is absent; the borrowed argument still drops cleanly.
 ```maxon
 typealias StrSet = Set with String
@@ -109,7 +105,6 @@ end 'main'
 ```
 
 <!-- test: remove-drops-stored-key -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 `remove` DROPS the stored key (its argument stays the caller's borrow for the compare), tombstones the slot,
 and decrements the count. Three inserts, one remove → count 2. The removed key is freed exactly once (by
 remove), the borrowed argument once (at statement end), and the two survivors once each (at scope exit).
@@ -133,7 +128,6 @@ end 'main'
 ```
 
 <!-- test: remove-then-contains -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A removed key is no longer present — the tombstoned slot is skipped by a later probe.
 ```maxon
 typealias StrSet = Set with String
@@ -154,7 +148,6 @@ end 'main'
 ```
 
 <!-- test: remove-nonexistent -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Removing an absent key returns false and drops nothing stored — only the borrowed argument.
 ```maxon
 typealias StrSet = Set with String
@@ -174,7 +167,6 @@ end 'main'
 ```
 
 <!-- test: grow-with-managed-elements -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Twenty distinct heap-`String` keys (interpolated, so each is a real allocation) force a grow-and-rehash past
 the 75% load factor of the initial 16-slot table. Relocation moves the key POINTERS into the new buffers and
 drops NOTHING; every key survives, the count is exact, and each `contains` argument is a borrowed temp that
@@ -207,7 +199,6 @@ end 'main'
 ```
 
 <!-- test: from-literal-distinct -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 `Set from ["…"]` builds a set by MOVING each key out of the source array literal — the array is the caller's
 owned temp, borrowed by `__set_from`, and each moved-out slot is nulled so the array's own drop double-frees
 nothing. Three distinct keys → count 3.
@@ -222,7 +213,6 @@ end 'main'
 ```
 
 <!-- test: from-literal-dedup -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The oracle dedup case: `Set from ["a", "b", "a", "c"]` — the second `"a"` is a distinct allocation that
 duplicates the first by content, so it is dropped by the insert dup-path (and its source array slot nulled).
 Three unique members; no double-free between the set's key drops and the array's element drop.
@@ -237,7 +227,6 @@ end 'main'
 ```
 
 <!-- test: from-literal-contains -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A `Set from ["…"]` value answers `contains` by content and owns its keys to scope exit.
 ```maxon
 function main() returns ExitCode
@@ -256,7 +245,6 @@ end 'main'
 ```
 
 <!-- test: construct-drop-loop-no-leak -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The standing leak/double-free probe: a `String`-keyed set built with two heap keys, checked, and DROPPED
 every iteration of a 100-iteration loop. Each iteration allocates two keys, the set owns them, and the
 scope-exit drop frees both through the record's stored element destructor. `acc` reaches 100 and the leak
@@ -289,7 +277,6 @@ end 'main'
 ```
 
 <!-- test: duplicate-heap-key-loop-no-leak -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The dup-drop probe under real allocations: a key inserted TWICE per iteration for 100 iterations. Each
 `insert` promotes the literal to a fresh owned copy; the first is stored, the second duplicates it and is
 dropped by the insert dup-path. Two allocations and two frees per iteration — a leak (the dup never freed) or
@@ -322,7 +309,6 @@ end 'main'
 ```
 
 <!-- test: remove-loop-no-leak -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The remove-drop probe under real allocations: a heap key inserted then removed every iteration for 100
 iterations, exercising the remove drop site. Each iteration allocates the stored key (freed by remove) and
 the borrowed remove argument (freed at statement end); the set is then dropped empty. Neither a leak nor a

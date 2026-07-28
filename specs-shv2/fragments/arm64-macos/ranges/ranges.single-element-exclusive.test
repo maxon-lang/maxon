@@ -1,0 +1,32 @@
+// Test: ranges.single-element-exclusive
+function main() returns ExitCode
+		var count = 0
+		for _ in 5 upto 6 'loop'
+				count = count + 1
+		end 'loop'
+		return count
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 5
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, 6
+    arm64.cset x2, lt
+    arm64.cbnz x2, loop
+    arm64.b forexit
+  loop:
+    arm64.add x0, x0, 1
+    arm64.b forstep
+  forstep:
+    arm64.add x1, x1, 1
+    arm64.b forhdr
+  forexit:
+    arm64.epilogue 16
+    arm64.ret
+}

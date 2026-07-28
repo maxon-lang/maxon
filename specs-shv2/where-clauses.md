@@ -30,7 +30,6 @@ only authoritative vocabulary.
 ## Tests
 
 <!-- test: where-clauses.witness-user-dispatch -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Dispatch a USER interface method through the witness of a constrained type parameter — the concrete type is
 unknown in `Box.itemDigest`'s shared body, so `self.item.digest()` goes through the `(Point, Digest)` witness.
 ```maxon
@@ -78,7 +77,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-dispatch-in-loop -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same witness dispatch driven in a loop — the fused witness call and its element borrow must be leak-free
 across iterations.
 ```maxon
@@ -132,7 +130,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.two-constraints -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Two constraints on one parameter (`where T is Digest and Tagged`) reserve two witness slots; a dispatch of
 each interface's method reads its own slot.
 ```maxon
@@ -187,7 +184,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.forward-through-sibling -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A generic method that dispatches on `T` reached through a sibling self-call — the caller forwards its own
 witness slot to the sibling (no reload), so both drive the same witness.
 ```maxon
@@ -238,7 +234,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-temporary-arg -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The element passed to the container is a TEMPORARY (an rvalue constructor result, not a named binding).
 Its borrow escapes into the container's field, so it is RETAINED (co-owned) at the constructor feed — the
 box holds a real second reference that outlives the temporary's statement, the later witness dispatch reads
@@ -288,7 +283,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.int-actual-for-float-formal -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 An INTEGRAL actual supplied for a `float` interface FORMAL is widened at the witness dispatch, exactly as a
 direct call's argument is (`LowerMaxonToStd.widenIntArgsToFloatParams`). A witness dispatch has no callee
 signature to look the parameter up in, so nothing used to widen it and the fused `witnessCall`'s
@@ -342,7 +336,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.float-formal-among-int-formals -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The formal→actual MAPPING under the widening above, which a one-off would silently break: the receiver is
 `args[0]` and interface formal `j` is `args[j+1]`, so in `combine(a int, k float, b int)` exactly the MIDDLE
 actual is widened and its two integral neighbours are passed through. Widening the wrong position puts a
@@ -391,7 +384,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-multi-arg-labelled -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The headline unlock: a witness dispatch of a TWO-parameter interface method, spelled the way every other
 Maxon call is spelled — first argument positional, second labelled. Before this rung the dispatch parsed its
 argument list as a bare comma loop with no label grammar at all, so `b: 2` was read as an expression and
@@ -438,7 +430,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-multi-arg-out-of-order -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Labels REORDER the arguments against the interface's declaration, exactly as they do at a direct call:
 `combine(1, b: 5, k: 3)` must bind `k = 3` and `b = 5` even though `b` appears first in source.
 `1*100 + 3*10 + 5` reads 135, and every wrong slotting reads something else (source order would give 153).
@@ -486,7 +477,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-multi-arg-first-arg-labelled -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A LABELLED FIRST ARGUMENT is accepted at an interface / type-parameter receiver — the one documented
 exemption from the rule `parameter-labels.md` states, because the receiver's concrete type is unknown in the
 shared body and the label binds against the interface. A concrete-struct receiver still rejects it with
@@ -534,7 +524,6 @@ end 'main'
 ```
 
 <!-- test: where-clauses.witness-multi-arg-ranged-return -->
-<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Regression pin for the garbage-read this rung closed, in the shape that made it LOUD rather than silent.
 With a NARROW ranged return (`int(0 to 1000)`) the only spelling the old parser accepted for a two-parameter
 method was the under-supplied `self.item.add(1)` — whose missing second actual left an uninitialised

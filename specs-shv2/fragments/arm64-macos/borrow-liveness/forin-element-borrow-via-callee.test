@@ -1,0 +1,29 @@
+// Test: forin-element-borrow-via-callee
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: ["hello world this is a long string for heap allocation"]}
+	end 'create'
+end 'Bag'
+
+function wipe(dest StringArray)
+	dest.clear()
+end 'wipe'
+
+function main() returns ExitCode
+	let b = Bag.create()
+	var total = 0 as Integer
+	for it in b.items 'scan'
+		wipe(b.items)
+		total = total + it.byteLength()
+	end 'scan'
+	print("{total}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:21:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)

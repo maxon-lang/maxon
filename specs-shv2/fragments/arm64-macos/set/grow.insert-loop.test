@@ -1,0 +1,159 @@
+// Test: grow.insert-loop
+typealias Int = int(i64.min to i64.max)
+typealias IntSet = Set with Int
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	var i = 0
+	while i < 20 'fill'
+		s.insert(i)
+		i = i + 1
+	end 'fill'
+	if s.count() != 20 'count'
+		return 1
+	end 'count'
+	var j = 0
+	while j < 20 'check'
+		if not s.contains(j) 'missing'
+			return 2
+		end 'missing'
+		j = j + 1
+	end 'check'
+	if s.contains(20) 'phantom'
+		return 3
+	end 'phantom'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl __set_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 20
+    arm64.cset x0, lt
+    arm64.cbnz x0, fill
+    arm64.b whileexit
+  fill:
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x3, x6
+    arm64.bl __set_insert
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x19
+    arm64.bl __set_count
+    arm64.cmp x0, 20
+    arm64.cset x0, ne
+    arm64.cbnz x0, count
+    arm64.b ifcont
+  count:
+    arm64.movImm x20, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __set_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 20
+    arm64.cset x0, lt
+    arm64.cbnz x0, check
+    arm64.b whileexit
+  check:
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x3, x6
+    arm64.bl __set_contains
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, missing
+    arm64.b ifcont
+  missing:
+    arm64.movImm x20, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __set_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movImm x1, 20
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.movRegReg x3, x6
+    arm64.bl __set_contains
+    arm64.cbnz x0, phantom
+    arm64.b ifcont
+  phantom:
+    arm64.movImm x20, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __set_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x20, 0
+    arm64.movRegReg x0, x19
+    arm64.bl __set_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @int.hash {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @int.equals {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, equal
+    arm64.b notEqual
+  equal:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  notEqual:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

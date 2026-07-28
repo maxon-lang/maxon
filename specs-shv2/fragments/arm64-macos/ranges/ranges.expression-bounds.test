@@ -1,0 +1,66 @@
+// Test: ranges.expression-bounds
+
+typealias Integer = int(i64.min to i64.max)
+
+function getStart() returns Integer
+		return 1
+end 'getStart'
+
+function getEnd() returns Integer
+		return 4
+end 'getEnd'
+
+function main() returns ExitCode
+		var sum = 0
+		for i in getStart() to getEnd() 'loop'
+				sum = sum + i
+		end 'loop'
+		return sum
+end 'main'
+---
+ExitCode: 10
+---
+func @getStart {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @getEnd {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl getStart
+    arm64.movRegReg x20, x0
+    arm64.bl getEnd
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x20, x0
+    arm64.cset x1, le
+    arm64.cbnz x1, loop
+    arm64.b forexit
+  loop:
+    arm64.add x19, x19, x20
+    arm64.b forstep
+  forstep:
+    arm64.add x20, x20, 1
+    arm64.b forhdr
+  forexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

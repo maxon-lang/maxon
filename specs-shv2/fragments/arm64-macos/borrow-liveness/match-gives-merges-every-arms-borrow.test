@@ -1,0 +1,23 @@
+// Test: match-gives-merges-every-arms-borrow
+enum Mode
+	first
+	second
+end 'Mode'
+
+function main() returns ExitCode
+	var a = ["alpha string long enough for the heap allocation path"]
+	var b = ["beta string long enough for the heap allocation path"]
+	let m = Mode.first
+	let s = match m 'pick'
+		first gives try a.get(0) otherwise ""
+		second gives try b.get(0) otherwise ""
+	end 'pick'
+	a.clear()
+	b.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:15:4: cannot mutate 'a' via 'clear' while it is borrowed by 's' (borrowed at line 12)
+error E3070: <fragment>:16:4: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 13)

@@ -1,0 +1,43 @@
+// Test: witness-throws.error.bare-dispatch-needs-try
+typealias Code = int(0 to u32.max)
+
+enum DigestError implements Error
+	tooSmall
+end 'DigestError'
+
+interface Digest
+	function digest() returns Code throws DigestError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws DigestError
+		if self.x < 10 'small'
+			throw DigestError.tooSmall
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+	export function itemDigest() returns Code throws DigestError
+		return self.item.digest()
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let b = PointBox.create(Point.create(3))
+	return (try b.itemDigest() otherwise 55) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3057: <fragment>:31:20: throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns

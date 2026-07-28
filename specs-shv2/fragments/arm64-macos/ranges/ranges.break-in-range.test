@@ -1,0 +1,45 @@
+// Test: ranges.break-in-range
+function main() returns ExitCode
+		var last = 0
+		for i in 1 to 100 'loop'
+				last = i
+				if i == 5 'done'
+						break
+				end 'done'
+		end 'loop'
+		return last
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
+    arm64.b forhdr
+  forhdr:
+    arm64.cmp x1, 100
+    arm64.cset x2, le
+    arm64.cbnz x2, loop
+    arm64.b critsplit
+  loop:
+    arm64.cmp x1, 5
+    arm64.cset x0, eq
+    arm64.cbnz x0, done
+    arm64.b ifcont
+  done:
+    arm64.movRegReg x0, x1
+    arm64.b forexit
+  ifcont:
+    arm64.b forstep
+  forstep:
+    arm64.add x0, x1, 1
+    arm64.xchgRegReg x1, x0
+    arm64.b forhdr
+  critsplit:
+    arm64.b forexit
+  forexit:
+    arm64.epilogue 16
+    arm64.ret
+}

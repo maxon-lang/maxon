@@ -1,0 +1,165 @@
+// Test: dead-def-past-the-arm64-pool-across-register-files
+function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, x float) returns int
+	let unused = x as int
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
+end 'f'
+
+function main() returns ExitCode
+	return f(1, a1: 2, a2: 3, a3: 4, a4: 5, a5: 6, a6: 7, a7: 8, a8: 9, a9: 10, a10: 11, a11: 12, a12: 13, a13: 14, a14: 15, a15: 16, a16: 17, a17: 18, a18: 19, a19: 20, a20: 0, a21: 0, a22: 0, a23: 0, a24: 0, a25: 0, x: 1.5)
+end 'main'
+---
+ExitCode: 210
+---
+func @f {
+  entry:
+    arm64.prologue 112
+    arm64.storeSlotReg slot10, x28
+    arm64.storeSlotReg slot9, x27
+    arm64.storeSlotReg slot8, x26
+    arm64.storeSlotReg slot7, x25
+    arm64.storeSlotReg slot6, x24
+    arm64.storeSlotReg slot5, x23
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movRegReg x8, x3
+    arm64.movRegReg x9, x4
+    arm64.movRegReg x10, x5
+    arm64.loadRegBaseDisp.word64 x11, [x29 + 112]
+    arm64.loadRegBaseDisp.word64 x19, [x29 + 120]
+    arm64.loadRegBaseDisp.word64 x20, [x29 + 128]
+    arm64.loadRegBaseDisp.word64 x21, [x29 + 136]
+    arm64.loadRegBaseDisp.word64 x3, [x29 + 144]
+    arm64.loadRegBaseDisp.word64 x4, [x29 + 152]
+    arm64.loadRegBaseDisp.word64 x5, [x29 + 160]
+    arm64.loadRegBaseDisp.word64 x12, [x29 + 168]
+    arm64.loadRegBaseDisp.word64 x13, [x29 + 176]
+    arm64.loadRegBaseDisp.word64 x14, [x29 + 184]
+    arm64.loadRegBaseDisp.word64 x15, [x29 + 192]
+    arm64.loadRegBaseDisp.word64 x22, [x29 + 200]
+    arm64.loadRegBaseDisp.word64 x23, [x29 + 208]
+    arm64.loadRegBaseDisp.word64 x24, [x29 + 216]
+    arm64.loadRegBaseDisp.word64 x25, [x29 + 224]
+    arm64.loadRegBaseDisp.word64 x26, [x29 + 232]
+    arm64.loadRegBaseDisp.word64 x27, [x29 + 240]
+    arm64.loadRegBaseDisp.word64 x28, [x29 + 248]
+    arm64.storeSlotReg slot0, x28
+    arm64.fcvtzs x28, d0
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x8
+    arm64.add x0, x0, x9
+    arm64.add x0, x0, x10
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.add x0, x0, x11
+    arm64.add x0, x0, x19
+    arm64.add x0, x0, x20
+    arm64.add x0, x0, x21
+    arm64.add x0, x0, x3
+    arm64.add x0, x0, x4
+    arm64.add x0, x0, x5
+    arm64.add x0, x0, x12
+    arm64.add x0, x0, x13
+    arm64.add x0, x0, x14
+    arm64.add x0, x0, x15
+    arm64.add x0, x0, x22
+    arm64.add x0, x0, x23
+    arm64.add x0, x0, x24
+    arm64.add x0, x0, x25
+    arm64.add x0, x0, x26
+    arm64.add x0, x0, x27
+    arm64.loadRegSlot x1, slot0
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.loadRegSlot x27, slot9
+    arm64.loadRegSlot x28, slot10
+    arm64.epilogue 112
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 240 record@144
+    arm64.storeSlotReg slot9, x28
+    arm64.storeSlotReg slot8, x27
+    arm64.storeSlotReg slot7, x26
+    arm64.storeSlotReg slot6, x25
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 3
+    arm64.movImm x6, 4
+    arm64.movImm x7, 5
+    arm64.movImm x8, 6
+    arm64.movImm x9, 7
+    arm64.movImm x10, 8
+    arm64.movImm x11, 9
+    arm64.movImm x19, 10
+    arm64.movImm x20, 11
+    arm64.movImm x21, 12
+    arm64.movImm x3, 13
+    arm64.movImm x4, 14
+    arm64.movImm x5, 15
+    arm64.movImm x12, 16
+    arm64.movImm x13, 17
+    arm64.movImm x14, 18
+    arm64.movImm x15, 19
+    arm64.movImm x22, 20
+    arm64.movImm x23, 0
+    arm64.movImm x24, 0
+    arm64.movImm x25, 0
+    arm64.movImm x26, 0
+    arm64.movImm x27, 0
+    arm64.movImm x28, 0
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.storeOutgoingArg [sp + arg0], x11
+    arm64.storeOutgoingArg [sp + arg1], x19
+    arm64.storeOutgoingArg [sp + arg2], x20
+    arm64.storeOutgoingArg [sp + arg3], x21
+    arm64.storeOutgoingArg [sp + arg4], x3
+    arm64.storeOutgoingArg [sp + arg5], x4
+    arm64.storeOutgoingArg [sp + arg6], x5
+    arm64.storeOutgoingArg [sp + arg7], x12
+    arm64.storeOutgoingArg [sp + arg8], x13
+    arm64.storeOutgoingArg [sp + arg9], x14
+    arm64.storeOutgoingArg [sp + arg10], x15
+    arm64.storeOutgoingArg [sp + arg11], x22
+    arm64.storeOutgoingArg [sp + arg12], x23
+    arm64.storeOutgoingArg [sp + arg13], x24
+    arm64.storeOutgoingArg [sp + arg14], x25
+    arm64.storeOutgoingArg [sp + arg15], x26
+    arm64.storeOutgoingArg [sp + arg16], x27
+    arm64.storeOutgoingArg [sp + arg17], x28
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.movRegReg x5, x8
+    arm64.movRegReg x6, x9
+    arm64.movRegReg x7, x10
+    arm64.bl f
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.loadRegSlot x25, slot6
+    arm64.loadRegSlot x26, slot7
+    arm64.loadRegSlot x27, slot8
+    arm64.loadRegSlot x28, slot9
+    arm64.epilogue 240 record@144
+    arm64.ret
+}

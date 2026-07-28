@@ -1,0 +1,101 @@
+// Test: first-class-function.indirect-call-arity-13
+typealias Integer = int(i64.min to i64.max)
+typealias Op13 = function(Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer) returns Integer
+
+function sum13(a0 Integer, a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer) returns Integer
+	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12
+end 'sum13'
+
+function callIt(f Op13) returns Integer
+	return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+end 'callIt'
+
+function main() returns ExitCode
+	return callIt(sum13) as ExitCode
+end 'main'
+---
+ExitCode: 91
+---
+func @sum13 {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x8, x3
+    arm64.movRegReg x9, x4
+    arm64.movRegReg x10, x5
+    arm64.loadRegBaseDisp.word64 x11, [x29 + 48]
+    arm64.loadRegBaseDisp.word64 x19, [x29 + 56]
+    arm64.loadRegBaseDisp.word64 x20, [x29 + 64]
+    arm64.loadRegBaseDisp.word64 x21, [x29 + 72]
+    arm64.loadRegBaseDisp.word64 x3, [x29 + 80]
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x2
+    arm64.add x0, x0, x8
+    arm64.add x0, x0, x9
+    arm64.add x0, x0, x10
+    arm64.add x0, x0, x6
+    arm64.add x0, x0, x7
+    arm64.add x0, x0, x11
+    arm64.add x0, x0, x19
+    arm64.add x0, x0, x20
+    arm64.add x0, x0, x21
+    arm64.add x0, x0, x3
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @callIt {
+  entry:
+    arm64.prologue 96 record@48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 1
+    arm64.movImm x2, 2
+    arm64.movImm x6, 3
+    arm64.movImm x7, 4
+    arm64.movImm x8, 5
+    arm64.movImm x9, 6
+    arm64.movImm x10, 7
+    arm64.movImm x11, 8
+    arm64.movImm x20, 9
+    arm64.movImm x21, 10
+    arm64.movImm x3, 11
+    arm64.movImm x4, 12
+    arm64.movImm x5, 13
+    arm64.storeOutgoingArg [sp + arg0], x20
+    arm64.storeOutgoingArg [sp + arg1], x21
+    arm64.storeOutgoingArg [sp + arg2], x3
+    arm64.storeOutgoingArg [sp + arg3], x4
+    arm64.storeOutgoingArg [sp + arg4], x5
+    arm64.storeOutgoingArg [sp + arg5], x1
+    arm64.movRegReg x1, x2
+    arm64.movRegReg x2, x6
+    arm64.movRegReg x3, x7
+    arm64.movRegReg x4, x8
+    arm64.movRegReg x5, x9
+    arm64.movRegReg x6, x10
+    arm64.movRegReg x7, x11
+    arm64.blr x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 96 record@48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaFuncAddr x0, __fnref_sum13
+    arm64.movImm x1, 0
+    arm64.bl callIt
+    arm64.epilogue 16
+    arm64.ret
+}

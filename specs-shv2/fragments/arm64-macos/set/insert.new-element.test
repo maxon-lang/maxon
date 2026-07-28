@@ -1,0 +1,83 @@
+// Test: insert.new-element
+function main() returns ExitCode
+	var s = Set from [1, 2, 3]
+	s.insert(4)
+	return s.count()
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __arr_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 2
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.movImm x1, 3
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_push
+    arm64.leaRdata x1, __witness_int.Hashable
+    arm64.leaRdata x2, __witness_int.Equatable
+    arm64.movRegReg x0, x19
+    arm64.bl __set_from
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __arr_decref
+    arm64.movImm x1, 4
+    arm64.leaRdata x2, __witness_int.Hashable
+    arm64.leaRdata x6, __witness_int.Equatable
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x3, x6
+    arm64.bl __set_insert
+    arm64.movRegReg x0, x20
+    arm64.bl __set_count
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x20
+    arm64.bl __set_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @int.hash {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x1, 4294967295
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @int.equals {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, equal
+    arm64.b notEqual
+  equal:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  notEqual:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
