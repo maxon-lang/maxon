@@ -1,6 +1,6 @@
 ---
 name: rung
-description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, scale-test ladder read (optimizer agent on trigger), independent review, gate battery, cross-target gate (every LOCAL target; remote/arm64 is synced separately by hand), rebase, fast-forward merge, push. Prefer a WIDER WAVE over slicing. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
+description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, scale-test ladder read (optimizer agent on trigger), independent review, gate battery, cross-target gate (every LOCAL target — arm64 is remote, synced separately by hand, and is NEVER required to complete a rung), rebase, fast-forward merge, push. Prefer a WIDER WAVE over slicing. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
 ---
 
 # Run one rung of the plan
@@ -30,6 +30,9 @@ have marched straight past that and built P1.1 on it.)*
 
 - **Any gate is red** — a non-zero build, a non-green suite, exit **101**, or an unjustified **`M`** on a
   pre-existing fragment. **Never turn a gate green by narrowing what it tests.**
+  ⚠ **A lane that did not RUN is not a red gate.** The remote **arm64** lanes are outside the rung gate
+  entirely (step 10) — an unreachable Mac, an absent runner or a skipped target is a **SKIP you report**,
+  never a HALT and never a reason to hold a rung open. Red means *ran and failed*.
 - **A reachable DEFECT in this rung's own mechanism — a WRONG ANSWER as much as a leak — even one the
   SUITE is GREEN over.** The leak gate ("no run exits 101") checks the *committed suite*; the defects that
   matter most are the ones a suite run never reaches — a `let m = f()` that exits **101**, or a correct
@@ -460,7 +463,7 @@ project. **Manual testing is the slowest possible way to check the same thing tw
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
 | Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks. ⇒ **and the probe that found it becomes a COMMITTED SPEC** — see step 8. That is what turns this gate's one-off discovery into coverage the next rung inherits |
-| Cross-target | **step 10** — every **locally runnable** target, not just this host's. The remote arm64 lanes are NOT in the rung gate (synced by hand — see step 10). Not run ⇒ SKIP (say which); ran-and-failed ⇒ **RED** |
+| Cross-target | **step 10** — every **locally runnable** target, not just this host's. **The remote arm64 lanes are NOT in this battery and are NOT required to complete the rung** (synced by hand — see step 10). Not run ⇒ SKIP (say which); ran-and-failed ⇒ **RED** |
 
 ## 10. The CROSS-TARGET gate — every LOCAL target, once, before it lands
 
@@ -503,6 +506,11 @@ belong on every commit: it is minutes of work whose answer only changes when the
 
 ### ⛔ The REMOTE (arm64/Mac) lanes are NOT part of this gate — they are synced by hand (user, 2026-07-27)
 
+> **⭐ ARM64 VERIFICATION IS NEVER A CONDITION FOR COMPLETING A RUNG (user, 2026-07-28).** Not the
+> suite, not the goldens, not "let me just try the Mac first." **A rung that is green on every
+> LOCALLY runnable target is finished** — it merges, it pushes, and step 12 marks it ✅ if nothing
+> else holds it open. **An unverified arm64 lane is a reported SKIP, not a residual**; see step 12.
+
 **`arm64-macos` and `arm64-linux` run over `ssh` to a Mac, and everything expensive about them is the
 REMOTE part, not the arm64 part**: a bundle transport, a second checkout's build, an OrbStack guest, and
 a machine that can be asleep, wedged, or behind flaky mDNS. **They cost the rung more than they caught** —
@@ -515,8 +523,16 @@ longer waits on another machine.
   (or `bash scripts/remote-mac.sh --host=<user@mac> --shv2` for the native macOS lane alone, which
   bypasses the OrbStack preflight). `--require-mac` makes an unreachable Mac a FAILURE there, which is
   right when reaching it *was* the point. **Not your call to schedule as part of a rung.**
+- **The arm64 GOLDENS ride the same rule.** A codegen change leaves `fragments-arm64-*` stale, and those
+  goldens can only be minted by the lane that emits them — **so they are minted at the periodic sync, not
+  at the rung.** Do not hold a merge for them, and do not hand-edit them to look current. **Say in the
+  rung report that the rung changed codegen and the arm64 goldens are therefore owed a mint.** *(This is
+  why the sync's own red lanes are fixed rather than filed: the debt is real, it is just not the rung's
+  to pay.)*
 - ⚠ **This is a deliberate COVERAGE TRADE, not a claim arm64 is fine.** Golden rot on an unrun lane is a
   measured, recurring fact in this repo. **Do not describe a rung as cross-target verified on arm64.**
+  The trade is only honest if the SKIP is stated — an unreported skip converts *"we chose not to check"*
+  into *"we checked,"* which is the one failure this whole section is guarding against.
 
 | | |
 |---|---|
@@ -553,6 +569,14 @@ Update `maxon-shv2/PLAN.md`: a rung's deliverable is the set of `disabled-test:`
 step 2, the rung is **not** complete (status **◑**, not ✅), and each residual must be written into the
 appropriate PLAN.md section (a future rung, a workstream residual, or the bootstrap-oracle / "Measured
 debt" notes), not left implicit. Record anything durable in memory.
+
+> **⭐ AN UNVERIFIED arm64 LANE IS NOT A RESIDUAL, AND NEVER HOLDS A RUNG AT ◑.** A residual is
+> **work this rung owes** — a mechanism it left unbuilt, a defect it sanctioned deferring. A skipped
+> remote lane is **coverage this process deliberately batches** (step 10, step 13), owed by the
+> periodic sync and not by the rung. **Mark the rung ✅ on the local targets** and write the skip into
+> its detail row exactly as the gate reported it — `arm64 SKIP — remote, UNVERIFIED` — which is the
+> spelling the existing rows already use. **A rung parked at ◑ waiting on another machine is the
+> failure this rule exists to prevent: it makes the ladder's next rung unpickable over a laptop.**
 
 **Write the rung's DETAIL row. Do NOT hand-update the "Status at a glance" index — that is a
 PHASE-BOUNDARY job.** The index is a second copy of facts the detail rows already hold, and maintaining

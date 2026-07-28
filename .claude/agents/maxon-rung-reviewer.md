@@ -63,7 +63,9 @@ fallthrough — throw. `try/otherwise` that cannot fail ⇒ `otherwise panic("re
 `typealias` names describe **purpose**, not type. Typed ranges as narrow as **provably** correct (a
 wrong narrow bound is a runtime panic; wide is fine where there is no real bound). Comments explain
 **WHY**, not what. Blank lines between logical sections. TABS, camelCase, no underscores.
-**Cross-target consistency:** an x64 change needs its arm64 equivalent.
+**Cross-target consistency:** an x64 change needs its arm64 equivalent — **the CODE, which you review by
+READING. Never ask for it to be RUN**: the arm64 lanes are remote and are not part of the rung gate, so
+"unverified on arm64" is never a review finding and never blocks the merge.
 
 ## Rules of engagement
 
