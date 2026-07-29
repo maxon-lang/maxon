@@ -159,14 +159,14 @@ take its blocker instead)*
 
 | id | Slice | Lane | Status | Owner (branch) | Claimed (UTC) |
 |---|---|---|:--:|---|---|
-| **G1** | **Split `compilerExe` → compiler-under-test + WORKER exe.** §"⚠⚠ STEP 0" — unsplit, the gate passes while testing nothing | L-harness | 🔶 CLAIMED | `slice/G1-worker-exe-split` | 2026-07-29T18:22Z |
+| **G1** | **Split `compilerExe` → compiler-under-test + WORKER exe.** §"⚠⚠ STEP 0" — unsplit, the gate passes while testing nothing. ✅ `9402d4620`..`20312151a`: two params + `--compiler=<path>` forwarded UNCONDITIONALLY (the worker used to re-derive it). Pinned by `scripts/worker-exe-split-gate.sh` — a **NEGATIVE control**, because a byte-identical copy distinguishes the two models not at all. Review found a second door to the same wrong answer (`--compiler=` empty read as "no flag") and closed it. **Moved NO committed goldens** — fragments empty after a full run | L-harness | ✅ DONE | `slice/G1-worker-exe-split` | 2026-07-29T18:22Z |
 | **S1** | **`__Builtins.*` QUALIFIED-call recognition** for the programs shv2 compiles (a qualified callee can never match the bare-name table). Step (2) of §"STDLIB WHITELIST"'s own sequence | L-stdlib | ⬜ FREE | — | — |
 | **S2** | **Whitelist entries 4…n** — `FilePath` · `File` · `Directory` · `Subprocess` · `Executable` · `StringArray`. **The dominant cost of the whole gate** | L-stdlib | ⛔ BLOCKED | on **S1**, and see the ⚠ below | — |
 | **D1** | **Methods on `union` / `enum`** (`Parser.maxon:7922`, already self-labelled *"arrive with a later rung"*). Unblocks **5 of the 13** harness files by itself | L-parser-decl | ⬜ FREE | — | — |
 | **D2** | **The postfix / member walk**, all four symptoms as ONE slice: a method call on a struct FIELD · a field access on a non-struct base · a method call on a **literal** (`"a,b".split(",")`) · a static method on a primitive (`int.fromString`) | L-parser-postfix | ⬜ FREE | — | — |
 | **D4** | **`ByteArray` / `Byte` as a declared type** — today it resolves to `int`, which is why its symptom is D2's message. Blocks the 4 binary-image readers | L-types | ⬜ FREE | — | — |
 | **D5** | **`#if` conditional compilation.** ✅ The LEXER half already exists — `Lexer.maxon` emits `hashIf`/`hashElse`/`hashEndif` (`:257`, `:1364`) and `scanDirective` (`:1096`) reads them. ⚠ **The rest is not small**: condition EVALUATION (`os()`/`arch()`/`testing()` with `and`/`or`/`not`) plus `#else` plus **NESTING** — `Target.detectHostTarget()` is itself a nested `#if`/`#else`, so a flat implementation does not compile the one function this row exists to unblock | L-parser-stmt | ⬜ FREE | — | — |
-| **5d** | **RE-EXTRACT AND RE-MEASURE the runner.** A LOOP, not a slice | — | ⛔ BLOCKED | on G1 · S2 · D1 · D2 · D4 · D5 | — |
+| **5d** | **RE-EXTRACT AND RE-MEASURE the runner.** A LOOP, not a slice | — | ⛔ BLOCKED | on ~~G1~~ ✅ · S2 · D1 · D2 · D4 · D5 | — |
 | **6b** | **The differential oracle** · `-j1==-jN` · clean `mm-trace` | — | ⛔ BLOCKED | on **5d** | — |
 
 > ### ⚠ S2 PROBABLY HAS A SECOND BLOCKER, AND IT IS NOT ON THIS BOARD YET
@@ -1463,8 +1463,9 @@ top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — 
 ### 🚩 PHASE 1 GATE — the differential oracle
 
 **Acceptance — and step 1 is the whole point:**
-0. **Split `compilerExe` into the COMPILER-UNDER-TEST and the WORKER EXECUTABLE.** ⚠⚠ See the box
-   below. Without this, steps 1–4 all pass while testing nothing.
+0. ✅ **DONE 2026-07-29 (slice G1).** Split `compilerExe` into the COMPILER-UNDER-TEST and the WORKER
+   EXECUTABLE. ⚠⚠ See the box below. Without this, steps 1–4 all pass while testing nothing.
+   **Gate: `scripts/worker-exe-split-gate.sh` — run it whenever the pool's dispatch changes.**
 1. Compile the **parallel** harness with **`maxon.exe`** → `spec-runner-ref.exe`.
 2. Compile the **parallel** harness with **`maxon-shv2.exe`** → `spec-runner-shv2.exe`.
 3. Run **both** against `specs-shv2/`, both driving `maxon-shv2.exe` as the compiler-under-test,
@@ -1497,6 +1498,56 @@ while silently broken.**
 > signature bug — ONE FACT WRITTEN DOWN TWICE — inverted: here it is *two facts spelled once*, and it
 > is wearing this gate's own intention as a mask. Fix it BEFORE the gate can mean anything, and pin
 > it with a run whose worker exe is deliberately NOT the compiler under test.
+>
+> ### ✅ CLOSED 2026-07-29 — slice **G1** (`9402d4620`..`20312151a`)
+>
+> `workerExe` (always `Process.executablePath()`, **not settable** — a flag spawning some *other*
+> harness as a worker has no caller and could only lie) and `compilerExe` (**`--compiler=<path>`**,
+> else the running exe) are now two parameters. The parent forwards `--compiler=` to every worker
+> **unconditionally**, which is the part that actually kills the bug: the worker used to *re-derive*
+> the compiler from its own `Process.executablePath()`, and `spawnNoWait` had already written the
+> cure for the sibling case — *"a worker that decided again could decide differently"* — without
+> anyone applying it here.
+>
+> **⭐ NEITHER REFERENCE COMPILER COULD ANSWER THIS, AND THAT IS A FINDING RATHER THAN A GAP.** v1's
+> workers compile **in-process** (`compileFragmentInMemory`,
+> [SpecTestRunner.maxon:1134](maxon-selfhosted/Testing/SpecTestRunner.maxon#L1134)) and the bootstrap
+> uses in-process **threads** ([TestRunner.cs:109-176](maxon-sharp/Testing/TestRunner.cs#L109)) —
+> **neither ever spawns a compiler binary from a worker**, so the two facts never had to separate and
+> neither tree contains a `--compiler`-like flag. shv2's spawn-the-compiler harness is its own
+> deliberate design; this split was **designed here, not ported**, and no reference could validate it.
+>
+> **⭐⭐ THE PIN IS A NEGATIVE CONTROL, BECAUSE THE OBVIOUS CHECK DISTINGUISHES NOTHING.**
+> `scripts/worker-exe-split-gate.sh`. Running with `--compiler=<a byte-identical copy>` and seeing it
+> pass is **not evidence** — a harness that honours the flag and one that ignores it and uses itself
+> BOTH pass, which is *"no failing test is about coverage, never agreement"* in its purest form. The
+> experiment where the two models give **opposite** verdicts is pointing `--compiler=` at a real
+> executable that is not a compiler: split honoured ⇒ **every test fails**; split broken ⇒ **every
+> test passes**. Verified by sabotage — passing `workerExe` where `compilerExe` belongs turns that
+> check from `0 passed, 4 failed` into `4 passed, 0 failed` **while the positive control stays green
+> in both**, which is the whole argument written out as a measurement.
+>
+> **⭐ THE REVIEW FOUND A SECOND DOOR INTO THE SAME WRONG ANSWER, AND IT WAS THE RUNG'S OWN.**
+> `--compiler=` with an **empty value** exited 0 with `4 passed, 0 failed`:
+> `CommandLine.optionValue("--compiler=")` returns `""` **without throwing**, and `""` is exactly how
+> the field spells *"the caller named no compiler"* — so an empty VALUE and an ABSENT FLAG arrived
+> indistinguishable and were both answered with the running executable. The rung's own comment said
+> that outcome was impossible; the code reached it through the argument parser instead of the
+> filesystem. Reachable, not theoretical: `set -u` catches an *unset* variable and never an *empty*
+> one, so any wrapper computing `--compiler=$CUT` — **including this gate script itself** — got the
+> green. Refused at the parser through the door `--workers=`/`--rungs=` already use, and pinned as
+> gate CHECK 5, seen RED first.
+>
+> ⚠ **`Testing/ScaleTestRunner.maxon:364` has the same `Process.executablePath()` spelling and is NOT
+> the same bug** — checked at the code rather than assumed: its `compilerExe` has exactly one
+> consumer (`compileRung` → `runProcess`), no pool, no second process, nothing re-deriving it. One
+> fact, one consumer. (`Compiler/StdlibSource.maxon:58` locates the *running image's own* stdlib, so
+> the subject is by definition this process — and it is what makes the gate's positive control work.)
+>
+> Gates: shv2 **2372/0** unchanged · build 0 warnings · `specs-shv2/fragments/` **EMPTY** after a full
+> run ⇒ byte-identical codegen · no run exits 101 · split gate **5/5** · scale-test **unmoved, and
+> A/B-confirmed at the same checkout path against the pre-change binary** (the log's standing +192 is
+> upstream's, not this rung's — the plausible story was wrong).
 
 ### 📏 THE GATE'S MEASURED DISTANCE (2026-07-29) — 13 files, 13 first-errors, and a LOWER BOUND
 
@@ -2728,7 +2779,7 @@ gate**.
 > | **5b** | **methods on `union`/`enum`** | Blocks 5 of the 13 files by itself, including `TestOutcome` — which `reportResults` matches on, i.e. the gate's entire observable surface |
 > | **5c** | **a method call on a struct FIELD** · **`ByteArray`/`Byte`** · **`#if`** · **`int.fromString`** | Individually small, jointly the rest of the measured 13. `#if` is the sharp one: it blocks `detectHostTarget()`, so nothing target-aware runs until it lands |
 > | **5d** | **RE-EXTRACT AND RE-MEASURE** | The list above is a **LOWER bound** — one error per file, nothing behind the first reached. Expect a new list, not an empty one. Budget for the loop; do not read 5a–5c completing as "the harness compiles" |
-> | **6a** | **⚠ SPLIT `compilerExe` → compiler-under-test + worker exe** (step 0's box) | **MUST precede 6b.** Unsplit, the gate passes while testing nothing — it is not a cleanup, it is the precondition for 6b having content |
+> | **6a** | ✅ **DONE 2026-07-29 (slice G1).** SPLIT `compilerExe` → compiler-under-test + worker exe (step 0's box) | **MUST precede 6b.** Unsplit, the gate passes while testing nothing — it is not a cleanup, it is the precondition for 6b having content. **6b can now be written against `--compiler=<path>`**, and `scripts/worker-exe-split-gate.sh` is what keeps that flag honest |
 > | **6b** | the differential oracle · `-j1==-jN` · clean `mm-trace` | The gate as written |
 >
 > ⚠ **5d is the row most likely to be skipped, and it is the one the measurement argues for.** A
