@@ -28,6 +28,10 @@ of driving a DIFFERENT await) has already had its stack freed, so only its struc
 removed from the timer / process stores — closing a parked child's handle to abandon the wait — and its stack
 freed.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** Dropping a promise reaps a green-thread struct and releases its stack through
+`osFreePages`/`VirtualFree`, which exists only on x64-windows at this rung.
+
 ## Tests
 
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->

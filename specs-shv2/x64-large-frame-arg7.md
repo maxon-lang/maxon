@@ -40,14 +40,19 @@ of the register the prologue overwrote.
 
 **Targets: an x64-windows case ON ITS MERITS.** `__chkstk` is the Windows stack probe — Linux x64 grows
 the stack without one, and neither arm64 nor wasm has the concept — so no other native target can exhibit
-this bug and a pass on one would be a green light about nothing. The `wasm32-wasi` lane is kept because it
-already passes and costs nothing, but it checks the SUM, not the prologue. arm64 is therefore gated out on
-the merits, not merely for the missing golden.
+this bug and a pass on one would be a green light about nothing. arm64 is therefore gated out on the
+merits, not merely for the missing golden.
+
+The `x64-linux` and `wasm32-wasi` lanes are kept because they already pass and cost nothing, but **both
+check the SUM, not the prologue** — a green light about nothing, run because it is free, not because it
+proves anything. ⚠ `x64-linux` was absent until 2026-07-28 while `wasm32-wasi` was listed on exactly that
+"costs nothing" reasoning, which the two lanes could not both be right about; measured green there and
+added, so the stated policy and the marker now agree.
 
 ## Tests
 
 <!-- test: seventh-param-survives-chkstk-prologue -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 typealias Num = int(0 to 100000000)
 

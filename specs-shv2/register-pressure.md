@@ -58,6 +58,17 @@ allocator would have colored. It is designed to let its consumer converge in one
 The message is **deterministic byte-for-byte** — same program, same message — which is what
 the ` ```maxoncstderr ` blocks below assert.
 
+**Targets — a REGISTER-POOL gate, and the pool is the subject.** The deficit each message quotes is
+computed against the target's own file, so the same program yields a DIFFERENT byte-exact message per
+ISA — which is why the cases below come in `x64-windows, x64-linux` / `arm64-macos, arm64-linux` twins
+rather than one shared case. `wasm32-wasi` is excluded from all of them because a stack machine has no
+register cap to exceed, so E5001 cannot fire there at all. The float case is gated to x64 for the same
+reason one file down: it is calibrated to x64's sixteen-deep XMM pool.
+
+⚠ Verified 2026-07-28 by widening every marker and re-running: each x64 twin fails on arm64 and each
+arm64 twin on x64 with a *compiler-error mismatch* — the deficits genuinely differ — so no twin is
+gated merely because nobody generated its golden.
+
 ## Tests
 
 <!-- test: hot-loop-overflow -->

@@ -61,6 +61,11 @@ monotonic one has no arm64/wasm lowering. A program that reaches any of them on 
 refused with `E3104` at the call site rather than panicking three tiers down in the wasm/arm64
 backend.
 
+⚠ **Which cases that gates, exactly**: only the ones that REACH `__gt_now_ns`/`__clock_now_unix_s`.
+`arity-checked` and `unknown-intrinsic` are refused in the front end, are target-neutral, and carry NO
+marker — `arity-checked` wore one until the 2026-07-28 targets audit measured it green on x64-linux and
+wasm32-wasi. See `async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
+
 ## Tests
 
 <!-- test: builtins-clock.nanos-monotonic -->
@@ -239,7 +244,6 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.arity-checked -->
-<!-- targets: x64-windows -->
 A clock intrinsic takes no arguments; one given an argument is refused by the same builtin-arity
 check `trunc`/`sleep` use, because a builtin has no signature for the ordinary arity check to read.
 ```maxon

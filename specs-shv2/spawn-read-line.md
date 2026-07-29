@@ -35,6 +35,10 @@ publish-after-park handshake (the reading thread sets a `parked` flag only AFTER
 completion thread spins on that flag before re-readying) closes the lost-wakeup / torn-status race a
 completion arriving before the park would otherwise cause.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** Reading a line from a spawned child parks the calling green thread on the driver,
+and the interleaving cases additionally reach `__gt_sleep` — both x64-windows only at this rung.
+
 ## Tests
 
 <!-- test: spawn-read-line.top-level -->

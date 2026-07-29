@@ -1,0 +1,147 @@
+// Test: params-straddling-rbp-128-boundary
+
+typealias Integer = int(i64.min to i64.max)
+
+// Sum the three parameters straddling the boundary: a20 at [rbp+112], a21 at
+// [rbp+120], a22 at [rbp+128]. A miscompiled a22 load corrupts the total.
+function sum22(a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer, a20 Integer, a21 Integer, a22 Integer) returns Integer
+	return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22
+end 'sum22'
+
+function main() returns ExitCode
+	return sum22(0, a2: 0, a3: 0, a4: 0, a5: 0, a6: 0, a7: 0, a8: 0, a9: 0, a10: 0, a11: 0, a12: 0, a13: 0, a14: 0, a15: 0, a16: 0, a17: 0, a18: 0, a19: 0, a20: 40, a21: 50, a22: 60)
+end 'main'
+---
+ExitCode: 150
+---
+func @sum22 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 64
+    x64.loadRegBaseDisp.word64 r8, [rbp + 48]
+    x64.loadRegBaseDisp.word64 r10, [rbp + 56]
+    x64.loadRegBaseDisp.word64 r11, [rbp + 64]
+    x64.loadRegBaseDisp.word64 rbx, [rbp + 72]
+    x64.loadRegBaseDisp.word64 r12, [rbp + 80]
+    x64.loadRegBaseDisp.word64 r13, [rbp + 88]
+    x64.loadRegBaseDisp.word64 r14, [rbp + 96]
+    x64.loadRegBaseDisp.word64 r15, [rbp + 104]
+    x64.storeSlotReg slot0, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 112]
+    x64.storeSlotReg slot1, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 120]
+    x64.storeSlotReg slot2, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 128]
+    x64.storeSlotReg slot3, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 136]
+    x64.storeSlotReg slot4, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 144]
+    x64.storeSlotReg slot5, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 152]
+    x64.storeSlotReg slot6, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 160]
+    x64.storeSlotReg slot7, r15
+    x64.loadRegBaseDisp.word64 r15, [rbp + 168]
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot4
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot5
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r8, rax, r15
+    x64.epilogue 64
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 168
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdi, 0
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r9, 0
+    x64.movRegImm32 r10, 0
+    x64.movRegImm32 r11, 0
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 r14, 0
+    x64.movRegImm32 r15, 40
+    x64.storeBaseDispReg.word64 [rsp + 32], rax
+    x64.storeBaseDispReg.word64 [rsp + 40], rcx
+    x64.storeBaseDispReg.word64 [rsp + 48], rdx
+    x64.storeBaseDispReg.word64 [rsp + 56], rsi
+    x64.storeBaseDispReg.word64 [rsp + 64], rdi
+    x64.storeBaseDispReg.word64 [rsp + 72], r8
+    x64.storeBaseDispReg.word64 [rsp + 80], r9
+    x64.storeBaseDispReg.word64 [rsp + 88], r10
+    x64.storeBaseDispReg.word64 [rsp + 96], r11
+    x64.storeBaseDispReg.word64 [rsp + 104], rbx
+    x64.storeBaseDispReg.word64 [rsp + 112], r12
+    x64.storeBaseDispReg.word64 [rsp + 120], r13
+    x64.storeBaseDispReg.word64 [rsp + 128], r14
+    x64.storeBaseDispReg.word64 [rsp + 136], r15
+    x64.movRegImm32 rax, 50
+    x64.storeBaseDispReg.word64 [rsp + 144], rax
+    x64.movRegImm32 rax, 60
+    x64.storeBaseDispReg.word64 [rsp + 152], rax
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r9, 0
+    x64.movRegImm32 rsi, 0
+    x64.movRegImm32 rdi, 0
+    x64.callDirect sum22
+    x64.epilogue 168
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

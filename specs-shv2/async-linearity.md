@@ -31,6 +31,11 @@ The check is **flow-sensitive reachability**, not lexical position, and it has t
 These cases are **scalar twins** of `specs/async-await.md`'s linearity tests, which gate on `File.exists`
 (no shv2 I/O yet); the linearity rule is structural and fires identically for a scalar promise.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** These cases spawn and await, so they reach the driver's `QueryPerformanceCounter`
+and `VirtualFree` entries, which exist only on x64-windows at this rung. The marker is not an opt-in:
+the linearity RULE itself is target-neutral, and its compile-time refusals carry no marker.
+
 ## Tests
 
 <!-- test: async-linearity.error.double-await -->

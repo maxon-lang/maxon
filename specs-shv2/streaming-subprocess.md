@@ -42,6 +42,10 @@ The read line-buffers per handle: each stdout/stderr stream carries a growable b
 appends into; the reader scans for `\n`, returns everything through the first one, and keeps the tail
 buffered for the next call. `cmd /c echo hello` writes `hello\r\n` = 7 bytes.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** The streaming reader parks its green thread on the driver, and several cases reach
+`__gt_sleep` directly — both x64-windows only at this rung.
+
 ## Tests
 
 <!-- test: streaming-subprocess.echo-read -->

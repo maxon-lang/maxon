@@ -2789,6 +2789,12 @@ function value into a parameter whose function type has a function-typed paramet
 that fails validation (`expected i64 but nothing on stack`). It reproduces byte-for-byte on the parent
 commit, with the SAME alias on both sides and with no indirect call anywhere, so it is neither this
 rule's nor newly reachable — it is filed for its own rung.
+
+⚠ **The marker also excludes both arm64 targets, and NOTHING above explains that** — the wasm reason
+does not reach arm64, which shares the register backend x64 uses. Flagged by the 2026-07-28 targets
+audit, which could not settle it: the audit ran x64-windows, x64-linux and wasm32-wasi locally, and the
+arm64 lanes are synced by hand from a Mac. **Widen it to `arm64-macos, arm64-linux` and keep it if it
+passes** — an unexplained exclusion is the shape a "it was red once" gate hides in.
 <!-- targets: x64-windows, x64-linux -->
 ```maxon
 

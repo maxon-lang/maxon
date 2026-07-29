@@ -71,6 +71,11 @@ unreached one COMPILES (`async-sleep.unreached-compiles-on-wasm` pins the other 
 for user code and reachability-aware for stdlib source is one rule with two halves, and the two cases now
 pin one half each.
 
+⚠ **Which cases that gates, exactly**: only the ones that REACH the emit. Arity, operand type, value
+position and unknown member are decided in the front end, are target-neutral, and carry NO marker — all
+four wore one until the 2026-07-28 targets audit measured them green on x64-linux and wasm32-wasi. See
+`async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
+
 ## Tests
 
 <!-- test: builtins-sleep.statement-position -->
@@ -101,7 +106,6 @@ end 'main'
 ```
 
 <!-- test: builtins-sleep.value-position-rejected -->
-<!-- targets: x64-windows -->
 `sleep` returns nothing, so reading its result is reading a value that is not there — the same
 rejection a void user-call gets, quoting the QUALIFIED name the user wrote.
 ```maxon
@@ -115,7 +119,6 @@ error E2004: <fragment>:3:16: Function '__Builtins.sleep' does not return a valu
 ```
 
 <!-- test: builtins-sleep.arity-rejected -->
-<!-- targets: x64-windows -->
 An intrinsic has no signature registry entry for the ordinary arity check to consult, so the arity is
 enforced at the emit — and the diagnostic quotes what the user wrote, not the bare spelling.
 ```maxon
@@ -129,10 +132,12 @@ error E3036: <fragment>:3:2: '__Builtins.sleep' takes exactly 1 argument, but 0 
 ```
 
 <!-- test: builtins-sleep.float-arg-rejected -->
-<!-- targets: x64-windows -->
 The duration is an integer count of milliseconds; a float is refused, by the SAME operand rule the
 bare `sleep(1.5)` is refused by (`async-sleep.float-arg-rejected`) — one emit, so the two spellings
-cannot drift apart on what they accept.
+cannot drift apart on what they accept. ⚠ The two differ in WHICH refusal arrives FIRST off
+x64-windows, which is why only this one is un-gated: the qualified `__Builtins.sleep` form reaches the
+operand check, while the bare `sleep` name is a whitelisted stdlib call the E3104 target gate refuses
+before the operand is ever typed. Measured 2026-07-28 on x64-linux and wasm32-wasi.
 ```maxon
 function main() returns ExitCode
 	__Builtins.sleep(1.5)
@@ -144,7 +149,6 @@ error E3005: <fragment>:3:2: '__Builtins.sleep' requires a integer, but its argu
 ```
 
 <!-- test: builtins-sleep.unknown-member-in-statement-position -->
-<!-- targets: x64-windows -->
 The statement door widened a SHAPE, not a name list: an unrecognized `__Builtins` member written on a
 line of its own reaches the same reserved-callee rejection it gets in expression position, rather than
 the shape-level `E2015` it used to die on.

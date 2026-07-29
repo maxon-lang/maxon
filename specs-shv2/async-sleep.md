@@ -56,6 +56,11 @@ Everything the builtin enforced by hand is now enforced by the declaration: the 
 `milliseconds Milliseconds` by the ordinary argument rule, and the absent result by the ordinary void-call
 rule. Only the qualified `__Builtins.sleep(ms)` — stdlib's own floor — is still recognized by name.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** `sleep` lowers to `__gt_sleep`, which has no non-Windows implementation, so
+`SemanticCheck` refuses it with **E3104** everywhere else — which is what the `rejected-on-wasm` and
+`rejected-on-arm64` cases below PIN, and why they carry the inverse marker naming only that target.
+
 ## Tests
 
 <!-- test: async-sleep.basic -->

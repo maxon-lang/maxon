@@ -31,6 +31,28 @@ values. A managed (`String`/struct) or float argument or result is refused at co
 leaked or miscompiled — the green-thread runtime moves scalars through the integer registers, and a managed
 or float value needs a channel a later slice builds.
 
+## Targets — the one statement of the green-thread gate
+
+⭐ **This section is the HOME of the `<!-- targets: x64-windows -->` marker that every async, sleep,
+clock and subprocess spec carries. Those files point HERE rather than restating it**, so the reason
+exists once and cannot drift into twelve versions of itself.
+
+**It is a RUNTIME-SUBSTRATE gate, and the COMPILER — not the marker — is what decides it.** The context
+switch is hand-written x64 assembly, and the driver calls `VirtualFree` and `QueryPerformanceCounter`.
+So every gated case reaches a runtime entry that has no implementation on any other target:
+`SemanticCheck.requireTargetSupportsCallee` refuses the reachable ones with **E3104**, naming the entry
+(`__gt_sleep`, `__gt_now_ns`, `__clock_now_unix_s`). A pass elsewhere is not a thing that could be had,
+and the marker only spares the runner a compile whose answer is already known.
+
+⚠ **It is NOT a per-target opt-in, and the test of that is what carries NO marker.** Anything decided
+BEFORE lowering — an arity, an operand type, a shape refusal — is target-neutral and runs everywhere.
+That is why the four `-refused` cases in this file are gated by nothing at all: they assert `E2015`, and
+`E2015` is the same on x64-linux and wasm32-wasi (measured 2026-07-28). **A marker on one of those would
+be hiding a green lane, not describing a red one** — which is exactly what eleven of them were doing
+across this file, `async-subprocess`, `builtins-clock` and `builtins-sleep` until that audit.
+
+⚠ **Un-gate the moment a second substrate lands.** A stale gate is indistinguishable from a real one.
+
 ## Tests
 
 <!-- test: async-scheduler.basic -->
@@ -294,7 +316,6 @@ end 'main'
 ```
 
 <!-- test: async-scheduler.managed-result-refused -->
-<!-- targets: x64-windows -->
 An async function returning a managed `String` result is refused — the runtime captures the result through
 a single integer register, so a managed heap pointer has no channel to await at this rung.
 ```maxon
@@ -314,7 +335,6 @@ error E2015: <fragment>:8:16: Unsupported: `async greet(…)` must return a scal
 ```
 
 <!-- test: async-scheduler.managed-arg-refused -->
-<!-- targets: x64-windows -->
 A managed `String` argument to an async call is refused for the same reason.
 ```maxon
 
@@ -333,7 +353,6 @@ error E2015: <fragment>:9:16: Unsupported: an `async` call argument must be a sc
 ```
 
 <!-- test: async-scheduler.float-param-refused -->
-<!-- targets: x64-windows -->
 An async callee with a float parameter is refused — the trampoline passes arguments through the integer
 registers, so a float parameter (which is read from an XMM register) would read the wrong register file.
 ```maxon
@@ -353,7 +372,6 @@ error E2015: <fragment>:8:16: `async takesFloat(…)` — an async function's pa
 ```
 
 <!-- test: async-scheduler.await-non-promise-refused -->
-<!-- targets: x64-windows -->
 `await` requires a Promise from an `async` call; awaiting a plain value is refused.
 ```maxon
 

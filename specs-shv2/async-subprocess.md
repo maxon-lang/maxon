@@ -48,6 +48,11 @@ If the command names no runnable executable (`CreateProcessA` fails outright), `
 never a hang. Parking more than the store's 64-slot capacity concurrently throws its **store-overflow** error
 rather than corrupting the parallel arrays. Both used to abort the process (exit 1 / exit 70); now they recover.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** A subprocess promise is reaped by the driver, so these cases need the substrate.
+⚠ The two `error.` cases are front-end refusals (`E3005`, `E3057`), are target-neutral, and carry NO
+marker.
+
 ## Tests
 
 <!-- test: async-subprocess.exit-code -->
@@ -344,7 +349,6 @@ end 'main'
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->
-<!-- targets: x64-windows -->
 `runProcess` requires a `String` command line; a non-String argument is refused at compile time.
 ```maxon
 function main() returns ExitCode
@@ -357,7 +361,6 @@ error E3005: <fragment>:3:2: 'runProcess' requires a String, but its argument is
 ```
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
-<!-- targets: x64-windows -->
 `runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused (E3057) —
 the exact mirror of the throwing-array-accessor rule. A bare `runProcess` would read only the exit code (R8) and
 silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.

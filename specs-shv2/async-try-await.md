@@ -32,6 +32,10 @@ wrong answer. The error type the promise carries also lets the propagate form ch
 This slice is **scalar-only** (like B1a): the awaited result and the async arguments are integer/bool
 values, and the thrown error is a scalar enum or a union whose payload is scalar.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** Every case here awaits, so it reaches the driver. The `try`/`otherwise` VALUE FLOW
+being pinned is target-neutral and is covered without a marker by `try-otherwise-value-flow`.
+
 ## Tests
 
 <!-- test: async-try-await.otherwise-default -->

@@ -37,6 +37,10 @@ composes with the mid-body yield — a thread that `sleep`s, resumes, and THEN r
 stack — and with completion — a thread whose grown stack is released on completion leaves the next spawn a fresh
 2 KB seed.
 
+**Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
+statement of it.** `__gt_morestack` is hand-written x64 assembly and relocates a stack obtained from
+`VirtualAlloc`, so these cases have no substrate to run on off x64-windows.
+
 ## Tests
 
 <!-- test: async-stack-growth.deep-recursion -->

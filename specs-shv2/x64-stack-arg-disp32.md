@@ -25,8 +25,7 @@ emitted code, where `sum22`'s parameter loads step `0x78(%rbp)` (disp8) then
 parameter, so it straddles the boundary and catches a wrong load at any one of them,
 whichever index happens to sit on it. (The same v1 arithmetic survives in a comment
 inside `twenty-second-param-at-rbp-128`'s source. It is left alone deliberately —
-editing it would rewrite a committed fragment for a comment — and rides the same
-regeneration follow-up as the missing `x64-linux` goldens.)
+editing it would rewrite a committed fragment for a comment.)
 
 A signed-byte (disp8) memory displacement only spans `-128..+127`, so a `+128`
 displacement must be encoded with a 32-bit displacement (disp32). Encoding it as
@@ -38,15 +37,21 @@ of them changes the result.
 
 **Targets: an x64 case on its merits** — disp8-vs-disp32 is an x86 instruction-encoding fact, so arm64
 cannot exhibit it and the `wasm32-wasi` lane (kept, already green) checks the sum rather than the
-encoding. ⚠ Unlike `x64-large-frame-arg7`, **`x64-linux` DOES share this encoding and belongs here on the
-merits** — it is gated out purely because this host cannot execute it, so its fragment was never
-generated. **To widen**: `spec-test --target=x64-linux --update-required --filter=x64-stack-arg-disp32`
-on a Linux host, commit `specs-shv2/fragments/x64-linux/x64-stack-arg-disp32/`, and add the target below.
+encoding. Unlike `x64-large-frame-arg7`, **`x64-linux` shares this encoding and belongs here on the
+merits**, and it is listed.
+
+⚠ **It was NOT listed until 2026-07-28, and the reason it was missing was never a technical one**: the
+note here claimed "this host cannot execute it, so its fragment was never generated". That claim was
+stale — a Windows host cross-compiles x64-linux and runs the ELF under WSL2, which is exactly what the
+cross-target gate does. Both cases were measured green on x64-linux the moment the marker was widened,
+and the goldens generated from this host. **A target absent because nobody generated its golden is not
+a restriction; it is a gap wearing a restriction's syntax**, and it hid the one other native target
+that can exhibit the bug this spec exists to catch.
 
 ## Tests
 
 <!-- test: twenty-second-param-at-rbp-128 -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -67,7 +72,7 @@ end 'main'
 
 
 <!-- test: params-straddling-rbp-128-boundary -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

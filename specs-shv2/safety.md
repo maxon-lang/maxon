@@ -26,7 +26,12 @@ traps the operation. On x64 the `idiv` instruction raises `#DE` (delivered as a
 Windows `EXCEPTION_INT_DIVIDE_BY_ZERO` / a POSIX `SIGFPE`), which the handler
 converts to the panic below. AArch64 integer `SDIV`/`UDIV` by zero is defined to
 return 0 with NO trap, so there is no fault to catch and the divide/modulo-by-zero
-tests are gated to `x64-windows`. The handler still classifies a `SIGFPE` it does
+tests are gated away from both arm64 targets. `wasm32-wasi` is gated out for a
+different reason and must not be confused with it: `i64.div_s` by zero DOES trap,
+but a wasm trap is not routed through a fault handler and prints no diagnostic, so
+the module exits **3** with empty stderr instead of the panic and exit 1 asserted
+below (measured 2026-07-28). Both remaining x64 lanes are listed, and the marker
+says so. The handler still classifies a `SIGFPE` it does
 receive (e.g. a floating-point trap) to the divide-by-zero panic. The nil-pointer
 (`SIGSEGV`/`SIGBUS`) path traps identically on both architectures, so the
 `force-segfault` test runs on `arm64-macos` as well as `x64-windows`.
