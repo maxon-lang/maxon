@@ -1,0 +1,85 @@
+// Test: directives.interface-body-requirement
+interface Shape
+	function area() returns ExitCode
+	#if testing(false)
+		function perimeter() returns ExitCode
+	#endif
+end 'Shape'
+
+type Square implements Shape
+	export let side as ExitCode
+
+	export static function create(side ExitCode) returns Square
+		return Square{side: side}
+	end 'create'
+
+	export function area() returns ExitCode
+		return side
+	end 'area'
+
+	export function perimeter() returns ExitCode
+		return 29
+	end 'perimeter'
+end 'Square'
+
+function main() returns ExitCode
+	let s = Square.create(4)
+	return s.perimeter()
+end 'main'
+---
+ExitCode: 29
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Square.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Square.perimeter {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 29
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 4
+    x64.callDirect Square.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Square.perimeter
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

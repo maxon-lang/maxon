@@ -1,0 +1,42 @@
+// Test: directives.top-level-nested
+#if testing(false)
+	#if testing(true)
+		function pick() returns ExitCode
+			return 98
+		end 'pick'
+	#else
+		function pick() returns ExitCode
+			return 22
+		end 'pick'
+	#endif
+#else
+	function pick() returns ExitCode
+		return 97
+	end 'pick'
+#endif
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+---
+ExitCode: 22
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 22
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect pick
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

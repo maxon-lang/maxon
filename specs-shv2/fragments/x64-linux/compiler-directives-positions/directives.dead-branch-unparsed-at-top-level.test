@@ -1,0 +1,21 @@
+// Test: directives.dead-branch-unparsed-at-top-level
+#if testing(true)
+	function ghost() returns ExitCode
+		return no_such_function_anywhere()
+	end 'ghost'
+#endif
+
+function main() returns ExitCode
+	return 30
+end 'main'
+---
+ExitCode: 30
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 30
+    x64.popReg rbp
+    x64.ret
+}
