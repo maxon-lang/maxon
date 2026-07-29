@@ -1,0 +1,93 @@
+// Test: closer-case-member-and-the-declaration-sweep
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+var counter = 10
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function shadowing() returns int
+	let a = tagOf(Kw.end)
+	var counter = 100
+	counter = counter + 1
+	return a + counter
+end 'shadowing'
+
+function main() returns ExitCode
+	return (shadowing() + counter) as ExitCode
+end 'main'
+---
+ExitCode: 113
+---
+data {
+  __data_counter@0 = i64 10
+}
+
+func @tagOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @shadowing {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect tagOf
+    x64.movRegImm32 rax, 100
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegRegReg r8, r8, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect shadowing
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegReg r8, r8, rax
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

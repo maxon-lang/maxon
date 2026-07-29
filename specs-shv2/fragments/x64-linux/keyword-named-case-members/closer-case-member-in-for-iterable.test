@@ -1,0 +1,89 @@
+// Test: closer-case-member-in-for-iterable
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto tagOf(Kw.end) 'each'
+		acc = acc + 10 + i
+	end 'each'
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 21
+---
+func @tagOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 1
+    x64.callDirect tagOf
+    x64.movRegReg rax, r12
+    x64.movRegReg rcx, rbx
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg rax, r8
+    x64.jcc less, each
+    x64.jmp forexit
+  each:
+    x64.leaRegRegImm32 rcx, rcx, 10
+    x64.leaRegRegReg rcx, rcx, rax
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

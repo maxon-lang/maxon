@@ -203,18 +203,26 @@ end 'main'
 <!-- test: discard-managed-field -->
 A `_` discard of a managed field binds nothing and does not consume: the union is
 dropped at scope exit and the cascade frees the discarded String.
+
+⚠ The discard is PARTIAL (`text(_, tag)`), and it has to be: an all-discard list
+(`text(_)`) is `E3081` — the bare case name is the only spelling of "ignore every
+payload" (`match-payload-discard-bindings.md`), and the bare form is already the case
+directly above. It would also not test THIS: with no binding list there is no discard
+for `declarePayloadBindings` to skip, so the slot that stays in the box for the cascade
+would never be exercised.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 
 union Message
 	silent
-	text(body String)
+	text(body String, code Integer)
 end 'Message'
 
 function main() returns ExitCode
-	let m = Message.text("discard me, i am long enough to be a heap string")
+	let m = Message.text("discard me, i am long enough to be a heap string", code: 4)
 	let code = match m 'check'
 		silent gives 0
-		text(_) gives 4
+		text(_, tag) gives tag
 	end 'check'
 	return code
 end 'main'

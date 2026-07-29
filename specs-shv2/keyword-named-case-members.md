@@ -1,0 +1,556 @@
+---
+feature: keyword-named-case-members
+status: experimental
+keywords: [enum, union, keyword-case, block-structure, token-scan]
+category: type-system
+---
+
+# A KEYWORD-named case READ AS A MEMBER (`Kw.end`, `Kw.while`, `Kw.match`, `Kw.for`)
+
+## Documentation
+
+`enums-simple.md`'s `keyword-as-case-name` pins that an enum case may be **spelled with a keyword**
+(`enum TokenType { function return end if … }`) and that a `match` may write `end gives …` as an arm.
+This file pins the OTHER half of the same fact, which that spec never exercises: **reading such a case
+as a MEMBER** — `Kw.end`, `Kw.while` — in an ordinary expression.
+
+The two halves are one rule stated from two sides. `Parser.maxon`'s block-extent token scans
+(`opensBlockAt` / `closesBlockAt`, and every scan that counts depth through them) re-derive Maxon's
+block structure from the raw token array, and a keyword that is a NAME here is not block structure.
+Both shapes are now ONE predicate (`keywordIsAName`), because they are one fact:
+
+- **A match-arm case name is a NAME** — the LOOKAHEAD (the next token is a match-arm separator
+  `gives`/`then`/`to`/`upto`/`or`). That half already existed.
+- **A member name after a `.` is a NAME too** — the LOOKBEHIND. That half did NOT exist, and its
+  absence was a **reachable compiler PANIC**, in both directions:
+  - `Kw.end` was read as a **CLOSER**, so the scan predicted a construct's `end` too EARLY;
+  - `Kw.while` / `Kw.match` / `Kw.for` were read as **OPENERS**, so it predicted one too LATE.
+
+  Either way `assertScanAligned` fired — `parseIfStatement: the token scan predicted the closing 'end'
+  at token 60 but the parser closed the last body at token 69`. Every block statement that runs a token
+  scan was affected: `if`, `while`, `for`, and a `match`'s scrutinee and arm bodies.
+
+⚠ **`Kw.if`, `Kw.else` and `Kw.otherwise` never panicked, and pinning them is the point.** Those three
+keywords are not unconditional block markers — an `if` opens a block only at STATEMENT START
+(`ifBeginsStatement`), an `else` only after a then-branch's `end` (`elseFollowsBlockEnd`), an
+`otherwise` only in its two block-handler shapes (`otherwiseOpensBlock`) — and a member name satisfies
+none of those. So they were already excluded, **by a position test that has nothing to do with being a
+name.** They are pinned here because a case that passes for an unrelated reason is exactly the case a
+later rung deletes as redundant, and because the lookbehind now covers all seven uniformly.
+
+⚠ **Two shapes are worse than the rest and each gets its own case, because in both a keyword member
+spells a real piece of block syntax character for character:**
+
+- `match Kw.end 'm'` — the scrutinee plus the match's own block label spell `end 'm'`, a labelled
+  closing `end`;
+- `… or Kw.end == Kw.end else 2` — a TERNARY whose condition ends in the member puts `end` immediately
+  before the `else`, which is how a block `else` is told from a ternary one (`elseFollowsBlockEnd`). So
+  the ternary read as opening a block, and the enclosing loop's scan ran past its `end`.
+
+Nothing but the preceding `.` tells any of these apart, which is why the lookbehind belongs to the one
+shared predicate and every scan that counts depth asks it rather than testing `TokenKind.end` itself.
+
+⚠ **One case here was authored AFTER the fix and never ran red, deliberately:**
+`closer-case-member-spelling-a-labelled-end-in-a-header` puts `Kw.end == Kw.end 'label'` in a `while`
+AND an `if` header, so the header itself ends in the labelled-`end` shape. Its red is carried by the two
+cases above it (a `while` condition and an `if` condition, both observed panicking), and it is here for
+the reason `enum-union-method-receiver.md` states for its own: next rung, only a committed case still
+runs.
+
+⚠ **THE SIBLING-RECEIVER WALK COUNTS THE SAME DEPTH, AND ITS MISCOUNT IS A FALSE REJECTION.**
+`ensureSiblingReceivers` (which resolves a bare `inner()` inside a method to `self.inner()`) walks a
+type body through the same two predicates, and a `Kw.end` / `Kw.while` in a METHOD BODY moved its
+delimiter. Both directions refuse a legal program, and each has a case below:
+
+- `Kw.end` **ended the walk early** — the type's remaining methods were never registered, so a bare
+  call to one reported `E3004 call to undefined function 'bonus'`;
+- `Kw.while` **ran the walk past the type's own `end`** — a FREE function declared after the type was
+  adopted as an instance sibling, so a bare call to it reported `E3004 … 'Holder.helper'`.
+
+This is the same family the D1 review fixed for an enum's CASE LIST, reached from the other side: that
+fix taught the walk that a member list is not block structure, and this one teaches it that a member
+READ is not either.
+
+⚠ **The DECLARATION SWEEP counts the same depth, and its miscount is silent rather than loud.**
+`foldDeclaredSignaturesInto`'s walk gates its `let`/`var` arm on depth 0, so a `Kw.end` inside a
+function body dropped the sweep's depth to 0 and every following LOCAL binding was recorded as a
+TOP-LEVEL one. Measured before the fix: the answers happened to stay right (the real parse is
+authoritative for what a binding IS, and an unreferenced global is eliminated), so this half had no
+observable symptom at all — which is precisely why it goes through the same shared predicate as the
+loud half rather than being left to be found later.
+
+## Tests
+
+<!-- test: closer-case-member-in-if-condition -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end) == 2 'ok'
+		return 20
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: closer-case-member-in-while-condition -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var n = 0
+	var acc = 0
+	while n < tagOf(Kw.end) 'spin'
+		acc = acc + 10
+		n = n + 1
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: closer-case-member-in-for-iterable -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto tagOf(Kw.end) 'each'
+		acc = acc + 10 + i
+	end 'each'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: closer-case-member-as-match-scrutinee -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	match Kw.end 'm'
+		alpha then return 11
+		end then return 22
+		omega then return 33
+	end 'm'
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: closer-case-member-in-match-arm-body -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function pick(n int) returns int
+	match n 'p'
+		0 then return tagOf(Kw.end) * 21
+		default then return 9
+	end 'p'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(0) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closer-case-member-in-else-if-chain -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.end) == 1 'first'
+		return 1
+	end 'first' else if tagOf(Kw.end) == 2 'second'
+		return 42
+	end 'second' else 'rest'
+		return 3
+	end 'rest'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closer-case-member-spelling-a-labelled-end-in-a-header -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while Kw.end == Kw.end 'spin'
+		if Kw.end == Kw.end 'inner'
+			acc = acc + 21
+		end 'inner'
+		i = i + 1
+		if i == 2 'done'
+			break
+		end 'done'
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closer-case-member-before-a-ternary-else -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while i < 2 'spin'
+		let x = 1 if i == 0 or Kw.end == Kw.end else 2
+		acc = acc + x
+		i = i + 1
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: opener-case-member-in-if-condition -->
+```maxon
+enum Kw
+	alpha
+	while
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		while then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	if tagOf(Kw.while) == 2 'ok'
+		return 25
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+25
+```
+
+<!-- test: opener-case-member-as-match-scrutinee -->
+```maxon
+enum Kw
+	alpha
+	match
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	match Kw.match 'm'
+		alpha then return 11
+		match then return 22
+		omega then return 33
+	end 'm'
+end 'main'
+```
+```exitcode
+22
+```
+
+<!-- test: opener-case-member-in-for-iterable -->
+```maxon
+enum Kw
+	alpha
+	for
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		for then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var acc = 0
+	for i in 0 upto tagOf(Kw.for) 'each'
+		acc = acc + 10 + i
+	end 'each'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: every-block-keyword-as-a-case-member -->
+```maxon
+enum Kw
+	if
+	else
+	end
+	while
+	match
+	for
+	otherwise
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		if then return 1
+		else then return 2
+		end then return 4
+		while then return 8
+		match then return 16
+		for then return 32
+		otherwise then return 64
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var sum = 0
+	if tagOf(Kw.if) == 1 'guard'
+		sum = tagOf(Kw.if) + tagOf(Kw.else) + tagOf(Kw.end) + tagOf(Kw.while) + tagOf(Kw.match) + tagOf(Kw.for) + tagOf(Kw.otherwise)
+	end 'guard'
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+127
+```
+
+<!-- test: closer-case-member-nested-two-deep -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < tagOf(Kw.end) 'outer'
+		if tagOf(Kw.end) == 2 'inner'
+			total = total + 21
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closer-case-member-in-a-method-body-keeps-later-siblings -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+type Holder
+	export var base as int
+
+	export static function create() returns Holder
+		return Self{base: tagOf(Kw.end)}
+	end 'create'
+
+	export function total() returns int
+		return self.base + bonus()
+	end 'total'
+
+	export function bonus() returns int
+		return 40
+	end 'bonus'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.total() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: opener-case-member-in-a-method-body-adopts-no-free-function -->
+```maxon
+enum Kw
+	alpha
+	while
+	omega
+end 'Kw'
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		while then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+type Holder
+	export var base as int
+
+	export static function create() returns Holder
+		return Self{base: tagOf(Kw.while)}
+	end 'create'
+
+	export function total() returns int
+		return self.base + helper()
+	end 'total'
+end 'Holder'
+
+function helper() returns int
+	return 40
+end 'helper'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.total() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: closer-case-member-and-the-declaration-sweep -->
+```maxon
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+var counter = 10
+
+function tagOf(k Kw) returns int
+	match k 'm'
+		alpha then return 1
+		end then return 2
+		omega then return 3
+	end 'm'
+end 'tagOf'
+
+function shadowing() returns int
+	let a = tagOf(Kw.end)
+	var counter = 100
+	counter = counter + 1
+	return a + counter
+end 'shadowing'
+
+function main() returns ExitCode
+	return (shadowing() + counter) as ExitCode
+end 'main'
+```
+```exitcode
+113
+```

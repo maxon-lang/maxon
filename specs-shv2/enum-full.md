@@ -1055,8 +1055,7 @@ end 'main'
 error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:13:3: unknown union case: 'unknown'
 ```
 
-<!-- disabled-test: error.match-discarded-bindings -->
-<!-- ⚠ A GENUINELY MISSING CHECK, not a wording difference: shv2 ACCEPTS `value(_)` in a match arm and compiles the program, where the oracle refuses it with `E3081` ("use 'value' instead of 'value(_)' to ignore associated values"). Blocked on the discard-pattern rule in a payload binding list — reported to the coordinator as a hole of its own rather than folded into D1, which is a declaration-site + receiver rung. -->
+<!-- test: error.match-discarded-bindings -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

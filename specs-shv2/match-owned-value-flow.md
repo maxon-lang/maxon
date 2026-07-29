@@ -82,19 +82,27 @@ end 'main'
 ```
 
 <!-- test: temp-managed-union-discard -->
-A constructed String-payload union used directly as the scrutinee, matched with a
-discard arm that binds nothing: the box AND its String payload free once through the
+A constructed String-payload union used directly as the scrutinee, matched with an arm
+that DISCARDS the String slot: the box AND its String payload free once through the
 cascade on whichever `return` runs.
+
+⚠ The discard is PARTIAL (`text(_, code)`), and it has to be: an all-discard list
+(`text(_)`) is `E3081` — the bare case name is the only spelling of "ignore every
+payload" (`match-payload-discard-bindings.md`). A bare name would not test this at all:
+it carries no binding list, so `declarePayloadBindings`'s discard branch — the code
+that leaves a managed payload in the box for the cascade — would never run.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 union Message
 	silent
-	text(body String)
+	text(body String, code Integer)
 end 'Message'
 
 function main() returns ExitCode
-	match Message.text("a long enough heap string to really allocate") 'check'
+	match Message.text("a long enough heap string to really allocate", code: 5) 'check'
 		silent then return 0
-		text(_) then return 5
+		text(_, code) then return code
 	end 'check'
 	return 0
 end 'main'

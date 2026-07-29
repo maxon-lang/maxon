@@ -602,6 +602,13 @@ export union ParseError implements Error
 	// A match arm names a case in QUALIFIED form (`Color.red`). Renders as **E3075**, positioned at
 	// the type name — the scrutinee's enum is already known, so the bare name suffices.
 	matchQualifiedCaseName(bare String, qualified String, line LineNumber, column ColumnNumber)
+	// A payload binding list in which EVERY binding is the discard `_` (`value(_)`, `two(_, _)`).
+	// Renders as **E3081**, positioned at the ARM's case name — the anchor both references use. Such a
+	// list is exactly equivalent to omitting it, so the bare case name says the same thing and says it
+	// once; a PARTIAL discard (`two(_, b)`) binds something and stays legal. `discardList` is the list
+	// spelled back as written (one `_` per slot, `, `-joined), built at the throw site exactly as
+	// `enumMatchNotExhaustive`'s `missing` is.
+	matchDiscardedBindings(caseName String, discardList String, line LineNumber, column ColumnNumber)
 	// A `default` arm on an ENUM match that is not `default throws`/`default panic`. Renders as
 	// **E2046**, positioned at the `default` — an enum match is exhaustive by listing every case, so
 	// a plain catch-all is forbidden (it would silently mask a case added later). `kindWord` is
@@ -1349,6 +1356,33 @@ let ParametersAreMutable = false
 // by TEXT and skips the load + declaration for that slot. A constant because it is a language fact
 // (`_` means discard), spelled once.
 let DiscardBindingName = b"_"
+
+// Join `items` with `", "` — the separator every list a match diagnostic spells out uses (E2026's
+// uncovered-case list, E3081's discard list). Spelled once, because two messages that render a list of
+// the same kind must not come to punctuate it differently. Cold: only a rejected program reaches it.
+function joinCommaSeparated(items StringArray) returns String
+	var joined = ""
+	for i in 0 upto items.count() 'each'
+		if i > 0 'separator'
+			joined = "{joined}, "
+		end 'separator'
+		joined = "{joined}{try items.get(i) otherwise panic("joinCommaSeparated: items.get OOB at {i} — the loop bound is the array's own count")}"
+	end 'each'
+	return joined
+end 'joinCommaSeparated'
+
+// An all-discard binding list spelled back as the user wrote it — `_`, `_, _`, … — for E3081's message
+// ("use 'two' instead of 'two(_, _)'"). Built from the COUNT rather than from the bindings themselves
+// because every one of them is the same token by definition of the diagnostic, and it reads the
+// discard's own spelling so a language that renamed `_` renames the message with it.
+function discardBindingList(count ElementCount) returns String
+	var slots = StringArray.create()
+	// The index is not read — every slot renders the same token — so the loop variable is the discard.
+	for _ in 0 upto count 'eachSlot'
+		slots.push(String.from(DiscardBindingName))
+	end 'eachSlot'
+	return joinCommaSeparated(slots)
+end 'discardBindingList'
 
 // How many `.field` HOPS a token-level field-chain walk must find (`Parser.fieldChainEndAfter`). A
 // chain-METHOD call needs at least two (`b.ops.push(1)`) — the ONE-hop `b.push(1)` is the binding-
@@ -4844,8 +4878,10 @@ export type Parser
 			return depth + 1
 		end 'opens'
 
-		// A keyword case-name arm (`end gives …`) is not a block close — see `keywordIsMatchCaseName`.
-		if self.at(TokenKind.end) and depth > 0 and not self.keywordIsMatchCaseName(self.pos) 'closes'
+		// `closesBlockAt` rather than a `TokenKind.end` test of its own: a keyword can be a NAME here (a
+		// case-name arm `end gives …`, a member read `Kw.end`) and neither is a block close. The floor is
+		// the only thing this adds — see the header.
+		if self.closesBlockAt(self.pos) and depth > 0 'closes'
 			return depth - 1
 		end 'closes'
 
@@ -5141,7 +5177,7 @@ export type Parser
 	// fixpoint is a single peek-only walk of the type body plus a cheap iterate-to-stable — no whole-program
 	// index. A non-generic type has no such methods, so it clears the map and returns.
 	//
-	// The same framework `scanConsumeBits` uses (`opensBlockAt` / `keywordIsMatchCaseName`) delimits each
+	// The same framework `scanConsumeBits` uses (`opensBlockAt` / `closesBlockAt`) delimits each
 	// method body; a named `function <ident>` opens one (a closure is `function(` — no name, no `end`).
 	function computeTypeDescriptorNeeds()
 		// A NON-generic type has no method that can carry a descriptor, so it allocates NOTHING here (the
@@ -14578,11 +14614,11 @@ export type Parser
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
 		if kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for 'alwaysOpens'
-			return not self.keywordIsMatchCaseName(index)
+			return not self.keywordIsAName(index)
 		end 'alwaysOpens'
 
 		if kind == TokenKind.if 'ifKw'
-			return self.ifBeginsStatement(index) and not self.keywordIsMatchCaseName(index)
+			return self.ifBeginsStatement(index) and not self.keywordIsAName(index)
 		end 'ifKw'
 
 		if kind == TokenKind.otherwise 'tryBlock'
@@ -14593,7 +14629,7 @@ export type Parser
 			return false
 		end 'notElse'
 
-		if self.kindAt(index + 1) == TokenKind.if or self.keywordIsMatchCaseName(index) 'notBlockElse'
+		if self.kindAt(index + 1) == TokenKind.if or self.keywordIsAName(index) 'notBlockElse'
 			return false
 		end 'notBlockElse'
 
@@ -14602,11 +14638,15 @@ export type Parser
 
 	// Does the token at `index` CLOSE a block — `opensBlockAt`'s counterpart, and its own predicate for the
 	// same reason `assignsAt` is one. Every token scan in this file that counts block depth has to make the
-	// keyword-as-case-name exclusion (`end` is a legal enum case name, so `end then …` is an arm and not a
-	// closer), and eight of them had spelled it out independently. Spelled once, a scan cannot be taught the
-	// opener rule and miss the closer rule — which would leave a depth counter that never comes back down.
+	// keyword-as-a-NAME exclusion (`end` is a legal enum case name, so `end then …` is an arm and `Kw.end`
+	// is a member read — neither is a closer), and eight of them had spelled it out independently. Spelled
+	// once, a scan cannot be taught the opener rule and miss the closer rule — which would leave a depth
+	// counter that never comes back down.
+	//
+	// ⚠ **A SCAN THAT TESTS `TokenKind.end` ITSELF IS THIS BUG WAITING**, which is why the two that did
+	// (the sweep's `blockDepthAfter` and the match arm loop's end-of-arms test) now ask here instead.
 	function closesBlockAt(index TokenIndex) returns bool
-		return self.kindAt(index) == TokenKind.end and not self.keywordIsMatchCaseName(index)
+		return self.kindAt(index) == TokenKind.end and not self.keywordIsAName(index)
 	end 'closesBlockAt'
 
 	// Is the `if` at `index` a block-opening STATEMENT `if` rather than the `if` of an inline
@@ -14627,8 +14667,16 @@ export type Parser
 	// Does the `else` at `index` close an if/else then-branch (a block `else`) rather than tail an
 	// inline conditional? A block `else` follows the then-branch's `end` and its ONE optional block
 	// label — the backward twin of `elseFollowsEnd` (`end 'x' else` or bare `end else`). A ternary
-	// `else` follows the condition operand, so the token before it (past an optional label) is not
-	// `end`. Index 0 cannot be an `else`, so it is never a block `else`.
+	// `else` follows the condition operand, so the token before it (past an optional label) is not a
+	// block-closing `end`. Index 0 cannot be an `else`, so it is never a block `else`.
+	//
+	// ⚠ **IT ASKS `closesBlockAt`, NOT "is the previous token an `end`"**, and the difference is a
+	// reachable PANIC: a ternary whose CONDITION ends in a keyword-named case member puts a literal
+	// `end` immediately before the `else` (`let x = 1 if i == 0 or Kw.end == Kw.end else 2`). Read as
+	// a block `else`, that ternary opens a block nothing closes and the enclosing loop's extent scan
+	// runs past its `end` — `assertScanAligned` fires. `keyword-named-case-members.md` pins it.
+	// (`elseFollowsEnd`, the forward twin, needs no such care: it is only ever asked at a token
+	// `closesBlockAt` has already accepted.)
 	function elseFollowsBlockEnd(index TokenIndex) returns bool
 		if index == 0 'atStart'
 			return false
@@ -14642,7 +14690,7 @@ export type Parser
 			prev = prev - 1
 		end 'skipLabel'
 
-		return self.kindAt(prev) == TokenKind.end
+		return self.closesBlockAt(prev)
 	end 'elseFollowsBlockEnd'
 
 	// Does the `otherwise` at `index` begin a BLOCK-form handler — one closed by its own `end`?
@@ -14665,22 +14713,47 @@ export type Parser
 		return next == TokenKind.leftParen and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.rightParen and self.kindAt(index + 4) == TokenKind.charLiteral
 	end 'otherwiseOpensBlock'
 
-	// Is the keyword at `index` being used as a match-arm CASE NAME rather than as control flow?
+	// Is the keyword at `index` being used as a NAME rather than as block structure?
 	//
 	// ⚠ **AN ENUM CASE MAY BE SPELLED WITH A KEYWORD** (`enum TokenType { function if else end … }`,
-	// keyword-as-case-name.md), and a match over such an enum writes `if gives …`, `end then …`,
-	// `else to critical then …`. The block-extent token scans (`opensBlockAt`,
-	// `blockStatementEndIndex`, the sweep's `blockDepthAfter`) read `if`/`else`/`end`/`while`/`match`
-	// as block STRUCTURE, and would miscount those case-name arms — the match's end would be
-	// mispredicted and the drift guard would fire (or the arm loop would stop early). A control
-	// keyword is NEVER followed by a match-arm SEPARATOR in real control flow (`if` takes a condition,
-	// `end` a label or newline, `while` a condition), so a keyword immediately followed by
-	// `gives`/`then`/`to`/`upto`/`or` is unambiguously a case name. That single lookahead is what lets
-	// every one of those scans skip a keyword case arm without re-deriving the grammar.
-	function keywordIsMatchCaseName(index TokenIndex) returns bool
+	// keyword-as-case-name.md), so `if`/`else`/`end`/`while`/`match`/`for` can appear in a program as
+	// an ordinary NAME. The block-extent token scans (`opensBlockAt`/`closesBlockAt`, and every scan
+	// that counts depth through them) read those keywords as block STRUCTURE, so each place a keyword
+	// is a name has to be excluded here or a scan miscounts — the construct's `end` is mispredicted
+	// and `assertScanAligned` fires (or the arm loop stops early, or the declaration sweep records a
+	// local as a top-level binding).
+	//
+	// **TWO SHAPES, ONE FACT, so ONE predicate** — a divergence would leave the opener rule taught and
+	// the closer rule not, or the lookahead taught and the lookbehind not:
+	//
+	//   • **A MATCH-ARM CASE NAME — the LOOKAHEAD.** `if gives …`, `end then …`, `else to critical then
+	//     …`. A control keyword is NEVER followed by a match-arm SEPARATOR in real control flow (`if`
+	//     takes a condition, `end` a label or newline, `while` a condition), so a keyword immediately
+	//     followed by `gives`/`then`/`to`/`upto`/`or` is unambiguously a case name.
+	//   • **A MEMBER NAME — the LOOKBEHIND.** `Kw.end`, `Kw.while`, `obj.end()`. A `.` is followed by a
+	//     member name and by nothing else in this grammar (Maxon has no `..` range and a float literal
+	//     is one token), so a keyword whose PREVIOUS token is a `.` is a name, whatever follows it.
+	//     ⚠ This half is what a reachable compiler PANIC was made of, in BOTH directions:
+	//     `keyword-named-case-members.md` pins them. `Kw.end` read as a CLOSER predicted a construct's
+	//     `end` too early; `Kw.while`/`Kw.match`/`Kw.for` read as OPENERS predicted it too late. Worst
+	//     of all is `match Kw.end 'm'`, whose scrutinee plus the match's own block label spell `end 'm'`
+	//     — character for character a labelled closing `end`, and only the preceding `.` says otherwise.
+	//     (`Kw.if`/`Kw.else`/`Kw.otherwise` never panicked, because those three are not unconditional
+	//     block markers and their POSITION tests already refused a member — an unrelated reason, which
+	//     is why they are pinned too.)
+	function keywordIsAName(index TokenIndex) returns bool
 		let next = self.kindAt(index + 1)
-		return next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or
-	end 'keywordIsMatchCaseName'
+		if next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or 'matchCaseName'
+			return true
+		end 'matchCaseName'
+
+		// Index 0 has no previous token, so it cannot be a member name.
+		if index == 0 'atFileStart'
+			return false
+		end 'atFileStart'
+
+		return self.kindAt(index - 1) == TokenKind.dot
+	end 'keywordIsAName'
 
 	// ⭐ **THE FILE'S BLOCK-EXTENT INDEX: per token, the `end` that closes the block opened there** — one
 	// linear bracket-matching pass over the token array, run on the first construct that asks and shared
@@ -15269,9 +15342,10 @@ export type Parser
 
 		while true 'arms'
 			self.skipNewlines()
-			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
-			// whose case is spelled `end`. See `keywordIsMatchCaseName`.
-			if self.at(TokenKind.end) and not self.keywordIsMatchCaseName(self.pos) 'endOfArms'
+			// The closing `end` — unless the keyword is a NAME here (an `end then …` arm on an enum whose
+			// case is spelled `end`, or a member read `Kw.end`). Asked of `closesBlockAt` rather than
+			// spelled out, so this loop and the block-extent scans cannot drift on what an `end` is.
+			if self.closesBlockAt(self.pos) 'endOfArms'
 				break
 			end 'endOfArms'
 
@@ -16635,7 +16709,7 @@ export type Parser
 
 		var bindings = PayloadBindingArray.create()
 		if self.at(TokenKind.leftParen) 'payloadBind'
-			bindings = try self.parseCasePayloadBindings(layout, caseIndex: lowIndex)
+			bindings = try self.parseCasePayloadBindings(layout, caseIndex: lowIndex, caseTok: patternTok)
 		end 'payloadBind'
 
 		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
@@ -16658,10 +16732,15 @@ export type Parser
 	// Parse a `(dir)` / `(_)` / `(a, b)` binding list on a single-case pattern, resolving each binding
 	// against the case's declared payload fields in SLOT order. A `_` is the discard — it consumes a
 	// slot but binds nothing. The binding count must equal the case's declared arity.
-	function parseCasePayloadBindings(layout EnumLayout, caseIndex CaseIndex) returns PayloadBindingArray throws ParseError
+	//
+	// `caseTok` is the ARM's case-name token, carried in for one reason: it is E3081's anchor (below).
+	function parseCasePayloadBindings(layout EnumLayout, caseIndex CaseIndex, caseTok Token) returns PayloadBindingArray throws ParseError
 		let payloads = layout.payloadsAt(caseIndex)
 		try self.consume(TokenKind.leftParen)
 		var bindings = PayloadBindingArray.create()
+		// Tracked as the list is read rather than re-walked afterwards — the loop already knows which arm
+		// each binding took.
+		var allDiscard = true
 
 		while true 'bindLoop'
 			let nameTok = try self.consume(TokenKind.identifier)
@@ -16674,6 +16753,7 @@ export type Parser
 			end 'discard' else 'realBinding'
 				try self.requireUnreservedName(nameTok)
 				bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count()))
+				allDiscard = false
 			end 'realBinding'
 
 			if not self.at(TokenKind.comma) 'endBindings'
@@ -16687,6 +16767,20 @@ export type Parser
 		if bindings.count() != payloads.count() 'tooFew'
 			throw ParseError.unsupported("case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` binds {bindings.count()} payload(s) but declares {payloads.count()}", line: closeTok.line, column: closeTok.column)
 		end 'tooFew'
+
+		// ⭐ **AN ALL-DISCARD LIST IS EXACTLY THE BARE CASE NAME, so the language admits only the one
+		// spelling** (E3081, both reference compilers). The rule is about the LIST and nothing else: a
+		// PARTIAL discard (`two(_, b)`) binds something and is legal, and a bare `value` on a
+		// payload-carrying case is legal — it is the spelling this message recommends.
+		//
+		// ⚠ The references also test `count > 0`; here that condition CANNOT fail, so it is deliberately
+		// absent rather than written as a check that always passes. The loop above consumes an identifier
+		// before it can add anything, so `value()` is `E2010` at the missing name and an empty list never
+		// reaches this line.
+		if allDiscard 'everyBindingDiscarded'
+			throw ParseError.matchDiscardedBindings(String.from(layout.caseNameAt(caseIndex)), discardList: discardBindingList(bindings.count()), line: caseTok.line, column: caseTok.column)
+		end 'everyBindingDiscarded'
+
 		return bindings
 	end 'parseCasePayloadBindings'
 
@@ -16873,23 +16967,19 @@ export type Parser
 	// `missing:` list, positioned at the closing `end` — the enum twin of the scalar exhaustiveness
 	// gate, and the mechanism that makes adding a case force every match site to handle it.
 	function checkEnumExhaustive(layout EnumLayout, covered BoolArray) throws ParseError
-		var missing = ""
-		var hasMissing = false
+		var missing = StringArray.create()
 		for i in 0 upto layout.caseCount() 'eachCase'
 			let isCovered = try covered.get(i) otherwise panic("checkEnumExhaustive: covered.get OOB at {i} — the bitmap is sized to the enum's case count")
 			if not isCovered 'uncovered'
-				if hasMissing 'notFirst'
-					missing = "{missing}, {String.from(layout.caseNameAt(i))}"
-				end 'notFirst' else 'first'
-					missing = String.from(layout.caseNameAt(i))
-				end 'first'
-				hasMissing = true
+				missing.push(String.from(layout.caseNameAt(i)))
 			end 'uncovered'
 		end 'eachCase'
 
-		if hasMissing 'incomplete'
+		// The list IS the flag — an exhaustive match leaves it empty, so there is no parallel `hasMissing`
+		// bool to keep in step with it.
+		if missing.count() > 0 'incomplete'
 			let endTok = self.current()
-			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: missing, line: endTok.line, column: endTok.column)
+			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: joinCommaSeparated(missing), line: endTok.line, column: endTok.column)
 		end 'incomplete'
 	end 'checkEnumExhaustive'
 

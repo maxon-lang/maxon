@@ -1,0 +1,63 @@
+// Test: closer-case-member-spelling-a-labelled-end-in-a-header
+enum Kw
+	alpha
+	end
+	omega
+end 'Kw'
+
+function main() returns ExitCode
+	var acc = 0
+	var i = 0
+	while Kw.end == Kw.end 'spin'
+		if Kw.end == Kw.end 'inner'
+			acc = acc + 21
+		end 'inner'
+		i = i + 1
+		if i == 2 'done'
+			break
+		end 'done'
+	end 'spin'
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegImm32 rdx, 1
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, spin
+    x64.jmp critsplit
+  spin:
+    x64.movRegImm32 rdx, 1
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, inner
+    x64.jmp critsplit
+  inner:
+    x64.leaRegRegImm32 rax, rax, 21
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, done
+    x64.jmp ifcont
+  done:
+    x64.movRegReg r8, rax
+    x64.jmp whileexit
+  ifcont:
+    x64.jmp whilehdr
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp whileexit
+  whileexit:
+    x64.popReg rbp
+    x64.ret
+}
