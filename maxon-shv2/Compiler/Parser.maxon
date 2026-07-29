@@ -3921,11 +3921,13 @@ export type Parser
 	// (`recordFunctionRangeChecks`), keyed by the function's name — the `InsertRangeChecks` Std pass
 	// reads them back by name.
 	//
-	// ⚠ They are NOT swapped across a nested closure body the way the per-value columns are (that path
-	// is P1.5-owned and this rung does not touch it), so a ranged `as` cast written INSIDE a closure
-	// would be filed against its enclosing function. No P1.9 or pre-existing case casts inside a
-	// closure, so the mis-attribution is unreachable today; when closures grow ranged casts, this
-	// wants the same save/restore `parseClosureExpression` already does for `valueTags`.
+	// ⭐ They ARE swapped across a nested closure body, exactly as the per-value columns are, and the
+	// closure commits its own under its own lifted name — see `parseClosureExpression`, which carries the
+	// measurement. They have to be: a site names a ValueId and a BlockId, and a closure is a separate
+	// `IrFunction` with its own dense numbering, so a site that leaks across the boundary is resolved
+	// against numbers that mean something else. (Until the P1.9 review this note said the leak was
+	// "unreachable today" — it was reachable by an ordinary `as` inside a closure, and it killed a correct
+	// program.)
 	var rangeCheckSites as RangeCheckSiteArray
 	var rangeCheckArgSites as RangeCheckArgSiteArray
 	var rangeCheckReturnSites as RangeCheckReturnSiteArray
@@ -25312,6 +25314,28 @@ export type Parser
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
 		let savedClosureEnvParamId = self.closureEnvParamId
+		// ⭐⭐ **THE RANGE-CHECK ACCUMULATORS SWAP TOO, AND THEY DID NOT UNTIL THE P1.9 REVIEW.** They are
+		// per-function for the reason every column above is: a site names a ValueId AND a BlockId in the
+		// SSA/CFG space of the function being parsed, and a closure gets its OWN `IrFunction` with its own
+		// dense numbering. Left shared, a `x as Small` inside a closure body appended to the ENCLOSING
+		// function's list, and `InsertRangeChecks` then resolved that site inside the ENCLOSING function —
+		// where the same numbers name completely unrelated things.
+		//
+		// ⚠ MEASURED, both directions, against `maxon-sharp`: `apply(function(n Wide) gives (n - j) as Small,
+		// x: 605)` with `j = 600` is a program in which every value is in range — the bootstrap prints `r=5`
+		// and exits 0 — and shv2 PANICKED, because the guard landed in `main` and read `main`'s `j` (600)
+		// through the id the closure had numbered. A correct program killed at run time. The dual is worse in
+		// a quieter way: the closure's OWN cast got no guard at all, so an out-of-range value inside a closure
+		// passed unchecked where the bootstrap panics `in _$closure_0`.
+		//
+		// The field header's note that the mis-attribution was "unreachable today" was true of a corpus with
+		// two doors and is not a property of the mechanism; P1.9 took it to six, and a struct literal or a
+		// field store inside a closure body is ordinary code.
+		let savedRangeCheckSites = self.rangeCheckSites
+		let savedRangeCheckArgSites = self.rangeCheckArgSites
+		let savedRangeCheckReturnSites = self.rangeCheckReturnSites
+		let savedRangeCheckReturnAlias = self.rangeCheckReturnAlias
+		let savedRangeCheckParamAliases = self.rangeCheckParamAliases
 
 		let paramCount = paramNames.count()
 		// ⭐ **RESERVE THE TRAILING `__env` PARAMETER'S ValueId UP FRONT (P1.5-A2b).** A capturing closure
@@ -25359,6 +25383,18 @@ export type Parser
 		self.captureTypes = MaxonTypeArray.create()
 		self.closureEnvParamId = paramCount
 		self.inMatchArmBody = false
+		// Fresh per-closure range-check accumulators, exactly as `parseFunction` re-creates them — see the
+		// save block. The return-alias stays EMPTY: a closure's return type is INFERRED from its body
+		// expression, never declared, so there is no declared ranged return for a `return` site to check
+		// against (the body's own cast/store sites carry the checking). The PARAMETER aliases are asked the
+		// same way `parseFunction` asks them, so the shape stays uniform even though a closure — whose lifted
+		// name carries a `$` and so cannot be written in a call — is never a direct callee whose
+		// `paramAliasNames` a caller could read.
+		self.rangeCheckSites = RangeCheckSiteArray.create()
+		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
+		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
+		self.rangeCheckReturnAlias = EmptySourceText
+		self.rangeCheckParamAliases = self.rangedParamAliasNames(paramTypes)
 		// The enclosing scope becomes a CAPTURE scope for the duration of the body — a body name resolving
 		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
 		// here, popped just before the restore.
@@ -25441,6 +25477,11 @@ export type Parser
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
+		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
+		// resolves them against the function whose SSA space numbered them. It sits here — after the body,
+		// BEFORE the restore below — because it reads the accumulators the body filled, which the restore is
+		// about to swap back. Same call `parseFunction` makes at its own end, for the same reason.
+		self.commitRangeChecks(closureName)
 
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")
@@ -25476,6 +25517,11 @@ export type Parser
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes
 		self.closureEnvParamId = savedClosureEnvParamId
+		self.rangeCheckSites = savedRangeCheckSites
+		self.rangeCheckArgSites = savedRangeCheckArgSites
+		self.rangeCheckReturnSites = savedRangeCheckReturnSites
+		self.rangeCheckReturnAlias = savedRangeCheckReturnAlias
+		self.rangeCheckParamAliases = savedRangeCheckParamAliases
 
 		// In the ENCLOSING function's value space now: mint the closure VALUE — a `function`-tagged code
 		// pointer governed by the lifted name — and emit the `functionRef` A1 lowers to `funcAddr`.

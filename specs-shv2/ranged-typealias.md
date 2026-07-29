@@ -1788,3 +1788,71 @@ end 'main'
 ```exitcode
 24
 ```
+
+### A closure body's site belongs to the CLOSURE, not to the function that wrote it
+
+A closure is lifted into its own function with its own dense SSA numbering and its own blocks. A range
+check recorded inside a closure body therefore names a ValueId and a BlockId in the CLOSURE's space, and
+the guard has to be emitted there — resolving it against the ENCLOSING function makes those numbers name
+unrelated values.
+
+Both directions were live before the P1.9 review, and each is a wrong answer on its own:
+
+- **A correct program was killed.** Here every value is in range — `605 - 600 = 5` — and the enclosing
+  `j` is 600. The site leaked into `main`, the guard read `main`'s `j` through the id the closure had
+  numbered, and the program panicked against `Small`. `maxon-sharp` runs it to completion.
+- **An out-of-range closure cast went unchecked**, because the guard that should have been in the
+  closure was somewhere else entirely.
+
+<!-- test: closure-body-site-guards-the-closures-own-value -->
+```maxon
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+typealias Fn1 = function(Wide) returns Wide
+
+function apply(f Fn1, x Wide) returns Wide
+	return f(x)
+end 'apply'
+
+function pad(a Wide, b Wide, c Wide) returns Wide
+	return a + b + c
+end 'pad'
+
+function main() returns ExitCode
+	let j = pad(100, b: 200, c: 300)
+	return apply(function(n Wide) gives (n - j) as Small, x: 605)
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: closure-body-out-of-range-cast-panics-in-the-closure -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime chunk. Everywhere else the range verdict is a bare exit 1 with EMPTY stderr — and the FRAME NAME is the whole point of this case, so only here is it observable. The check itself is target-neutral and the in-range case above covers it everywhere. -->
+The frame the trace names is the load-bearing part: the guard runs inside the lifted closure, so
+`main$closure_0` is on the stack when it fires. `maxon-sharp` names its own spelling of the same frame.
+```maxon
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+typealias Fn1 = function(Wide) returns Wide
+
+function apply(f Fn1, x Wide) returns Wide
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(function(n Wide) gives (n + 1) as Small, x: 605)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at closure-body-out-of-range-cast-panics-in-the-closure.test:11: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in main$closure_0
+  in apply
+  in main
+  in mrt_start
+```

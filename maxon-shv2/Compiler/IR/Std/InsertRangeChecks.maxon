@@ -511,14 +511,31 @@ type RangeCheckEmitter
 	// allocator. Guards then also fire in source order, which is the order a reader expects the FIRST
 	// out-of-range value to be reported in.
 	//
-	// ⚠ **END-OF-BLOCK IS A PATH ANCHOR, NOT A STATEMENT ANCHOR, and a FIELD STORE is where that shows.**
-	// The bootstrap emits a store's guard immediately before the store; here it lands at the end of the
-	// store's block, so a side effect written between the two runs before the panic does. The verdict is
-	// identical either way — a guard tests a VALUE, and the value is the same number at both points, so the
-	// program panics on exactly the same inputs — and the panic is fatal, so nothing observes the stored
-	// value afterwards; what can differ is the ORDER of output emitted between the store and the block's
-	// end. Anchoring on the store itself would need a Maxon-tier op position, and positions do not survive
-	// `lowerMaxonToStd`'s 1:N desugaring — the reason this pass anchors on a BLOCK in the first place.
+	// ⚠⚠⚠ **END-OF-BLOCK IS A PATH ANCHOR, NOT A STATEMENT ANCHOR — AND THAT IS AN OPEN DIVERGENCE FROM
+	// THE ORACLE, NOT A COSMETIC ONE. DO NOT READ THIS PARAGRAPH AS A JUSTIFICATION.** Every guard in a
+	// block runs at the END of that block, so in a straight-line body EVERY range check runs after the
+	// WHOLE body — after every print, every call, every store and every division the out-of-range value
+	// reaches. MEASURED against `maxon-sharp`, P1.9 review:
+	//
+	//   * `b.v = bad` (out of range) then `print("after")` then `print("{b.v}")` — shv2 prints BOTH,
+	//     including the number 500 read back out of a `Percent` slot, and panics after. The bootstrap
+	//     prints nothing. The same holds for `as` (pre-existing on main) and for a struct-literal field.
+	//   * `let d = z as NonZero` (z == 0) then `100 / d` — the bootstrap panics
+	//     `Range check failed: … 'NonZero'`; shv2 executes the DIVISION first and dies
+	//     `panic: integer divide by zero`. Same exit code 1, different diagnostic, and the language's own
+	//     check never runs. No exit-code-only case can see it, which is why the suite is green over it.
+	//
+	// An earlier draft of this comment claimed "the panic is fatal, so nothing observes the stored value
+	// afterwards"; the first bullet is that claim being false. Corrected here rather than deleted so the
+	// next reader inherits the measurement instead of the reassurance.
+	//
+	// The fix is NOT a line: anchoring on the landing op needs a Maxon-tier op POSITION, and no position
+	// survives `lowerMaxonToStd`'s 1:N desugaring today — though it could, cheaply, since that pass's
+	// per-block walk is a plain `for opIdx in srcBlock.opRefs` and could record the Std `opRefs.count()`
+	// it stood at for each site's Maxon ordinal. `GuardSite` ALREADY carries the `position` such a fix
+	// would fill (every caller passes the block end today, so `splitBlock`'s partition looks like dead
+	// generality — it is the hook, do not remove it). Filed for the coordinator: it moves ~269 guarded
+	// goldens and is its own rung.
 	// ⚠ **THIS RESOLVES THROUGH AN INDEX, NOT `IrModule.getBlockByIdIn`, AND THE DIFFERENCE IS A GROWTH
 	// CURVE.** `getBlockByIdIn` is a LINEAR SCAN of `func.blockRefs`; called once per guard site it made
 	// this pass **O(sites × blocks)** — and worse than the plain product, because every guard this pass
@@ -709,8 +726,9 @@ function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
 	end 'eachBlock'
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops")
-		if stdOpDefinesValue(op) 'defines'
-			maxId = maxValueId(maxId, other: stdOpDefinedIdOrZero(op))
+		match stdOpDefinedValue(op) 'defines'
+			none then break 'defines'
+			defines(definedId) then maxId = maxValueId(maxId, other: definedId)
 		end 'defines'
 	end 'eachOp'
 	return maxId + 1
@@ -720,113 +738,87 @@ function maxValueId(a ValueId, other ValueId) returns ValueId
 	return a if a >= other else other
 end 'maxValueId'
 
-// True iff `op` DEFINES a value (has a result). The `false` set is the terminators / stores / effect
-// ops that define nothing. Exhaustive over StdOp, matching `collectStdOpUses`'s discipline — a new
-// variant is a compile error here rather than a silently-missed def.
-function stdOpDefinesValue(op StdOp) returns bool
-	return match op 'd'
-		const to cmpImm gives true
-		div to mod gives true
-		condBranch to branch gives false
-		ret gives false
-		param gives true
-		call gives true
-		retVoid gives false
-		globalAddr to loadIndirect gives true
-		storeIndirect gives false
-		rdataAddr gives true
-		tryCall gives true
-		errorReturn to osExit gives false
-		osAllocPages gives true
-		osWriteStdout gives false
-		funcAddr gives true
-		callIndirect gives true
+// Whether `op` DEFINES a value, and WHICH — ONE exhaustive `StdOp` match answering both halves.
+//
+// ⚠⚠ **IT WAS TWO, AND WHAT KEPT THEM AGREEING WAS NOTHING** (P1.9 review). `stdOpDefinesValue`
+// answered "does it define?" over a range-arm partition of the union and `stdOpDefinedIdOrZero`
+// answered "which id?" over a destructured one — ~105 lines of parallel arms a reader had to diff by
+// eye. A new `StdOp` variant is a compile error in BOTH, which is what the exhaustive match buys; but
+// adding it as `true` in the first and `0` in the second COMPILES, and the consequence is not a
+// diagnostic: `nextFreeValueId` under-counts, this pass mints a ValueId some op already defines, and
+// two values collide in a function nothing about the guard being emitted names. A wrong answer one
+// arm's worth of inattention away — the shape the duplication rule exists for.
+//
+// It also retires a SENTINEL: the id half returned `0` for a non-defining op and was safe only
+// because every caller asked the boolean first — and ValueId 0 is a REAL id in this compiler (a
+// zero-user-parameter generic method's layout-descriptor slot legitimately holds it, which is why
+// `MaxonToStdLowering` carries a separate `hasImplicitLayout` bit rather than testing for 0). The
+// union says "no value" in a way no ValueId can spell.
+union DefinedValueLookup
+	none
+	defines(valueId ValueId)
+end 'DefinedValueLookup'
+
+// The `none` set is the terminators / stores / effect ops that define nothing. Exhaustive over StdOp,
+// matching `collectStdOpUses`'s discipline — a new variant is a compile error here rather than a
+// silently-missed def.
+function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
+	return match op 'r'
+		const(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		binOp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		unaryOp(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		cmp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		binOpImm(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		cmpImm(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		div(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		mod(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		condBranch to branch gives DefinedValueLookup.none
+		ret gives DefinedValueLookup.none
+		param(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		call(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		retVoid gives DefinedValueLookup.none
+		globalAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		loadIndirect(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		storeIndirect gives DefinedValueLookup.none
+		rdataAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		tryCall(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		errorReturn to osExit gives DefinedValueLookup.none
+		osAllocPages(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osWriteStdout gives DefinedValueLookup.none
+		funcAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		callIndirect(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
 		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
-		osWaitHandle gives true
-		osRangePanic to osCloseHandle gives false
-		// `osFreePages` (P1.5-B1a′) defines no value; it sits past `osWaitHandle` in the union, so its own arm.
-		osFreePages gives false
+		osWaitHandle(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osRangePanic to osCloseHandle gives DefinedValueLookup.none
+		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
+		osFreePages gives DefinedValueLookup.none
 		// The jump table defines no value — a terminator branches, it does not produce a result.
-		switch gives false
+		switch gives DefinedValueLookup.none
 		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
-		// throwing form defines that result AND an error flag — reported here as `tryCall`'s two are, by its
-		// PRIMARY alone, since this pair of readers models one def per op.
-		witnessCall gives true
-		witnessTryCall gives true
+		// throwing form defines that result AND an error flag — reported here by its PRIMARY alone, exactly as
+		// `tryCall` reports its own, since this reader models one def per op.
+		witnessCall(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		witnessTryCall(resultId, _, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
 		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
-		osPipeCreate gives false
-		osIocpCreate to osThreadCreate gives true
-		osLockInit to osLockLeave gives false
-		osReadOverlapped to osLastError gives true
-		osProcessSpawnInherit gives false
-		osCancelIo gives false
-		osGetPid gives true
+		osPipeCreate gives DefinedValueLookup.none
+		osIocpCreate(resultId) gives DefinedValueLookup.defines(resultId)
+		osEventCreate(resultId) gives DefinedValueLookup.defines(resultId)
+		osThreadCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osLockInit to osLockLeave gives DefinedValueLookup.none
+		osReadOverlapped(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osLastError(resultId) gives DefinedValueLookup.defines(resultId)
+		osProcessSpawnInherit gives DefinedValueLookup.none
+		osCancelIo gives DefinedValueLookup.none
+		osGetPid(resultId) gives DefinedValueLookup.defines(resultId)
 		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
-		osPipeCreateOutbound gives false
-		osWriteFile gives true
+		osPipeCreateOutbound gives DefinedValueLookup.none
+		osWriteFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
 		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
-		osReadWallClock gives false
-	end 'd'
-end 'stdOpDefinesValue'
-
-// The ValueId `op` defines, or 0 for a non-defining op (safe filler for a MAX, never a real answer read
-// on its own — every caller gates on `stdOpDefinesValue`). Exhaustive over StdOp.
-function stdOpDefinedIdOrZero(op StdOp) returns ValueId
-	return match op 'r'
-		const(resultId, _, _) gives resultId
-		binOp(resultId, _, _, _, _) gives resultId
-		unaryOp(resultId, _, _, _) gives resultId
-		cmp(resultId, _, _, _, _) gives resultId
-		binOpImm(resultId, _, _, _) gives resultId
-		cmpImm(resultId, _, _, _) gives resultId
-		div(resultId, _, _) gives resultId
-		mod(resultId, _, _) gives resultId
-		condBranch to branch gives 0
-		ret gives 0
-		param(resultId, _, _) gives resultId
-		call(resultId, _, _) gives resultId
-		retVoid gives 0
-		globalAddr(resultId, _) gives resultId
-		loadIndirect(resultId, _, _, _) gives resultId
-		storeIndirect gives 0
-		rdataAddr(resultId, _) gives resultId
-		tryCall(resultId, _, _, _) gives resultId
-		errorReturn to osExit gives 0
-		osAllocPages(resultId, _) gives resultId
-		osWriteStdout gives 0
-		funcAddr(resultId, _) gives resultId
-		callIndirect(resultId, _, _, _, _) gives resultId
-		// P1.5 subprocess: `osWaitHandle` defines the wait result; the other four define nothing (see above).
-		osWaitHandle(resultId, _, _) gives resultId
-		osRangePanic to osCloseHandle gives 0
-		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
-		osFreePages gives 0
-		// The jump table defines no value.
-		switch gives 0
-		// A witness call defines its result value, like `callIndirect`. The throwing form reports its PRIMARY,
-		// exactly as `tryCall` reports its own and leaves the error flag out of this single-def model.
-		witnessCall(resultId, _, _, _, _, _) gives resultId
-		witnessTryCall(resultId, _, _, _, _, _, _) gives resultId
-		// P1.5 dogfood slice 1a: the value-defining IOCP ops return their captured RAX result id; the rest 0.
-		osPipeCreate gives 0
-		osIocpCreate(resultId) gives resultId
-		osEventCreate(resultId) gives resultId
-		osThreadCreate(resultId, _) gives resultId
-		osLockInit to osLockLeave gives 0
-		osReadOverlapped(resultId, _, _, _, _, _) gives resultId
-		osLastError(resultId) gives resultId
-		osProcessSpawnInherit gives 0
-		osCancelIo gives 0
-		osGetPid(resultId) gives resultId
-		// P1.5 dogfood slice 1b: osWriteFile returns its captured RAX BOOL id; osPipeCreateOutbound defines nothing.
-		osPipeCreateOutbound gives 0
-		osWriteFile(resultId, _, _, _, _) gives resultId
-		// The wall-clock read defines nothing.
-		osReadWallClock gives 0
+		osReadWallClock gives DefinedValueLookup.none
 	end 'r'
-end 'stdOpDefinedIdOrZero'
+end 'stdOpDefinedValue'
 
 // The base file name (last path segment) of a compiler source path, for the runtime panic message —
 // the shv2 equivalent of the bootstrap's `Path.GetFileName`. Strips both separators so a Windows temp
