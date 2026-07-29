@@ -1,6 +1,6 @@
 ---
 name: rung
-description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, scale-test ladder read (optimizer agent on trigger), independent review, gate battery, cross-target gate (every LOCAL target — arm64 is remote, synced separately by hand, and is NEVER required to complete a rung), rebase, fast-forward merge, push. Prefer a WIDER WAVE over slicing. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan.
+description: Implement one rung of maxon-shv2/PLAN.md end to end — plan, contract, worktree-isolated implementer, scale-test ladder read (optimizer agent on trigger), independent review, gate battery, cross-target gate (every LOCAL target — arm64 is remote, synced separately by hand, and is NEVER required to complete a rung), rebase, fast-forward merge, push. Prefer a WIDER WAVE over slicing. Use whenever asked to implement a milestone, phase, or rung of the shv2 plan. Also runs in SLICE mode for parallel agents with no outer coordinator — claim a row on PLAN.md's 🧭 SLICE BOARD by pushing the claim (§0a; the push is the lock), then run the rung normally. Invoke as `/rung <row-id>` (e.g. `/rung G1`) to take a specific row.
 ---
 
 # Run one rung of the plan
@@ -17,6 +17,18 @@ and the verification. Agents own layers.
 
 Integration is inherently serial and is the real limit on wave size: **beyond ~4–5 agents, integration
 dominates and adding agents makes it slower.**
+
+> ### TWO MODES — and the difference is whether an OUTER coordinator exists
+>
+> - **WAVE mode (the default, everything below).** You are the only coordinator. You slice the rung
+>   yourself, hand each sub-agent an exclusive file list, and integrate. Nobody else is touching `main`.
+> - **SLICE mode.** `maxon-shv2/PLAN.md` carries a **🧭 SLICE BOARD**, and **several instances of this
+>   skill are running at once, in different repos or worktrees, with no outer coordinator.** You own
+>   **exactly one board row**. Inside your slice you are still the coordinator and every step below
+>   still applies — but you no longer own `main`, you share it, and **§0a is what makes that safe.**
+>
+> **You are in SLICE mode if the board exists and has a claimable row** — or if you were invoked with a
+> row id (`/rung G1`). In SLICE mode, §0a runs **before** §0's orientation and is not optional.
 
 ## ⛔ HALT AND ASK — the things that are NOT yours to decide
 
@@ -102,6 +114,60 @@ This is the leak rule (*"leaks are not ok"*) generalized: a leak may not be defe
 defect the rung owns — and **a wrong answer the rung owns is no different.** The only change from the old
 regime is the DESTINATION of a legitimate deferral: a **numbered future rung in PLAN.md**, decided by the
 coordinator up front — not a row in a backlog file that anyone could quietly append to.
+
+## 0a. SLICE mode — CLAIM YOUR ROW, AND PUSH IT, BEFORE YOU DO ANYTHING ELSE
+
+**`git push` IS THE LOCK.** There is no lockfile, no registry and no coordinator to ask. A claim exists
+when — and only when — it is **on `origin/main`**. A claim in your working tree is not a claim; it is a
+private intention, and the next agent's `fetch` will never see it.
+
+**Pick a row that is `⬜ FREE` AND whose LANE holds no `🔶`.** Both conditions, every time. The lane
+table is the real exclusion unit, because most of the remaining rows live inside one 28k-line file
+(`Compiler/Parser.maxon`) and "different mechanism" does not mean "different code".
+
+```bash
+git fetch origin && git rebase origin/main       # NEVER claim against a stale board
+# read maxon-shv2/PLAN.md §"🧭 THE SLICE BOARD"; choose a FREE row in a FREE lane
+# edit ONLY that row:  ⬜ FREE → 🔶 CLAIMED   |  slice/<id>-<slug>  |  <UTC>
+git add maxon-shv2/PLAN.md
+git commit -m "claim(slice): <id> — <one line>"  # ⚠ PLAN.md ONLY. No code. No other file.
+git push origin main
+```
+
+**The claim commit carries `maxon-shv2/PLAN.md` and NOTHING else.** It has to replay cleanly over any
+other agent's claim, every time, without thought — a claim commit that can conflict is worse than no
+claim at all, because it fails at the exact moment two agents are racing.
+
+| Push result | What it means | What you do |
+|---|---|---|
+| **accepted** | **The row is yours.** | Proceed to §0, then §4 with `slice/<id>-<slug>` as your branch |
+| **rejected** (non-fast-forward) | **You lost the race** — someone claimed between your `fetch` and your `push` | `git fetch origin && git rebase origin/main`, **re-read the board**. Row or lane now taken? `git reset --hard origin/main` to drop your claim, then pick a different row. Still free? Push again |
+
+> ### ⛔ NEVER `git push --force` ON `main`. NOT ONCE, NOT "JUST THIS TIME".
+> A rejected push here is not an obstacle — **it is the lock working.** Forcing past it deletes another
+> agent's claim commit while that agent is already building against it, and you both then implement the
+> same row against a board that agrees with neither of you. The rejection is the ONLY signal this
+> protocol has; overriding it removes the protocol.
+
+**Announce the claim before working**: state the row id, the lane, and the pushed commit SHA. That SHA
+is the claim's evidence — it is what another agent can verify, and what you point at if the board and
+reality ever disagree.
+
+### Releasing, and the claim that outlives its agent
+
+- **On success**, the row goes `🔶 → ✅ DONE` in **step 12's** PLAN.md update, pushed with it.
+- **If you abandon** — a HALT-AND-ASK in §"⛔", a blocker you cannot clear — **push the row back to
+  `⬜ FREE` yourself**, with a one-line note saying what stopped you. A silent abandon is the worst
+  outcome the board can produce: it looks exactly like work in progress, forever.
+- **Reclaiming a STALE row** (`🔶` older than ~24 h with no branch on the remote — check with
+  `git ls-remote --heads origin 'slice/<id>-*'`) is allowed, but it is **an edit that gets pushed like
+  any other**: move it to `⬜ FREE`, name the claim you released and why, push, and only then claim it.
+  Never just take it — the previous agent may be mid-rebase, and two live branches for one row is the
+  one state this board cannot represent.
+
+⚠ **Your branch is not private once pushed, but `main` is shared from the first second.** Everything in
+step 11 about re-running the battery when `main` moved is now the COMMON case, not the exception —
+another agent will land while you work. Expect it; budget for it.
 
 ## 0. Which rung, and orient
 
@@ -308,6 +374,16 @@ program. If the rung is purely front-end, say so and skip.
 git worktree add ../maxon-<rung> -b <rung>-<slug>
 cp -r bin ../maxon-<rung>/bin        # bin/ is GITIGNORED — a worktree has no compiler without this
 ```
+
+**In SLICE mode the branch name is not free-form — it is `slice/<id>-<slug>`, the exact name you wrote
+into the board in §0a.** The board row is how another agent checks whether a claim is alive
+(`git ls-remote --heads origin 'slice/<id>-*'`), so a branch that does not match the row it claims is a
+claim nobody can verify. **Push the branch early**, before it is finished: an unpushed branch is
+indistinguishable from an abandoned claim.
+
+⚠ **In a worktree, every `maxon-dev` MCP call needs `repoRoot`** — see CLAUDE.md's box. This bites
+hardest in SLICE mode, where several worktrees exist at once and the default (the main checkout) is
+somebody else's tree.
 
 ## 5. Implement — `maxon-rung-implementer`
 
@@ -562,7 +638,25 @@ leaves main byte-identical to the branch tip you gated in step 8, so the re-run 
 known-green tree — skip it. Either way, then **`git push origin main`** — the parallel repo consumes it.
 Remove the worktree and delete the branch.
 
+> ### SLICE mode — the landing race, and why "did `main` move?" flips from exception to default
+> Another agent lands while you work. That is the normal case here, not the surprise, so:
+> - **`<old-base>` will almost always be behind `main`** ⇒ the re-run above is **owed, not optional**.
+>   You gated a tree that no longer exists.
+> - **Your `git push origin main` can be REJECTED** — someone landed between your `fetch` and your push.
+>   Same rule as §0a: **rebase and re-gate, never force.** A forced landing overwrites a merge whose
+>   author already gated it, and the suite that proves your work green never saw their code.
+> - **If the agent who landed first touched YOUR lane's file** (three lanes share `Parser.maxon`), read
+>   their diff before you re-gate. A clean textual rebase is not evidence the two changes compose — it
+>   is only evidence they were far apart in the file.
+
 ## 12. Close the loop
+
+**In SLICE mode, this step also RELEASES your claim: flip your board row `🔶 CLAIMED → ✅ DONE`, in the
+same commit as the rest of the PLAN.md update, and push it.** Until that push lands, the board still
+says you are working and your lane is still closed to everyone else — **a finished slice whose row was
+never flipped blocks its whole lane exactly as effectively as an abandoned one.** If your slice moved
+goldens you did not add, say so on the row (see the board's ⚠ on golden churn) so the agents rebasing
+onto you know what they are inheriting.
 
 Update `maxon-shv2/PLAN.md`: a rung's deliverable is the set of `disabled-test:` markers it flipped to
 `test:`. **Mark the rung done ONLY if it has no open residuals** — if the plan sanctioned any deferral in
