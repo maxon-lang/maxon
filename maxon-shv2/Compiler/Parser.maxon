@@ -19236,8 +19236,9 @@ export type Parser
 	end 'emitUnionTagStore'
 
 	// Classify a payload field's storage, rejecting the ones this rung's UNION-payload store cannot lower —
-	// a FLOAT (needs the bitcast ops a later rung adds) and a NESTED boxed-union payload. A SCALAR, a
-	// String, and a struct are lowerable; the returned class carries the storage type and, for a managed
+	// a FLOAT (needs the `bitcastI64ToF64` inverse a later rung adds; the outbound `bitcastF64ToI64`
+	// shipped with `float.hash`) and a NESTED boxed-union payload. A SCALAR, a String, and a struct are
+	// lowerable; the returned class carries the storage type and, for a managed
 	// payload, whether it is a String. The reject is at the construct/extract USE site (not the
 	// declaration), so the tolerant enum sweep never truncates a layout over it.
 	//
@@ -23126,9 +23127,11 @@ export type Parser
 
 	// ⭐ **THE SCALAR-VS-MANAGED PAYLOAD DECISION — the boundary of slice 1.** The concrete storage
 	// type a union payload field of declared type `declared` occupies its 8-byte slot as, OR a clean
-	// rejection of the types slice 1 cannot lower: a FLOAT (needs the bitcast ops a later rung adds)
-	// and every MANAGED reference (String, struct, a boxed union — an owned heap pointer whose
-	// move-in/drop is slice 2's ownership work). A SCALAR — `int`/`bool`, a ranged-int alias, or a
+	// rejection of the types slice 1 cannot lower: a FLOAT (needs the `bitcastI64ToF64` inverse a later
+	// rung adds — the outbound `bitcastF64ToI64` shipped with `float.hash`, so only the READ BACK out of
+	// the int-tagged slot is still missing) and every MANAGED reference (String, struct, a boxed union —
+	// an owned heap pointer whose move-in/drop is slice 2's ownership work). A SCALAR — `int`/`bool`,
+	// a ranged-int alias, or a
 	// payload-FREE enum (whose value IS its i64 tag) — is stored inline and returned here.
 	//
 	// It is the payload twin of `fieldStorageType`, and it is a SEPARATE policy on purpose: a struct
@@ -23151,7 +23154,7 @@ export type Parser
 	end 'nestedUnionPayloadMessage'
 
 	function floatPayloadMessage(field PayloadField, layout EnumLayout) returns String
-		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload needs the bitcast ops a later rung adds (a scalar-only union is int-tagged)"
+		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload needs the `bitcastI64ToF64` inverse a later rung adds (a scalar-only union is int-tagged, and reading a float back out of the slot has no op yet)"
 	end 'floatPayloadMessage'
 
 	// A type-qualified numeric bound used as a VALUE (`let x = u16.max`, `if v == u64.max`).

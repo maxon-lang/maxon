@@ -460,10 +460,21 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// Neither stack-argument op is a register-to-register move (one touches memory at each end), so
 		// neither can be a `mov r, r` self-move.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then return false
-		// ⚠ The arm64 bit reinterpretation is EXACTLY the shape a careless reader would call a self-move —
-		// two registers, same number possible. It is not: `fmov x3, d3` names a GPR and an FP register,
-		// two different registers that share a `RegNum` only because the numbering is one space. Deleting
-		// it would drop the whole transfer, so this must stay `false`.
+		// The arm64 bit reinterpretation is not a `movRegReg`, so it is not a self-move — the same
+		// structural reason every arm above returns `false`. Only the `movRegReg` arm compares two
+		// register NUMBERS at all; nothing here ever asks whether `fmov`'s two ends are equal.
+		//
+		// ⚠ AND THE NUMBER COINCIDENCE THAT WOULD MAKE THAT COMPARISON DANGEROUS CANNOT ARISE, which
+		// is worth stating because it reads backwards: `Arm64Register` is ONE `RegNum` space whose two
+		// classes occupy DISJOINT ranges (`x0..x30` = 0..30, `d0..d31` = 31..62), so `fmov x3, d3` is
+		// `RegNum` 3 and `RegNum` 34 and the two can never compare equal. It is precisely BECAUSE the
+		// numbering is one space that a GPR and an FP register cannot collide; the hazard would be real
+		// under v1's TWO-enum design, where `x3` and `d3` are both 3. x64 is the same shape (GPRs 0..15,
+		// XMMs 16..31), which is why its `movqGprXmm` twin needs nothing here and is correctly answered
+		// `false` by the `andRegReg to leaRegRdata` arm above.
+		//
+		// The arm is not optional: `arm64FmovGprFp` is the LAST union member, so no range covers it and
+		// the match would not be exhaustive without it.
 		arm64FmovGprFp then return false
 	end 'sm'
 end 'isPhysicalSelfMove'

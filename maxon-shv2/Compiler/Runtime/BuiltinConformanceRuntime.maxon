@@ -1,7 +1,8 @@
 // BuiltinConformanceRuntime.maxon — the synthesized `int.hash`/`int.equals` (P1.7a slice 2b),
-// `int.compare` (P1.7a slice 2b-ii), `float.equals`/`float.compare` + `bool.compare` (P1.7a slice 2b-iii)
-// and `String.hash`/`String.equals` (P1.7b) impls that make the BUILTIN types conform to
-// `Hashable`/`Equatable`/`Comparable`. WHICH type conforms to WHICH protocol is not restated here — it is
+// `int.compare` (P1.7a slice 2b-ii), `float.equals`/`float.compare` + `bool.compare` (P1.7a slice 2b-iii),
+// `String.hash`/`String.equals` (P1.7b) and `float.hash` (P1.7a's last slice) impls that make the BUILTIN
+// types conform to `Hashable`/`Equatable`/`Comparable`. WHICH type conforms to WHICH protocol is not
+// restated here — it is
 // `IrInterface.isIntrinsicBuiltinConformance`, and the impls below are exactly its true entries — one per
 // (type, protocol) pair, no count written down, because a count is a copy that goes stale on the next rung.
 //
@@ -48,9 +49,14 @@
 // compare. The witness reloc these ride is baked by EVERY writer: the x64 one, the wasm one as a
 // funcref-table index (P1.7a slice 2b-iv-B) and the arm64 Mach-O/ELF one (slice 2b-iv-C).
 
-// The low-32-bit mask `int.hash`/`String.hash` fold their result through — `HashValue` is `int(0 to u32.max)`,
-// so a hash is the low 32 bits. The one place the mask is spelled, shared by both hashers (it IS `HashValue`'s
-// width, one fact).
+// The low-32-bit mask EVERY builtin hasher folds its result through — `HashValue` is `int(0 to u32.max)`,
+// so a hash is the low 32 bits. The one place the mask is spelled (it IS `HashValue`'s width, one fact);
+// `returnLow32Masked` is the one place the FOLD is spelled, and the roster of hashers lives there rather
+// than here, so this constant carries no count to go stale.
+//
+// ⚠ For `float.hash` this mask is LOAD-BEARING rather than incidental: `buildFloatHash` omits the `-0.0`
+// branch both references write purely because a 32-bit mask discards IEEE-754's sign bit. That dependence
+// is checked, not remembered — see `assertSignBitAboveHashMask`.
 let HashLow32Mask = 0xFFFFFFFF
 
 // ⭐ **`-0.0`'s IEEE-754 BIT PATTERN.** `+0.0` is 64 zero bits and `-0.0` is those bits with the SIGN
