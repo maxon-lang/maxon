@@ -3779,12 +3779,13 @@ export type ProgramSignatures
 		return layout
 	end 'characterSetLayout'
 
-	// The compiler-owned `CharacterSet` layout, for the front end's nominal identity. It PANICS rather than
-	// answering when the type is unregistered, for `stringIndexLayoutOrPanic`'s reason: every caller reaches
-	// it through a value the parser itself minted, which the sweep must already have registered.
-	export function characterSetLayoutOrPanic() returns StructLayout
-		return try self.structTypes.get(CharacterSetTypeName) otherwise panic("ProgramSignatures.characterSetLayoutOrPanic: `{String.from(CharacterSetTypeName)}` is not registered — every CharacterSet value is minted by a producer the sweep's `fileNamesCharacterSetProducer` scan sees, and that scan is what calls `registerCharacterSetType`")
-	end 'characterSetLayoutOrPanic'
+	// ⚠ **THERE IS DELIBERATELY NO `characterSetLayoutOrPanic`**, where `StringIndex` has one. An index is
+	// READ through its layout (`charIndex()`/`bytePos()` are field loads, `stringIndexLayoutOrPanic` serves
+	// them); a `CharacterSet` has no field access at all — the front end never loads either field and the
+	// runtime writes both through `CharacterSetRuntime`'s own constants. So the layout registered above is
+	// read by nothing, and an accessor for it would be an exported function with one caller: its own panic.
+	// What the registration buys is the DRIFT CHECK inside `characterSetLayout` and the nominal identity
+	// `containsStruct` answers for; if a later slice adds a field read, add the accessor with it.
 
 	// The `Set with Character` instance a `CharacterSet`'s explicit members live in, and the instance a
 	// `CharSet from [...]` constructs (P1.8 Slice D) — the `setInstanceForString` twin. Keyed as

@@ -23,6 +23,8 @@ Each case names the sabotage that found it.
 | `Character` withdrawn from the `Set` key-type gate | **0** | 3 | `character-set-create` (+ the two above) |
 | `__ucd_cat`'s supplementary-plane search removed | **0** | 2 | `supplementary-plane-category`, `supplementary-plane-trim` |
 | a bare-local member set not poisoned when `from` consumes it | **0** | 2 | `member-set-moved-into-from`, `member-set-consumed-twice` |
+| `availableUnicodeEscapeText`'s UNTRUNCATED window (`available = whole`) | **0** | 1 | `malformed-escape-full-window` |
+| `__ucd_cat`'s `Cn` fall-out (`UcdUnassignedCategory`) reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
 
 Two sabotages the ported corpus already covered well, recorded so the next reader does not re-run them:
 a member set never enrolled as an owned temporary is **31** red, and explicit membership never winning
@@ -181,6 +183,33 @@ end 'main'
 ```
 ```stdout
 [ok]
+```
+
+<!-- test: supplementary-plane-table-bounds -->
+### The sorted table's TOP, and the `Cn` a codepoint in no range falls out to
+`supplementary-plane-category` finds both its codepoints in the table's MIDDLE, so nothing above
+reaches the last entry and nothing at all reaches the `missing` arm — a `__ucd_cat` that answered any
+other category for an unmatched supplementary codepoint left the suite at 2230/0 (measured:
+`UcdUnassignedCategory` 0 ⇒ 2). The three here are, in order: inside the highest range any preset's
+mask covers (U+E0100, `Mn`, entry 803 of 806); one byte past that range's end, so the search falls out
+between two entries; and above EVERY range (U+10FFFF), which is the only input that drives `lo` to the
+table's last index and is therefore what an off-by-one in `suppEntryCount - 1` would read past.
+```maxon
+function main() returns ExitCode
+	let letters = CharacterSet.letters()
+	print("{letters.contains('󠄀')}\n")
+	print("{letters.contains('󠇰')}\n")
+	print("{letters.contains('􏿿')}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+false
+false
 ```
 
 <!-- test: member-set-moved-into-from -->
@@ -345,4 +374,22 @@ end 'main'
 ```
 ```maxoncstderr
 error E1004: <fragment>:3:12: Invalid unicode escape '\uZZ': expected 4 hex digits in string interpolation
+```
+
+<!-- test: malformed-escape-full-window -->
+### A malformed `\uNNNN` quotes SIX bytes when six are there
+`availableUnicodeEscapeText` has two arms — the escape runs off the end of the literal body, or it does
+not — and every other malformed-escape case in the corpus takes the TRUNCATED one (`'\u00'` and
+`"ab\uZZ"` each have fewer than six bytes left at the backslash), so the arm that quotes the full
+`\u` + four is unreached. Sabotaging it alone (`available = whole` ⇒ `available = 0`) left the whole
+suite at 2230/0. Here the escape has a byte after it, so the window is complete and the truncation
+never fires.
+```maxon
+function main() returns ExitCode
+	let x = "z\uZZZZ!"
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E1004: <fragment>:3:11: Invalid unicode escape '\uZZZZ': expected 4 hex digits in string interpolation
 ```

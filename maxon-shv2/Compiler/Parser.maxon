@@ -4208,8 +4208,18 @@ export type Parser
 
 	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — the `StringIndex`
 	// twin, and it needs its OWN complete walk for the identical reason (see above): a `CharacterSet` built
-	// inside a `type`'s method body is invisible to the declaration loop, and an unregistered layout takes
-	// the compiler down at `characterSetLayoutOrPanic`.
+	// inside a `type`'s method body is invisible to the declaration loop, which consumes a `type` whole and
+	// resumes past its `end`.
+	//
+	// ⚠ **WHAT AN UNREGISTERED FILE ACTUALLY COSTS IS THE ALIAS AND THE GID, NOT A CRASH** — MEASURED, by
+	// making this answer `false` for every file: **8 red, every one of them a file that SPELLS `CharSet`**
+	// (`error E2015: a field access on 'cs', which is declared 'unknown'` — `CharSet.create()` with no
+	// alias to resolve), and nothing else. The `__CharacterSet` LAYOUT is read by no one (see
+	// `SignatureIndex`'s note where its `…OrPanic` accessor would be), so a missing one takes nothing down;
+	// the drop router answers from the NAME and needs no registry entry. What the trim arm below buys is
+	// therefore the pre-interning discipline `atSetFromConstruction` states, not a rescue from a panic:
+	// `Set with Character` is interned by the SWEEP so the parser's own read is never the first write to
+	// the shared registry mid-parse, which would make its gid depend on parse order.
 	//
 	// TWO producers, because there are two ways to make one: naming the type (`CharacterSet.letters()`,
 	// `CharacterSet.from(…)`) and calling a NO-ARGUMENT trim, which builds
