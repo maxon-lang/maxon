@@ -3899,6 +3899,17 @@ trigger, not chased (a superlinearity you can *trigger* today is fixed, not file
   `tokenize` through `TokenMemo` — putting directive knowledge in the lexer's signature for four
   tenths of a percent. **Re-measure trigger:** `Testing/ladders/gendirectives.sh plain` (whose
   directives phase is 100% this scan), or `phase:directives` CPU passing ~1% of a rung.
+  ⭐ **BOTH ESCAPES WERE RE-EXAMINED 2026-07-29 AND BOTH ARE CLOSED — do not re-derive this.**
+  (1) *"Resolve directives in the LEXER so the seam stops existing"* is **blocked by `fmt`**, which
+  shv2 will have: a formatter needs the RAW stream — directives present, BOTH branches intact — and
+  a lexer that resolves them would silently delete the dead branch from any file it formatted. Giving
+  `tokenize` a `resolveDirectives` mode re-creates one-fact-two-spellings (and a memo keyed on the
+  mode) to save a rescan. **The shipped tier split is the right one: `fmt` reads `queryTokens`, the
+  compiler reads `queryActiveTokens`.** (2) *"Fuse the pre-scan into the filter and copy lazily"*
+  **saves nothing**: the gate exists so a directive-free file needs no array copy, and that file walks
+  its tokens exactly ONCE either way. ⇒ the flag is the only route, and it is declined above. Note the
+  failure mode if a flag were ever wrong is LOUD, not silent — a leaked directive token hits the parse
+  loops' generic unsupported arm, since D5 deliberately left no directive arms there.
 
 - **⬜ THE ARRAY ELEMENT-TYPE CHECK COSTS ~2.5 ALLOCATIONS PER MUTATOR SITE** (P1.6 Array-element rung,
   2026-07-28). Measured by a same-path A/B against the parent, built by the byte-identical bootstrap:
