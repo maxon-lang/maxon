@@ -1517,19 +1517,27 @@ claimed by this one: "use a ranged typealias instead" is true for `int` and a tr
 compiler must not route a reader into a panic with its own diagnostic. The message names the ALIAS
 the source wrote, not `float`, so a reader of the line `Box with Real` is told about `Real`.
 
-⚠ **IT CLOSES THE TYPE-ARGUMENT DOOR, NOT THE PANIC — and the difference is two lines of source.**
-Every spelling of a float TYPE ARGUMENT is refused above, but a float VALUE handed to a `T`-typed
-formal still reaches `X64Backend.emitRegRegMove` with no float in the type arguments at all:
-`typealias SBox = Box with String` then `SBox.create(1.5)` panics, as does the same call on a
-`Box with Integer`. That door is the OPPOSITE side of one thesis E2062's own message states — a
+⚠ **IT CLOSES THE TYPE-ARGUMENT DOOR, NOT THE VALUE DOOR — and the difference is two lines of
+source.** Every spelling of a float TYPE ARGUMENT is refused above, but a float VALUE handed to a
+`T`-typed formal reached `X64Backend.emitRegRegMove` with no float in the type arguments at all, and
+PANICKED the compiler: `typealias SBox = Box with String` then `SBox.create(1.5)`, and the same call
+on a `Box with Integer`. That door is the OPPOSITE side of one thesis E2062's own message states — a
 float cannot travel through a type parameter's general-purpose slot — but it is a different
 mechanism (`tagIsIntegral` answers `false` for `typeParameter` precisely so that a float into a `T`
-does NOT read as a lossy conversion), it predates this rule, and this rule strictly shrank its
-reach. Closing it needs a ruling this rung does not have: whether a generic call site SUBSTITUTES
-its instance's type arguments — making `IntBox.create(1.5)` the ordinary E3009 the non-generic
-`takeInt(1.5)` already reports — or whether a float actual for an opaque formal is refused outright.
-Recorded here because the sentence that used to stand in this place said the panic was unreachable,
-and a reader who believed it would never look for the value door.
+does NOT read as a lossy conversion, which is right INSIDE a generic body), so this rule strictly
+shrank its reach rather than closing it.
+
+⭐ **IT IS CLOSED NOW, AND THE RULING IS THAT A GENERIC CALL SITE SUBSTITUTES ITS INSTANCE'S TYPE
+ARGUMENTS BEFORE THE ACTUAL-VS-FORMAL CHECK.** `IntBox.create(1.5)` is therefore the ordinary E3009
+the non-generic `takeInt(1.5)` already reports, and `StrBox.create(1.5)` the ordinary E3005 —
+`error.float-actual-at-opaque-formal` and `error.float-actual-at-opaque-formal-string` below pin
+both, byte-for-byte against the non-generic wording, and `int-actual-at-opaque-formal-still-works`
+pins that an ordinary generic call is untouched. ONE RULE, BOTH PATHS. The rejected alternative was
+refusing a float actual at an opaque formal outright: it decides from the FORMAL's shape rather than
+from the instance's real type, and answers wrongly the moment a float type argument becomes legal —
+which E2062's own message says is temporary. The defect is described here rather than deleted
+because the sentence that used to stand in this place said the panic was unreachable, and a reader
+who believed it would never look for the value door at all.
 ```maxon
 typealias Real = float(f64.min to f64.max)
 type Box uses T
@@ -1718,7 +1726,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:10:17: argument 'v': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: <fragment>:11:10: argument 'v': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: error.float-actual-at-opaque-formal-string -->
@@ -1741,7 +1749,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:17: argument type mismatch for 'v': expected 'String', got 'float'
+error E3005: <fragment>:11:10: argument type mismatch for 'v': expected 'String', got 'float'
 ```
 
 <!-- test: int-actual-at-opaque-formal-still-works -->

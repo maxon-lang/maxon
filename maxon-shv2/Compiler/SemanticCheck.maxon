@@ -1526,9 +1526,11 @@ end 'checkImmutableArgToMutatingParam'
 //     `checkPerInstanceArgs` reads its own instance from.
 //
 // Substituting through it turns `T` back into the concrete type argument, and the comparison is then the
-// ONE shared rule (`namedAggregatesConflict`) over the SAME aggregate names `checkArgTypes` uses — so a
-// nominal argument (a struct, a nested instance) is matched EXACTLY, and a scalar / `String` / ranged-alias
-// argument carries no name on either side and keeps coercing by tag (`Box with Integer` still takes `42`).
+// ONE shared rule over the SAME two halves `checkArgTypes` uses on a concrete parameter — the aggregate
+// names (`namedAggregatesConflict`), so a nominal argument (a struct, a nested instance) is matched
+// EXACTLY, and then the tags (`checkDeclaredType`), so a scalar / `String` / ranged-alias argument — which
+// carries no name on either side — is coerced against the type the INSTANCE bound rather than against the
+// opaque formal (`Box with Integer` still takes `42`, and now refuses `1.5`).
 function checkTypeParameterArgs(project Project, func IrFunction, result ValueId, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
 	if not sig.hasTypeParameterParam() 'noOpaqueParams'
 		return
@@ -1556,6 +1558,12 @@ end 'checkTypeParameterArgs'
 // The body of the type-parameter argument check once the call's concrete instance is known. Only the
 // positions whose DECLARED type is a bare type parameter are substituted; every other position was already
 // concrete in the shared signature and `checkArgTypes` has judged it.
+//
+// Each such position is judged by BOTH halves of the argument rule, against the SUBSTITUTED type — the
+// nominal half (`aggregatesConflict`, which a tag can never see) and then the scalar half
+// (`checkArgAgainstDeclaredTag`, which is the identical verdict and the identical four sentences
+// `checkOneArgType` gives a concrete parameter). At most one is reported per call, as the nominal half
+// alone always did.
 function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericInstanceId, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
 	// ⚠ `var`, because the index MEMOIZES a nested instance's compiled name on first ask — the same reason
 	// `compileToCodeResult` binds it that way (see `mangleGenericInstance`).
@@ -1574,6 +1582,10 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkTypeParameterArgsAt: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId)
+		// Hoisted out of the failure branch because BOTH halves below want it now, and one unconditional read
+		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
+		// and `checkArgTypes` fetches the same name unconditionally for every argument of every call.
+		let paramName = try sig.paramNames.get(i) otherwise panic("checkTypeParameterArgsAt: paramNames.get OOB at {i}")
 		// ⚠ **`aggregatesConflict`, NOT the bare rule — the SAME door the parser's five coercion sites use.**
 		// The wrapper adds the P1.6-C decay: a PER-INSTANCE alias (`WA.Idx`) meeting a target that is not one
 		// carries no identity claim and decays. Spelled with the bare rule this arm read a decaying argument's
@@ -1581,7 +1593,6 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// argument — and REJECTED a legal program: `takesPlain(t)` and `IntBox.create(t)` were the same value
 		// into the same `Integer`, accepted at the parser and refused here. One comparison rule, one answer.
 		if signatures.aggregatesConflict(expected, got: got) 'wrongTypeArgument'
-			let paramName = try sig.paramNames.get(i) otherwise panic("checkTypeParameterArgsAt: paramNames.get OOB at {i}")
 			// The EXPECTED side names the concrete TYPE ARGUMENT, not the identity that was compared: the
 			// two agree for an aggregate (`instanceArgAggregateName`'s nominal arm IS this call), and where
 			// they differ — a scalar / `String` / ranged-alias argument, whose identity is deliberately
@@ -1590,6 +1601,49 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(signatures.instanceArgTypeName(gid, position: position))}', got '{aggregateArgDisplay(got, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
+
+		// ⭐⭐ **THE SAME SUBSTITUTION, HANDED TO THE SCALAR RULE — AND THAT HALF WAS A COMPILER PANIC.** The
+		// nominal check above is blind to everything that carries no name: `instanceArgAggregateName` answers
+		// `EmptySourceText` for a scalar, a `String` and a ranged alias, deliberately, so `Box with Integer`
+		// keeps accepting a plain `42`. But a FLOAT carries no name either, so `IntBox.create(1.5)` and
+		// `StrBox.create(1.5)` passed both walks — `checkOneArgType` asked `checkDeclaredType(float,
+		// typeParameter)`, and a type parameter agrees with everything (`typeClassesAgree`) — and the
+		// XMM-born float reached `X64Backend.emitRegRegMove` headed for a GPR parameter slot, where the
+		// emitter PANICKED on a program whose only defect was an ordinary lossy conversion.
+		//
+		// ⚠⚠ **THE TWO HALVES PARTITION THE TYPE ARGUMENTS, AND THIS GATE IS THAT PARTITION — NOT A
+		// SHORT-CIRCUIT.** `instanceArgAggregateName` answers a NAME for exactly the arguments that carry a
+		// nominal identity and `EmptySourceText` for exactly the ones that do not, and its own header states
+		// that the second group "meets its argument by TAG (`checkDeclaredType`)". This is that sentence
+		// enforced. The tag CANNOT stand in for the first group, because `substitutedInstanceArg` returns the
+		// argument AS INTERNED — a user type spelled by name is a `named` LEAF, never `structRef`, and
+		// `typeTagName(named)` is "int" — so handing it to the scalar rule refused a `Leaf` into a
+		// `Box with Leaf` with "expected 'int', got 'struct'" (MEASURED: 51 legal tests in this suite). The
+		// nominal half has already judged that group EXACTLY, by name, against the right interner; reaching
+		// here at all means it found the two identities equal, and both empty.
+		//
+		// ⚠ **THE FIX IS THE SUBSTITUTION, NOT A NEW RULE, AND THAT IS THE RULING** (2026-07-28): a generic
+		// call site substitutes its instance's type arguments BEFORE the actual-vs-formal check, so
+		// `IntBox.create(1.5)` lands on the SAME E3009 the non-generic `takeInt(1.5)` gives and
+		// `StrBox.create(1.5)` on the SAME E3005 as `takeStr(1.5)`. ONE RULE, BOTH PATHS — which is why not
+		// one sentence of diagnostic text lives here. The rejected alternative was refusing a float actual at
+		// an opaque formal outright: it decides from the FORMAL's shape rather than from the instance's real
+		// type, and would answer wrongly the moment a float type argument becomes legal (E2062 is explicitly
+		// temporary).
+		//
+		// ⚠ **IT CANNOT REACH A GENERIC BODY'S OWN `T`.** `checkTypeParameterArgs` only arrives here when the
+		// call's subject is tagged `genericInstance` — a concrete instance — so a call made inside a generic
+		// body on a `self` receiver (tagged with the base `structRef`) never substitutes and keeps the P1.6-A
+		// deferral it must have: inside the body `T` is genuinely opaque and `tagIsIntegral(typeParameter)`
+		// stays `false`.
+		if not expected.isEmpty() 'nominalArgumentAlreadyMatched'
+			continue
+		end 'nominalArgumentAlreadyMatched'
+
+		let substituted = signatures.substitutedInstanceArg(gid, position: position)
+		if checkArgAgainstDeclaredTag(project, argTag: argTag, declaredTag: maxonTypeTag(substituted), paramName: paramName, position: i, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
+			return
+		end 'refusedBySubstitutedType'
 	end 'eachArg'
 end 'checkTypeParameterArgsAt'
 
@@ -1926,25 +1980,40 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		end 'signatureMismatch'
 	end 'functionArg'
 
-	// `checkDeclaredType`, not `typesAgree` — an argument meeting its parameter is a COERCION
-	// SITE, and the symmetric rule cannot see a direction. A float and an int AGREE (they must,
-	// or `5 + 2.0` would not compile), so `takeInt(3.7)` passed this check and the float reached
-	// the x64 emitter as an f64 headed for a GPR argument register. The same rule now answers
-	// here, at the `return` and at both assignments.
-	match checkDeclaredType(argTag, declared: paramTag) 'declared'
+	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, declaredTag: paramTag, paramName: paramName, position: position, callRange: callRange, filePath: filePath)
+end 'checkOneArgType'
+
+// ⭐ **THE COERCION RULE ON ONE ARGUMENT, AND ITS FOUR WORDINGS — STATED ONCE FOR THE THREE SITES THAT
+// ASK IT.** A concrete parameter asks it through `checkOneArgType` (a direct call's slotted argument, an
+// indirect call's positional one), and a `T`-TYPED parameter asks it through `checkTypeParameterArgsAt`,
+// which first substitutes the instance's concrete type argument for the opaque formal. The substitution is
+// the only thing that differs; the verdict and every sentence it provokes are this function's, so
+// `IntBox.create(1.5)` and the non-generic `takeInt(1.5)` cannot come to explain one rule two ways.
+//
+// `checkDeclaredType`, not `typesAgree` — an argument meeting its parameter is a COERCION SITE, and the
+// symmetric rule cannot see a direction. A float and an int AGREE (they must, or `5 + 2.0` would not
+// compile), so `takeInt(3.7)` passed this check and the float reached the x64 emitter as an f64 headed for
+// a GPR argument register. The same rule now answers here, at the `return` and at both assignments.
+//
+// It ANSWERS the verdict rather than swallowing it, because a caller walking several arguments must stop
+// at the first one it refused — one diagnostic per call, the same bound the aggregate arm above it keeps.
+function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, declaredTag ValueTypeTag, paramName ByteArray, position ParamCount, callRange SourceRange, filePath FilePath) returns DeclaredTypeMatch
+	let verdict = checkDeclaredType(argTag, declared: declaredTag)
+	match verdict 'declared'
 		ok then break 'declared'
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{typeTagName(paramTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{typeTagName(declaredTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		// The parameter is NAMED, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 		// shared verbatim, so the four sites cannot come to explain one rule four ways.
-		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(paramName, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(paramTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
+		narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument {argParamLabel(paramName, position: position)}: {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(declaredTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
 		// A FUNCTION VALUE passed to a NON-function parameter (P1.5-A1) — the argument twin of the
 		// parser's assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one
 		// rule one way. (Reached only through the whole-program signature the parser cannot see, which
 		// is why the rule's argument arm lives here rather than at the call site.)
-		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(paramName, position: position)}, which holds '{typeTagName(paramTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
+		functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument {argParamLabel(paramName, position: position)}, which holds '{typeTagName(declaredTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'declared'
-end 'checkOneArgType'
+	return verdict
+end 'checkArgAgainstDeclaredTag'
 
 // The interned name of the declared STRUCT or boxed UNION/ENUM a (tag, nameId) pair denotes, or
 // `EmptySourceText` for anything that is not one — the SemanticCheck half of the OPEN #54 identity
