@@ -12,7 +12,7 @@
 // CLI (documented):
 //   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--target=<cpu>-<os>]
 //   maxon-shv2 verify-warm-rebuild <file>
-//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>]
+//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>] [--compiler=<path>]
 
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
@@ -27,6 +27,16 @@ export let SpecTestCommandName = "spec-test"
 export let WorkerPersistentFlag = "--worker-persistent"
 export let FilterFlagPrefix = "--filter="
 export let UpdateRequiredFlag = "--update-required"
+
+// `--compiler=<path>` — THE COMPILER UNDER TEST, which is a different fact from "the executable a
+// worker process is", and this constant exists because the two were one value until 2026-07-29.
+//
+// A worker IS this harness relaunched; the compiler it spawns to build each fragment need not be.
+// In-tree they are the same file, so nothing ever distinguished them — see runSpecTest. It is in
+// the re-emitted set because the parent forwards it to every worker: the child must be TOLD which
+// compiler this run is about rather than re-deriving one from its own `Process.executablePath()`,
+// which would answer with the worker binary and be right only by coincidence.
+export let CompilerFlagPrefix = "--compiler="
 
 // `--target=` is in this re-emitted set (not with `build`'s options) because a cross-target
 // spec run forwards it to every worker's command line — see SpecWorkerPool.spawnNoWait. The
@@ -149,12 +159,24 @@ function runVerifyWarmRebuild(args MaxonArgs) returns ExitCode
 	return 1
 end 'runVerifyWarmRebuild'
 
-// The `spec-test [dir]` command: resolve the running compiler's own path, run every active test in
-// `dir` (default `specs-shv2`) through it on a pool of persistent worker subprocesses, print
-// per-test PASS/FAIL + an `N passed, M failed` summary, and exit non-zero iff any test failed. The
-// compiler under test is the RUNNING executable (`Process.executablePath`), so a freshly built
-// `maxon-shv2.exe` tests itself — and so does every worker it spawns, since a worker IS this
-// executable.
+// The `spec-test [dir]` command: run every active test in `dir` (default `specs-shv2`) on a pool of
+// persistent worker subprocesses, print per-test PASS/FAIL + an `N passed, M failed` summary, and
+// exit non-zero iff any test failed.
+//
+// ⚠ TWO EXECUTABLES, NOT ONE — and they were one value until 2026-07-29:
+//
+//   workerExe    what a pool worker IS. ALWAYS this process (`Process.executablePath`), because a
+//                worker is this harness relaunched with `--worker-persistent`. Not settable: a flag
+//                that spawned some OTHER harness as a worker has no caller and could only lie.
+//   compilerExe  the COMPILER UNDER TEST — the binary each selected test is built with. This
+//                process unless `--compiler=<path>` names another.
+//
+// In-tree they are the same file: the harness IS the compiler, so a freshly built maxon-shv2.exe
+// tests itself and both readings land on it. That is why the conflation was invisible — it has
+// never once been wrong here. The 🚩 Phase 1 gate is precisely the configuration that separates
+// them (a harness compiled by maxon.exe, driving maxon-shv2.exe as the compiler), and with one
+// value it would not have failed loudly: it would have PASSED, with both harnesses delegating every
+// verdict to the same in-tree binary and agreeing perfectly about nothing.
 //
 // There is ONE path through the pool, taken by every worker count including `--workers=1`. A serial
 // in-process branch for the single-worker case would be a second implementation of "run the suite",
@@ -165,10 +187,16 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'badSpecDir'
 
-	let compilerExe = try Process.executablePath() otherwise 'noExe'
-		printError("error: could not determine the running compiler's path\n")
+	// What a worker IS. Never `--compiler`: see this function's header.
+	let workerExe = try Process.executablePath() otherwise 'noExe'
+		printError("error: could not determine the running executable's path\n")
 		return 1
 	end 'noExe'
+
+	let compilerExe = try resolveCompilerUnderTest(args.compilerPath, workerExe: workerExe) otherwise 'badCompiler'
+		printError("error: --compiler must name an existing executable: {args.compilerPath}\n")
+		return 1
+	end 'badCompiler'
 
 	// The effective target for this run: the host unless `--target` overrode it. Resolved up front so
 	// BOTH sides run the SAME target — the dispatcher's pool AND a relaunched worker, which re-parses
@@ -196,7 +224,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// real message is in another process's stderr. The workers inherit the answer by never starting.
 	requireRunnerAvailable(effectiveTarget)
 
-	let run = try runSpecPool(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
+	let run = try runSpecPool(compilerExe, workerExe: workerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
@@ -251,6 +279,36 @@ function resolveSpecDir(args MaxonArgs) returns FilePath throws FilePathError
 	end 'useDefault'
 	return try FilePath.from(args.path)
 end 'resolveSpecDir'
+
+// Raised when `--compiler=<path>` names something that is not there. A THROW rather than a sentinel
+// FilePath: there is no path value that means "no path", and falling back to the running executable
+// on a bad spelling would run the entire suite against a compiler the caller never named — which is
+// the exact failure this flag exists to make impossible.
+enum BadCompilerPath implements Error
+	none
+end 'BadCompilerPath'
+
+// Resolve the COMPILER UNDER TEST: `--compiler=<path>` when given, else the running executable
+// (the in-tree case, where the harness IS the compiler).
+//
+// The path is validated HERE — once, in the parent, before a worker exists. That is the same
+// discipline `requireRunnerAvailable` and the `--target` spelling already follow, and for the same
+// measured reason: a bad compiler path discovered per test turns ONE fact into hundreds of
+// identical failures, and discovered inside a worker it turns into a dead pipe whose real message
+// is in another process's stderr.
+function resolveCompilerUnderTest(spec String, workerExe FilePath) returns FilePath throws BadCompilerPath
+	if spec.isEmpty() 'runningExe'
+		return workerExe
+	end 'runningExe'
+
+	let named = try FilePath.from(spec) otherwise throw BadCompilerPath.none
+
+	if not File.exists(named) 'missing'
+		throw BadCompilerPath.none
+	end 'missing'
+
+	return named
+end 'resolveCompilerUnderTest'
 
 // Print each test's verdict and the summary, returning the process exit code (1
 // iff any test failed). The PASS/FAIL line is built via a match EXPRESSION (both
@@ -338,6 +396,10 @@ function printUsage()
 	print("                                x64-windows, x64-linux, arm64-macos or wasm32-wasi (default: the host\n")
 	print("                                target). For spec-test a cross target cross-compiles each\n")
 	print("                                selected test and runs it under the vendored runtime.\n")
+	print("  --compiler=<path>             (spec-test) Build each selected test with THIS compiler instead\n")
+	print("                                of the running executable. The pool's workers are still this\n")
+	print("                                executable relaunched — the two are different facts, identical\n")
+	print("                                in-tree and separate wherever the harness is not the compiler.\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
 	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
 	print("                                the same numbers as a human-readable table.\n")
@@ -418,6 +480,15 @@ export type MaxonArgs
 	// out of the usage text. Undocumented but PARSED: an unrecognized flag aborts the run, so a
 	// worker whose own flag was not understood would fail to start at all.
 	export let workerPersistent as bool
+	// `--compiler=<path>` (spec-test only): the COMPILER UNDER TEST — the binary each selected test
+	// is built with. Empty means "the running executable", which is the in-tree case where the
+	// harness IS the compiler and a freshly built maxon-shv2.exe tests itself.
+	//
+	// It is a SEPARATE fact from the executable a pool worker is relaunched as (always this process;
+	// see runSpecTest). The Phase 1 gate is the configuration that separates them — a harness
+	// compiled by maxon.exe driving maxon-shv2.exe as the compiler — and without this flag that gate
+	// would pass while every verdict came from the in-tree harness.
+	export let compilerPath as String
 	// `--metrics=<path>` (build only): write this compile's per-phase time + memory attribution as
 	// TSV to <path> (see MetricsEmit). The scale-test harness reads it back; a human wants
 	// `--log=compiler:debug`, which prints the same numbers as a table.
@@ -482,6 +553,7 @@ export type MaxonArgs
 		var updateRequired = false
 		var workers = DefaultWorkerCount
 		var workerPersistent = false
+		var compilerPath = ""
 		var metricsPath = ""
 		var emitCorpus = ""
 		var rungs = DefaultRungCount
@@ -526,7 +598,9 @@ export type MaxonArgs
 				end 'workersArg'
 			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				workerPersistent = true
-			end 'workerPersistentFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
+			end 'workerPersistentFlag' else if arg.startsWith(CompilerFlagPrefix) 'compilerFlag'
+				compilerPath = try CommandLine.optionValue(arg) otherwise ""
+			end 'compilerFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
 				metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'
 				emitCorpus = try CommandLine.optionValue(arg) otherwise ""
@@ -577,6 +651,6 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'
