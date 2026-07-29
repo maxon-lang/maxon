@@ -260,7 +260,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.character-range -->
-<!-- P1.8b Character — shv2 has no `Character` type (`Parser.maxon` says so in its own words); a char literal is an INT. ⚠ MEASURED: this case PASSES anyway, because it only COUNTS the iterations and 'a'..'z' as codepoints counts 26 the same way. Its twin `character-range-print` — which looks at the value — does not. Left disabled deliberately: enabling it would claim a mechanism that is not here (the P1.7 slice-1 lesson) -->
+<!-- CHARACTER RANGES rung (re-attributed from P1.8b, 2026-07-28) — shv2 has no `Character` type (`Parser.maxon` says so in its own words); a char literal is an INT. ⚠ MEASURED: this case PASSES anyway, because it only COUNTS the iterations and 'a'..'z' as codepoints counts 26 the same way. Its twin `character-range-print` — which looks at the value — does not. Left disabled deliberately: enabling it would claim a mechanism that is not here (the P1.7 slice-1 lesson) -->
 ```maxon
 function main() returns ExitCode
 		var count = 0
@@ -275,7 +275,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.character-range-print -->
-<!-- P1.8 CHARACTER RANGES — `'a' upto 'f'` is a range of INTEGERS in shv2: a single-byte character
+<!-- CHARACTER RANGES rung (re-attributed from P1.8, 2026-07-28) — `'a' upto 'f'` is a range of INTEGERS in shv2: a single-byte character
      literal materializes as an integer literal (`decodeCharLiteral`'s `byte` arm), so the loop variable
      is an int and prints as one. ⚠ MEASURED at P1.8 Slice E, on the enabled case: `97 98 99 100 101`
      where the spec wants `a b c d e`. Its twin `ranges.character-range` passes over the identical
@@ -318,7 +318,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.inclusive-create-iterator -->
-<!-- P1.8 first-class `Range` VALUE + the iterator protocol -->
+<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
 `to` produces an inclusive Range — `createIterator()` visits the endpoint.
 ```maxon
 function main() returns ExitCode
@@ -335,7 +335,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.with-iterator -->
-<!-- P1.8 first-class `Range` VALUE + the iterator protocol -->
+<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
 `(start upto end).withIterator()` exposes the underlying iterator inside the loop.
 ```maxon
 function main() returns ExitCode
@@ -355,7 +355,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.empty-create-iterator-throws -->
-<!-- P1.8 first-class `Range` VALUE + the iterator protocol -->
+<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
 An empty exclusive range fails to construct an iterator.
 ```maxon
 function main() returns ExitCode
@@ -368,7 +368,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.empty-inclusive-create-iterator-throws -->
-<!-- P1.8 first-class `Range` VALUE + the iterator protocol -->
+<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
 An empty inclusive range (end < start) also throws.
 ```maxon
 function main() returns ExitCode
@@ -381,7 +381,7 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.let-binding -->
-<!-- P1.8 first-class `Range` VALUE + the iterator protocol -->
+<!-- TUPLES + `Map` rung — first-class `Range` VALUE + the iterator protocol. `withIterator()` yields `(Iterator, Element)` TUPLES and shv2 has no tuple type, so this is blocked on the same missing mechanism `Map` is; re-attributed from P1.8 when Slice E closed the rung (2026-07-28). -->
 A range can be bound to a variable and iterated via the standard for-in path.
 ```maxon
 function main() returns ExitCode

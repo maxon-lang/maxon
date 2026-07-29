@@ -46,7 +46,7 @@ range remain interchangeable — they carry the same invariant and the same widt
 ## Tests
 
 <!-- disabled-test: narrow-element-rejected-where-wide-expected -->
-<!-- P1.8 diagnostics: a generic instance is rendered in E3005 by its COMPILED name (`Array_Wide`),
+<!-- E3005 INSTANCE-NAME RENDERING rung (re-attributed from P1.8, 2026-07-28) — diagnostics: a generic instance is rendered in E3005 by its COMPILED name (`Array_Wide`),
      not by the `typealias` the user wrote (`WideCol`). shv2 REJECTS both directions correctly, at the
      right line:col — only the spelling differs — but it holds no giid -> declared-alias-name reverse
      map, and one instance may carry several aliases, so which name to print is its own decision. -->
@@ -74,7 +74,7 @@ error E3005: specs/fragments/ranged-element-invariance/narrow-element-rejected-w
 ```
 
 <!-- disabled-test: wide-element-rejected-where-narrow-expected -->
-<!-- P1.8 diagnostics: a generic instance is rendered in E3005 by its COMPILED name (`Array_Wide`),
+<!-- E3005 INSTANCE-NAME RENDERING rung (re-attributed from P1.8, 2026-07-28) — diagnostics: a generic instance is rendered in E3005 by its COMPILED name (`Array_Wide`),
      not by the `typealias` the user wrote (`WideCol`). shv2 REJECTS both directions correctly, at the
      right line:col — only the spelling differs — but it holds no giid -> declared-alias-name reverse
      map, and one instance may carry several aliases, so which name to print is its own decision. -->
