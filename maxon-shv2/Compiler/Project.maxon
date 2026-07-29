@@ -976,16 +976,41 @@ end 'RangeCheckGuard'
 // even when the cast sits in an unselected ternary arm / if-branch. BlockIds survive `lowerMaxonToStd`
 // (blocks are cloned 1:1 keeping their id), so the Std pass finds the same block by id. A
 // `compileTimeOnly` site carries its block like any other and simply never spends it.
+//
+// ⭐⭐ **`maxonOpPos` IS WHERE IN THAT BLOCK, AND IT IS THE DIFFERENCE BETWEEN A PATH ANCHOR AND A
+// STATEMENT ANCHOR.** The block alone says which path the guard runs on; without a position the guard
+// can only go at the END of that block, so the whole rest of the block — every print, every call, every
+// store and every division the out-of-range value reaches — runs BEFORE the check that forbids it.
+// Measured against `maxon-sharp`: `b.v = bad` then `print("{b.v}")` printed the number 500 back out of a
+// `Percent` field, and `z as NonZero` (z == 0) followed by `100 / d` died `integer divide by zero`
+// instead of raising the range panic the language promises. Both exit 1, which is why no exit-code-only
+// case could see either.
+//
+// It is the count of ops the recording block held at the moment the value was checked — i.e. the
+// ordinal the CONSUMING op is about to take — because a cast is recorded BEFORE the store/call/division
+// that spends its value is emitted. An int->int cast emits no op at all, so a MAXON ordinal is the only
+// anchor there is.
+//
+// ⭐ **TWO POSITIONS, TWO TIERS, AND THE SITE CARRIES BOTH.** `maxonOpPos` is the PARSER's answer and
+// means nothing at the Std tier, where each Maxon op has become N; `stdOpPos` is `LowerMaxonToStd`'s
+// translation of it (`RangeSiteWalk`), and it is what `InsertRangeChecks` splits at. They are separate
+// fields rather than one rewritten in place because a field that changes meaning at a tier boundary is
+// a field the next reader has to date. `stdOpPos` is 0 until the lowering fills it, which
+// `FunctionRangeChecks.positionsResolved` is the presence bit for — a `0` is a legitimate position (a
+// guard at the very top of its block), so no value of it can mean "unset".
 export type RangeCheckSite
 	export var value as ValueId
 	export var aliasName as ByteArray
 	export var block as BlockId
+	export var maxonOpPos as BlockOpPos
+	export var stdOpPos as BlockOpPos
 	export var guard as RangeCheckGuard
 	export var line as LineNumber
 	export var column as ColumnNumber
 
-	export static function create(value ValueId, aliasName ByteArray, block BlockId, guard RangeCheckGuard, line LineNumber, column ColumnNumber) returns RangeCheckSite
-		return Self{value: value, aliasName: aliasName, block: block, guard: guard, line: line, column: column}
+	// `stdOpPos` is not a parameter: it is the LOWERING's to write, and the parser has no way to know it.
+	export static function create(value ValueId, aliasName ByteArray, block BlockId, maxonOpPos BlockOpPos, guard RangeCheckGuard, line LineNumber, column ColumnNumber) returns RangeCheckSite
+		return Self{value: value, aliasName: aliasName, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, guard: guard, line: line, column: column}
 	end 'create'
 end 'RangeCheckSite'
 
@@ -1059,6 +1084,14 @@ export typealias ValueInstanceAliasNameMap = Map with (ValueId, ByteArray)
 export type FunctionRangeChecks
 	export var filePath as FilePath
 	export var sites as RangeCheckSiteArray
+	// ⭐ **HAS `LowerMaxonToStd` FILLED EVERY SITE'S `stdOpPos` YET?** The presence bit `stdOpPos` cannot
+	// carry itself, per function rather than per site because the lowering walks a function whole: it
+	// fills all of that function's sites or none of them. `InsertRangeChecks` refuses to spend a position
+	// without it, so a function that reached the guard pass unlowered fails LOUDLY instead of silently
+	// anchoring every guard at the top of its block. A bool, not a column: an entry is filed for every
+	// function that merely passes a constant argument, and a per-function ARRAY here would be one
+	// allocation for each of them (MEASURED at +1,133/+31,079 across the scale ladder as exactly that).
+	export var positionsResolved as bool
 	export var argSites as RangeCheckArgSiteArray
 	export var returnAliasName as ByteArray
 	export var returnSites as RangeCheckReturnSiteArray
@@ -1068,7 +1101,7 @@ export type FunctionRangeChecks
 	export var valueInstanceAliases as ValueInstanceAliasNameMap
 
 	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramAliasNames ByteArrayArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramAliasNames: paramAliasNames, valueInstanceAliases: valueInstanceAliases}
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramAliasNames: paramAliasNames, valueInstanceAliases: valueInstanceAliases}
 	end 'create'
 end 'FunctionRangeChecks'
 

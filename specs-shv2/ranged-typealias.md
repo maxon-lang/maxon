@@ -1582,6 +1582,198 @@ Stack trace:
   in mrt_start
 ```
 
+### A guard fires AT ITS SITE, so nothing after the site runs
+
+The four cases below pin the one thing an exit code cannot see: WHERE in the body the guard runs. A
+guard anchored at the END of its block still exits 1, so an exit-code-only case passes either way —
+what separates them is the output the program produced before dying, and the fault that killed it.
+
+The first three each print through `unpinned` stdout or a pinned one, and every line of that output is
+a statement that must NOT have run. They are `x64-windows` only for `field-store-runtime-panic`'s
+reason: each pins the panic MESSAGE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime
+chunk — everywhere else a range verdict is a bare exit 1 with EMPTY stderr. The fourth is the in-range
+control and runs on every target.
+
+#### The store's guard runs BEFORE the store
+
+`bad` is 500 and the slot is a `Percent`, so the store must never happen. Anchored at the block end it
+did: the program printed, and then read the number 500 back out of a `Percent` field — a value that
+slot cannot legally hold, observed by the program that owns it. There is no ```stdout block, which is
+itself the assertion (`SpecParser.SpecStdout`): an unpinned stdout asserts the program printed NOTHING.
+
+<!-- test: store-guard-fires-before-the-store -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Percent = int(0 to 100)
+typealias Wide = int(0 to 100000)
+
+type Box
+	export var v as Percent = 1
+
+	export static function make() returns Box
+		return Self{}
+	end 'make'
+end 'Box'
+
+function widen(n Wide) returns Wide
+	return n + 400
+end 'widen'
+
+function main() returns ExitCode
+	var b = Box.make()
+	let bad = widen(100)
+	b.v = bad
+	print("stored\n")
+	print("v={b.v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at store-guard-fires-before-the-store.test:20: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+#### The language's own check is not pre-empted by the fault its violation causes
+
+`z` is 0 and `NonZero` starts at 1, so the cast is the violation. Anchored at the block end the
+DIVISION ran first and the program died `integer divide by zero` — the same exit code, a different
+diagnostic, and the check the language promises never ran at all.
+
+<!-- test: cast-guard-fires-before-the-division -->
+<!-- targets: x64-windows -->
+```maxon
+typealias NonZero = int(1 to 1000)
+typealias Wide = int(0 to 100000)
+
+function pick(n Wide) returns Wide
+	return n - 7
+end 'pick'
+
+function main() returns ExitCode
+	let z = pick(7)
+	let d = z as NonZero
+	let q = 100 / d
+	print("q={q}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at cast-guard-fires-before-the-division.test:11: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+#### Three guards in ONE block, each at its own site
+
+Positions and the guard CHAIN have to compose: the k-th guard splits its block, so the (k+1)-th must
+land at its own site measured in the continuation the split just made, not at that continuation's end
+and not back in the original head. Only the third cast is out of range, so the first two statements
+after a guard must have printed and the third must not — which is the whole claim, and it is invisible
+to an exit code.
+
+<!-- test: guards-fire-at-their-own-site-in-source-order -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	let a = widen(1)
+	let b = widen(2)
+	let c = widen(5000)
+	print("start\n")
+	let x = a as Small
+	print("after-x\n")
+	let y = b as Small
+	print("after-y\n")
+	let z = c as Small
+	print("after-z\n")
+	return x + y + z
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+start
+after-x
+after-y
+```
+```stderr
+panic at guards-fire-at-their-own-site-in-source-order.test:18: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+#### The in-range control through every guarded position
+
+The same five shapes the three cases above violate — a field DEFAULT, a field STORE, a struct-LITERAL
+field, a cast feeding a division, and a plain cast — with every value inside its range. Moving a guard
+to its site must not make an admissible value fire one, and every line of output must still appear, in
+order, with a clean exit.
+
+<!-- test: in-range-through-every-guarded-position -->
+```maxon
+typealias Percent = int(0 to 100)
+typealias NonZero = int(1 to 1000)
+typealias Wide = int(0 to 100000)
+
+type Box
+	export var v as Percent = 7
+
+	export static function make() returns Box
+		return Self{}
+	end 'make'
+
+	export static function holding(n Percent) returns Box
+		return Self{v: n}
+	end 'holding'
+end 'Box'
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	var b = Box.make()
+	print("default={b.v}\n")
+	let a = widen(9)
+	b.v = a
+	print("stored={b.v}\n")
+	let c = Box.holding(a)
+	print("literal={c.v}\n")
+	let d = widen(3) as NonZero
+	print("q={100 / d}\n")
+	let e = widen(41) as Percent
+	print("cast={e}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+default=7
+stored=10
+literal=10
+q=25
+cast=42
+```
+
 ### Many guarded casts of SIMULTANEOUSLY LIVE values
 
 24 distinct values, each guarded and each still live afterwards (the sum reads every one), so all 24

@@ -319,6 +319,145 @@ export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 // shape that drifts, and with an injective label there is nothing the pair knows that the label does not.
 export typealias WitnessTableLabelSet = Set with String
 
+// An index into ONE function's `FunctionRangeChecks.sites`. Distinct from `BlockOpPos` (a position
+// WITHIN a block) and from `OpIndex` (a position in the module's flat ops array) — the three are all
+// integers and all three appear together in `RangeSiteWalk`.
+typealias RangeSiteIndex = int(0 to u64.max)
+typealias RangeSiteIndexArray = Array with RangeSiteIndex
+
+// ⭐⭐ **HANDS EACH OF ONE FUNCTION'S RANGE-CHECK SITES THE STD `opRefs` POSITION ITS VALUE COMES TO
+// REST AT (P1.9) — the translation only this pass can make.** The parser records a site's position as a
+// MAXON ordinal (`RangeCheckSite.maxonOpPos`), because at the Maxon tier a narrowing cast may emit no op
+// at all and an ordinal is the only anchor there is. `InsertRangeChecks` runs one pass later, at the Std
+// tier, where each of those Maxon ops has become N and the ordinal means nothing. This lowering stands on
+// both sides of that desugaring, and the answer costs it nothing: the Std position is the
+// `dstBlock.opRefs.count()` its own walk is already standing at.
+//
+// ⚠ **THE GROUPING IS A COUNTING SORT, NOT A PER-BLOCK SCAN OF THE SITE LIST.** A scan is
+// O(sites x blocks), which is precisely the product `Testing/ladders/genrangesites.sh`'s `onefunc` mode
+// was written to catch — N sites concentrated in ONE function is the shape that turns it into a
+// quadratic, and `InsertRangeChecks.guardSiteAt`'s own header records the last time this rung paid one.
+// `runEnd` is counted, then accumulated into one-past-the-end of each block's run; the placement pass
+// then walks the sites BACKWARDS, which both keeps each run in ascending source order (a stable sort)
+// and leaves `cursor` sitting exactly at its run's START. So the two columns that sorted the sites ARE
+// the walk's per-block cursor — no third column, and no copy.
+type RangeSiteWalk
+	// The CURRENT function's sites — the objects this walk writes `stdOpPos` onto, which IS the
+	// publishing: `project.rangeChecks` holds the same array, so `InsertRangeChecks` reads what lands here.
+	var sites as RangeCheckSiteArray
+	// Site indices grouped by the block that records them, ascending by ordinal within a block.
+	var order as RangeSiteIndexArray
+	// Per block id: the next unconsumed entry of that block's run in `order`, and one past its last.
+	var cursor as RangeSiteIndexArray
+	var runEnd as RangeSiteIndexArray
+
+	// ⭐ **ONE WALK PER LOWERING, REFILLED PER FUNCTION — NOT ONE PER FUNCTION.** `beginFunction` is
+	// called for every function that records ANY site, which on the scale ladder is most of them (a site is
+	// recorded wherever an alias is NAMED, long before `needsRuntimeGuard` discards the full-range ones), so
+	// an object-plus-three-arrays per function is a per-function allocation for work the vast majority throw
+	// away. The three grouping columns are SCRATCH — cleared and refilled in place, exactly as
+	// `SplitScratch` and `HallScratch` are — and the ANSWER lands on the site objects themselves, so the
+	// whole mechanism costs FOUR allocations for the entire lowering rather than any per function.
+	export static function create() returns RangeSiteWalk
+		return Self{sites: RangeCheckSiteArray.create(), order: RangeSiteIndexArray.create(), cursor: RangeSiteIndexArray.create(), runEnd: RangeSiteIndexArray.create()}
+	end 'create'
+
+	// Stand down for a function that records no site: an empty `order` is what `recordAt` returns on, so
+	// the per-op cost for such a function is one `isEmpty`.
+	//
+	// ⚠ `sites` is LEFT POINTING AT THE PREVIOUS FUNCTION'S, deliberately: it may not be `clear()`ed,
+	// because it is that function's own site list and clearing it would destroy the answer just written
+	// into it. Nothing reads it while `order` is empty, and the retention is one array its own
+	// `FunctionRangeChecks` owns anyway.
+	export function standDown()
+		self.order.clear()
+	end 'standDown'
+
+	// Group `checks`'s sites by their recording block, and RAISE ITS PRESENCE BIT — the promise that every
+	// one of its sites carries a real `stdOpPos` by the time the walk ends, which holds because the block
+	// walk that follows covers the whole function. `blockCount` is the function's `nextBlockId` — its
+	// block ids are exactly `0 .. blockCount-1`, the same dense id space `buildBlockIdIndex` keys on.
+	export function beginFunction(checks FunctionRangeChecks, blockCount BlockId)
+		self.sites = checks.sites
+		checks.positionsResolved = true
+
+		self.runEnd.clear()
+		self.runEnd.growFilled(blockCount, value: 0)
+		for site in checks.sites 'countPerBlock'
+			let seen = try self.runEnd.get(site.block) otherwise panic("RangeSiteWalk.beginFunction: a site names block id {site.block}, outside the function's id space of {blockCount}")
+			try self.runEnd.set(site.block, value: seen + 1) otherwise panic("RangeSiteWalk.beginFunction: runEnd.set OOB at block {site.block}, which was just read in range")
+		end 'countPerBlock'
+
+		self.cursor.clear()
+		self.cursor.reserve(blockCount)
+		var total = 0 as RangeSiteIndex
+		for id in 0 upto blockCount 'accumulate'
+			total = total + (try self.runEnd.get(id) otherwise panic("RangeSiteWalk.beginFunction: runEnd.get OOB at block {id} despite the upto bound"))
+			try self.runEnd.set(id, value: total) otherwise panic("RangeSiteWalk.beginFunction: runEnd.set OOB at block {id} despite the upto bound")
+			self.cursor.push(total)
+		end 'accumulate'
+
+		self.order.clear()
+		self.order.growFilled(checks.sites.count(), value: 0)
+		for step in 0 upto checks.sites.count() 'placeBackwards'
+			let index = checks.sites.count() - 1 - step
+			let site = try checks.sites.get(index) otherwise panic("RangeSiteWalk.beginFunction: sites.get OOB at {index} despite the upto bound")
+			let at = (try self.cursor.get(site.block) otherwise panic("RangeSiteWalk.beginFunction: cursor.get OOB at block {site.block}, which the counting pass already read in range")) - 1
+			requireSiteOrdinalsAscend(checks.sites, order: self.order, at: at, site: site, runEnd: self.runEnd)
+			try self.cursor.set(site.block, value: at) otherwise panic("RangeSiteWalk.beginFunction: cursor.set OOB at block {site.block}, which was just read in range")
+			try self.order.set(at, value: index) otherwise panic("RangeSiteWalk.beginFunction: order.set OOB at {at} — the run for block {site.block} was sized by the counting pass")
+		end 'placeBackwards'
+	end 'beginFunction'
+
+	// Serve every site of block `blockId` whose Maxon ordinal the walk has now reached. `stdOpPos` is
+	// where the Std block stands RIGHT NOW — immediately before the ops the Maxon op at `maxonOpPos` is
+	// about to lower into — which is exactly where the guard must split so that nothing between the site
+	// and the panic executes.
+	//
+	// Called once per Maxon body op AND once past the last, so a site whose value is spent by the block's
+	// TERMINATOR (a cast feeding the `if` that ends the block) is served at the end of the body rather
+	// than left unserved.
+	function recordAt(blockId BlockId, maxonOpPos BlockOpPos, stdOpPos BlockOpPos)
+		if self.order.isEmpty() 'noSitesInThisFunction'
+			return
+		end 'noSitesInThisFunction'
+
+		var next = try self.cursor.get(blockId) otherwise panic("RangeSiteWalk.recordAt: block id {blockId} is outside the function's block-id space, which `beginFunction` sized the columns to")
+		let stop = try self.runEnd.get(blockId) otherwise panic("RangeSiteWalk.recordAt: runEnd has no entry for block id {blockId}, which cursor just answered for")
+		while next < stop 'eachReachedSite'
+			let index = try self.order.get(next) otherwise panic("RangeSiteWalk.recordAt: order.get OOB at {next}, inside block {blockId}'s own run")
+			var site = try self.sites.get(index) otherwise panic("RangeSiteWalk.recordAt: order entry {index} is not a site index")
+			if site.maxonOpPos > maxonOpPos 'notReachedYet'
+				break
+			end 'notReachedYet'
+
+			site.stdOpPos = stdOpPos
+			next = next + 1
+		end 'eachReachedSite'
+		try self.cursor.set(blockId, value: next) otherwise panic("RangeSiteWalk.recordAt: cursor.set OOB at block {blockId}, which was just read in range")
+	end 'recordAt'
+end 'RangeSiteWalk'
+
+// The site about to be placed at `at` must not have a LATER ordinal than the one already at `at + 1`,
+// when that neighbour belongs to the same run. Placement runs backwards through the site array, so the
+// neighbour is the site the parser recorded NEXT in this block — and a block's ordinals are
+// non-decreasing in parse order only because the parser's on-the-fly SSA never returns to a block it has
+// left. `recordAt` consumes a run strictly in order, so a run that is out of order would hand an earlier
+// site a LATER position: a guard emitted past the statement it exists to precede, silently, and with the
+// suite still green. The premise is enforced here rather than trusted.
+function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteIndexArray, at RangeSiteIndex, site RangeCheckSite, runEnd RangeSiteIndexArray)
+	let runStop = try runEnd.get(site.block) otherwise panic("requireSiteOrdinalsAscend: runEnd.get OOB at block {site.block}, which the placement pass already read in range")
+	if at + 1 >= runStop 'lastOfItsRun'
+		return
+	end 'lastOfItsRun'
+
+	let nextIndex = try order.get(at + 1) otherwise panic("requireSiteOrdinalsAscend: order.get OOB at {at + 1}, inside block {site.block}'s own run")
+	let next = try sites.get(nextIndex) otherwise panic("requireSiteOrdinalsAscend: order entry {nextIndex} is not a site index")
+	if next.maxonOpPos < site.maxonOpPos 'outOfOrder'
+		panic("requireSiteOrdinalsAscend: block {site.block} records a range-check site at Maxon op position {site.maxonOpPos} before one at {next.maxonOpPos} — a block's sites must be recorded in source order, because the guard walk consumes each block's run in order and would hand the earlier site the later position")
+	end 'outOfOrder'
+end 'requireSiteOrdinalsAscend'
+
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project) returns StdModule
 	return MaxonToStdLowering.create(maxonModule, project: project).lower()
 end 'lowerMaxonToStd'
@@ -429,6 +568,14 @@ type MaxonToStdLowering
 	// for a float return, else a GPR zero) — the identical field `emitReturnValueMove` keys the return
 	// register off, so the throw-edge default and the return register cannot come to disagree.
 	var currentReturnType as StdReturnType
+	// The whole-program range-check plan (P1.9), from `project.rangeChecks` — the SAME table
+	// `InsertRangeChecks` reads its sites from one pass later, held here so this pass can answer the one
+	// question that table cannot ask for itself: which STD op position each site's Maxon ordinal became.
+	// See `RangeSiteWalk`.
+	var rangeChecks as RangeCheckPlanMap
+	// The site walk of the function CURRENTLY being lowered — re-pointed per function like `valueTags`,
+	// but REFILLED rather than rebuilt — one walk serves the whole lowering (`RangeSiteWalk.create`).
+	var rangeSites as RangeSiteWalk
 	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) seeded at
 	// the parser's dense id count, i.e. the next free id. The ops this pass synthesizes (the flag re-encode
 	// of a throw, the zero flag of a normal throwing return, the exit code a `panicAbort` expands into) mint
@@ -441,7 +588,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, emittedWitnessTables: WitnessTableLabelSet.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -530,6 +677,9 @@ type MaxonToStdLowering
 			self.currentReturnType = srcFunc.returnType
 			// The next free ValueId is the count of the dense per-value column the parser handed over.
 			self.nextValueId = srcFunc.valueTags.count()
+			// Point the range-check site walk at THIS function, so the block walk below can hand each of its
+			// sites the Std position the parser's Maxon ordinal became (P1.9). See `RangeSiteWalk`.
+			self.bindRangeSiteWalk(srcFunc)
 			self.emitParams(srcFunc)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -538,10 +688,18 @@ type MaxonToStdLowering
 
 				self.retypeBlockArgs(dstBlock)
 
-				for opIdx in srcBlock.opRefs 'eachOp'
+				for maxonOpPos in 0 upto srcBlock.opRefs.count() 'eachOp'
+					// BEFORE the op is lowered: a site recorded at this ordinal names the op that SPENDS its
+					// value, so its guard must split the Std block where that op's own ops are about to begin.
+					self.rangeSites.recordAt(srcBlock.id, maxonOpPos: maxonOpPos, stdOpPos: dstBlock.opRefs.count())
+					let opIdx = try srcBlock.opRefs.get(maxonOpPos) otherwise panic("lowerMaxonToStd: opRefs.get OOB at {maxonOpPos} despite the upto bound")
 					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("lowerMaxonToStd: opIdx from srcBlock.opRefs not in maxonModule.ops")
 					self.lowerOp(hlOp, dstBlock: dstBlock)
 				end 'eachOp'
+
+				// A site whose value is spent by the block's TERMINATOR sits past the last body op, so the end
+				// of the body — before the terminator's own ops — is where its guard belongs.
+				self.rangeSites.recordAt(srcBlock.id, maxonOpPos: srcBlock.opRefs.count(), stdOpPos: dstBlock.opRefs.count())
 
 				if srcBlock.hasTerminatorOp() 'hasTerm'
 					let termOp = try self.maxonModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerMaxonToStd: terminatorIndex not in maxonModule.ops")
@@ -558,6 +716,25 @@ type MaxonToStdLowering
 
 		return self.stdModule
 	end 'lower'
+
+	// Point `rangeSites` at THIS function's recorded range-check sites (P1.9). A function with no
+	// `rangeChecks` entry — or, far more often, one whose entry records no SITE, because an entry is filed
+	// for a function that merely passes a constant argument or constructs a generic instance
+	// (`Parser.commitRangeChecks`) — shares the inactive walk and allocates nothing.
+	function bindRangeSiteWalk(func IrFunction)
+		if not self.rangeChecks.contains(func.name) 'noEntry'
+			self.rangeSites.standDown()
+			return
+		end 'noEntry'
+
+		let checks = try self.rangeChecks.get(func.name) otherwise panic("bindRangeSiteWalk: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
+		if checks.sites.isEmpty() 'noSites'
+			self.rangeSites.standDown()
+			return
+		end 'noSites'
+
+		self.rangeSites.beginFunction(checks, blockCount: func.nextBlockId)
+	end 'bindRangeSiteWalk'
 
 	// Give every phi on this block the Std type its VALUE computes in — from `stdTypeOf`, the same
 	// one oracle every operand's `operandType` comes from. A phi and its incoming values are then

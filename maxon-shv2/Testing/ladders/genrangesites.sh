@@ -26,11 +26,13 @@
 #   blindness `ScaleCorpus`'s own manifest warns about, in its subtler form: the construct is present,
 #   the KNOB THAT MAKES IT COST ANYTHING is not.
 #
-# ⚠ **AND THE COST THIS LADDER IS AIMED AT IS ON THE EMISSION PATH ONLY.** `blockEndGuardSite` re-fetches
-# the site's block with `IrModule.getBlockByIdIn`, which is a LINEAR SCAN over `func.blockRefs`; and each
-# guard it then emits APPENDS TWO BLOCKS to that same function (`__rc_ok`, `__rc_panic`). So the scan the
-# k-th guard pays is over a block set the previous k-1 guards grew. Recording a site is O(1) and
-# discarding a full-range one is O(1) — which is the whole of what the shared ladder exercises.
+# ⚠ **AND THE COST THIS LADDER IS AIMED AT IS ON THE EMISSION PATH ONLY.** `blockEndGuardSite` (now `guardSiteAt`) re-fetched
+# the site's block with `IrModule.getBlockByIdIn`, which was a LINEAR SCAN over `func.blockRefs`; and each
+# guard it then emits APPENDS TWO BLOCKS to that same function (`__rc_ok`, `__rc_panic`), so the scan the
+# k-th guard paid was over a block set the previous k-1 guards had grown. THAT TERM IS GONE — the site's
+# block now resolves through `buildBlockIdIndex`/`blockById` — and the ladder is kept because it is the
+# only thing that can show it has NOT come back. Recording a site is O(1) and discarding a full-range one
+# is O(1) — which is the whole of what the shared ladder exercises.
 #
 # Usage: genrangesites.sh <n> <mode> <outdir>
 #   <n>    = NUMBER OF RUNTIME RANGE-CHECK SITES. THE DOUBLING KNOB.

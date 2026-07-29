@@ -65,7 +65,8 @@ end 'RangeBoundCheck'
 typealias RangeBoundCheckArray = Array with RangeBoundCheck
 
 // A guard's insertion point: the block to split and the `opRefs` position to split it at (ops before
-// stay in the head, ops from here on move to the continuation).
+// stay in the head, ops from here on move to the continuation). The position is what makes the guard
+// fire AT its site rather than at the end of its block — see `guardSiteAt`.
 type GuardSite
 	export var block as IrBlock
 	export var position as BlockOpPos
@@ -77,15 +78,25 @@ end 'GuardSite'
 
 // ⭐ WHICH CHAIN THE EMITTED GUARD EXTENDS — the one thing an alias-named site owes after its split
 // that a `return` site does not. Every guard in ONE source block splits that block, so the k-th guard
-// must anchor at the end of the (k-1)-th's continuation; anchoring them all at the end of the ORIGINAL
-// head instead threads the cascades in REVERSE (see `blockEndGuardSite`). An alias-named site therefore
-// moves its block's chain end to its own continuation. A `return` site records nothing: `findRetBlock`
+// must anchor inside the (k-1)-th's continuation; anchoring them all in the ORIGINAL head instead
+// threads the cascades in REVERSE (see `guardSiteAt`). An alias-named site therefore moves its block's
+// chain end — and its chain BASE, the offset that continuation begins at — to its own continuation. A
+// `return` site records neither: `findRetBlock`
 // re-derives its block from the CURRENT `ret` terminator at every site, which a split moves along with
 // the terminator, so the chain end is already what it finds.
 union GuardChain
 	blockChain(blockId BlockId)
 	retChain
 end 'GuardChain'
+
+// What the shared site rule answers (`guardVerdict`): whether the RUNTIME half is owed, and against
+// WHICH range. A union rather than a bool beside an alias, because "no guard" has no range to hand back
+// — the two `noGuard` reasons are a full-range alias and a value settled at compile time, and neither
+// leaves an alias for a caller to misread.
+union RangeGuardVerdict
+	noGuard
+	guard(alias RangedTypeAlias)
+end 'RangeGuardVerdict'
 
 // The block whose terminator is `ret(value)` — the return site to guard. `notFound` covers the value
 // having been folded away or otherwise not surviving as a `ret` (defensive; a recorded ranged return
@@ -154,7 +165,7 @@ export function insertRangeChecks(project Project, module StdModule)
 	end 'eachFunc'
 end 'insertRangeChecks'
 
-// The `guardChainTail` an emitter starts with, SHARED and never mutated — `blockEndGuardSite` REPLACES
+// The `guardChainTail` an emitter starts with, SHARED and never mutated — `guardSiteAt` REPLACES
 // the field with a freshly built index rather than filling this one.
 //
 // ⚠ It is shared for the reason `Parser`'s `sharedEmptyInstanceAliasNames` is: an emitter is built for
@@ -165,6 +176,11 @@ end 'insertRangeChecks'
 // rungs — a linear cost, but a real one, paid entirely by functions that never emit a guard. Only ONE
 // function in the whole generated corpus ever builds a real index (`scaleCoverCast`).
 let sharedEmptyGuardChainTail = ValueIdArray.create()
+
+// The `guardChainBase` companion to it, shared for the identical reason and replaced in the identical
+// place — the two columns are built together and are empty together, so `guardChainTail.isEmpty()` is
+// the one test that decides for both.
+let sharedEmptyGuardChainBase = BlockOpPosArray.create()
 
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
@@ -185,11 +201,19 @@ type RangeCheckEmitter
 	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
 	// minted, so the next guard in that source block lands after it rather than before it. Starts as the
 	// SHARED empty one and is REPLACED by a real index on first use — see `sharedEmptyGuardChainTail`
-	// and `blockEndGuardSite`.
+	// and `guardSiteAt`.
 	var guardChainTail as ValueIdArray
+	// ⭐ **WHERE EACH CHAIN-END BLOCK BEGINS, IN ITS ORIGINAL BLOCK'S COORDINATES** — one position per
+	// block id, and the other half of what makes site positions and the guard CHAIN compose. A site's
+	// recorded position (`RangeCheckSite.stdOpPos`) is an offset into the block as the
+	// LOWERING left it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the
+	// continuation at `position - base`, where `base` is where the last split cut. Zero until a block's
+	// first guard splits it, and moved to the split point by every split after that. Built and shared
+	// exactly as `guardChainTail` is — the two are one index in two columns, so one `isEmpty` decides both.
+	var guardChainBase as BlockOpPosArray
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -208,8 +232,16 @@ type RangeCheckEmitter
 	// original, never the guard consts this pass appends afterward.
 	function run(checks FunctionRangeChecks)
 		self.collectConsts()
+		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
+		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
+		// per site: a function that reached this pass unlowered would otherwise anchor every one of its
+		// guards at the top of its block, silently, with only a golden to say so.
+		if not checks.sites.isEmpty() and not checks.positionsResolved 'unlowered'
+			panic("run: '{String.from(self.func.name)}' has {checks.sites.count()} range-check site(s) whose Std positions `lowerMaxonToStd` never filled — this pass runs over the module that lowering just produced, so every function it walks was walked there first")
+		end 'unlowered'
+
 		for site in checks.sites 'eachSite'
-			self.processSite(site, aliasFilePath: checks.filePath, filePath: checks.filePath)
+			self.processSite(site, filePath: checks.filePath)
 		end 'eachSite'
 		for argSite in checks.argSites 'eachArgSite'
 			self.processArgSite(argSite, filePath: checks.filePath)
@@ -221,6 +253,15 @@ type RangeCheckEmitter
 
 	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
 
+	// The site rule, asked ONCE for every position — an `as`, a field, a field default, and the call
+	// argument that resolves into one. It raises the compile-time E3005 on its way to its answer and says
+	// whether the RUNTIME half is owed too.
+	//
+	// ⚠ **`needsRuntimeGuard` IS ASKED FIRST AND UNCONDITIONALLY, INCLUDING FOR A POSITION THAT WILL NEVER
+	// EMIT ONE**, because raising that E3005 for a folded literal is what it does on the way to its answer.
+	// Both halves of the rule are one decision (`range-check-panic.md` says so outright), and splitting
+	// them so a `compileTimeOnly` position could skip the call would be two deciders that can drift.
+	//
 	// ⭐ **TWO FILES, AND THEY ARE NOT THE SAME QUESTION.** `aliasFilePath` picks WHICH declaration of the
 	// name applies — a file's own `Limit` governs it even where another file declares that name over a
 	// wider range (`RangedAliasRegistry`). `filePath` is where the DIAGNOSTIC and the runtime panic message
@@ -230,47 +271,67 @@ type RangeCheckEmitter
 	// column against the STDLIB's path — a position that names a `typealias` declaration, in a file the
 	// program never wrote a call in. (Measured, on `string-views`.)
 	//
+	// It takes the position's parts rather than a `RangeCheckSite` because the call-argument door has no
+	// site to hand it: synthesizing one there would have to invent a `maxonOpPos` the position does not
+	// have and no reader would ever spend — a magic value one refactor away from being believed.
+	//
 	// `undeclared` — a builtin like `ExitCode`, or an alias no loaded file declares — is the "not a
 	// checkable range" case and guards nothing.
-	function processSite(site RangeCheckSite, aliasFilePath FilePath, filePath FilePath)
-		match self.project.typeAliases.lookup(site.aliasName, readerFilePath: aliasFilePath) 'bounds'
-			undeclared then return
-			declared(alias) then self.guardSite(site, alias: alias, filePath: filePath)
+	function guardVerdict(value ValueId, aliasName ByteArray, guard RangeCheckGuard, line LineNumber, column ColumnNumber, aliasFilePath FilePath, filePath FilePath) returns RangeGuardVerdict
+		return match self.project.typeAliases.lookup(aliasName, readerFilePath: aliasFilePath) 'bounds'
+			undeclared gives RangeGuardVerdict.noGuard
+			declared(alias) gives self.runtimeHalfOf(alias, value: value, aliasName: aliasName, guard: guard, line: line, column: column, filePath: filePath)
 		end 'bounds'
-	end 'processSite'
+	end 'guardVerdict'
 
-	// ⚠ **`needsRuntimeGuard` IS ASKED FIRST AND UNCONDITIONALLY, INCLUDING FOR A SITE THAT WILL NEVER
-	// EMIT ONE**, because raising the compile-time E3005 for a folded literal is what it does on the way to
-	// its answer. Both halves of the rule are one decision (`range-check-panic.md` says so outright), and
-	// splitting them so a `compileTimeOnly` site could skip the call would be two deciders that can drift.
-	// The `guard` field then decides only whether the RUNTIME half is emitted.
-	function guardSite(site RangeCheckSite, alias RangedTypeAlias, filePath FilePath)
-		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath) 'noGuard'
-			return
-		end 'noGuard'
-		if site.guard == RangeCheckGuard.compileTimeOnly 'compileTimeHalfOnly'
-			return
+	function runtimeHalfOf(alias RangedTypeAlias, value ValueId, aliasName ByteArray, guard RangeCheckGuard, line LineNumber, column ColumnNumber, filePath FilePath) returns RangeGuardVerdict
+		if not self.needsRuntimeGuard(value, alias: alias, aliasName: aliasName, line: line, column: column, filePath: filePath) 'settledAtCompileTime'
+			return RangeGuardVerdict.noGuard
+		end 'settledAtCompileTime'
+		if guard == RangeCheckGuard.compileTimeOnly 'compileTimeHalfOnly'
+			return RangeGuardVerdict.noGuard
 		end 'compileTimeHalfOnly'
-		self.emitGuardAt(self.blockEndGuardSite(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
-	end 'guardSite'
+
+		return RangeGuardVerdict.guard(alias)
+	end 'runtimeHalfOf'
+
+	// An alias-named site: both files are this function's own (every door here resolved its alias where it
+	// wrote it), and the site's own `stdOpPos` is where in its block the guard goes.
+	function processSite(site RangeCheckSite, filePath FilePath)
+		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: site.guard, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard(alias) then self.emitGuardAt(self.guardSiteAt(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
+		end 'verdict'
+	end 'processSite'
 
 	// ---- call-argument sites ----
 
 	// ⭐ **THE ONE SITE KIND WHOSE ALIAS IS RESOLVED HERE RATHER THAN AT THE PARSE.** A call argument's
 	// declared type belongs to the callee, which the caller's file may never have seen (see
 	// `RangeCheckArgSite`); this pass runs once, after every file has merged, so the callee's own record is
-	// in hand. Resolved, it becomes an ordinary `compileTimeOnly` site and takes the shared path above —
-	// there is no second decision anywhere for a call argument.
+	// in hand. Resolved, it asks the SAME `guardVerdict` every other position asks — there is no second
+	// decision anywhere for a call argument.
 	//
 	// ⚠ The alias reader file is the CALLEE's, never this function's: the range a parameter was declared
 	// with is the one visible where the FUNCTION was written. The diagnostic's file stays this function's
-	// — see `processSite`.
+	// — see `guardVerdict`.
 	function processArgSite(site RangeCheckArgSite, filePath FilePath)
 		match self.paramAliasOf(site) 'p'
 			none then return
-			found(aliasName, declFilePath) then self.processSite(RangeCheckSite.create(site.value, aliasName: aliasName, block: site.block, guard: RangeCheckGuard.compileTimeOnly, line: site.line, column: site.column), aliasFilePath: declFilePath, filePath: filePath)
+			found(aliasName, declFilePath) then self.checkArgAgainstParamRange(site, aliasName: aliasName, declFilePath: declFilePath, filePath: filePath)
 		end 'p'
 	end 'processArgSite'
+
+	// A call argument owes the COMPILE-TIME half and NOTHING ELSE (`RangeCheckGuard`), so it asks the
+	// shared decider purely for the E3005 that decider raises on its way to an answer. The `guard` arm is
+	// unreachable by construction — the argument is asked as `compileTimeOnly` — and says so, rather than
+	// quietly anchoring a guard at a position a call argument has no way to name.
+	function checkArgAgainstParamRange(site RangeCheckArgSite, aliasName ByteArray, declFilePath FilePath, filePath FilePath)
+		match self.guardVerdict(site.value, aliasName: aliasName, guard: RangeCheckGuard.compileTimeOnly, line: site.line, column: site.column, aliasFilePath: declFilePath, filePath: filePath) 'verdict'
+			noGuard then return
+			guard then panic("checkArgAgainstParamRange: the call to '{String.from(site.callee)}' was asked as `compileTimeOnly` and came back owing a RUNTIME guard — `runtimeHalfOf` must never answer `guard` for a compile-time-only position")
+		end 'verdict'
+	end 'checkArgAgainstParamRange'
 
 	// The ranged-alias name the argument's PARAMETER was declared with, plus the callee's file. `none`
 	// covers every ordinary call: a callee with no ranged parameter at all files no `paramAliasNames`, an
@@ -367,7 +428,7 @@ type RangeCheckEmitter
 		let ok = self.splitBlock(site.block, position: site.position)
 		// ⚠ **BEFORE `emitPanicBlock`, AND THE ORDER IS LOAD-BEARING** — see `extendGuardChain`.
 		match chain 'chain'
-			blockChain(siteBlockId) then self.extendGuardChain(siteBlockId, continuation: ok)
+			blockChain(siteBlockId) then self.extendGuardChain(siteBlockId, continuation: ok, splitAt: site.position)
 			retChain then break 'chain'
 		end 'chain'
 		let panicBlock = self.emitPanicBlock(message)
@@ -383,13 +444,21 @@ type RangeCheckEmitter
 	// block the split actually returned, not assumed: a later reordering that slipped an append in
 	// between would chain the NEXT guard onto the panic block, and no test would show that as anything
 	// but wrong code at some unrelated site.
-	function extendGuardChain(siteBlockId BlockId, continuation IrBlock)
+	//
+	// ⚠ **THE BASE MOVES WITH THE TAIL, AND `splitAt` IS WHY.** The continuation holds the head's ops from
+	// `splitAt` on, so an op that stood at position p of the chain-end block now stands at `p - splitAt` of
+	// the new one. `guardChainBase` accumulates those shifts in the ORIGINAL block's coordinates, which is
+	// the space a site's recorded position is written in — advance one column without the other and the
+	// (k+1)-th guard lands at an offset measured against a block it is no longer in.
+	function extendGuardChain(siteBlockId BlockId, continuation IrBlock, splitAt BlockOpPos)
 		let okRef = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("extendGuardChain: `addBlock` made the continuation of '{String.from(self.func.name)}' but registered no blockRef for it")
 		if self.module.getBlock(okRef).id != continuation.id 'notTheContinuation'
 			panic("extendGuardChain: the last block registered in '{String.from(self.func.name)}' is not the continuation `splitBlock` returned — a block was appended between the split and this record, so the chain would advance onto the wrong block")
 		end 'notTheContinuation'
 
-		try self.guardChainTail.set(siteBlockId, value: okRef + 1) otherwise panic("extendGuardChain: guard site block id {siteBlockId} is outside the function's block-id space, which `blockEndGuardSite` already resolved it within")
+		try self.guardChainTail.set(siteBlockId, value: okRef + 1) otherwise panic("extendGuardChain: guard site block id {siteBlockId} is outside the function's block-id space, which `guardSiteAt` already resolved it within")
+		let base = try self.guardChainBase.get(siteBlockId) otherwise panic("extendGuardChain: guardChainBase has no entry for block id {siteBlockId}, which guardChainTail just answered for")
+		try self.guardChainBase.set(siteBlockId, value: base + splitAt) otherwise panic("extendGuardChain: guardChainBase.set OOB at block {siteBlockId}, which was just read in range")
 	end 'extendGuardChain'
 
 	// Split `head` at `position`: ops before it stay in `head`; ops from it on, plus `head`'s
@@ -483,14 +552,32 @@ type RangeCheckEmitter
 		end 'eachCheck'
 	end 'emitCascade'
 
-	// Where a guard goes: at the END of the block the value was CHECKED in (before that block's
-	// terminator), so the guard runs on the path the site is on and NOWHERE else — a cast in an unselected
-	// ternary arm / if-branch does not fire it. An int->int cast emits no Std op to anchor to, so the block
-	// is the one the parser recorded (`site.block`, its on-the-fly-SSA current block at the `as`), and the
+	// Where a guard goes: in the block the value was CHECKED in — so the guard runs on the path the site is
+	// on and NOWHERE else, and a cast in an unselected ternary arm / if-branch does not fire it — AT the
+	// position the value comes to rest at, so nothing between the site and the panic executes. An int->int
+	// cast emits no Std op to anchor to, so both halves are the parser's to record (`site.block` is its
+	// on-the-fly-SSA current block at the `as`, `site.maxonOpPos` the ordinal that block stood at), and the
 	// checked value is available there (a parameter, a value from a dominating block, or one defined earlier
-	// in this block — the site reads it, so it is already defined). For a straight-line function the site's
-	// block IS entry, so end-of-body equals the post-param point the older anchoring used — those goldens
-	// are unchanged; only a site inside a branch moves.
+	// in this block — the site reads it, so it is already defined).
+	//
+	// ⚠⚠⚠ **THE POSITION IS THE WHOLE POINT, AND ANCHORING AT THE BLOCK END WAS A WRONG ANSWER, NOT A
+	// COSMETIC ONE.** Until P1.9's close every guard went at the END of its block, so in a straight-line
+	// body EVERY range check ran after the WHOLE body — after every print, every call, every store and
+	// every division the out-of-range value reached. MEASURED against `maxon-sharp`:
+	//
+	//   * `b.v = bad` (out of range) then `print("after")` then `print("{b.v}")` — shv2 printed BOTH,
+	//     including the number 500 read back out of a `Percent` slot, and panicked after. The bootstrap
+	//     prints nothing. The same held for `as` and for a struct-literal field.
+	//   * `let d = z as NonZero` (z == 0) then `100 / d` — the bootstrap panics
+	//     `Range check failed: … 'NonZero'`; shv2 executed the DIVISION first and died
+	//     `panic: integer divide by zero`. Same exit code 1, a different diagnostic, and the language's own
+	//     check never ran. No exit-code-only case can see either, which is why the suite was green over it.
+	//
+	// The fix was not a line, and it is not in this pass: no Maxon-tier op position survived
+	// `lowerMaxonToStd`'s 1:N desugaring, so the lowering now RECORDS one per site out of the
+	// `opRefs.count()` its own walk already stands at (`RangeSiteWalk`), and this pass spends it. `GuardSite`
+	// always carried the `position` — it was the hook, kept deliberately through two reviews, and this is
+	// what fills it.
 	//
 	// ⭐⭐ **"THE END OF THE BLOCK" MOVES AS SOON AS THE FIRST GUARD SPLITS IT, AND RESOLVING EVERY SITE
 	// TO THE ORIGINAL HEAD IS TWO BUGS AT ONCE.** N sites in one source block all name that block's id.
@@ -506,36 +593,19 @@ type RangeCheckEmitter
 	// the 14-GPR file and the RULE 3 backstop panicked, on a program with nothing wrong with it.
 	//
 	// So the index is a CHAIN END, not a block identity: a guard moves its site block's entry to its own
-	// continuation, the (k+1)-th cascade lands at the end of the k-th's `__rc_ok`, and every `cmp` is
+	// continuation, the (k+1)-th cascade lands in the k-th's `__rc_ok`, and every `cmp` is
 	// again the last op before the branch that reads it — fused, holding no register, invisible to the
 	// allocator. Guards then also fire in source order, which is the order a reader expects the FIRST
 	// out-of-range value to be reported in.
 	//
-	// ⚠⚠⚠ **END-OF-BLOCK IS A PATH ANCHOR, NOT A STATEMENT ANCHOR — AND THAT IS AN OPEN DIVERGENCE FROM
-	// THE ORACLE, NOT A COSMETIC ONE. DO NOT READ THIS PARAGRAPH AS A JUSTIFICATION.** Every guard in a
-	// block runs at the END of that block, so in a straight-line body EVERY range check runs after the
-	// WHOLE body — after every print, every call, every store and every division the out-of-range value
-	// reaches. MEASURED against `maxon-sharp`, P1.9 review:
+	// ⭐ **AND THE CHAIN COMPOSES WITH THE POSITION THROUGH `guardChainBase`, WHICH IS THE OTHER HALF OF
+	// THE SAME FACT.** The chain end says WHICH block the (k+1)-th guard splits; the base says where that
+	// block BEGINS in the coordinates the site's position is written in. A site's position is an offset
+	// into the block as the LOWERING left it, and every split shortens the front of that block by exactly
+	// its own split point — so the position to split at is `stdOpPos - base`, and the base advances by the
+	// split point each time. Tracking one without the other measures the (k+1)-th offset against a block
+	// it is no longer in.
 	//
-	//   * `b.v = bad` (out of range) then `print("after")` then `print("{b.v}")` — shv2 prints BOTH,
-	//     including the number 500 read back out of a `Percent` slot, and panics after. The bootstrap
-	//     prints nothing. The same holds for `as` (pre-existing on main) and for a struct-literal field.
-	//   * `let d = z as NonZero` (z == 0) then `100 / d` — the bootstrap panics
-	//     `Range check failed: … 'NonZero'`; shv2 executes the DIVISION first and dies
-	//     `panic: integer divide by zero`. Same exit code 1, different diagnostic, and the language's own
-	//     check never runs. No exit-code-only case can see it, which is why the suite is green over it.
-	//
-	// An earlier draft of this comment claimed "the panic is fatal, so nothing observes the stored value
-	// afterwards"; the first bullet is that claim being false. Corrected here rather than deleted so the
-	// next reader inherits the measurement instead of the reassurance.
-	//
-	// The fix is NOT a line: anchoring on the landing op needs a Maxon-tier op POSITION, and no position
-	// survives `lowerMaxonToStd`'s 1:N desugaring today — though it could, cheaply, since that pass's
-	// per-block walk is a plain `for opIdx in srcBlock.opRefs` and could record the Std `opRefs.count()`
-	// it stood at for each site's Maxon ordinal. `GuardSite` ALREADY carries the `position` such a fix
-	// would fill (every caller passes the block end today, so `splitBlock`'s partition looks like dead
-	// generality — it is the hook, do not remove it). Filed for the coordinator: it moves ~269 guarded
-	// goldens and is its own rung.
 	// ⚠ **THIS RESOLVES THROUGH AN INDEX, NOT `IrModule.getBlockByIdIn`, AND THE DIFFERENCE IS A GROWTH
 	// CURVE.** `getBlockByIdIn` is a LINEAR SCAN of `func.blockRefs`; called once per guard site it made
 	// this pass **O(sites × blocks)** — and worse than the plain product, because every guard this pass
@@ -560,13 +630,26 @@ type RangeCheckEmitter
 	// names was recorded by the parser and therefore predates the pass. Its ROWS are only ever the
 	// parser's block ids — a continuation is written as a VALUE at its site block's row and never gets a
 	// row of its own — so it stays exactly `func.nextBlockId` wide however many blocks the pass appends.
-	function blockEndGuardSite(site RangeCheckSite) returns GuardSite
+	function guardSiteAt(site RangeCheckSite) returns GuardSite
 		if self.guardChainTail.isEmpty() 'firstRuntimeGuard'
 			self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
+			self.guardChainBase = BlockOpPosArray.create()
+			self.guardChainBase.growFilled(self.func.nextBlockId, value: 0)
 		end 'firstRuntimeGuard'
+
 		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
-		return GuardSite.create(block, position: block.opRefs.count())
-	end 'blockEndGuardSite'
+		let base = try self.guardChainBase.get(site.block) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {site.block}, which blockById just resolved within the function")
+		if site.stdOpPos < base 'behindTheChain'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, but that block's chain end already begins at {base} — sites are consumed in source order, so a position can never fall behind the last split")
+		end 'behindTheChain'
+
+		let position = site.stdOpPos - base
+		if position > block.opRefs.count() 'pastTheBlock'
+			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {site.stdOpPos} of block {site.block}, which is {position} into a chain-end block holding only {block.opRefs.count()} ops — `splitBlock` would silently put every op in the head and anchor the guard at the end")
+		end 'pastTheBlock'
+
+		return GuardSite.create(block, position: position)
+	end 'guardSiteAt'
 
 	// The block whose terminator is `ret(value)`.
 	function findRetBlock(value ValueId) returns RetBlockLookup

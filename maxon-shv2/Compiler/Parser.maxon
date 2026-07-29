@@ -18307,7 +18307,12 @@ export type Parser
 	// compile. A parameter's does not survive `resolveTypes` — see `recordConstantArgRangeChecks`.
 	//
 	// `block` is the value's CHECKING block (`self.currentBlock`), so a runtime guard runs on the path the
-	// value is on — a cast in an unselected ternary arm / if-branch does not fire it.
+	// value is on — a cast in an unselected ternary arm / if-branch does not fire it. `maxonOpPos` is WHERE
+	// in that block: the block's op count RIGHT NOW, which is the ordinal the op that spends the value is
+	// about to take, because every door here records BEFORE it emits that op (`applyCast` above its two
+	// conversion arms, `requireFieldType` before its caller stores, `fillFieldDefault` before the literal
+	// reaches the slot). Anchoring on the block alone put the guard at the block's END and let the whole
+	// rest of the body run first — see `RangeCheckSite`.
 	//
 	// It takes the RESOLVED alias rather than the declared type because `applyCast` already holds one: its
 	// shift-fill predicate asks the identical question of the identical type, and `signatures.aliasOf`
@@ -18318,7 +18323,7 @@ export type Parser
 	// diagnostic is anchored on the struct literal that took it, which that door holds as a `SourceRange`.
 	function recordRangeCheckSite(value ValueId, targetAlias DeclaredAlias, guard RangeCheckGuard, line LineNumber, column ColumnNumber)
 		match targetAlias 'a'
-			declared(alias) then self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: alias.name, block: self.currentBlock.id, guard: guard, line: line, column: column))
+			declared(alias) then self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: alias.name, block: self.currentBlock.id, maxonOpPos: self.currentBlock.opRefs.count(), guard: guard, line: line, column: column))
 			undeclared then break 'a'
 		end 'a'
 	end 'recordRangeCheckSite'
