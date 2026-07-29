@@ -10547,8 +10547,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var fieldKind = field.Type.ToValueKind();
     string? structTypeName = DeclaredTypeNameOf(field.Type);
 
-    newValue = CoerceAssignedValue(newValue, fieldKind, structTypeName,
-      $"field '{fieldToken.Value}' of '{_currentTypeName}'", fieldToken.Line, fieldToken.Column);
+    newValue = CoerceValueToDeclaredType(newValue, field.Type,
+      $"field '{fieldToken.Value}' of '{_currentTypeName}'", fieldToken);
 
     RejectCapturingClosureStoredInField(field, newValue, _currentTypeName, fieldToken.Line, fieldToken.Column);
 
@@ -10589,8 +10589,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // rule — a mismatch it could not widen was stored anyway, so `p.x = "hello"` into an Integer
     // field compiled clean and printed a raw heap pointer. Half a rule reads exactly like a whole
     // one until you look for the branch that is missing.
-    newValue = CoerceAssignedValue(newValue, field.Type.ToValueKind(), DeclaredTypeNameOf(field.Type),
-      $"field '{fieldToken.Value}' of '{structTypeName}'", fieldToken.Line, fieldToken.Column);
+    newValue = CoerceValueToDeclaredType(newValue, field.Type,
+      $"field '{fieldToken.Value}' of '{structTypeName}'", fieldToken);
 
     RejectCapturingClosureStoredInField(field, newValue, structTypeName, fieldToken.Line, fieldToken.Column);
 
@@ -18899,7 +18899,60 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Validates a value against a ranged type's bounds. For literal constants, performs
   /// a compile-time check. For non-constant values, emits a runtime range check.
   /// </summary>
-  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType, MaxonValueKind expectedKind, Token errorToken) {
+  /// <summary>
+  /// Is <paramref name="candidate"/> outside <paramref name="rangedType"/>'s bounds? The signed and
+  /// unsigned readings are NOT interchangeable — a lower bound of 0 makes the upper bound a `ulong`,
+  /// so `int(0 to u64.max)` must compare unsigned or `u64.max` orders as -1.
+  /// </summary>
+  private static bool IntegerOutOfRange(long candidate, IrRangedPrimitiveType rangedType) {
+    if (rangedType.IntLower >= 0) {
+      var upperLimit = rangedType.UpperInclusive ? (ulong)rangedType.IntUpper : (ulong)rangedType.IntUpper - 1;
+      return (ulong)candidate < (ulong)rangedType.IntLower || (ulong)candidate > upperLimit;
+    }
+
+    var signedUpper = rangedType.UpperInclusive ? rangedType.IntUpper : rangedType.IntUpper - 1;
+    return candidate < rangedType.IntLower || candidate > signedUpper;
+  }
+
+  /// <summary>
+  /// The integer a value holds when it is a constants-enum case's raw value — the same compile-time
+  /// constant a literal is, reached through the `MaxonEnumRawValueOp` that extracted it.
+  /// </summary>
+  /// <remarks>
+  /// Scans the WHOLE function, matching <see cref="ValidateAndEmitRangeCheck"/>'s own literal scan.
+  /// ⚠ <see cref="IsSmallEnumConstant"/> asks a NEARBY question ("does it fit 0-255?") with a
+  /// current-BLOCK scan, and the two are deliberately not merged: that one is a byte-fitting test
+  /// used to pick a representation, this one recovers the value to compare against declared bounds.
+  /// Same walk, different questions — merging them would tie a representation choice to a range rule.
+  /// </remarks>
+  private bool TryResolveEnumRawConstant(MaxonValue value, out long constant) {
+    constant = 0;
+    foreach (var block in _currentFunction!.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is not MaxonEnumRawValueOp rawOp || rawOp.Result != value) continue;
+
+        foreach (var producerBlock in _currentFunction!.Body.Blocks) {
+          foreach (var producer in producerBlock.Operations) {
+            if (producer is MaxonEnumLiteralOp litOp && litOp.Result == rawOp.EnumValue) {
+              constant = litOp.IntValue;
+              return true;
+            }
+          }
+        }
+
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  /// <param name="emitRuntimeCheck">
+  /// When false, a value the compiler cannot fold is left ALONE rather than guarded at run time.
+  /// The compile-time half still throws. See the call-argument site for why one caller needs this.
+  /// </param>
+  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, IrRangedPrimitiveType rangedType,
+      MaxonValueKind expectedKind, Token errorToken, bool emitRuntimeCheck = true) {
     bool isLiteral = false;
     // Search all blocks in the current function for the literal that defined this value,
     // not just the last op — the value may have been defined earlier (e.g. before an assign).
@@ -18923,15 +18976,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
       } else if (litOp.ValueKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
         isLiteral = true;
-        bool outOfRange;
-        if (rangedType.IntLower >= 0) {
-          var upperLimit = rangedType.UpperInclusive ? (ulong)rangedType.IntUpper : (ulong)rangedType.IntUpper - 1;
-          outOfRange = (ulong)litOp.IntValue < (ulong)rangedType.IntLower || (ulong)litOp.IntValue > upperLimit;
-        } else {
-          var upperLimit = rangedType.UpperInclusive ? rangedType.IntUpper : rangedType.IntUpper - 1;
-          outOfRange = litOp.IntValue < rangedType.IntLower || litOp.IntValue > upperLimit;
-        }
-        if (outOfRange) {
+        if (IntegerOutOfRange(litOp.IntValue, rangedType)) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
             errorToken.Line, errorToken.Column);
@@ -18939,7 +18984,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
 
-    if (!isLiteral) {
+    // A constants-enum case's raw value is every bit as constant as a literal, but it arrives as a
+    // `MaxonEnumRawValueOp` rather than a `MaxonLiteralOp`, so the scan above cannot see it. Without
+    // this, `takesByte(Ascii.underscore)` emitted a full runtime range check to prove 95 <= 255 — a
+    // branch, two compares and a panic block, for a number the compiler was holding.
+    if (!isLiteral && !rangedType.IsFloatBased
+        && TryResolveEnumRawConstant(value, out var enumConst)) {
+      isLiteral = true;
+      if (IntegerOutOfRange(enumConst, rangedType)) {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Value {enumConst} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
+          errorToken.Line, errorToken.Column);
+      }
+    }
+
+    if (!isLiteral && emitRuntimeCheck) {
       value = EmitRuntimeRangeCheck(value, rangedType, expectedKind, errorToken.Line, _sourceFilePath);
     }
 
@@ -19136,8 +19195,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
         }
 
-        value = CoerceStructLiteralField(field, value, typeName,
-          fieldNameToken.Line, fieldNameToken.Column);
+        value = CoerceStructLiteralField(field, value, typeName, fieldNameToken);
 
         RejectCapturingClosureStoredInField(field, value, typeName, fieldNameToken.Line, fieldNameToken.Column);
 
@@ -19227,8 +19285,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // `EmitDefaultLiteral` turns an integer attribute into an integer literal without consulting
         // the declared type at all (only I1 is special-cased), so `var v as Float = 0` crashed
         // identically to `Self{v: 0}` and independently of it.
-        defaultValue = CoerceStructLiteralField(field, defaultValue, typeName,
-          errorToken.Line, errorToken.Column);
+        defaultValue = CoerceStructLiteralField(field, defaultValue, typeName, errorToken);
         fieldValues.Add((field.Name, defaultValue));
         continue;
       }
@@ -21355,6 +21412,42 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// Applies the WHOLE declared-type rule — kind coercion AND range validation — to a value meeting
+  /// a declared type. Takes the <see cref="IrType"/>, deliberately, where
+  /// <see cref="CoerceAssignedValue"/> takes a <see cref="MaxonValueKind"/>.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ A KIND IS A LOSSY PROJECTION OF A TYPE, AND WHAT IT DROPS IS EXACTLY THE RANGE. That is the
+  /// whole bug this exists to prevent: `int(0 to 100)` and `int(i64.min to i64.max)` are one kind,
+  /// so a door handed the kind CANNOT range-check however carefully it is written, and every site
+  /// that took a kind silently enforced nothing. Measured: `takePercent(500)` for
+  /// `typealias Percent = int(0 to 100)` ran the callee with p = 500 and the body observed
+  /// `p > 100` as TRUE — the declared range was fiction at the call boundary.
+  ///
+  /// `ValidateAndEmitRangeCheck` had FOUR callers (a `return`, an explicit `as`, an array-literal
+  /// element, and its own definition) against SEVEN positions where a value meets a declared type.
+  /// This door is how the missing ones get it without a fifth, sixth and seventh hand-written call:
+  /// a caller supplies the TYPE and cannot express "coerce but do not range-check", because there is
+  /// no argument for it.
+  ///
+  /// ⚠ Local and global assignment still cannot use this and are NOT fixed by it: `ResolvedVar`
+  /// records a `Kind` and a struct NAME, never an `IrType`, so a local does not know its own range
+  /// to be checked against. That is a deeper gap (the declaration loses the range, not the store)
+  /// and is filed rather than papered over here.
+  /// </remarks>
+  private MaxonValue CoerceValueToDeclaredType(
+      MaxonValue value, IrType declaredType, string place, Token errorToken) {
+    var declaredKind = declaredType.ToValueKind();
+    var coerced = CoerceAssignedValue(value, declaredKind, DeclaredTypeNameOf(declaredType), place,
+      errorToken.Line, errorToken.Column);
+
+    if (declaredType is IrRangedPrimitiveType ranged)
+      coerced = ValidateAndEmitRangeCheck(coerced, ranged, declaredKind, errorToken);
+
+    return coerced;
+  }
+
+  /// <summary>
   /// Applies the declared-type rule to a struct-literal field initializer — the FOURTH context of
   /// specs/implicit-type-conversion.md's *"everywhere a value meets a declared type"*, and the one
   /// that was missing.
@@ -21381,12 +21474,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// wording is gated by specs. This owns exactly the numeric family the conversion rule is about.
   /// </remarks>
   private MaxonValue CoerceStructLiteralField(
-      IrStructField field, MaxonValue value, string typeName, int line, int column) {
-    var declaredKind = field.Type.ToValueKind();
-    if (!IsNumericPrimitiveKind(declaredKind)) return value;
+      IrStructField field, MaxonValue value, string typeName, Token errorToken) {
+    if (!IsNumericPrimitiveKind(field.Type.ToValueKind())) return value;
 
-    return CoerceAssignedValue(value, declaredKind, DeclaredTypeNameOf(field.Type),
-      $"field '{field.Name}' of '{typeName}'", line, column);
+    return CoerceValueToDeclaredType(value, field.Type, $"field '{field.Name}' of '{typeName}'",
+      errorToken);
   }
 
   /// <summary>
@@ -21633,9 +21725,40 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       var paramKind = paramType.ToValueKind();
-      if (argKind == paramKind) continue;
+      if (argKind != paramKind)
+        args[i] = ConvertArgToParamType(args[i]!, argKind, paramKind, callee.ParamNames[i], functionNameToken);
 
-      args[i] = ConvertArgToParamType(args[i]!, argKind, paramKind, callee.ParamNames[i], functionNameToken);
+      // A parameter is a place with a declared type, so a ranged one binds its argument to its
+      // bounds — the same rule a `return` has always applied. ⚠ THIS SITS OUTSIDE THE KIND CHECK
+      // ABOVE, AND THAT IS THE WHOLE POINT: it used to be `if (argKind == paramKind) continue;`,
+      // which skipped everything precisely when the two agreed on kind — and a ranged alias agrees
+      // with plain `int` on kind ALWAYS (`int(0 to 100)` is Integer, so is `int`). The common case
+      // was therefore the unguarded one: `takePercent(500)` ran the callee with p = 500.
+      //
+      // ⚠⚠ COMPILE-TIME ONLY, AND THE RUNTIME HALF IS BLOCKED BY A LOWERING BUG, NOT BY CHOICE.
+      // `EmitRuntimeRangeCheck` SPLITS the current block (it needs a branch and a panic block). Done
+      // here, that split lands in the middle of an argument list, and the arg-PINNING pass that runs
+      // over `argLocations` assumes an argument's value is defined in the block its evaluation was
+      // recorded against. Enabling it dies building shv2:
+      //   E9001: Lowering 'Compiler.CompileMemory.deltaOf' failed: assign value %3748
+      //          (kind=MaxonInteger) not in valueMap; assigning to '__arg_pin_4'
+      // on `PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees,
+      // bytes: self.columns.bytesAt(phase.ordinal))` — five ranged params where the LAST argument is
+      // itself a call whose own argument needs a runtime check, so the split happens while the outer
+      // argument list is still being built. Verified by bisection: the identical tree builds clean
+      // with `emitRuntimeCheck: false` and dies with it true. The pinning fragility is PRE-EXISTING
+      // (this is the first caller to split a block there); filed on PLAN.md's bootstrap-oracle-bugs
+      // list rather than worked around, because the workaround would be to stop checking.
+      //
+      // What is lost is narrow and worth stating: a call argument the compiler CANNOT fold is not
+      // guarded at the boundary. It is still caught downstream wherever it lands — a `return` of the
+      // ranged type, a field store, an `as` — which is where every such value in the corpus is
+      // caught today. What is GAINED is the whole statically-known half, which is where every
+      // measured instance of this bug lived.
+      if (paramType is IrRangedPrimitiveType paramRangedBound
+          && GetArgRangedTypeName(args[i]!) != paramRangedBound.Name)
+        args[i] = ValidateAndEmitRangeCheck(args[i]!, paramRangedBound, paramKind, functionNameToken,
+          emitRuntimeCheck: false);
     }
 
     return args.ToList()!;

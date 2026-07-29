@@ -36,6 +36,18 @@ module {
   func @Box.create(n: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg Box.create.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl Box.create.__range_panic_0
+    x64.jmp Box.create.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
@@ -69,7 +81,7 @@ module {
     x64.jl Box.doubled.__range_panic_0
     x64.jmp Box.doubled.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
@@ -92,7 +104,7 @@ module {
     x64.jl callThunk.__range_panic_0
     x64.jmp callThunk.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_1]
+    x64.lea_symdata rax, [__panic_msg_2]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
@@ -140,7 +152,7 @@ module {
     x64.jl run.__range_panic_0
     x64.jmp run.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_2]
+    x64.lea_symdata rax, [__panic_msg_3]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
@@ -187,7 +199,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_3]
+    x64.lea_symdata rax, [__panic_msg_4]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

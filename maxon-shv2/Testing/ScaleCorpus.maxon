@@ -160,6 +160,18 @@ end 'parseRungCount'
 // rung's largest knob (rung 7's deepBlocks is 200 << 7 = 25,600).
 export typealias KnobSize = int(1 to 1048576)
 
+// A POSITION within a knob, not a COUNT of one — 0-based, where `KnobSize` starts at 1. The upper
+// bound is `KnobSize`'s max minus one because the generators walk `0 upto size`, and `upto` excludes
+// its bound.
+//
+// ⚠ These are two different domains and sharing one alias was a live defect: `chainLinkName` took a
+// `KnobSize` while every one of its callers passes a link INDEX, which starts at 0 —
+// `chainLinkName(0)` for the chain's base and `chainLinkName(i - 1)` for each link's callee. The
+// bootstrap did not enforce a ranged parameter's bounds at a call, so a value one below the declared
+// minimum was passed on three lines and nothing said so; the moment the check was added the build
+// stopped. A range that describes the wrong quantity reads as correct until something measures it.
+typealias KnobIndex = int(0 to 1048575)
+
 // ===========================================================================================
 // The twenty-five knobs, and their rung-0 sizes
 // ===========================================================================================
@@ -1089,7 +1101,7 @@ end 'deepBlocksSource'
 // generator that emits the links and by the driver registration below. The chain takes a name
 // FUNCTION where every other knob takes a name constant, because it generates N functions rather
 // than one.
-function chainLinkName(link KnobSize) returns String
+function chainLinkName(link KnobIndex) returns String
 	return "scaleChain{link}"
 end 'chainLinkName'
 

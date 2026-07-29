@@ -3731,8 +3731,16 @@ against (user has ruled before: *fix the bootstrap so it stays a solid reference
 work). **shv2 does NOT inherit these** (it diverges deliberately, usually stricter); each needs the full C#
 suite as its gate:
 
-- **🔴⭐⭐ A RANGED PARAMETER'S BOUNDS ARE NEVER ENFORCED AT A CALL — `takeByte(300)` PASSES 300.**
-  Found 2026-07-28 by the review of the struct-literal fix below, while auditing whether that fix's
+- **◑⭐⭐ A RANGED TYPE'S BOUNDS WERE NEVER ENFORCED AT A CALL OR A FIELD — COMPILE-TIME HALF FIXED
+  2026-07-28, RUNTIME HALF AT CALL ARGUMENTS STILL OPEN (see the entry below it).** Every
+  statically-known violation is now an **E3005** at a call argument, a struct-literal field, a field
+  default and a field store, and the runtime check is emitted at the three field positions. What
+  remains is the runtime check at a **call argument**, blocked by the arg-pinning bug filed
+  immediately below. ⚠ **Local and global assignment are NOT covered and cannot be, yet**:
+  `ResolvedVar` records a `Kind` and a struct name, never an `IrType`, so a local does not know its
+  own range — the declaration loses it, not the store. That is a separate, deeper rung.
+  Original finding, kept because the measurements are the evidence:
+  found 2026-07-28 by the review of the struct-literal fix below, while auditing whether that fix's
   two widening tables should be collapsed. **The A/B is one conversion in two contexts**, with
   `typealias Byte = int(0 to u8.max)` and `let n = 300`: at a `return` it is
   `E3005: Value 300 is outside the range of 'Byte' (int(0 to 255))`; as an ARGUMENT it compiles clean
@@ -3750,6 +3758,24 @@ suite as its gate:
   that have none today), so it is its own change and not a review edit. ⇒ **Related to but wider than
   `#103`** ("builtin array methods do not enforce their RANGED parameter types"), which is this same
   hole seen from one caller: the enforcement is missing for *every* function, not only the builtins.
+
+- **🔴⭐⭐ SPLITTING A BLOCK PART-WAY THROUGH AN ARGUMENT LIST BREAKS ARG-PINNING — `E9001 … not in
+  valueMap`.** Found 2026-07-28 by the range-check rung, which is the FIRST caller that ever emitted
+  a branch there. `ParseArgList` pins any argument evaluated in a block other than the final one:
+  it inserts a store into the block the argument was recorded against and reloads in the final block.
+  That assumes an argument's value lives in the block its evaluation was recorded against — and a
+  block SPLIT during a later argument's evaluation breaks the assumption. Emitting the runtime range
+  check at a call argument dies building shv2 with
+  `E9001: Lowering 'Compiler.CompileMemory.deltaOf' failed: assign value %3748 (kind=MaxonInteger)
+  not in valueMap; assigning to '__arg_pin_4'`, on
+  `PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal))`
+  — five ranged params whose LAST argument is itself a call needing a runtime check, so the split
+  lands mid-list. ⭐ **Established by BISECTION, not by reading**: the identical tree builds clean with
+  `emitRuntimeCheck: false` and dies with it true. ⚠ **The minimal repro is not yet reduced** — three
+  hand-built shapes (nested call in a named arg; `let`-bound args ahead of a splitting one; a
+  differing ranged type to defeat the skip) all compile fine, so the trigger is narrower than any of
+  them and the real one is still only reproducible through shv2's own source. ⇒ **Closing this
+  un-blocks the runtime half of the entry above**, which is why the two are filed together.
 
 - **🔴⭐ AN INT LITERAL IN A `float` STRUCT-LITERAL FIELD CRASHES THE ORACLE — `E9001: float value %0 has
   no FP register and no stack home`.** Filed 2026-07-28 by the bare-type-argument rung; **it is the reason

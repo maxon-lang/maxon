@@ -6,12 +6,11 @@ function validate(s Score) returns Score
 end 'validate'
 
 function process(x Score) returns Score
-  return validate(x)
+  return validate(x * 3)
 end 'process'
 
 function main() returns ExitCode
-  let result = process(200)
-  return result
+  return process(50)
 end 'main'
 ---
 ExitCode: 1
@@ -48,12 +47,17 @@ module {
   func @process(x: i64) -> u8 {
   entry:
     x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov edx, ecx
+    x64.mov ecx, eax
+    x64.imul rdx, rcx
+    x64.mov rcx, rdx
     x64.call validate
-    x64.xor ecx, ecx
-    x64.mov rdx, 100
-    x64.cmp rax, rdx
+    x64.xor edx, edx
+    x64.mov rbx, 100
+    x64.cmp rax, rbx
     x64.jg process.__range_panic_0
-    x64.cmp rax, rcx
+    x64.cmp rax, rdx
     x64.jl process.__range_panic_0
     x64.jmp process.__range_ok_0
   __range_panic_0:
@@ -67,7 +71,7 @@ module {
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
-    x64.mov rcx, 200
+    x64.mov rcx, 50
     x64.call process
     x64.xor ecx, ecx
     x64.mov edx, 4294967295

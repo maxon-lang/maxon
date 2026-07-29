@@ -23,6 +23,18 @@ module {
   func @Counter.create(value: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov rdx, 255
+    x64.cmp rcx, rdx
+    x64.jg Counter.create.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl Counter.create.__range_panic_0
+    x64.jmp Counter.create.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
     x64.mov [rbp-16], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
@@ -59,7 +71,7 @@ module {
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
+    x64.lea_symdata rax, [__panic_msg_1]
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:

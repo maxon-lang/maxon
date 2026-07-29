@@ -9,7 +9,17 @@ category: runtime
 
 ## Documentation
 
-When a function returns a ranged typealias, the compiler inserts a runtime range check before the return. If the value is outside the declared range, the program panics with a message identifying the type and its bounds, followed by a stack trace.
+A ranged typealias binds every value that meets it. Wherever a value reaches a place declared with
+one — a **call argument**, a `return`, a **struct-literal field**, a **field store**, an array-literal
+element, an explicit `as` — the declared bounds are enforced.
+
+**How they are enforced depends on what the compiler can know, and the two halves are one rule:**
+
+- **The value is known at compile time** — it traces back to a literal, or to a constants-enum case's
+  raw value — and it is a **compile error (E3005)** naming the value, the type and its bounds. This
+  applies at **every** position above. A program that provably violates a range never gets built.
+- **The value is not known at compile time** — the compiler emits a **runtime range check** where the
+  value lands. If it is out of range the program panics, naming the type, with a stack trace.
 
 ### Example
 
@@ -21,35 +31,57 @@ function clamp(x Percent) returns Percent
 end 'clamp'
 ```
 
-Calling `clamp(101)` produces:
+`clamp(101)` is refused at compile time — the 101 is right there. A value the compiler cannot fold
+reaches the runtime check on the `return`:
+
 ```text
 Range check failed: value outside typealias 'Percent'
 Stack trace:
-  in example.clamp
+  in clamp
   in main
   in mrt_start
 ```
 
+### ⚠ Where the RUNTIME check is emitted, and the one gap
+
+The runtime half is emitted at a `return`, a struct-literal field, a field store, an array-literal
+element and an explicit `as`. It is **not** emitted at a call argument: a runtime check needs a
+branch, which splits the current block, and doing that part-way through building an argument list
+breaks the compiler's argument-pinning pass (an `E9001 … not in valueMap`, see PLAN.md's
+bootstrap-oracle-bugs list). So an unfoldable argument is not guarded at the boundary it crosses —
+it is guarded wherever it comes to rest, which is what the traces below show.
+
+**The compile-time half at a call argument is unaffected and is the half that was missing**: before
+it existed, `takePercent(500)` ran the callee with `p = 500` and the body observed `p > 100` as true.
+A declared range was simply not enforced at a call.
+
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
+Above the maximum, and not foldable — so the runtime check on `clamp`'s `return` is what fires, and
+the trace names `clamp`.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias Percent = int(0 to 100)
 
 function clamp(x Percent) returns Percent
   return x
 end 'clamp'
 
+function grow(n Integer) returns Integer
+  return n * 101
+end 'grow'
+
 function main() returns ExitCode
-  let result = clamp(101)
-  return result
+  let big = grow(1)
+  return clamp(big)
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
+panic at range-check-panic.upper-bound.test:6: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in clamp
   in main
@@ -57,23 +89,30 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.lower-bound -->
+Below the minimum. `Natural`'s lower bound is 0, so a negative value is out of range even though it
+is a perfectly ordinary `int`.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
 typealias Natural = int(0 to i64.max)
 
 function check(n Natural) returns Natural
   return n
 end 'check'
 
+function neg(n Integer) returns Integer
+  return 0 - n
+end 'neg'
+
 function main() returns ExitCode
-  let result = check(-1)
-  return result
+  let below = neg(1)
+  return check(below)
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
+panic at range-check-panic.lower-bound.test:6: Range check failed: value outside typealias 'Natural'
 Stack trace:
   in check
   in main
@@ -81,6 +120,7 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.in-range -->
+The half that must keep working: an in-range argument costs nothing and returns normally.
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -97,6 +137,8 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.nested-call -->
+The stack trace goes as deep as the value does: `process` receives an in-range `Score`, computes one
+that is not, and `validate` is where it comes to rest.
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -105,12 +147,11 @@ function validate(s Score) returns Score
 end 'validate'
 
 function process(x Score) returns Score
-  return validate(x)
+  return validate(x * 3)
 end 'process'
 
 function main() returns ExitCode
-  let result = process(200)
-  return result
+  return process(50)
 end 'main'
 ```
 ```exitcode
@@ -123,4 +164,44 @@ Stack trace:
   in process
   in main
   in mrt_start
+```
+
+<!-- test: range-check-panic.error.literal-argument -->
+The compile-time half at a call argument -- the position that used to let the value through in
+silence. `clamp(101)` never reaches a runtime check because it never builds.
+```maxon
+typealias Percent = int(0 to 100)
+
+function clamp(x Percent) returns Percent
+  return x
+end 'clamp'
+
+function main() returns ExitCode
+  return clamp(101)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-argument.test:9:10: Value 101 is outside the range of 'Percent' (int(0 to 100))
+```
+
+<!-- test: range-check-panic.error.literal-struct-field -->
+And at a struct-literal field, which is the same rule at a different place.
+```maxon
+typealias Percent = int(0 to 100)
+
+type Reading
+  export var pct as Percent
+
+  static function create() returns Self
+    return Self{pct: 101}
+  end 'create'
+end 'Reading'
+
+function main() returns ExitCode
+  let r = Reading.create()
+  return r.pct
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/range-check-panic/range-check-panic.error.literal-struct-field.test:8:17: Value 101 is outside the range of 'Percent' (int(0 to 100))
 ```
