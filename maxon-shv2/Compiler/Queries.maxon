@@ -79,12 +79,12 @@ end 'queryTokens'
 // than two copies of it.
 //
 // ⚠ **THE FILTERED STREAM IS TARGET-DEPENDENT AND THIS MEMO'S KEY IS NOT, WHICH IS SOUND ONLY
-// BECAUSE A `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is set once by
-// `Project.create` and has no other writer anywhere in the compiler (verified), and this cache lives
-// on `project.db` — so two targets are two `Project`s and two databases, and one cache can never be
-// asked a question about a target it was not filled for. Should a single `Project` ever be re-aimed
-// at a second target, THIS is the key that becomes wrong: mix the target into it, do not simply
-// invalidate.
+// BECAUSE A `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is a `let` set
+// by `Project.create` and re-aiming a live `Project` does not compile (Project.maxon says so at the
+// field, which is the line that would have to change first), and this cache lives on `project.db` —
+// so two targets are two `Project`s and two databases, and one cache can never be asked a question
+// about a target it was not filled for. Should a `Project` ever need re-aiming, THIS memo's key is
+// what becomes wrong: mix the target into it, do not simply invalidate.
 function queryActiveTokens(project Project, path FilePath) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
 	let entry = try sourceEntryOf(project, path: path)
@@ -117,6 +117,8 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	let active = activeTokensOrReported(project, path: path, tokens: tokens)
 	recordPhase(project, phase: CompilePhase.directives, probe: probe)
 
+	// ⚠ The stamp that carries this query's soundness argument: a TARGET-DEPENDENT value under a key
+	// that names only the file. Read the target note in this function's header before changing it.
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(active, keyHash: entry.contentHash))
 	return active
 end 'queryActiveTokens'
@@ -509,19 +511,27 @@ function reportLexerError(project Project, path FilePath, error LexerError)
 	end 'kind'
 end 'reportLexerError'
 
-// Map a DirectiveError to a project diagnostic. Two codes, and the split is by what the author got
-// wrong rather than by where the filter noticed: E2063 is a region whose STRUCTURE does not close,
-// E2064 a condition that calls a predicate that does not exist.
+// Map a DirectiveError to a project diagnostic. THREE codes, split by what the author got wrong
+// rather than by where the filter noticed:
 //
-// `malformedCondition` reports under E2064 as well, because a condition the grammar has no
-// production for is a condition that names no predicate the compiler knows -- and the message says
-// which spellings ARE known, which is the same advice the unknown-name case needs.
+//   • E2063 — the REGION's structure does not close. Nothing is wrong with any condition.
+//   • E2064 — the condition reads fine and the FUNCTION IT CALLS does not exist. The fix is a name,
+//     and the message lists the names there are.
+//   • E2065 — the condition cannot be READ, either because it does not parse or because text follows
+//     it on its line. There is no name to look up.
+//
+// ⚠ E2064 and E2065 shipped as ONE code, on the argument that "a condition the grammar has no
+// production for names no predicate the compiler knows". That does not survive contact with a
+// missing `)`: the reader is told their predicate name is unknown when the name was fine, and
+// `lookup_error_code E2064` -- whose registry text says "names a predicate that does not exist" --
+// confirms the wrong diagnosis. Two faults, two fixes, two codes.
 function reportDirectiveError(project Project, path FilePath, error DirectiveError)
 	match error 'kind'
 		unterminatedIf(line, column) then reportPositioned(project, code: ErrorCode.directiveUnbalanced, message: "Unterminated '#if' -- the region is still open at end of file. Every '#if' needs a matching '#endif'", line: line, column: column, filePath: path)
 		unmatchedDirective(spelling, line, column) then reportPositioned(project, code: ErrorCode.directiveUnbalanced, message: "'{spelling}' has no matching '#if'", line: line, column: column, filePath: path)
-		unknownPredicate(name, line, column) then reportPositioned(project, code: ErrorCode.directiveUnknownPredicate, message: "Unknown conditional compilation function '{name}'. Expected {AcceptedPredicateList}.", line: line, column: column, filePath: path)
-		malformedCondition(line, column) then reportPositioned(project, code: ErrorCode.directiveUnknownPredicate, message: "Malformed '#if' condition. Expected a predicate call -- {AcceptedPredicateList} -- optionally combined with 'and', 'or', 'not' and parentheses", line: line, column: column, filePath: path)
+		unknownPredicate(name, line, column) then reportPositioned(project, code: ErrorCode.directiveUnknownPredicate, message: "Unknown conditional compilation function '{name}'. Expected {acceptedPredicateList()}.", line: line, column: column, filePath: path)
+		malformedCondition(line, column) then reportPositioned(project, code: ErrorCode.directiveMalformedCondition, message: "Malformed '#if' condition. Expected a predicate call -- {acceptedPredicateList()} -- optionally combined with 'and', 'or', 'not' and parentheses", line: line, column: column, filePath: path)
+		trailingConditionTokens(line, column) then reportPositioned(project, code: ErrorCode.directiveMalformedCondition, message: "Unexpected text after the '#if' condition -- a condition ends at the end of its own line", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportDirectiveError'
 

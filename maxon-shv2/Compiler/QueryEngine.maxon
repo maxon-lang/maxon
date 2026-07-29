@@ -55,13 +55,6 @@ export function sourceEntryOf(project Project, path FilePath) returns SourceFile
 	return try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
 end 'sourceEntryOf'
 
-// The current content hash of a registered file, or a throw for an unregistered path. A memo whose
-// `keyHash` equals this is valid. Only the PARSE key needs it standalone (it mixes in a second
-// input); the token queries compare against `sourceEntryOf(...).contentHash` directly.
-function currentContentHash(project Project, path FilePath) returns ContentHash throws CompileError
-	return (try sourceEntryOf(project, path: path)).contentHash
-end 'currentContentHash'
-
 // **A PARSE MEMO IS KEYED ON TWO FACTS, BECAUSE A PARSE READS TWO INPUTS.**
 //
 //   1. the file's OWN bytes — its tokens;
@@ -91,7 +84,7 @@ end 'parseMemoKey'
 // new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
 // another `FilePath` map probe.
 export function currentParseMemoKey(project Project, path FilePath, signatureHash ContentHash) returns ContentHash throws CompileError
-	return parseMemoKey(try currentContentHash(project, path: path), signatureHash: signatureHash)
+	return parseMemoKey((try sourceEntryOf(project, path: path)).contentHash, signatureHash: signatureHash)
 end 'currentParseMemoKey'
 
 // The composite whole-program hash: every source file's content hash folded in source-path order.

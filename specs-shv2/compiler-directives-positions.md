@@ -429,3 +429,119 @@ end 'main'
 ```maxoncstderr
 error E2063: specs/fragments/compiler-directives-positions/error.orphan-else.test:4:1: '#else' has no matching '#if'
 ```
+
+<!-- test: error.trailing-condition-tokens -->
+⭐⭐ **TEXT AFTER A CONDITION IS REFUSED, AND THE REASON IS THAT ACCEPTING IT WAS TARGET-DEPENDENT.**
+Found by review, by probing rather than by any committed test.
+
+The condition grammar stops at the first token no production wants, and the filter resumes its walk
+from exactly there — so before this refusal existed, `os ( Linux )` here was emitted **into the
+program as code**. It failed with an `E2015` about a top-level identifier on Windows, and compiled
+**clean** on a target where `os(Windows)` is false, because the region is dead and the junk is
+skipped along with it. The same file, accepted or rejected according to who is building it, and
+neither answer mentioning a directive.
+
+The bootstrap is silent on this shape: it discards the remainder of a `#if` line. Measured — for
+`#if os(Windows) n = 5` in a function body, the bootstrap sees no assignment at all (it reports
+`n` as never reassigned) while shv2 assigned 5. Two compilers, two programs, from one file.
+
+Its own code (**E2065**, not E2064) because there is no predicate name to correct here.
+```maxon
+#if os(Windows) os(Linux)
+function main() returns ExitCode
+	return 7
+end 'main'
+#endif
+```
+```maxoncstderr
+error E2065: specs/fragments/compiler-directives-positions/error.trailing-condition-tokens.test:2:17: Unexpected text after the '#if' condition -- a condition ends at the end of its own line
+```
+
+<!-- test: error.malformed-condition -->
+The OTHER shape E2065 answers, and the one that had no test at all: a condition that does not parse.
+A missing `)` is not an unknown predicate — the name `os` is perfectly good — which is why these two
+faults no longer share E2064, whose registry text promises the reader that a predicate name is
+wrong.
+
+Positioned at the token that had no reading, which for a condition running off the end of its line is
+that line's `newline`.
+```maxon
+function main() returns ExitCode
+	return 5
+end 'main'
+#if os(Windows
+#endif
+```
+```maxoncstderr
+error E2065: specs/fragments/compiler-directives-positions/error.malformed-condition.test:5:15: Malformed '#if' condition. Expected a predicate call -- 'os', 'arch', 'testing', 'rcSanitize', or 'leakReport' -- optionally combined with 'and', 'or', 'not' and parentheses
+```
+
+<!-- test: error.dead-branch-lexically-invalid -->
+**A DEAD BRANCH IS STILL LEXED.** The whole file is tokenized before this pass runs at all, so
+lexical garbage in a branch nobody will parse is still an error — `E1002`, from the lexer, not from
+the filter. That is the semantics both references have (oracle-measured), and it is the boundary that
+makes the rest of this file's behaviour coherent: a dead branch escapes PARSING and NAME RESOLUTION,
+never TOKENIZATION. It had no test.
+```maxon
+#if testing(true)
+	let x = "unterminated
+#endif
+
+function main() returns ExitCode
+	return 9
+end 'main'
+```
+```maxoncstderr
+error E1002: specs/fragments/compiler-directives-positions/error.dead-branch-lexically-invalid.test:3:10: Unterminated string literal
+```
+
+<!-- test: directives.second-else-is-dead -->
+A second `#else` for one `#if` is ACCEPTED, and every arm after the first taken one is dead — which
+falls straight out of `takenAlready` and needs no special case. Pinned because it is a shape nothing
+else covers and because it AGREES WITH THE ORACLE, which also accepts it and also selects the second
+arm (measured: both compilers exit 2).
+
+Not an error, deliberately. Unlike an unbalanced region, a repeated `#else` swallows nothing and
+leaves no declaration silently missing — the reading is unambiguous, so there is no wrong answer to
+prevent.
+```maxon
+#if os(Plan9)
+function main() returns ExitCode
+	return 1
+end 'main'
+#else
+function main() returns ExitCode
+	return 2
+end 'main'
+#else
+function main() returns ExitCode
+	return 3
+end 'main'
+#endif
+```
+```exitcode
+2
+```
+
+<!-- test: directives.trailing-text-unread-in-dead-region -->
+The complement of `error.trailing-condition-tokens`, and the boundary of that refusal: a `#if` inside
+a DEAD region has its condition **not evaluated at all**, so nothing there is checked — not the
+predicate name, not the grammar, not the end of the line. `wibble(nonsense) and and` would be as
+quiet as this.
+
+That is not an oversight in the check's placement; it is the rule that makes a nested `#if` inside a
+dead branch mean nothing, and both references have it. A directive fault only ever surfaces where the
+directive could have taken effect.
+```maxon
+#if os(Plan9)
+	#if os(Windows) this is not a condition
+	#endif
+#endif
+
+function main() returns ExitCode
+	return 21
+end 'main'
+```
+```exitcode
+21
+```

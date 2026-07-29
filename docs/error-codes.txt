@@ -419,6 +419,25 @@ E2064 DirectiveUnknownPredicate
 	doc An unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it
 	doc evaluates to FALSE, matching both references and letting a condition name a platform this
 	doc compiler does not target without becoming a build failure.
+	doc Names ONLY the unknown-name fault. A condition the grammar cannot READ at all -- a missing
+	doc ')', an operator with no right-hand side, text trailing the condition -- is E2065; it used to
+	doc share this code, and 'your predicate name is unknown' is the wrong advice for a missing paren.
+
+E2065 DirectiveMalformedCondition
+	shv2 directiveMalformedCondition
+	doc A '#if' condition the directive grammar has no production for. Two shapes reach it: the
+	doc condition itself does not parse (a missing ')', an 'and' with no right-hand side, a bare
+	doc 'true' where a predicate call belongs, a condition that runs off the end of the file), or the
+	doc condition parses but TEXT FOLLOWS IT on the same line.
+	doc Split out of E2064, which names a different fault: there the condition reads fine and the
+	doc function it calls does not exist, and the fix is to correct a NAME. Here there is nothing to
+	doc look up. One code answering both told a reader with an unbalanced paren that their predicate
+	doc name was unknown.
+	doc The trailing-text shape is a REFUSAL where the bootstrap is silent (measured: it discards the
+	doc remainder of a '#if' line, so '#if os(Windows) n = 5' assigns nothing). Accepting it is a
+	doc wrong-answer generator: the tokens after the condition are emitted into the program as code,
+	doc so '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the
+	doc region is dead and the junk is skipped along with it. A condition ends at its own newline.
 
 E3001 SemanticNoMain
 	csharp SemanticNoMain

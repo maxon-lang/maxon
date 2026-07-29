@@ -2203,7 +2203,15 @@ export type Project
 	// derive per-file namespaces and the default output path.
 	export var rootPath as FilePath
 	// Target CPU/OS this build emits for.
-	export var target as Target
+	//
+	// ⭐ **`let`, AND THAT IS LOAD-BEARING RATHER THAN TIDY.** `queryActiveTokens`' memo holds a
+	// TARGET-DEPENDENT token stream under a key that is only the file's content hash, which is sound
+	// exactly because a `Project` is aimed once and never re-aimed — two targets are two `Project`s
+	// and two `QueryDatabase`s, so one cache can never be asked about a target it was not filled for.
+	// It had been a `var` with no writer but `create`, which made the argument a survey of the
+	// current source rather than a property of the type. Re-aiming a live `Project` now does not
+	// compile; if it ever must, mix the target into that memo's key rather than deleting this word.
+	export let target as Target
 	// Accumulated user-facing diagnostics; a non-empty set fails the build.
 	export var diagnostics as DiagnosticArray
 	// Backend rdata/global constant table, threaded to `buildBackend`. Empty for

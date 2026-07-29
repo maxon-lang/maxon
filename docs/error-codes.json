@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "3fa5b37633c70f79",
+  "sourceHash": "bfe8418ca94c01af",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -485,8 +485,17 @@
       "tag": "E2064",
       "name": "DirectiveUnknownPredicate",
       "stage": "parser",
-      "doc": "A '#if' condition names a conditional-compilation predicate that does not exist -- anything\nother than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.\nDistinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a\nbad token); this names a known directive whose CONDITION calls an unknown function.\nAn unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it\nevaluates to FALSE, matching both references and letting a condition name a platform this\ncompiler does not target without becoming a build failure.",
+      "doc": "A '#if' condition names a conditional-compilation predicate that does not exist -- anything\nother than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.\nDistinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a\nbad token); this names a known directive whose CONDITION calls an unknown function.\nAn unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it\nevaluates to FALSE, matching both references and letting a condition name a platform this\ncompiler does not target without becoming a build failure.\nNames ONLY the unknown-name fault. A condition the grammar cannot READ at all -- a missing\n')', an operator with no right-hand side, text trailing the condition -- is E2065; it used to\nshare this code, and 'your predicate name is unknown' is the wrong advice for a missing paren.",
       "emittedBy": {"shv2": "directiveUnknownPredicate"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2065,
+      "tag": "E2065",
+      "name": "DirectiveMalformedCondition",
+      "stage": "parser",
+      "doc": "A '#if' condition the directive grammar has no production for. Two shapes reach it: the\ncondition itself does not parse (a missing ')', an 'and' with no right-hand side, a bare\n'true' where a predicate call belongs, a condition that runs off the end of the file), or the\ncondition parses but TEXT FOLLOWS IT on the same line.\nSplit out of E2064, which names a different fault: there the condition reads fine and the\nfunction it calls does not exist, and the fix is to correct a NAME. Here there is nothing to\nlook up. One code answering both told a reader with an unbalanced paren that their predicate\nname was unknown.\nThe trailing-text shape is a REFUSAL where the bootstrap is silent (measured: it discards the\nremainder of a '#if' line, so '#if os(Windows) n = 5' assigns nothing). Accepting it is a\nwrong-answer generator: the tokens after the condition are emitted into the program as code,\nso '#if os(Windows) os(Linux)' is a hard error on Windows and silence on Linux, where the\nregion is dead and the junk is skipped along with it. A condition ends at its own newline.",
+      "emittedBy": {"shv2": "directiveMalformedCondition"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

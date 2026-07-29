@@ -49,21 +49,36 @@ export function detectHostTarget() returns Target
 	return Target.create(hostCpu, os: hostOs)
 end 'detectHostTarget'
 
-export function targetToString(t Target) returns String
-	let cpuStr = match t.cpu 'cpu'
-		x64 gives "x64"
-		arm64 gives "arm64"
-		wasm32 gives "wasm32"
+// ⭐ **THE CANONICAL SPELLING OF A CPU / AN OS, WRITTEN DOWN ONCE — because it has TWO readers that
+// must never disagree.** The `--target=` triple goes through `targetToString` (which `Main`'s
+// `parseTargetSpec` matches a spec against, rather than keeping its own table), and `#if arch(...)`
+// / `#if os(...)` go through `ConditionalCompilation.satisfyingArgument`. A second list would be the
+// same fact twice, and its failure mode is SILENT: adding a `CpuArch` case forces an arm here (the
+// match is exhaustive) but would leave `#if arch(<newName>)` quietly answering FALSE on the very
+// target it names, with no diagnostic anywhere.
+//
+// Bytes rather than `String` because the directive evaluator compares them against a `Token.value`,
+// which is a zero-copy slice of the source buffer; `targetToString` is the side that pays for a
+// `String`, and it is the side that was already building one.
+export function cpuCanonicalName(cpu CpuArch) returns ByteArray
+	return match cpu 'cpu'
+		x64 gives b"x64"
+		arm64 gives b"arm64"
+		wasm32 gives b"wasm32"
 	end 'cpu'
+end 'cpuCanonicalName'
 
-	let osStr = match t.os 'os'
-		windows gives "windows"
-		linux gives "linux"
-		macos gives "macos"
-		wasi gives "wasi"
+export function osCanonicalName(os Os) returns ByteArray
+	return match os 'os'
+		windows gives b"windows"
+		linux gives b"linux"
+		macos gives b"macos"
+		wasi gives b"wasi"
 	end 'os'
+end 'osCanonicalName'
 
-	return "{cpuStr}-{osStr}"
+export function targetToString(t Target) returns String
+	return "{String.from(cpuCanonicalName(t.cpu))}-{String.from(osCanonicalName(t.os))}"
 end 'targetToString'
 
 export function executableExtension(t Target) returns String

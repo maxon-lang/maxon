@@ -44,8 +44,9 @@
 // A token-level skip with a depth counter is exactly that behaviour, and it is what both references
 // implement. One linear pass, O(1) state per open region, no allocation beyond the output array.
 
-// The three directive TokenKinds are emitted by the lexer (`Lexer.scanDirective`); an unrecognized
-// `#name` never reaches here at all — it is `E1009 lexerUnknownDirective`, a lexer error.
+// The directive TokenKinds are emitted by the lexer (`Lexer.scanDirective`) and enumerated ONCE here,
+// by `isDirectiveToken`; an unrecognized `#name` never reaches this pass at all — it is
+// `E1009 lexerUnknownDirective`, a lexer error.
 
 // A structural or semantic fault in a directive region. Surfaced by `Queries.reportDirectiveError`,
 // which is the only caller — the filter runs inside a query, where `project` is in scope, so a
@@ -57,11 +58,16 @@ export union DirectiveError implements Error
 	// An `#else` or an `#endif` with no open `#if`. Carries the offending spelling so the message
 	// can name what it actually saw rather than enumerating both.
 	unmatchedDirective(spelling String, line LineNumber, column ColumnNumber)
-	// A condition calls a predicate that is not one of the five. See `evaluateAtom`.
+	// A condition calls a predicate that is not one of the five. See `predicateNamed`.
 	unknownPredicate(name String, line LineNumber, column ColumnNumber)
 	// A condition ran out of tokens, or holds something the grammar has no production for — a
 	// missing `)`, an operator with no right-hand side, a bare identifier with no argument list.
 	malformedCondition(line LineNumber, column ColumnNumber)
+	// A condition that PARSES, followed by more tokens on the same line. Its own case rather than a
+	// second use of `malformedCondition`, because the advice differs — there is nothing to correct
+	// in the condition itself — and because it is the one directive fault whose absence was a silent
+	// WRONG ANSWER rather than a poor message. See `expectConditionEnd`.
+	trailingConditionTokens(line LineNumber, column ColumnNumber)
 end 'DirectiveError'
 
 // One open `#if`. `branchLive` already folds in the enclosing region's liveness (see
@@ -90,29 +96,25 @@ end 'DirectiveFrame'
 
 typealias DirectiveFrameArray = Array with DirectiveFrame
 
-// The predicate names a `#if` condition may call. Named constants rather than bare literals at the
-// comparison sites, and the SAME values the diagnostic renders, so the accepted set and the message
-// that lists it cannot drift.
-let OsPredicate = b"os"
-let ArchPredicate = b"arch"
-let TestingPredicate = b"testing"
-let RcSanitizePredicate = b"rcSanitize"
-let LeakReportPredicate = b"leakReport"
-export let AcceptedPredicateList = "'os', 'arch', 'testing', 'rcSanitize', or 'leakReport'"
-
-// The OS names `os(...)` accepts, matched case-insensitively (the corpus writes `Windows`, this file
-// writes `windows`). An unrecognized name is FALSE, not an error — see `matchesTargetOs`.
-let WindowsOsName = b"windows"
-let LinuxOsName = b"linux"
-let MacosOsName = b"macos"
-let WasiOsName = b"wasi"
-
-let X64ArchName = b"x64"
-let Arm64ArchName = b"arm64"
-let Wasm32ArchName = b"wasm32"
+// ⭐ **THE PREDICATES A `#if` CONDITION MAY CALL — THE ENUM *IS* THE ACCEPTED SET.**
+//
+// It had been two lists: five byte constants the evaluator compared against, and a hand-written
+// English sentence the diagnostic printed. They agreed, and nothing made them — a sixth predicate
+// could be accepted without being advertised, or advertised without being accepted, and neither
+// direction is a compile error. Now `predicateNamed` resolves a spelling by walking `allCases` and
+// `acceptedPredicateList` renders the same walk, so acceptance and advertisement are one fact. A new
+// case forces an arm in `predicateSpelling` and in `satisfyingArgument` (both matches are exhaustive
+// over this enum) and needs no other edit anywhere.
+enum ConditionPredicate
+	os
+	arch
+	testing
+	rcSanitize
+	leakReport
+end 'ConditionPredicate'
 
 // The spelling `flag(false)` must carry for an absent build flag to satisfy it. See
-// `matchesAbsentBuildFlag`.
+// `satisfyingArgument`.
 let FalseSpelling = b"false"
 
 // ⭐ **THE FILTER: `tokens` minus every directive token and every inactive branch.**
@@ -153,6 +155,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 			if regionLive 'liveParent'
 				let cursor = ConditionCursor.create((scan + 1) as TokenIndex)
 				let taken = try evaluateCondition(tokens, cursor: cursor, target: target)
+				try expectConditionEnd(tokens, cursor: cursor)
 				frames.push(DirectiveFrame.create(taken, takenAlready: taken, line: tok.line, column: tok.column))
 				scan = cursor.value
 				continue
@@ -193,6 +196,16 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 			continue
 		end 'closeRegion'
 
+		// ⚠ **THE THREE ARMS ABOVE MUST COVER EVERY KIND `isDirectiveToken` ADMITS**, because that
+		// predicate is the early-out probe's entire definition of "this file needs filtering". A
+		// fourth directive kind added to it and to the lexer but not to a handler here would fall
+		// through to the `keep` below and be EMITTED INTO THE PROGRAM — and a fourth kind added to a
+		// handler but not to the probe would make a file that uses only that kind skip the filter
+		// altogether. One list, checked from both ends, so neither drift is silent.
+		if isDirectiveToken(tok.kind) 'unhandledDirective'
+			panic("filterConditionalTokens: directive token '{tok.kind.rawValue}' has no handling arm")
+		end 'unhandledDirective'
+
 		if regionLive 'keep'
 			out.push(tok)
 		end 'keep'
@@ -223,11 +236,18 @@ function innermostFrame(frames DirectiveFrameArray) returns DirectiveFrame
 	return try frames.get(frames.count() - 1) otherwise panic("innermostFrame: called on an empty directive frame stack")
 end 'innermostFrame'
 
+// THE set of token kinds this pass owns, written down once. Read by the early-out probe below and
+// asserted against the filter's handler arms (see the `unhandledDirective` panic), so the two cannot
+// come to disagree about what a directive IS.
+function isDirectiveToken(kind TokenKind) returns bool
+	return kind == TokenKind.hashIf or kind == TokenKind.hashElse or kind == TokenKind.hashEndif
+end 'isDirectiveToken'
+
 // Does this file contain a directive at all? The gate on `filterConditionalTokens`'s whole body —
 // see there for why a directive-free file must not pay for a copy of its token array.
 function tokensHoldDirective(tokens TokenArray) returns bool
 	for tok in tokens 'each'
-		if tok.kind == TokenKind.hashIf or tok.kind == TokenKind.hashElse or tok.kind == TokenKind.hashEndif 'found'
+		if isDirectiveToken(tok.kind) 'found'
 			return true
 		end 'found'
 	end 'each'
@@ -289,6 +309,35 @@ function evaluateCondition(tokens TokenArray, cursor ConditionCursor, target Tar
 	return try evaluateOr(tokens, cursor: cursor, target: target)
 end 'evaluateCondition'
 
+// ⭐ **A CONDITION ENDS AT THE END OF ITS OWN LINE, AND NOTHING MAY FOLLOW IT THERE.**
+//
+// ⚠ Without this the grammar simply stops at the first token no production wants, and the FILTER
+// RESUMES ITS WALK FROM EXACTLY THERE — so text trailing a condition is emitted into the program as
+// code. `evaluateCondition`'s no-short-circuit note names that hazard for the evaluator's own
+// tokens; this is the same hazard reached from the SOURCE side, and it was live.
+//
+// It is worth a refusal rather than a shrug because the symptom is TARGET-DEPENDENT. Measured, before
+// this existed: `#if os(Windows) os(Linux)` left `os ( Linux )` in the stream and failed with an
+// E2015 about a top-level identifier on Windows — and compiled clean on a target where the region is
+// dead and the junk is skipped along with it. The same file, accepted or rejected according to who
+// is building it, and neither answer mentioning a directive.
+//
+// The bootstrap oracle is silent here because it discards the remainder of the `#if` line: measured,
+// `#if os(Windows) n = 5` assigns nothing there (its `n` stays `let`-eligible) and assigned 5 here.
+// Refusing is the only reading that cannot silently mean two different programs. Nothing in the
+// corpus is affected — all 100 directive lines in `specs/`, `specs-shv2/` and `stdlib/` end at their
+// condition.
+//
+// `newline` is a real token in this lexer, so "the rest of the line" is one lookahead and no
+// position arithmetic. EOF counts as an ending: a `#if` on an unterminated final line is a region
+// fault (E2063), reported below with the position of the `#if` itself, not a condition fault.
+function expectConditionEnd(tokens TokenArray, cursor ConditionCursor) throws DirectiveError
+	let tok = tokenAtOrEof(tokens, index: cursor.value)
+	if tok.kind != TokenKind.newline and tok.kind != TokenKind.eof 'trailing'
+		throw DirectiveError.trailingConditionTokens(tok.line, column: tok.column)
+	end 'trailing'
+end 'expectConditionEnd'
+
 function evaluateOr(tokens TokenArray, cursor ConditionCursor, target Target) returns bool throws DirectiveError
 	var result = try evaluateAnd(tokens, cursor: cursor, target: target)
 	while acceptKind(tokens, cursor: cursor, kind: TokenKind.or) 'orLoop'
@@ -330,18 +379,94 @@ function evaluateAtom(tokens TokenArray, cursor ConditionCursor, target Target) 
 	let argTok = try readConditionArgument(tokens, cursor: cursor)
 	try expectKind(tokens, cursor: cursor, kind: TokenKind.rightParen)
 
-	if nameTok.value.equals(OsPredicate) 'isOs'
-		return matchesTargetOs(argTok.value, target: target)
-	end 'isOs'
-	if nameTok.value.equals(ArchPredicate) 'isArch'
-		return matchesTargetArch(argTok.value, target: target)
-	end 'isArch'
-	if nameTok.value.equals(TestingPredicate) or nameTok.value.equals(RcSanitizePredicate) or nameTok.value.equals(LeakReportPredicate) 'isAbsentFlag'
-		return matchesAbsentBuildFlag(argTok.value)
-	end 'isAbsentFlag'
+	// Resolved AFTER the argument list is consumed, so an unknown name reports its own position while
+	// the cursor still lands past the atom — the same order the two lists version had, and what keeps
+	// `error.unknown-predicate`'s golden pointing at the name rather than at the `(`.
+	let predicate = try predicateNamed(nameTok)
+	return equalsIgnoringAsciiCase(argTok.value, b: satisfyingArgument(predicate, target: target))
+end 'evaluateAtom'
+
+// The predicate a source spelling names, or E2064. Matched EXACTLY, unlike a predicate's ARGUMENT:
+// `os` is a function name in this grammar and the corpus spells all five in camelCase, whereas
+// `os(Windows)` names a platform whose conventional spelling is capitalized.
+function predicateNamed(nameTok Token) returns ConditionPredicate throws DirectiveError
+	for predicate in ConditionPredicate.allCases 'each'
+		if nameTok.value.equals(predicateSpelling(predicate)) 'found'
+			return predicate
+		end 'found'
+	end 'each'
 
 	throw DirectiveError.unknownPredicate(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
-end 'evaluateAtom'
+end 'predicateNamed'
+
+// Each predicate's source spelling. THE names — read by the resolver above and by the diagnostic
+// below, never written down a second time.
+function predicateSpelling(predicate ConditionPredicate) returns ByteArray
+	return match predicate 'spelling'
+		os gives b"os"
+		arch gives b"arch"
+		testing gives b"testing"
+		rcSanitize gives b"rcSanitize"
+		leakReport gives b"leakReport"
+	end 'spelling'
+end 'predicateSpelling'
+
+// ⭐ **WHAT A PREDICATE'S ARGUMENT MUST SPELL FOR IT TO BE TRUE — one comparison serves all five,
+// because all five ask the same shape of question: "is your argument the current value of this
+// fact?"** So the match yields a VALUE and never a second evaluator, and there is exactly one place
+// where an argument is compared to anything.
+//
+// `os` and `arch` answer out of `Target.maxon`'s canonical names, which is also what `--target=`
+// parses through — the platform spellings are that file's fact, not this one's. An UNRECOGNIZED
+// argument is therefore FALSE rather than an error, matching both references (and measured on the
+// oracle: `os(Plan9)` compiles and takes the `#else`), which is what lets portable source name a
+// platform this compiler does not target without becoming unbuildable.
+//
+// ⭐ **`testing`, `rcSanitize` AND `leakReport` NAME BUILD FLAGS shv2 DOES NOT HAVE — all three are
+// OFF, so each is satisfied exactly by `flag(false)`.** That is the correct answer and not a
+// stand-in for one. `testing` asks whether the compiler is running under the spec harness: shv2's
+// harness SPAWNS the compiler as a subprocess and threads no such flag, so there is nothing for it
+// to be true of — and v1 answers the same way outside its own harness
+// (`maxon-selfhosted/Compiler/Parser.maxon:17912-17919`), as does the bootstrap with `_testing`
+// unset (oracle-measured: exit 2). `rcSanitize` and `leakReport` gate v1's optional refcount
+// sanitizer and leak census, neither of which shv2 has; its leak check is unconditional.
+//
+// One rule for all three, deliberately: v1 spells them separately and its two spellings disagree on
+// a NON-BOOLEAN argument (`testing(wibble)` is false there, while `rcSanitize(wibble)` is TRUE — it
+// tests only for `"true"` and negates). Uniform here, and in the conservative direction: a nonsense
+// argument never switches code ON.
+function satisfyingArgument(predicate ConditionPredicate, target Target) returns ByteArray
+	return match predicate 'satisfying'
+		os gives osCanonicalName(target.os)
+		arch gives cpuCanonicalName(target.cpu)
+		testing gives FalseSpelling
+		rcSanitize gives FalseSpelling
+		leakReport gives FalseSpelling
+	end 'satisfying'
+end 'satisfyingArgument'
+
+// The accepted predicates as the diagnostics list them — `'os', 'arch', 'testing', 'rcSanitize', or
+// 'leakReport'`. Rendered from `allCases` rather than written out, so the sentence a reader is told
+// to obey and the set `predicateNamed` actually accepts are the same walk of the same enum.
+export function acceptedPredicateList() returns String
+	let finalIndex = ConditionPredicate.allCases.count() - 1
+	var rendered = ""
+	var index = 0
+
+	for predicate in ConditionPredicate.allCases 'each'
+		if index > 0 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		if index == finalIndex 'lastItem'
+			rendered = "{rendered}or "
+		end 'lastItem'
+
+		rendered = "{rendered}'{String.from(predicateSpelling(predicate))}'"
+		index = index + 1
+	end 'each'
+
+	return rendered
+end 'acceptedPredicateList'
 
 // The single argument of a predicate call. Accepted kinds are `identifier` (`Windows`, `x64`) and
 // the two bool keywords, which are their own kinds in this lexer and would otherwise be rejected as
@@ -386,58 +511,6 @@ function expectKind(tokens TokenArray, cursor ConditionCursor, kind TokenKind) r
 	cursor.value = cursor.value + 1
 	return tok
 end 'expectKind'
-
-// `os(Name)` against the build target. An UNRECOGNIZED name is FALSE rather than an error, matching
-// both references (and measured on the oracle: `os(Plan9)` compiles and takes the `#else`). That is
-// what lets a portable source name a platform this compiler does not target without the file
-// becoming unbuildable — the whole point of asking.
-function matchesTargetOs(name ByteArray, target Target) returns bool
-	if equalsIgnoringAsciiCase(name, b: WindowsOsName) 'isWindows'
-		return target.os == Os.windows
-	end 'isWindows'
-	if equalsIgnoringAsciiCase(name, b: LinuxOsName) 'isLinux'
-		return target.os == Os.linux
-	end 'isLinux'
-	if equalsIgnoringAsciiCase(name, b: MacosOsName) 'isMacos'
-		return target.os == Os.macos
-	end 'isMacos'
-	if equalsIgnoringAsciiCase(name, b: WasiOsName) 'isWasi'
-		return target.os == Os.wasi
-	end 'isWasi'
-	return false
-end 'matchesTargetOs'
-
-// `arch(Name)` against the build target. Unrecognized name is FALSE, for `matchesTargetOs`'s reason.
-function matchesTargetArch(name ByteArray, target Target) returns bool
-	if equalsIgnoringAsciiCase(name, b: X64ArchName) 'isX64'
-		return target.cpu == CpuArch.x64
-	end 'isX64'
-	if equalsIgnoringAsciiCase(name, b: Arm64ArchName) 'isArm64'
-		return target.cpu == CpuArch.arm64
-	end 'isArm64'
-	if equalsIgnoringAsciiCase(name, b: Wasm32ArchName) 'isWasm32'
-		return target.cpu == CpuArch.wasm32
-	end 'isWasm32'
-	return false
-end 'matchesTargetArch'
-
-// ⭐ **`testing`, `rcSanitize` AND `leakReport` NAME BUILD FLAGS shv2 DOES NOT HAVE — all three are
-// OFF, so the predicate is satisfied exactly by `flag(false)`.**
-//
-// This is the correct answer and not a stand-in for one. `testing` asks whether the compiler is
-// running under the spec harness: shv2's harness SPAWNS the compiler as a subprocess and threads no
-// such flag, so there is nothing for it to be true of — and v1 answers the same way outside its own
-// harness (`:17912-17919`), as does the bootstrap with `_testing` unset (oracle-measured: exit 2).
-// `rcSanitize` and `leakReport` gate v1's optional refcount sanitizer and leak census, neither of
-// which shv2 has; its leak check is unconditional and is not a toggle.
-//
-// ONE function for all three because all three ask one question. v1 spells them separately and its
-// two spellings disagree on a NON-BOOLEAN argument (`testing(wibble)` is false there, while
-// `rcSanitize(wibble)` is TRUE — it tests only for `"true"` and negates). Uniform here, and
-// deliberately the conservative direction: a nonsense argument never switches code ON.
-function matchesAbsentBuildFlag(value ByteArray) returns bool
-	return equalsIgnoringAsciiCase(value, b: FalseSpelling)
-end 'matchesAbsentBuildFlag'
 
 // ASCII case-insensitive byte equality. The corpus writes `os(Windows)` and this file's constants are
 // lowercase, so every predicate argument compares through here. Compares the SLICES in place — a
