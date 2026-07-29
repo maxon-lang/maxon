@@ -291,6 +291,12 @@ end 'BadCompilerPath'
 // Resolve the COMPILER UNDER TEST: `--compiler=<path>` when given, else the running executable
 // (the in-tree case, where the harness IS the compiler).
 //
+// An EMPTY `spec` means the flag was ABSENT, and only that: a `--compiler=` typed with no value is
+// refused by the parser as a bad option (see MaxonArgs.parse), because it would otherwise arrive
+// here indistinguishable from "not given" and be answered with the running executable — the same
+// wrong answer this function throws on, reached through the argument parser instead of the
+// filesystem.
+//
 // The path is validated HERE — once, in the parent, before a worker exists. That is the same
 // discipline `requireRunnerAvailable` and the `--target` spelling already follow, and for the same
 // measured reason: a bad compiler path discovered per test turns ONE fact into hundreds of
@@ -481,8 +487,10 @@ export type MaxonArgs
 	// worker whose own flag was not understood would fail to start at all.
 	export let workerPersistent as bool
 	// `--compiler=<path>` (spec-test only): the COMPILER UNDER TEST — the binary each selected test
-	// is built with. Empty means "the running executable", which is the in-tree case where the
-	// harness IS the compiler and a freshly built maxon-shv2.exe tests itself.
+	// is built with. Empty means the flag was ABSENT — "the running executable", the in-tree case
+	// where the harness IS the compiler and a freshly built maxon-shv2.exe tests itself. A
+	// `--compiler=` with no value never reaches this field: `parse` records it as a bad option, so
+	// empty cannot mean two things.
 	//
 	// It is a SEPARATE fact from the executable a pool worker is relaunched as (always this process;
 	// see runSpecTest). The Phase 1 gate is the configuration that separates them — a harness
@@ -599,7 +607,20 @@ export type MaxonArgs
 			end 'workersFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				workerPersistent = true
 			end 'workerPersistentFlag' else if arg.startsWith(CompilerFlagPrefix) 'compilerFlag'
-				compilerPath = try CommandLine.optionValue(arg) otherwise ""
+				let named = try CommandLine.optionValue(arg) otherwise ""
+				// A VALUELESS `--compiler=` is a BAD OPTION, not "no flag" — the same door as
+				// `--workers=` and `--rungs=` above. Empty is how this field spells "the caller named no
+				// compiler", so letting an empty VALUE reach it would run the whole suite against the
+				// running executable under a command line that named some other one — the exact failure
+				// `resolveCompilerUnderTest` refuses a MISSPELLED path for, arrived at by a different
+				// door. It is the reachable form, not the theoretical one: a wrapper whose
+				// `--compiler=$CUT` expanded empty gets a GREEN suite that tested the wrong binary, and
+				// green is the one answer nobody re-reads.
+				if named.isEmpty() 'noCompilerValue'
+					badOption = firstBadOption(badOption, arg: arg)
+				end 'noCompilerValue' else 'hasCompilerValue'
+					compilerPath = named
+				end 'hasCompilerValue'
 			end 'compilerFlag' else if arg.startsWith("--metrics=") 'metricsFlag'
 				metricsPath = try CommandLine.optionValue(arg) otherwise ""
 			end 'metricsFlag' else if arg.startsWith("--emit-corpus=") 'emitCorpusFlag'

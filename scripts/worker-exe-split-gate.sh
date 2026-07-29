@@ -50,7 +50,7 @@
 #     sabotage — pass `workerExe` where `compilerExe` belongs in `Main.runSpecTest` — and confirm
 #     CHECK 3 below goes red before you trust a green run of it.
 #
-# Usage:  scripts/worker-exe-split-gate.sh [--compiler-exe=<path>]
+# Usage:  scripts/worker-exe-split-gate.sh [--harness=<path>]
 # Exit:   0 = all checks pass · 1 = a check failed (a rung-halting red gate)
 
 set -u
@@ -60,13 +60,17 @@ cd "$REPO_ROOT" || exit 1
 
 # The harness under examination. It plays the PARENT in every check below; what changes between
 # checks is only what it is told to use as the compiler.
+#
+# ⚠ The override is `--harness=`, NOT `--compiler-exe=`. This script exists to say that the harness
+# and the compiler under test are two facts; spelling its harness override with the word "compiler"
+# would be this gate's own subject, committed in its own interface.
 HARNESS="./maxon-shv2/.maxon/maxon-shv2"
 [ -f "${HARNESS}.exe" ] && HARNESS="${HARNESS}.exe"
 
 for arg in "$@"; do
 	case "$arg" in
-		--compiler-exe=*) HARNESS="${arg#*=}" ;;
-		*) echo "usage: $0 [--compiler-exe=<path>]" >&2; exit 1 ;;
+		--harness=*) HARNESS="${arg#*=}" ;;
+		*) echo "usage: $0 [--harness=<path>]" >&2; exit 1 ;;
 	esac
 done
 
@@ -124,7 +128,9 @@ fi
 # differ. On its own it distinguishes nothing (see the header) — CHECK 3 is what has teeth.
 #
 # The copy locates `stdlib/` by walking up from its OWN path (StdlibSource.locateStdlibDir), so it
-# must live inside the checkout. `temp/` is two levels down from the repo root; that is why.
+# must live INSIDE THE CHECKOUT — that is the whole constraint, and it is why the copy goes under
+# `temp/` rather than the system temp directory. Depth is NOT the constraint: that walk is bounded
+# at MaxStdlibSearchDepth = 64, and this copy sits three levels down.
 # --------------------------------------------------------------------------------------------
 CUT="$WORK/cut/$(basename "$HARNESS")"
 cp "$HARNESS" "$CUT" || exit 1
@@ -184,6 +190,25 @@ if [ "$code" != "0" ] && grep -q 'must name an existing executable' "$WORK/out.l
 	pass "a nonexistent --compiler is refused up front"
 else
 	fail "a nonexistent --compiler is refused up front" "exit=$code; $(head -1 "$WORK/out.log")"
+fi
+
+# --------------------------------------------------------------------------------------------
+# CHECK 5 — a VALUELESS `--compiler=` is refused, not silently answered with the running exe.
+#
+# The second door to CHECK 4's failure, and the one a machine walks through rather than a person: a
+# wrapper computing `--compiler=$CUT` with $CUT empty. `set -u` does not catch an empty variable,
+# only an unset one. Until 2026-07-29 this exited 0 with `4 passed, 0 failed` — a green suite that
+# tested a binary the command line did not name, which is the exact outcome this whole gate exists
+# to make impossible. It has to be refused at the PARSER, because by the time the empty value
+# reaches `resolveCompilerUnderTest` it is indistinguishable from "no flag given".
+# --------------------------------------------------------------------------------------------
+"$HARNESS" spec-test "--filter=$FILTER" "--compiler=" > "$WORK/out.log" 2>&1
+code=$?
+if [ "$code" != "0" ] && grep -q 'unknown option: --compiler=' "$WORK/out.log"; then
+	pass "a valueless --compiler= is refused, not read as 'no flag'"
+else
+	fail "a valueless --compiler= is refused, not read as 'no flag'" \
+	     "exit=$code; $(summary)  <-- an empty value silently self-tested"
 fi
 
 echo
