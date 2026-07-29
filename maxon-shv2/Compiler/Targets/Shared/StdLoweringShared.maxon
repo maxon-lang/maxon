@@ -84,9 +84,10 @@ end 'regClassForStdType'
 // The class of a UNARY op's result, which is NOT its operand's whenever the op CROSSES files.
 //
 // ⚠⚠ THE CONVERSIONS INVERT. `siToFp`'s operand is an INT and its result is an f64; `fpToSi`'s operand
-// is an f64 and its result is an int. `operandType` is the SOURCE by definition, so the conversion
-// band's ops are the only ops whose result type is not on the op at all. `neg`/`bitNot`/`logicalNot`
-// stay in their operand's file: they compute what they consume.
+// is an f64 and its result is an int. `operandType` is the SOURCE by definition, so the conversion band
+// — and `bitcastF64ToI64`, which crosses the same boundary without converting — are the ops whose
+// result type is not on the op at all. `neg`/`bitNot`/`logicalNot` stay in their operand's file: they
+// compute what they consume.
 function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns RegClass
 	return match opcode 'k'
 		neg to logicalNot gives regClassForStdType(operandType)

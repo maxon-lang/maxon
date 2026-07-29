@@ -733,16 +733,16 @@ end 'encodeMovsdRegRip'
 
 // A register-to-register move: `mov` for a GPR pair, `movsd` for an XMM pair.
 //
-// A CROSS-CLASS pair panics rather than picking one. Moving an f64 into a GPR is `movq` — a
-// different instruction with different semantics — and nothing in the compiler should ever ask
-// for it: a value's class is fixed by its Std type at birth, phi copies join values of one
-// type, and the two CONVERTS are the only cross-class ops in the dialect and carry their own
-// TargetOps. So a mixed pair here is a coloring bug, and it is exactly the bug that would
-// otherwise emit a `mov` naming a GPR that shares an XMM's low nibble.
+// A CROSS-CLASS pair panics rather than picking one. Moving an f64's bits into a GPR is `movq` —
+// a different instruction with different semantics — and it is never asked for HERE: a value's
+// class is fixed by its Std type at birth and phi copies join values of one type, so no MOVE ever
+// spans the boundary. Every op that does span it — the two CONVERTS and the `movqGprXmm` BITCAST —
+// carries its own TargetOp and its own encoder. So a mixed pair here is a coloring bug, and it is
+// exactly the bug that would otherwise emit a `mov` naming a GPR that shares an XMM's low nibble.
 function emitRegRegMove(code ByteArray, dest X64Register, src X64Register)
 	let destClass = registerClass(dest)
 	if destClass != registerClass(src) 'crossClass'
-		panic("x64 emitter: a register-to-register move from {src.name} to {dest.name} crosses register files — a value's class is fixed by its type at birth, so the allocator colored a move's two ends into different files (the converts are the only cross-class ops, and they are their own TargetOps)")
+		panic("x64 emitter: a register-to-register move from {src.name} to {dest.name} crosses register files — a value's class is fixed by its type at birth, so the allocator colored a move's two ends into different files (every cross-class op — the two converts and the `movqGprXmm` bitcast — is its own TargetOp, so a MOVE is never one)")
 	end 'crossClass'
 	match destClass 'c'
 		gpr then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: dest, src: src, wide: true)
@@ -1515,8 +1515,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		//
 		// Every arm resolves through `resolveXmm`/`resolveGpr` rather than `resolvePhysical`: these
 		// are FIXED-CLASS encodings, and a bare register number is ambiguous at exactly this point
-		// (see `requireClass`). The two converts are the dialect's only cross-class ops, and they
-		// are the only arms here naming both doors — which is the type change made visible.
+		// (see `requireClass`). The two converts and the bitcast are the dialect's only cross-class
+		// ops, and they are the only arms here naming both doors — which is the class change made
+		// visible.
 		addsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeAddsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
 		subsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeSubsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)
 		mulsdRegReg(dest, _, rhs) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeMulsd, dest: resolveXmm(dest), src: resolveXmm(rhs), wide: false)

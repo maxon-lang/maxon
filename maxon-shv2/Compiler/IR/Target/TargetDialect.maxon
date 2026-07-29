@@ -780,11 +780,12 @@ export union TargetOp
 	// taking either means generalizing remat from "a constant value" to "an op with no register
 	// inputs". Not this rung's. Recorded here rather than silently ranged over.
 	movsdRegRip(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-	// ⚠⚠ THE ONLY TWO CROSS-CLASS OPS IN THE DIALECT — they read one file and write the other.
+	// ⚠⚠ TWO OF THE DIALECT'S THREE CROSS-CLASS OPS — they read one file and write the other.
 	// `cvtsi2sd xmm, r64` (int → f64, `float-promotion`'s widening) and `cvttsd2si r64, xmm`
 	// (f64 → int, TRUNCATING toward zero — the `trunc()` builtin, and the `t` in its mnemonic
 	// is the whole reason it is the right instruction for a spec that says `3.99` gives `3`).
-	// Both are PLAIN defs (dest independent of src), so no seed copy is emitted.
+	// Both are PLAIN defs (dest independent of src), so no seed copy is emitted. The THIRD is
+	// `movqGprXmm` below, which crosses the same boundary while CONVERTING NOTHING.
 	//
 	// They need NO special class machinery: a value's class comes from its Std type, and these
 	// ops sit exactly where the type changes — `cvtsi2sd`'s operand IS an i64 value (gpr) and
@@ -823,11 +824,11 @@ export union TargetOp
 	// ⭐ P1.7a's LAST SLICE: `movq r64, xmm` (`66 REX.W 0F 7E /r`) — the f64 → i64 BIT
 	// REINTERPRETATION `float.hash` is built on, and the THIRD cross-class op in this dialect.
 	//
-	// ⚠⚠ THE PANIC IN `emitRegRegMove` — *"the converts are the only cross-class ops, and they are
-	// their own TargetOps"* — IS WHY THIS IS AN OP AND NOT A MOVE. A cross-file transfer is exactly
-	// what that panic exists to refuse, because `movRegReg` cannot express it: `mov`/`movsd` each
-	// name ONE file, and there is no reading of a generic reg-reg copy that assembles a `movq`. The
-	// remedy is a third named op, never a widened panic — the panic stays as it is.
+	// ⚠⚠ `emitRegRegMove`'s CROSS-CLASS PANIC IS WHY THIS IS AN OP AND NOT A MOVE, and that panic is
+	// deliberately left refusing exactly what it always refused. `movRegReg` cannot express a cross-file
+	// transfer: `mov`/`movsd` each name ONE file, and there is no reading of a generic reg-reg copy that
+	// assembles a `movq`. So the remedy is a third named op, never a widened panic. (Its arm64 twin
+	// `arm64EmitRegRegMove` says the same thing about the GPR/SIMD boundary and is equally untouched.)
 	//
 	// APPENDED AT THE END OF THE SSE BAND (before `leaRegRdata`), exactly where `sqrtsd`/`roundsd`
 	// went and for the same reason its comment gives: the union's tail is the control/misc band,
