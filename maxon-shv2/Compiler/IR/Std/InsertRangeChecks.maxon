@@ -142,6 +142,18 @@ export function insertRangeChecks(project Project, module StdModule)
 	end 'eachFunc'
 end 'insertRangeChecks'
 
+// The `blockIdIndex` an emitter starts with, SHARED and never mutated — `blockEndGuardSite` REPLACES the
+// field with a freshly built index rather than filling this one.
+//
+// ⚠ It is shared for the reason `Parser`'s `sharedEmptyInstanceAliasNames` is: an emitter is built for
+// every function carrying ANY range-check side data, which includes every function that merely passes a
+// constant argument or constructs a generic instance, so an unconditional `ValueIdArray.create()` in
+// `create` is one allocation per such function across the whole program. MEASURED on the scale ladder:
+// as a per-emitter `create()` it cost +45 / +66 / +108 / +192 / +360 / +696 allocations across the six
+// rungs — a linear cost, but a real one, paid entirely by functions that never emit a guard. Only ONE
+// function in the whole generated corpus ever builds a real index (`scaleCoverCast`).
+let sharedEmptyBlockIdIndex = ValueIdArray.create()
+
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
 type RangeCheckEmitter
@@ -156,9 +168,12 @@ type RangeCheckEmitter
 	// guard (which is also what the bootstrap does — see `needsRuntimeGuard`).
 	var intConsts as ConstValueMap
 	var floatConsts as ConstValueMap
+	// This function's block-id => blockRef index. Starts as the SHARED empty one and is REPLACED by a real
+	// index on first use — see `sharedEmptyBlockIdIndex` and `blockEndGuardSite`.
+	var blockIdIndex as ValueIdArray
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create()}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), blockIdIndex: sharedEmptyBlockIdIndex}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -443,8 +458,34 @@ type RangeCheckEmitter
 	// value afterwards; what can differ is the ORDER of output emitted between the store and the block's
 	// end. Anchoring on the store itself would need a Maxon-tier op position, and positions do not survive
 	// `lowerMaxonToStd`'s 1:N desugaring — the reason this pass anchors on a BLOCK in the first place.
+	// ⚠ **THIS RESOLVES THROUGH AN INDEX, NOT `IrModule.getBlockByIdIn`, AND THE DIFFERENCE IS A GROWTH
+	// CURVE.** `getBlockByIdIn` is a LINEAR SCAN of `func.blockRefs`; called once per guard site it made
+	// this pass **O(sites × blocks)** — and worse than the plain product, because every guard this pass
+	// emits APPENDS TWO BLOCKS to the very set the next site's scan walks (`__rc_ok`, `__rc_panic`), so the
+	// k-th site scanned a set the previous k-1 had grown. `buildBlockIdIndex`/`blockById` are the cure that
+	// already existed for exactly this shape one pass over: `pruneDeadBlockArgs` introduced them because
+	// resolving an edge per call "would be O(edges × blocks), the shape the allocator's data-representation
+	// contract exists to forbid", and `elimTrivialBlockArgs` shares them rather than keeping a second copy.
+	// This is the third user of the same index over the same id space, not a fourth mechanism.
+	//
+	// ⚠ **LAZY, AND THAT IS LOAD-BEARING RATHER THAN THRIFT.** A `rangeChecks` entry is filed for a
+	// function that merely passes a CONSTANT ARGUMENT to any declared callee, or constructs a generic
+	// instance (`Parser.commitRangeChecks`) — so the overwhelming majority of entries reach this pass with
+	// no RUNTIME site at all, and a call-argument site is `compileTimeOnly` and never arrives here. Building
+	// the index in `create` would hand every one of those functions a fresh `func.nextBlockId`-sized array
+	// it never reads, turning a cost this pass does not currently pay into one it pays program-wide — and
+	// allocations are the trend log's exact column, so that would read as a regression on every future row.
+	//
+	// The index is safe to hold across the splits and block appends that follow: it stores blockRef
+	// INDICES, not `IrBlock` aliases (`blockById` re-fetches from `module.blocks` on every call, so no
+	// alias goes stale), a split MUTATES its head block in place and never moves it, and every id a site
+	// names was recorded by the parser and therefore predates the pass. The blocks this pass appends are
+	// never looked up by id.
 	function blockEndGuardSite(site RangeCheckSite) returns GuardSite
-		let block = try self.module.getBlockByIdIn(self.func, id: site.block) otherwise panic("blockEndGuardSite: site block {site.block} is not in '{String.from(self.func.name)}' — the parser records a live block id and lowerMaxonToStd preserves it")
+		if self.blockIdIndex.isEmpty() 'firstRuntimeGuard'
+			self.blockIdIndex = buildBlockIdIndex(self.module, func: self.func)
+		end 'firstRuntimeGuard'
+		let block = blockById(self.module, refByBlockId: self.blockIdIndex, id: site.block, from: self.func.name)
 		return GuardSite.create(block, position: block.opRefs.count())
 	end 'blockEndGuardSite'
 

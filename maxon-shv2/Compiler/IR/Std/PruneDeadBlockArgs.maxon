@@ -228,10 +228,14 @@ export function buildBlockIdIndex(module StdModule, func IrFunction) returns Val
 	return refByBlockId
 end 'buildBlockIdIndex'
 
+// `from` NAMES THE THING THAT CITED THE ID, and it is not always a predecessor block: the two
+// block-arg passes pass the branching block's label, `insertRangeChecks` passes the function whose
+// recorded guard site cites it. The message therefore says "names" rather than "branches to" — a
+// panic that asserts the wrong provenance sends its reader to the wrong pass.
 export function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
-	let refPlusOne = try refByBlockId.get(id) otherwise panic("blockById: block '{String.from(from)}' branches to block id {id}, outside its function's block-id space")
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("blockById: '{String.from(from)}' names block id {id}, outside its function's block-id space")
 	if refPlusOne == 0 'notInFunction'
-		panic("blockById: block '{String.from(from)}' branches to block id {id}, which is not registered in the function")
+		panic("blockById: '{String.from(from)}' names block id {id}, which is not registered in the function")
 	end 'notInFunction'
 	return try module.blocks.get(refPlusOne - 1) otherwise panic("blockById: blockRef for block id {id} not in module.blocks")
 end 'blockById'
