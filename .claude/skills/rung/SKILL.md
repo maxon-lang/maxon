@@ -23,9 +23,10 @@ dominates and adding agents makes it slower.**
 > - **WAVE mode (the default, everything below).** You are the only coordinator. You slice the rung
 >   yourself, hand each sub-agent an exclusive file list, and integrate. Nobody else is touching `main`.
 > - **SLICE mode.** `maxon-shv2/PLAN.md` carries a **🧭 SLICE BOARD**, and **several instances of this
->   skill are running at once, in different repos or worktrees, with no outer coordinator.** You own
->   **exactly one board row**. Inside your slice you are still the coordinator and every step below
->   still applies — but you no longer own `main`, you share it, and **§0a is what makes that safe.**
+>   skill are running at once with no outer coordinator — each in its OWN CLONE** (a worktree cannot
+>   claim; see §0a's first box). You own **exactly one board row**. Inside your slice you are still the
+>   coordinator and every step below still applies — but you no longer own `main`, you share it, and
+>   **§0a is what makes that safe.**
 >
 > **You are in SLICE mode if the board exists and has a claimable row** — or if you were invoked with a
 > row id (`/rung G1`). In SLICE mode, §0a runs **before** §0's orientation and is not optional.
@@ -120,6 +121,29 @@ coordinator up front — not a row in a backlog file that anyone could quietly a
 **`git push` IS THE LOCK.** There is no lockfile, no registry and no coordinator to ask. A claim exists
 when — and only when — it is **on `origin/main`**. A claim in your working tree is not a claim; it is a
 private intention, and the next agent's `fetch` will never see it.
+
+> ### ⛔ FIRST: A WORKTREE CANNOT CLAIM. IT CANNOT CHECK OUT `main`.
+> ```
+> $ git checkout main
+> fatal: 'main' is already used by worktree at 'C:/Users/Eric/Dev/maxon'
+> ```
+> **Verified 2026-07-29** — git allows one checkout of a branch per clone, so the step-4 worktree (on
+> `slice/<id>-<slug>`) structurally cannot run the claim below, nor step 12's release. That splits the
+> process by WHERE it runs, not by what it does:
+>
+> | Steps | Where | Why |
+> |---|---|---|
+> | **§0a claim · §11 land · §12 release** | **a checkout that OWNS `main`** | all three commit or merge onto `main` |
+> | **§0–§10** (orient → implement → gate) | **your worktree** | never touches `main` |
+>
+> ⇒ **Two ways to be a parallel agent, and only one of them is a worktree:**
+> - **Your OWN CLONE** — you have your own `main`, §0a works verbatim, you are genuinely
+>   uncoordinated. This is what the board is for.
+> - **A WORKTREE in a shared clone** — you have no `main` and **cannot claim**. A launcher must claim
+>   your row for you in the primary checkout BEFORE spawning you, and lands/releases there too. The
+>   push-lock still guards against other clones; it cannot guard two agents inside one clone, so the
+>   launcher is what serializes them. **If you are in a worktree and were not handed a pre-claimed row,
+>   STOP and say so** — do not improvise a claim, and do not start work unclaimed.
 
 **Pick a row that is `⬜ FREE` AND whose LANE holds no `🔶`.** Both conditions, every time. The lane
 table is the real exclusion unit, because most of the remaining rows live inside one 28k-line file
