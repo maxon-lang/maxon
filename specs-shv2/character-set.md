@@ -25,6 +25,7 @@ Each case names the sabotage that found it.
 | a bare-local member set not poisoned when `from` consumes it | **0** | 2 | `member-set-moved-into-from`, `member-set-consumed-twice` |
 | `availableUnicodeEscapeText`'s UNTRUNCATED window (`available = whole`) | **0** | 1 | `malformed-escape-full-window` |
 | `__ucd_cat`'s `Cn` fall-out (`UcdUnassignedCategory`) reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
+| `CharSet`/`CharacterSet` withdrawn from `isCompilerOwnedTypeName` | **0** | 2 | `charset-alias-is-compiler-owned`, `characterset-name-is-compiler-owned` |
 
 Two sabotages the ported corpus already covered well, recorded so the next reader does not re-run them:
 a member set never enrolled as an owned temporary is **31** red, and explicit membership never winning
@@ -392,4 +393,47 @@ end 'main'
 ```
 ```maxoncstderr
 error E1004: <fragment>:3:11: Invalid unicode escape '\uZZZZ': expected 4 hex digits in string interpolation
+```
+
+<!-- test: charset-alias-is-compiler-owned -->
+### A user declaration of `CharSet` is refused AT THE DECLARATION
+This slice introduced two user-visible compiler-owned type names, and
+`registerCharacterSetType`'s `genericAliases.upsert` is unconditional — so before `CharSet` joined
+`TypeResolution.isCompilerOwnedTypeName`, a user declaration of the name was not refused, it was
+silently OVERWRITTEN, and the author was blamed at the first USE of the name the compiler had taken:
+*"`Set with Character` requires a Character key — got a 'String' value"*, reported on line 5 for a
+declaration written on line 1. The rule the author broke is stated on line 1.
+```maxon
+typealias CharSet = Set with String
+
+function main() returns ExitCode
+	var s = CharSet.create()
+	s.insert("a")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:11: Unsupported: a declaration of the type name 'CharSet', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+```
+
+<!-- test: characterset-name-is-compiler-owned -->
+### And so is one of `CharacterSet`, through the SAME derivation
+The two names are not two checks: both are rows of `isCompilerOwnedTypeName`, which
+`requireTypeNameNotCompilerOwned` asks at the four declaration forms that mint a nominal identity
+(`type`, `enum`/`union`, a function typealias, a generic-instance typealias). Withdrawing the two rows
+turns exactly these two cases red, which is what says they share one derivation rather than agreeing by
+coincidence. A RANGED `typealias CharSet = int(0 to 5)` stays legal, as it does for `Ordering` and
+`ExitCode` — it mints no identity, and a ranged reference and a `CharSet from […]` read different
+registries.
+```maxon
+type CharacterSet
+	export var x as int
+end 'CharacterSet'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterSet', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
 ```

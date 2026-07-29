@@ -530,8 +530,28 @@ end 'resolveType'
 // mint a NOMINAL identity under one of these names, which is what makes the arms below and the registry seed
 // the SOLE writers of them. (A RANGED typealias over one is still legal — it erases to the same primitive
 // the builtin does, so it cannot disagree; see that function.)
+//
+// ⭐ **`CharacterSet` AND `CharSet` JOIN THE LIST AT P1.8 SLICE D, AND THEIR SEED IS A DIFFERENT SHAPE —
+// WHICH IS WHY THEY BELONG HERE RATHER THAN IN A CHECK OF THEIR OWN.** The three above are seeded by
+// `resolveNamedType`'s arms and by `createEnumRegistry`; these two are seeded by
+// `ProgramSignatures.registerCharacterSetType`, which upserts the `CharSet` → `Set with Character` entry
+// into the SAME `genericAliases` map a user `typealias` folds into. That upsert is unconditional, so
+// before this line a user declaration was not refused — it was silently OVERWRITTEN, and the author was
+// then blamed at the first USE of the name the compiler had taken from them. MEASURED, on
+// `typealias CharSet = Set with String` + `s.insert("a")`:
+// *"`Set with Character` requires a Character key — got a 'String' value"*, reported at line 5 for a
+// declaration written on line 1. The rule the author broke is stated on line 1, so that is where it is
+// now reported.
+//
+// ⚠ **THE RANGED CARVE-OUT IS INHERITED UNCHANGED, AND IT IS SOUND FOR THESE TWO FOR A DIFFERENT REASON.**
+// A `typealias CharSet = int(0 to 5)` mints no nominal identity, and it cannot contest the seed either,
+// because a RANGED alias and a GENERIC-INSTANCE alias live in different registries and are reached by
+// different syntax: `CharSet from ['x']` asks `genericAliases`, a ranged reference asks the alias
+// registry. MEASURED: both readings coexist and each answers for its own syntax (a `CharSet from ['x']`
+// still builds the member set, `true`, exit 0). So the erasure argument above is replaced here by a
+// disjointness one, and the answer is the same — legal.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(OrderingTypeName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it
