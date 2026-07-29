@@ -1,0 +1,33 @@
+// Test: unsigned-max-upper-call-argument
+typealias Idx = int(0 to u64.max)
+
+function identity(i Idx) returns Idx
+	return i
+end 'identity'
+
+function main() returns ExitCode
+	return identity(7)
+end 'main'
+---
+ExitCode: 7
+---
+func @identity {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 7
+    x64.callDirect identity
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1016,6 +1016,29 @@ let sharedEmptyTopLevelBorrowSubjects = VarInfoMap.create()
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
 
+// The `paramAliasNames` column of a function no parameter of which is a ranged alias — which is most of
+// them. Same invariant as the two above: it is never mutated (`rangedParamAliasNames` builds a FRESH
+// array on the first parameter that HAS an alias and returns this one otherwise), so it is safe both
+// across the per-file parse fan-out and stored into `FunctionRangeChecks`.
+let sharedEmptyParamAliasNames = ByteArrayArray.create()
+
+// Materialize `rangedParamAliasNames`' column on the FIRST parameter that turns out to be a ranged
+// alias, padding the `prefixLength` unaliased parameters the lazy walk skipped; a column already
+// materialized is returned untouched. Split out of the walk because the padding is a LOOP, and a loop
+// inside a branch that also reassigns the enclosing binding is exactly the shape that leaves the
+// reassigned value undefined on the merge path (`E9001`).
+function materializedParamAliasNames(names ByteArrayArray, prefixLength ParamCount) returns ByteArrayArray
+	if names is sharedEmptyParamAliasNames 'firstAlias'
+		var out = ByteArrayArray.create()
+		while out.count() < prefixLength 'padUnaliasedPrefix'
+			out.push(EmptySourceText)
+		end 'padUnaliasedPrefix'
+		return out
+	end 'firstAlias'
+
+	return names
+end 'materializedParamAliasNames'
+
 // The signals one method's body contributes to the descriptor-need fixpoint (P1.6-B1): whether it directly
 // reads `sizeof(T)`, the siblings it calls on `self`, and the token position just past its `end` (so the
 // type-body walk resumes there). `hasControlFlow` (P1.7 slice 3b-v) records whether the body is NOT
@@ -3880,22 +3903,34 @@ export type Parser
 	var captureValues as ValueIdArray
 	var captureTypes as MaxonTypeArray
 	var closureEnvParamId as ValueId
-	// ⭐ **THE RANGE-CHECK SITES OF THE FUNCTION CURRENTLY BEING PARSED (P1.9).** Two accumulators
-	// plus the function's return-alias name: every `as` cast into a ranged alias appends to
-	// `rangeCheckCastSites`; every `return <expr>` in a ranged-int-alias-returning function appends to
-	// `rangeCheckReturnSites`; `rangeCheckReturnAlias` is that alias's name (EMPTY when the return type
-	// is not a ranged int alias, which is what gates the return recording). All three are RESET at the
-	// top of `parseFunction` and COMMITTED to the artifact at its end (`recordFunctionRangeChecks`),
-	// keyed by the function's name — the `InsertRangeChecks` Std pass reads them back by name.
+	// ⭐ **THE RANGE-CHECK SITES OF THE FUNCTION CURRENTLY BEING PARSED (P1.9).** Three accumulators
+	// plus the two names the function's own SIGNATURE fixes:
+	//
+	//   • `rangeCheckSites` — every position whose declared alias the parser holds in hand: an `as` cast
+	//     into a ranged alias, a struct-literal field, a field store, a field's declared default, an
+	//     array element. Each carries the alias name it resolved and which HALVES it owes.
+	//   • `rangeCheckArgSites` — a CALL ARGUMENT already folded to a constant. The alias is the callee's
+	//     to name, not this file's (see `RangeCheckArgSite`), so the site names the callee instead.
+	//   • `rangeCheckReturnSites` — every `return <expr>` in a ranged-alias-returning function.
+	//   • `rangeCheckReturnAlias` — that alias's name (EMPTY when the return type is not a ranged alias,
+	//     which is what gates the return recording).
+	//   • `rangeCheckParamAliases` — one name per PARAMETER, for this function's CALLERS to read back
+	//     (see `FunctionRangeChecks.paramAliasNames`). EMPTY when no parameter is a ranged alias.
+	//
+	// All five are RESET at the top of `parseFunction` and COMMITTED to the artifact at its end
+	// (`recordFunctionRangeChecks`), keyed by the function's name — the `InsertRangeChecks` Std pass
+	// reads them back by name.
 	//
 	// ⚠ They are NOT swapped across a nested closure body the way the per-value columns are (that path
 	// is P1.5-owned and this rung does not touch it), so a ranged `as` cast written INSIDE a closure
 	// would be filed against its enclosing function. No P1.9 or pre-existing case casts inside a
 	// closure, so the mis-attribution is unreachable today; when closures grow ranged casts, this
 	// wants the same save/restore `parseClosureExpression` already does for `valueTags`.
-	var rangeCheckCastSites as RangeCheckCastSiteArray
+	var rangeCheckSites as RangeCheckSiteArray
+	var rangeCheckArgSites as RangeCheckArgSiteArray
 	var rangeCheckReturnSites as RangeCheckReturnSiteArray
 	var rangeCheckReturnAlias as ByteArray
+	var rangeCheckParamAliases as ByteArrayArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -4155,9 +4190,11 @@ export type Parser
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
 			closureEnvParamId: 0,
-			rangeCheckCastSites: RangeCheckCastSiteArray.create(),
+			rangeCheckSites: RangeCheckSiteArray.create(),
+			rangeCheckArgSites: RangeCheckArgSiteArray.create(),
 			rangeCheckReturnSites: RangeCheckReturnSiteArray.create(),
 			rangeCheckReturnAlias: EmptySourceText,
+			rangeCheckParamAliases: sharedEmptyParamAliasNames,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeParams: ByteArrayArray.create(),
@@ -8304,12 +8341,15 @@ export type Parser
 		// Per-function for the identical reason (P1.7 slice 2b): a marked value names an id in THIS
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
-		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias
-		// name is fixed by the DECLARED return type and known here, before the body is parsed; the two
-		// site lists fill as the body emits casts / returns.
-		self.rangeCheckCastSites = RangeCheckCastSiteArray.create()
+		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias name
+		// and the PARAMETER alias names are fixed by the DECLARED signature and known here, before the
+		// body is parsed and before `resolveTypes` erases either; the three site lists fill as the body
+		// emits casts / stores / returns / calls.
+		self.rangeCheckSites = RangeCheckSiteArray.create()
+		self.rangeCheckArgSites = RangeCheckArgSiteArray.create()
 		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
 		self.rangeCheckReturnAlias = self.rangedReturnAliasName(returnType)
+		self.rangeCheckParamAliases = self.rangedParamAliasNames(paramTypes)
 		for paramType in paramTypes 'seedParamTypes'
 			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
 			// `named` a ranged alias otherwise carries — exactly as F2a resolves a float-returning callee's
@@ -8424,11 +8464,14 @@ export type Parser
 		// gate reads `count()` (no allocation); only a function that actually constructs an instance packages a
 		// fresh map, every other filed entry carries the SHARED empty one.
 		let hasInstanceAliases = self.valueInstanceAlias.count() != 0
-		if self.rangeCheckCastSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and not hasInstanceAliases 'noSideData'
+		// ⚠ A RANGED PARAMETER IS ENOUGH ON ITS OWN, even for a function with no site of its own: the entry is
+		// how this function's CALLERS learn what its parameters were declared as (`paramAliasNames`), and the
+		// caller's site names it by the name this map is keyed by.
+		if self.rangeCheckSites.isEmpty() and self.rangeCheckArgSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and self.rangeCheckParamAliases.isEmpty() and not hasInstanceAliases 'noSideData'
 			return
 		end 'noSideData'
 		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else sharedEmptyInstanceAliasNames
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, castSites: self.rangeCheckCastSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, valueInstanceAliases: instanceAliases))
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, sites: self.rangeCheckSites, argSites: self.rangeCheckArgSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, paramAliasNames: self.rangeCheckParamAliases, valueInstanceAliases: instanceAliases))
 	end 'commitRangeChecks'
 
 	// Package the parser's per-value instance-alias provenance (ValueId ⇒ interned alias id, file-local) into
@@ -8458,6 +8501,37 @@ export type Parser
 			value(inner) gives self.rangedAliasNameOfType(inner)
 		end 'r'
 	end 'rangedReturnAliasName'
+
+	// ⭐ **THE PARAMETER TWIN OF THE LINE ABOVE — one alias name per DECLARED parameter, EMPTY where the
+	// parameter is not a ranged alias, and the SHARED empty array when none of them is.** Asked once per
+	// function, off the declared parameter types, at the one point they still carry their names.
+	//
+	// It exists because a CALL ARGUMENT cannot be checked where it is written. Every other position holds
+	// its own declared type; a call argument's type belongs to the callee, which may be declared in a file
+	// this one is parsed independently of — the whole-program `ProgramSignatures` sweep carries return
+	// types, not parameter types — so the name has to be PUBLISHED here and read back by the whole-program
+	// pass. See `RangeCheckArgSite`.
+	//
+	// ⚠ It walks the DECLARED list, not the reserved one: `paramTypes` holds exactly the user's
+	// parameters, while the ValueId space `parseFunction` reserves also carries closure-env companions, the
+	// layout descriptor and the witness slots. `argSlotPosition` maps an argument to a position in the
+	// USER list, so indexing anything wider would slide every alias by the count of hidden slots.
+	//
+	// The array is built lazily — most functions take no ranged parameter at all, and one shared empty
+	// array is the difference between that and one allocation per function in the program.
+	function rangedParamAliasNames(paramTypes MaxonTypeArray) returns ByteArrayArray
+		var names = sharedEmptyParamAliasNames
+		for i in 0 upto paramTypes.count() 'eachParam'
+			let aliasName = self.rangedAliasNameOfType(try paramTypes.get(i) otherwise panic("rangedParamAliasNames: paramTypes.get OOB at {i}"))
+			if aliasName.isEmpty() and names is sharedEmptyParamAliasNames 'noAliasSeenYet'
+				continue
+			end 'noAliasSeenYet'
+
+			names = materializedParamAliasNames(names, prefixLength: i)
+			names.push(aliasName)
+		end 'eachParam'
+		return names
+	end 'rangedParamAliasNames'
 
 	// ⭐ **THE ONE PLACE A `MaxonType` IS ASKED WHETHER IT DENOTES A RANGED ALIAS.** Every reader of that
 	// question goes through here — the return path above, and the `as`-cast path's TWO readers (which
@@ -18022,7 +18096,7 @@ export type Parser
 			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
 			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
 			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
-			self.recordCastSite(narrowed, targetAlias: targetAlias, asTok: asTok)
+			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, guard: RangeCheckGuard.runtime, line: asTok.line, column: asTok.column)
 			return narrowed
 		end 'floatToInt'
 
@@ -18040,7 +18114,7 @@ export type Parser
 		// time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is the case that says
 		// so. The float→int cast above anchors on its RESULT for the opposite reason, stated there:
 		// `trunc` changes the number, so the source is not the value being checked.
-		self.recordCastSite(value, targetAlias: targetAlias, asTok: asTok)
+		self.recordRangeCheckSite(value, targetAlias: targetAlias, guard: RangeCheckGuard.runtime, line: asTok.line, column: asTok.column)
 
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
@@ -18072,7 +18146,7 @@ export type Parser
 	//
 	// ⚠ **THE RESOLVED TYPE IS FOR THIS GATE ONLY and is NOT substituted for `targetType`.** The
 	// conversion below still reads the `named` type, because that is what carries the alias NAME a
-	// narrowing check records (`recordCastSite`) and the nominal identity a per-instance cast stamps
+	// narrowing check records (`recordRangeCheckSite`) and the nominal identity a per-instance cast stamps
 	// (`castConvertsPerInstance`). Erasing it here would silently drop both — the erasure is the
 	// SIGNATURE's, not the cast's.
 	function castTargetTag(targetType MaxonType, asTok Token) returns ValueTypeTag throws ParseError
@@ -18146,7 +18220,7 @@ export type Parser
 	// range cannot hold such a value answers the same under either reading — `bitwise-operators.md` says
 	// exactly this ("a value of `int(0 to 100)` is provably non-negative, so an arithmetic and a logical
 	// shift of it agree bit for bit"), and the cast is guarded INTO that range by the site
-	// `recordCastSite` records, so the premise is enforced rather than hoped for. That is what keeps
+	// `recordRangeCheckSite` records, so the premise is enforced rather than hoped for. That is what keeps
 	// `x as Byte`, `x as Age` and `x as U32` the byte-for-byte no-ops they have always been while
 	// `x as Word` is not.
 	//
@@ -18217,21 +18291,35 @@ export type Parser
 		return result
 	end 'emitRetaggedCastValue'
 
-	// Record a narrowing-check site for `value` when the cast's target is a ranged alias, integer or
-	// float (P1.9, and #19 for the float half). `block` is the CAST'S evaluation block
-	// (`self.currentBlock`), so the guard runs on the path the cast is on — an unselected ternary arm /
-	// if-branch does not fire it.
-	//
-	// It takes the RESOLVED alias rather than the target type because every caller already holds one:
-	// `applyCast`'s shift-fill predicate asks the identical question of the identical type, and
-	// `signatures.aliasOf` allocates per call. `undeclared` — `ExitCode`, a bare primitive, a name
+	// ⭐ **THE ONE PLACE A RANGE-CHECK SITE IS APPENDED** for a position whose declared alias the parser
+	// already holds — an `as` cast, a struct-literal field, a field store, a self-field store, a field's
+	// declared default, an array element. Each caller decides only two things: which alias (through
+	// `declaredAliasOfType`, the one asker, so every door resolves the question the same way), and which
+	// HALVES it owes (`RangeCheckGuard`). `undeclared` — `ExitCode`, a bare primitive, a struct, a name
 	// nothing declares — records nothing.
-	function recordCastSite(value ValueId, targetAlias DeclaredAlias, asTok Token)
+	//
+	// ⭐ **EVERY ONE OF THOSE DOORS STILL HOLDS THE UN-ERASED TYPE, which is precisely why they can resolve
+	// for themselves and the CALL-ARGUMENT door cannot.** A cast names its target outright, and a struct
+	// field's declared type is never rewritten (`TypeResolution.checkStructFieldTypes` validates and
+	// discards its result), so `ProgramSignatures.fieldTypeOf` still answers `named(Percent)` for the whole
+	// compile. A parameter's does not survive `resolveTypes` — see `recordConstantArgRangeChecks`.
+	//
+	// `block` is the value's CHECKING block (`self.currentBlock`), so a runtime guard runs on the path the
+	// value is on — a cast in an unselected ternary arm / if-branch does not fire it.
+	//
+	// It takes the RESOLVED alias rather than the declared type because `applyCast` already holds one: its
+	// shift-fill predicate asks the identical question of the identical type, and `signatures.aliasOf`
+	// allocates per call.
+	//
+	// The anchor arrives as line/column rather than a `Token` because the field-DEFAULT door has no token
+	// of its own: the default is a literal from a declaration that may live in another file, so its
+	// diagnostic is anchored on the struct literal that took it, which that door holds as a `SourceRange`.
+	function recordRangeCheckSite(value ValueId, targetAlias DeclaredAlias, guard RangeCheckGuard, line LineNumber, column ColumnNumber)
 		match targetAlias 'a'
-			declared(alias) then self.rangeCheckCastSites.push(RangeCheckCastSite.create(value, aliasName: alias.name, block: self.currentBlock.id, line: asTok.line, column: asTok.column))
+			declared(alias) then self.rangeCheckSites.push(RangeCheckSite.create(value, aliasName: alias.name, block: self.currentBlock.id, guard: guard, line: line, column: column))
 			undeclared then break 'a'
 		end 'a'
-	end 'recordCastSite'
+	end 'recordRangeCheckSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
 	// float alias? Everything else (bare int, an int alias, `ExitCode`, a struct/String/function) is
@@ -19698,7 +19786,18 @@ export type Parser
 		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
-		return try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field)
+		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field)
+		// ⭐ **THE FIELD'S DECLARED RANGE BINDS WHAT IS STORED IN IT (P1.9).** The site is recorded on the
+		// COERCED value, not the parsed one: that is the value the slot receives, and for a widening door
+		// (an int meeting a declared float) it is a different SSA id. All three field doors — the struct
+		// literal, the field write, the self-field write — funnel through here, so one record covers them.
+		//
+		// ⚠ **A ranged FLOAT alias field is NOT reached**: `declaredSlotType` re-tags a float alias to bare
+		// `float` before `fieldTypeOf` answers, so `declaredAliasOfType` sees no alias and the slot is
+		// unchecked. That is a named boundary of this rung — the erasure is `declaredSlotType`'s, whose own
+		// comment records it — and not something this door can decide.
+		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(fieldType), guard: RangeCheckGuard.runtime, line: anchor.line, column: anchor.column)
+		return stored
 	end 'requireFieldType'
 
 	// ⭐ **REJECT A DOUBLE-MOVE OF ONE VALUE INTO TWO OWNING FIELDS (P1.6-B2)** — the move-only guard that
@@ -19832,6 +19931,12 @@ export type Parser
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
 		let bits = self.constFloatBits(given) if tagIsFloat(maxonTypeTag(declared)) else given.payload
 		let value = self.emitLiteral(bits, valueType: self.fieldStorageType(declared), range: range)
+		// A declared default is a value coming to rest in the slot exactly as a written one is, so the
+		// field's range binds it (P1.9) — `export var v as Percent = 500` is the same E3005 `Self{v: 500}`
+		// gets. It is always a LITERAL, so `InsertRangeChecks` decides it entirely at compile time and the
+		// runtime half it is nominally owed is never emitted; recording it with the same `guard` the written
+		// field takes keeps the two doors saying one thing rather than two.
+		self.recordRangeCheckSite(value, targetAlias: self.declaredAliasOfType(declared), guard: RangeCheckGuard.runtime, line: range.line, column: range.column)
 
 		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
 		try filled.set(index, value: true) otherwise panic("fillFieldDefault: filled.set OOB at {index} — the column is sized to the layout's field count")
@@ -23498,7 +23603,13 @@ export type Parser
 		// The `field` door, because an element IS a slot of the container's storage and the noun a function
 		// value's E3005 needs is the container-slot one. A fourth noun would have to be minted in
 		// `FunctionTypeDoor`, and there is no fourth RULE here to justify one.
-		return try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field)
+		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field)
+		// The element's declared range binds it (P1.9), COMPILE-TIME ONLY: the element travels as an
+		// argument of `__arr_push`/`__arr_set`/`__arr_insert`, so a runtime guard would land past the call
+		// that already stored it. That is not an exception to the rule — an array element IS a call
+		// argument, and takes the rule call arguments take. See `RangeCheckGuard`.
+		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), guard: RangeCheckGuard.compileTimeOnly, line: methodTok.line, column: methodTok.column)
+		return stored
 	end 'requireArrayElementType'
 
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
@@ -27066,9 +27177,61 @@ export type Parser
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
+		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames)), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
+
+	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to
+	// let it through in silence** — `clamp(101)` ran the callee with `p = 101` and the body observed
+	// `p > 100` as true. Both reference compilers have the same hole and neither fixed it: the bootstrap's
+	// pre-fix path bottomed out at a `MaxonValueKind` and v1's still bottoms out at a `CastCategory`, and
+	// *a kind is a lossy projection of a type, and what it drops is exactly the range*.
+	//
+	// ⚠ **RECORDED, NOT DECIDED, and the reason is cross-file.** Every other range-check door holds the
+	// declared type with its alias still on it. This one holds a callee NAME: the parameter belongs to a
+	// function that may be declared in a file this one is parsed independently of, and the whole-program
+	// index built before any parse (`ProgramSignatures`) carries return types, not parameter types. So the
+	// site names the callee and the argument position, and `InsertRangeChecks` — which runs once, after
+	// every file has merged — reads the alias back off that callee's `paramAliasNames`.
+	//
+	// ⚠ **ONLY AN ARGUMENT THAT COULD BE A COMPILE-TIME CONSTANT IS RECORDED.** A call argument owes the
+	// COMPILE-TIME half alone (`RangeCheckGuard`), so an argument no constant folds to has nothing a site
+	// could report, and recording one would file a row per argument in the program for a check that could
+	// never fire.
+	//
+	// ⚠⚠ **AND THE TWO DOMAINS ANSWER THAT QUESTION DIFFERENTLY, WHICH IS NOT A WART BUT A CONSEQUENCE OF
+	// WHAT THE PARSER'S CONSTANT VIEW IS FOR.** `valueConstKnown` is the INTEGER view — `emitLiteralIn`
+	// records a fold only for an integer-tagged literal — because its readers decide integer questions (a
+	// shift COUNT, a folded operand), and a float's payload is an IEEE-754 bit pattern that every one of
+	// them would read as a number it is not. So a FLOAT argument is recorded on its TAG alone, and
+	// `InsertRangeChecks` decides literal-ness from its own `floatConsts` map, which is built from the Std
+	// `const` ops and does partition by domain. The cost is a site per float argument rather than per float
+	// LITERAL argument; float arguments are rare, and the alternative — a second, float-domain constant
+	// column on every value in the program — is a large price for a narrower filter.
+	//
+	// ⚠ Without the float arm, `take(500.0)` into a `float(0 to 100)` parameter compiled and was caught
+	// only by the callee's own ranged `return` at RUN time, where the reference refuses it at compile time.
+	//
+	// The anchor is the CALLEE token, which is where the reference compiler anchors it
+	// (`range-check-panic.error.literal-argument` pins the column) — the argument's own span would move the
+	// diagnostic off the name that decides which range applies.
+	function recordConstantArgRangeChecks(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token)
+		// A callee no file DECLARES has no parameter list to consult — a runtime helper (`__arr_push`), or an
+		// undeclared name whose own E3004 is SemanticCheck's to raise.
+		if not self.signatures.declaresCallee(callee) 'noDeclaredParams'
+			return
+		end 'noDeclaredParams'
+
+		for i in 0 upto args.count() 'eachArg'
+			let argValue = try args.get(i) otherwise panic("recordConstantArgRangeChecks: args.get OOB at {i}")
+			if not (self.constIsKnown(argValue) or tagIsFloat(self.tagOf(argValue))) 'cannotBeALiteral'
+				continue
+			end 'cannotBeALiteral'
+			let label = try argLabels.get(i) otherwise EmptySourceText
+			self.rangeCheckArgSites.push(RangeCheckArgSite.create(argValue, callee: callee, argIndex: i, label: label, block: self.currentBlock.id, line: anchor.line, column: anchor.column))
+		end 'eachArg'
+	end 'recordConstantArgRangeChecks'
 
 	// ⭐ **`async f(args…)` — SPAWN A GREEN THREAD** (P1.5-B1a). The cursor sits just past `async`, on the
 	// callee name. B1a supports a FREE call only (`async f(…)`), so the callee name is followed directly by

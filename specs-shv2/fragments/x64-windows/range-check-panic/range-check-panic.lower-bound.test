@@ -1,13 +1,18 @@
 // Test: range-check-panic.lower-bound
+typealias Integer = int(i64.min to i64.max)
 typealias Natural = int(0 to i64.max)
 
 function check(n Natural) returns Natural
   return n
 end 'check'
 
+function neg(n Integer) returns Integer
+  return 0 - n
+end 'neg'
+
 function main() returns ExitCode
-  let result = check(-1)
-  return result
+  let below = neg(1)
+  return check(below)
 end 'main'
 ---
 ExitCode: 1
@@ -34,12 +39,24 @@ func @check {
     x64.ret
 }
 
+func @neg {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.subRegReg r8, r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm rcx, -1
+    x64.movRegImm32 rcx, 1
+    x64.callDirect neg
+    x64.movRegReg rcx, r8
     x64.callDirect check
     x64.epilogue 32
     x64.popReg rbp

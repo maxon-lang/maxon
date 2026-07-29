@@ -6,12 +6,11 @@ function validate(s Score) returns Score
 end 'validate'
 
 function process(x Score) returns Score
-  return validate(x)
+  return validate(x * 3)
 end 'process'
 
 function main() returns ExitCode
-  let result = process(200)
-  return result
+  return process(50)
 end 'main'
 ---
 ExitCode: 1
@@ -47,6 +46,7 @@ func @process {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+    x64.imulRegRegImm32 rcx, rcx, 3
     x64.callDirect validate
     x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
@@ -73,7 +73,7 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 200
+    x64.movRegImm32 rcx, 50
     x64.callDirect process
     x64.epilogue 32
     x64.popReg rbp

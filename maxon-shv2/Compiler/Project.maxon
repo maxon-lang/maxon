@@ -924,41 +924,103 @@ end 'isLegalRepeatedAlias'
 
 // --- Range-check sites (P1.9) — the parser's carrier for `InsertRangeChecks` ---
 //
-// ⭐ WHY A SIDE TABLE AND NOT A MARKER OP. A narrowing `as` cast has no value of its own — it
-// RETAGS the operand and flows it on unchanged — so there is nothing for an IR op to define,
-// and the two places that must be checked (a `as`-cast operand, and a ranged `return`'s value)
-// are found by the parser at PARSE time, not by any later structural walk. A dedicated
-// `MaxonOp` would ALSO force a new arm into every exhaustive `MaxonOp` match — including the
-// escape-analysis functions the closures/async rung owns and is actively editing — so the cast
-// is recorded HERE instead, keyed by the enclosing function's (unique) name, and resolved by
-// the Std-tier `InsertRangeChecks` pass.
+// ⭐ WHY A SIDE TABLE AND NOT A MARKER OP. A value meeting a ranged alias produces nothing of its
+// own — a narrowing `as` cast RETAGS its operand and flows it on unchanged, and a store writes the
+// value the source already named — so there is nothing for an IR op to define, and every position
+// that must be checked (an `as`-cast operand, a ranged `return`, a struct-literal field, a field
+// store, a field's declared default, an array element, a call argument) is found by the parser at
+// PARSE time, not by any later structural walk. A dedicated `MaxonOp` would ALSO force a new arm
+// into every exhaustive `MaxonOp` match — including the escape-analysis functions the closures/async
+// rung owns and is actively editing — so the site is recorded HERE instead, keyed by the enclosing
+// function's (unique) name, and resolved by the Std-tier `InsertRangeChecks` pass.
+//
+// ⭐ **THE SIDE TABLE IS ALSO WHAT MAKES THE ERASURE SURVIVABLE, AND THAT IS THE WHOLE DESIGN.**
+// `TypeResolution.resolveNamedType` collapses a plain ranged alias to its primitive and DROPS the
+// range, and `syncResolvedSignature` writes that back into `project.funcSignatures` — so by
+// `semanticCheck` a parameter's declared `Percent` is bare `int`. Both reference compilers check a
+// call argument through a lossy projection of the type (the bootstrap's pre-fix `MaxonValueKind`, v1's
+// `CastCategory`) and neither can see a range through it. Recording the NAME here, off the still-named
+// `MaxonType`, is immune to that by construction.
 //
 // The bounds live only in `typeAliases` (an alias resolves AWAY to its primitive before the
 // pass runs), so a site carries the alias NAME and the pass looks the bounds up — the linchpin
 // the "retain the alias" requirement exists for. `value` is the flat Std `ValueId` the operand
 // carries (ids pass through `lowerMaxonToStd` verbatim), never a name string. `line`/`column`
-// anchor the E3005 diagnostic and the runtime panic message on the source `as`/`return`.
+// anchor the E3005 diagnostic and the runtime panic message on the source position.
 
-// One `as`-cast into a ranged alias, recorded where it was written. `block` is the function-local
-// BlockId the cast is EVALUATED in (the parser's on-the-fly-SSA current block at the `as`) — the guard
+// ⭐ **WHICH HALVES OF THE RULE A SITE OWES.** `range-check-panic.md` states both — a compile-time
+// E3005 for a value the compiler can fold, and a runtime check where an unfoldable value LANDS — and
+// then names the one position that owes only the first: *"The runtime half is emitted at a `return`, a
+// struct-literal field, a field store, an array-literal element and an explicit `as`. It is **not**
+// emitted at a call argument."*
+//
+// The reason is mechanical and it is the same one in every compiler in the tree: a runtime check is a
+// BRANCH, so it splits the block it lands in, and a call argument is evaluated part-way through building
+// an argument list. shv2 emits its guards a tier later than the bootstrap does — so it never splits a
+// block mid-argument-list and never hits the bootstrap's arg-pinning `E9001` — but the guard it WOULD
+// place lands at the end of the argument's block, which is PAST the call: the callee would already have
+// run with the out-of-range value, and the panic would blame a position the value had left. An
+// array-element `push` is a call argument in exactly that sense (its element travels as `__arr_push`'s
+// third argument), so it takes the same rule.
+export enum RangeCheckGuard
+	runtime
+	compileTimeOnly
+end 'RangeCheckGuard'
+
+// One place a value MEETS a ranged alias whose name the parser already holds — an `as` cast, a
+// struct-literal field, a field store, a field's declared default, an array element. `block` is the
+// function-local BlockId the value is checked in (the parser's on-the-fly-SSA current block) — the guard
 // must split THAT block, not the value's DEFINITION block. An int->int cast is a representational no-op
 // with no Std op to anchor to, so without the block a cast of a value defined earlier (a parameter, or a
 // value from a dominating block) would place its guard at the definition — which runs UNCONDITIONALLY,
 // even when the cast sits in an unselected ternary arm / if-branch. BlockIds survive `lowerMaxonToStd`
-// (blocks are cloned 1:1 keeping their id), so the Std pass finds the same block by id.
-export type RangeCheckCastSite
+// (blocks are cloned 1:1 keeping their id), so the Std pass finds the same block by id. A
+// `compileTimeOnly` site carries its block like any other and simply never spends it.
+export type RangeCheckSite
 	export var value as ValueId
 	export var aliasName as ByteArray
+	export var block as BlockId
+	export var guard as RangeCheckGuard
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function create(value ValueId, aliasName ByteArray, block BlockId, guard RangeCheckGuard, line LineNumber, column ColumnNumber) returns RangeCheckSite
+		return Self{value: value, aliasName: aliasName, block: block, guard: guard, line: line, column: column}
+	end 'create'
+end 'RangeCheckSite'
+
+export typealias RangeCheckSiteArray = Array with RangeCheckSite
+
+// ⭐ **THE ONE POSITION WHOSE ALIAS THE PARSER CANNOT NAME.** Every door above holds the DECLARED type
+// with its alias still on it, so it resolves the name on the spot. A call argument does not: the
+// parameter it lands on belongs to a callee that may be declared in another file, and a file's parse is
+// a pure function of its own tokens plus the token-swept `ProgramSignatures` — which carries return
+// types, not parameter types. So the site names the CALLEE and the argument's own position, and the
+// whole-program `InsertRangeChecks` pass — which runs after every file has merged — reads the alias back
+// off that callee's own `FunctionRangeChecks.paramAliasNames`.
+//
+// `label` rides along unslotted because the label→position mapping has ONE home (`argSlotPosition`), and
+// it needs the callee's `paramNames`, which is another whole-program read. Slotting it here would be a
+// second copy of that mapping in the one place it is hardest to keep honest.
+//
+// ⚠ RECORDED ONLY FOR AN ARGUMENT THE PARSER HAS ALREADY FOLDED TO A CONSTANT. A call argument owes the
+// compile-time half and nothing else, so an argument no constant folds to can produce no diagnostic and
+// there is nothing for a site to say about it.
+export type RangeCheckArgSite
+	export var value as ValueId
+	export var callee as ByteArray
+	export var argIndex as ParamCount
+	export var label as ByteArray
 	export var block as BlockId
 	export var line as LineNumber
 	export var column as ColumnNumber
 
-	export static function create(value ValueId, aliasName ByteArray, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckCastSite
-		return Self{value: value, aliasName: aliasName, block: block, line: line, column: column}
+	export static function create(value ValueId, callee ByteArray, argIndex ParamCount, label ByteArray, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckArgSite
+		return Self{value: value, callee: callee, argIndex: argIndex, label: label, block: block, line: line, column: column}
 	end 'create'
-end 'RangeCheckCastSite'
+end 'RangeCheckArgSite'
 
-export typealias RangeCheckCastSiteArray = Array with RangeCheckCastSite
+export typealias RangeCheckArgSiteArray = Array with RangeCheckArgSite
 
 // One `return <expr>` in a function whose declared return type is a ranged alias. The pass
 // finds the `ret` op by `value` and reports/guards against the function's `returnAliasName`.
@@ -986,17 +1048,27 @@ export typealias ValueInstanceAliasNameMap = Map with (ValueId, ByteArray)
 
 // Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
 // function's file); `returnAliasName` is EMPTY unless the function returns a ranged INT alias.
+//
+// ⭐ **IT IS ALSO WHAT THIS FUNCTION PUBLISHES TO ITS CALLERS.** `paramAliasNames` is not a site — no
+// check in THIS function reads it — but the pre-erasure name each of its PARAMETERS was declared with,
+// captured where `returnAliasName` is and for the identical reason (`TypeResolution.resolveNamedType`
+// collapses a plain ranged alias to its primitive and drops the range). A caller's `RangeCheckArgSite`
+// names this function and an argument position; the pass reads the alias back from here, together with
+// the `filePath` that decides WHICH `Percent` a file's own declaration means. Empty — the shared array —
+// unless at least one parameter is a ranged alias.
 export type FunctionRangeChecks
 	export var filePath as FilePath
-	export var castSites as RangeCheckCastSiteArray
+	export var sites as RangeCheckSiteArray
+	export var argSites as RangeCheckArgSiteArray
 	export var returnAliasName as ByteArray
 	export var returnSites as RangeCheckReturnSiteArray
+	export var paramAliasNames as ByteArrayArray
 	// P1.6-C — see `ValueInstanceAliasNameMap`. Empty for a function that constructs no generic instance,
 	// which is every function outside the generics corpus.
 	export var valueInstanceAliases as ValueInstanceAliasNameMap
 
-	export static function create(filePath FilePath, castSites RangeCheckCastSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
-		return Self{filePath: filePath, castSites: castSites, returnAliasName: returnAliasName, returnSites: returnSites, valueInstanceAliases: valueInstanceAliases}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, paramAliasNames ByteArrayArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, argSites: argSites, returnAliasName: returnAliasName, returnSites: returnSites, paramAliasNames: paramAliasNames, valueInstanceAliases: valueInstanceAliases}
 	end 'create'
 end 'FunctionRangeChecks'
 

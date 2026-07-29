@@ -1,7 +1,14 @@
 // InsertRangeChecks — the P1.9 ranged-typealias guard pass. A Std→Std pass that turns the parser's
 // recorded range-check sites (`project.rangeChecks`) into the compile-time E3005s and runtime panics a
-// narrowing `as` cast / ranged `return` promises. It runs right after `lowerMaxonToStd`, before the
-// other Std passes.
+// ranged typealias promises at EVERY position a value meets one: a narrowing `as` cast, a ranged
+// `return`, a struct-literal field, a field store, a field's declared default, an array element and a
+// call argument. It runs right after `lowerMaxonToStd`, before the other Std passes.
+//
+// ⚠ **WHICH HALVES A POSITION OWES IS THE SITE'S TO SAY, NOT THIS PASS'S** — see `RangeCheckGuard`. The
+// compile-time E3005 is owed EVERYWHERE and is raised by the one decision function
+// (`needsRuntimeGuard`); the runtime cascade is skipped at the two positions where the value has already
+// travelled into a call by the time a guard could land (a call argument, and an array element, which is
+// one).
 //
 // ⭐ WHY STD-TIER, AND NOT THE MAXON-TIER MARKER OP THE PLAN SKETCHED. The narrowing guard needs a
 // primitive the Maxon dialect does not have — "abort with a symbolized backtrace and exit 1" — and the
@@ -75,6 +82,15 @@ union RetBlockLookup
 	notFound
 	found(block IrBlock)
 end 'RetBlockLookup'
+
+// The parameter alias a call-argument site resolves to, once the callee's own `FunctionRangeChecks` is
+// in hand: the alias NAME, and the FILE whose declaration of it applies — the CALLEE's, never the
+// caller's (`RangedAliasRegistry` resolves a name per declaring file, and a parameter's range is the one
+// visible where the function was written).
+union ParamAliasLookup
+	none
+	found(aliasName ByteArray, declFilePath FilePath)
+end 'ParamAliasLookup'
 
 // Run the pass over every function that has recorded range-check sites. Functions with none are skipped
 // without touching their blocks.
@@ -154,39 +170,102 @@ type RangeCheckEmitter
 		return id
 	end 'mintId'
 
-	// Process one function's sites. Casts FIRST (they split blocks and move terminators onto new
-	// continuation blocks), then returns (re-found from the CURRENT block structure, since a cast may
-	// have moved a `ret` terminator). The literal/const map is built ONCE over the original ops — the
-	// values a site checks are original, never the guard consts this pass appends afterward.
+	// Process one function's sites. The alias-named sites FIRST (they split blocks and move terminators
+	// onto new continuation blocks), then the call-argument sites — which emit nothing, so their order is
+	// free — then returns (re-found from the CURRENT block structure, since a split may have moved a `ret`
+	// terminator). The literal/const map is built ONCE over the original ops — the values a site checks are
+	// original, never the guard consts this pass appends afterward.
 	function run(checks FunctionRangeChecks)
 		self.collectConsts()
-		for site in checks.castSites 'eachCast'
-			self.processCastSite(site, filePath: checks.filePath)
-		end 'eachCast'
+		for site in checks.sites 'eachSite'
+			self.processSite(site, aliasFilePath: checks.filePath, filePath: checks.filePath)
+		end 'eachSite'
+		for argSite in checks.argSites 'eachArgSite'
+			self.processArgSite(argSite, filePath: checks.filePath)
+		end 'eachArgSite'
 		if not checks.returnAliasName.isEmpty() 'rangedReturn'
 			self.processReturnSites(checks.returnAliasName, sites: checks.returnSites, filePath: checks.filePath)
 		end 'rangedReturn'
 	end 'run'
 
-	// ---- cast sites ----
+	// ---- alias-named sites (cast, struct-literal field, field store, field default, array element) ----
 
-	// ⭐ `filePath` is the file the CAST was written in, and it is what picks the alias: a file's own
-	// `Limit` governs its own casts even where another file declares that name over a wider range
-	// (`RangedAliasRegistry`). `undeclared` — a builtin like `ExitCode`, or an alias no loaded file
-	// declares — is the "not a checkable range" case and guards nothing.
-	function processCastSite(site RangeCheckCastSite, filePath FilePath)
-		match self.project.typeAliases.lookup(site.aliasName, readerFilePath: filePath) 'bounds'
+	// ⭐ **TWO FILES, AND THEY ARE NOT THE SAME QUESTION.** `aliasFilePath` picks WHICH declaration of the
+	// name applies — a file's own `Limit` governs it even where another file declares that name over a
+	// wider range (`RangedAliasRegistry`). `filePath` is where the DIAGNOSTIC and the runtime panic message
+	// point. They are one file at every door the parser resolved for itself; they DIFFER at a call
+	// argument, where the parameter's range is the CALLEE's to declare and the error belongs to the line
+	// that wrote the argument. Conflated, `utf16LeadSurrogate(1000000000)` reported the caller's line and
+	// column against the STDLIB's path — a position that names a `typealias` declaration, in a file the
+	// program never wrote a call in. (Measured, on `string-views`.)
+	//
+	// `undeclared` — a builtin like `ExitCode`, or an alias no loaded file declares — is the "not a
+	// checkable range" case and guards nothing.
+	function processSite(site RangeCheckSite, aliasFilePath FilePath, filePath FilePath)
+		match self.project.typeAliases.lookup(site.aliasName, readerFilePath: aliasFilePath) 'bounds'
 			undeclared then return
-			declared(alias) then self.guardCast(site, alias: alias, filePath: filePath)
+			declared(alias) then self.guardSite(site, alias: alias, filePath: filePath)
 		end 'bounds'
-	end 'processCastSite'
+	end 'processSite'
 
-	function guardCast(site RangeCheckCastSite, alias RangedTypeAlias, filePath FilePath)
+	// ⚠ **`needsRuntimeGuard` IS ASKED FIRST AND UNCONDITIONALLY, INCLUDING FOR A SITE THAT WILL NEVER
+	// EMIT ONE**, because raising the compile-time E3005 for a folded literal is what it does on the way to
+	// its answer. Both halves of the rule are one decision (`range-check-panic.md` says so outright), and
+	// splitting them so a `compileTimeOnly` site could skip the call would be two deciders that can drift.
+	// The `guard` field then decides only whether the RUNTIME half is emitted.
+	function guardSite(site RangeCheckSite, alias RangedTypeAlias, filePath FilePath)
 		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath) 'noGuard'
 			return
 		end 'noGuard'
-		self.emitGuardAt(self.castGuardSite(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
-	end 'guardCast'
+		if site.guard == RangeCheckGuard.compileTimeOnly 'compileTimeHalfOnly'
+			return
+		end 'compileTimeHalfOnly'
+		self.emitGuardAt(self.blockEndGuardSite(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
+	end 'guardSite'
+
+	// ---- call-argument sites ----
+
+	// ⭐ **THE ONE SITE KIND WHOSE ALIAS IS RESOLVED HERE RATHER THAN AT THE PARSE.** A call argument's
+	// declared type belongs to the callee, which the caller's file may never have seen (see
+	// `RangeCheckArgSite`); this pass runs once, after every file has merged, so the callee's own record is
+	// in hand. Resolved, it becomes an ordinary `compileTimeOnly` site and takes the shared path above —
+	// there is no second decision anywhere for a call argument.
+	//
+	// ⚠ The alias reader file is the CALLEE's, never this function's: the range a parameter was declared
+	// with is the one visible where the FUNCTION was written. The diagnostic's file stays this function's
+	// — see `processSite`.
+	function processArgSite(site RangeCheckArgSite, filePath FilePath)
+		match self.paramAliasOf(site) 'p'
+			none then return
+			found(aliasName, declFilePath) then self.processSite(RangeCheckSite.create(site.value, aliasName: aliasName, block: site.block, guard: RangeCheckGuard.compileTimeOnly, line: site.line, column: site.column), aliasFilePath: declFilePath, filePath: filePath)
+		end 'p'
+	end 'processArgSite'
+
+	// The ranged-alias name the argument's PARAMETER was declared with, plus the callee's file. `none`
+	// covers every ordinary call: a callee with no ranged parameter at all files no `paramAliasNames`, an
+	// argument landing on an unranged position carries `EmptySourceText`, and a malformed call (bad arity,
+	// unknown label) slots past the end — which SemanticCheck reports against the real registry, and which
+	// is not this pass's to diagnose.
+	function paramAliasOf(site RangeCheckArgSite) returns ParamAliasLookup
+		let calleeChecks = try self.project.rangeChecks.get(site.callee) otherwise return ParamAliasLookup.none
+		if calleeChecks.paramAliasNames.isEmpty() 'noRangedParam'
+			return ParamAliasLookup.none
+		end 'noRangedParam'
+
+		// A `rangeChecks` entry and a `funcSignatures` entry are written by the SAME `parseFunction`, one
+		// statement apart and under the same name, so a callee present in one and absent from the other is a
+		// broken invariant rather than a program the user could write.
+		let signature = try self.project.funcSignatures.get(site.callee) otherwise panic("paramAliasOf: '{String.from(site.callee)}' has range-check data but no FuncSignature — parseFunction records both, keyed by the same name")
+		// `argSlotPosition` is the ONE label->position mapping in the compiler; asking it here is what keeps
+		// a labelled argument checked against the parameter it actually lands on rather than the one it
+		// happens to sit beside.
+		let aliasName = try calleeChecks.paramAliasNames.get(argSlotPosition(signature.paramNames, argIndex: site.argIndex, label: site.label)) otherwise return ParamAliasLookup.none
+		if aliasName.isEmpty() 'positionNotRanged'
+			return ParamAliasLookup.none
+		end 'positionNotRanged'
+
+		return ParamAliasLookup.found(aliasName, declFilePath: calleeChecks.filePath)
+	end 'paramAliasOf'
 
 	// ---- return sites ----
 
@@ -347,18 +426,27 @@ type RangeCheckEmitter
 		end 'eachCheck'
 	end 'emitCascade'
 
-	// Where a CAST guard goes: at the END of the block the cast was EVALUATED in (before that block's
-	// terminator), so the guard runs on the path the cast is on and NOWHERE else — a cast in an unselected
+	// Where a guard goes: at the END of the block the value was CHECKED in (before that block's
+	// terminator), so the guard runs on the path the site is on and NOWHERE else — a cast in an unselected
 	// ternary arm / if-branch does not fire it. An int->int cast emits no Std op to anchor to, so the block
 	// is the one the parser recorded (`site.block`, its on-the-fly-SSA current block at the `as`), and the
-	// cast's value is available there (a parameter, a value from a dominating block, or one defined earlier
-	// in this block — the cast reads it, so it is already defined). For a straight-line function the cast's
+	// checked value is available there (a parameter, a value from a dominating block, or one defined earlier
+	// in this block — the site reads it, so it is already defined). For a straight-line function the site's
 	// block IS entry, so end-of-body equals the post-param point the older anchoring used — those goldens
-	// are unchanged; only a cast inside a branch moves.
-	function castGuardSite(site RangeCheckCastSite) returns GuardSite
-		let block = try self.module.getBlockByIdIn(self.func, id: site.block) otherwise panic("castGuardSite: cast block {site.block} is not in '{String.from(self.func.name)}' — the parser records a live block id and lowerMaxonToStd preserves it")
+	// are unchanged; only a site inside a branch moves.
+	//
+	// ⚠ **END-OF-BLOCK IS A PATH ANCHOR, NOT A STATEMENT ANCHOR, and a FIELD STORE is where that shows.**
+	// The bootstrap emits a store's guard immediately before the store; here it lands at the end of the
+	// store's block, so a side effect written between the two runs before the panic does. The verdict is
+	// identical either way — a guard tests a VALUE, and the value is the same number at both points, so the
+	// program panics on exactly the same inputs — and the panic is fatal, so nothing observes the stored
+	// value afterwards; what can differ is the ORDER of output emitted between the store and the block's
+	// end. Anchoring on the store itself would need a Maxon-tier op position, and positions do not survive
+	// `lowerMaxonToStd`'s 1:N desugaring — the reason this pass anchors on a BLOCK in the first place.
+	function blockEndGuardSite(site RangeCheckSite) returns GuardSite
+		let block = try self.module.getBlockByIdIn(self.func, id: site.block) otherwise panic("blockEndGuardSite: site block {site.block} is not in '{String.from(self.func.name)}' — the parser records a live block id and lowerMaxonToStd preserves it")
 		return GuardSite.create(block, position: block.opRefs.count())
-	end 'castGuardSite'
+	end 'blockEndGuardSite'
 
 	// The block whose terminator is `ret(value)`.
 	function findRetBlock(value ValueId) returns RetBlockLookup

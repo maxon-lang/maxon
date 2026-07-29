@@ -1285,3 +1285,262 @@ end 'main'
 ```exitcode
 7
 ```
+
+### Every position a value meets a ranged alias
+
+`range-check-panic.md` states the rule: wherever a value reaches a place declared with a ranged
+typealias, the bounds are enforced — a compile-time E3005 when the value is known, a runtime check
+where the value lands when it is not. The cases below cover the STORAGE positions (a struct field's
+declared default, a field store, an array element) and the u64-upper shape that the extra check
+sites must not regress.
+
+### Error: field default out of range
+
+A declared default is a literal in a slot the alias governs, so it is refused at compile time. The
+diagnostic is anchored on the struct literal that took the default (`Self`), not on the field
+declaration — a default may be declared in another file, and a source span is an offset into the
+file being parsed.
+
+<!-- test: error.field-default-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Box
+	export var v as Percent = 500
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return b.v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.field-default-out-of-range.test:8:10: Value 500 is outside the range of 'Percent' (int(0 to 100))
+```
+
+### Error: field store out of range
+
+<!-- test: error.field-store-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Box
+	export var v as Percent
+
+	static function create() returns Self
+		return Self{v: 1}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var b = Box.create()
+	b.v = 500
+	return b.v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.field-store-out-of-range.test:14:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
+```
+
+### Error: array element out of range
+
+An `Array with Percent` element is a storage slot the alias governs exactly as a struct field is,
+so `push` of an out-of-range literal is the same compile error.
+
+<!-- test: error.array-push-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(500)
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.array-push-out-of-range.test:7:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
+```
+
+### Field store: runtime panic
+
+The half a literal cannot reach. `grow(5)` is a call result, so nothing folds it — the check lands
+where the value does, at the store.
+
+<!-- test: field-store-runtime-panic -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY, for `return-runtime-check-fail`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime chunk. Everywhere else the range verdict is a bare exit 1 with EMPTY stderr. The CHECK is target-neutral and the compile-time cases beside this one cover it on every target. -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+
+type Box
+	export var v as Percent
+
+	static function create() returns Self
+		return Self{v: 1}
+	end 'create'
+end 'Box'
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var b = Box.create()
+	b.v = grow(5)
+	return b.v
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at field-store-runtime-panic.test:19: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+### Error: a call argument is checked against the CALLEE's declaration of the alias
+
+Two files each declare `Limit`, over different ranges — which
+`crossfile-alias-same-underlying-different-range-still-legal` establishes is legal. A parameter's range
+is the one visible where the FUNCTION was written, so `narrow(500)` is refused against `lib.maxon`'s
+`int(0 to 10)` even though the file that wrote the call has a `Limit` that would admit it. The
+diagnostic still points at the line that wrote the argument: the range comes from one file and the
+error belongs to the other, and conflating them reported a caller's line and column against the
+callee's path.
+
+<!-- test: error.crossfile-call-argument-uses-callee-range -->
+```maxon
+// --- file: lib.maxon
+typealias Limit = int(0 to 10)
+
+export function narrow(x Limit) returns Limit
+	return x
+end 'narrow'
+
+// --- file: main.maxon
+typealias Limit = int(0 to 1000)
+
+function main() returns ExitCode
+	return narrow(500)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.crossfile-call-argument-uses-callee-range.test:13:9: Value 500 is outside the range of 'Limit' (int(0 to 10))
+```
+
+### Error: float literal call argument out of range
+
+The call-argument door in the FLOAT domain. It is a separate case because the parser's constant view is
+integer-only — a float literal is not in `valueConstKnown`, so a float argument is recorded on its tag
+and the domain-partitioned const map in `InsertRangeChecks` decides. Without that arm the value reached
+the callee and was caught only by its ranged `return`, at run time, where the reference refuses it at
+compile time.
+
+<!-- test: error.float-call-argument-out-of-range -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+function take(p Pct) returns Pct
+	return p
+end 'take'
+
+function main() returns ExitCode
+	return trunc(take(500.0))
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.float-call-argument-out-of-range.test:9:15: Value 500 is outside the range of 'Pct' (float(0 to 100))
+```
+
+### Float call argument in range
+
+The control for the case above: an in-range float literal at the same door still compiles and runs.
+
+<!-- test: float-call-argument-in-range -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+function take(p Pct) returns Pct
+	return p
+end 'take'
+
+function main() returns ExitCode
+	return trunc(take(42.5))
+end 'main'
+```
+```exitcode
+42
+```
+
+### Unsigned-max upper: a call argument and a return are unguarded
+
+⚠ **THE REGRESSION GUARD FOR `int(0 to u64.max)`.** The upper bound stores as `-1`, so a signed
+`value > u64.max` test compares against `-1` and every valid value fails it. v1 shipped exactly that
+bug. `rangeIsFull` elides the whole check for this shape — and it has to keep doing so at every
+position a check site is recorded, not only at the two that had one when it was written.
+
+<!-- test: unsigned-max-upper-call-argument -->
+```maxon
+typealias Idx = int(0 to u64.max)
+
+function identity(i Idx) returns Idx
+	return i
+end 'identity'
+
+function main() returns ExitCode
+	return identity(7)
+end 'main'
+```
+```exitcode
+7
+```
+
+### In range at every position
+
+The control the out-of-range cases above are only meaningful against: one program that puts an
+IN-RANGE value at each of the five positions — a declared default (`Self{}` takes `v = 7`), a
+struct-literal field (`Self{v: p}`), a field store (`b.v = 42`), an array element (`a.push(3)`) and
+a call argument, both as a literal (`Box.make(5)`) and as a computed value (`take(b.v)`). It must
+compile and run: `42 + 1 + 5`.
+
+<!-- test: in-range-at-every-position -->
+```maxon
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+type Box
+	export var v as Percent = 7
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function make(p Percent) returns Self
+		return Self{v: p}
+	end 'make'
+end 'Box'
+
+function take(p Percent) returns Percent
+	return p
+end 'take'
+
+function main() returns ExitCode
+	var b = Box.create()
+	b.v = 42
+	var a = PA.create()
+	a.push(3)
+	let s = Box.make(5)
+	return take(b.v) + a.count() + s.v
+end 'main'
+```
+```exitcode
+48
+```

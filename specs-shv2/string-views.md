@@ -278,9 +278,22 @@ through the ranged `CodeUnit16`, and a codepoint far past the supplementary plan
 The exit code is the assertion because it is the part every target shares. `7` is what an UNGUARDED
 build returns — the out-of-range lead surrogate, 1031794, is comfortably past `u16.max` — so this case
 tells a fired guard from a silent wrong answer on every lane, which a message-only case cannot.
+
+⚠ **THE CODEPOINT ARRIVES THROUGH `widen`, AND IT HAS TO.** `utf16LeadSurrogate(1000000000)` — which is
+what this case read while a call argument's declared range went unenforced — is now the compile-time
+E3005 `range-check-panic.md` promises at every position ("a literal argument never reaches a runtime
+check because it never builds"), measured identically on the bootstrap. The subject here is the RUNTIME
+guard on the whitelisted stdlib function's ranged `return`, so the codepoint must be a value no constant
+folds to; `widen` is the smallest way to say that.
 ```maxon
+typealias Wide = int(0 to u32.max)
+
+function widen(n Wide) returns Wide
+	return n * 1000000
+end 'widen'
+
 function main() returns ExitCode
-	let lead = utf16LeadSurrogate(1000000000)
+	let lead = utf16LeadSurrogate(widen(1000))
 	return 7 if lead > 65535 else 9
 end 'main'
 ```
@@ -291,11 +304,18 @@ end 'main'
 <!-- test: whitelisted-stdlib-range-panic-names-the-alias -->
 <!-- targets: x64-windows -->
 ### …and on the target that has a panic runtime, it names the alias and the function
-The message half of the case above. `targets: x64-windows` for the reason stated at the head of this
-group, and the same reason every other panic-text case in the suite carries it.
+The message half of the case above — same program, same reason for `widen`. `targets: x64-windows` for
+the reason stated at the head of this group, and the same reason every other panic-text case in the
+suite carries it.
 ```maxon
+typealias Wide = int(0 to u32.max)
+
+function widen(n Wide) returns Wide
+	return n * 1000000
+end 'widen'
+
 function main() returns ExitCode
-	let lead = utf16LeadSurrogate(1000000000)
+	let lead = utf16LeadSurrogate(widen(1000))
 	return 7 if lead > 65535 else 9
 end 'main'
 ```
