@@ -648,6 +648,66 @@ end 'main'
 42
 ```
 
+<!-- test: array-of-tuples-from-a-literal -->
+A `[<identifier>…]` array literal whose elements are TUPLES, in a program that ALSO declares
+`Array with <a tuple typealias>`. Both spellings reach the generic-instance registry, and the registry
+keys on the argument's `(tag, id)` while the compiled name reads only the NAME — so an element arg
+carrying the wrong tag interns a SECOND instance that compiles to the first's symbol, and
+`checkTypeSymbolNamespace` rejected this whole program with `E3006 duplicate definition of
+'Array_<T>'`, blaming a `typealias` the author wrote exactly once. A tuple type is `structRef` at every
+spelling (`Parser.parseTypeReference`), so `arrayInstanceForNamedElement` must mint that tag too.
+Oracle-verified against `maxon-sharp` (exit 45). Returns 45 (3 + 40 from element 1, plus the count).
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+typealias PairArray = Array with Pair
+
+function count(xs PairArray) returns Num
+	return xs.count()
+end 'count'
+
+function main() returns ExitCode
+	let p = (1, 2)
+	let q = (3, 40)
+	var xs = [p, q]
+	let r = try xs.get(1) otherwise panic("pushed")
+	return r.0 + r.1 + xs.count()
+end 'main'
+```
+```exitcode
+45
+```
+
+<!-- test: array-of-managed-element-tuples-drops-each -->
+`Array with <a tuple typealias whose elements are themselves ALIASES>`, holding a MANAGED element. The
+DECLARATION SWEEP spells a tuple's elements the way the source did (`__Tuple2.Num.String`), because the
+alias registry that says what `Num` means is still being built; every VALUE the array holds carries the
+canonical `__Tuple2.int.String`, and only that layout reaches `installStructDestructors`. Read raw, the
+array's `element_destroy@40` stamp named a destructor nobody synthesizes and the x64 backend died —
+`panic … resolveCallFixups: call to unknown function '__destruct___Tuple2.Num.String'`. A generic
+instance's stored ARGUMENT is a second door this index's types leave by, so it canonicalizes exactly as
+`adoptType` does. Oracle-verified against `maxon-sharp` (exit 4, same stdout). Returns 4 (2 + the count).
+```maxon
+typealias Num = int(0 to 1000)
+typealias Tagged = (Num, String)
+typealias TaggedArray = Array with Tagged
+
+function main() returns ExitCode
+	var xs = TaggedArray.create()
+	xs.push((1, "hello"))
+	xs.push((2, "world"))
+	let r = try xs.get(1) otherwise panic("pushed")
+	print("{r.1}\n")
+	return r.0 + xs.count()
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+world
+```
+
 <!-- test: parenthesized-grouping-is-not-a-tuple -->
 A parenthesized expression with no comma is grouping, and stays so: `(2 + 3) * 4` is 20.
 ```maxon

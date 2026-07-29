@@ -9630,9 +9630,7 @@ export type Parser
 	// is an OWNED temporary of the statement, like any freshly built box.
 	function copyTupleValue(value ValueId, range SourceRange) returns ValueId
 		let layout = self.tupleLayoutOfValue(value)
-		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
-		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.valueNameId(value), range: range)
-		self.trackOwnedTemp(box)
+		let box = self.emitOwnedStructBox(layout, range: range)
 
 		for i in 0 upto layout.fieldCount() 'eachElement'
 			self.emitFieldStore(box, layout: layout, index: i, value: self.emitFieldLoad(value, layout: layout, index: i, range: range), range: range)
@@ -20319,9 +20317,7 @@ export type Parser
 	// cross-call consume). The box becomes the field's sole owner, and its `__destruct_<Struct>` cascade
 	// drops the field once when the box is dropped.
 	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, anchor Token, range SourceRange) returns ValueId throws ParseError
-		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
-		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
-		self.trackOwnedTemp(box)
+		let box = self.emitOwnedStructBox(layout, range: range)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
@@ -20334,6 +20330,20 @@ export type Parser
 
 		return box
 	end 'emitStructLiteral'
+
+	// ⭐ **ALLOCATE THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN, AND ENROL IT AS THIS STATEMENT'S OWNED
+	// TEMPORARY** — the three steps that MUST happen together (the size literal read off the layout, the
+	// `__mm_alloc`, and `trackOwnedTemp`, which sets the provenance bit AND the statement's drop obligation
+	// in one call). Shared by `emitStructLiteral` (a `Self{…}` and a tuple literal) and `copyTupleValue` (the
+	// value-semantics copy, P1.10), because a second copy of the sequence is how a change to what a record
+	// costs — a header, an alignment, a different allocator door — reaches one producer and not the other,
+	// and a box allocated without the enrolment simply leaks (exit 101).
+	function emitOwnedStructBox(layout StructLayout, range SourceRange) returns ValueId
+		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
+		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		self.trackOwnedTemp(box)
+		return box
+	end 'emitOwnedStructBox'
 
 	// ⭐ **THE THREE DOTTED EXPRESSIONS**, split here and nowhere else. The cursor is on an
 	// identifier followed by `.`, and the language now spells three unrelated things that way:
@@ -24161,7 +24171,7 @@ export type Parser
 		end 'namedMember'
 
 		let indexTok = try self.consume(TokenKind.intLiteral)
-		return Token.create(TokenKind.identifier, line: indexTok.line, column: indexTok.column, value: "_{String.from(indexTok.value)}".toByteArray())
+		return Token.create(TokenKind.identifier, line: indexTok.line, column: indexTok.column, value: tupleFieldName(indexTok.value))
 	end 'consumeMemberNameToken'
 
 	// **The token kinds that may NAME a member after a `.`** — an identifier, or the int literal of a tuple's
