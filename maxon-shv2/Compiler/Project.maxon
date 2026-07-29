@@ -318,6 +318,10 @@ typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
 // a program where no name is declared twice, which is nearly every program — see `RangedAliasRegistry`.
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
 
+// Every name AT LEAST ONE declaration made nameable from any file — an `export`ed alias, or a
+// compiler-supplied stdlib one. See `RangedAliasRegistry.nameableFromAnyFile`.
+typealias NameableAliasNameSet = Set with ByteArray
+
 // What ONE `typealias` declaration conflicted with when it was filed — `RangedAliasRegistry.record`'s
 // answer, and the ONLY thing that decides whether E3105 is raised.
 //
@@ -482,6 +486,11 @@ export type RangedAliasRegistry
 	// often than it is written. A width is asked once per array op site and once per `sizeof`; it is
 	// written once per `typealias` declaration in the program.
 	var storageBytes as AliasStorageBytesMap
+	// ⭐ **THE NAMES SOME DECLARATION MADE NAMEABLE FROM ANY FILE** — `export`ed or compiler-supplied.
+	// A second derived index over the same declarations, maintained by the same single writer, for the
+	// reason `multiplyDeclared` is one: it answers a question `lookup` structurally cannot, because
+	// `lookup` returns ONE declaration and this is about ALL of them (see `nameableFromAnyFile`).
+	var nameable as NameableAliasNameSet
 
 	// ⭐⭐ **EVERY REGISTRY IS BORN HOLDING `Codepoint`, AND THAT IS WHAT GIVES IT A RANGE (P1.8 Slice E
 	// review).** `Codepoint` is declared, verbatim and with these bounds, in `stdlib/Character.maxon` —
@@ -515,7 +524,7 @@ export type RangedAliasRegistry
 	// `recordAlias`, one level up). The seed is identical in every program, so it distinguishes nothing —
 	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
-		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create()}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), nameable: NameableAliasNameSet.create()}
 		_ = registry.record(builtinStdlibAlias(CodepointTypeName, low: CodepointAliasLow, high: CodepointAliasHigh, declPathText: CodepointAliasDeclPath))
 		_ = registry.record(builtinStdlibAlias(ElementCountAliasName, low: ElementCountAliasLow, high: ElementCountAliasHigh, declPathText: ElementCountAliasDeclPath))
 		return registry
@@ -526,6 +535,12 @@ export type RangedAliasRegistry
 	// the insert sit on one structure and cannot come to disagree about which declarations conflict.
 	export function record(alias RangedTypeAlias) returns AliasRecordOutcome
 		self.widenStorageBytesFor(alias)
+
+		// Recorded here, ABOVE the first-declaration early return below, so every declaration passes
+		// through it exactly once whatever else the name goes on to do.
+		if alias.visibility != Visibility.file 'nameableAnywhere'
+			self.nameable.insert(alias.name)
+		end 'nameableAnywhere'
 
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
 		// single one of them — collides with nothing and contests nothing. It costs ONE probe and one
@@ -599,6 +614,27 @@ export type RangedAliasRegistry
 
 		return outcome
 	end 'record'
+
+	// ⭐⭐ **DOES *SOME* DECLARATION OF `name` MAKE IT NAMEABLE FROM ANY FILE?** — a question about ALL
+	// of a name's declarations, which is why it cannot be asked of `lookup`'s answer: `lookup` returns
+	// exactly ONE declaration, and for a name no file of the reader's declares that one is whichever was
+	// recorded LAST (the bare `byName` door). Reading visibility off that one alone answers about the
+	// file walk rather than about the program.
+	//
+	// ⚠ **MEASURED, and it is what this exists for** (P1.9 review). Two files declaring `Score`, one
+	// `export`ed and one not, plus a third that casts to it: `a.maxon` exported + `b.maxon` private
+	// REFUSED the third file with `E2003 Expected type name after 'as'`, while the identical program
+	// with those two files renamed `aaa.maxon` private + `bbb.maxon` exported COMPILED. One program, two
+	// answers, decided by two filenames — and the refusal was of the legal one, since an exported
+	// declaration was in scope the whole time.
+	//
+	// It does NOT make the reader resolve to the exported declaration — which range a contested name
+	// carries for a file that declares none of them is still last-wins, the E3063 cross-file ambiguity
+	// this rung leaves open. It only stops a diagnostic whose whole claim ("no declaration of this name
+	// is yours to name") is false from being raised.
+	export function nameableFromAnyFile(name ByteArray) returns bool
+		return self.nameable.contains(name)
+	end 'nameableFromAnyFile'
 
 	// The alias `name` denotes when read FROM `readerFilePath`.
 	//

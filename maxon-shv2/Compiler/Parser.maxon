@@ -7800,18 +7800,42 @@ export type Parser
 	end 'parseTypeImplementsClause'
 
 	// A `with <TypeArg>` / `with (<TypeArgs>)` associated-type binding after an interface name in an
-	// `implements` clause (slice 2). Consumed and dropped: slice 1 records only the interface NAMES, and no
-	// enabled case binds one. A parenthesized list skips balanced; a single arg is one type reference.
+	// `implements` clause (slice 2). The BINDINGS themselves are dropped — slice 1 records only the
+	// interface NAMES, and no enabled case binds one — but every argument is READ as a type reference
+	// rather than skipped, in BOTH spellings.
+	//
+	// ⚠ **THE PARENTHESIZED ARM USED TO SKIP BALANCED TOKENS, WHICH MADE IT A TYPE POSITION THE E3062
+	// USE CHECK COULD NOT SEE** (P1.9 review). `parseTypeReference` is where a written type name is
+	// recorded as USED (`recordTypeNameUse`), so a file whose only mention of an alias was
+	// `implements Container with (Score)` had that alias reported UNUSED — a legal program refused, and
+	// refused in only ONE of the two spellings, since the single-argument arm already went through the
+	// reference parser. Measured before this fix: `error E3062 … unused typealias: 'Score'` on a program
+	// naming it, with the same program clean the moment the parentheses came off. The two arms are one
+	// rule now, so a use cannot be visible in one spelling of it and invisible in the other.
+	//
+	// It reads a LEAF reference per argument rather than reaching for `parseGenericArgNodes`: that
+	// reader also VALIDATES what it reads (`checkGenericInstance` / `checkGenericArgType`), and this
+	// clause binds nothing, so borrowing it would add diagnostics to a position that has none.
 	function skipOptionalWithClause() throws ParseError
 		if not self.at(TokenKind.with) 'noWith'
 			return
 		end 'noWith'
 		try self.consume(TokenKind.with)
-		if self.at(TokenKind.leftParen) 'parenList'
-			_ = self.skipBalancedParens()
+
+		if not self.at(TokenKind.leftParen) 'singleArg'
+			_ = try self.parseTypeReference()
 			return
-		end 'parenList'
-		_ = try self.parseTypeReference()
+		end 'singleArg'
+
+		try self.consume(TokenKind.leftParen)
+		while true 'eachArg'
+			_ = try self.parseTypeReference()
+			if not self.at(TokenKind.comma) 'lastArg'
+				break
+			end 'lastArg'
+			try self.consume(TokenKind.comma)
+		end 'eachArg'
+		try self.consume(TokenKind.rightParen)
 	end 'skipOptionalWithClause'
 
 	// Parse an `enum`/`union` declaration (P1.1b wave B):
@@ -17109,6 +17133,16 @@ export type Parser
 	// STATEMENT keyword `parseStatement` catches at statement start, whereas a ternary `if` only follows an
 	// operand — the same split both reference compilers draw (2-Parser.cs:5128).
 	//
+	// ⚠ **THE SPLIT IS SHARED; THE PRECEDENCE IS NOT, AND THIS COMMENT USED TO CLAIM IT WAS.**
+	// MEASURED 2026-07-29 — `return 1 + 20 if false else 40` answers **40** here and **41** under the
+	// bootstrap, which binds the ternary TIGHTER than `+` (`1 + (20 if false else 40)`) where shv2 binds
+	// it looser (`(1 + 20) if false else 40`). Neither is blessed by the corpus: the one case that
+	// exercises the combination, `specs/ternary-expression.md`'s `complex-expressions`
+	// (`let x = a + b if cond else a * b`, a=3 b=2 cond=true), evaluates to **5 under BOTH readings**, so
+	// it has never distinguished them — a coverage hole, not agreement. Left UNRESOLVED and unpinned
+	// pending a ruling; it is a P2 self-hosting hazard, since a self-hosted parse that disagrees with the
+	// bootstrap's silently changes the compiler's own meaning. See PLAN.md.
+	//
 	// The true arm parses before the `if` announces the form, so two facts about the block ARE captured up
 	// front, allocation-free: the IR-detach mark (the start block plus its op/block-ref counts, so
 	// `parseTernaryExpression` can lift the arm's ops off the unconditional path into the true branch — only
@@ -17772,9 +17806,26 @@ export type Parser
 	function aliasHiddenFromThisFile(found DeclaredAlias) returns bool
 		return match found 'a'
 			undeclared gives false
-			declared(alias) gives not visibleFrom(alias, readerFilePath: self.filePath)
+			declared(alias) gives self.everyDeclarationHidden(alias)
 		end 'a'
 	end 'aliasHiddenFromThisFile'
+
+	// ⭐ **THE CLAIM E2003 MAKES IS ABOUT EVERY DECLARATION OF THE NAME, NOT ABOUT THE ONE `lookup`
+	// RETURNED** (P1.9 review) — "a declaration binds this name, elsewhere, and did not export it" is
+	// false the moment ANY declaration of it did.
+	//
+	// `lookup` hands back exactly one, and for a name the reading file does not itself declare, that one
+	// is whichever was recorded LAST. So judging the resolved declaration alone judged the file walk:
+	// MEASURED, an exported `Score` in `a.maxon` beside a private one in `b.maxon` REFUSED a third
+	// file's `as Score`, while the same two files named `bbb`/`aaa` compiled it. The second probe is
+	// paid only on the path that was about to report an error, so a clean build never makes it.
+	function everyDeclarationHidden(alias RangedTypeAlias) returns bool
+		if visibleFrom(alias, readerFilePath: self.filePath) 'thisOneIsVisible'
+			return false
+		end 'thisOneIsVisible'
+
+		return not self.signatures.aliasNameableFromAnyFile(alias.name)
+	end 'everyDeclarationHidden'
 
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'

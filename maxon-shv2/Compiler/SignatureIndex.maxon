@@ -2669,8 +2669,19 @@ export type ProgramSignatures
 		let low = alias.low as ContentHash
 		let high = alias.high as ContentHash
 
+		// ⭐ **VISIBILITY RIDES FOR THE RANGE'S OWN REASON, now that P1.9 made it load-bearing** (review):
+		// widening a range changes what a `shr` on a value of the alias means, and adding or removing
+		// `export` changes what ANOTHER file's `as` cast to the name means (E2003, `visibleFrom`) and
+		// whether this file's own declaration can be reported unused (E3062, `recordTypeName`). Both are
+		// decisions a memoized parse of a DIFFERENT file bakes in, so both must move its memo key.
+		//
+		// ONE BIT, not the three-valued enum: every reader asks only `!= Visibility.file`, and `global` is
+		// a property of which directory the file was loaded from rather than of anything its text says —
+		// so a hash that distinguished `module` from `global` would be keying on a fact no edit can change.
+		let exported = (1 as ContentHash) if alias.visibility != Visibility.file else (0 as ContentHash)
+
 		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
-		self.hash = mix(mix(named, value: low), value: high)
+		self.hash = mix(mix(mix(named, value: low), value: high), value: exported)
 	end 'recordAlias'
 
 	// Add one INNER ranged typealias (P1.6-C) under its BASE-QUALIFIED name AND fold it into the hash —
@@ -3525,6 +3536,13 @@ export type ProgramSignatures
 	export function aliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
 		return self.typeAliases.lookup(name, readerFilePath: readerFilePath)
 	end 'aliasOf'
+
+	// Is SOME declaration of `name` nameable from any file? The all-declarations question the door
+	// above cannot answer, asked only where `aliasOf`'s single answer is hidden — see
+	// `RangedAliasRegistry.nameableFromAnyFile`, which carries the whole argument.
+	export function aliasNameableFromAnyFile(name ByteArray) returns bool
+		return self.typeAliases.nameableFromAnyFile(name)
+	end 'aliasNameableFromAnyFile'
 
 	// ⭐ **THE TYPE NAMES A FILE'S TOP-LEVEL CONSTANT INITIALIZERS CAST TO (P1.9) — a `use` the real
 	// parse structurally cannot see.**
