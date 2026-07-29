@@ -2141,10 +2141,11 @@ union CharLiteralValue
 	// A `\` escape this decoder does not know.
 	badEscape(text String)
 	// A `\uNNNN` escape with the wrong number of hex digits. It carries the text the author actually
-	// wrote (`\u00`), and it is its OWN case rather than a `badEscape`: the escape's SHAPE is
-	// recognized, only its digit count is wrong, and the canonical corpus pins a distinct diagnostic
-	// for it (E1004, `specs/unicode-escape.md:151`) where an unrecognized `\q` is E2016.
-	badUnicodeEscape(text String)
+	// wrote (`\u00`) and its OFFSET in the literal's body, and it is its OWN case rather than a
+	// `badEscape`: the escape's SHAPE is recognized, only its digit count is wrong, and the canonical
+	// corpus pins a distinct diagnostic for it (E1004, `specs/unicode-escape.md:151`) where an
+	// unrecognized `\q` is E2016.
+	badUnicodeEscape(text String, offset ByteOffset)
 end 'CharLiteralValue'
 
 // Decode a character-literal body. Ported from maxon-selfhosted's `parseCharLiteralExpr`
@@ -2157,7 +2158,7 @@ function decodeCharLiteral(raw ByteArray) returns CharLiteralValue
 	match decoded 'd'
 		bytes(buf) then return charValueOf(buf)
 		unknownEscape(text) then return CharLiteralValue.badEscape(text)
-		badUnicodeEscape(text) then return CharLiteralValue.badUnicodeEscape(text)
+		badUnicodeEscape(text, offset) then return CharLiteralValue.badUnicodeEscape(text, offset: offset)
 	end 'd'
 end 'decodeCharLiteral'
 
@@ -2178,7 +2179,7 @@ union DecodedLiteral
 	unknownEscape(text String)
 	// A `\uNNNN` escape with the wrong number of hex digits — see `CharLiteralValue.badUnicodeEscape`
 	// for why the digit count gets a case of its own rather than riding `unknownEscape`.
-	badUnicodeEscape(text String)
+	badUnicodeEscape(text String, offset ByteOffset)
 end 'DecodedLiteral'
 
 // The escape sequences a quoted literal accepts, decoded to their bytes. The set is
@@ -2219,7 +2220,7 @@ function decodeEscapes(raw ByteArray) returns DecodedLiteral
 		// canonical corpus pins that spelling (`specs/unicode-escape.md:151`).
 		if next == LowerU 'uniEscape'
 			if not hexEscapeWellFormed(raw, at: i, len: len, digitCount: UniEscapeDigits) 'malformed'
-				return DecodedLiteral.badUnicodeEscape(availableUnicodeEscapeText(raw, at: i, len: len))
+				return DecodedLiteral.badUnicodeEscape(availableUnicodeEscapeText(raw, at: i, len: len), offset: i)
 			end 'malformed'
 			appendUtf8Encoded(buf, codepoint: uniEscapeCodepoint(raw, at: i))
 			i = i + EscapeMarkerBytes + UniEscapeDigits
@@ -2313,8 +2314,11 @@ end 'availableUnicodeEscapeText'
 // what the author wrote, `kind` is the literal FORM they wrote it in — and the message exists once so a
 // character literal and a string literal cannot come to word the same fault differently. Both reference
 // compilers phrase it this way and the canonical corpus pins the character-literal spelling.
-function invalidUnicodeEscapeError(text String, kind String, tok Token) returns ParseError
-	return ParseError.invalidUnicodeEscape("Invalid unicode escape '{text}': expected {UniEscapeDigits} hex digits in {kind}", line: tok.line, column: tok.column)
+// ⚠ The column is the LITERAL's, advanced by the escape's byte offset in the body — v1's own
+// `token.column + i` (`maxon-selfhosted/Compiler/Parser.maxon:16987`), so the SECOND escape in a string is
+// blamed where it is written rather than at the opening quote.
+function invalidUnicodeEscapeError(text String, kind String, offset ByteOffset, tok Token) returns ParseError
+	return ParseError.invalidUnicodeEscape("Invalid unicode escape '{text}': expected {UniEscapeDigits} hex digits in {kind}", line: tok.line, column: tok.column + offset)
 end 'invalidUnicodeEscapeError'
 
 // The trailing context phrase the diagnostic above names, one per literal form that admits a `\uNNNN`.
@@ -18111,7 +18115,7 @@ export type Parser
 			multiByte(bytes) then return self.emitCharacterLiteral(bytes, range: SourceRange.ofToken(tok))
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
-			badUnicodeEscape(text) then throw invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, tok: tok)
+			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok)
 		end 'decoded'
 	end 'parseCharLiteral'
 
@@ -18158,7 +18162,7 @@ export type Parser
 			multiByte(bytes) then panic("characterizedOperand: the {bytes.count()}-byte literal '{String.from(tok.value)}' already materialized as a Character, so the tag guard above cannot have let it reach here")
 			empty then panic("characterizedOperand: an empty character literal is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
 			badEscape(text) then panic("characterizedOperand: the unknown escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
-			badUnicodeEscape(text) then panic("characterizedOperand: the malformed unicode escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
+			badUnicodeEscape(text, _) then panic("characterizedOperand: the malformed unicode escape '{text}' is refused by parseCharLiteral, so no operand carrying one reaches a typed position")
 		end 'decoded'
 	end 'characterizedOperand'
 
@@ -18185,7 +18189,7 @@ export type Parser
 			// pattern machinery meeting this type, not this rung's.
 			multiByte(bytes) then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' as a `match` pattern — a pattern bound is a compile-time integer and a `Character` is a byte record ({bytes.count()} bytes here); comparing Characters in a `match` needs pattern dispatch over a runtime equality", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
-			badUnicodeEscape(text) then throw invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, tok: tok)
+			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok)
 		end 'decoded'
 	end 'decodeCharPatternValue'
 
@@ -18220,7 +18224,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return self.emitStringLiteral(buf, range: SourceRange.ofToken(tok))
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
-			badUnicodeEscape(text) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, tok: tok)
+			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok)
 		end 'decoded'
 	end 'consumeStringLiteralValue'
 
@@ -18348,7 +18352,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then self.materializeFragmentBytes(buf, partBufs: partBufs, partLens: partLens, range: range)
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
-			badUnicodeEscape(text) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, tok: tok)
+			badUnicodeEscape(text, offset) then throw invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok)
 		end 'decoded'
 	end 'materializeLiteralFragment'
 
@@ -24499,7 +24503,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ConstEvalError.defective(ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column))
-			badUnicodeEscape(text) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, tok: tok))
+			badUnicodeEscape(text, offset) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, tok: tok))
 		end 'decoded'
 	end 'decodeConstStringLiteral'
 
@@ -24992,7 +24996,7 @@ export type Parser
 			// from the other end). A module-scope `let c = 'é'` is therefore refused rather than folded.
 			multiByte(bytes) then throw ConstEvalError.defective(ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' at module scope — a top-level binding's initializer folds to a compile-time constant and a `Character` is a byte record ({bytes.count()} bytes here); declare it inside a function", line: tok.line, column: tok.column))
 			badEscape(text) then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column))
-			badUnicodeEscape(text) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, tok: tok))
+			badUnicodeEscape(text, offset) then throw ConstEvalError.defective(invalidUnicodeEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, tok: tok))
 		end 'decoded'
 	end 'evalConstCharLiteral'
 
