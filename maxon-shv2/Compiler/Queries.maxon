@@ -152,6 +152,11 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `Parser.foldDeclaredSignaturesInto`) and keeps this memo cacheable: a query that reported would
 	// have to suppress on a hit, exactly as `queryParseOps` must.
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+	// ⭐ And the `Array with <every declared struct/union>` over-interning a `[<identifier>…]` array literal
+	// needs (P1.7 slice 3) — HERE, for the same "the whole program is known now" reason, and because doing it
+	// at each such file re-walked tables that were still growing: O(files × types), measured at ×3.03
+	// allocations per doubling on 1024 files. Before `deriveInstanceNames`, which names every instance.
+	signatures.internArrayLiteralAggregateInstances()
 	signatures.evaluateInitializers()
 	// ⭐ And every instantiation's COMPILED and CANONICAL names, for the same "the whole program is known
 	// now" reason — the parse READS both (a generic instance's nominal identity, P1.7) and each memo behind

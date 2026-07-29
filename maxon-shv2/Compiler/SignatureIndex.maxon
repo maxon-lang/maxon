@@ -1801,16 +1801,6 @@ export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArr
 // no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
 export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
 
-// The element type NAMES whose `Array with <name>` literal instance the sweep has ALREADY over-interned
-// (P1.7 slice 3). `internArrayLiteralAggregateInstances` runs once per file that materializes a
-// `[<identifier>…]` literal and over-interns `Array with <every declared struct/union>`; because the
-// struct/union tables ACCUMULATE across files, a naive re-walk re-interns every already-seen type at every
-// such file — O(files × types) allocations (each `arrayInstanceForNamedElement` builds a `MaxonTypeArray`,
-// a `MaxonType.named` and an instance key only to hit the interner and discard them). This set skips a name
-// whose instance already exists, so the FIRST intern of each `Array with <name>` — the one that assigns its
-// gid — happens in the identical file-and-iteration order it did before (the skipped calls were idempotent
-// no-ops that assigned nothing), leaving the emitted gids byte-identical while the interning is O(types).
-typealias ArrayLiteralElementNameSet = Set with ByteArray
 
 // The NAMES every top-level MANAGED binding in the program is declared under — `let` and `var` alike
 // (P1.7a / P1.7 slice 2a) — the filter `Parser.managedTopLevelReceiverAt` asks before it will build a
@@ -2190,10 +2180,12 @@ export type ProgramSignatures
 	// ever sees the alias name. Read through `tupleAliasTarget`, which canonicalizes: the sweep writes the
 	// spelling it saw and the real parse the canonical one, exactly as every other tuple name does.
 	var tupleAliases as TupleCanonicalNameMap
-	// The element type names whose `Array with <name>` managed-literal instance has already been over-interned
-	// by an earlier file's sweep (P1.7 slice 3) — the dedup that keeps `internArrayLiteralAggregateInstances`
-	// O(types) rather than O(files × types). See `ArrayLiteralElementNameSet`.
-	var arrayLiteralElementsInterned as ArrayLiteralElementNameSet
+	// ⭐ **DOES ANY FILE IN THE PROGRAM MATERIALIZE A `[<identifier>…]` ARRAY LITERAL?** (P1.7 slice 3.) Set
+	// by the sweep, read ONCE by `queryProgramSignatures` after the last file folds, which is what makes
+	// `internArrayLiteralAggregateInstances` a single whole-program walk instead of a per-file one. A bool
+	// and not a count: the over-interning is over every declared type, so one such file asks for exactly
+	// what a thousand do.
+	var sawAggregateArrayLiteral as bool
 	// ⭐ Generic-instance TYPEALIAS name ⇒ its interned instance (P1.6-A) — `IntBox` ⇒ the giid for
 	// `Box with Integer`. THE door `Parser.parseQualifiedCall` resolves `IntBox.create` to `Box.create`
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
@@ -2321,7 +2313,7 @@ export type ProgramSignatures
 	var constCastTargets as ConstCastTargetSet
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create()}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
@@ -4509,38 +4501,44 @@ export type ProgramSignatures
 	// instance per declared struct/union are interned, and the parser looks up whichever the first element
 	// resolves to. An UNREFERENCED instance gets no descriptor or destructor synthesized (both gate on usage),
 	// so this is bounded registry entries — not codegen — and it leaves int-only-array programs' goldens untouched.
+	// ⚠ **CALLED ONCE, AFTER THE LAST FILE FOLDS — NOT PER FILE, and that is a MEASURED asymptotic and not a
+	// tidy-up.** The struct/union tables ACCUMULATE across the sweep, so a walk placed at each
+	// `[<identifier>…]`-bearing file re-walks every type folded so far, at every such file: **O(files × types)**.
+	// A dedup set used to sit inside the walk, which made the *interning* O(types) — but not the WALK, whose
+	// per-entry cost (a `MapIterator` entry tuple, a set probe) is paid whether or not the name is new. The
+	// early-out that guarded it was a count-equality that any freshly folded type defeats, so the common shape
+	// — every file declaring a type AND using an array literal — defeated it at every file.
+	//
+	// ⇒ MEASURED, on 64→1024 files each declaring one `type S<k>` and holding one `[<identifier>…]` literal:
+	//   `phase signatures` allocations went **×2.16, ×2.38, ×2.68, ×3.03** per DOUBLING (exact column, so this
+	//   is not noise), against ×1.99 flat for the same files with no declared type. Hoisted here it reads
+	//   ×1.99 flat. The tuple rung (P1.10) did not introduce this — it added a SECOND producer of registered
+	//   types, since a tuple layout is registered under a mangled name — but it is what the ladder found it with.
+	//
+	// The hoist is exact, not an approximation: the sweep folds EVERY file before any reader runs
+	// (`queryProgramSignatures`), and nothing between the two points reads a generic instance — the sweep only
+	// records. So one walk over the final tables interns the identical SET this interned incrementally, and the
+	// dedup set it needed is gone with the repetition that made it necessary.
 	export function internArrayLiteralAggregateInstances()
-		_ = self.arrayInstanceForString()
-
-		// The struct/union tables ACCUMULATE across files, so a naive re-walk re-interns every already-seen
-		// element type at EVERY `[<identifier>…]`-bearing file — O(files × types) throwaway allocations. Once
-		// `arrayLiteralElementsInterned` holds every declared struct/union (the common shape: types declared,
-		// then used in literals) this whole pass is a single count compare; otherwise only the types NEW since
-		// the last such file are interned (`internArrayLiteralElement` skips the rest). The gid each `Array with
-		// <name>` receives is unchanged — a skipped name is an idempotent interner hit that assigns nothing.
-		if self.arrayLiteralElementsInterned.count() == self.structTypes.count() + self.enumTypes.count() 'allInterned'
+		if not self.sawAggregateArrayLiteral 'noAggregateLiteralAnywhere'
 			return
-		end 'allInterned'
+		end 'noAggregateLiteralAnywhere'
 
+		_ = self.arrayInstanceForString()
 		for (name, _) in self.structTypes 'eachStruct'
-			self.internArrayLiteralElement(name)
+			_ = self.arrayInstanceForNamedElement(name)
 		end 'eachStruct'
 		for (name, _) in self.enumTypes 'eachUnion'
-			self.internArrayLiteralElement(name)
+			_ = self.arrayInstanceForNamedElement(name)
 		end 'eachUnion'
 	end 'internArrayLiteralAggregateInstances'
 
-	// Over-intern `Array with <name>` for ONE managed-literal element type, unless an earlier file's sweep
-	// already did. The dedup keeps `internArrayLiteralAggregateInstances` O(types), not O(files × types); the
-	// skip elides only a redundant interner hit, never a gid assignment (the first intern of each name still
-	// happens in its original file-and-iteration order). See `ArrayLiteralElementNameSet`.
-	function internArrayLiteralElement(name ByteArray)
-		if self.arrayLiteralElementsInterned.contains(name) 'already'
-			return
-		end 'already'
-		_ = self.arrayInstanceForNamedElement(name)
-		self.arrayLiteralElementsInterned.insert(name)
-	end 'internArrayLiteralElement'
+	// This file materializes a `[<identifier>…]` array literal, whose element type the sweep's tokens cannot
+	// name. All the sweep does is remember that SOMETHING asked; the over-interning itself waits for the whole
+	// program (see `internArrayLiteralAggregateInstances`).
+	export function noteAggregateArrayLiteral()
+		self.sawAggregateArrayLiteral = true
+	end 'noteAggregateArrayLiteral'
 
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//

@@ -4549,9 +4549,13 @@ export type Parser
 		if hasStringArrayLiteral or hasStringSplitCall 'internStringArrayLiteral'
 			_ = index.arrayInstanceForString()
 		end 'internStringArrayLiteral'
-		if hasAggregateArrayLiteral 'internAggregateArrayLiteral'
-			index.internArrayLiteralAggregateInstances()
-		end 'internAggregateArrayLiteral'
+		// Only NOTED here, never performed: the over-interning is over every declared struct/union in the
+		// PROGRAM, so doing it at each such file re-walks tables that are still growing — O(files × types),
+		// measured (see `ProgramSignatures.internArrayLiteralAggregateInstances`). `queryProgramSignatures`
+		// performs it once, after the last file folds.
+		if hasAggregateArrayLiteral 'noteAggregateArrayLiteral'
+			index.noteAggregateArrayLiteral()
+		end 'noteAggregateArrayLiteral'
 
 		// Intern the `Set with integer` AND `Set with String` instances if this file materializes a `Set from […]`
 		// construction — its key type (int or String) is inferred from the array literal, which the sweep cannot
