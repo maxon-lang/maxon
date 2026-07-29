@@ -602,3 +602,65 @@ end 'main'
 ```exitcode
 42
 ```
+
+### A hidden alias is judged against EVERY declaration of the name, not the last one recorded
+
+Whether `7 as Score` is legal depends on whether ANY declaration of `Score` in scope is exported —
+not on whichever declaration happened to be recorded last. Reading only the last one made the answer
+depend on the order files are walked, which is alphabetical: the same three files refused the cast
+under one set of names and accepted it under another. **The filenames below are load-bearing** —
+`a.maxon` sorts before `b.maxon`, so the private declaration is the one recorded last, and the
+exported one must still be found.
+
+<!-- test: exported-alias-found-past-a-later-private-one -->
+```maxon
+// --- file: a.maxon
+export typealias Score = int(0 to 100)
+
+export function fromA() returns Score
+	return 7
+end 'fromA'
+
+// --- file: b.maxon
+typealias Score = int(0 to 50)
+
+export function fromB() returns Score
+	return 3
+end 'fromB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let s = 7 as Score
+	return s
+end 'main'
+```
+```exitcode
+7
+```
+
+### A hidden alias reached from BOTH a top-level constant and a body
+
+The top-level-constant spelling of the hidden-cast rejection is raised from a transient parser whose
+artifact is discarded, so it cannot join the deferred queue the body spelling is drained from, and it
+therefore lands ahead of the unused-typealias diagnostic. Same code, same message, same anchor as the
+body spelling — only the position in the list differs. This case exists to pin that order so it
+cannot drift unnoticed; the body-only order is pinned by
+`error.non-exported-typealias-cross-file` above.
+
+<!-- test: error.hidden-alias-const-and-body-cast -->
+```maxon
+// --- file: types.maxon
+typealias Dead = int(0 to 100)
+
+// --- file: main.maxon
+let K = 5 as Dead
+
+function main() returns ExitCode
+	let v = 7 as Dead
+	return v + K
+end 'main'
+```
+```maxoncstderr
+error E2003: specs/fragments/export-keyword/error.hidden-alias-const-and-body-cast.test:6:14: Expected type name after 'as'
+error E3062: specs/fragments/export-keyword/error.hidden-alias-const-and-body-cast.test:3:11: unused typealias: 'Dead'
+```

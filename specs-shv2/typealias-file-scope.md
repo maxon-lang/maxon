@@ -84,8 +84,8 @@ error E3005: <fragment>:5:14: Value 500 is outside the range of 'Milliseconds' (
 checked against `a.maxon`'s range and rejected. This is the direction where the WIDER alias would
 erase a guard the author wrote — the failure that returned 9 from this program.
 
-The diagnostic is anchored in **`a.maxon`**, the file that wrote the cast — never in `b.maxon`, whose
-only involvement is declaring the name.
+The diagnostic is anchored in **`a.maxon`**, the file that wrote the cast — never in `b.maxon`, which
+declares the same name over a different, wider range.
 ```maxon
 // --- file: a.maxon
 typealias Limit = int(0 to 500)
@@ -98,7 +98,7 @@ end 'checkA'
 // --- file: b.maxon
 typealias Limit = int(0 to 2000)
 
-export function checkB() returns ExitCode
+export function checkB() returns Limit
 	return 0
 end 'checkB'
 

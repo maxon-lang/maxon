@@ -60,7 +60,6 @@ return 0.
 
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 
 var counter = 0
 
@@ -90,7 +89,6 @@ must produce DIFFERENT values, so the second cannot be CSE'd onto the first — 
 
 ```maxon
 
-typealias Integer = int(i64.min to i64.max)
 
 var slot = 3
 

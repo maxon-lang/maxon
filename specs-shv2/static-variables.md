@@ -512,7 +512,6 @@ declaration never contributed to it), and what the case still pins is the pair t
 and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune is per-global rather
 than per-init.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 var grow = [1]
 var untouched = [7, 7, 7]

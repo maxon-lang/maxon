@@ -102,7 +102,6 @@ lowers to the address of a `__fnref_` thunk that forwards to it. Taking a functi
 reachability edge; pruning `triple` here would be a link failure, and pruning the thunk a wrong call.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
 
 function triple(n Integer) returns Integer
 	return n * 3

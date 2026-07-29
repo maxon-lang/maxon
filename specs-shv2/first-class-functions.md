@@ -2403,7 +2403,6 @@ literal is the token that has to change either way.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
 
 function main() returns ExitCode
 	let bump = 20
@@ -2415,7 +2414,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-if-merge-errors.test:8:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-if-merge-errors.test:7:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
 <!-- test: first-class-function.capturing-closure-across-loop-merge-errors -->
@@ -2425,7 +2424,6 @@ which is a merge and loses the environment.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
 
 function main() returns ExitCode
 	let bump = 20
@@ -2439,7 +2437,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-loop-merge-errors.test:8:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-across-loop-merge-errors.test:7:10: cannot carry a closure that captures across a branch merge: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
 <!-- test: first-class-function.capturing-closure-through-witness-dispatch-errors -->

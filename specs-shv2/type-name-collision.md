@@ -453,7 +453,6 @@ with `ByteArray = Array with Byte` in five files. Nothing checked a generic alia
 before this rule existed, so the file-local carve-out must not hand it a way to stay unchecked.
 ```maxon
 // --- file: base.maxon
-typealias Small = int(0 to 100)
 
 export type Bx uses T
 	export var value as T
@@ -474,7 +473,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3061: <fragment>:16:11: Duplicate typealias 'G'
+error E3061: <fragment>:15:11: Duplicate typealias 'G'
+error E3062: <fragment>:10:11: unused typealias: 'G'
 ```
 
 
@@ -517,7 +517,6 @@ holds, where FIVE files each declare `typealias ByteArray = Array with Byte`. Tw
 generic-instance alias is the file-local case, the same as two ranged aliases, and it stays legal.
 ```maxon
 // --- file: base.maxon
-typealias Integer = int(i64.min to i64.max)
 
 export type Box uses T
 	export var value as T
@@ -787,6 +786,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3006: <fragment>:29:11: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+error E3062: <fragment>:30:11: unused typealias: 'W1'
 ```
 
 
@@ -836,6 +836,8 @@ end 'main'
 ```
 ```maxoncstderr
 error E3006: duplicate definition of 'Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+error E3062: <fragment>:33:11: unused typealias: 'W1'
+error E3062: <fragment>:34:11: unused typealias: 'H1'
 ```
 
 
@@ -887,6 +889,7 @@ end 'main'
 ```maxoncstderr
 error E3006: <fragment>:34:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A_B, C_D)` compile to that same name
 error E3006: <fragment>:35:11: duplicate definition of 'Pair_A_B_C_D' — the generic instantiations `Pair with (A_B_C, D)` and `Pair with (A, B_C_D)` compile to that same name
+error E3062: <fragment>:33:11: unused typealias: 'Q1'
 ```
 
 
@@ -934,6 +937,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3006: <fragment>:30:11: duplicate definition of '__Pair_Box_Int_Str' — the generic instantiations `Pair with (Box_Int, Str)` and `Pair with (Box, Int_Str)` compile to that same name
+error E3062: <fragment>:29:11: unused typealias: 'P1'
 ```
 
 

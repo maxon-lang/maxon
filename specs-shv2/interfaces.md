@@ -546,3 +546,43 @@ end 'main'
 ```exitcode
 63
 ```
+
+### A conformance argument in parentheses is a USE of the alias it names
+
+`implements I with (A)` and `implements I with A` are the same binding written two ways, so both
+must count as a reference for the unused-typealias check. They did not: the parenthesized arm was
+read by a brace-skipper while the bare arm went through the type-reference reader that records the
+use, so an alias named ONLY inside the parentheses was reported unused and a legal program was
+refused. `stdlib/helpers/string/views.maxon` uses the parenthesized form three times.
+
+Here `Slot` is named nowhere but the conformance argument.
+
+<!-- test: parenthesized-conformance-arg-is-a-use -->
+```maxon
+typealias Index = int(0 to 100)
+typealias Slot = int(0 to 100)
+
+interface Container uses Element
+	function size() returns Index
+end 'Container'
+
+type Holder implements Container with (Slot)
+	export var n as Index
+
+	export static function create(n Index) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function size() returns Index
+		return self.n
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(7)
+	return h.size()
+end 'main'
+```
+```exitcode
+7
+```

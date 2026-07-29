@@ -63,7 +63,6 @@ A `bool` returned from another file cannot be added to an `int`. This is the hea
 compiled, and returned 42.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
 
 export function isReady() returns bool
 	return true
@@ -76,7 +75,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:12:11: Cannot operate on bool and int
+error E2004: <fragment>:11:11: Cannot operate on bool and int
 ```
 
 <!-- test: cross-file-word-operator-mixed-operands -->
@@ -154,7 +153,6 @@ refuses an unknown operand — so this correct program would stop compiling. It 
 is false. A clean exit IS the proof.
 ```maxon
 // --- file: a.maxon
-typealias Integer = int(i64.min to i64.max)
 
 export function ready() returns bool
 	return false

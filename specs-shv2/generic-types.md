@@ -233,7 +233,6 @@ error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), bu
 
 <!-- test: managed-string-arg -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
 	export static function create(v T) returns Self
@@ -304,7 +303,6 @@ end 'main'
 
 <!-- test: managed-string-arg-loop -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
 	export static function create(v T) returns Self
@@ -327,7 +325,6 @@ end 'main'
 
 <!-- test: managed-string-arg-moved-not-double-freed -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
 	export static function create(v T) returns Self
@@ -348,7 +345,6 @@ end 'main'
 
 <!-- test: managed-instance-escape-owns-content -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
 	export static function create(v T) returns Self
@@ -372,7 +368,6 @@ end 'main'
 
 <!-- test: nested-managed-cascade -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
 	export static function create(v T) returns Self
@@ -1735,7 +1730,6 @@ float actual is a plain type mismatch (E3005), matching the non-generic `takeStr
 exists because the panic was NOT specific to `Integer` -- it reproduced identically here, so a fix
 that only taught the numeric arm would leave half the defect live.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var value as T
 	export static function create(v T) returns Self
@@ -1749,7 +1743,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:10: argument type mismatch for 'v': expected 'String', got 'float'
+error E3005: <fragment>:10:10: argument type mismatch for 'v': expected 'String', got 'float'
 ```
 
 <!-- test: int-actual-at-opaque-formal-still-works -->

@@ -101,7 +101,6 @@ end 'main'
 An owned union with a String payload, dropped at scope exit without being matched,
 frees its String through `__str_decref` — no leak.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Message
 	silent
@@ -121,7 +120,6 @@ end 'main'
 Matching an owned String-payload union binds the String, prints it, and consumes
 the union. The String is freed once (via the binding), the box once.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Message
 	silent
@@ -148,7 +146,6 @@ hi
 An interpolated String moved into a union payload, then matched back out and
 printed. The interpolation temporary is owned; the move transfers it into the box.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Message
 	silent
@@ -207,7 +204,6 @@ end 'main'
 A `_` discard of a managed field binds nothing and does not consume: the union is
 dropped at scope exit and the cascade frees the discarded String.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Message
 	silent
@@ -230,7 +226,6 @@ end 'main'
 <!-- test: two-managed-fields-drop -->
 A case with two String fields, dropped at scope exit, frees both.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Pair
 	none
@@ -250,7 +245,6 @@ end 'main'
 A two-String case binds one field and discards the other. The bound one is freed
 via its binding; the discarded one is freed by the cascade at scope exit.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Pair
 	none
@@ -278,7 +272,6 @@ Two arms that each bind a managed payload AND fall through: each arm's binding i
 exit edge, not accumulated for the continuation (where the other arm's value would be garbage). Both
 paths are leak-free and crash-free.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union U
 	a(x String)
@@ -306,7 +299,6 @@ A `var` union consumed by a binding-match is `partiallyMoved` (a re-read is E310
 revives it: the fresh value has no moved-out slots, so a later match is legal again. The old box (with
 its nulled payload slot) is dropped at the reassignment; the new one at scope exit — both leak-free.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 union Message
 	silent

@@ -1094,6 +1094,32 @@ end 'main'
 error E3005: specs/fragments/ranged-typealias/error.otherwise-outside-ranged-return.test:13:10: otherwise value -1 is outside the range of 'Score' (int(0 to 100))
 ```
 
+The same check must fire on a value that overruns the range's **upper** end. This twin is not
+redundant with the one above: a first cut of the check reached the literal through a path that only
+handled a *negated* literal, so `otherwise -1` was rejected while `otherwise 101` compiled clean and
+returned 50. A single-signed case cannot see that.
+
+<!-- test: error.otherwise-above-ranged-return -->
+```maxon
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function getScore() returns Score throws MyError
+	return 50 as Score
+end 'getScore'
+
+function main() returns ExitCode
+	let v = try getScore() otherwise 101
+	return v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.otherwise-above-ranged-return.test:13:10: otherwise value 101 is outside the range of 'Score' (int(0 to 100))
+```
+
 ### Error: bare sized type shorthand not allowed
 
 <!-- test: error.bare-shorthand -->
