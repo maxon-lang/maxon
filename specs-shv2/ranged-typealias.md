@@ -1428,12 +1428,20 @@ end 'narrow'
 // --- file: main.maxon
 typealias Limit = int(0 to 1000)
 
+function wide(x Limit) returns Limit
+	return x
+end 'wide'
+
 function main() returns ExitCode
-	return narrow(500)
+	let w = wide(500)
+	if w == 500 'ok'
+		return narrow(500)
+	end 'ok'
+	return 1
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.crossfile-call-argument-uses-callee-range.test:13:9: Value 500 is outside the range of 'Limit' (int(0 to 10))
+error E3005: specs/fragments/ranged-typealias/error.crossfile-call-argument-uses-callee-range.test:19:10: Value 500 is outside the range of 'Limit' (int(0 to 10))
 ```
 
 ### Error: float literal call argument out of range
