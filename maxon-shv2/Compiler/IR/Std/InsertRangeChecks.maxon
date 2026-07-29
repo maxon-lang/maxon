@@ -100,6 +100,20 @@ export function insertRangeChecks(project Project, module StdModule)
 		// handed, stated the same way — never "is this whitelisted", which would not outlive the filter. A
 		// REACHABLE stdlib function is not in the set, so its guards and its compile-time E3005 are emitted
 		// exactly as before, and no user function is ever in it.
+		//
+		// ⚠⚠ **THIS SHUTS ONE DOOR ONTO `nextStringId`, NOT THE CLASS — AND THE SECOND DOOR IS MEASURED
+		// AND STILL OPEN** (P1.8 Slice E review). `lowerMaxonToStd` runs one pass EARLIER than this one and
+		// is equally pre-elimination, and its `lowerStringLiteral`/`lowerByteStringLiteral` register
+		// `.rdata` for the body of ANY function — including a whitelisted stdlib function no path from
+		// `main` reaches. MEASURED, by appending one unreachable `export function … returns String` with a
+		// single string literal to `stdlib/helpers/string/utf16.maxon` and recompiling a two-float program
+		// that mentions no string at all: md5 `765a309c…` → `57d2a6cd…`, the literal's blob taking the
+		// front of `.rdata` and displacing both `__fconst_` payloads. So the whitelist's byte-neutrality
+		// holds TODAY only because no listed module contains a literal, which is a property of the three
+		// files listed and not of the mechanism. The fix belongs with the debt
+		// `DeadFunctionElimination`'s header already files — *"it prunes FUNCTIONS, never `.rdata`.
+		// Dead-`.rdata` elimination is a separate rung with its own goldens"* — or with a lowering that
+		// skips an unreachable stdlib body the way this pass does; either is a rung, not a line.
 		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
 			continue
 		end 'notInTheProgram'

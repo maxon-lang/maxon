@@ -1815,7 +1815,7 @@ let GraphemeClassifierArity = 1 as ParamCount
 // (`stdlib/String.maxon:392-398`) needs a type shv2 has not got.
 let StringStartsWithMethod = b"startsWith"
 let StringEndsWithMethod = b"endsWith"
-let StringContainsMethod = b"contains"
+let ContainsMethod = b"contains"
 let StringToLowerMethod = b"toLower"
 let StringToUpperMethod = b"toUpper"
 let StringReplaceMethod = b"replace"
@@ -1933,7 +1933,7 @@ end 'quadArgs'
 // **THE BUILTIN `Array` METHODS** (P1.7 slice 1). `create` is a static factory; the rest are instance
 // methods dispatched by name in `parseArrayMethodCall` off an `Array`-instance receiver. `get`/`set`/
 // `first`/`last`/`pop`/`remove` are THROWING (they ride `try … otherwise`); the rest are non-throwing.
-let ArrayCreateMethod = b"create"
+let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
 let ArrayGetMethod = b"get"
 let ArraySetMethod = b"set"
@@ -1944,8 +1944,8 @@ let ArrayFirstMethod = b"first"
 let ArrayLastMethod = b"last"
 let ArrayPopMethod = b"pop"
 let ArrayClearMethod = b"clear"
-let ArrayInsertMethod = b"insert"
-let ArrayRemoveMethod = b"remove"
+let InsertMethod = b"insert"
+let RemoveMethod = b"remove"
 
 // The whole-array copy methods (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`) and
 // returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
@@ -1963,11 +1963,19 @@ let ArrayRemoveMethod = b"remove"
 // line above them. `isEmpty` and `clone` joined the group at that slice rather than growing a fifth and
 // sixth `String`-prefixed twin.
 //
-// ⚠ **THE `Set` FAMILY IS NOT HERE, AND ITS `count`/`contains`/`create`/`insert`/`remove` ARE STILL
-// SEPARATE SPELLINGS** (`SetRuntime.maxon`'s `Set*Method` block). That is a design question rather than an
-// oversight: they are homed there deliberately, beside `setMethodMutatesReceiver`, "so adding a method
-// here and forgetting the rule is one edit away rather than two files away" — and moving them would trade
-// this duplication for that one. Left as found and reported.
+// ⚠ **THE `Set` FAMILY JOINED IT AT THE SLICE E REVIEW, AND THE REASON IT HAD BEEN LEFT OUT DOES NOT
+// SURVIVE READING THE FIVE NAMES.** `count`/`contains`/`create`/`insert`/`remove` were a second
+// `Set*Method` block in `SetRuntime.maxon` — five spellings each written twice, against `count`,
+// `contains`, `create`, `insert` and `remove` already spelled here for `Array`/`String`. The stated
+// reason was that they sat beside `setMethodMutatesReceiver` "so adding a method here and forgetting the
+// rule is one edit away rather than two files away" — but that rule names only `insert` and `remove`,
+// so it was no reason at all for the other three, and it argues for keeping the RULE beside the names,
+// not the SPELLING beside the rule. So the rule moved to `arrayMethodMutatesReceiver`'s side (below,
+// where its twin already lived) and the spellings folded in here. `SetRuntime.maxon` keeps what is
+// actually its own: the `__set_*` entry-point names.
+//
+// A rename that reached one copy and not the other was a WRONG ANSWER with no diagnostic: `Array.count`
+// and `Set.count` would answer to different tokens, each dispatcher still compiling.
 let SliceMethod = b"slice"
 let CloneMethod = b"clone"
 let AppendMethod = b"append"
@@ -1997,8 +2005,23 @@ let ArrayValueLabel = b"value"
 // "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
 // the ARGUMENT. This one is about the RECEIVER.
 function arrayMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(ArrayInsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
 end 'arrayMethodMutatesReceiver'
+
+// ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
+// beside the `Array` half above rather than in `SetRuntime.maxon`, where it used to sit holding the five
+// method-name spellings hostage with it (see the shared-spelling block). The two halves answer the same
+// question about two containers; a reader checking one now sees the other.
+//
+// `insert` adds a member and `remove` takes one out — both rewrite the record's own slots (and `insert`
+// may `__set_grow` the buffers); `contains` and `count` only read.
+//
+// **MEASURED AGAINST THE RUNNABLE ORACLE, one method at a time**, over `let s = IntSet.create()`: both of
+// these are E3019 ("cannot pass 's' to function that mutates parameter 'self'") and `contains` / `count`
+// are accepted.
+function setMethodMutatesReceiver(name ByteArray) returns bool
+	return name.equals(InsertMethod) or name.equals(RemoveMethod)
+end 'setMethodMutatesReceiver'
 
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
 // slice when positional), and its source span.
@@ -4829,7 +4852,7 @@ export type Parser
 	// The sweep has folded every inner alias before the real parse reaches here, so the lookup is complete
 	// regardless of where the alias sits in the body (a constructing method may textually precede it).
 	function opaqueArrayCreateAt(aliasPos TokenIndex) returns bool
-		if self.kindAt(aliasPos + 1) != TokenKind.dot or self.kindAt(aliasPos + 2) != TokenKind.identifier or not self.tokenAt(aliasPos + 2).value.equals(ArrayCreateMethod) or self.kindAt(aliasPos + 3) != TokenKind.leftParen 'notCreateShape'
+		if self.kindAt(aliasPos + 1) != TokenKind.dot or self.kindAt(aliasPos + 2) != TokenKind.identifier or not self.tokenAt(aliasPos + 2).value.equals(CreateMethod) or self.kindAt(aliasPos + 3) != TokenKind.leftParen 'notCreateShape'
 			return false
 		end 'notCreateShape'
 		let qualified = joinQualifiedName(self.enclosingType, member: self.tokenAt(aliasPos).value)
@@ -4860,7 +4883,7 @@ export type Parser
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
-		return name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
+		return name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
 	end 'arrayMoveOutMethodAt'
 
 	// Is the identifier at `q` the method name of a `<receiver> . slice/clone/append (` array COPY — the
@@ -5159,7 +5182,7 @@ export type Parser
 	// labelled `value:` argument) — all of which transfer ownership of that element to the array (P1.7 slice
 	// 3b-iii). `append` borrows another array, `reserve`/`resize`/`clear` take no element, so none feeds.
 	function isArrayMoveInMutator(name ByteArray) returns bool
-		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(ArrayInsertMethod)
+		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod)
 	end 'isArrayMoveInMutator'
 
 	// Is the identifier at `p` a BARE argument value — the whole of its argument slot? True iff it is bounded
@@ -20209,8 +20232,8 @@ export type Parser
 		if methodTok.value.equals(StringEndsWithMethod) 'endsWith'
 			return try self.parseStringPredicate(func, binding: binding, callee: StrEndsWithName, methodName: StringEndsWithMethod, range: range)
 		end 'endsWith'
-		if methodTok.value.equals(StringContainsMethod) 'contains'
-			return try self.parseStringPredicate(func, binding: binding, callee: StrContainsName, methodName: StringContainsMethod, range: range)
+		if methodTok.value.equals(ContainsMethod) 'contains'
+			return try self.parseStringPredicate(func, binding: binding, callee: StrContainsName, methodName: ContainsMethod, range: range)
 		end 'contains'
 		if methodTok.value.equals(StringToLowerMethod) 'toLower'
 			return try self.parseStringCaseConversion(binding, lo: AsciiUpperA, hi: AsciiUpperZ, delta: AsciiToLowerDelta, range: range)
@@ -20705,7 +20728,7 @@ export type Parser
 
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(baseTok, last: methodTok)
-		if not methodTok.value.equals(SetContainsMethod) 'unknownMethod'
+		if not methodTok.value.equals(ContainsMethod) 'unknownMethod'
 			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `contains`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
 		end 'unknownMethod'
 
@@ -21236,7 +21259,7 @@ export type Parser
 	function parseArrayStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
-		if not methodTok.value.equals(ArrayCreateMethod) 'unknownStatic'
+		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
 			throw ParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — P1.7 slice 1 provides `create()` only", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 		try self.consumeEmptyArgList()
@@ -21251,7 +21274,7 @@ export type Parser
 	function parseSetStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
-		if not methodTok.value.equals(SetCreateMethod) 'unknownStatic'
+		if not methodTok.value.equals(CreateMethod) 'unknownStatic'
 			throw ParseError.unsupported("`Set` static method '{String.from(methodTok.value)}' — P1.7b slice A provides `create()` only", line: methodTok.line, column: methodTok.column)
 		end 'unknownStatic'
 		try self.consumeEmptyArgList()
@@ -21386,22 +21409,22 @@ export type Parser
 		// cannot free an ARRAY element, which is the only borrow E3070 tracks.
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
 
-		if methodTok.value.equals(SetCountMethod) 'count'
+		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(SetCountName, args: singletonArgs(set), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
-		if methodTok.value.equals(SetContainsMethod) 'contains'
+		if methodTok.value.equals(ContainsMethod) 'contains'
 			let elem = try self.parseSetKeyArg(func, giid: giid, consume: false)
 			return self.emitRuntimeCall(SetContainsName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'contains'
-		if methodTok.value.equals(SetRemoveMethod) 'remove'
+		if methodTok.value.equals(RemoveMethod) 'remove'
 			let elem = try self.parseSetKeyArg(func, giid: giid, consume: false)
 			return self.emitRuntimeCall(SetRemoveName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'remove'
 
 		// `insert` is a non-throwing VOID mutator — rejected in value position (E3059, the shared check).
 		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
-		if methodTok.value.equals(SetInsertMethod) 'insert'
+		if methodTok.value.equals(InsertMethod) 'insert'
 			let elem = try self.parseSetKeyArg(func, giid: giid, consume: true)
 			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 			return set
@@ -21994,7 +22017,7 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitArrayElementAccessor(func, callee: ArrPopName, args: singletonArgs(arr), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'pop'
-		if methodTok.value.equals(ArrayRemoveMethod) 'remove'
+		if methodTok.value.equals(RemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
 			return self.emitArrayElementAccessor(func, callee: ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
@@ -22047,7 +22070,7 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
-		if methodTok.value.equals(ArrayInsertMethod) 'insert'
+		if methodTok.value.equals(InsertMethod) 'insert'
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, range: range)
 		end 'insert'
 		if methodTok.value.equals(AppendMethod) 'append'

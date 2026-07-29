@@ -245,6 +245,29 @@ end 'main'
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
 ```
 
+<!-- test: whitelisted-stdlib-keeps-its-range-check -->
+### A REACHABLE whitelisted stdlib function still gets its range guard
+`insertRangeChecks` skips a stdlib function no path from `main` reaches — that skip is what keeps the
+whitelist from renumbering `.rdata` for functions nobody calls. It must not be one word wider than
+that: a function the program DOES call keeps every guard it declared. `utf16LeadSurrogate` returns
+through the ranged `CodeUnit16`, and a codepoint far past the supplementary plane overflows it.
+```maxon
+function main() returns ExitCode
+	let lead = utf16LeadSurrogate(1000000000)
+	return lead - 55296
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at utf16.maxon:51: Range check failed: value outside typealias 'CodeUnit16'
+Stack trace:
+  in utf16LeadSurrogate
+  in main
+  in mrt_start
+```
+
 <!-- test: ranged-codepoint-alias-stays-legal -->
 ### A RANGED `typealias Codepoint` is still legal, exactly as one over `ExitCode` is
 The carve-out is the same one every compiler-owned name gets: a ranged alias mints no nominal identity,
@@ -281,4 +304,32 @@ end 'main'
 ```
 ```stdout
 Hi!
+```
+
+<!-- test: a-user-ranged-alias-element-keeps-its-name -->
+### The same rule for a USER-declared ranged alias, which is the arm the byte case never reaches
+The case above rides `emitArrayElementAccessor`'s trivial arm; the element type of a compiler-minted
+`Array with Byte` is not a `named` type, so it never reaches `arrayElementValueType`'s ranged-alias arm.
+A `typealias` the AUTHOR wrote does — and without that arm the element erases to a bare `int`, so
+`[x, y]` builds an eight-byte-strided `Array with integer` and `String.from` FALSE-REJECTS a program
+both references accept (measured: `E3005 requires a Array with Byte, but its argument is Array_int`).
+```maxon
+typealias Octet = int(0 to u8.max)
+typealias OctetArray = Array with Octet
+
+function main() returns ExitCode
+	var a = OctetArray.create()
+	a.push(72)
+	a.push(105)
+	let x = try a.get(0) otherwise 0
+	let y = try a.get(1) otherwise 0
+	print("{String.from([x, y])}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Hi
 ```

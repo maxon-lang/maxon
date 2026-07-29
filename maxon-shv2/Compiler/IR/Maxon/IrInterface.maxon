@@ -501,13 +501,26 @@ export let IntConformerName = b"int"
 // codepoint parameters and `utf16DecodeSurrogates`'s result as; without this it is `E3011 Unknown type
 // 'Codepoint'` five times over, which is the ONLY thing that stood between that file and compiling.
 //
-// ⚠ The erasure DROPS THE RANGE, and that costs nothing here because a REGISTRY alias's range is dropped
-// at this door too (`resolveNamedType`'s alias arm returns `alias.underlying`, width-free). MEASURED on
-// the unmodified compiler with a real `typealias Codepoint = int(0 to 1114111)` in scope:
-// `utf16Width(2000000)` compiles clean — shv2 does not range-check an argument against its parameter's
-// declared alias at all — so a synthesized alias and a declared one are indistinguishable to every check
-// that exists. A user's OWN `typealias Codepoint` keeps its range wherever ranges are enforced, because
-// those readers ask `aliasOf`, which still finds the declaration.
+// ⚠ The erasure DROPS THE RANGE. On the ARGUMENT side that costs nothing, because a REGISTRY alias's
+// range is dropped at this door too (`resolveNamedType`'s alias arm returns `alias.underlying`,
+// width-free): MEASURED on the unmodified compiler with a real `typealias Codepoint = int(0 to 1114111)`
+// in scope, `utf16Width(2000000)` compiles clean — shv2 does not range-check an argument against its
+// parameter's declared alias at all. A user's OWN `typealias Codepoint` also keeps its range wherever
+// ranges ARE enforced, because those readers ask `aliasOf`, which still finds the declaration (measured:
+// `500 as Codepoint` under a user `typealias Codepoint = int(0 to 10)` is E3005, naming `Codepoint`).
+//
+// ⚠⚠ **BUT "INDISTINGUISHABLE TO EVERY CHECK THAT EXISTS" IS NOT TRUE OF THE *RETURN* SIDE, AND THAT
+// ASYMMETRY IS LIVE INSIDE ONE STDLIB MODULE** (found at the P1.8 Slice E review). `insertRangeChecks`
+// guards a RETURN through a ranged alias, and it can only find a range a REGISTRY holds. So in
+// `stdlib/helpers/string/utf16.maxon`, a precondition violation is loud through one alias and silent
+// through the other: `utf16LeadSurrogate(1000000000)` — declared `returns CodeUnit16`, a registry alias —
+// panics `Range check failed: value outside typealias 'CodeUnit16'` (pinned by
+// `specs-shv2/string-views.md`), while `utf16DecodeSurrogates(0, low: 0)` — declared `returns Codepoint`,
+// this synthesized one — MEASURED returns **-56613888**, a negative number wearing a type whose declared
+// range starts at 0. Both are documented precondition violations and neither reference would compute
+// anything better, but only one of them says so. Closing it means giving a synthesized alias its RANGE
+// and not merely its erasure, which is `HashValue`'s question too (`int(0 to u32.max)`, same silence) and
+// therefore its own rung rather than a line here.
 export function isSynthesizedIntAliasName(name ByteArray) returns bool
 	return name.equals(HashValueTypeName) or name.equals(CodepointTypeName)
 end 'isSynthesizedIntAliasName'
