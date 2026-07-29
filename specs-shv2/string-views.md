@@ -268,6 +268,79 @@ Stack trace:
   in mrt_start
 ```
 
+<!-- test: truncated-sequences-stop-at-the-buffer-end -->
+### A lead byte may not promise more bytes than the buffer holds
+`String.from(bytes)` is the FIRST door arbitrary bytes reach the UTF-8 decoders through: every earlier
+producer of a `String` is well-formed by construction (a literal is lexer-validated, a slice is
+grapheme-aligned, `replace`/`split` rebuild from valid pieces). A truncated lead therefore used to make
+`__utf8_cp_at` read the byte PAST the allocation — measured, and it answered rather than faulting, which
+is the worst version: at the end of a slab the same read crosses a page.
+
+**A sequence the buffer cannot complete now decodes as its own lead byte and advances ONE**, so no read
+leaves the buffer. The reference produces nothing at all to match here — its `utf8DecodeAt` is
+bounds-checked and `panic`s (`stdlib/helpers/string/utf8.maxon:126`, *"2-byte seq continuation out of
+bounds"*) — so what is pinned is the memory-safety guarantee, not an answer copied from it. The last row
+is the well-formed control: it must be untouched.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteSeq = Array with Byte
+
+function show(label String, bytes ByteSeq)
+	let s = String.from(bytes)
+	var cps = ""
+	for c in s.codepoints() 'eachCp'
+		cps = "{cps}{c},"
+	end 'eachCp'
+	var units = ""
+	for u in s.utf16() 'eachUnit'
+		units = "{units}{u},"
+	end 'eachUnit'
+	print("{label} len={s.byteLength()} count={s.count()} cps=[{cps}] utf16=[{units}]\n")
+end 'show'
+
+function main() returns ExitCode
+	show("lead2-alone", bytes: b"\xC3")
+	show("lead3-one-continuation", bytes: b"\xE4\xB8")
+	show("lead4-two-continuations", bytes: b"\xF0\x9F\x98")
+	show("well-formed-3byte", bytes: b"\xE4\xB8\xAD")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+lead2-alone len=1 count=1 cps=[195,] utf16=[195,]
+lead3-one-continuation len=2 count=2 cps=[228,184,] utf16=[228,184,]
+lead4-two-continuations len=3 count=2 cps=[240,2008,] utf16=[240,2008,]
+well-formed-3byte len=3 count=1 cps=[20013,] utf16=[20013,]
+```
+
+<!-- test: codepoint-return-is-range-checked -->
+### `Codepoint` is a RANGE and not merely an erasure
+`Codepoint` is `int(0 to 1114111)` in `stdlib/Character.maxon`, a module shv2 cannot load — so the
+compiler declares the alias for itself rather than answering only "it erases to `integer`". Without the
+range, this sibling of the case above was silent where that one panics: `utf16DecodeSurrogates` on two
+non-surrogates computed **-56613888** and handed it back as a `Codepoint`, whose declared range starts
+at 0. One stdlib module, one kind of precondition violation, and it must not matter which alias the
+compiler happened to get from a registry and which it synthesized.
+```maxon
+function main() returns ExitCode
+	let cp = utf16DecodeSurrogates(0, low: 0)
+	return cp - 65536
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at utf16.maxon:67: Range check failed: value outside typealias 'Codepoint'
+Stack trace:
+  in utf16DecodeSurrogates
+  in main
+  in mrt_start
+```
+
 <!-- test: ranged-codepoint-alias-stays-legal -->
 ### A RANGED `typealias Codepoint` is still legal, exactly as one over `ExitCode` is
 The carve-out is the same one every compiler-owned name gets: a ranged alias mints no nominal identity,

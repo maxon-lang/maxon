@@ -342,8 +342,12 @@ function buildCharSetContains(module StdModule)
 	// by its base, which is what `Character.codepoint()` returns (`stdlib/Character.maxon:127-146`) and what
 	// the reference passes here (`:129`).
 	let buffer = emitLoadField(module, block: classify, record: character, offset: StringBufferOffset, ids: ids)
+	// The decoder's buffer-end bound is the Character's OWN byte length — its record is a String record, so
+	// the cluster's bytes are all there are, and a lead byte announcing more than the cluster holds must
+	// not be read past (`emitUtf8LeadLadder`).
+	let available = emitLoadField(module, block: classify, record: character, offset: StringLengthOffset, ids: ids)
 	let codepoint = ids.mint()
-	module.appendOp(classify, op: StdOp.call(codepoint, callee: Utf8CodepointAtName, args: argsOf(buffer)))
+	module.appendOp(classify, op: StdOp.call(codepoint, callee: Utf8CodepointAtName, args: twoArgs(buffer, second: available)))
 	let category = ids.mint()
 	module.appendOp(classify, op: StdOp.call(category, callee: UcdCategoryName, args: argsOf(codepoint)))
 	let shifted = emitBin(module, block: classify, a: mask, b: category, opcode: StdBinOpcode.shrLogical, ids: ids)

@@ -478,38 +478,83 @@ end 'emitOrShifted'
 // exactly the shape where a threshold corrected in one decoder and not the other makes a sequence's
 // LENGTH and its VALUE disagree: the scan then steps by the wrong width and every following cluster is
 // misread, with no error raised anywhere.
-function emitUtf8LeadLadder(module StdModule, func IrFunction, entry IrBlock, lead ValueId, oneByte IrBlock, twoByte IrBlock, threeByte IrBlock, ids ValueMinter) returns IrBlock
-	var afterAscii = emitLeadBelow(module, func: func, cur: entry, lead: lead, limit: Utf8OneByteCeiling, taken: oneByte, ids: ids)
-	var afterTwo = emitLeadBelow(module, func: func, cur: afterAscii, lead: lead, limit: Utf8LeadThreeByteFloor, taken: twoByte, ids: ids)
-	return emitLeadBelow(module, func: func, cur: afterTwo, lead: lead, limit: Utf8LeadFourByteFloor, taken: threeByte, ids: ids)
+//
+// ⭐⭐ **AND IT IS ALSO WHERE THE BUFFER END IS ENFORCED (P1.8 Slice E review), FOR PRECISELY THAT REASON.**
+// `avail` is how many bytes the caller's buffer still holds at `addr`. A lead byte announcing a sequence
+// WIDER than that is malformed input, and the answer is the ONE-BYTE arm: the decoders then read the lead
+// and nothing else, `__utf8_len_at` says 1, `__utf8_cp_at` gives the lead's own value, and the walk
+// advances by one. **The two answers cannot disagree, because the routing that produces them is this one
+// function** — which is the whole argument this ladder was extracted for, now carrying the bound as well
+// as the thresholds.
+//
+// ⚠ **WHY IT HAD TO EXIST: `String.from(bytes)` (Slice E) IS THE FIRST DOOR ARBITRARY BYTES REACH THESE
+// DECODERS THROUGH.** Every earlier producer of a `String` is well-formed by construction — a literal is
+// validated by the lexer, a slice is grapheme-aligned, `replace`/`split` rebuild from valid pieces — so a
+// lead byte never promised more than the buffer held. MEASURED before this clamp: `String.from(b"\xC3")`
+// then `.codepoints()` decoded a two-byte sequence out of a one-byte buffer, reading the byte PAST the
+// allocation. It answered rather than faulting, which is the worst version of that: at the end of a slab
+// the same read crosses a page and is an access violation instead.
+//
+// A WELL-FORMED sequence is untouched, and that is checkable rather than asserted: `avail` is then always
+// at least the declared width, every added compare falls through, and the suite's committed goldens do not
+// move.
+function emitUtf8LeadLadder(module StdModule, func IrFunction, entry IrBlock, lead ValueId, avail ValueId, oneByte IrBlock, twoByte IrBlock, threeByte IrBlock, ids ValueMinter) returns IrBlock
+	var afterAscii = emitValueBelow(module, func: func, cur: entry, value: lead, limit: Utf8OneByteCeiling, taken: oneByte, ids: ids)
+	var afterTwo = emitBandWithRoom(module, func: func, cur: afterAscii, lead: lead, avail: avail, leadLimit: Utf8LeadThreeByteFloor, width: Utf8TwoByteLength, band: twoByte, truncated: oneByte, ids: ids)
+	var afterThree = emitBandWithRoom(module, func: func, cur: afterTwo, lead: lead, avail: avail, leadLimit: Utf8LeadFourByteFloor, width: Utf8ThreeByteLength, band: threeByte, truncated: oneByte, ids: ids)
+
+	// The FOUR-byte band is the fall-through and has no lead threshold of its own, so only its room is
+	// tested. The block returned is the one the caller fills as the four-byte arm.
+	let fourByte = module.addBlock(func, label: b"four")
+	let short = emitValueBelow(module, func: func, cur: afterThree, value: avail, limit: Utf8FourByteLength, taken: oneByte, ids: ids)
+	module.setTerminator(short, op: StdOp.branch(fourByte.id))
+
+	return fourByte
 end 'emitUtf8LeadLadder'
 
-// Split `cur` on `lead < limit`: the THEN block is `taken`, the ELSE block is returned as the
-// continuation. One step of the ladder above.
-function emitLeadBelow(module StdModule, func IrFunction, cur IrBlock, lead ValueId, limit ParsedInt, taken IrBlock, ids ValueMinter) returns IrBlock
+// One WIDER band of the ladder: `lead < leadLimit` selects the band, and inside it `avail < width` means
+// the buffer cannot hold the sequence the lead announced, so the byte decodes alone. Returns the
+// continuation for the next band. Written once because the two wider bands differ only in their two
+// numbers — the shape they share is exactly the pairing of a threshold with its width, which is the thing
+// that must never be mismatched.
+function emitBandWithRoom(module StdModule, func IrFunction, cur IrBlock, lead ValueId, avail ValueId, leadLimit ParsedInt, width ParsedInt, band IrBlock, truncated IrBlock, ids ValueMinter) returns IrBlock
+	var inBand = module.addBlock(func, label: b"band")
+	let next = emitValueBelow(module, func: func, cur: cur, value: lead, limit: leadLimit, taken: inBand, ids: ids)
+	let hasRoom = emitValueBelow(module, func: func, cur: inBand, value: avail, limit: width, taken: truncated, ids: ids)
+	module.setTerminator(hasRoom, op: StdOp.branch(band.id))
+
+	return next
+end 'emitBandWithRoom'
+
+// Split `cur` on `value < limit`: the THEN block is `taken`, the ELSE block is returned as the
+// continuation. One step of the ladder above — used for both halves of a band, the LEAD against its
+// threshold and the AVAILABLE bytes against the width, because the two are the same branch.
+function emitValueBelow(module StdModule, func IrFunction, cur IrBlock, value ValueId, limit ParsedInt, taken IrBlock, ids ValueMinter) returns IrBlock
 	let next = module.addBlock(func, label: b"wider")
 	let bound = emitConst(module, block: cur, value: limit, ids: ids)
-	let below = emitCmp(module, block: cur, a: lead, b: bound, pred: StdCmpPred.lt, ids: ids)
+	let below = emitCmp(module, block: cur, a: value, b: bound, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(below, thenBlockId: taken.id, elseBlockId: next.id))
 	return next
-end 'emitLeadBelow'
+end 'emitValueBelow'
 
-// `__utf8_len_at(addr) -> i64` — the byte length of the UTF-8 sequence beginning at `addr`
-// (`utf8.maxon:101-115`), decided by the LEAD byte alone.
+// `__utf8_len_at(addr, avail) -> i64` — the byte length of the UTF-8 sequence beginning at `addr`
+// (`utf8.maxon:101-115`), decided by the LEAD byte alone — except that a sequence the buffer cannot hold
+// is one byte, which is `emitUtf8LeadLadder`'s clamp and is stated there.
 function buildUtf8LengthAt(module StdModule)
-	var func = IrFunction.createFromStd(Utf8LengthAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+	var func = IrFunction.createFromStd(Utf8LengthAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var oneByte = module.addBlock(func, label: b"one")
 	var twoByte = module.addBlock(func, label: b"two")
 	var threeByte = module.addBlock(func, label: b"three")
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: entry, count: 2)
 	let addr = 0 as ValueId
+	let avail = 1 as ValueId
 
 	let lead = emitLoadByteAt(module, block: entry, addr: addr, ids: ids)
-	var fourByte = emitUtf8LeadLadder(module, func: func, entry: entry, lead: lead, oneByte: oneByte, twoByte: twoByte, threeByte: threeByte, ids: ids)
+	var fourByte = emitUtf8LeadLadder(module, func: func, entry: entry, lead: lead, avail: avail, oneByte: oneByte, twoByte: twoByte, threeByte: threeByte, ids: ids)
 	emitConstReturn(module, block: oneByte, value: Utf8OneByteLength, ids: ids)
 	emitConstReturn(module, block: twoByte, value: Utf8TwoByteLength, ids: ids)
 	emitConstReturn(module, block: threeByte, value: Utf8ThreeByteLength, ids: ids)
@@ -517,25 +562,28 @@ function buildUtf8LengthAt(module StdModule)
 	module.functions.push(func)
 end 'buildUtf8LengthAt'
 
-// `__utf8_cp_at(addr) -> i64` — the codepoint of the UTF-8 sequence beginning at `addr`
-// (`utf8.maxon:118-152`). The same three-way lead-byte ladder `__utf8_len_at` walks; each arm assembles
-// the lead's payload bits with its continuation bytes'.
+// `__utf8_cp_at(addr, avail) -> i64` — the codepoint of the UTF-8 sequence beginning at `addr`
+// (`utf8.maxon:118-152`). The same three-way lead-byte ladder `__utf8_len_at` walks, and the same
+// buffer-end clamp: it is what stops an arm below from reading a continuation byte the buffer does not
+// have (see `emitUtf8LeadLadder`). Each arm assembles the lead's payload bits with its continuation bytes'.
 function buildUtf8CodepointAt(module StdModule)
-	var func = IrFunction.createFromStd(Utf8CodepointAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+	var func = IrFunction.createFromStd(Utf8CodepointAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var oneByte = module.addBlock(func, label: b"one")
 	var twoByte = module.addBlock(func, label: b"two")
 	var threeByte = module.addBlock(func, label: b"three")
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: entry, count: 2)
 	let addr = 0 as ValueId
+	let avail = 1 as ValueId
 
 	let lead = emitLoadByteAt(module, block: entry, addr: addr, ids: ids)
-	var fourByte = emitUtf8LeadLadder(module, func: func, entry: entry, lead: lead, oneByte: oneByte, twoByte: twoByte, threeByte: threeByte, ids: ids)
+	var fourByte = emitUtf8LeadLadder(module, func: func, entry: entry, lead: lead, avail: avail, oneByte: oneByte, twoByte: twoByte, threeByte: threeByte, ids: ids)
 
-	// An ASCII byte IS its codepoint.
+	// An ASCII byte IS its codepoint — and so is a TRUNCATED lead, which the ladder routes here: with no
+	// room for its continuation bytes there is nothing else to read, and the byte stands for itself.
 	module.setTerminator(oneByte, op: StdOp.ret(lead))
 
 	let twoLead = emitLeadBits(module, block: twoByte, lead: lead, mask: Utf8LeadTwoByteMask, shift: Utf8ContinuationBits, ids: ids)
@@ -846,7 +894,7 @@ function buildGraphemeEnd(module StdModule)
 	module.setTerminator(notCr, op: StdOp.condBranch(nextAscii, thenBlockId: singleByte.id, elseBlockId: nextIsWide.id))
 
 	let nextCp = ids.mint()
-	module.appendOp(nextIsWide, op: StdOp.call(nextCp, callee: Utf8CodepointAtName, args: argsOf(nextAddr)))
+	module.appendOp(nextIsWide, op: StdOp.call(nextCp, callee: Utf8CodepointAtName, args: twoArgs(nextAddr, second: emitBin(module, block: nextIsWide, a: len, b: nextPos, opcode: StdBinOpcode.sub, ids: ids))))
 	let nextGbp = ids.mint()
 	module.appendOp(nextIsWide, op: StdOp.call(nextGbp, callee: GbpName, args: argsOf(nextCp)))
 	// GB9 (× Extend, × ZWJ) and GB9a (× SpacingMark): any of the three JOINS, so only a property outside
@@ -875,12 +923,16 @@ function emitGeneralScan(module StdModule, func IrFunction, cur IrBlock, buf Val
 
 	// Seed: the first codepoint's property and the state after consuming it.
 	let firstAddr = emitBin(module, block: cur, a: buf, b: startPos, opcode: StdBinOpcode.add, ids: ids)
+	// Both decoders get the bytes REMAINING from here, so a truncated tail decodes as its own lead byte
+	// and steps one instead of reading past the buffer (`emitUtf8LeadLadder`). One value, both calls: the
+	// width and the value must be answered about the same amount of buffer or they can disagree.
+	let firstAvail = emitBin(module, block: cur, a: len, b: startPos, opcode: StdBinOpcode.sub, ids: ids)
 	let firstCp = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstCp, callee: Utf8CodepointAtName, args: argsOf(firstAddr)))
+	module.appendOp(cur, op: StdOp.call(firstCp, callee: Utf8CodepointAtName, args: twoArgs(firstAddr, second: firstAvail)))
 	let firstGbp = ids.mint()
 	module.appendOp(cur, op: StdOp.call(firstGbp, callee: GbpName, args: argsOf(firstCp)))
 	let firstLen = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstLen, callee: Utf8LengthAtName, args: argsOf(firstAddr)))
+	module.appendOp(cur, op: StdOp.call(firstLen, callee: Utf8LengthAtName, args: twoArgs(firstAddr, second: firstAvail)))
 	let firstPos = emitBin(module, block: cur, a: startPos, b: firstLen, opcode: StdBinOpcode.add, ids: ids)
 	let zeroState = emitConst(module, block: cur, value: 0, ids: ids)
 	let firstState = ids.mint()
@@ -899,8 +951,11 @@ function emitGeneralScan(module StdModule, func IrFunction, cur IrBlock, buf Val
 	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: stop.id, elseBlockId: probe.id))
 
 	let addr = emitBin(module, block: probe, a: buf, b: pos, opcode: StdBinOpcode.add, ids: ids)
+	// Formed in `probe`, which dominates `advance`, so the value decoded and the width stepped are
+	// answered about ONE remaining count — see the seed above.
+	let avail = emitBin(module, block: probe, a: len, b: pos, opcode: StdBinOpcode.sub, ids: ids)
 	let currCp = ids.mint()
-	module.appendOp(probe, op: StdOp.call(currCp, callee: Utf8CodepointAtName, args: argsOf(addr)))
+	module.appendOp(probe, op: StdOp.call(currCp, callee: Utf8CodepointAtName, args: twoArgs(addr, second: avail)))
 	let currGbp = ids.mint()
 	module.appendOp(probe, op: StdOp.call(currGbp, callee: GbpName, args: argsOf(currCp)))
 	let breaks = ids.mint()
@@ -910,7 +965,7 @@ function emitGeneralScan(module StdModule, func IrFunction, cur IrBlock, buf Val
 	let nextState = ids.mint()
 	module.appendOp(advance, op: StdOp.call(nextState, callee: GraphemeStateName, args: threeArgs(state, second: currGbp, third: currCp)))
 	let step = ids.mint()
-	module.appendOp(advance, op: StdOp.call(step, callee: Utf8LengthAtName, args: argsOf(addr)))
+	module.appendOp(advance, op: StdOp.call(step, callee: Utf8LengthAtName, args: twoArgs(addr, second: avail)))
 	let nextPos = emitBin(module, block: advance, a: pos, b: step, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(advance, op: StdOp.branch(header.id))
 	advance.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(nextPos, second: currGbp, third: nextState)))
@@ -1046,14 +1101,19 @@ end 'buildStrToBytes'
 // is its runtime half.
 //
 // The caller creates the blocks (so their creation ORDER, and with it every label, stays the caller's)
-// and this wires them — `emitUtf8LeadLadder`'s arrangement in this file, for its reason. `length` is not
-// handed back because no body reads it: it is consumed by the bound test here.
+// and this wires them — `emitUtf8LeadLadder`'s arrangement in this file, for its reason.
+//
+// `length` rides back alongside the cursor because a DECODING body needs it: the bytes remaining at the
+// cursor are what bound the decoder's read (`emitUtf8LeadLadder`), and deriving that from a second load
+// would be the same field read twice with nothing making the two agree. `__str_to_bytes` reads one byte at
+// a time and simply ignores it.
 type StringWalkCursor
 	export var position as ValueId
 	export var buffer as ValueId
+	export var length as ValueId
 
-	static function create(position ValueId, buffer ValueId) returns StringWalkCursor
-		return Self{position: position, buffer: buffer}
+	static function create(position ValueId, buffer ValueId, length ValueId) returns StringWalkCursor
+		return Self{position: position, buffer: buffer, length: length}
 	end 'create'
 end 'StringWalkCursor'
 
@@ -1071,7 +1131,7 @@ function emitStringWalkSkeleton(module StdModule, entry IrBlock, header IrBlock,
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 	module.setTerminator(done, op: StdOp.retVoid)
 
-	return StringWalkCursor.create(position, buffer: buf)
+	return StringWalkCursor.create(position, buffer: buf, length: len)
 end 'emitStringWalkSkeleton'
 
 // ⭐ **`__str_to_codepoints(strRec, arr)` — `.codepoints()`, `__str_to_bytes`'s sibling one decoding level
@@ -1100,12 +1160,13 @@ function buildStrToCodepoints(module StdModule)
 	let i = walk.position
 
 	let addr = emitBin(module, block: body, a: walk.buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let avail = emitBin(module, block: body, a: walk.length, b: i, opcode: StdBinOpcode.sub, ids: ids)
 	let cp = ids.mint()
-	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: argsOf(addr)))
+	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: twoArgs(addr, second: avail)))
 	let pushed = ids.mint()
 	module.appendOp(body, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(arr, second: cp)))
 	let width = ids.mint()
-	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: argsOf(addr)))
+	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: twoArgs(addr, second: avail)))
 	let iNext = emitBin(module, block: body, a: i, b: width, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(body, op: StdOp.branch(header.id))
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
@@ -1148,10 +1209,11 @@ function buildStrToUtf16(module StdModule)
 	// `body` dominates both encoding arms, so the advance is formed once here and each arm carries it back
 	// to the header — the cursor moves by the SOURCE sequence's width whichever encoding the codepoint took.
 	let addr = emitBin(module, block: body, a: walk.buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let avail = emitBin(module, block: body, a: walk.length, b: i, opcode: StdBinOpcode.sub, ids: ids)
 	let cp = ids.mint()
-	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: argsOf(addr)))
+	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: twoArgs(addr, second: avail)))
 	let width = ids.mint()
-	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: argsOf(addr)))
+	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: twoArgs(addr, second: avail)))
 	let iNext = emitBin(module, block: body, a: i, b: width, opcode: StdBinOpcode.add, ids: ids)
 	let supplementaryBase = emitConst(module, block: body, value: Utf16SupplementaryBase, ids: ids)
 	let isBmp = emitCmp(module, block: body, a: cp, b: supplementaryBase, pred: StdCmpPred.lt, ids: ids)

@@ -372,6 +372,29 @@ end 'AliasRecordOutcome'
 // files and none is the reader's, the bare probe still answers last-wins. That is the E3063
 // ambiguity case, and reporting it needs cross-file name resolution — the same rung that gives
 // `export` its meaning as a key.
+// `stdlib/Character.maxon`'s `export typealias Codepoint = int(0 to 1114111)`, transcribed — the highest
+// Unicode scalar value, which is what makes the upper bound this number and not a round one.
+let CodepointAliasLow = 0 as ParsedInt
+let CodepointAliasHigh = 1114111 as ParsedInt
+
+// The file the seed claims as its declaring one. It names the module the line actually comes from, so a
+// diagnostic that ever prints it points at the truth; and because no file shv2 LOADS carries this path
+// (loading `Character.maxon` is what the compiler cannot do), it can never collide with a reader's own
+// path in `multiplyDeclared` — so a user's declaration always wins in the user's own file.
+let CodepointAliasDeclPath = "stdlib/Character.maxon"
+
+// The seed itself, built once per registry. Positions are 0: there is no source line in THIS program to
+// blame, and the only diagnostics that read them (E3061 same-file redeclaration, E3105 cross-file
+// primitive conflict) cannot fire against it — a user redeclaring `Codepoint` is in a different file, and
+// over `int`, which is this one's primitive too.
+function builtinCodepointAlias() returns RangedTypeAlias
+	// Bound to a local rather than written inline as the argument: the bootstrap mislowers a
+	// `try … otherwise panic(…)` in argument position (E9001, "not in valueMap" against the pin temp).
+	let declPath = try FilePath.from(CodepointAliasDeclPath) otherwise panic("builtinCodepointAlias: '{CodepointAliasDeclPath}' is a literal relative path with no invalid character in it")
+
+	return RangedTypeAlias.create(CodepointTypeName, underlying: MaxonType.integer, low: CodepointAliasLow, high: CodepointAliasHigh, declFilePath: declPath, nameLine: 0, nameColumn: 0)
+end 'builtinCodepointAlias'
+
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
 	// whole-program behaviour, which is what makes the bare probe safe to keep.
@@ -396,8 +419,41 @@ export type RangedAliasRegistry
 	// written once per `typealias` declaration in the program.
 	var storageBytes as AliasStorageBytesMap
 
+	// ⭐⭐ **EVERY REGISTRY IS BORN HOLDING `Codepoint`, AND THAT IS WHAT GIVES IT A RANGE (P1.8 Slice E
+	// review).** `Codepoint` is declared, verbatim and with these bounds, in `stdlib/Character.maxon` —
+	// a module shv2 cannot LOAD, because it also declares `type Character`, a name the compiler owns. So
+	// the alias was answered by `isSynthesizedIntAliasName` instead, which supplies the ERASURE (`→
+	// integer`) and has nowhere to put a RANGE.
+	//
+	// ⚠ **AND A RANGE IT HAD TO HAVE, because `insertRangeChecks` guards a RETURN through a ranged alias
+	// and can only find a range a registry holds.** MEASURED before this seed, inside ONE stdlib module:
+	// `utf16LeadSurrogate(1000000000)` — declared `returns CodeUnit16`, an ordinary registry alias
+	// declared in `utf16.maxon` — panicked correctly, while `utf16DecodeSurrogates(0, low: 0)` — declared
+	// `returns Codepoint` — returned **-56613888**, a negative number wearing a type whose declared range
+	// starts at 0. Two behaviours for one kind of precondition violation, and the difference was an
+	// implementation detail of how shv2 came by the name.
+	//
+	// ⭐ **SEEDED HERE, IN THE ONE CONSTRUCTOR, so there is ONE home for the fact and no per-file loop to
+	// forget.** All three registries in the compiler are built through this function — `ProgramSignatures`'
+	// (which `aliasOf` reads to PLAN a return check) and `Project`'s (which `InsertRangeChecks` reads to
+	// get the BOUNDS, and `resolveNamedType` to erase the name), created at `Project.create` and again at
+	// `Queries`' reset. A seed at either registry alone would have made the planner and the emitter
+	// disagree about whether `Codepoint` has a range at all.
+	//
+	// It goes through `record`, not a bare upsert, for the reason the sweep does: this registry and the
+	// project's must be BUILT by one function or a contested name resolves differently in each. And
+	// because it is `record`ed as an ordinary declaration of an ordinary file, a USER's own
+	// `typealias Codepoint = int(0 to 10)` simply contests it — `multiplyDeclared` files both, the user's
+	// file resolves to the user's bounds, and `utf16.maxon` (which is neither file) falls through to
+	// `byName`, where this seed sits because it was recorded first. No carve-out anywhere.
+	//
+	// ⚠ It is deliberately NOT folded into `ProgramSignatures`' content hash (that happens in
+	// `recordAlias`, one level up). The seed is identical in every program, so it distinguishes nothing —
+	// hashing it would invalidate every parse memo in the project to record a constant.
 	export static function create() returns RangedAliasRegistry
-		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create()}
+		var registry = Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create()}
+		_ = registry.record(builtinCodepointAlias())
+		return registry
 	end 'create'
 
 	// File one declaration, and answer whether its UNDERLYING PRIMITIVE conflicts with the one every
