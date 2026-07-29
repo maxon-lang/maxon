@@ -16,13 +16,18 @@ those tests red**, which is a coverage hole rather than a passing grade.
 
 Each case names the sabotage that found it.
 
-| Sabotage | Reds in the ported corpus | Covered here by |
-|---|---|---|
-| `__str_trim`'s all-matched arm reopened to the byte length | 2 — both `trim()` | `trim-start-all-match`, `trim-end-all-match` |
-| a `Set` key argument no longer adopts the set's key type | 0 | `character-key-insert-contains`, `character-key-remove` |
-| `Character` withdrawn from the `Set` key-type gate | 0 | `character-set-create` |
-| `__ucd_cat`'s supplementary-plane search removed | 0 | `supplementary-plane-category` |
-| a bare-local member set not poisoned when `from` consumes it | 0 | `member-set-moved-into-from` |
+| Sabotage | Reds in the ported corpus alone | With this file | Covered by |
+|---|---|---|---|
+| `__str_trim`'s all-matched arm reopened to the byte length | 2 — both `trim()` | 4 | `trim-start-all-match`, `trim-end-all-match` |
+| a `Set` key argument no longer adopts the set's key type | **0** | 2 | `character-key-insert-contains`, `character-key-remove` |
+| `Character` withdrawn from the `Set` key-type gate | **0** | 3 | `character-set-create` (+ the two above) |
+| `__ucd_cat`'s supplementary-plane search removed | **0** | 2 | `supplementary-plane-category`, `supplementary-plane-trim` |
+| a bare-local member set not poisoned when `from` consumes it | **0** | 2 | `member-set-moved-into-from`, `member-set-consumed-twice` |
+
+Two sabotages the ported corpus already covered well, recorded so the next reader does not re-run them:
+a member set never enrolled as an owned temporary is **31** red, and explicit membership never winning
+over the category mask is **3** red (`trim-tabs-and-newlines`, `trim-mixed-whitespace`,
+`unicode-category/custom-set-unchanged` — exactly the seeds no category bit covers).
 
 ## Tests
 
@@ -192,6 +197,24 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:5:10: use of moved value 'members': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: member-set-consumed-twice -->
+### One member set cannot fill two CharacterSets
+The second `from` reads a value the first already took ownership of — an ARGUMENT position rather than
+the method-receiver position above, so the poison is caught at both of the two sites a moved member set
+can be read from.
+```maxon
+function main() returns ExitCode
+	let members = CharSet from ['x']
+	let first = CharacterSet.from(members)
+	let second = CharacterSet.from(members)
+	print("{first.contains('x')}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:5:33: use of moved value 'members': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: member-set-dropped-unused -->
