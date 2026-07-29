@@ -1620,6 +1620,11 @@ export let CharacterSetTypeName = b"__CharacterSet"
 // is reachable through. Distinct from the reserved registry name above, and deliberately so.
 export let CharacterSetBuiltinName = b"CharacterSet"
 
+// The builtin alias for a `CharacterSet`'s member set — the reference's own `typealias CharSet =
+// Set with Character` (`stdlib/CharacterSet.maxon:19`), which `CharacterSet.from` takes and the corpus
+// spells (`specs/unicode-category.md:121`). Registered by `registerCharacterSetType`.
+export let CharacterMemberSetAliasName = b"CharSet"
+
 // Its two fields, in the reference's own declaration ORDER — which IS the layout, since
 // `StructLayout.offsetOfField` derives an offset from the index (`stdlib/CharacterSet.maxon:23-24`). Both
 // are `let` and unexported there, and nothing reads them through a field access here: the front end never
@@ -3742,6 +3747,15 @@ export type ProgramSignatures
 	// `CharacterSet` owns its member set, and the field's declared type is what routes the box's drop.
 	export function registerCharacterSetType()
 		let charsInstance = self.setInstanceForCharacter()
+		// ⭐ **`CharSet` IS A BUILTIN GENERIC-INSTANCE ALIAS, exactly as the reference declares it**
+		// (`typealias CharSet = Set with Character`, `stdlib/CharacterSet.maxon:19`) — it is the type
+		// `CharacterSet.from` takes, and shv2 reads no stdlib to get it from. Registered through the SAME
+		// `genericAliases` map a user `typealias` folds into, so `CharSet.create()` and `CharSet from […]`
+		// reach the ordinary `Set` alias paths with nothing special-cased at either.
+		// ⚠ It therefore RESERVES the name program-wide for a file that names a `CharacterSet` producer,
+		// exactly as listing a stdlib module reserves its type names (`StdlibLoader`'s collision rule). The
+		// reference reserves it too, being an exported alias of a module every program loads.
+		self.genericAliases.upsert(CharacterMemberSetAliasName, value: charsInstance)
 		if self.structTypes.contains(CharacterSetTypeName) 'alreadyRegistered'
 			return
 		end 'alreadyRegistered'

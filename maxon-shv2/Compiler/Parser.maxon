@@ -4158,7 +4158,13 @@ export type Parser
 	// — a `Set from` would go un-pre-interned, and the parser's instance read would become the FIRST write to the
 	// shared registry mid-parse: an order-dependent gid no drift guard can see. Teaching this one predicate teaches both.
 	function atSetFromConstruction() returns bool
-		return self.at(TokenKind.identifier) and self.current().value.equals(SetBuiltinBaseName) and self.peekKind() == TokenKind.from
+		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from) 'notAFromConstruction'
+			return false
+		end 'notAFromConstruction'
+		// The bare base name, or a `Set` INSTANCE ALIAS (`CharSet from ['x']`, P1.8 Slice D). The alias form
+		// is what the corpus spells for a Character-keyed set, and it is the only form that can name a key
+		// type the array literal cannot infer.
+		return self.current().value.equals(SetBuiltinBaseName) or self.namesSetInstanceAlias(self.current().value)
 	end 'atSetFromConstruction'
 
 	// Is the cursor on the `.` of a `<receiver>.split` method call? Asked at the DOT rather than at the
@@ -4244,7 +4250,9 @@ export type Parser
 	// `fileNamesCharacterSetProducer` for why those are the two. Deliberately TOLERANT, like every sweep
 	// probe: it sees tokens, not types, so it over-registers rather than missing.
 	function atCharacterSetProducer() returns bool
-		if self.at(TokenKind.identifier) and self.current().value.equals(CharacterSetBuiltinName) 'namesTheType'
+		// The TYPE's own name, or its member-set ALIAS: `CharSet` is registered by the same call, so a file
+		// that only writes `CharSet from ['x']` must trigger it too or the alias would not exist.
+		if self.at(TokenKind.identifier) and (self.current().value.equals(CharacterSetBuiltinName) or self.current().value.equals(CharacterMemberSetAliasName)) 'namesTheType'
 			return true
 		end 'namesTheType'
 		return self.atBuiltinMethodCall(StringTrimMethod) or self.atBuiltinMethodCall(StringTrimStartMethod) or self.atBuiltinMethodCall(StringTrimEndMethod)
@@ -20395,6 +20403,14 @@ export type Parser
 	// rung, and a wrong answer is not on the table either way.
 	function parseCharacterSetStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
+
+		// ⚠ **`from` IS A KEYWORD, NOT AN IDENTIFIER** — it opens a `Set from […]` construction — so the
+		// twelfth static is recognized by its TOKEN KIND before the identifier the eleven accessors are.
+		if self.at(TokenKind.from) 'fromStatic'
+			let fromTok = try self.consume(TokenKind.from)
+			return try self.parseCharacterSetFrom(func, range: SourceRange.between(typeTok, last: fromTok))
+		end 'fromStatic'
+
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(typeTok, last: methodTok)
 
@@ -20404,10 +20420,6 @@ export type Parser
 				return try self.emitPredefinedCharacterSet(preset, range: range)
 			end 'match'
 		end 'eachPreset'
-
-		if methodTok.value.equals(CharSetFromMethod) 'from'
-			return try self.parseCharacterSetFrom(func, range: range)
-		end 'from'
 
 		throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` static '{String.from(methodTok.value)}' — shv2 provides the eleven predefined sets and `from(chars)`", line: methodTok.line, column: methodTok.column)
 	end 'parseCharacterSetStaticCall'
@@ -20419,40 +20431,76 @@ export type Parser
 	// released by `__cs_decref` → `__set_decref`, with nothing aliased to `.rdata`.
 	function emitPredefinedCharacterSet(preset CharacterSetPreset, range SourceRange) returns ValueId throws ParseError
 		let chars = try self.emitCharacterMemberSet(preset.members, range: range)
-		return self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, range: range)
+		return try self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, argBareLocal: false, anchor: self.current(), range: range)
 	end 'emitPredefinedCharacterSet'
 
-	// A fresh `Set with Character` holding one member per byte sequence. The ONE door a compiler-built member
-	// set comes through, so the eleven presets cannot disagree about how a member is owned.
-	//
-	// The set is deliberately NOT enrolled as a pending temporary: it is handed straight to `__cs_make`,
-	// which becomes its sole owner, and the BOX is what gets tracked. Enrolling it too would drop it at
-	// statement end while the box still held it.
+	// A fresh `Set with Character` seeded from a preset's byte sequences. Each member is a `Character`
+	// LITERAL the parser mints, promoted to an owned copy on the way in exactly as a source `insert` is.
 	function emitCharacterMemberSet(members ByteArrayArray, range SourceRange) returns ValueId throws ParseError
-		let chars = self.emitSetCreateOp(self.signatures.setInstanceForCharacter(), range: range)
+		let chars = self.emitEmptyCharacterMemberSet(range)
 		let anchor = self.current()
 		for bytes in members 'eachMember'
 			let owned = try self.moveManagedValueInto(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, isString: true, anchor: anchor, range: range)
-			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(chars, second: owned), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			self.emitCharacterMemberInsert(chars, member: owned, range: range)
 		end 'eachMember'
 		return chars
 	end 'emitCharacterMemberSet'
 
+	// `CharSet from ['x', 'y', 'z']` — the SOURCE form of a member set. The cursor sits on the `[`. Each
+	// element is characterized (`'x'` adopts `Character`) and MOVED in, exactly as a preset's minted literal
+	// is, so the two producers cannot disagree about who owns a member.
+	function parseCharacterMemberSetLiteral(func IrFunction, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftBracket)
+		let chars = self.emitEmptyCharacterMemberSet(range)
+		while not self.at(TokenKind.rightBracket) 'eachMember'
+			let memberTok = self.current()
+			let memberStart = self.pos
+			let member = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: ValueTypeTag.character, start: memberStart, pastEnd: self.pos)
+			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
+				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
+			end 'notACharacter'
+			self.emitCharacterMemberInsert(chars, member: try self.moveManagedValueInto(member, argBareLocal: self.rhsWasBareLocalReference(memberStart), isString: true, anchor: memberTok, range: range), range: range)
+			if not self.at(TokenKind.rightBracket) 'moreMembers'
+				try self.consume(TokenKind.comma)
+			end 'moreMembers'
+		end 'eachMember'
+		try self.consume(TokenKind.rightBracket)
+		return chars
+	end 'parseCharacterMemberSetLiteral'
+
+	// ⭐ **THE ONE DOOR AN EMPTY `Set with Character` COMES THROUGH**, so the preset seeds and a source
+	// `CharSet from […]` cannot disagree about which instance a member set is.
+	//
+	// It IS enrolled as a pending temporary, exactly as `IntSet.create()`'s result is: a `let s = CharSet from
+	// ['x']` that never reaches a box must still be dropped at scope exit. The box's `moveManagedValueInto`
+	// de-lists it again when one does take ownership, so it is dropped exactly once either way.
+	function emitEmptyCharacterMemberSet(range SourceRange) returns ValueId
+		let chars = self.emitSetCreateOp(self.signatures.setInstanceForCharacter(), range: range)
+		self.trackOwnedTemp(chars)
+		return chars
+	end 'emitEmptyCharacterMemberSet'
+
+	// One member into a member set. The insert is a VOID mutator; the set OWNS the member from here.
+	function emitCharacterMemberInsert(chars ValueId, member ValueId, range SourceRange)
+		_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(chars, second: member), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitCharacterMemberInsert'
+
 	// ⭐ **THE ONE DOOR A `CharacterSet` BOX IS BORN THROUGH** — `__cs_make(chars, categoryMask)`, whose
 	// result is an OWNED box tracked so an unbound one drops at statement end and a bound one at scope exit,
 	// through `__cs_decref` (`managedNameDropCallee`'s `CharacterSet` arm).
-	function emitCharacterSetBox(chars ValueId, categoryMask ParsedInt, range SourceRange) returns ValueId
+	// The member set is MOVED in: the box becomes its sole owner, so an owned temporary is de-listed from the
+	// statement's pending drops and a bare local is POISONED — the SAME `moveManagedValueInto` a set key and
+	// an array element take, so a member set that reaches a box cannot also be freed by its own scope.
+	function emitCharacterSetBox(chars ValueId, categoryMask ParsedInt, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let owned = try self.moveManagedValueInto(chars, argBareLocal: argBareLocal, isString: false, anchor: anchor, range: range)
 		let mask = self.emitLiteral(categoryMask, valueType: MaxonType.integer, range: range)
-		return self.emitOwnedRuntimeResult(CharSetMakeName, args: pairArgs(chars, second: mask), resultTag: ValueTypeTag.structRef, resultNameId: self.characterSetNameId(), range: range)
+		return self.emitOwnedRuntimeResult(CharSetMakeName, args: pairArgs(owned, second: mask), resultTag: ValueTypeTag.structRef, resultNameId: self.characterSetNameId(), range: range)
 	end 'emitCharacterSetBox'
 
 	// `CharacterSet.from(chars)` — a set of EXPLICIT members and nothing else, so its category mask is zero
 	// (`stdlib/CharacterSet.maxon:119-121`), which is what makes `contains` skip the codepoint decode and the
 	// table read entirely.
 	//
-	// The member set is MOVED into the box: it becomes the box's sole owner, so an owned temporary is
-	// de-listed and a bare local is poisoned — the SAME `moveManagedValueInto` a set key and an array element
-	// take, so a `CharSet` that reaches `from` cannot also be freed by its own scope.
 	function parseCharacterSetFrom(func IrFunction, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let argTok = self.current()
@@ -20461,9 +20509,9 @@ export type Parser
 		if not self.valueIsCharacterMemberSet(chars) 'notACharacterSet'
 			throw ParseError.builtinOperandType("{String.from(CharacterSetBuiltinName)}.{String.from(CharSetFromMethod)}", required: String.from(CharacterMemberSetDisplayName), got: typeTagName(self.tagOf(chars)), line: argTok.line, column: argTok.column)
 		end 'notACharacterSet'
-		let owned = try self.moveManagedValueInto(chars, argBareLocal: self.rhsWasBareLocalReference(argStart), isString: false, anchor: argTok, range: range)
+		let bareLocal = self.rhsWasBareLocalReference(argStart)
 		try self.consume(TokenKind.rightParen)
-		return self.emitCharacterSetBox(owned, categoryMask: CharSetNoCategories, range: range)
+		return try self.emitCharacterSetBox(chars, categoryMask: CharSetNoCategories, argBareLocal: bareLocal, anchor: argTok, range: range)
 	end 'parseCharacterSetFrom'
 
 	// Is `value` a `Set with Character` — the one argument `CharacterSet.from` accepts? Asked of the VALUE's
@@ -21089,6 +21137,13 @@ export type Parser
 	// it), so the array stays a pending owned temporary the caller drops at statement end, and the constructed set
 	// drops at scope exit through `genericInstanceBoxDropCallee` → `__set_decref` — no double-free. INT keys only
 	// this slice (a String / managed-element literal is a later slice), gated like `IntSet.create()`.
+	// Is `name` a typealias for a `Set` instance — the alias form of a `from` construction's head? Asked of
+	// the whole-program index, which is complete in the real parse; during the tolerant sweep every alias
+	// answers no, which is sound because the sweep's artifact is discarded.
+	function namesSetInstanceAlias(name ByteArray) returns bool
+		return self.signatures.isGenericAlias(name) and self.signatures.isSetInstance(self.signatures.genericAliasInstance(name))
+	end 'namesSetInstanceAlias'
+
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let setTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.from)
@@ -21098,6 +21153,16 @@ export type Parser
 			let srcTok = self.current()
 			throw ParseError.unsupported("`Set from` requires an array literal `[…]` — `Set from <expr>` for another source is a later slice", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
+
+		// ⭐ **A CHARACTER-KEYED SET IS BUILT MEMBER BY MEMBER, NOT THROUGH AN ARRAY (P1.8 Slice D).** Every
+		// other key type infers its instance from the array literal's ELEMENT type — but a single-byte
+		// character literal materializes as an INT (shv2 types one by its byte width), so `['x','y','z']`
+		// would infer `Array with integer` and a `Set with int` of byte values. The ALIAS states the key type
+		// the elements cannot, so the bracket list is read as members directly and each element adopts
+		// `Character` the way every other Character-expecting position makes a literal adopt it.
+		if self.namesSetInstanceAlias(setTok.value) and self.signatures.genericAliasInstance(setTok.value) == self.signatures.setInstanceForCharacter() 'characterKeyed'
+			return try self.parseCharacterMemberSetLiteral(func, range: SourceRange.ofToken(setTok))
+		end 'characterKeyed'
 
 		let arr = try self.parseArrayLiteral(func)
 		let setGid = try self.setInstanceForArrayLiteral(self.valueNameId(arr), setTok: setTok)
