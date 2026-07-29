@@ -290,6 +290,35 @@ end 'main'
 33
 ```
 
+<!-- test: directives.else-inside-dead-branch-stays-dead -->
+⭐ **An `#else` nested inside a DEAD outer branch must NOT go live** — the one shape where "has an arm
+of this `#if` been taken?" is not enough on its own, because no arm of the inner `#if` was ever
+offered. Every other nested case in this file and in `specs/compiler-directives.md` has a LIVE outer
+branch, so none of them can tell a correct implementation from one that resurrects the inner `#else`.
+
+Found by deliberately breaking the filter and watching which tests did not notice. If the inner
+`#else` went live, `ghostB` would be parsed and its undefined callee reported.
+```maxon
+#if testing(true)
+	#if testing(true)
+		function ghostA() returns ExitCode
+			return no_such_function_a()
+		end 'ghostA'
+	#else
+		function ghostB() returns ExitCode
+			return no_such_function_b()
+		end 'ghostB'
+	#endif
+#endif
+
+function main() returns ExitCode
+	return 36
+end 'main'
+```
+```exitcode
+36
+```
+
 <!-- test: directives.unknown-os-argument-is-false -->
 `os(Plan9)` — an unknown ARGUMENT to a KNOWN predicate is silently FALSE, not an error. That is what
 lets portable source name a platform this compiler does not target. Contrast

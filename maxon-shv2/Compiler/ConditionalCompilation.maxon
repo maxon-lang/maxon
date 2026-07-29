@@ -73,6 +73,11 @@ type DirectiveFrame
 	// Has ANY arm of this `#if` been taken? What makes `#else` the complement of `#if` rather than
 	// a second unconditional arm. Distinct from `not branchLive`, which is also true while the
 	// `#if` arm is being skipped and its `#else` has not yet been reached.
+	//
+	// ⚠ It answers ONLY that question, and stays `false` for an `#if` inside a dead region even
+	// though no arm of one can ever run — because "this region is unreachable" is a different fact
+	// with its own home (`enclosingRegionIsLive`), and encoding it here as well would be the same
+	// rule in two places.
 	export var takenAlready as bool
 	// The `#if`'s own position, for the unterminated-region diagnostic.
 	export let line as LineNumber
@@ -153,7 +158,13 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 				continue
 			end 'liveParent'
 
-			frames.push(DirectiveFrame.create(false, takenAlready: true, line: tok.line, column: tok.column))
+			// `takenAlready: false` is the HONEST value and not an oversight: no arm of an unreachable
+			// `#if` is ever taken. Keeping the `#else` dead is `enclosingRegionIsLive`'s job alone —
+			// setting this true would ALSO do it, and having both is one fact written down twice.
+			// MEASURED: with both in place, disabling either one on its own broke no test in the
+			// suite, which is exactly what a redundant guard looks like. See
+			// `directives.else-inside-dead-branch-stays-dead`, the case that now pins the survivor.
+			frames.push(DirectiveFrame.create(false, takenAlready: false, line: tok.line, column: tok.column))
 			scan = scan + 1
 			continue
 		end 'openRegion'
