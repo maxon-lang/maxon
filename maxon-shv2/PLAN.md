@@ -163,13 +163,50 @@ take its blocker instead)*
 | **S1** | ~~`__Builtins.*` QUALIFIED-call recognition~~ **✅ THE ROW WAS DRAWN STALE — THIS LANDED 2026-07-24** as §"STDLIB WHITELIST" step (2) (`1c36c1ba8`), which this board's own text says three lines further down. **Re-verified by RUNNING it 2026-07-29**, not by reading: `__Builtins.currentTimeNanos()` in an ordinary user program compiles and returns a live reading, and `__Builtins.noSuchIntrinsic()` gives a clean **E3004** (no panic). The arm is `Parser.maxon:26681`, gated on `isBuiltinsIntrinsicCallee`, recognizing 4 members (`currentTimeNanos`, `currentTimeMs`, `currentUnixTimeSeconds`, `sleep`). **Nothing in the S2 cone is blocked on it** — see the corrected blocker table below | L-stdlib | ✅ DONE | *(landed 2026-07-24)* | — |
 | **S2** | **Whitelist entries 4…n.** ⚠ **THE BLOCKER LIST BELOW WAS WRONG AND IS NOW MEASURED** (2026-07-29). **The dominant cost of the whole gate** | L-stdlib | ⛔ BLOCKED | on **D5 · D1 · D2/D4 · S3** — *not* on S1. See the measured table | — |
 | **S3** | **`String.addressableBytes`** — `stdlib/File.maxon:60`'s first blocker, and **it was on no row until 2026-07-29**. Not a whitelist question and not a parser one: a String method shv2 does not provide (its E2015 lists what it does). Needs its own contract | L-stdlib | ⬜ FREE | — | — |
-| **D1** | **Methods on `union` / `enum`** (`Parser.maxon:7922`, already self-labelled *"arrive with a later rung"*). Unblocks **5 of the 13** harness files by itself, and is `stdlib/Subprocess.maxon`'s measured first blocker | L-parser-decl | 🔶 CLAIMED | `slice/D1-union-enum-methods` | 2026-07-29T19:14Z |
+| **D1** | **Methods on `union` / `enum`** — the DECLARATION SITE and the RECEIVER only (`Parser.maxon:7922`, self-labelled *"arrive with a later rung"*). ⚠ **"Unblocks 5 of the 13 harness files by itself" is MEASURED FALSE — see the box below.** It unblocks the *declaration*; 4 of those 5 then hit **D1b**. Real unlock: `TestOutcome.isPass` and every non-managed union/enum method, plus it is the hard prerequisite for D1b | L-parser-decl | 🔶 CLAIMED | `slice/D1-union-enum-methods` | 2026-07-29T19:14Z |
+| **D1b** | **Binding a MANAGED payload out of a BORROWED union** (`E2015` at `Parser.maxon`, whose text already says *"a parameter, **a receiver**"* and blames a P1.4 that has since closed). Two sub-cases the design must separate: **read-only borrow** (`unreadable(path) gives "…{path.toString()}"` — `PeReadError.displayReason`, never moves) vs **move/copy out** (`pass(s, _) gives s` — `WorkerRecord.spec`, yields the String). ⚠ **NEEDS A DESIGN RULING** — the bootstrap borrows-and-retains-on-store where the self-hosted tier consumes, so the oracle's answer does not transfer | L-parser-postfix? | ⛔ BLOCKED | on **D1** (hard: unreachable until a method can be declared) | — |
 | **D2** | **The postfix / member walk**, all four symptoms as ONE slice: a method call on a struct FIELD · a field access on a non-struct base · a method call on a **literal** (`"a,b".split(",")`) · a static method on a primitive (`int.fromString`) | L-parser-postfix | ⬜ FREE | — | — |
 | **D4** | **`ByteArray` / `Byte` as a declared type** — today it resolves to `int`, which is why its symptom is D2's message. Blocks the 4 binary-image readers | L-types | ⬜ FREE | — | — |
 | **D5** | **`#if` conditional compilation.** ✅ The LEXER half already exists — `Lexer.maxon` emits `hashIf`/`hashElse`/`hashEndif` (`:257`, `:1364`) and `scanDirective` (`:1096`) reads them. ⚠ **The rest is not small**: condition EVALUATION (`os()`/`arch()`/`testing()` with `and`/`or`/`not`) plus `#else` plus **NESTING** — `Target.detectHostTarget()` is itself a nested `#if`/`#else`, so a flat implementation does not compile the one function this row exists to unblock | L-parser-stmt | ⬜ FREE | — | — |
 | **5d** | **RE-EXTRACT AND RE-MEASURE the runner.** A LOOP, not a slice | — | ⛔ BLOCKED | on ~~G1~~ ✅ · S2 · D1 · D2 · D4 · D5 | — |
 | **6b** | **The differential oracle** · `-j1==-jN` · clean `mm-trace` | — | ⛔ BLOCKED | on **5d** | — |
 
+> ### ⭐⭐ D1 IS A SMALLER UNLOCK THAN THE ROW CLAIMED — MEASURED 2026-07-29, SECOND STALE DEPENDENCY EDGE IN A ROW
+>
+> **The hard machinery already exists.** The identical body that is refused as a METHOD compiles and
+> runs today as a **free function**: `union` payload construction + `match` with payload binding
+> returns **16**, the `enum` equivalent returns **2**. ⇒ **D1 is a DECLARATION-SITE + RECEIVER rung**
+> — not match, not layout, not payload. That is the good news and it should keep the rung small.
+>
+> **The bad news, measured on the same afternoon:** four of the five harness files D1 claims to unblock
+> do not become compilable when the declaration is accepted. Their methods bind a **managed** payload
+> out of the receiver, and that is refused by a SEPARATE rule:
+>
+> ```
+> E2015: binding the managed payload 'n' out of a `union Exec` that is not an OWNED local —
+>        a borrowed union (a parameter, A RECEIVER) cannot have its payload MOVED out
+> ```
+>
+> Isolated to three cases, each run: **owned local + managed bind ⇒ WORKS (9)** · **borrowed param,
+> managed payload not bound ⇒ WORKS (5)** · **borrowed param + managed bind ⇒ REFUSED.** The refusal's
+> own text already anticipates "a receiver", so it fires the instant D1 lands. ⇒ **D1b**, above.
+>
+> | harness method | binds a managed payload out of `self`? |
+> |---|---|
+> | `TestOutcome.isPass` (`SpecTestRunner.maxon:209`) | **NO** — `pass gives true` / `fail gives false`. **D1 alone unblocks it.** |
+> | `PeReadError.displayReason` (`PeSectionReader.maxon:61`) | YES, **read-only** (`path.toString()`) |
+> | `WorkerRecord.spec`/`.test` (`SpecWorkerPool.maxon:464,471`) | YES, **moved out** (`pass(s, _) gives s`) |
+> | `Elf`/`Macho`/`DataSection`/`TypedValue` `.displayReason` | YES, same convention as PeReadError |
+>
+> **⭐ THE ORACLE'S OWN SURFACE IS ASYMMETRIC, AND IT SETTLES THE STATIC QUESTION FOR FREE.** Measured
+> against `bin/maxon.exe`: an `enum` **instance** method with `match self` works (2); a `union`
+> instance method with payload binding works (16); an `enum` **static** method is a **parse error**
+> (`E2010`); and a `union` **static** method is accepted-then-misread — `static` is silently ignored
+> and the method becomes an instance method, so the call fails with **`E3036 missing argument for
+> parameter 'self'`**. That last one is a bootstrap sharp edge worth its own filing. ⇒ **shv2 should
+> implement INSTANCE methods and cleanly REFUSE statics**, and the cost of refusing is measured at
+> **zero**: a sweep of every `union`/`enum` body in all of `stdlib/` finds **0 static methods**.
+>
 > ### ⭐⭐ S2's BLOCKERS, MEASURED 2026-07-29 — THE ROW HAD NAMED THE WRONG ONE, AND TWO OF ITS SIX NAMES ARE NOT FILES
 >
 > Taken by claiming S1 and then *reproducing its premise before planning on it* — which is how the row
