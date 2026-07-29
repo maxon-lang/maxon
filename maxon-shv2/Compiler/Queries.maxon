@@ -355,8 +355,27 @@ end 'probeRebuildCacheHits'
 // so a membership test over it is a linear scan of ~49 `FilePath.equals`, each allocating two Strings —
 // an order of magnitude worse than one `isInside` — and it would go on being worse as the loader's
 // whitelist grows toward the whole of `stdlib/`.
+// ⚠ **RESOLVE BOTH SIDES FIRST — `isInside` compares SPELLINGS, not files.** Before that it answered
+// differently for one file depending only on how the command line named it: `build stdlib/p19rev`
+// read the project's own sources as the USER's (correct), and `build C:/…/stdlib/p19rev` read the
+// same files as STDLIB, silently promoting a private typealias to `Visibility.global` and dropping
+// the E3062 it was owed. `StdlibLoader.registeredPathsWhenTheRootIsInsideStdlib` already resolves
+// against the cwd for exactly this reason; this door did not, and P1.9 made it load-bearing.
+//
+// The root-inside-`stdlib/` arm is that same function's ruling, restated where this door can act on
+// it: a project ROOTED under `stdlib/` keeps its own files as the user's, so only what the loader
+// pulled in from OUTSIDE that root is stdlib. It stays a directory test rather than a membership
+// test over `project.stdlibSourcePaths` for the reason given above.
 function isStdlibSourceFile(project Project, path FilePath) returns bool
-	return path.isInside(project.stdlibDir)
+	let cwd = Directory.currentPath()
+	let resolvedPath = path.resolve(cwd)
+	let resolvedRoot = project.rootPath.resolve(cwd)
+
+	if resolvedRoot.isInside(project.stdlibDir) 'rootInsideStdlib'
+		return not resolvedPath.isInside(resolvedRoot)
+	end 'rootInsideStdlib'
+
+	return resolvedPath.isInside(project.stdlibDir)
 end 'isStdlibSourceFile'
 
 // Clear the registries that `mergeArtifact` rebuilds from artifacts, so a
