@@ -253,8 +253,31 @@ take its blocker instead)*
 > generated from an unfiltered run and committed (`f4c1c43e5`). ⚠ `arm64-macos`/`arm64-linux` still owe
 > the same 51 — remote, hand-synced, **named rather than fabricated**, and not a merge condition.
 >
-> Gates: build 0 warnings · host **2423/0** · x64-linux **2325/0** · fragments **0 M** (additions only)
-> ⇒ byte-identical codegen · no run exits 101 · scale-test allocsDelta **0 at every rung**.
+> **⭐ D1 × D5 COMPOSE, AND THAT WAS RE-GATED RATHER THAN ASSUMED.** `main` advanced by two rungs
+> (P1.10 tuples + D5 `#if`) while D1 was live, and D5's own row had warned that it wires the directive
+> into **`parseEnumDeclaration`'s member loop — D1's exact site**. The rebase was textually clean, which
+> proves nothing about composition, so both directions are now pinned as cases: a `#if` selecting between
+> two whole methods in the shared member loop, and a `#if` inside a method body — each routed through a
+> `match` on a case declared AFTER the directive block, so a wrong post-directive tag fails them too.
+>
+> ⚠⚠ **AND THE FIRST VERSION OF THOSE TWO CASES DISCRIMINATED NOTHING** (caught by the user). They used
+> D5's own target-invariance idiom, `#if os(Windows) or os(Linux) or os(Macos) or os(Wasi)` — **true on
+> every target**, so the `#else` is dead everywhere and a compiler that ignored `#if` entirely and always
+> took the first branch would pass both. A positive control both models pass, which is the trap the
+> receiver spec's own header argues against. Cured by MEASURING the predicate instead: `testing()` is
+> FALSE under a plain `build`, so **`#if testing(true)` must take the `#else`** — target-invariant AND
+> discriminating (a directive-ignoring compiler returns 3 where the answer is 7). Verified RED.
+> ⇒ **A convention borrowed from a neighbouring rung still owes you the question "what does this go red
+> for?"**
+>
+> Gates on the MERGED tree: build 0 warnings · host **2482/0** · x64-linux **2384/0** ·
+> **106 fragment ADDITIONS vs `main`, ZERO pre-existing goldens modified** ⇒ byte-identical codegen ·
+> no run exits 101 · scale-test allocsDelta **0 at every rung**.
+> ⚠ **A self-inflicted repeat, recorded because the shape is the lesson:** forcing a golden regeneration
+> with `rm -rf specs-shv2/fragments/*/enum-union-method-receiver/` matched BOTH targets and deleted the
+> x64-linux set — silently undoing `f4c1c43e5`, whose whole subject was that this lane had no goldens for
+> the feature. **A missing golden never fails**, so nothing went red; it was caught by counting files per
+> target. Restored, 51 per local target.
 > Three findings outside the rung filed as **D1c** (a missing E3081 check), **D1d** (a pre-existing
 > reachable panic, proven D1-independent by a repro with no enum method) and **D1e** (rvalue receivers).
 >
