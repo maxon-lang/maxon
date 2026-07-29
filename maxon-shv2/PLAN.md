@@ -1462,16 +1462,44 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   one-file-one-owner it cannot be a concurrent agent — an exclusive-file-list collision, not a size
   judgement. It carries its own spec-port list.
 
-- **⬜⭐⭐ A RANGED ALIAS'S BOUNDS ARE NOT ENFORCED AT AN ARRAY ELEMENT NOR AT A CALL ARGUMENT — shv2's
-  OWN HALF of the bug `7c05a6996` fixed in the bootstrap the same day.** Found 2026-07-28 by the P1.6
-  Array-element rung. Measured: with `typealias Byte = int(0 to u8.max)`, both `Array with Byte` +
-  `push(300)` and `takeByte(300)` compile and run. ⭐ **The bootstrap's cure is written up and is the
-  design to copy, including what it could NOT close**: a KIND is a lossy projection of a TYPE and what it
-  drops is exactly the range, so every door handed a kind enforces nothing; the fix is a door taking the
-  declared TYPE. ⚠ In the bootstrap the runtime half at a call argument was BLOCKED by an arg-pinning
-  bug and only the compile-time half shipped — check whether shv2's argument path has the same hazard
-  before assuming both halves are available. Needs the range-check machinery plus `SemanticCheck`, so it
-  is its own rung, not an edit.
+- **✅⭐⭐ A RANGED ALIAS BINDS EVERY POSITION A VALUE MEETS IT — CLOSED 2026-07-29** (main `349002a56` · `57f931f60` · `0f5048d1d` · `07309764a` · `a7f3263ad` · `2ba120280` + integration; x64-windows **2337 → 2372/0**, x64-linux **2274/0**, wasm PASS, build 0 warnings, **arm64 SKIP — remote, UNVERIFIED**).
+  **THE FILING WAS RIGHT AND I ALMOST CONCLUDED IT WAS WRONG, BECAUSE MY ORACLE WAS STALE.** `bin/maxon.exe` had not been rebuilt against `maxon-sharp/`; against it shv2 and the bootstrap looked BYTE-IDENTICAL on every probe — same output, same panic, same stack trace. A 54-second rebuild reversed every reading. ⇒ **STEP 1's "ALWAYS BUILD" INCLUDES THE ORACLE. It is a binary too.**
+  **MEASURED DIVERGENCE:** shv2 missed the compile-time `E3005` at FIVE positions the bootstrap rejects — call argument, array `push`, struct-literal field, field default, field store — and the RUNTIME guard at a field store. `return` and `as` were already right.
+  ⭐ **THE CORPUS SETTLED THE SCOPE, SO NO RULING WAS NEEDED**: `specs/range-check-panic.md` states normatively that the runtime half is emitted at a return, struct-literal field, field store, array-literal element and `as`, and **explicitly NOT at a call argument** (a documented, filed bootstrap limitation). So shv2 matching the oracle there is CORRECT, and only the compile-time half was owed — which is also why shv2 never met the arg-pinning blocker that stopped the bootstrap: no branch, no block split, no pinning pass to break.
+  ⛔⛔ **NEITHER REFERENCE WAS THE DESIGN — BOTH HAVE THIS BUG.** The pre-fix bootstrap drove checks off a `MaxonValueKind`; **v1 drives them off `CastCategory`, a five-value enum with NO range field**, and checks NEITHER half at a call argument, struct-literal field, field store or local assignment. **shv2's architecture was already the right one** — a site recorded at PARSE time off the still-`named` `MaxonType`, consumed by a Std-tier pass, immune to the erasure both references died on. The rung pointed it at four more doors.
+  ⭐ **THE ERASURE IS ASYMMETRIC AND THAT DECIDED THE WORK**: `resolveTypes` overwrites function PARAMETER types with bare primitives, but **struct field types are never rewritten**, so the field doors already held the alias name. Only the call argument was hard, and the RETURN had already solved it — parameter alias names are now captured in `parseFunction` exactly as `rangeCheckReturnAlias` always was.
+  🔴 **THE RUNG FOUND AND FIXED FOUR DEFECTS BEYOND ITS BRIEF, EACH A WRONG ANSWER:**
+  1. **Guards chained BACKWARDS.** A guard splits its block, so resolving every site to the parser-recorded block id put guard k+1's cascade *before* guard k's branch. Guards ran in REVERSE SOURCE ORDER (the compiler blamed the second of two bad casts), and `where-clauses.two-constraints` proves it was a genuine MISCOMPILE — two cascades comparing `rbx` against 0 and `r12` against 1000, mixing two fields across two checks. It also broke compare fusion, leaving N−1 `setcc` values in registers until the file overflowed at **N=16** and the RULE 3 backstop panicked. Fixed; both doors now clean at **N=512**.
+  2. **A range-check site written inside a CLOSURE was filed against the ENCLOSING function** — a closure has its own SSA numbering, so ids crossed a boundary. A CORRECT program was killed at run time, and the dual let an out-of-range closure cast through unchecked. **Reachable through the `as` door before this rung.**
+  3. **The guard fired at END OF BLOCK**, so the rest of the block ran first: an out-of-range value was PRINTED and read back out of a `Percent` slot before its panic, and `100 / d` panicked *"integer divide by zero"* where the oracle panics *"Range check failed"* — the language's own check pre-empted. **USER RULING: fix in-rung.** Fixed with a two-tier position (`maxonOpPos` parser-stamped, `stdOpPos` translated by one `RangeSiteWalk`), composed with the chain via `guardChainBase`.
+  4. **A FALSE `E5001`** exposed by (3): `peakOutranks` resolved a full-pool tie to the highest-indexed block, so the driver relieved a chain back-to-front and refused a program that fits in two registers. Fixed by letting a value already in a slot be re-relieved at a COLD peak; loop `E5001` untouched by construction.
+  ⚠ **THE LADDER COULD NOT SEE THIS RUNG — EIGHTH CONSECUTIVE, AND A NEW MECHANISM.** The manifest check PASSES (the corpus really does declare narrow aliases) but they are only ever GENERIC TYPE ARGUMENTS, erased to opaque `T` before any door sees them: **128 narrow aliases, ZERO doors**. Measured: the rung-0 and rung-5 binaries each contain exactly ONE range-check panic blob. ⇒ **A NARROW ALIAS IN THE CORPUS IS NOT A NARROW ALIAS AT A DOOR**; a manifest check must count DOORS. `Testing/ladders/genrangesites.sh` is the committed instrument that does, and it found a real `O(sites × blocks)` scan (−27.4% CPU) that the allocation column was structurally blind to.
+  ⚠ **AND THE MERGE ITSELF FOUND A THIRD THING**: `origin/main` advanced mid-rung with P1.9's declaration-site half, and on the rebased tree upstream's new **E3062 pre-empted this rung's E3005** in a cross-file case whose caller-side alias was, correctly, unused. The case predated the rule and was rewritten to use it — and now proves strictly more. **Step 11's "re-run the suites if main advanced" is what caught it.**
+
+- **⬜⭐ A UNION CASE PAYLOAD DECLARED WITH A RANGED ALIAS IS UNCHECKED — IN BOTH COMPILERS.** Found
+  2026-07-29 by the ranged-bounds rung. `Reading.pct(500)` where the case is declared `pct(v Percent)`
+  exits 244 under the bootstrap and under shv2 alike. **Not a divergence — shv2 matches the oracle** —
+  and the position is not in `specs/range-check-panic.md`'s normative list, which is why it was out of
+  scope. But the rule as the corpus states it (*"a ranged typealias binds every value that meets it"*)
+  does not obviously exempt a union payload, so this is a question for the SPEC before it is a question
+  for the compiler.
+
+- **⬜ IS STRAIGHT-LINE `E5001` REACHABLE AT ALL, AND IF NOT, DOES ITS MESSAGE BODY BELONG?** Found
+  2026-07-29 when the ranged-bounds rung's false-`E5001` fix (`a7f3263ad`) made
+  `register-pressure/straight-line-overflow-names-no-loop` COMPILE — 21 parameters live across two
+  calls, every one already in a slot by then, so relieving that peak costs nothing unpaid. The case was
+  kept and renamed `straight-line-wide-signature-compiles` with the reasoning recorded, **but the
+  straight-line `E5001` message body now has NO coverage**, and no program could be constructed that
+  still reaches it (with no calls, tier 2 handles straight-line overflow). ⚠ A diagnostic nothing can
+  reach is either dead code or a gap in the search — decide which.
+
+- **⬜ A RANGED FLOAT ALIAS AT A FIELD OR ARRAY ELEMENT CANNOT BE RANGE-CHECKED AT ALL.**
+  `SignatureIndex.declaredSlotType:5106` re-tags a float alias to bare `float` before `fieldTypeOf`
+  answers, and its own comment says so: *"a float alias has no range check today"*. Confirmed by the
+  ranged-bounds rung's review to produce no half-applied verdict — a clean absence, not a wrong
+  answer. A float PARAMETER is not erased, which is why the call-argument door could be fixed and these
+  cannot. Needs what the int side just got: carry the name through a channel `declaredSlotType` does
+  not erase.
 
 - **⬜⭐ THE ARGUMENT-MISMATCH SENTENCE HAS TWO VOICES, AND `specs/type-checking.md` IS UNPORTED BECAUSE
   OF IT — NEEDS A RULING.** Found 2026-07-28 by the P1.6 Array-element rung. shv2's parser-side doors
@@ -3881,6 +3909,18 @@ not ported from v1's `.mxc`.
 | 8 | **A compiler-SYNTHESIZED type that gains a managed field must be named in `managedNameDropCallee`, and the arm is a NAME EQUALITY** (shv2; filed by P1.8 Slice D's review, 2026-07-28). `installStructDestructors` walks `project.structTypes`, so a synthesized type is in no file's declarations and the generic route mints `__destruct___<Name>` — a symbol nothing builds. Today exactly ONE hand-written arm exists (`__CharacterSet`), and `__StringIndex` needs none because it is scalar-only, so this is **not yet duplication** and the abstraction was deliberately not built on speculation | The next synthesized type to acquire a managed field **dies in the BACKEND** — `panic at X64Backend.maxon:1820: resolveCallFixups: call to unknown function '__destruct___<Name>'` — a panic, not a diagnostic. Sabotage-confirmed: removing the existing arm gives **40 red, all that panic**; replacing it with the generic `__mm_decref` gives **40 red, all exit 101** (a leak). ⇒ **When a SECOND such type appears, replace both arms with ONE predicate** ("a reserved `__`-prefixed layout with a managed field must name its compiler-owned drop"), which turns a backend panic into a compile-time assertion |
 
 ### Bootstrap (`maxon-sharp`) oracle bugs — silent wrong answers to fix when the subsystem is next touched
+
+- **⬜ `E9001` ON LEGAL MAXON: a `try … otherwise …` INSIDE AN ARGUMENT LIST.** Found 2026-07-29 by the
+  ranged-bounds rung, which had to write around it. `assign value %N (kind=MaxonInteger) not in
+  valueMap; assigning to '__arg_pin_12'`. This is the SAME argument-pinning pass whose block-splitting
+  fragility `specs/range-check-panic.md` already documents normatively as the reason the bootstrap does
+  not emit a runtime range check at a call argument — so the two are one defect seen from two sides, and
+  fixing the pinning pass would retire the spec's documented gap as well.
+
+- **⬜ `E9001` ON LEGAL MAXON: a `while` INSIDE AN `if` BRANCH THAT ALSO REASSIGNS AN ENCLOSING `var`.**
+  Found 2026-07-29 by the ranged-bounds rung. *"reads %N, which is defined in block 'firstAlias_7' — and
+  'firstAlias_7' does not dominate 'firstAlias_7.merge'"*. Workaround used: hoist the loop into a free
+  function. shv2 compiles the same shape, so this is bootstrap-only.
 
 The bootstrap is the runnable `/specs` oracle, so a silent wrong answer in it erodes what shv2 is checked
 against (user has ruled before: *fix the bootstrap so it stays a solid reference* — cf. the throw-ownership
