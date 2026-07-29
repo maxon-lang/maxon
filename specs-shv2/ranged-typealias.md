@@ -1544,3 +1544,247 @@ end 'main'
 ```exitcode
 48
 ```
+
+### Guards in one block run in SOURCE order
+
+Two out-of-range casts, one line apart. The FIRST one is the one that fires, because a guard is
+emitted at the end of the chain its block has already grown and not at the end of the ORIGINAL block
+— which threaded the cascades in REVERSE and blamed the second cast for a program the first one
+already fails. (The compiled fragment carries a `// test:` line ahead of the source, so `let x` is
+its line 12 and `let y` its line 13 — the number below names the FIRST of the two.)
+
+<!-- test: guards-run-in-source-order -->
+<!-- targets: x64-windows -->
+<!-- x64-windows ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE, and `mrt_panic` is a hand-assembled Windows-only `.text` runtime chunk. Everywhere else the range verdict is a bare exit 1 with EMPTY stderr, which cannot tell the two lines apart — so the ORDER this case exists to pin is only observable here. -->
+```maxon
+typealias Small = int(0 to 10)
+typealias Wide = int(0 to 100000)
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	let a = widen(500)
+	let b = widen(900)
+	let x = a as Small
+	let y = b as Small
+	return x + y
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at guards-run-in-source-order.test:12: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+### Many guarded casts of SIMULTANEOUSLY LIVE values
+
+24 distinct values, each guarded and each still live afterwards (the sum reads every one), so all 24
+are in registers together across all 24 guards. Every guard's `cmp` must be the last op before the
+branch that reads it — otherwise it materializes through `setcc` and holds a register across the rest
+of the chain, and 24 compiler-introduced values overflow the 14-GPR file. That overflowed at 16 and
+tripped the register allocator's RULE 3 backstop, on a program with nothing wrong with it. 24 is
+chosen for headroom above that 16.
+
+`widen(i)` returns `i + 1`, so the sum is 1 + 2 + ... + 24 = 300.
+
+<!-- test: many-live-guarded-casts -->
+```maxon
+typealias Small = int(0 to 1000)
+typealias Wide = int(0 to 100000)
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	var acc = 0
+	let w0 = widen(0)
+	let w1 = widen(1)
+	let w2 = widen(2)
+	let w3 = widen(3)
+	let w4 = widen(4)
+	let w5 = widen(5)
+	let w6 = widen(6)
+	let w7 = widen(7)
+	let w8 = widen(8)
+	let w9 = widen(9)
+	let w10 = widen(10)
+	let w11 = widen(11)
+	let w12 = widen(12)
+	let w13 = widen(13)
+	let w14 = widen(14)
+	let w15 = widen(15)
+	let w16 = widen(16)
+	let w17 = widen(17)
+	let w18 = widen(18)
+	let w19 = widen(19)
+	let w20 = widen(20)
+	let w21 = widen(21)
+	let w22 = widen(22)
+	let w23 = widen(23)
+	let s0 = w0 as Small
+	let s1 = w1 as Small
+	let s2 = w2 as Small
+	let s3 = w3 as Small
+	let s4 = w4 as Small
+	let s5 = w5 as Small
+	let s6 = w6 as Small
+	let s7 = w7 as Small
+	let s8 = w8 as Small
+	let s9 = w9 as Small
+	let s10 = w10 as Small
+	let s11 = w11 as Small
+	let s12 = w12 as Small
+	let s13 = w13 as Small
+	let s14 = w14 as Small
+	let s15 = w15 as Small
+	let s16 = w16 as Small
+	let s17 = w17 as Small
+	let s18 = w18 as Small
+	let s19 = w19 as Small
+	let s20 = w20 as Small
+	let s21 = w21 as Small
+	let s22 = w22 as Small
+	let s23 = w23 as Small
+	acc = acc + s0
+	acc = acc + s1
+	acc = acc + s2
+	acc = acc + s3
+	acc = acc + s4
+	acc = acc + s5
+	acc = acc + s6
+	acc = acc + s7
+	acc = acc + s8
+	acc = acc + s9
+	acc = acc + s10
+	acc = acc + s11
+	acc = acc + s12
+	acc = acc + s13
+	acc = acc + s14
+	acc = acc + s15
+	acc = acc + s16
+	acc = acc + s17
+	acc = acc + s18
+	acc = acc + s19
+	acc = acc + s20
+	acc = acc + s21
+	acc = acc + s22
+	acc = acc + s23
+	if acc == 300 'summed'
+		return 24
+	end 'summed'
+	return 1
+end 'main'
+```
+```exitcode
+24
+```
+
+### Many guarded field stores of SIMULTANEOUSLY LIVE values
+
+The same pressure through the FIELD STORE door rather than the `as` cast: 24 distinct call results,
+all live until their stores. Both doors reach the same guard emitter, and both must stay clear of the
+register file.
+
+<!-- test: many-live-guarded-field-stores -->
+```maxon
+typealias Small = int(0 to 1000)
+typealias Wide = int(0 to 100000)
+
+type Box
+	export var f0 as Small = 1
+	export var f1 as Small = 1
+	export var f2 as Small = 1
+	export var f3 as Small = 1
+	export var f4 as Small = 1
+	export var f5 as Small = 1
+	export var f6 as Small = 1
+	export var f7 as Small = 1
+	export var f8 as Small = 1
+	export var f9 as Small = 1
+	export var f10 as Small = 1
+	export var f11 as Small = 1
+	export var f12 as Small = 1
+	export var f13 as Small = 1
+	export var f14 as Small = 1
+	export var f15 as Small = 1
+	export var f16 as Small = 1
+	export var f17 as Small = 1
+	export var f18 as Small = 1
+	export var f19 as Small = 1
+	export var f20 as Small = 1
+	export var f21 as Small = 1
+	export var f22 as Small = 1
+	export var f23 as Small = 1
+
+	export static function make() returns Box
+		return Self{}
+	end 'make'
+end 'Box'
+
+function widen(n Wide) returns Wide
+	return n + 1
+end 'widen'
+
+function main() returns ExitCode
+	var b = Box.make()
+	let v0 = widen(0)
+	let v1 = widen(1)
+	let v2 = widen(2)
+	let v3 = widen(3)
+	let v4 = widen(4)
+	let v5 = widen(5)
+	let v6 = widen(6)
+	let v7 = widen(7)
+	let v8 = widen(8)
+	let v9 = widen(9)
+	let v10 = widen(10)
+	let v11 = widen(11)
+	let v12 = widen(12)
+	let v13 = widen(13)
+	let v14 = widen(14)
+	let v15 = widen(15)
+	let v16 = widen(16)
+	let v17 = widen(17)
+	let v18 = widen(18)
+	let v19 = widen(19)
+	let v20 = widen(20)
+	let v21 = widen(21)
+	let v22 = widen(22)
+	let v23 = widen(23)
+	b.f0 = v0
+	b.f1 = v1
+	b.f2 = v2
+	b.f3 = v3
+	b.f4 = v4
+	b.f5 = v5
+	b.f6 = v6
+	b.f7 = v7
+	b.f8 = v8
+	b.f9 = v9
+	b.f10 = v10
+	b.f11 = v11
+	b.f12 = v12
+	b.f13 = v13
+	b.f14 = v14
+	b.f15 = v15
+	b.f16 = v16
+	b.f17 = v17
+	b.f18 = v18
+	b.f19 = v19
+	b.f20 = v20
+	b.f21 = v21
+	b.f22 = v22
+	b.f23 = v23
+	return b.f23
+end 'main'
+```
+```exitcode
+24
+```

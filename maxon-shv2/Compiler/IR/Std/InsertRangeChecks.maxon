@@ -75,6 +75,18 @@ type GuardSite
 	end 'create'
 end 'GuardSite'
 
+// ⭐ WHICH CHAIN THE EMITTED GUARD EXTENDS — the one thing an alias-named site owes after its split
+// that a `return` site does not. Every guard in ONE source block splits that block, so the k-th guard
+// must anchor at the end of the (k-1)-th's continuation; anchoring them all at the end of the ORIGINAL
+// head instead threads the cascades in REVERSE (see `blockEndGuardSite`). An alias-named site therefore
+// moves its block's chain end to its own continuation. A `return` site records nothing: `findRetBlock`
+// re-derives its block from the CURRENT `ret` terminator at every site, which a split moves along with
+// the terminator, so the chain end is already what it finds.
+union GuardChain
+	blockChain(blockId BlockId)
+	retChain
+end 'GuardChain'
+
 // The block whose terminator is `ret(value)` — the return site to guard. `notFound` covers the value
 // having been folded away or otherwise not surviving as a `ret` (defensive; a recorded ranged return
 // always has one).
@@ -142,8 +154,8 @@ export function insertRangeChecks(project Project, module StdModule)
 	end 'eachFunc'
 end 'insertRangeChecks'
 
-// The `blockIdIndex` an emitter starts with, SHARED and never mutated — `blockEndGuardSite` REPLACES the
-// field with a freshly built index rather than filling this one.
+// The `guardChainTail` an emitter starts with, SHARED and never mutated — `blockEndGuardSite` REPLACES
+// the field with a freshly built index rather than filling this one.
 //
 // ⚠ It is shared for the reason `Parser`'s `sharedEmptyInstanceAliasNames` is: an emitter is built for
 // every function carrying ANY range-check side data, which includes every function that merely passes a
@@ -152,7 +164,7 @@ end 'insertRangeChecks'
 // as a per-emitter `create()` it cost +45 / +66 / +108 / +192 / +360 / +696 allocations across the six
 // rungs — a linear cost, but a real one, paid entirely by functions that never emit a guard. Only ONE
 // function in the whole generated corpus ever builds a real index (`scaleCoverCast`).
-let sharedEmptyBlockIdIndex = ValueIdArray.create()
+let sharedEmptyGuardChainTail = ValueIdArray.create()
 
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
@@ -168,12 +180,16 @@ type RangeCheckEmitter
 	// guard (which is also what the bootstrap does — see `needsRuntimeGuard`).
 	var intConsts as ConstValueMap
 	var floatConsts as ConstValueMap
-	// This function's block-id => blockRef index. Starts as the SHARED empty one and is REPLACED by a real
-	// index on first use — see `sharedEmptyBlockIdIndex` and `blockEndGuardSite`.
-	var blockIdIndex as ValueIdArray
+	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
+	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
+	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
+	// minted, so the next guard in that source block lands after it rather than before it. Starts as the
+	// SHARED empty one and is REPLACED by a real index on first use — see `sharedEmptyGuardChainTail`
+	// and `blockEndGuardSite`.
+	var guardChainTail as ValueIdArray
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), blockIdIndex: sharedEmptyBlockIdIndex}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), guardChainTail: sharedEmptyGuardChainTail}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -235,7 +251,7 @@ type RangeCheckEmitter
 		if site.guard == RangeCheckGuard.compileTimeOnly 'compileTimeHalfOnly'
 			return
 		end 'compileTimeHalfOnly'
-		self.emitGuardAt(self.blockEndGuardSite(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
+		self.emitGuardAt(self.blockEndGuardSite(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
 	end 'guardSite'
 
 	// ---- call-argument sites ----
@@ -300,7 +316,7 @@ type RangeCheckEmitter
 			end 'noGuard'
 			match self.findRetBlock(site.value) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName))
+				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName), chain: GuardChain.retChain)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -335,20 +351,46 @@ type RangeCheckEmitter
 		return true
 	end 'needsRuntimeGuard'
 
-	// Split the site's block, emit the panic block, and thread the compare cascade between them.
-	function emitGuardAt(site GuardSite, value ValueId, alias RangedTypeAlias, message ByteArray)
+	// Split the site's block, emit the panic block, thread the compare cascade between them, and extend
+	// `chain` onto the continuation so the NEXT guard on this path lands after this one (see `GuardChain`
+	// for why only an alias-named site has a chain to extend).
+	function emitGuardAt(site GuardSite, value ValueId, alias RangedTypeAlias, message ByteArray, chain GuardChain)
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 		if checks.isEmpty() 'noBoundNeeded'
 			// Both bounds elide (a signed range whose only stored bound is a negative upper) — nothing to
-			// guard. Matches the bootstrap's both-elided path, which returns the value unchecked.
+			// guard. Matches the bootstrap's both-elided path, which returns the value unchecked. Nothing was
+			// split, so the chain end is where it was.
 			return
 		end 'noBoundNeeded'
 
 		let ok = self.splitBlock(site.block, position: site.position)
+		// ⚠ **BEFORE `emitPanicBlock`, AND THE ORDER IS LOAD-BEARING** — see `extendGuardChain`.
+		match chain 'chain'
+			blockChain(siteBlockId) then self.extendGuardChain(siteBlockId, continuation: ok)
+			retChain then break 'chain'
+		end 'chain'
 		let panicBlock = self.emitPanicBlock(message)
 		self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 	end 'emitGuardAt'
+
+	// Move `siteBlockId`'s chain end onto the continuation `splitBlock` just made, so the next guard in
+	// that source block lands after this one instead of before it.
+	//
+	// ⚠ **THIS MUST RUN BEFORE ANYTHING ELSE APPENDS A BLOCK.** The continuation's own blockRef is
+	// recoverable only as "the last entry `addBlock` registered", and `emitPanicBlock` plus the cascade's
+	// `__rc_chk` blocks append more the moment they run. So it is read here — and CHECKED against the
+	// block the split actually returned, not assumed: a later reordering that slipped an append in
+	// between would chain the NEXT guard onto the panic block, and no test would show that as anything
+	// but wrong code at some unrelated site.
+	function extendGuardChain(siteBlockId BlockId, continuation IrBlock)
+		let okRef = try self.func.blockRefs.get(self.func.blockRefs.count() - 1) otherwise panic("extendGuardChain: `addBlock` made the continuation of '{String.from(self.func.name)}' but registered no blockRef for it")
+		if self.module.getBlock(okRef).id != continuation.id 'notTheContinuation'
+			panic("extendGuardChain: the last block registered in '{String.from(self.func.name)}' is not the continuation `splitBlock` returned — a block was appended between the split and this record, so the chain would advance onto the wrong block")
+		end 'notTheContinuation'
+
+		try self.guardChainTail.set(siteBlockId, value: okRef + 1) otherwise panic("extendGuardChain: guard site block id {siteBlockId} is outside the function's block-id space, which `blockEndGuardSite` already resolved it within")
+	end 'extendGuardChain'
 
 	// Split `head` at `position`: ops before it stay in `head`; ops from it on, plus `head`'s
 	// terminator / conditional branch / outgoing edges, move to a fresh continuation block returned
@@ -450,6 +492,25 @@ type RangeCheckEmitter
 	// block IS entry, so end-of-body equals the post-param point the older anchoring used — those goldens
 	// are unchanged; only a site inside a branch moves.
 	//
+	// ⭐⭐ **"THE END OF THE BLOCK" MOVES AS SOON AS THE FIRST GUARD SPLITS IT, AND RESOLVING EVERY SITE
+	// TO THE ORIGINAL HEAD IS TWO BUGS AT ONCE.** N sites in one source block all name that block's id.
+	// Each split moves the head's terminator onto a fresh continuation and leaves the new cascade in the
+	// head — so resolving the (k+1)-th site to the head again puts its cascade BEFORE the k-th's branch
+	// and pushes that branch one block further down. Chained that way the guards RUN IN REVERSE SOURCE
+	// ORDER (measured: two out-of-range casts on consecutive lines panicked on the SECOND), and — the
+	// costlier half — all N `cmp` results are DEFINED in the head while each is READ by the terminator of
+	// a different block k levels down. `recordFusableCompare` fuses a compare only when it is the last
+	// flag-clobbering op of the branch's OWN block, so N-1 of them lose their fusion, materialize through
+	// `setcc`, and sit in a register across the whole chain: N-1 compiler-introduced values live at one
+	// point, which is what RULE 3 (RegisterPressureDiagnostic) forbids outright. At N=16 that overflowed
+	// the 14-GPR file and the RULE 3 backstop panicked, on a program with nothing wrong with it.
+	//
+	// So the index is a CHAIN END, not a block identity: a guard moves its site block's entry to its own
+	// continuation, the (k+1)-th cascade lands at the end of the k-th's `__rc_ok`, and every `cmp` is
+	// again the last op before the branch that reads it — fused, holding no register, invisible to the
+	// allocator. Guards then also fire in source order, which is the order a reader expects the FIRST
+	// out-of-range value to be reported in.
+	//
 	// ⚠ **END-OF-BLOCK IS A PATH ANCHOR, NOT A STATEMENT ANCHOR, and a FIELD STORE is where that shows.**
 	// The bootstrap emits a store's guard immediately before the store; here it lands at the end of the
 	// store's block, so a side effect written between the two runs before the panic does. The verdict is
@@ -479,13 +540,14 @@ type RangeCheckEmitter
 	// The index is safe to hold across the splits and block appends that follow: it stores blockRef
 	// INDICES, not `IrBlock` aliases (`blockById` re-fetches from `module.blocks` on every call, so no
 	// alias goes stale), a split MUTATES its head block in place and never moves it, and every id a site
-	// names was recorded by the parser and therefore predates the pass. The blocks this pass appends are
-	// never looked up by id.
+	// names was recorded by the parser and therefore predates the pass. Its ROWS are only ever the
+	// parser's block ids — a continuation is written as a VALUE at its site block's row and never gets a
+	// row of its own — so it stays exactly `func.nextBlockId` wide however many blocks the pass appends.
 	function blockEndGuardSite(site RangeCheckSite) returns GuardSite
-		if self.blockIdIndex.isEmpty() 'firstRuntimeGuard'
-			self.blockIdIndex = buildBlockIdIndex(self.module, func: self.func)
+		if self.guardChainTail.isEmpty() 'firstRuntimeGuard'
+			self.guardChainTail = buildBlockIdIndex(self.module, func: self.func)
 		end 'firstRuntimeGuard'
-		let block = blockById(self.module, refByBlockId: self.blockIdIndex, id: site.block, from: self.func.name)
+		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
 		return GuardSite.create(block, position: block.opRefs.count())
 	end 'blockEndGuardSite'
 
