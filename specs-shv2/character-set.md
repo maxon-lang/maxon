@@ -158,6 +158,26 @@ false
 true
 ```
 
+<!-- test: supplementary-plane-trim -->
+### A trim driven by a supplementary-plane category
+The direct `contains` above and this reach the sorted table by different routes — one from the parser's
+own `__cs_contains` call, one from inside the trim's cluster walk — so a search broken in either
+direction is caught twice rather than once.
+```maxon
+function main() returns ExitCode
+	let s = "🎉🎉ok🎉"
+	let r = s.trim(CharacterSet.symbols())
+	print("[{r}]")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[ok]
+```
+
 <!-- test: member-set-moved-into-from -->
 ### `CharacterSet.from` CONSUMES its member set
 The box becomes the set's sole owner, so a bare local that reaches `from` is moved out and may not be
