@@ -1,0 +1,84 @@
+// Test: match-break.every-arm-breaks
+typealias Count = int(0 to 1000)
+
+function pick(k Count) returns Count
+	let r = 7
+	match k 'check'
+		1 then break
+		2 then break
+		default then break
+	end 'check'
+	return r + 1
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1) + pick(2) + pick(5) - 16
+end 'main'
+---
+ExitCode: 8
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 7
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.jmp matchcont
+  matchdefault:
+    x64.jmp matchcont
+  matchcont:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  afterbreak:
+  afterbreak:
+  afterbreak:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect pick
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect pick
+    x64.leaRegRegReg rax, rbx, r8
+    x64.leaRegRegImm32 r8, rax, -16
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

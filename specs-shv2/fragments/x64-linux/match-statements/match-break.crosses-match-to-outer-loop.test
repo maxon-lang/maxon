@@ -1,0 +1,61 @@
+// Test: match-break.crosses-match-to-outer-loop
+function main() returns ExitCode
+	var r = 0
+	var i = 0
+	while i < 3 'outer'
+		var j = 0
+		while j < 3 'inner'
+			match j 'check'
+				1 then break 'outer'
+				default then r = r + 1
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return r
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc less, outer
+    x64.jmp critsplit
+  outer:
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, inner
+    x64.jmp whileexit
+  inner:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.movRegReg r8, rax
+    x64.jmp whileexit
+  matchdefault:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp whilehdr
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp whileexit
+  whileexit:
+    x64.popReg rbp
+    x64.ret
+}

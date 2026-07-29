@@ -1,0 +1,143 @@
+// Test: match-statements.break-only-arms-with-panic-arm
+typealias Payload = int(0 to u64.max)
+
+union Slot
+	vacant
+	reserved
+	filled(value Payload)
+end 'Slot'
+
+type Holder
+	export var slot as Slot
+
+	export static function create() returns Holder
+		return Self{slot: Slot.reserved}
+	end 'create'
+
+	export function assertUsable()
+		match self.slot 'check'
+			vacant then panic("slot is vacant")
+			reserved then break 'check'
+			filled then break 'check'
+		end 'check'
+	end 'assertUsable'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.assertUsable()
+	h.slot = Slot.filled(7)
+	h.assertUsable()
+	print("usable\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Holder.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Holder.assertUsable {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  afterbreak:
+  afterbreak:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect Holder.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.assertUsable
+    x64.movRegImm32 r12, 7
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect Holder.assertUsable
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Holder
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

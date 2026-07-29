@@ -1,0 +1,50 @@
+// Test: match-break.managed-string-live-across
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'loop'
+		let s = "abc"
+		match i 'check'
+			1 then break
+			default then total = total + s.byteLength()
+		end 'check'
+		total = total + 1
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 9
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rax, 3
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdefault
+  matcharm:
+    x64.jmp matchcont
+  matchdefault:
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg rcx, r8, rcx
+    x64.movRegReg r8, rcx
+    x64.jmp matchcont
+  matchcont:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.popReg rbp
+    x64.ret
+  afterbreak:
+}
