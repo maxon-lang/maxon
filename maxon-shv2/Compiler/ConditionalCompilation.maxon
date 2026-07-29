@@ -142,7 +142,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 		// Read ONCE per token, before any arm can push or pop: for an ordinary token this decides
 		// whether it survives, and for a `#if` it is the ENCLOSING region's liveness, which is what
 		// the new frame's own liveness is conjoined with.
-		let regionLive = try regionIsLive(frames)
+		let regionLive = regionIsLive(frames)
 
 		if tok.kind == TokenKind.hashIf 'openRegion'
 			// ⚠ **THE CONDITION IS EVALUATED ONLY IN LIVE CODE**, and that is not an optimization —
@@ -177,7 +177,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 			// `branchLive` describes the arm that just ended and says nothing about whether the `#if`
 			// was reachable at all. Without it, an `#else` inside a dead outer branch goes live.
 			let enclosingLive = enclosingRegionIsLive(frames)
-			var frame = try innermostFrame(frames)
+			var frame = innermostFrame(frames)
 			frame.branchLive = enclosingLive and not frame.takenAlready
 			frame.takenAlready = frame.takenAlready or frame.branchLive
 			scan = scan + 1
@@ -208,7 +208,7 @@ export function filterConditionalTokens(tokens TokenArray, target Target) return
 	// The INNERMOST open region is the one named: its `#endif` is the missing one however many `#if`s
 	// enclose it.
 	if not frames.isEmpty() 'unterminated'
-		let open = try innermostFrame(frames)
+		let open = innermostFrame(frames)
 		throw DirectiveError.unterminatedIf(open.line, column: open.column)
 	end 'unterminated'
 
@@ -219,7 +219,7 @@ end 'filterConditionalTokens'
 // `#else` arm and the unterminated report cannot come to disagree about which frame is current.
 // Callers test `isEmpty` first; a caller that did not would rather see this panic than silently read
 // a frame belonging to an enclosing region.
-function innermostFrame(frames DirectiveFrameArray) returns DirectiveFrame throws DirectiveError
+function innermostFrame(frames DirectiveFrameArray) returns DirectiveFrame
 	return try frames.get(frames.count() - 1) otherwise panic("innermostFrame: called on an empty directive frame stack")
 end 'innermostFrame'
 
@@ -237,12 +237,11 @@ end 'tokensHoldDirective'
 // Is the cursor in code that is emitted? True at the top level (no open `#if`), otherwise the
 // innermost frame's own answer — which already folds in every enclosing region (see
 // `DirectiveFrame.branchLive`).
-function regionIsLive(frames DirectiveFrameArray) returns bool throws DirectiveError
+function regionIsLive(frames DirectiveFrameArray) returns bool
 	if frames.isEmpty() 'topLevel'
 		return true
 	end 'topLevel'
-	let innermost = try innermostFrame(frames)
-	return innermost.branchLive
+	return innermostFrame(frames).branchLive
 end 'regionIsLive'
 
 // Is the region ENCLOSING the innermost open `#if` live? What an `#else` needs, and what
