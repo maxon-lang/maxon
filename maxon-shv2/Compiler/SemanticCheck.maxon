@@ -1598,7 +1598,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// they differ — a scalar / `String` / ranged-alias argument, whose identity is deliberately
 			// empty — this is the only one that can say `String` rather than `type parameter`. It is asked
 			// on the FAILURE path alone, so the rendering costs a rejected program and nothing else.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(signatures.instanceArgTypeName(gid, position: position))}', got '{aggregateArgDisplay(got, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(signatures.instanceArgTypeName(gid, position: position)), got: aggregateArgDisplay(got, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongTypeArgument'
 
@@ -1720,7 +1720,7 @@ function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSign
 		let expected = joinQualifiedName(receiverAlias, member: member)
 		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expected)}', got '{aggregateArgDisplay(got, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: i, expected: String.from(expected), got: aggregateArgDisplay(got, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
@@ -1929,6 +1929,21 @@ function argParamLabel(paramName ByteArray, position ParamCount) returns String
 	return "{position + 1}" if paramName.isEmpty() else "'{String.from(paramName)}'"
 end 'argParamLabel'
 
+// ⭐ **THE ARGUMENT-MISMATCH SENTENCE, STATED ONCE FOR THE FIVE SITES THAT REPORT IT.** What DECIDES a
+// mismatch is deliberately five different rules — an aggregate IDENTITY asked three ways (a concrete
+// parameter's, a `T`-typed formal's substituted type argument, a per-instance alias parameter's), a
+// function SHAPE, and a scalar TAG — but what a READER is told is one sentence, and each site differs only
+// in how it renders the two types it holds. Rendering is therefore all a caller passes.
+//
+// ⚠ Written out per site, the sentence had already DRIFTED, silently and in the way this project keeps
+// meeting: three of the five hard-coded `'{paramName}'` where the other two asked `argParamLabel`. The two
+// spellings agree today only because those three are reachable from DIRECT calls alone, where a parameter
+// always has a declared name — a property of today's call graph, not an invariant. The day one of those
+// rules serves an indirect call it would name the parameter `''`, and no test would say so.
+function argTypeMismatchMessage(paramName ByteArray, position ParamCount, expected String, got String) returns String
+	return "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{expected}', got '{got}'"
+end 'argTypeMismatchMessage'
+
 // ⭐ **ONE ARGUMENT AGAINST ITS PARAMETER — the rule, stated once for both call shapes.** A DIRECT call
 // reaches it per slotted argument (`checkArgTypes`) and an INDIRECT one per positional argument
 // (`checkIndirectCall`); the two differ ONLY in what the parameter is CALLED, which is `argParamLabel`'s
@@ -1961,7 +1976,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 		let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
 		if namedAggregatesConflict(expectedAggregate, got: gotAggregate) 'aggregateArgMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{String.from(expectedAggregate)}', got '{aggregateArgDisplay(gotAggregate, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: String.from(expectedAggregate), got: aggregateArgDisplay(gotAggregate, tag: argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateParam'
@@ -1975,7 +1990,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		let declaredShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared")
 		let gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
 		if not functionShapesAgree(functionTypeRegistryOf(project), declared: declaredShape, got: gotShape) 'signatureMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{formatFnTypeDisplay(declaredShape.paramTypes, returnType: declaredShape.returnType, typeNames: project.typeNames)}', got '{formatFnTypeDisplay(gotShape.paramTypes, returnType: gotShape.returnType, typeNames: project.typeNames)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFnTypeDisplay(declaredShape.paramTypes, returnType: declaredShape.returnType, typeNames: project.typeNames), got: formatFnTypeDisplay(gotShape.paramTypes, returnType: gotShape.returnType, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'signatureMismatch'
 	end 'functionArg'
@@ -2001,7 +2016,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, declar
 	let verdict = checkDeclaredType(argTag, declared: declaredTag)
 	match verdict 'declared'
 		ok then break 'declared'
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {argParamLabel(paramName, position: position)}: expected '{typeTagName(declaredTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: typeTagName(declaredTag), got: typeTagName(argTag)), line: callRange.line, column: callRange.column, filePath: filePath)
 		// The parameter is NAMED, unlike the parser's three sites, because the reader's next
 		// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 		// shared verbatim, so the four sites cannot come to explain one rule four ways.
