@@ -602,7 +602,7 @@ error E2026: specs/fragments/match-simple/error.match-not-exhaustive.test:7:2: m
 ```
 
 <!-- disabled-test: match-arm-field-assignment -->
-<!-- enum scrutinee (Wave B) -->
+<!-- a FIELD STORE THROUGH AN IMMUTABLE BINDING (`state State` is a parameter, so `state.flag = true` is E2013 "cannot assign to immutable variable"). NOT break-in-match, which this case now clears: measured on the fixed compiler, and reproduced with no `match` anywhere — `let s = State.make()` then `s.flag = true` is E2013 too, while the oracle compiles both and runs them. shv2 refuses the write to the POINTEE because the BINDING is immutable; `let`/a parameter binds the reference, not the record. Its own rung. -->
 A match arm body may be a dotted field assignment (`state.flag = true`), not
 just a bare `x = value`. The arm-body parser routes an identifier-started
 statement through the shared statement parser so every assignment shape — plain,

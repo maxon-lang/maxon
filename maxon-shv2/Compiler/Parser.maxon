@@ -169,15 +169,19 @@ export union ParseError implements Error
 	// is shv2's first ownership program-rejection; the reference compilers refcount and have no
 	// move model, so there is no bootstrap text to match.
 	useAfterMove(name String, line LineNumber, column ColumnNumber)
-	// A `break`/`continue` with no enclosing loop. `keyword` is "break"/"continue"
-	// for the message. Renders as E2047.
-	controlOutsideLoop(keyword String, line LineNumber, column ColumnNumber)
+	// A `break`/`continue` with no enclosing target. `keyword` is "break"/"continue" for the
+	// message; `targets` names the constructs that keyword may leave, and it is NOT the same for
+	// the two — a `break` also leaves a match statement (`controlTargetNoun`). Renders as E2047.
+	controlOutsideLoop(keyword String, targets String, line LineNumber, column ColumnNumber)
 	// A labelled `break 'l'`/`continue 'l'` whose label names the INNERMOST loop —
 	// redundant (a plain `break`/`continue` already targets it). Renders as E2048.
+	// ⚠ For `break` this fires only when NO match is open: with one, the bare keyword would target
+	// the MATCH, so naming the loop is the only way to say "the loop" (see `resolveControlTarget`).
+	// The text is therefore true for both keywords and stays verbatim.
 	labelTargetsOwnLoop(keyword String, label String, line LineNumber, column ColumnNumber)
-	// A labelled `break 'l'`/`continue 'l'` whose label matches no enclosing loop.
-	// Renders as E2047.
-	unknownLoopLabel(keyword String, label String, line LineNumber, column ColumnNumber)
+	// A labelled `break 'l'`/`continue 'l'` whose label matches no enclosing target.
+	// `targets` as above. Renders as E2047.
+	unknownLoopLabel(keyword String, targets String, label String, line LineNumber, column ColumnNumber)
 	// A call whose FIRST argument carries a `name:` label — the first argument is
 	// positional, only the 2nd and later take labels. Renders as E2052. A syntactic
 	// rule the parser checks without the callee's signature.
@@ -2741,6 +2745,29 @@ function orMoveMarks(a MoveMark, b MoveMark) returns MoveMark
 	return MoveMark.create(moved, values: b.values)
 end 'orMoveMarks'
 
+// The sub-mark over the FIRST `height` owned bindings — the ones that OUTLIVE a construct whose own
+// bindings sit above `height`.
+//
+// Its one use is a `break` that leaves a MATCH. Every other capture site is already at its join's
+// height (see `MoveMark`), but a break is captured MID-ARM, with the arm's payload/`let` bindings
+// still on the stack; the merge it reaches has drained them (`dropArmScopedOwned`) by the time
+// `reconcileMovesAtMerge` runs, and that function compares EVERY reaching edge's mark against the
+// owned height at the merge and panics on a mismatch. Trimming here is not a workaround for that
+// check — it is what the check is asking for: the bindings above the floor are the arm's, they were
+// already dropped by the break itself, and the merge has no business reconciling them.
+function moveMarkPrefix(mark MoveMark, height BindingMark) returns MoveMark
+	if mark.moved.count() < height 'tooShort'
+		panic("moveMarkPrefix: the mark holds {mark.moved.count()} entries, fewer than the requested prefix of {height} — the owned-binding stack fell below the floor the construct recorded at entry")
+	end 'tooShort'
+	var moved = BoolArray.create()
+	var values = ValueIdArray.create()
+	for i in 0 upto height 'each'
+		moved.push(try mark.moved.get(i) otherwise panic("moveMarkPrefix: moved.get OOB at {i} after the height check"))
+		values.push(try mark.values.get(i) otherwise panic("moveMarkPrefix: values.get OOB at {i} after the height check"))
+	end 'each'
+	return MoveMark.create(moved, values: values)
+end 'moveMarkPrefix'
+
 // How a `try … otherwise …`'s error handler affects the merge (P1.4b). The success (`ok`) block always
 // carries the tryCall's `result`; the error block's shape is one of:
 //   • `value(v)`      — `otherwise <expr>` produced a fallback value; both edges merge into a result phi.
@@ -3130,6 +3157,65 @@ end 'MatchArmExit'
 
 typealias MatchArmExitArray = Array with MatchArmExit
 
+// ⭐⭐ **ONE ENCLOSING MATCH STATEMENT — A `break` TARGET, ON ITS OWN STACK BESIDE `Parser.loops`.**
+//
+// `break` targets a match ∪ the loops; `continue` targets the loops ONLY (`specs/match-statements.md`'s
+// "## Break" section states it verbatim, `docs/WRITING_MAXON_CODE.md:529-532` agrees, and both reference
+// compilers implement exactly that). The two kinds therefore cannot share one kind-tagged stack: every
+// existing reader of `Parser.loops` means "the innermost LOOP" by reading its top — `bindingIndexEscapesLoop`
+// above all, which decides whether a move escapes a loop — and a match interleaved into that stack would
+// silently give each of them a different answer. A SECOND stack leaves every one of them correct by
+// construction, which is why both references keep two as well (`maxon-sharp/Compiler/2-Parser.cs:112-113`,
+// `maxon-selfhosted/Compiler/Parser.maxon:342-343`).
+//
+// A match EXPRESSION is never pushed: each of its arms feeds the one result phi, and a `break` that
+// skipped an arm would leave that phi an operand short. Only the statement form is a target.
+type MatchContext
+	export var label as ByteArray
+	// The match's carried-variable set. A `break`'s exit snapshot must be positional over the SAME list
+	// every arm's exit snapshot is, because `finalizeMatchMerge` compares them slot by slot.
+	export var carried as VarInfoArray
+	// The owned-binding height at match entry — the floor a `break` releases down to, dropping the arm's
+	// own payload/`let` bindings on its way out. The exact twin of `LoopContext.ownedFloor`, and equal to
+	// every arm's `armOwnedFloor`, since `dropArmScopedOwned` drains each arm back to it. Captured AFTER
+	// the temporary-scrutinee enrolment, so the scrutinee box — which outlives the match — sits BELOW the
+	// floor and a break does not drop it.
+	export var ownedFloor as BindingMark
+	// The arm exits contributed by `break`s that target this match, drained into `reachingArms` before
+	// `finalizeMatchMerge` counts them.
+	//
+	// ⭐ **THIS IS THE CURE FOR v1'S ALL-BREAK MERGE-DEAD BUG** (`maxon-selfhosted/Compiler/Parser.maxon:9713-9729`:
+	// *"an all-break match wrongly sealed its live merge dead: no implicit return landed, and the merge fell
+	// through into whatever block the layout placed next"*). v1 needed a separate `mergeReached` flag because
+	// its break blocks were DETACHED and dead, invisible to its fall-through accounting. Here a break's block
+	// is a reaching arm exit like any other — same record, same join, same phi args — so a match whose every
+	// arm breaks has a non-empty reaching set and a live merge without any second signal to keep in step.
+	export var breakExits as MatchArmExitArray
+
+	export static function create(label ByteArray, carried VarInfoArray, ownedFloor BindingMark) returns MatchContext
+		return Self{label: label, carried: carried, ownedFloor: ownedFloor, breakExits: MatchArmExitArray.create()}
+	end 'create'
+end 'MatchContext'
+
+typealias MatchContextArray = Array with MatchContext
+
+// What a `break`/`continue` resolved to. Two arms rather than one context type with a kind tag, because
+// the destinations are genuinely different things: a loop's exit block already EXISTS and takes its
+// loop-carried phi args now, while a match's merge is not a block yet at all — `finalizeMatchMerge` mints
+// it last — so a break enrols itself in the reaching-arm set instead of branching.
+union ControlTarget
+	loopExit(ctx LoopContext)
+	matchMerge(ctx MatchContext)
+end 'ControlTarget'
+
+// The constructs a keyword may leave, for the two E2047 texts. A shared "inside a loop" wording became
+// FALSE for `break` the moment a match became a target, while staying true for `continue` — so the noun
+// is derived from the same single bit `resolveControlTarget` computes, and the message cannot come to
+// disagree with the resolution about what the keyword may name.
+function controlTargetNoun(isBreak bool) returns String
+	return "loop or match" if isBreak else "loop"
+end 'controlTargetNoun'
+
 // ⭐ **WHICH VALUE-MERGE CONSTRUCT `finalizeMatchMerge` is finishing (P1.5 #80).** The three share ONE
 // merge — the phi, the give-agreement rules, the ownership normalisation — but they must NOT share their
 // DIAGNOSTIC NOUN: a `match` reports "match arms give incompatible types" (E3005) naming the offending
@@ -3364,6 +3450,12 @@ export type Parser
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
 	var loops as LoopContextArray
+	// The enclosing match STATEMENTS, innermost last — the other half of the break-target stack (see
+	// `MatchContext` for why `break` needs its own rather than sharing `loops`). `continue` never reads
+	// it. Reset per function AND per closure exactly as `loops` is: without the closure reset, a `break`
+	// inside a closure inside a match arm would target a match in the ENCLOSING function, whose merge
+	// block belongs to another `IrFunction` entirely.
+	var matches as MatchContextArray
 	// ⭐⭐ **THE BINDINGS AN ENCLOSING `for … in` IS CURRENTLY ITERATING THROUGH** — innermost last, pushed
 	// by `lockIterationSource` around each `for` body and popped after it. THE ONE FACT behind the borrow's
 	// safety obligation, and the reason it is a list on the parser rather than a flag flipped on the binding:
@@ -3808,6 +3900,7 @@ export type Parser
 			mutableVarShadowed: sharedEmptyMutableVarShadowed,
 			mutableVarInnermost: sharedEmptyMutableVarInnermost,
 			loops: LoopContextArray.create(),
+			matches: MatchContextArray.create(),
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
 			blockExtentEnds: sharedEmptyBlockExtentEnds,
@@ -7740,6 +7833,7 @@ export type Parser
 		// function's SSA space, so a move-out would null the wrong slot.
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		self.matches = MatchContextArray.create()
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
 		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
 		// at the shared empty rather than allocating (see `sharedEmptyIterationLocks`).
@@ -8579,7 +8673,7 @@ export type Parser
 		end 'forStmt' else if self.at(TokenKind.match) 'matchStmt'
 			return try self.parseMatchStatement(func, block: block)
 		end 'matchStmt' else if self.at(TokenKind.break) 'breakStmt'
-			try self.parseBreakStatement(block)
+			try self.parseBreakStatement(func, block: block)
 		end 'breakStmt' else if self.at(TokenKind.continue) 'continueStmt'
 			try self.parseContinueStatement(block)
 		end 'continueStmt' else if self.at(TokenKind.throw) 'throwStmt'
@@ -13678,28 +13772,34 @@ export type Parser
 		self.recordBranchEdge(condExit, targetId: exit.id, argIds: headerVals)
 	end 'wireLoopExit'
 
-	// Drop the owned bindings a `break`/`continue` skips past — everything declared since the target
-	// loop's body was entered (`ctx.ownedFloor`), in reverse order, into `block` BEFORE the branch that
-	// terminates it. A `break`/`continue` leaves its block ALIVE (it jumps forward/back rather than
-	// falling through the `end`), so `parseBlockBody`'s fall-through drop never runs on this path — this
-	// is the only place that iteration's body-local Strings/structs are released. For a labelled control
-	// to an OUTER loop, `ctx` is that outer loop, so the floor releases every binding down to it. The
-	// decrefs land in `block` because `emitScopeDrops` emits into `currentBlock` and a `break`/`continue`
-	// moves control nowhere until its branch, so `currentBlock` is `block`.
-	function dropLoopBodyOwned(block IrBlock, ctx LoopContext, anchor Token)
+	// Drop the owned bindings a `break`/`continue` skips past — everything declared since the TARGET's
+	// body was entered (a `LoopContext.ownedFloor`, or a `MatchContext.ownedFloor`), in reverse order,
+	// into `block` BEFORE the branch that terminates it. A `break`/`continue` leaves its block ALIVE (it
+	// jumps forward/back rather than falling through the `end`), so `parseBlockBody`'s fall-through drop
+	// and `dropArmScopedOwned`'s live-exit drop never run on this path — this is the only place that
+	// iteration's, or that arm's, body-local Strings/structs are released. For a labelled control to an
+	// OUTER target, `floor` is that outer target's, so it releases every binding down to it. The decrefs
+	// land in `block` because `emitScopeDrops` emits into `currentBlock` and a `break`/`continue` moves
+	// control nowhere until its branch, so `currentBlock` is `block`.
+	//
+	// It takes the FLOOR rather than a context, because the two context types record the same fact and a
+	// second copy of these two lines is exactly how their drop rules would drift apart.
+	function dropTargetBodyOwned(block IrBlock, floor BindingMark, anchor Token)
 		self.currentBlock = block
-		self.emitScopeDrops(ctx.ownedFloor, anchor: anchor)
-	end 'dropLoopBodyOwned'
+		self.emitScopeDrops(floor, anchor: anchor)
+	end 'dropTargetBodyOwned'
 
-	// Parse `break ['label']` (M4b): branch to the target loop's EXIT block, carrying
-	// the current phi-var values so the exit's merge phis see this path's values.
-	function parseBreakStatement(block IrBlock) throws ParseError
+	// Parse `break ['label']` (M4b): leave the innermost enclosing break TARGET — the match statement if
+	// one is open, else the loop (`resolveControlTarget`). The two destinations are wired differently
+	// enough to be their own functions: a loop's exit block exists and takes its phi args now, while a
+	// match's merge does not exist yet.
+	function parseBreakStatement(func IrFunction, block IrBlock) throws ParseError
 		let breakTok = try self.consume(TokenKind.break)
-		var ctx = try self.resolveControlTarget("break", kwTok: breakTok)
-		ctx.hasBreak = true
-		self.dropLoopBodyOwned(block, ctx: ctx, anchor: breakTok)
-		self.recordBranchEdge(block, targetId: ctx.exitId, argIds: self.edgeArgsFor(ctx.phiVars, preLoop: false))
-		self.emitBranch(block, targetId: ctx.exitId)
+		let target = try self.resolveControlTarget(breakTok)
+		match target 'target'
+			loopExit(ctx) then self.jumpToLoopBlock(block, ctx: ctx, targetId: ctx.exitId, anchor: breakTok)
+			matchMerge(ctx) then self.breakToMatchMerge(func, block: block, ctx: ctx, breakTok: breakTok)
+		end 'target'
 	end 'parseBreakStatement'
 
 	// Parse `continue ['label']` (M4b): branch to the target loop's CONTINUE TARGET, carrying the
@@ -13708,39 +13808,139 @@ export type Parser
 	// increment must run before the header or the counter never advances — see `LoopContext`.
 	function parseContinueStatement(block IrBlock) throws ParseError
 		let continueTok = try self.consume(TokenKind.continue)
-		let ctx = try self.resolveControlTarget("continue", kwTok: continueTok)
-		self.dropLoopBodyOwned(block, ctx: ctx, anchor: continueTok)
-		self.recordBranchEdge(block, targetId: ctx.continueTargetId, argIds: self.edgeArgsFor(ctx.phiVars, preLoop: false))
-		self.emitBranch(block, targetId: ctx.continueTargetId)
+		let target = try self.resolveControlTarget(continueTok)
+		match target 'target'
+			loopExit(ctx) then self.jumpToLoopBlock(block, ctx: ctx, targetId: ctx.continueTargetId, anchor: continueTok)
+			matchMerge then panic("parseContinueStatement: `continue` resolved to a match — only `break` searches the match stack, and `resolveControlTarget` keys that on the keyword's own token kind")
+		end 'target'
 	end 'parseContinueStatement'
 
-	// Resolve the loop a `break`/`continue` targets. No label → the innermost loop.
-	// A label → the enclosing loop with that label; naming the INNERMOST loop's own
-	// label is redundant (E2048), and a label matching no enclosing loop is E2047.
-	// A `break`/`continue` with no enclosing loop at all is E2047. Returns the live
-	// stack entry (a reference) so `break` can flip its `hasBreak`.
-	function resolveControlTarget(keyword String, kwTok Token) returns LoopContext throws ParseError
-		let depth = self.loops.count()
-		if depth == 0 'noLoop'
-			throw ParseError.controlOutsideLoop(keyword, line: kwTok.line, column: kwTok.column)
-		end 'noLoop'
+	// Wire a `break`/`continue` that leaves a LOOP: release what the loop body declared, then branch,
+	// carrying the loop's phi values so the destination's phis see this path. `targetId` is the ONLY
+	// thing that differs between the two keywords here — the exit for a `break`, the continue target for
+	// a `continue` — which is why they share this rather than each spelling the same three lines.
+	function jumpToLoopBlock(block IrBlock, ctx LoopContext, targetId BlockId, anchor Token)
+		self.dropTargetBodyOwned(block, floor: ctx.ownedFloor, anchor: anchor)
+		self.recordBranchEdge(block, targetId: targetId, argIds: self.edgeArgsFor(ctx.phiVars, preLoop: false))
+		self.emitBranch(block, targetId: targetId)
+	end 'jumpToLoopBlock'
+
+	// ⭐⭐ **A `break` THAT LEAVES A MATCH STATEMENT ENROLS ITS BLOCK AS A REACHING ARM EXIT.**
+	//
+	// There is nothing to branch to: `finalizeMatchMerge` mints the merge block LAST, deliberately, so it
+	// lays out after every arm body. So instead of a branch this contributes the very record a
+	// fall-through arm contributes — exit block, carried-var snapshot, no `gives` value, move state — and
+	// the merge then emits the branch and the phi args through the ONE join every arm already uses. No
+	// new block in the merge's path, no early block, and no existing match's layout moves.
+	//
+	// ⚠ **NEITHER REFERENCE'S LOWERING WAS AVAILABLE HERE, and copying either would have been a
+	// regression.** The bootstrap emits a branch to a merge that does not exist yet because it branches by
+	// LABEL STRING (`2-Parser.cs:13626`); shv2 branches by `BlockId` — the rewrite's thesis — so there is
+	// no name to forward-reference. v1 creates the merge EAGERLY in `parseMatchHeader`
+	// (`maxon-selfhosted/Compiler/Parser.maxon:7909-7910`), which would reorder every existing match's
+	// blocks and churn every committed golden for a program that has no `break` in it at all.
+	function breakToMatchMerge(func IrFunction, block IrBlock, ctx MatchContext, breakTok Token)
+		// Release what the arm declared, exactly as a live arm exit's `dropArmScopedOwned` would — the
+		// break skips the arm's end, so this is the only drop its payload/`let` bindings get.
+		self.dropTargetBodyOwned(block, floor: ctx.ownedFloor, anchor: breakTok)
+		// A local `var` alias, not `ctx.breakExits.push(…)`: the mutating-parameter analysis reads a write
+		// through a parameter's FIELD as a write to the parameter itself, and a `match` arm's payload
+		// binding is immutable, so `parseBreakStatement` could not then pass `ctx` at all (E3019). The
+		// alias is the same array the live stack entry holds, so the push lands where it must.
+		var breakExits = ctx.breakExits
+		breakExits.push(MatchArmExit.create(block, exitVals: self.snapshotBindings(ctx.carried), give: MatchGiveValue.none, moveMark: moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor)))
+
+		// ⭐ **CONTROL LEAVES, YET `block` MUST STAY UNTERMINATED** — terminating a reaching arm's exit is
+		// `finalizeMatchMerge`'s job, and it has not run. So the statement continues in a fresh DEAD block,
+		// the same shape `parseIfStatement` gives the continuation of a fully-terminated `if`. THAT is what
+		// keeps every `isTerminated()` reader downstream right by construction rather than by a flag each
+		// would have to remember to consult: `parseArmBody` must not enrol this arm a SECOND time,
+		// `dropArmScopedOwned` must not re-drop what was just dropped, and `parseOtherwiseHandler`'s
+		// caught-box drop must not double-free after an `otherwise break`.
+		var afterBreak = self.newBlock(func, label: b"afterbreak", line: breakTok.line)
+		afterBreak.terminator = Terminator.dead
+		self.currentBlock = afterBreak
+	end 'breakToMatchMerge'
+
+	// ⭐⭐ **BREAK TARGETS ARE MATCHES ∪ LOOPS; CONTINUE TARGETS ARE LOOPS ONLY.**
+	//
+	// No label → the innermost break target (the match, if one is open; else the innermost loop). A label
+	// → the enclosing match, else the enclosing loop, with that label. Naming the innermost LOOP is
+	// redundant (E2048) — but only when no match is open, see below. A label matching no enclosing target,
+	// or a keyword with no target at all, is E2047. Returns the live stack entry (a reference), so a
+	// `break` reaches the same `LoopContext`/`MatchContext` the stack still holds.
+	function resolveControlTarget(kwTok Token) returns ControlTarget throws ParseError
+		// ⭐ **THE ONE BIT THE TWO KEYWORDS DIFFER BY.** `break` leaves an enclosing construct, and a match
+		// statement is one; `continue` starts the next ITERATION, which only a loop has. All THREE places
+		// they diverge read this — which stacks are searched, whether the innermost loop's label is
+		// redundant, and the noun the E2047 texts use — so they cannot come to disagree.
+		let isBreak = kwTok.kind == TokenKind.break
+		let matchDepth = self.matches.count() if isBreak else 0
+		let loopDepth = self.loops.count()
+
+		if loopDepth == 0 and matchDepth == 0 'noTarget'
+			throw ParseError.controlOutsideLoop(String.from(kwTok.value), targets: controlTargetNoun(isBreak), line: kwTok.line, column: kwTok.column)
+		end 'noTarget'
 
 		if not self.at(TokenKind.charLiteral) 'unlabelled'
-			return try self.loops.get(depth - 1) otherwise panic("resolveControlTarget: loops.get({depth - 1}) failed after count check")
+			// ⚠ **THE MATCH WINS UNCONDITIONALLY, AND THAT IS CORRECT ONLY BECAUSE OF E2049.** "Innermost
+			// break target" is what the rule says, and preferring the top of `matches` over the top of
+			// `loops` computes it only because a match arm body may not OPEN a loop
+			// (`parseArmBody` → `isBlockOpeningStatement` → E2049) and a closure resets both stacks — so no
+			// loop can ever be nested INSIDE an open match, and a match on the stack always IS the innermost
+			// target. Both references depend on this and neither records it. A push-depth counter would
+			// remove the dependency and was deliberately not built: it is speculative generality for a
+			// nesting the language forbids. **If E2049 is ever relaxed, this preference must become an
+			// interleaved depth comparison.**
+			if matchDepth > 0 'innermostMatch'
+				return ControlTarget.matchMerge(try self.matches.get(matchDepth - 1) otherwise panic("resolveControlTarget: matches.get({matchDepth - 1}) failed after the count check"))
+			end 'innermostMatch'
+			return self.loopTargetAt(loopDepth - 1, isBreak: isBreak)
 		end 'unlabelled'
 
 		let labelTok = try self.consume(TokenKind.charLiteral)
-		for i in 0 upto depth 'search'
-			let ctx = try self.loops.get(depth - 1 - i) otherwise panic("resolveControlTarget: loops.get OOB during label search")
-			if ctx.label.equals(labelTok.value) 'match'
-				if i == 0 'ownLabel'
-					throw ParseError.labelTargetsOwnLoop(keyword, label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
+
+		// Matches first, innermost out — a labelled break names its target directly, and a match's label is
+		// NEVER redundant: `break 'check'` inside `match … 'check'` says exactly what the bare `break` says,
+		// but the redundancy diagnostic exists for LOOP labels only (E2048's text names a loop), and both
+		// references accept the match spelling silently. `match-arm-field-assignment` and
+		// `match-statements.break-exhaustive-enum` are both written that way.
+		for i in 0 upto matchDepth 'matchSearch'
+			let ctx = try self.matches.get(matchDepth - 1 - i) otherwise panic("resolveControlTarget: matches.get OOB during the label search")
+			if ctx.label.equals(labelTok.value) 'foundMatch'
+				return ControlTarget.matchMerge(ctx)
+			end 'foundMatch'
+		end 'matchSearch'
+
+		for i in 0 upto loopDepth 'loopSearch'
+			let ctx = try self.loops.get(loopDepth - 1 - i) otherwise panic("resolveControlTarget: loops.get OOB during the label search")
+			if ctx.label.equals(labelTok.value) 'foundLoop'
+				// E2048 — the label says nothing the bare keyword would not. ⚠ The `matchDepth == 0` conjunct
+				// is load-bearing and not a refinement: with a match open, a bare `break` targets the MATCH,
+				// so naming the enclosing loop is the ONLY way to say "the loop" and is required rather than
+				// redundant. For `continue` the conjunct is `0 == 0` by construction, so its rule is
+				// unchanged — `specs-shv2/break.md:49` pins that text byte for byte.
+				if i == 0 and matchDepth == 0 'ownLabel'
+					throw ParseError.labelTargetsOwnLoop(String.from(kwTok.value), label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
 				end 'ownLabel'
-				return ctx
-			end 'match'
-		end 'search'
-		throw ParseError.unknownLoopLabel(keyword, label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
+				return self.loopTargetAt(loopDepth - 1 - i, isBreak: isBreak)
+			end 'foundLoop'
+		end 'loopSearch'
+		throw ParseError.unknownLoopLabel(String.from(kwTok.value), targets: controlTargetNoun(isBreak), label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
 	end 'resolveControlTarget'
+
+	// The `loopExit` target for the loop at `index`, flagging its exit as a `break` destination when the
+	// keyword is one — the exit then merges the condition's false edge with each break's values, so
+	// `wireLoopExit` gives it phis. The flag is written HERE, at the one place a loop becomes a target,
+	// rather than by the caller: it must land on the live stack entry, and a caller that unpacked
+	// `ControlTarget` could not write it — a `match` arm's payload binding is immutable.
+	function loopTargetAt(index ElementIndex, isBreak bool) returns ControlTarget
+		var ctx = try self.loops.get(index) otherwise panic("loopTargetAt: loops.get({index}) OOB — the index was found by searching the live stack")
+		if isBreak 'exitIsAMergePoint'
+			ctx.hasBreak = true
+		end 'exitIsAMergePoint'
+		return ControlTarget.loopExit(ctx)
+	end 'loopTargetAt'
 
 	// The current SSA value of each binding in `bindings`, in the list's order — one of an
 	// `if`'s three merge snapshots (entry / then-exit / else-exit), positional over the
@@ -14017,6 +14217,14 @@ export type Parser
 		// the twin of `restoreBindings`), and each reaching arm captures its own exit move state for the
 		// merge reconciliation. A `and fallthrough` arm does NOT restore — it inherits the prior arm's state.
 		let entryMoveMark = self.captureMoveMark()
+
+		// ⭐ **THE MATCH BECOMES A `break` TARGET FOR ITS ARMS** (see `MatchContext`). A match STATEMENT
+		// only: every arm of an EXPRESSION feeds the one result phi, and a `break` that skipped an arm would
+		// leave that phi an operand short. Pushed AFTER the temporary-scrutinee enrolment so `ownedFloor`
+		// sits ABOVE that box — the box outlives the match, and a break must not drop it.
+		if not isExpression 'pushBreakTarget'
+			self.matches.push(MatchContext.create(matchLabel, carried: carried, ownedFloor: self.ownedBindings.count()))
+		end 'pushBreakTarget'
 
 		// ⭐ **DISPATCH STRATEGY (match-dispatch Slice 1).** An integer-like scrutinee builds a normalized
 		// interval PLAN and dispatches by a balanced binary search (or a chain when small); a `String`/
@@ -14299,6 +14507,18 @@ export type Parser
 			let normalized = self.normalizeDispatchIntervals(dispatchIntervals)
 			try self.emitMatchDispatch(func, entry: dispatchEntry, subject: dispatchSubject, intervals: normalized, missTarget: planMissBlockId, missArgs: planMissArgs, opTok: matchTok)
 		end 'emitPlan'
+
+		// ⭐⭐ **DRAIN THE BREAK EXITS INTO THE REACHING SET — BEFORE `finalizeMatchMerge` COUNTS IT.** That
+		// ordering IS the cure for v1's all-break merge-dead bug (`MatchContext.breakExits`): the merge is
+		// sealed `dead` on `reachingArms.count() == 0`, and a match whose every arm breaks has an empty
+		// reaching set until this line runs. Appended at the end rather than interleaved in arm order — the
+		// edges are recorded on each arm's OWN block, so the merge's predecessor order is not a property of
+		// this list, and `finalizeMatchMerge`'s only order-sensitive read is "arm 0 is the type reference",
+		// which a statement match does not use.
+		if not isExpression 'drainBreakExits'
+			let matchCtx = try self.matches.pop() otherwise panic("parseMatchCommon: the match stack is empty at the end of a statement match — one is pushed before the arm loop")
+			reachingArms.append(matchCtx.breakExits)
+		end 'drainBreakExits'
 
 		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.matchExpression if isExpression else MergeConstruct.matchStatement)
 		self.currentBlock = outcome.cont
@@ -24336,6 +24556,7 @@ export type Parser
 		let savedMutableVarShadowed = self.mutableVarShadowed
 		let savedMutableVarInnermost = self.mutableVarInnermost
 		let savedLoops = self.loops
+		let savedMatches = self.matches
 		let savedCurrentBlock = self.currentBlock
 		let savedValueTags = self.valueTags
 		let savedValueNameIds = self.valueNameIds
@@ -24397,6 +24618,7 @@ export type Parser
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
+		self.matches = MatchContextArray.create()
 		// ⚠ Balanced by construction — pushed and popped around each `for` body — EXCEPT on the error path,
 		// where a `ParseError` thrown inside a body skips the release. So the reset is real; it points back
 		// at the shared empty rather than allocating (see `sharedEmptyIterationLocks`).
@@ -24507,6 +24729,7 @@ export type Parser
 		self.mutableVarShadowed = savedMutableVarShadowed
 		self.mutableVarInnermost = savedMutableVarInnermost
 		self.loops = savedLoops
+		self.matches = savedMatches
 		self.currentBlock = savedCurrentBlock
 		self.valueTags = savedValueTags
 		self.valueNameIds = savedValueNameIds

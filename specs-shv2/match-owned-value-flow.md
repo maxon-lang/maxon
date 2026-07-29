@@ -107,6 +107,13 @@ end 'main'
 A temporary scrutinee inside a loop with a `break` arm: the box drops on the break
 edge (down to the loop floor), not only on the `return` arm that the parser drained
 into first.
+
+⚠ The break is LABELLED, and it must be. An unlabelled `break` in a match arm exits
+the MATCH, not the loop (`specs/match-statements.md`'s "## Break" section), so the
+loop-floor drop this case exists to pin is only reached by naming the loop — and the
+unlabelled spelling makes this very program an infinite loop, which is exactly what
+the reference oracle does with it. This case was written against a parser that had
+not yet implemented match targeting, so it read the unlabelled form as a loop exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -120,7 +127,7 @@ function main() returns ExitCode
 	while result > 0 'loop'
 		match Num.val(1) 'check'
 			zero then return 0
-			val(n) then break
+			val(n) then break 'loop'
 		end 'check'
 	end 'loop'
 	return result

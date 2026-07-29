@@ -106,8 +106,7 @@ end 'main'
 55
 ```
 
-<!-- disabled-test: array-of-structs-enum-for-in-loop -->
-<!-- break-in-match context, its own small concern (the same blocker `match-statements.md`'s `match-break.basic`/`match-break.labeled` carry). ⚠ MEASURED as a SILENT WRONG ANSWER, not a missing feature: an unlabelled `break` in a match ARM must exit the MATCH (oracle), shv2 exits the enclosing LOOP — reachable today with `while` and no `for` at all -->
+<!-- test: array-of-structs-enum-for-in-loop -->
 ```maxon
 // Regression test: enum match works in for-in loop over struct array
 enum Status

@@ -1,0 +1,142 @@
+// Test: array-of-structs-enum-for-in-loop
+// Regression test: enum match works in for-in loop over struct array
+enum Status
+	pending
+	active
+	done
+end 'Status'
+
+type Task
+	export var status as Status
+
+	static function create(status Status) returns Self
+		return Self{status: status}
+	end 'create'
+end 'Task'
+
+typealias TaskArray = Array with Task
+
+function main() returns ExitCode
+	var tasks = TaskArray.create()
+	tasks.push(Task.create(Status.pending))
+	tasks.push(Task.create(Status.active))
+	tasks.push(Task.create(Status.done))
+
+	var activeCount = 0
+	for task in tasks 'loop'
+		match task.status 'check'
+			active then activeCount = activeCount + 1
+			pending then break
+			done then break
+		end 'check'
+	end 'loop'
+
+	return activeCount
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Task.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Task.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.movRegImm32 rcx, 1
+    x64.callDirect Task.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.movRegImm32 rcx, 2
+    x64.callDirect Task.create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.cmpRegReg r13, r8
+    x64.jcc less, loop
+    x64.jmp forexit
+  loop:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_get_unchecked
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegReg rax, r12
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRegImm32 rax, r12, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegReg rax, r12
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.movRegReg r12, rax
+    x64.jmp forhdr
+  matchdead:
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  afterbreak:
+  afterbreak:
+}

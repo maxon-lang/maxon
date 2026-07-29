@@ -1341,8 +1341,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: match-break.basic -->
-<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
+<!-- test: match-break.basic -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1358,8 +1357,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-break.labeled -->
-<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
+<!-- test: match-break.labeled -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1376,8 +1374,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-break.inside-loop -->
-<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
+<!-- test: match-break.inside-loop -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1396,8 +1393,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: match-break.exits-match-not-loop -->
-<!-- MISCOMPILE, not a missing feature: an unlabelled `break` in a match arm must exit the MATCH (docs/WRITING_MAXON_CODE.md + the oracle); shv2 exits the LOOP. Measured on `match-break.exits-match-not-loop`, whose name states the rule: the oracle pins exitcode 23, shv2 compiles silently and returns 11. Own rung (user ruling 2026-07-28) — see PLAN.md "Future rungs". Reachable today with `while`; no `for` needed. -->
+<!-- test: match-break.exits-match-not-loop -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1415,6 +1411,225 @@ end 'main'
 ```
 ```exitcode
 23
+```
+
+A `break` that leaves a match must release what the arm still owns, and nothing the
+match does not own. Here a managed `String` is declared by the LOOP body, so it sits
+BELOW the match's drop floor: the break jumps to the match's merge, which is still
+inside the loop body, and the String must survive to be read on the next iteration
+and released by the loop body's own `end`.
+
+<!-- test: match-break.managed-string-live-across -->
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'loop'
+		let s = "abc"
+		match i 'check'
+			1 then break
+			default then total = total + s.byteLength()
+		end 'check'
+		total = total + 1
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+```
+```exitcode
+9
+```
+
+A boxed union scrutinee whose arm `break`s still drops its box exactly once — the
+break leaves the match, not the function, so the scrutinee's own scope exit is what
+releases it. The leak gate (exit 101) is the assertion that matters here.
+
+<!-- test: match-break.managed-union-payload-arm -->
+```maxon
+union Note
+	text(s String)
+	none
+end 'Note'
+
+typealias Count = int(0 to 1000)
+
+function weigh(n Note) returns Count
+	var r = 0
+	match n 'check'
+		text then break
+		none then r = 5
+	end 'check'
+	return r + 1
+end 'weigh'
+
+function main() returns ExitCode
+	let a = weigh(Note.text("hello"))
+	let b = weigh(Note.none)
+	return a + b
+end 'main'
+```
+```exitcode
+7
+```
+
+Every arm `break`s, so no arm falls through — and the merge is still REACHABLE,
+because a break jumps to it. A parser that counts only fall-through arms seals the
+merge dead, drops the implicit return, and lets the merge fall into whatever block
+the layout placed next.
+
+<!-- test: match-break.every-arm-breaks -->
+```maxon
+typealias Count = int(0 to 1000)
+
+function pick(k Count) returns Count
+	let r = 7
+	match k 'check'
+		1 then break
+		2 then break
+		default then break
+	end 'check'
+	return r + 1
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1) + pick(2) + pick(5) - 16
+end 'main'
+```
+```exitcode
+8
+```
+
+Naming a MATCH's own label is never redundant-label (E2048): that diagnostic is about
+loop labels, and `break 'check'` inside `match … 'check'` is exactly how both
+reference compilers spell an explicit match exit.
+
+<!-- test: match-break.match-own-label -->
+```maxon
+function main() returns ExitCode
+	var r = 0
+	var i = 0
+	while i < 3 'loop'
+		match i 'check'
+			1 then break 'check'
+			default then r = r + 10
+		end 'check'
+		r = r + 1
+		i = i + 1
+	end 'loop'
+	return r
+end 'main'
+```
+```exitcode
+23
+```
+
+A labelled `break` still reaches PAST a match to an outer loop.
+
+<!-- test: match-break.crosses-match-to-outer-loop -->
+```maxon
+function main() returns ExitCode
+	var r = 0
+	var i = 0
+	while i < 3 'outer'
+		var j = 0
+		while j < 3 'inner'
+			match j 'check'
+				1 then break 'outer'
+				default then r = r + 1
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return r
+end 'main'
+```
+```exitcode
+1
+```
+
+A single-statement `otherwise break` inherits match targeting through the ordinary
+break parser — it is not special-cased anywhere. With a BOXED error type the handler
+owns a caught box that sits above the match's drop floor, so the break must release
+it exactly once: the break's own scope drop, and NOT a second one from the handler's
+live-exit drop. Both a leak and a double-free would show here.
+
+<!-- test: match-break.otherwise-break-boxed-error -->
+```maxon
+typealias Count = int(0 to 1000)
+
+union Err
+	bad(s String)
+end 'Err'
+
+function risky(k Count) returns Count throws Err
+	if k == 1 'fail'
+		throw Err.bad("boom")
+	end 'fail'
+	return 10
+end 'risky'
+
+function pick(k Count) returns Count
+	var r = 0
+	match k 'check'
+		1 then r = try risky(k) otherwise break
+		default then r = 50
+	end 'check'
+	return r + 1
+end 'pick'
+
+function main() returns ExitCode
+	return pick(1) + pick(2)
+end 'main'
+```
+```exitcode
+52
+```
+
+CONTROL. `continue` targets loops ONLY — a match is not an iteration — so an
+intervening match does NOT make the innermost loop's label meaningful for it. The
+redundant-label rule is unchanged for `continue`.
+
+<!-- test: match-break.continue-across-match-still-redundant -->
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'loop'
+		match i 'check'
+			1 then continue 'loop'
+			default then total = total + 1
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2048: <fragment>:7:20: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
+```
+
+CONTROL. The E2048 exemption keys on an intervening MATCH, not on "any intervening
+construct": an `if` is not a break target, so a `break 'loop'` written inside one
+still names the innermost loop redundantly.
+
+<!-- test: match-break.loop-label-across-if-still-redundant -->
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'loop'
+		if i == 1 'check'
+			break 'loop'
+		end 'check'
+		total = total + 1
+		i = i + 1
+	end 'loop'
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2048: <fragment>:7:10: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
 ```
 
 ### Default Throws on Non-Enum Match
@@ -1478,8 +1693,7 @@ end 'main'
 
 ### Break in Exhaustive Enum Match
 
-<!-- disabled-test: match-statements.break-exhaustive-enum -->
-<!-- blocked by `break` OUT OF A MATCH (E2047 "'break' can only be used inside a loop") — a separate feature, NOT cross-call ownership: the union-parameter mechanism it was thought to test is already GREEN (match-enum-typed-binding/match-enum-typed-binding-compare, isGreen(p Pixel)). It unlocks when a match label becomes a `break` target. -->
+<!-- test: match-statements.break-exhaustive-enum -->
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1521,8 +1735,7 @@ into whatever block the layout places next (historically the panic arm's
 body — the self-hosted `IrBlock.assertTerminated` panicked on every
 well-terminated block in self-compiled builds).
 
-<!-- disabled-test: match-statements.break-only-arms-with-panic-arm -->
-<!-- payload union + panic (Wave B) -->
+<!-- test: match-statements.break-only-arms-with-panic-arm -->
 ```maxon
 typealias Payload = int(0 to u64.max)
 

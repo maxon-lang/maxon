@@ -433,9 +433,12 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// Wave C, static single-owner. shv2-only — the reference compilers refcount and have no move
 		// model, so there is no bootstrap text to match. Positioned on the use.
 		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment", line: line, column: column, filePath: path)
-		controlOutsideLoop(keyword, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a loop", line: line, column: column, filePath: path)
+		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement, so the old
+		// shared wording was FALSE for one of the two keywords. `Parser.controlTargetNoun` is where the
+		// noun is decided, from the same bit that decides which stacks the resolution searches.
+		controlOutsideLoop(keyword, targets, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
 		labelTargetsOwnLoop(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
-		unknownLoopLabel(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing loop with label '{label}'", line: line, column: column, filePath: path)
+		unknownLoopLabel(keyword, targets, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
 		firstArgNamed(line, column) then reportPositioned(project, code: ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
 		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
 		// P1.7a slice 2b-vi. The three codes AND the three messages are the ones a DIRECT call's slotting
