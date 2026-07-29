@@ -92,20 +92,34 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	let tokens = try queryTokens(project, path: path)
 
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.directives)
-	let active = try filterConditionalTokens(tokens, target: project.target) otherwise (directiveErr) 'directiveFail'
-		recordPhase(project, phase: CompilePhase.directives, probe: probe)
-		reportDirectiveError(project, path: path, error: directiveErr)
-		// NOT cached, exactly as a failed tokenize is not: the diagnostic gates the build and the
-		// next attempt must re-run against corrected source. An empty stream rolls the caller
-		// forward to the error gate with nothing to misparse.
-		return TokenArray.create()
-	end 'directiveFail'
+	// ⚠ **THE FAILURE IS MEMOIZED TOO, AND THAT IS WHAT MAKES THE DIAGNOSTIC APPEAR ONCE.** This query
+	// has TWO callers per file — the declaration sweep and the real parse — with no error gate between
+	// them, so anything not cached here is computed twice and any diagnostic raised here is REPORTED
+	// twice. Measured: `error.unterminated-if` rendered its E2063 on two lines before this returned
+	// through the shared cache write below.
+	//
+	// Caching a failure is sound because the key is the file's CONTENT HASH: the empty stream can only
+	// ever be served back for the very bytes that produced it, corrected source changes the hash and
+	// invalidates the entry, and the diagnostic is already on `project.diagnostics` — which is
+	// cumulative for the whole compile, so the build still fails, once. (This is also exactly what
+	// already happens to a failed TOKENIZE, whose empty array reaches the same cache write below.)
+	let active = activeTokensOrReported(project, path: path, tokens: tokens)
 	recordPhase(project, phase: CompilePhase.directives, probe: probe)
 
 	let entry = try project.db.sourceFiles.get(path) otherwise panic("queryActiveTokens: source entry for {path} vanished after queryTokens")
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(active, keyHash: entry.contentHash))
 	return active
 end 'queryActiveTokens'
+
+// The filtered stream, or an EMPTY one with the fault reported. Its own function purely so the
+// caller has a single success path to memoize through — see the cache-the-failure note there for
+// why returning early instead reported every directive fault twice.
+function activeTokensOrReported(project Project, path FilePath, tokens TokenArray) returns TokenArray
+	return try filterConditionalTokens(tokens, target: project.target) otherwise (directiveErr) 'directiveFail'
+		reportDirectiveError(project, path: path, error: directiveErr)
+		return TokenArray.create()
+	end 'directiveFail'
+end 'activeTokensOrReported'
 
 // --- Whole-program query: the DECLARED SIGNATURE of every function, from TOKENS ---
 //
