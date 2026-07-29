@@ -97,8 +97,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: float.hash.nonzero -->
-<!-- float.hash — needs a Std-tier BIT REINTERPRETATION, which shv2 has no route to: `floatToBits`/`bitsToFloat` are HOST-only constant folding, `StdUnaryOpcode` carries only the numeric `siToFp`/`fpToSi`, x64's `emitRegRegMove` refuses a cross-register-file move, and there is no `alloca` for a store-then-load round trip. Its own future rung (`float` is Equatable + Comparable today, NOT Hashable — `isIntrinsicBuiltinConformance`) -->
+<!-- test: float.hash.nonzero -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.14
@@ -113,8 +112,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: float.hash.zero-normalization -->
-<!-- float.hash — needs a Std-tier BIT REINTERPRETATION plus the explicit `-0.0` normalization that rides on it; see float.hash.nonzero above. Its own future rung -->
+<!-- test: float.hash.zero-normalization -->
 ```maxon
 function main() returns ExitCode
 	let pos = 0.0
@@ -174,4 +172,121 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: float.hash.chained -->
+`float.hash()` returns a `HashValue` exactly as `int.hash()` does, so a hash of a hash is an ordinary
+chained dispatch that leaves the float domain after the first hop: the second `.hash()` dispatches
+`int.hash`, whose low-32 mask is the identity on a value already inside `HashValue`'s range. The pinned
+number is the low 32 bits of `3.14`'s IEEE-754 pattern `0x40091EB851EB851F`, i.e. `0x51EB851F`.
+```maxon
+function main() returns ExitCode
+	let f = 3.14
+	let once = f.hash()
+	let twice = f.hash().hash()
+	if once != twice 'chainDiffers'
+		return 1
+	end 'chainDiffers'
+	if once != 1374389535 'pinned'
+		return 2
+	end 'pinned'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.hash.equal-values-equal-hashes -->
+The `Hashable` contract: two values that `equals` must hash alike. `3.0 / 2.0` is computed at run time
+by a `divsd` and `1.5` is loaded from `.rdata`, so the two hashes are reached by different routes and
+agree only because the bit patterns do.
+```maxon
+function main() returns ExitCode
+	let a = 1.5
+	let b = 3.0 / 2.0
+	if a.hash() != b.hash() 'differ'
+		return 1
+	end 'differ'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.hash.negative -->
+⭐ **A NEGATIVE FLOAT HASHES TO ITS POSITIVE TWIN'S VALUE, and that is what the low-32 mask MEANS.**
+IEEE-754's sign is bit 63, so `-3.14` and `3.14` differ only in the half the mask discards. It is a
+collision, it is what both reference compilers compute, and it is legal: `Hashable` requires equal
+values to hash equal, never unequal values to hash differently.
+```maxon
+function main() returns ExitCode
+	let pos = 3.14
+	let neg = 0.0 - 3.14
+	if neg.hash() != pos.hash() 'signMasked'
+		return 1
+	end 'signMasked'
+	if neg.hash() != 1374389535 'pinned'
+		return 2
+	end 'pinned'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.hash.nan -->
+⭐ **NaN IS DELIBERATELY NOT NORMALIZED — only `-0.0` is — and the reason is that `float.equals` is
+plain IEEE.** `NaN.equals(NaN)` is FALSE, so no two `equals`-equal values can differ in hash however a
+NaN hashes, and the `Hashable` contract is untouched. Both reference compilers leave it raw
+(`stdlib/PrimitiveExtensions.maxon` masks the bits and special-cases `-0.0` alone). This case pins the
+value so a later reader cannot "fix" the absence of a NaN branch: `inf - inf` yields a quiet NaN whose
+MANTISSA is empty, so its low 32 bits are zero — the same hash `±0.0` gets, which is again a collision
+and again legal. (What this case pins is that the low half is zero, not which NaN a target chose: a
+payload-carrying NaN would hash to its payload, and that would still be correct.) NaN is built by
+overflow rather than `0.0 / 0.0` for `primitive-comparable`'s reason: a literal zero divisor is a
+compile error.
+```maxon
+function main() returns ExitCode
+	let inf = 1.0e308 * 10.0
+	let nan = inf - inf
+	let h = nan.hash()
+	if nan.equals(nan) 'ieeeEquals'
+		return 1
+	end 'ieeeEquals'
+	if h != 0 'pinned'
+		return 2
+	end 'pinned'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.float-type-argument-still-refused -->
+⚠ **MAKING `float` CONFORM TO `Hashable` DOES NOT OPEN THE GENERIC DOOR, AND THIS CASE IS WHAT KEEPS
+THE TWO APART.** `float.hash` ships as a DIRECT dispatch on a concrete value; the witness form is
+unreachable because a float TYPE ARGUMENT is still E2062 — a type parameter is one opaque 8-byte
+general-purpose slot under shv2's dictionary-passing, and a float travels in a floating-point register.
+Before this rung `where T is Hashable` at `float` was refused twice over (no conformance AND no type
+argument); now E2062 is the only thing standing between a user and a witness slot that could not carry
+its receiver, so the refusal is pinned here rather than left resting on `generic-types.md` alone.
+```maxon
+type Box uses T where T is Hashable
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias FloatBox = Box with float
+function main() returns ExitCode
+	let b = FloatBox.create(1.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2062: <fragment>:8:31: Cannot use 'float' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under shv2's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
 ```

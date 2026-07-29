@@ -273,6 +273,26 @@ end 'StdBinOpcode'
 //
 // ⭐ `round` IS TIES-TO-EVEN (banker's rounding), which is what all three of those instruction
 // families do natively and what `specs/round.md` pins (`round(2.5)` is 2). It is NOT C's `round()`.
+//
+// ⭐⭐ P1.7a's LAST SLICE APPENDS `bitcastF64ToI64` — the REINTERPRETATION, and the third distinct
+// operand/result relationship in this enum. It is neither of the two above:
+//   • the CONVERSIONS (`siToFp`/`fpToSi`) change the VALUE and the FILE — `2.9` becomes `2`;
+//   • the MATH INTRINSICS change the VALUE and stay in the FILE;
+//   • the BITCAST changes NEITHER the bits NOR the value's meaning to the machine — it moves the
+//     SAME 64 bits from an XMM register to a GPR, so it crosses the file while computing nothing.
+// It exists for `float.hash` (`BuiltinConformanceRuntime.buildFloatHash`), which masks a float's
+// IEEE-754 pattern to 32 bits — a question about BITS that no arithmetic opcode can ask.
+//
+// ONE DIRECTION ONLY. There is deliberately no `bitcastI64ToF64`: nothing in shv2 produces one
+// (`maxon-selfhosted` added the inverse for `Vector`/generic-float bridging, which shv2 has not
+// reached), and an opcode with zero producers is untested dead code in three backends.
+//
+// ⚠ APPENDED PAST `sqrt`, per the band-append invariant, and this enum's range arms are the reason
+// that matters: `stdUnaryOperandIsFloat` reads `fpToSi to sqrt`, `unaryResultClass` and
+// `unaryResultValType` read `floor to sqrt`, and the wasm isel dispatches `floor to sqrt` while the
+// arm64 isel dispatches `floor to round`. They do NOT all span the same members, so a member inserted
+// anywhere before `sqrt` would be swallowed by some and not by others — misclassified at a subset of
+// sites, which is worse than at all of them. Every one of those arms was re-read when this landed.
 export enum StdUnaryOpcode
 	neg
 	bitNot
@@ -283,6 +303,7 @@ export enum StdUnaryOpcode
 	ceil
 	round
 	sqrt
+	bitcastF64ToI64
 end 'StdUnaryOpcode'
 
 // ⭐⭐ **THE ONE ANSWER TO "does this unary opcode READ a float?"** — and the reason it lives beside
@@ -303,6 +324,12 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 		neg to siToFp gives false
 		// `fpToSi` reads the float half, and the four math intrinsics are f64 → f64.
 		fpToSi to sqrt gives true
+		// The BITCAST reads an f64 and writes a GPR. It gets its own arm rather than extending the
+		// range above, because that range's answer is "true" for two different reasons — `fpToSi`
+		// converts out of the float domain and the intrinsics stay inside it — and this is a third:
+		// it leaves the domain without converting. Extending the range would make the comment above
+		// false for its last member, which is how a range arm's endpoint stops describing its content.
+		bitcastF64ToI64 gives true
 	end 'k'
 end 'stdUnaryOperandIsFloat'
 

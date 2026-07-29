@@ -1324,6 +1324,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		callMem gives false
 		// Both stack-argument ops are body ops, not branches.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
+		// The arm64 bit reinterpretation is a body op, not a branch.
+		arm64FmovGprFp gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1356,6 +1358,8 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		callMem gives false
 		// Both stack-argument ops are body ops, not branches.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
+		// The arm64 bit reinterpretation is a body op, not a branch.
+		arm64FmovGprFp gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1404,6 +1408,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			leaRegFunc to x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			callMem then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
+			arm64FmovGprFp then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an `arm64FmovGprFp` (the bit reinterpretation) body op as its terminator")
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
@@ -2986,6 +2991,8 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			// exists to stop one parameter's capture DESTINATION from clobbering a sibling's incoming REGISTER, and
 			// a parameter that arrives in the caller's frame has no incoming register to clobber.
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'capture'
+			// The arm64 bit reinterpretation is not a `movRegReg`, so it is never an entry param capture.
+			arm64FmovGprFp then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3544,6 +3551,8 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		// let the splitter treat an argument store as a spill and elide a real one. An incoming-argument
 		// load reads the CALLER's frame for the same reason, so it is no reload either.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives OpSlotRole.touchesNoSlot
+		// The arm64 bit reinterpretation touches no stack slot — it is a register-to-register transfer.
+		arm64FmovGprFp gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

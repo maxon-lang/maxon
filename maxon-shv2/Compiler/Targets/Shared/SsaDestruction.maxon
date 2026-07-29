@@ -346,6 +346,8 @@ function isCaptureMove(op TargetOp) returns bool
 		callMem gives false
 		// Neither stack-argument op is a `movRegReg`, so neither is a call-result capture move.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
+		// The arm64 bit reinterpretation is not a `movRegReg`, so it is not a call-result capture move.
+		arm64FmovGprFp gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -458,6 +460,11 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// Neither stack-argument op is a register-to-register move (one touches memory at each end), so
 		// neither can be a `mov r, r` self-move.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then return false
+		// ⚠ The arm64 bit reinterpretation is EXACTLY the shape a careless reader would call a self-move —
+		// two registers, same number possible. It is not: `fmov x3, d3` names a GPR and an FP register,
+		// two different registers that share a `RegNum` only because the numbering is one space. Deleting
+		// it would drop the whole transfer, so this must stay `false`.
+		arm64FmovGprFp then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -702,6 +709,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			leaRegFunc to x64Syscall then panic("retargetControlOp: non-terminator op as terminator")
 			callMem then panic("retargetControlOp: a `callMem` (witness call) is a body op, not a terminator")
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("retargetControlOp: a stack-argument op is a body op, not a terminator")
+			arm64FmovGprFp then panic("retargetControlOp: an `arm64FmovGprFp` (the bit reinterpretation) is a body op, not a terminator")
 			// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
 			// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
 			// CFG edge redirects all of them through the one split block.

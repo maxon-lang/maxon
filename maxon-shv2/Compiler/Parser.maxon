@@ -20739,9 +20739,15 @@ export type Parser
 	end 'setElementDestroyValue'
 
 	// ⭐ **THE KEY-TYPE GATE (P1.7b).** A `Set`'s key type must be `int` (or a ranged-int alias) OR `String`:
-	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` witnesses, and only `int`
-	// (2b-i) and `String` (Slice C) have those synthesized. A struct / `ByteArray` key rides a later slice, so it
-	// is a clean E2015 here rather than a link failure at the missing witness impl. The key type is read through
+	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` WITNESSES, and those are
+	// the two key types a witness can carry. A struct / `ByteArray` key rides a later slice, so it is a clean
+	// E2015 here rather than a link failure at the missing witness impl.
+	// ⚠ `float` is NOT the counter-example it looks like now that `float.hash`/`float.equals` are both
+	// synthesized: a float key is refused one gate EARLIER, by E2062 on the type ARGUMENT, because a type
+	// parameter is an opaque general-purpose slot and a float has no way through it. So this gate never sees
+	// one, and admitting `float` here would name a witness whose receiver could not travel.
+	//
+	// The key type is read through
 	// `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
 	// (`LowerMaxonToStd.appendSetWitnessArgs`) — so the gate and the dispatch agree on the key's identity (an
 	// `int` and a ranged-int alias both reduce to `int`; a `String` names itself).

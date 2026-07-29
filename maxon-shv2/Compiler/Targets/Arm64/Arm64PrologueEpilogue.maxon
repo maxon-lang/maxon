@@ -108,6 +108,8 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				arm64LoadIncomingArg(dest, slot) then try module.ops.set(opIdx, value: TargetOp.loadRegBaseDisp(dest, base: arm64PhysVReg(Arm64FramePointerRegNum), disp: incomingBase + ((slot * SpillSlotBytes) as Imm32), width: X64AccessWidth.word64)) otherwise panic("resolveArm64IncomingArgs: ops.set OOB at {opIdx}")
 				prologue to callMem then break 'o'
 				arm64StoreOutgoingArg then break 'o'
+				// The bit reinterpretation is already concrete — it names two registers and no frame fact.
+				arm64FmovGprFp then break 'o'
 			end 'o'
 		end 'eachOp'
 	end 'eachBlock'
@@ -204,6 +206,9 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// store's source and an incoming load's destination can both be coloured into a callee-saved register,
 		// so both MUST be counted here or the prologue would not preserve it.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives arm64MaskFromOperands(op, buf: buf)
+		// The bit reinterpretation's GPR dest can be coloured into a callee-saved register, so it MUST be
+		// counted — read through the shared operand model like every other op.
+		arm64FmovGprFp gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -266,5 +271,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		callMem gives false
 		// Both stack-argument ops are body ops, never an `arm64Ret`.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
+		// The bit reinterpretation is a body op, never an `arm64Ret`.
+		arm64FmovGprFp gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

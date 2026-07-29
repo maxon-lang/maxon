@@ -315,6 +315,11 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// converts — one def, one use, and the model says nothing about which file either is in.
 		sqrtsdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		roundsdRegReg(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		// The BIT REINTERPRETATION (P1.7a's last slice) — the converts' shape exactly, and the
+		// clearest case of this band's rule: `movq r64, xmm` reads an XMM and writes a GPR, and the
+		// model still says only "one def, one use". Which FILE each lands in is the class column's
+		// answer, read off each value's own Std type.
+		movqGprXmm(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
@@ -408,6 +413,9 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// loaded parameter colourable like any other value.
 		arm64StoreOutgoingArg(_, srcReg) then pushUse(buf, vreg: srcReg)
 		arm64LoadIncomingArg(dest, _) then pushDef(buf, vreg: dest)
+		// The arm64 BIT REINTERPRETATION — `FMOV Xd, Dn`, one def one use, exactly like `fcvtzs`
+		// beside it and like x64's `movqGprXmm`.
+		arm64FmovGprFp(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 	end 'operands'
 end 'targetOpOperands'
 

@@ -382,6 +382,11 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// above gives.
 		sqrtsdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		roundsdRegReg(d, s, _) gives physRegBit(d) or physRegBit(s)
+		// The BIT REINTERPRETATION. Its GPR DEST can be colored into a callee-saved register
+		// (rbx/r12–r15), so a miss here is the real-miscompile trap `leaRegRdata` documents below,
+		// not a missed optimization: the prologue would never save that register and the function
+		// would silently clobber its CALLER's.
+		movqGprXmm(d, s) gives physRegBit(d) or physRegBit(s)
 		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
 		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
 		leaRegRdata(d, _) gives physRegBit(d)
@@ -413,6 +418,8 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// arm64-only ops (its own prologue pass counts them); they never reach an x64 program, and an empty
 		// mask is both unreachable and correct. `gives` cannot host a `panic`.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives 0
+		// The arm64 bit reinterpretation — arm64-only, so 0 for the reason the arm above gives.
+		arm64FmovGprFp gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -557,5 +564,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		callMem gives false
 		// Both stack-argument ops are body ops, never a `ret`.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
+		// The arm64 bit reinterpretation is a body op, never a `ret`.
+		arm64FmovGprFp gives false
 	end 'check'
 end 'blockEndsWithReturn'

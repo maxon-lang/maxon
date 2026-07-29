@@ -253,6 +253,13 @@ let opF64Floor = 0x9C
 let opF64Nearest = 0x9E
 let opF64Sqrt = 0x9F
 
+// The BIT REINTERPRETATION (P1.7a's last slice), f64 → i64 — `float.hash`'s foundation. Unlike
+// `i64.trunc_f64_s` above it converts NOTHING: the same 64 bits arrive on the i64 side, which is
+// exactly what a hash of a float's IEEE-754 pattern needs. wasm gives it natively in one byte where
+// the native backends need a cross-register-file transfer (`movq` / `FMOV Xd, Dn`). Value taken from
+// `maxon-selfhosted`'s wasm backend (WasmBinary.maxon:296).
+let opI64ReinterpretF64 = 0xBD
+
 // The memory-access band (the top-level-`var` milestone, then the heap-String one), appended the way
 // v1's WasmBinary grew each time a milestone needed new opcodes. A load/store carries a MEMARG — an
 // `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
@@ -671,6 +678,12 @@ export type WasmBody
 	export function f64Sqrt()
 		self.buf.push(opF64Sqrt)
 	end 'f64Sqrt'
+
+	// The BIT REINTERPRETATION (f64 in, i64 out, same bits) — see the opcode's comment for why it is
+	// beside the conversions and not one of them.
+	export function i64ReinterpretF64()
+		self.buf.push(opI64ReinterpretF64)
+	end 'i64ReinterpretF64'
 
 	// Data-section loads/stores. Each carries a MEMARG (`align` then `offset`, both ULEB); the
 	// dynamic base address is the i32 already on the stack (a load consumes it; a store consumes

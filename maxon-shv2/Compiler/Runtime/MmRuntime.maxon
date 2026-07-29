@@ -244,6 +244,16 @@ export function twoI64Params() returns StdTypeArray
 	return types
 end 'twoI64Params'
 
+// One f64 parameter — the synthesized `float.hash(self)` (P1.7a's last slice). The f64 sibling of
+// `oneI64Param`, and it exists for `twoF64Params`' reason: the DECLARED f64 is what makes the ABI
+// agree at both ends, `calleeParamClass` routing the argument into an XMM register and `lowerParam`
+// capturing it from one.
+export function oneF64Param() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.f64)
+	return types
+end 'oneF64Param'
+
 // Two f64 parameters — the synthesized `float.equals(self, other)` / `float.compare(self, other)`
 // (P1.7a slice 2b-iii). It joins the i64 family here rather than beside its caller for that family's
 // reason, and the DECLARED f64 is what makes the ABI agree at both ends: `calleeParamClass` reads these
@@ -335,6 +345,17 @@ export function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, o
 	module.appendOp(block, op: StdOp.binOp(v, lhs: a, rhs: b, opcode: opcode, operandType: StdType.i64))
 	return v
 end 'emitBin'
+
+// `<op> operand` into a fresh value. `operandType` is the SOURCE's type, never the result's — the
+// distinction `StdUnaryOpcode`'s header makes in full, and the reason it is a required argument here
+// rather than defaulting to i64 the way `emitCmp`'s does: the ONE caller today
+// (`BuiltinConformanceRuntime.buildFloatHash`) reads an f64 and writes an i64, so a defaulted i64
+// would be wrong on the only use this helper has.
+export function emitUnary(module StdModule, block IrBlock, operand ValueId, opcode StdUnaryOpcode, operandType StdType, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.unaryOp(v, operand: operand, opcode: opcode, operandType: operandType))
+	return v
+end 'emitUnary'
 
 // A fresh i64 constant.
 export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId

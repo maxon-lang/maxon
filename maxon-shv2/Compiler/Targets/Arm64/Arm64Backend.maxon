@@ -251,6 +251,14 @@ let Arm64OpScvtfD = 0x9E620000
 let Arm64OpFcvtzsD = 0x9E780000
 let Arm64OpFmovD = 0x1E604000
 
+// ⭐ `FMOV Xd, Dn` (P1.7a's last slice) — the GENERAL↔VECTOR 64-bit transfer, `float.hash`'s bit
+// reinterpretation. It is a DIFFERENT instruction from `Arm64OpFmovD` above, which is `FMOV Dd, Dn`,
+// an FP→FP copy: this one's `rmode=00, opcode=110` names the vector-to-general direction and its
+// `sf=1, ftype=01` the 64-bit width. Reusing the FP→FP word here would assemble a copy between two FP
+// registers and leave the GPR untouched — legal bytes, silently wrong answer. The word matches
+// `maxon-selfhosted`'s Arm64CodeEmitter.maxon:2144-2163.
+let Arm64OpFmovGprFromFp = 0x9E660000
+
 // The MATH INTRINSICS (P1.0d.4-C). `FSQRT Dd, Dn` is its own opcode; the three roundings are ONE
 // instruction, `FRINT<r> Dd, Dn`, whose rounding rides a 3-bit `rmode` field at [17:15] — so the
 // base opcode is written once and `arm64FrintOpcode` ORs in the mode. (Spelling the three as three
@@ -1014,6 +1022,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// `[x29 + disp]` load, because only that pass knows the final frame size. One reaching here means the
 		// pass did not run or missed a block — a guess at the displacement would be a silent wrong read.
 		arm64LoadIncomingArg(_, slot) then panic("emitArm64TargetOp: an unresolved `arm64LoadIncomingArg` (slot {slot}) reached the encoder — Arm64PrologueEpilogue must rewrite each into `[x29 + frameSize - outgoingArgSize + slot*8]` before emission")
+		// The BIT REINTERPRETATION (`float.hash`) — `FMOV Xd, Dn`. The ONE arm here reading `arm64FpField`
+		// for its source and `arm64GprField` for its destination in a form that is not a convert:
+		// `fcvtzs` above shares that pair of doors, this one shares nothing else with it.
+		arm64FmovGprFp(dest, src) then emitArm64Rr(code, opcode: Arm64OpFmovGprFromFp, rd: arm64GprField(dest), rn: arm64FpField(src))
 	end 'emit'
 end 'emitArm64TargetOp'
 

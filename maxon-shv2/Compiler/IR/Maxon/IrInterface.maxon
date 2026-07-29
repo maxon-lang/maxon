@@ -506,11 +506,12 @@ export let FloatConformerName = b"float"
 // and so must not become a second constant.
 export let BoolConformerName = b"bool"
 
-// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slice 2b/2b-ii/2b-iii + P1.7b) — the SINGLE source of
-// "does a builtin type conform to this protocol?"** The primitives `int`/`float`/`bool` AND the managed
-// concrete `String` conform with NO user `implements`: shv2 synthesizes their `int.hash`/`int.equals`/
-// `int.compare`, `float.equals`/`float.compare`, `bool.compare` and `String.hash`/`String.equals` impls
-// natively (the type-side twin of the synthesized `Hashable`/`Equatable`/`Comparable` interfaces), so
+// ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slices 2b/2b-ii/2b-iii + its last slice, + P1.7b) —
+// the SINGLE source of "does a builtin type conform to this protocol?"** The primitives `int`/`float`/`bool`
+// AND the managed concrete `String` conform with NO user `implements`: shv2 synthesizes their
+// `int.hash`/`int.equals`/`int.compare`, `float.hash`/`float.equals`/`float.compare`, `bool.compare` and
+// `String.hash`/`String.equals` impls natively (the type-side twin of the synthesized
+// `Hashable`/`Equatable`/`Comparable` interfaces), so
 // `Box with Integer where T is Hashable`, `Pair with Integer where T is Comparable` and `Box with String
 // where T is Hashable and Equatable` are legal and their witness slots resolve to real `.text` symbols.
 // `typeConformsTo` ORs this with the user registry, and the install-need decision reads it too, so the E3017
@@ -524,12 +525,6 @@ export let BoolConformerName = b"bool"
 //   • **`String` is NOT `Comparable`** — a byte record has no ordering, and neither reference compiler gives
 //     it one (`stdlib/String.maxon:34` lists `BuiltinStringLiteral, Hashable, Equatable, Iterable,
 //     Cloneable`, and no extension adds `Comparable`).
-//   • **`float` is NOT `Hashable`** — `float.hash` is a BIT REINTERPRETATION (`stdlib/PrimitiveExtensions
-//     .maxon:31-37` masks `floatToBits(self)` and normalizes `-0.0`), and shv2 has no Std-tier route to one:
-//     `floatToBits`/`bitsToFloat` are HOST-only constant folding, `StdUnaryOpcode` carries only the NUMERIC
-//     `siToFp`/`fpToSi`, x64's `emitRegRegMove` PANICS on a cross-register-file move, and there is no
-//     `alloca` for a store-then-load round trip. Admitting it here would route `f.hash()` to a symbol nothing
-//     installs. It is its own future rung, together with the bitcast it needs.
 //   • **`bool` is NEITHER `Hashable` NOR `Equatable`** — both reference compilers omit them (`bool` arrays
 //     bit-pack, `specs/primitive-hashable.md:13`), and the canonical corpus contains no `bool.hash`/
 //     `bool.equals` case at all, positive or negative.
@@ -552,7 +547,7 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
 	end 'string'
 	if typeName.equals(FloatConformerName) 'float'
-		return interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'float'
 	if typeName.equals(BoolConformerName) 'bool'
 		return interfaceName.equals(ComparableInterfaceName)
@@ -593,9 +588,9 @@ end 'BuiltinConformer'
 // routed to `parseStringMethodCall` before this is asked, so admitting it here would name a symbol nothing
 // installs — a link-time panic in place of a clean diagnostic. A tag joins this map when its impl does.
 //
-// ⚠ A tag admitted here answers for the CONFORMER, not for a method: `float` carries `equals`/`compare` and
-// NO `hash`, and that hole is `isIntrinsicBuiltinConformance`'s to state — `builtinConformerMethod` reads it
-// and turns `f.hash()` into a positioned reject.
+// ⚠ A tag admitted here answers for the CONFORMER, not for a method: `bool` carries `compare` and NEITHER
+// `hash` NOR `equals`, and that hole is `isIntrinsicBuiltinConformance`'s to state — `builtinConformerMethod`
+// reads it and turns `b.hash()` into a positioned reject.
 export function builtinConformerOfTag(tag ValueTypeTag) returns BuiltinConformer
 	if tag == ValueTypeTag.integer 'int'
 		return BuiltinConformer.intConformer

@@ -904,6 +904,9 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// Neither stack-argument op is a MOVE: the outgoing store has a use and no def, the incoming load a
 		// def and no use, so no two of their operands could want the same register. No copy hint.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'hint'
+		// The arm64 bit reinterpretation is not a move — its two operands live in DIFFERENT register
+		// files, so they could not want the same register even in principle. No copy hint.
+		arm64FmovGprFp then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1590,6 +1593,10 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
+		// The BIT REINTERPRETATION colors both operands like any other def-from-use pair — each from
+		// its OWN value's allocation, which is what puts the dest in a GPR and the source in an XMM
+		// with nothing here having to know that.
+		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
 		// --- arm64 SCALAR-CORE band ---
@@ -1668,6 +1675,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// The stack-argument pair colors its ONE register operand each; the slot is a frame index, not a register.
 		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(colorVRegWith(dest, alloc: alloc), slot: slot)
+		// The arm64 BIT REINTERPRETATION — both operands colored from their own values, like `fcvtzs`.
+		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

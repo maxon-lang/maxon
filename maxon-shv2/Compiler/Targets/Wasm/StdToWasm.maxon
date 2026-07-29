@@ -757,6 +757,11 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		// reach them without swallowing both conversions. `f64` outright is also the stronger claim —
 		// they are f64 → f64 by definition (`stdUnaryOperandIsFloat`).
 		floor to sqrt gives WasmValType.f64
+		// ⚠ The BITCAST is the only op here whose operand and result differ in CLASS without the
+		// value changing: `i64.reinterpret_f64` reads an f64 local and writes an i64 one. Recording
+		// it as f64 (which `wasmValTypeOf(operandType)` would) puts the result in the wrong local
+		// class and the module fails validation, exactly as it would for the conversions.
+		bitcastF64ToI64 gives WasmValType.i64
 	end 'k'
 end 'unaryResultValType'
 
@@ -1401,6 +1406,7 @@ type WasmFuncEmitter
 			// The MATH INTRINSICS. Each is ONE native wasm instruction over the same f64 operand, so
 			// the operand push and the domain check are written once and only the opcode differs.
 			floor to sqrt then self.emitMathIntrinsic(operand, operandType: operandType, opcode: opcode)
+			bitcastF64ToI64 then self.emitBitcastF64ToI64(operand, operandType: operandType)
 		end 'op'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
@@ -1444,8 +1450,19 @@ type WasmFuncEmitter
 			round then self.body.f64Nearest()
 			sqrt then self.body.f64Sqrt()
 			neg to fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt here")
+			bitcastF64ToI64 then panic("emitMathIntrinsic: `bitcastF64ToI64` computes nothing — it reinterprets the operand's bits, and `emitUnaryOp` routes it to `emitBitcastF64ToI64`")
 		end 'k'
 	end 'emitMathIntrinsic'
+
+	// f64 → i64 REINTERPRETATION (`float.hash`) — `i64.reinterpret_f64` (0xBD), one native instruction
+	// with the same 64 bits on both sides. `operandType` is the f64 SOURCE, as on every cross-class
+	// unary op here; the RESULT's i64 valtype is `unaryResultValType`'s to state, and the `localSet`
+	// `emitUnaryOp` appends writes the i64 local that table declared.
+	function emitBitcastF64ToI64(operand ValueId, operandType StdType)
+		requireF64(operandType, what: "bitcast source")
+		self.pushOperandAt(operand, targetVt: WasmValType.f64)
+		self.body.i64ReinterpretF64()
+	end 'emitBitcastF64ToI64'
 
 	// Integer negate as `0 - operand` (wasm has no unary negate). The operand is coerced to the op's
 	// width (from `operandType`, which the result also carries): the frontend can leave it a different

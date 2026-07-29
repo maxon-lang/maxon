@@ -42,10 +42,11 @@ fixed-base writers bake a `.text` VA, wasm a funcref-table index, and arm64-macO
 rebase — so these cases run everywhere and carry no target marker (as the `where-clauses` witness cases
 do); the E3005 reject is a compile error and was always target-independent.
 
-Float `hash` is a separate future mechanism and is NOT covered here. `Comparable`/`Ordering` and DIRECT
-dispatch on a concrete value (`i.hash()`, `i.equals(j)`, `i.compare(j)`, reaching the very same synthesized
-impls without a witness table) have both shipped and have their own specs — `comparable.md`,
-`primitive-hashable.md` and `primitive-comparable.md`.
+Float `hash` ships (it rides a Std-tier bit reinterpretation) but is DIRECT-dispatch only and is covered in
+`primitive-hashable.md`, not here: a float TYPE ARGUMENT is still E2062, so there is no float witness table
+to reach it through. `Comparable`/`Ordering` and DIRECT dispatch on a concrete value (`i.hash()`,
+`i.equals(j)`, `i.compare(j)`, reaching the very same synthesized impls without a witness table) have both
+shipped and have their own specs — `comparable.md`, `primitive-hashable.md` and `primitive-comparable.md`.
 
 ## Tests
 

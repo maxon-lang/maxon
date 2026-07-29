@@ -820,6 +820,28 @@ export union TargetOp
 	// wants and the encoder owns the bits, so the same lowering decision serves arm64's `frint` rmode
 	// field without either backend restating the other's encoding.
 	roundsdRegReg(dest TargetVReg, src TargetVReg, mode FloatRoundMode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⭐ P1.7a's LAST SLICE: `movq r64, xmm` (`66 REX.W 0F 7E /r`) — the f64 → i64 BIT
+	// REINTERPRETATION `float.hash` is built on, and the THIRD cross-class op in this dialect.
+	//
+	// ⚠⚠ THE PANIC IN `emitRegRegMove` — *"the converts are the only cross-class ops, and they are
+	// their own TargetOps"* — IS WHY THIS IS AN OP AND NOT A MOVE. A cross-file transfer is exactly
+	// what that panic exists to refuse, because `movRegReg` cannot express it: `mov`/`movsd` each
+	// name ONE file, and there is no reading of a generic reg-reg copy that assembles a `movq`. The
+	// remedy is a third named op, never a widened panic — the panic stays as it is.
+	//
+	// APPENDED AT THE END OF THE SSE BAND (before `leaRegRdata`), exactly where `sqrtsd`/`roundsd`
+	// went and for the same reason its comment gives: the union's tail is the control/misc band,
+	// which every `leaRegFunc to x64Syscall` range arm claims. Landing here puts it inside the
+	// `andRegReg to leaRegRdata` arms that already answer for `cvttsd2si` — all of which were re-read
+	// when this landed, since a range arm swallows silently.
+	//
+	// ONE PLAIN def, ONE use (`cvttsd2si`'s shape): `dest` does not read its own previous value, so
+	// no seed copy. It writes no flags. It is NOT rematerializable — its source is a register.
+	//
+	// ⚠ ITS ModR/M FIELDS ARE INVERTED relative to every other SSE form here: the reg field carries
+	// the XMM *source* and r/m the GPR *destination*, which is the `r/m, r` STORE mapping rather than
+	// the `r, r/m` mapping `encodeSseRegReg` assumes. That is `encodeMovqGprXmm`'s whole content.
+	movqGprXmm(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	// `lea dest, [rip + disp32]` to an `.rdata` constant — the address of a String literal's 48-byte
 	// record (P1.2 wave A). The `.rdata` twin of `leaRegGlobal` (which targets `.data`), and it shares
 	// that op's every property: ONE plain def, NO uses, reads no allocatable register at all (RIP is
@@ -1150,6 +1172,23 @@ export union TargetOp
 	// rather than guessing — the same "must have been rewritten by the pass that owns this fact" contract
 	// `assertNoSugarOps` states for the Std sugar band.
 	arm64LoadIncomingArg(dest TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- P1.7a's LAST SLICE: the arm64 half of the f64 → i64 BIT REINTERPRETATION ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `arm64LoadIncomingArg`, per the band-append invariant.
+	//
+	// `FMOV Xd, Dn` (`0x9E660000 | Rn<<5 | Rd`) — move a 64-bit vector register's low half into a general
+	// register, BITS UNCHANGED. The arm64 twin of x64's `movqGprXmm`, and the same shape: one plain def,
+	// one use, no flags, not rematerializable.
+	//
+	// ⚠⚠ IT IS **NOT** THE `fmov` ALREADY IN THE BACKEND. `Arm64OpFmovD` (0x1E604000) is `FMOV Dd, Dn`,
+	// an FP→FP copy the shared `movRegReg` emits when both ends are already FP-classed. The general↔vector
+	// transfer forms are a DIFFERENT encoding entirely (`sf=1, ftype=01, rmode=00, opcode=110`), which is
+	// why this needs its own opcode constant and its own emit helper rather than routing through that one.
+	//
+	// And it is an OP rather than a widening of `arm64EmitRegRegMove`, whose panic — *"a copy never
+	// crosses the GPR/SIMD boundary"* — is the arm64 twin of x64's and stays exactly as it is: a cross-file
+	// transfer is not a copy the allocator may insert anywhere, it is an instruction the isel names.
+	arm64FmovGprFp(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

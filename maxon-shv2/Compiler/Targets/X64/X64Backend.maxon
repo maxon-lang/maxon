@@ -197,6 +197,20 @@ let OpcodeCvttsd2si = 0x2C
 // has already selected scalar-double.
 let OpcodeSqrtsd = 0x51
 
+// movq r/m64, xmm (66 REX.W 0F 7E /r) — reg field = XMM SOURCE, r/m = GPR DEST. The BIT
+// REINTERPRETATION `float.hash` rests on: the same 64 bits, moved to the other register file, with
+// no conversion and no rounding.
+//
+// ⚠⚠ ITS FIELD MAPPING IS THE `r/m, r` ONE — the reverse of `cvttsd2si`, which shares its direction
+// (xmm → gpr) but writes its GPR dest in the REG field. Handing this opcode to `encodeSseRegReg`,
+// which assumes `r, r/m`, assembles the two registers the wrong way round: legal bytes, a `movq`
+// between the wrong pair, and NOTHING to report it. That is `encodeMovqGprXmm`'s whole content.
+//
+// ⚠ 66 is the mandatory prefix here (`packedDouble`), NOT the F2 of the scalar-double family: `F3 0F
+// 7E` is `movq xmm, xmm/m64` — a different instruction, in the other direction. REX.W is required and
+// is what makes it the 64-bit GPR transfer rather than `movd`'s 32-bit one.
+let OpcodeMovqRmXmm = 0x7E
+
 // --- `roundsd`: the ONE three-byte opcode in this file (SSE4.1) ---
 //
 // `roundsd xmm, xmm/m64, imm8` is `66 0F 3A 0B /r ib`. TWO things make it unlike every other SSE
@@ -607,6 +621,22 @@ end 'encodeSetccReg'
 function encodeSseRegReg(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, wide bool)
 	encodeModRmDirect(code, twoByteEscape: true, opcode: opcode, regField: dest, rmField: src, wide: wide, ssePrefix: prefix)
 end 'encodeSseRegReg'
+
+// `movq dest, src` (66 REX.W 0F 7E /r) — `dest` a GPR, `src` an XMM, same 64 bits.
+//
+// It cannot ride `encodeSseRegReg` for ONE reason, and it is not `roundsd`'s: the byte sequence is an
+// ordinary two-byte SSE form, but its ModR/M fields are the `r/m, r` STORE mapping (reg = the XMM
+// SOURCE, r/m = the GPR DEST) where `encodeSseRegReg` hard-codes `r, r/m`. Passing the operands
+// pre-swapped through that helper would put the inversion at the CALL SITE, where it reads as a bug
+// and where a later editor would "fix" it; stating it once here, next to the opcode that owns it, is
+// the same division `OpcodeMovsdRmReg`'s "reg field = SOURCE" comment already makes for the store form.
+//
+// Everything else is shared: the REX byte (REX.W required — without it this is `movd`, a 32-bit
+// transfer that would silently drop a float's high half, i.e. its entire exponent and sign) and the
+// ModR/M byte come from the same primitives every instruction in this file uses.
+function encodeMovqGprXmm(code ByteArray, dest X64Register, src X64Register)
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeMovqRmXmm, regField: src, rmField: dest, wide: true, ssePrefix: SseMandatoryPrefix.packedDouble)
+end 'encodeMovqGprXmm'
 
 // `roundsd dest, src, imm8` (66 0F 3A 0B /r ib) — the ONE instruction here that `encodeSseRegReg`
 // cannot assemble, for the two reasons `OpcodeRoundsd`'s comment gives in full: a THREE-byte opcode
@@ -1505,6 +1535,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// and has its own encoder (see `encodeRoundsdRegReg`).
 		sqrtsdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeSqrtsd, dest: resolveXmm(dest), src: resolveXmm(src), wide: false)
 		roundsdRegReg(dest, src, mode) then encodeRoundsdRegReg(code, dest: resolveXmm(dest), src: resolveXmm(src), mode: mode)
+		// The BIT REINTERPRETATION. The THIRD arm naming both class doors — and, unlike the two
+		// converts, its ModR/M fields are INVERTED, which `encodeMovqGprXmm` owns so that this arm
+		// can read in the direction the data actually flows.
+		movqGprXmm(dest, src) then encodeMovqGprXmm(code, dest: resolveGpr(dest), src: resolveXmm(src))
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
@@ -1535,6 +1569,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// (see the dialect header for why arm64 cannot), so neither arm64 stack-argument op is ever produced
 		// for an x64 program and reaching this encoder is a lowering bug, not a missing encoding.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("emitX64TargetOp: an arm64 stack-argument op reached the x64 encoder — x64 places stack arguments with `storeBaseDispReg`/`loadRegBaseDisp` off rsp/rbp")
+		// x64's own bit reinterpretation is `movqGprXmm`, encoded above; the arm64 `fmov` form never
+		// reaches this encoder (`buildBackend` dispatches on `target.cpu`).
+		arm64FmovGprFp then panic("emitX64TargetOp: the arm64-only `arm64FmovGprFp` reached the x64 encoder — x64's bit reinterpretation is `movqGprXmm`")
 	end 'emit'
 end 'emitTargetOp'
 

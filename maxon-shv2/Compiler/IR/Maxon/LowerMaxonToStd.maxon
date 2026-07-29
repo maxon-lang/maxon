@@ -937,8 +937,9 @@ type MaxonToStdLowering
 	// `24 + 8*methodCount`-byte blob (`methodCount@0`, `parentTablePtr@8`=0, `flags@16`=0, `methods[N]@24`) is
 	// registered zero-filled under `__witness_<Type>.<Iface>`; each method slot is stamped by a
 	// `funcAbs64InRdata` relocation whose target is the conforming type's own `<Type>.<method>` impl (the SAME
-	// reloc that bakes a layout descriptor's `destroyFunc@40`, so x64-only — the writers refuse it on
-	// arm64/wasm/macOS). Each impl is DCE-ROOTED (`recordCallUsage`) so the reloc never names a `.text` VA that
+	// reloc that bakes a layout descriptor's `destroyFunc@40`). Every writer bakes it now — the PE one, the
+	// Mach-O/ELF arm64 one (slice 2b-iv-C) and the wasm one as a funcref-table index (slice 2b-iv-B).
+	// Each impl is DCE-ROOTED (`recordCallUsage`) so the reloc never names a `.text` VA that
 	// was pruned — the noteDestructorUsage/noteClonerUsage rooting pattern for a slot named nowhere the module
 	// call graph can see. Idempotent by label: a table referenced at many sites registers ONE blob, ONE set of
 	// relocations, and one root.

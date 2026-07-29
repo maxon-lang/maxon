@@ -4097,6 +4097,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// A stack-argument store defines nothing; an incoming load's def is a MEMORY read whose address is a
 		// frame fact, not a constant this pass could re-materialize. Neither is rematerializable.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
+		// The arm64 bit reinterpretation READS A REGISTER, so its def cannot be rebuilt from a constant.
+		arm64FmovGprFp gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -4860,6 +4862,8 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		callMem panic("constDefInfo: a `callMem` def is not a constant materialization")
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		arm64StoreOutgoingArg to arm64LoadIncomingArg panic("constDefInfo: def is not a constant materialization")
+		// `opIsConstMaterialization` answers false for it, so it never reaches here; named rather than swallowed.
+		arm64FmovGprFp panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -4978,6 +4982,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// and passes through, exactly as an immediate or a cond code does.
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
+		// The BIT REINTERPRETATION — one def, one use, both substitutable, like the converts.
+		movqGprXmm(dest, src) then return TargetOp.movqGprXmm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
 		// --- arm64 SCALAR-CORE band ---
@@ -5053,6 +5059,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// The stack-argument pair substitutes its ONE register operand each; the slot is a frame index.
 		arm64StoreOutgoingArg(slot, srcReg) then return TargetOp.arm64StoreOutgoingArg(slot, srcReg: substituteVReg(srcReg, from: from, to: to))
 		arm64LoadIncomingArg(dest, slot) then return TargetOp.arm64LoadIncomingArg(substituteVReg(dest, from: from, to: to), slot: slot)
+		// The arm64 BIT REINTERPRETATION — one def, one use, both substitutable, like `fcvtzs`.
+		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

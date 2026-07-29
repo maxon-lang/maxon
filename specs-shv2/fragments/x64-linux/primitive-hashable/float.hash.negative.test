@@ -1,0 +1,77 @@
+// Test: float.hash.negative
+function main() returns ExitCode
+	let pos = 3.14
+	let neg = 0.0 - 3.14
+	if neg.hash() != pos.hash() 'signMasked'
+		return 1
+	end 'signMasked'
+	if neg.hash() != 1374389535 'pinned'
+		return 2
+	end 'pinned'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 56
+    x64.storeSlotReg slot0, xmm6
+    x64.storeSlotReg slot1, xmm7
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.movsdRegRip xmm7, [rip + __fconst_1]
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.subsdRegReg xmm7, xmm7, xmm0
+    x64.movRegReg xmm0, xmm7
+    x64.callDirect float.hash
+    x64.movRegReg rbx, r8
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect float.hash
+    x64.cmpRegReg rbx, r8
+    x64.jcc notEqual, signMasked
+    x64.jmp ifcont
+  signMasked:
+    x64.movRegImm32 r8, 1
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg xmm0, xmm7
+    x64.callDirect float.hash
+    x64.cmpRegImm32 r8, 1374389535
+    x64.jcc notEqual, pinned
+    x64.jmp ifcont
+  pinned:
+    x64.movRegImm32 r8, 2
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot0
+    x64.loadRegSlot xmm7, slot1
+    x64.epilogue 56
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @float.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movqGprXmm r8, xmm0
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg r8, r8, rax
+    x64.popReg rbp
+    x64.ret
+}

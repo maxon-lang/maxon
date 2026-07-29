@@ -1403,6 +1403,11 @@ type StdToX64Lowering
 			// isels, so this arm states the INSTRUCTION and never re-decides the mode.
 			floor to round then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.targetModule.appendOp(dstBlock, op: TargetOp.sqrtsdRegReg(dest, src: src))
+			// The BIT REINTERPRETATION (`float.hash`). `movq r64, xmm` moves the SAME 64 bits across
+			// the file boundary — it is not a convert, so there is no rounding and no value change.
+			// `dest` is GPR-classed and `src` XMM-classed, each from its own value's Std type
+			// (`unaryResultClass`), so the operand model needs nothing special for it.
+			bitcastF64ToI64 then self.targetModule.appendOp(dstBlock, op: TargetOp.movqGprXmm(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
 

@@ -1,0 +1,82 @@
+// Test: float.hash.chained
+function main() returns ExitCode
+	let f = 3.14
+	let once = f.hash()
+	let twice = f.hash().hash()
+	if once != twice 'chainDiffers'
+		return 1
+	end 'chainDiffers'
+	if once != 1374389535 'pinned'
+		return 2
+	end 'pinned'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.storeSlotReg slot0, xmm6
+    x64.movsdRegRip xmm6, [rip + __fconst_0]
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect float.hash
+    x64.movRegReg rbx, r8
+    x64.movRegReg xmm0, xmm6
+    x64.callDirect float.hash
+    x64.movRegReg rcx, r8
+    x64.callDirect int.hash
+    x64.cmpRegReg rbx, r8
+    x64.jcc notEqual, chainDiffers
+    x64.jmp ifcont
+  chainDiffers:
+    x64.movRegImm32 r8, 1
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rbx, 1374389535
+    x64.jcc notEqual, pinned
+    x64.jmp ifcont
+  pinned:
+    x64.movRegImm32 r8, 2
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.loadRegSlot xmm6, slot0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, rcx
+    x64.andRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @float.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movqGprXmm r8, xmm0
+    x64.movRegImm32 rax, 4294967295
+    x64.andRegReg r8, r8, rax
+    x64.popReg rbp
+    x64.ret
+}

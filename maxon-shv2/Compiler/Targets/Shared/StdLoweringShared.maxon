@@ -101,6 +101,11 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		// the stronger claim — these are f64 → f64 by definition (`stdUnaryOperandIsFloat`), so the
 		// class does not depend on `operandType` at all.
 		floor to sqrt gives RegClass.xmm
+		// ⚠ The BITCAST is the THIRD shape this table has to answer for, and the only one whose
+		// operand and result differ in FILE without differing in BITS: `bitcastF64ToI64` moves an
+		// f64's pattern into a GPR unchanged. `operandType` is the f64 SOURCE, so — exactly as for
+		// `fpToSi` — reading it as the result would put a 64-bit integer in an XMM register.
+		bitcastF64ToI64 gives RegClass.gpr
 	end 'k'
 end 'unaryResultClass'
 
@@ -118,8 +123,9 @@ end 'unaryResultClass'
 // (`roundsdRegReg.towardPositive`), the arm64 half only by goldens no Windows or Linux host can
 // regenerate, so the copy with the weaker gate is the one free to drift.
 //
-// `sqrt` is deliberately absent: it is not a `roundsd`/`frint` at all but its own instruction on both
-// ISAs, so asking this function for its rounding is a lowering bug, not a missing arm.
+// `sqrt` and `bitcastF64ToI64` are deliberately absent, for two different reasons: `sqrt` is not a
+// `roundsd`/`frint` at all but its own instruction on both ISAs, and a bitcast computes nothing to
+// round. Asking this function for either is a lowering bug, not a missing arm.
 export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 	match opcode 'k'
 		floor then return FloatRoundMode.towardNegative
@@ -127,6 +133,7 @@ export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
 		round then return FloatRoundMode.nearestTiesToEven
 		neg to fpToSi then panic("floatRoundModeFor: Std unary opcode {opcode.name} performs no rounding — only floor/ceil/round lower to a rounding instruction (`roundsd` on x64, `frint` on arm64), and the isels route only those three here")
 		sqrt then panic("floatRoundModeFor: `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`), not a rounding mode — an isel asking for its rounding has routed it to the wrong op")
+		bitcastF64ToI64 then panic("floatRoundModeFor: `bitcastF64ToI64` REINTERPRETS the operand's bits and computes no number at all, so there is nothing for it to round — an isel asking for its rounding has routed it to the wrong op")
 	end 'k'
 end 'floatRoundModeFor'
 

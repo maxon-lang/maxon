@@ -40,7 +40,9 @@
 //
 // The SEMANTICS match the reference compilers' monomorphizing source (`stdlib/PrimitiveExtensions.maxon`,
 // `stdlib/helpers/string/hash.maxon`): `int.hash() = self & 0xFFFFFFFF` (the low-32 mask — identity for a
-// value that already fits u32); `<scalar>.equals(other) = self == other`; `<scalar>.compare(other)` = the
+// value that already fits u32); `float.hash() = bitcast(self) & 0xFFFFFFFF`, whose mask ALSO normalizes
+// `-0.0` — see `buildFloatHash`, which is where shv2 diverges from both references by omitting a branch
+// they write and that mask makes dead; `<scalar>.equals(other) = self == other`; `<scalar>.compare(other)` = the
 // `lessThan`/`greaterThan`/`equalTo` cascade, which `float.compare` precedes with a NaN preamble
 // (`buildFloatCompare`); `String.hash() = djb2` over the bytes; `String.equals(other) = __str_eq`'s content
 // compare. The witness reloc these ride is baked by the x64 writers and, since P1.7a slice 2b-iv-B, by the
@@ -50,6 +52,27 @@
 // so a hash is the low 32 bits. The one place the mask is spelled, shared by both hashers (it IS `HashValue`'s
 // width, one fact).
 let HashLow32Mask = 0xFFFFFFFF
+
+// ⭐ **`-0.0`'s IEEE-754 BIT PATTERN.** `+0.0` is 64 zero bits and `-0.0` is those bits with the SIGN
+// BIT set, so the pattern IS the sign bit alone: `0x8000000000000000`. It is spelled `i64.min` because
+// `ParsedInt` is SIGNED and that is the number Maxon can write for the top bit (v1 writes the same
+// value as `-9223372036854775807 - 1`, the positive-literal parse being one short of it).
+//
+// ⭐⭐ **IT IS READ BY A CHECK, NOT BY THE HASH — see `assertSignBitAboveHashMask`.** The two zeros
+// must hash alike (`-0.0 == 0.0` is true under IEEE, so `float.equals` calls them equal and `Hashable`
+// then demands one hash), and BOTH reference compilers buy that with an explicit `if bits == -0.0
+// return 0` branch. **shv2 does not, because under a low-32 mask that branch is DEAD**: the sign bit
+// is bit 63 and the mask keeps bits 0–31, so `-0.0` masks to 0 exactly as `+0.0` does, and the branch
+// returns what the fallthrough already returns. That is not special to zero — it is why `-3.14` and
+// `3.14` hash alike too (`primitive-hashable/float.hash.negative`). The constant's job here is to make
+// the DEPENDENCE on the mask's width checkable instead of remembered.
+//
+// ⚠ It is the same bit `Parser.FloatSignBit` XORs to negate a float literal, and the two are NOT one
+// constant: that one is a MASK the front end applies to a literal, this one is a VALUE the check reads.
+// Merging them would make the parser export a numeric constant down into the runtime layer, and
+// `Arm64Backend.Arm64WordSignBit` is a third same-valued constant that declines the same merge for the
+// same reason.
+let NegativeZeroBits = i64.min as ParsedInt
 
 // A builtin `equals` returns a materialized bool (0 or 1) — there is no `setcc` at this tier, so the two
 // verdicts are two `const`-returning blocks off a fused `cmp`+`jcc`, exactly as `__str_eq` returns its
@@ -78,14 +101,14 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// it dies at link time naming a symbol whose builder is sitting right here. There is now no way to bind
 	// one without registering it.
 	//
-	// `float` has NO `Hashable` conformance (a bit reinterpretation shv2 cannot yet spell) and `bool` has
-	// neither `Hashable` nor `Equatable`, so there is no `float.hash`/`bool.hash`/`bool.equals` to mint —
-	// and `String` has no `Comparable`, so no `String.compare`. Those four holes are one fact, stated in
+	// `bool` has neither `Hashable` nor `Equatable`, so there is no `bool.hash`/`bool.equals` to mint —
+	// and `String` has no `Comparable`, so no `String.compare`. Those three holes are one fact, stated in
 	// `isIntrinsicBuiltinConformance` and read from there rather than restated here.
 	var impls = ByteArrayArray.create()
 	let intHash = candidateImplName(impls, conformerName: IntConformerName, methodName: HashMethodName)
 	let intEquals = candidateImplName(impls, conformerName: IntConformerName, methodName: EqualsMethodName)
 	let intCompare = candidateImplName(impls, conformerName: IntConformerName, methodName: CompareMethodName)
+	let floatHash = candidateImplName(impls, conformerName: FloatConformerName, methodName: HashMethodName)
 	let floatEquals = candidateImplName(impls, conformerName: FloatConformerName, methodName: EqualsMethodName)
 	let floatCompare = candidateImplName(impls, conformerName: FloatConformerName, methodName: CompareMethodName)
 	let boolCompare = candidateImplName(impls, conformerName: BoolConformerName, methodName: CompareMethodName)
@@ -109,6 +132,10 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	if referenced.contains(intCompare) 'intCompare'
 		buildOrderingCompare(module, name: intCompare, operandType: StdType.i64)
 	end 'intCompare'
+
+	if referenced.contains(floatHash) 'floatHash'
+		buildFloatHash(module, name: floatHash)
+	end 'floatHash'
 
 	if referenced.contains(floatEquals) 'floatEquals'
 		buildBuiltinEquals(module, name: floatEquals, operandType: StdType.f64)
@@ -276,12 +303,119 @@ function buildIntHash(module StdModule, name ByteArray)
 	emitParams(module, block: entry, count: 1)
 	let receiver = 0 as ValueId
 
-	let mask = emitConst(module, block: entry, value: HashLow32Mask, ids: ids)
-	let masked = emitBin(module, block: entry, a: receiver, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(masked))
+	returnLow32Masked(module, block: entry, value: receiver, ids: ids)
 
 	module.functions.push(func)
 end 'buildIntHash'
+
+// ⭐⭐ `float.hash(self) -> HashValue` (P1.7a's LAST slice) — the low 32 bits of `self`'s IEEE-754
+// pattern: ONE reinterpret, then the same masked return `int.hash` and `String.hash` end on.
+//
+// ⚠⚠ **IT OMITS THE `-0.0` BRANCH BOTH REFERENCES WRITE, AND THAT IS A DELIBERATE DIVERGENCE.**
+// `stdlib/PrimitiveExtensions.maxon:31-36` opens with `if bits == i64.min return 0`, and under a
+// LOW-32 mask that branch cannot be reached distinguishably: `-0.0` is `0x8000000000000000`, whose low
+// half is already zero, so the fallthrough returns 0 for it — the same 0 the branch would. Emitting it
+// would cost a 64-bit const, a compare, a conditional branch and two extra blocks on every
+// `float.hash` call to compute what the `and` already computes. The property the branch was buying —
+// the two zeros hash alike — is instead held by `assertSignBitAboveHashMask`, which fires if
+// `HashValue` ever widens past 32 bits and the branch becomes load-bearing.
+//
+// ⭐ **IT IS THE ONLY BUILTIN IMPL THAT ASKS A QUESTION ABOUT BITS RATHER THAN ABOUT A NUMBER**, and
+// that is why it needed a new Std opcode. `int.hash` masks its receiver directly because an `int`
+// ALREADY is its bits; a float's bits live in an XMM register, so reaching them means a genuine
+// cross-register-file transfer — `StdUnaryOpcode.bitcastF64ToI64`, one instruction on all three
+// backends (`movq r64, xmm` / `FMOV Xd, Dn` / `i64.reinterpret_f64`), no memory round trip and no
+// `alloca`. Everything after that transfer is `int.hash`'s arithmetic over an ordinary i64.
+//
+// ⚠ **THE PARAMETER IS DECLARED f64, WHICH IS WHY THIS USES `emitTypedParams` AND NOT `emitParams`.**
+// The all-i64 `emitParams` states the GPR-only internal ABI every other one-parameter runtime chunk
+// uses; here the receiver arrives in an XMM register, and the declared type is what both ends read
+// (`calleeParamClass` to route the argument, `lowerParam` to capture it). The RESULT is still the
+// uniform `builtinProtocolResultStdType(HashValue)` = i64 — one spelling, as every witness-visible
+// impl's must be.
+//
+// ⚠⚠ **NOTHING IS NORMALIZED AT ALL — NOT NaN, AND NOT EVEN THE SIGN.** Every NaN hashes to whatever
+// its own payload masks to, so two NaNs built differently can hash differently, and `-3.14` hashes
+// exactly as `3.14` does. Both are correct, and the SAME argument covers them: the contract `Hashable`
+// imposes is *equal values hash equal*, never *unequal values hash differently*. `float.equals` is
+// plain IEEE, so `NaN.equals(NaN)` is FALSE and NaN owes nothing to anybody; and the only
+// `equals`-equal pair whose bits differ at all is `±0.0`, which the mask already settles (above).
+// Both references leave NaN raw for the same reason; `primitive-hashable/float.hash.nan` and
+// `float.hash.negative` pin both behaviours so a later reader does not "fix" them.
+//
+// ⚠ `float.compare`'s NaN preamble is NOT the counter-example it looks like: `compare` implements a
+// TOTAL order, which IEEE does not give, so it must place NaN by hand. `hash` needs no order at all.
+function buildFloatHash(module StdModule, name ByteArray)
+	assertSignBitAboveHashMask()
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneF64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
+	let receiver = 0 as ValueId
+
+	// Reinterpret, then hand the i64 to the SAME masked return `int.hash` and `String.hash` end on.
+	let bits = emitUnary(module, block: entry, operand: receiver, opcode: StdUnaryOpcode.bitcastF64ToI64, operandType: StdType.f64, ids: ids)
+	returnLow32Masked(module, block: entry, value: bits, ids: ids)
+
+	module.functions.push(func)
+end 'buildFloatHash'
+
+// ⭐⭐ **THE PRECONDITION THAT LETS `buildFloatHash` OMIT THE `-0.0` BRANCH BOTH REFERENCES WRITE** —
+// stated as a CHECK rather than as a comment, because it is a dependence between two constants and a
+// comment is a test nobody wrote.
+//
+// `-0.0` and `+0.0` compare EQUAL under IEEE, so `Hashable` requires one hash for them, and their bit
+// patterns differ in exactly one place: bit 63. A mask that discards bit 63 therefore normalizes the
+// pair for free, and `HashLow32Mask` keeps only bits 0–31, so it does. **Widen the mask to reach bit 63
+// — which is what widening `HashValue` past 32 bits would do — and that stops being true, silently.**
+// `float.hash` would keep compiling and keep passing every test that hashes a nonzero float, while
+// quietly answering `0x8000000000000000` for `-0.0` against `0` for `+0.0`: an `equals`-equal pair with
+// two hashes, which is a wrong answer inside any hash container that ever holds a negative zero.
+//
+// ⚠ It is asked of the CONSTANTS, not of a hashed value, so it cannot be satisfied by luck — no input
+// reaches it. MEASURED RED: with `HashLow32Mask` set to `-1` it panics on the first program that
+// installs the impl, which is the only evidence that a check of this shape is live rather than decorative.
+//
+// ⚠⚠ **IT CHECKS THE MASK'S WIDTH, NOT THE FOLD'S OPERATION, AND THAT GAP CANNOT BE CLOSED HERE.** It
+// asks only "does `and`-ing with `HashLow32Mask` discard bit 63?". Change `returnLow32Masked` to FOLD
+// rather than truncate — an xor-down, a rotate, the very "rotate / widened `HashValue`" its own comment
+// floats — and bit 63 reaches the low half again: `-0.0` and `+0.0` would hash differently while this
+// assert passed VACUOUSLY, because the mask it inspects would still be 32 bits wide. Nothing available
+// at compile time can see that (it is a property of a graph this function does not read), so it is
+// stated out loud instead: **anyone changing that fold must re-derive whether ±0.0 still agree, and
+// restore the explicit `-0.0` branch if they do not.**
+//
+// So the moment that widening happens, this fires and names the remedy. It costs one compile-time test
+// per program that installs the impl.
+function assertSignBitAboveHashMask()
+	if (NegativeZeroBits and HashLow32Mask) != 0 'signBitSurvivesMask'
+		panic("assertSignBitAboveHashMask: `HashLow32Mask` no longer discards IEEE-754's sign bit, so `-0.0` and `+0.0` no longer hash alike — `buildFloatHash` must regain the explicit `-0.0 -> 0` branch both reference compilers carry (stdlib/PrimitiveExtensions.maxon:31-36)")
+	end 'signBitSurvivesMask'
+end 'assertSignBitAboveHashMask'
+
+// ⭐ **`return self & 0xFFFFFFFF` — the tail EVERY builtin hasher ends on, written once.** All three
+// (`int`, `float`, `String`) fold their accumulated i64 down to `HashValue`'s width and return it, and
+// the three had begun to spell that three times: the CONSTANT was already shared, but the SHAPE was
+// not, so a hash that ever has to leave differently — a rotate, a widened `HashValue`, a range
+// assertion on the way out — would be changed at one site and read as complete there.
+//
+// ⚠ **CHANGING THIS FROM A TRUNCATION TO A FOLD IS NOT A LOCAL EDIT.** `buildFloatHash` omits the
+// `-0.0` branch both reference compilers write, and the ONLY reason that is safe is that this `and`
+// DISCARDS bit 63. An xor-down or a rotate would carry the sign bit into the low half and make ±0.0
+// hash differently, silently — and `assertSignBitAboveHashMask` would NOT catch it (it inspects the
+// mask's width, not this operation). Read that function before touching this line.
+//
+// `block` is the block the value is live in and becomes the returning block, which is why the caller
+// passes it rather than this minting one: `int.hash`/`float.hash` end in their entry, `String.hash` in
+// its loop exit.
+function returnLow32Masked(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
+	let mask = emitConst(module, block: block, value: HashLow32Mask, ids: ids)
+	let masked = emitBin(module, block: block, a: value, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(block, op: StdOp.ret(masked))
+end 'returnLow32Masked'
 
 // The two-operand Std function every builtin `equals`/`compare` impl is: two parameters of its OWN operand
 // type, returning the type the INTERFACE METHOD it implements declares. ONE place where the declared ABI and
@@ -442,8 +576,8 @@ end 'buildOrderingCompare'
 //
 // ⭐ **`-0.0` REACHES `equalTo` BY FALLING THROUGH, and there is deliberately no branch for it.** Under IEEE
 // neither `-0.0 < 0.0` nor `-0.0 > 0.0` holds, so the cascade's final exit is already the right answer, and
-// both references do exactly this. (`float.hash` WOULD need an explicit `-0.0` normalization — one of the
-// two reasons it is a future rung, the other being the bit reinterpretation it rests on.)
+// both references do exactly this. (`buildFloatHash` DOES need an explicit `-0.0` branch, and the difference
+// is that IEEE settles this one for free while a HASH reads the bits, where the two zeros differ.)
 //
 // The `other != other` test is written TWICE, once per side of the `self` test, exactly as both references
 // write it. Hoisting it would make it a VALUE two blocks read rather than a branch, which on x64 costs the
@@ -537,9 +671,7 @@ function buildStrHash(module StdModule, name ByteArray)
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
 
 	// done: mask the accumulator to the low 32 bits (`h` is the header phi, and header dominates done).
-	let mask = emitConst(module, block: done, value: HashLow32Mask, ids: ids)
-	let masked = emitBin(module, block: done, a: h, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(done, op: StdOp.ret(masked))
+	returnLow32Masked(module, block: done, value: h, ids: ids)
 
 	module.functions.push(func)
 end 'buildStrHash'

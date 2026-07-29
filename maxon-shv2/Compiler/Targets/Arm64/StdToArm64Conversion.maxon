@@ -674,6 +674,9 @@ type StdToArm64Lowering
 			// encoded twice (`arm64FrintOpcode`, `roundsdImm8`), never decided twice.
 			floor to round then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.emit(dstRef, op: TargetOp.arm64Fsqrt(dest, src: src))
+			// The BIT REINTERPRETATION (`float.hash`) — `FMOV Xd, Dn`, the general↔vector transfer
+			// form, NOT the `FMOV Dd, Dn` the shared `movRegReg` emits. Same 64 bits, other file.
+			bitcastF64ToI64 then self.emit(dstRef, op: TargetOp.arm64FmovGprFp(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
 
