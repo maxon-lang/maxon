@@ -139,6 +139,26 @@ export enum ErrorCode
 	// It is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias
 	// advice, which would direct the reader into the very panic this refusal exists to close.
 	genericFloatTypeArg = "E2062"
+	// A '#if' / '#else' / '#endif' region is structurally unbalanced: a '#if' still open at end of
+	// file, or an '#endif' / '#else' with no '#if' to close.
+	// A DELIBERATE DIVERGENCE FROM BOTH REFERENCES, which accept all three silently -- v1's
+	// 'accept()' calls are optional and its 'skipConditionalBranch' simply returns at EOF, and the
+	// bootstrap compiles an unterminated '#if' and a stray '#endif' clean (measured).
+	// Accepting them is a wrong-answer generator, not a leniency: an unterminated '#if' silently
+	// SWALLOWS the rest of the file, so every declaration after it vanishes and the only symptom is
+	// an unrelated 'undefined' further on. shv2 refuses, naming the position of the directive that
+	// has no partner.
+	// Verified safe before it was added: every '#if' region in specs/, specs-shv2/ and stdlib/ (100
+	// directive lines) is balanced, so nothing in the corpus relied on the references' tolerance.
+	directiveUnbalanced = "E2063"
+	// A '#if' condition names a conditional-compilation predicate that does not exist -- anything
+	// other than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.
+	// Distinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a
+	// bad token); this names a known directive whose CONDITION calls an unknown function.
+	// An unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it
+	// evaluates to FALSE, matching both references and letting a condition name a platform this
+	// compiler does not target without becoming a build failure.
+	directiveUnknownPredicate = "E2064"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"

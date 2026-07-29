@@ -61,6 +61,52 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	return tokens
 end 'queryTokens'
 
+// --- Per-file query: the tokens THIS BUILD READS, with `#if` resolved ---
+//
+// ⭐⭐ **THE ONE DOOR EVERY TOKEN CONSUMER GOES THROUGH, AND THAT IS THE WHOLE POINT.** shv2 reads a
+// file's tokens TWICE — once for the whole-program declaration sweep (`queryProgramSignatures`) and
+// once for the real parse (`queryParseOps`) — and those two walks are different code. Handing them
+// the same filtered array is what makes it IMPOSSIBLE for them to disagree about which declarations
+// a `#if` leaves in the file; see ConditionalCompilation.maxon's header for the measured wrong
+// answers the alternative produces, one of them silent.
+//
+// Layered OVER `queryTokens` rather than folded INTO it, deliberately: `queryTokens`' `lex` probe
+// brackets `tokenize` alone and its comment explains that disjointness, so filtering inside it would
+// silently bill conditional compilation to the lexer in `scale-test` and `--metrics`. This has its
+// own `CompilePhase.directives`.
+//
+// A directive-free file — every file in the scale corpus, and all but four in `stdlib/` — is
+// returned untouched by `filterConditionalTokens`, so the two caches then hold the SAME array rather
+// than two copies of it.
+function queryActiveTokens(project Project, path FilePath) returns TokenArray throws CompileError
+	if activeTokensCacheValid(project, path: path) 'hit'
+		let memo = try project.db.activeTokenCache.get(path) otherwise panic("queryActiveTokens: activeTokensCacheValid true but activeTokenCache.get({path}) failed")
+		project.db.activeTokenHits = project.db.activeTokenHits + 1
+		return memo.value
+	end 'hit'
+	project.db.activeTokenMisses = project.db.activeTokenMisses + 1
+
+	// Outside the probe, exactly as `queryParseOps` keeps `queryTokens` outside its `parse` probe:
+	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
+	// CompileTimings' header is about.
+	let tokens = try queryTokens(project, path: path)
+
+	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.directives)
+	let active = try filterConditionalTokens(tokens, target: project.target) otherwise (directiveErr) 'directiveFail'
+		recordPhase(project, phase: CompilePhase.directives, probe: probe)
+		reportDirectiveError(project, path: path, error: directiveErr)
+		// NOT cached, exactly as a failed tokenize is not: the diagnostic gates the build and the
+		// next attempt must re-run against corrected source. An empty stream rolls the caller
+		// forward to the error gate with nothing to misparse.
+		return TokenArray.create()
+	end 'directiveFail'
+	recordPhase(project, phase: CompilePhase.directives, probe: probe)
+
+	let entry = try project.db.sourceFiles.get(path) otherwise panic("queryActiveTokens: source entry for {path} vanished after queryTokens")
+	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(active, keyHash: entry.contentHash))
+	return active
+end 'queryActiveTokens'
+
 // --- Whole-program query: the DECLARED SIGNATURE of every function, from TOKENS ---
 //
 // Sits between `queryTokens` and `queryParseOps` in the chain, and it is what makes a call's
@@ -120,7 +166,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge`
 		// probe: the tokens query does its own `lex` timing, and a phase that absorbed another's is
 		// the defect CompileTimings' header is about.
-		let tokens = try queryTokens(project, path: path)
+		let tokens = try queryActiveTokens(project, path: path)
 
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
 		// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
@@ -183,7 +229,7 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	end 'hit'
 	project.db.parseMisses = project.db.parseMisses + 1
 
-	let tokens = try queryTokens(project, path: path)
+	let tokens = try queryActiveTokens(project, path: path)
 
 	// The `parse` probe opens only NOW — after the tokens query has returned — so it bills
 	// the parse alone and never absorbs the lexing it depends on. (The alternative,
@@ -340,9 +386,11 @@ end 'reportUnverifiableFnMerge'
 // the gate needs.
 export function probeRebuildCacheHits(project Project) throws CompileError
 	for path in project.db.sourcePaths 'each'
-		// Both queries must run: a queryParseOps HIT returns before it would reach
-		// queryTokens, so querying tokens separately is what moves `tokenHits`.
+		// All three queries must run: a queryParseOps HIT returns before it would reach
+		// queryActiveTokens, which in turn returns on its own hit before it would reach
+		// queryTokens — so each must be asked directly to move its own counter.
 		_ = try queryTokens(project, path: path)
+		_ = try queryActiveTokens(project, path: path)
 		_ = try queryParseOps(project, path: path)
 	end 'each'
 end 'probeRebuildCacheHits'
@@ -430,6 +478,22 @@ function reportLexerError(project Project, path FilePath, error LexerError)
 		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerUnknownDirective, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportLexerError'
+
+// Map a DirectiveError to a project diagnostic. Two codes, and the split is by what the author got
+// wrong rather than by where the filter noticed: E2063 is a region whose STRUCTURE does not close,
+// E2064 a condition that calls a predicate that does not exist.
+//
+// `malformedCondition` reports under E2064 as well, because a condition the grammar has no
+// production for is a condition that names no predicate the compiler knows -- and the message says
+// which spellings ARE known, which is the same advice the unknown-name case needs.
+function reportDirectiveError(project Project, path FilePath, error DirectiveError)
+	match error 'kind'
+		unterminatedIf(line, column) then reportPositioned(project, code: ErrorCode.directiveUnbalanced, message: "Unterminated '#if' -- the region is still open at end of file. Every '#if' needs a matching '#endif'", line: line, column: column, filePath: path)
+		unmatchedDirective(spelling, line, column) then reportPositioned(project, code: ErrorCode.directiveUnbalanced, message: "'{spelling}' has no matching '#if'", line: line, column: column, filePath: path)
+		unknownPredicate(name, line, column) then reportPositioned(project, code: ErrorCode.directiveUnknownPredicate, message: "Unknown conditional compilation function '{name}'. Expected {AcceptedPredicateList}.", line: line, column: column, filePath: path)
+		malformedCondition(line, column) then reportPositioned(project, code: ErrorCode.directiveUnknownPredicate, message: "Malformed '#if' condition. Expected a predicate call -- {AcceptedPredicateList} -- optionally combined with 'and', 'or', 'not' and parentheses", line: line, column: column, filePath: path)
+	end 'kind'
+end 'reportDirectiveError'
 
 // The E2003 an `as` cast target that names a typealias the reading file cannot see reports (P1.9).
 // Worded ONCE because it has two producers that must not drift: the `hiddenCastTargetType` arm below

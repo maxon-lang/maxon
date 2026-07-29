@@ -57,6 +57,21 @@ export function tokensCacheValid(project Project, path FilePath) returns bool
 	return memo.keyHash == current
 end 'tokensCacheValid'
 
+// True iff the ACTIVE token memo for `path` was derived from the file's current bytes.
+//
+// ⚠ **THE FILTERED STREAM IS TARGET-DEPENDENT AND THIS KEY IS NOT, WHICH IS SOUND ONLY BECAUSE A
+// `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is set once by
+// `Project.create` and has no other writer anywhere in the compiler (verified), and this cache lives
+// on `project.db` — so two targets are two `Project`s and two databases, and one cache can never be
+// asked a question about a target it was not filled for. Should a single `Project` ever be
+// re-aimed at a second target, THIS is the line that becomes wrong: mix the target into the key,
+// do not simply invalidate.
+export function activeTokensCacheValid(project Project, path FilePath) returns bool
+	let memo = try project.db.activeTokenCache.get(path) otherwise return false
+	let current = try currentContentHash(project, path: path) otherwise return false
+	return memo.keyHash == current
+end 'activeTokensCacheValid'
+
 // **A PARSE MEMO IS KEYED ON TWO FACTS, BECAUSE A PARSE READS TWO INPUTS.**
 //
 //   1. the file's OWN bytes — its tokens;

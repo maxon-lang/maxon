@@ -211,17 +211,21 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	// the exact silent-staleness this key exists to prevent, caught as a miss instead of a wrong
 	// answer.
 	let tokHitBefore = project.db.tokenHits
+	let actHitBefore = project.db.activeTokenHits
 	let parHitBefore = project.db.parseHits
 	let sigHitBefore = project.db.signatureHits
 	let tokMissBefore = project.db.tokenMisses
+	let actMissBefore = project.db.activeTokenMisses
 	let parMissBefore = project.db.parseMisses
 	let sigMissBefore = project.db.signatureMisses
 
 	try probeRebuildCacheHits(project)
 	let tokHitAfter = project.db.tokenHits
+	let actHitAfter = project.db.activeTokenHits
 	let parHitAfter = project.db.parseHits
 	let sigHitAfter = project.db.signatureHits
 	let tokMissAfter = project.db.tokenMisses
+	let actMissAfter = project.db.activeTokenMisses
 	let parMissAfter = project.db.parseMisses
 	let sigMissAfter = project.db.signatureMisses
 
@@ -236,13 +240,21 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	// One signature read per parse re-query — every `queryParseOps` reads the index before it can
 	// even decide whether its own memo is valid.
 	let signaturesHitOnRebuild = assertCounterMove("rebuild signature re-query hits (signatureHits)", before: sigHitBefore, after: sigHitAfter, expectedDelta: fileCount)
+	// The ACTIVE (directive-filtered) stream is memoized separately and gets the same pair of
+	// assertions, for the reason every other memo here has them: a cache nothing verifies is a cache
+	// whose staleness bugs are simply unpaid (this file's own QueryDatabase header names that
+	// failure). It matters more than most — this one memo feeds BOTH the declaration sweep and the
+	// parse, so a stale entry IS the two disagreeing about what a file declares (see
+	// ConditionalCompilation.maxon).
+	let activeTokensHitOnRebuild = assertCounterMove("rebuild active-token re-query hits (activeTokenHits)", before: actHitBefore, after: actHitAfter, expectedDelta: fileCount)
+	let activeTokensNotRecomputed = assertCounterMove("rebuild does not re-filter directives (activeTokenMisses)", before: actMissBefore, after: actMissAfter, expectedDelta: NoCounterMove)
 	let tokensNotRecomputed = assertCounterMove("rebuild does not recompute tokens (tokenMisses)", before: tokMissBefore, after: tokMissAfter, expectedDelta: NoCounterMove)
 	let parseNotRecomputed = assertCounterMove("rebuild does not recompute parse (parseMisses)", before: parMissBefore, after: parMissAfter, expectedDelta: NoCounterMove)
 	let signaturesNotRecomputed = assertCounterMove("rebuild does not recompute signatures (signatureMisses)", before: sigMissBefore, after: sigMissAfter, expectedDelta: NoCounterMove)
 
-	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
+	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and activeTokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and activeTokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
 	if allOk 'passed'
-		print("PASS cache: allModule miss->hit, tokens/signatures/parse hit on rebuild (hits={tokHitAfter}/{sigHitAfter}/{parHitAfter}, misses={tokMissAfter}/{sigMissAfter}/{parMissAfter})\n")
+		print("PASS cache: allModule miss->hit, tokens/directives/signatures/parse hit on rebuild (hits={tokHitAfter}/{actHitAfter}/{sigHitAfter}/{parHitAfter}, misses={tokMissAfter}/{actMissAfter}/{sigMissAfter}/{parMissAfter})\n")
 		return true
 	end 'passed'
 

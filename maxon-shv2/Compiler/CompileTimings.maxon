@@ -171,6 +171,12 @@ export typealias CpuTicksArray = Array with CpuTicks
 export enum CompilePhase
 	load
 	lex
+	// Conditional compilation (`queryActiveTokens`): one pass per file resolving `#if`/`#else`/
+	// `#endif` against the build target. Its OWN phase rather than a slice of `lex`, because `lex`'s
+	// probe deliberately brackets `tokenize` alone (see `queryTokens`) and a phase that absorbed a
+	// neighbour's cost is the defect this file exists to prevent. A file with no directives returns
+	// its token array untouched, so the phase reads as the cost of the PROBE for most of the corpus.
+	directives
 	// The whole-program signature index (`queryProgramSignatures`): one token sweep per file, folded
 	// into one table. Its OWN phase, not a slice of `parse`, for the reason this file exists — a cost
 	// billed to a neighbour is a cost nobody can act on, and this one is new, whole-program, and

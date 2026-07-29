@@ -1,0 +1,19 @@
+// Test: directives.dead-branch-unparsed
+function main() returns ExitCode
+	#if not os(Windows) and not os(Linux) and not os(Macos) and not os(Wasi)
+		this_function_does_not_exist_and_should_not_be_parsed()
+	#else
+		return 13
+	#endif
+end 'main'
+---
+ExitCode: 13
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 13
+    x64.popReg rbp
+    x64.ret
+}

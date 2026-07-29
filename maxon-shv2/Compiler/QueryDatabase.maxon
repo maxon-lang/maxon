@@ -132,6 +132,12 @@ export type QueryDatabase
 
 	// Per-file memo caches (absence = not cached; validity via keyHash compare).
 	export var tokenCache as TokenCacheMap
+	// The same file's tokens with `#if` resolved — see `queryActiveTokens`. A SECOND cache rather
+	// than a filter folded into `tokenCache`, because the two answer different questions and only
+	// one of them is target-dependent: `tokenCache` holds what the file SAYS, this holds what this
+	// build READS. Keeping the raw stream memoized separately is also what lets the `lex` phase
+	// probe keep bracketing `tokenize` alone (see `queryTokens`).
+	export var activeTokenCache as TokenCacheMap
 	export var parseCache as ParseCacheMap
 
 	// Whole-program signature-index memo. Sits BETWEEN tokens and parse in the chain:
@@ -147,6 +153,8 @@ export type QueryDatabase
 	// it (see this file's header).
 	export var tokenHits as QueryCount
 	export var tokenMisses as QueryCount
+	export var activeTokenHits as QueryCount
+	export var activeTokenMisses as QueryCount
 	export var parseHits as QueryCount
 	export var parseMisses as QueryCount
 	export var signatureHits as QueryCount
@@ -160,10 +168,12 @@ export type QueryDatabase
 			sourcePaths: FilePathArray.create(),
 			compositeHash: 0, compositeHashValid: false,
 			tokenCache: TokenCacheMap.create(),
+			activeTokenCache: TokenCacheMap.create(),
 			parseCache: ParseCacheMap.create(),
 			signatureCache: SignatureMemo.empty(),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
+			activeTokenHits: 0, activeTokenMisses: 0,
 			parseHits: 0, parseMisses: 0,
 			signatureHits: 0, signatureMisses: 0,
 			allModuleHits: 0, allModuleMisses: 0

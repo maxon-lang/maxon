@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "2c3875bc1563cebc",
+  "sourceHash": "3fa5b37633c70f79",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -469,6 +469,24 @@
       "stage": "parser",
       "doc": "A generic type argument resolves to 'float' -- bare ('Box with float') or through a ranged\nfloat typealias ('typealias Real = float(...)' then 'Box with Real'). shv2 DICTIONARY-PASSES\nrather than monomorphizing, so a type parameter is one opaque 8-byte GENERAL-PURPOSE slot; a\nfloat value is born in a floating-point register and has no way to travel through it. Reaching\nthe backend, it panicked on the x64 emitter's cross-register-file assertion.\nA DELIBERATE DIVERGENCE FROM BOTH REFERENCES, which accept it because they MONOMORPHIZE (the\ninstantiation gets a genuine f64 slot). It is a compiler limitation, not a language rule, and\nthe message says so rather than naming a workaround -- there is none at this milestone.\nIt is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias\nadvice, which would direct the reader into the very panic this refusal exists to close.",
       "emittedBy": {"shv2": "genericFloatTypeArg"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2063,
+      "tag": "E2063",
+      "name": "DirectiveUnbalanced",
+      "stage": "parser",
+      "doc": "A '#if' / '#else' / '#endif' region is structurally unbalanced: a '#if' still open at end of\nfile, or an '#endif' / '#else' with no '#if' to close.\nA DELIBERATE DIVERGENCE FROM BOTH REFERENCES, which accept all three silently -- v1's\n'accept()' calls are optional and its 'skipConditionalBranch' simply returns at EOF, and the\nbootstrap compiles an unterminated '#if' and a stray '#endif' clean (measured).\nAccepting them is a wrong-answer generator, not a leniency: an unterminated '#if' silently\nSWALLOWS the rest of the file, so every declaration after it vanishes and the only symptom is\nan unrelated 'undefined' further on. shv2 refuses, naming the position of the directive that\nhas no partner.\nVerified safe before it was added: every '#if' region in specs/, specs-shv2/ and stdlib/ (100\ndirective lines) is balanced, so nothing in the corpus relied on the references' tolerance.",
+      "emittedBy": {"shv2": "directiveUnbalanced"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2064,
+      "tag": "E2064",
+      "name": "DirectiveUnknownPredicate",
+      "stage": "parser",
+      "doc": "A '#if' condition names a conditional-compilation predicate that does not exist -- anything\nother than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.\nDistinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a\nbad token); this names a known directive whose CONDITION calls an unknown function.\nAn unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it\nevaluates to FALSE, matching both references and letting a condition name a platform this\ncompiler does not target without becoming a build failure.",
+      "emittedBy": {"shv2": "directiveUnknownPredicate"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },
     {

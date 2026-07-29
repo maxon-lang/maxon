@@ -396,6 +396,30 @@ E2062 GenericFloatTypeArgUnsupported
 	doc It is asked BEFORE E2061 so a bare 'float' gets this message and not the ranged-typealias
 	doc advice, which would direct the reader into the very panic this refusal exists to close.
 
+E2063 DirectiveUnbalanced
+	shv2 directiveUnbalanced
+	doc A '#if' / '#else' / '#endif' region is structurally unbalanced: a '#if' still open at end of
+	doc file, or an '#endif' / '#else' with no '#if' to close.
+	doc A DELIBERATE DIVERGENCE FROM BOTH REFERENCES, which accept all three silently -- v1's
+	doc 'accept()' calls are optional and its 'skipConditionalBranch' simply returns at EOF, and the
+	doc bootstrap compiles an unterminated '#if' and a stray '#endif' clean (measured).
+	doc Accepting them is a wrong-answer generator, not a leniency: an unterminated '#if' silently
+	doc SWALLOWS the rest of the file, so every declaration after it vanishes and the only symptom is
+	doc an unrelated 'undefined' further on. shv2 refuses, naming the position of the directive that
+	doc has no partner.
+	doc Verified safe before it was added: every '#if' region in specs/, specs-shv2/ and stdlib/ (100
+	doc directive lines) is balanced, so nothing in the corpus relied on the references' tolerance.
+
+E2064 DirectiveUnknownPredicate
+	shv2 directiveUnknownPredicate
+	doc A '#if' condition names a conditional-compilation predicate that does not exist -- anything
+	doc other than 'os', 'arch', 'testing', 'rcSanitize' or 'leakReport'.
+	doc Distinct from E1009 (lexerUnknownDirective), which names an unknown DIRECTIVE ('#wibble', a
+	doc bad token); this names a known directive whose CONDITION calls an unknown function.
+	doc An unknown ARGUMENT to a KNOWN predicate ('os(Plan9)') is deliberately NOT this error -- it
+	doc evaluates to FALSE, matching both references and letting a condition name a platform this
+	doc compiler does not target without becoming a build failure.
+
 E3001 SemanticNoMain
 	csharp SemanticNoMain
 	selfhosted semanticNoMain
