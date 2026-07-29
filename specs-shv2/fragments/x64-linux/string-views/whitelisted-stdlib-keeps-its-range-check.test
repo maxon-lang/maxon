@@ -1,0 +1,57 @@
+// Test: whitelisted-stdlib-keeps-its-range-check
+function main() returns ExitCode
+	let lead = utf16LeadSurrogate(1000000000)
+	return 7 if lead > 65535 else 9
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1000000000
+    x64.callDirect utf16LeadSurrogate
+    x64.cmpRegImm32 r8, 65535
+    x64.jcc greater, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @utf16LeadSurrogate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRegImm32 rax, rcx, -65536
+    x64.sarRegImm8 rax, rax, 10
+    x64.leaRegRegImm32 r8, rax, 55296
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 65535
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

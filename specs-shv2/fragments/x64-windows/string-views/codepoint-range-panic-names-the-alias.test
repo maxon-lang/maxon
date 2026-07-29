@@ -1,7 +1,7 @@
-// Test: codepoint-return-is-range-checked
+// Test: codepoint-range-panic-names-the-alias
 function main() returns ExitCode
 	let cp = utf16DecodeSurrogates(0, low: 0)
-	return cp - 65536
+	return 7 if cp < 0 else 9
 end 'main'
 ---
 ExitCode: 1
@@ -14,7 +14,16 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rdx, 0
     x64.callDirect utf16DecodeSurrogates
-    x64.leaRegRegImm32 r8, r8, -65536
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matchcont:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

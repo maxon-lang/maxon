@@ -1,0 +1,76 @@
+// Test: utf16-is-trail-surrogate
+function main() returns ExitCode
+	// 0xDE00 = 56832 (low surrogate for 😀)
+	if utf16IsTrailSurrogate(56832) 'c4'
+		print("1\n")
+	end 'c4'
+	if utf16IsTrailSurrogate(55357) 'c5'
+		print("0\n")
+	end 'c5'
+	if utf16IsTrailSurrogate(65) 'c6'
+		print("0\n")
+	end 'c6'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 56832
+    x64.callDirect utf16IsTrailSurrogate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c4
+    x64.jmp ifcont
+  c4:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 55357
+    x64.callDirect utf16IsTrailSurrogate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c5
+    x64.jmp ifcont
+  c5:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 65
+    x64.callDirect utf16IsTrailSurrogate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c6
+    x64.jmp ifcont
+  c6:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @utf16IsTrailSurrogate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 56320
+    x64.movRegImm32 r8, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 57343
+    x64.setccReg lessEqual, r8
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.popReg rbp
+    x64.ret
+}

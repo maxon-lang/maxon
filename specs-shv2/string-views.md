@@ -245,16 +245,58 @@ end 'main'
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
 ```
 
+⚠ **THE FOUR RANGE-GUARD CASES BELOW COME IN PAIRS THAT PARTITION THE TARGETS, AND THE SPLIT IS A
+TARGET FACT RATHER THAN A CONVENIENCE.** A range violation EXITS 1 on every target — that is the guard
+FIRING. The message and the backtrace exist only where there is a panic runtime to print them: wasm's
+`emitRangePanic` is `i32.const 1; call $exit; unreachable`, its constant named `RangePanicExitCode` and
+documented *"No message/backtrace (wasm has no panic runtime)"*, and x64-linux is measured the same.
+So each guard is pinned TWICE — once on `x64-linux, wasm32-wasi`, where the assertion is the exit code
+and stderr must be silent, and once on `x64-windows`, where the message is pinned in full.
+
+⚠ **A `stderr` BLOCK CANNOT BE OMITTED TO PAPER OVER THIS**: an absent block asserts the program
+printed NOTHING (`SpecTestRunner.checkRunStderr`, whose `unpinned` arm says so in as many words), which
+is TRUE on the two silent lanes and FALSE on Windows. Partitioning the targets is what lets both facts
+be stated; a single case cannot state either without lying about the other.
+
+MEASURED, and this is why the pairing exists rather than a `targets: x64-windows` line on the lot:
+these two guards were first written as message-only cases with no target marker, and the cross-target
+gate went red on x64-linux and wasm with an EMPTY `actual` — which READS exactly like "the guard is
+missing on this target" and is not. The identical program over a USER-declared
+`typealias Percent = int(0 to 100)`, touching neither the whitelist nor `Codepoint`, exits 1 with empty
+stderr on wasm and exits 1 with the full message on x64. So the guard fires everywhere, and asserting
+the EXIT CODE on the silent lanes is what proves it — which no case in this suite had done for a range
+guard before.
+
 <!-- test: whitelisted-stdlib-keeps-its-range-check -->
+<!-- targets: x64-linux, wasm32-wasi -->
 ### A REACHABLE whitelisted stdlib function still gets its range guard
 `insertRangeChecks` skips a stdlib function no path from `main` reaches — that skip is what keeps the
 whitelist from renumbering `.rdata` for functions nobody calls. It must not be one word wider than
 that: a function the program DOES call keeps every guard it declared. `utf16LeadSurrogate` returns
 through the ranged `CodeUnit16`, and a codepoint far past the supplementary plane overflows it.
+
+The exit code is the assertion because it is the part every target shares. `7` is what an UNGUARDED
+build returns — the out-of-range lead surrogate, 1031794, is comfortably past `u16.max` — so this case
+tells a fired guard from a silent wrong answer on every lane, which a message-only case cannot.
 ```maxon
 function main() returns ExitCode
 	let lead = utf16LeadSurrogate(1000000000)
-	return lead - 55296
+	return 7 if lead > 65535 else 9
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: whitelisted-stdlib-range-panic-names-the-alias -->
+<!-- targets: x64-windows -->
+### …and on the target that has a panic runtime, it names the alias and the function
+The message half of the case above. `targets: x64-windows` for the reason stated at the head of this
+group, and the same reason every other panic-text case in the suite carries it.
+```maxon
+function main() returns ExitCode
+	let lead = utf16LeadSurrogate(1000000000)
+	return 7 if lead > 65535 else 9
 end 'main'
 ```
 ```exitcode
@@ -317,6 +359,7 @@ well-formed-3byte len=3 count=1 cps=[20013,] utf16=[20013,]
 ```
 
 <!-- test: codepoint-return-is-range-checked -->
+<!-- targets: x64-linux, wasm32-wasi -->
 ### `Codepoint` is a RANGE and not merely an erasure
 `Codepoint` is `int(0 to 1114111)` in `stdlib/Character.maxon`, a module shv2 cannot load — so the
 compiler declares the alias for itself rather than answering only "it erases to `integer`". Without the
@@ -324,10 +367,27 @@ range, this sibling of the case above was silent where that one panics: `utf16De
 non-surrogates computed **-56613888** and handed it back as a `Codepoint`, whose declared range starts
 at 0. One stdlib module, one kind of precondition violation, and it must not matter which alias the
 compiler happened to get from a registry and which it synthesized.
+`7` is what an UNGUARDED build returns — the answer it computes is negative — so the exit code alone
+separates a fired guard from the silent wrong answer, on every target.
 ```maxon
 function main() returns ExitCode
 	let cp = utf16DecodeSurrogates(0, low: 0)
-	return cp - 65536
+	return 7 if cp < 0 else 9
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: codepoint-range-panic-names-the-alias -->
+<!-- targets: x64-windows -->
+### …and the panic names `Codepoint`, the alias the compiler declared for itself
+The message half of the case above — and the one that shows the alias reaching the diagnostic under
+its own name, which is what a bare erasure to `integer` could never have produced.
+```maxon
+function main() returns ExitCode
+	let cp = utf16DecodeSurrogates(0, low: 0)
+	return 7 if cp < 0 else 9
 end 'main'
 ```
 ```exitcode

@@ -1,0 +1,123 @@
+// Test: utf16-valid-surrogate-pair
+function main() returns ExitCode
+	if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
+		print("1\n")  // valid pair
+	end 'c14'
+	if utf16IsValidSurrogatePair(56832, low: 55357) 'c15'
+		print("0\n")  // reversed
+	end 'c15'
+	if utf16IsValidSurrogatePair(65, low: 66) 'c16'
+		print("0\n")        // not surrogates
+	end 'c16'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 55357
+    x64.movRegImm32 rdx, 56832
+    x64.callDirect utf16IsValidSurrogatePair
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c14
+    x64.jmp ifcont
+  c14:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 56832
+    x64.movRegImm32 rdx, 55357
+    x64.callDirect utf16IsValidSurrogatePair
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c15
+    x64.jmp ifcont
+  c15:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 65
+    x64.movRegImm32 rdx, 66
+    x64.callDirect utf16IsValidSurrogatePair
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c16
+    x64.jmp ifcont
+  c16:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @utf16IsLeadSurrogate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 55296
+    x64.movRegImm32 r8, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 56319
+    x64.setccReg lessEqual, r8
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @utf16IsTrailSurrogate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 56320
+    x64.movRegImm32 r8, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 57343
+    x64.setccReg lessEqual, r8
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @utf16IsValidSurrogatePair {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.callDirect utf16IsLeadSurrogate
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.movRegReg rcx, rbx
+    x64.callDirect utf16IsTrailSurrogate
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
