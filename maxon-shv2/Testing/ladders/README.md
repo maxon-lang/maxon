@@ -38,6 +38,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genstring.sh <n> <sites-*\|data-*> <out>` | ⚠ **TWO families, and `<n>` means a different thing in each**: `sites-*` is a COMPILE ladder (`<n>` = method CALL SITES, four per function); `data-*` is a RUN ladder (`<n>` = DOUBLINGS of the subject string, the program timing only the operation and printing a CSV line) | the seven byte/ASCII `String` methods (P1.8 Slice C). `ScaleCorpus` emits **not one** of `startsWith`/`endsWith`/`contains`/`toLower`/`toUpper`/`replace`/`split` at any rung — dump it and the complete method-call inventory is `create push count get append scaleBy probe byteLength slice reserve clone firstVal` — so the family is structurally invisible to a default run. ⚠ **It is NOT blind to `String`**, which is the trap: 756 `==` sites plus `append`/`byteLength`/interpolation across the six rungs mean a Slice C change to the SHARED `__str_eq` loop DOES read, and that non-zero looks like coverage of a rung it does not cover. `sites-control` is the CONTROL (the P1.2 surface only, no Slice C method), and `data-appendloop` measures the P1.2 `append` this generator has to route around. See below. |
 | `genfnval.sh <aliases> <sites> <arity> <indirect\|direct> <out>` | `aliases` function typealiases with a matching callee each, called through a function VALUE `sites` times per alias, plus a `return` door and an argument door per alias | FUNCTION VALUES and their DECLARED TYPES — `resolveFunctionAliasShapes`, `declaredFunctionShapeOf`, `checkIndirectCall`, `checkFunctionTypeDoors` and `indirectCalleeParamTypes`. `--emit-corpus` finds **ZERO `typealias = function(…)` and ZERO function references** in all 465 generated files, so every column of a default run reads a flat Δ0 for the whole mechanism. `direct` is the CONTROL: the same declarations, bodies and CALL COUNT, called by NAME. See below. |
 | `genscope.sh <constructs> <locals> <if\|ifelse\|while\|match\|straight> <out>` | ONE function with `locals` scope-filler `var`s in scope and `constructs` merging statements after them, each assigning a BOUNDED two of six accumulators | THE PARSER'S SCOPE DIMENSION — mutable bindings IN SCOPE (V) against the CONSTRUCTS that merge them (C), which `ScaleCorpus` doubles TOGETHER (`LocalsPerFunctionBase` and `LongIfsBase`/`DeepBlocksBase`) and therefore cannot tell apart. It is what separated the `phase:parse` bend of 2026-07-28: **linear in C alone, linear in V alone, quadratic in the two together** — an O(V×C) term, which the `straight` CONTROL (same V, same statement count, no merging construct) then pinned to the construct rather than to program size. See below. |
+| `genfloathash.sh <sites> <hash\|equals\|inthash\|control> <out>` | `sites` direct builtin-conformance call sites on a FLOAT receiver, eight per function so doubling `<sites>` doubles the FUNCTION COUNT and leaves each function's register pressure fixed | P1.7a's last slice (`float` is `Hashable`) and the parse-time lookup that routes `<float>.<method>()` — `builtinConformerMethod` -> `requireBuiltinInterface`. `ScaleCorpus` emits **not one** `.hash()`/`.equals()`/`.compare()` on a float receiver at any rung, so the install gate never fires, `buildFloatHash` is never built and `movqGprXmm` is never encoded: every column of a default run reads a Δ0 that means UNREACHED. ⭐⭐ **`equals` and `inthash` compile under the PRE-rung compiler too, so this is one of the few ladders that supports a true A/B on a byte-identical file** — and `equals` is the mode that found the +10 allocations/site this rung costs a surface it never touched. `inthash` and `control` are the controls. See below. |
 
 ### `genscope.sh` — two knobs the standing corpus can only move together
 
@@ -406,3 +407,47 @@ one per **RUN** of the victim's uses (a run breaks at every block boundary), so 
 count that moves it, and no generator here moves that: measured **8 / 16 / 32 / 64** fresh ids in ONE
 split for a value read in 8 / 16 / 32 / 64 separate blocks, against 1 on this whole ladder. **Read
 which quantity a ladder actually varies before believing its flat column.**
+
+### `genfloathash.sh` — and the mode that found a cost in a surface the rung never touched
+
+The rung this was written for (P1.7a's last slice: `float` is `Hashable`) adds an IR opcode, a `TargetOp`
+on two backends and a synthesized `buildFloatHash`. **None of it is reachable from `ScaleCorpus`** — the
+corpus emits no `.hash()`, `.equals()` or `.compare()` on a float receiver at any rung, and the install
+gate is REFERENCED-but-undefined ⟺ INSTALLED, so nothing is ever built and every column reads Δ0. That is
+the ordinary reason a private ladder exists here, and it is the *less* interesting one.
+
+**The interesting reason is that the mode which measured a regression is the mode for a surface the rung
+did not modify at all.** `builtinConformerMethod` walks `builtinConformableProtocolNames()` in the fixed
+order Hashable, Equatable, Comparable; it `continue`s past a protocol the receiver does not conform to,
+and it RETURNS at the first protocol whose declaration carries the method. Admitting `float` to `Hashable`
+turns that leading `continue` into a `requireBuiltinInterface(Hashable)` — a whole `IrInterface`
+synthesized, searched for `equals`, missed, discarded — on **every float `.equals()` and `.compare()` call
+site in the program**. Nothing in `float.equals`'s own path changed; its position in a search order did.
+
+Measured, same file compiled by the pre-rung and post-rung binaries at a matched checkout-path length:
+
+| mode | 64 sites | 128 | 256 | 512 | reading |
+| --- | --- | --- | --- | --- | --- |
+| `equals` | +648 | +1,288 | +2,568 | +5,128 | **exactly `10 × sites + 8` allocations**, and `344 × sites + 510` bytes |
+| `inthash` | +8 | +8 | +8 | +8 | the control: FLAT |
+| `control` | +8 | +8 | +8 | +8 | the control: FLAT |
+
+**+10 allocations and +344 bytes per call site — LINEAR in sites, not superlinear**, so it is a constant
+factor and it is filed rather than fixed. The flat `+8 / +510` both controls show is the whole rest of the
+rung: one more candidate in `installBuiltinConformanceRuntime`'s roster, paid once per compile whatever the
+program's size.
+
+⚠ **`inthash` IS NOT A SMALLER `hash`, AND IT IS THE ROW THAT MAKES THE ATTRIBUTION STICK.** `int` has
+conformed to all three protocols since slice 2b-ii, so its conformance row is already the width this rung
+gave `float`, and this rung cannot have moved it. Its flat `+8` says the cost is in *float's row* and not
+in the walk — and, because those programs carry thousands of `TargetOp`s, the same flat `+8` is also the
+measurement that the new union variants did **not** widen `TargetOp`'s widest payload. A union that had
+grown would have taxed every op allocation and the delta would climb with program size. It does not.
+
+⚠ **`hash` CANNOT PRODUCE A DELTA AND MUST NOT BE READ FOR ONE** — the pre-rung compiler refuses the file
+(`E2015: 'float' has no method named 'hash' — its builtin conformances supply equals, compare`). That
+refusal is the ladder's proof of REACH, and it is the strongest kind available: a generator whose output
+the parent compiler cannot compile at all is unambiguously exercising the rung. Read `hash` as a SLOPE
+within one binary instead — measured **595.4 / 594.1 / 593.8** allocations per site against `control`'s
+**595.7 / 594.6 / 594.1**, i.e. compiling a `f.hash()` call site costs what compiling a float comparison
+costs, flat across an 8× span.
