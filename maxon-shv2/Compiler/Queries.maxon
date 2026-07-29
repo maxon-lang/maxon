@@ -8,7 +8,7 @@
 // QueryDatabase.maxon's header.
 //
 // The chain is:
-//   querySourceFile  (input; never computed)
+//   db.sourceFiles   (input; never computed — registered by `fileChanged`)
 //     -> queryTokens   (per-file memo; tokenize)
 //       -> queryProgramSignatures (whole-program memo; every file's DECLARATIONS, from tokens)
 //         -> queryParseOps (per-file memo; Parser -> FileParseArtifact)
@@ -26,29 +26,29 @@
 // queryAllModule rebuilds the derived registries from artifacts on every miss
 // (resetMergeTargets), so there is no ParseDelta rollback dance.
 
-// --- Input query: source content (records the source-file dependency) ---
-function querySourceFile(project Project, path FilePath) returns String throws CompileError
-	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
-	return entry.content
-end 'querySourceFile'
-
 // --- Per-file query: tokenize ---
+//
+// Tokenizing reads ONE input — the file — so the memo's key is that file's content hash and nothing
+// else. (Contrast `queryParseOps`, whose key mixes in the signature index.)
 function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
-	if tokensCacheValid(project, path: path) 'hit'
-		let memo = try project.db.tokenCache.get(path) otherwise panic("queryTokens: tokensCacheValid true but tokenCache.get({path}) failed")
-		project.db.tokenHits = project.db.tokenHits + 1
-		return memo.value
-	end 'hit'
-	project.db.tokenMisses = project.db.tokenMisses + 1
+	// ONE `sourceFiles` probe for the whole query: `entry` carries both the bytes to lex and the hash
+	// that validates and stamps the memo. See `sourceEntryOf` for why a probe is worth not repeating.
+	let entry = try sourceEntryOf(project, path: path)
 
-	let content = try querySourceFile(project, path: path)
+	if let memo = try project.db.tokenCache.get(path) 'memoized'
+		if memo.keyHash == entry.contentHash 'hit'
+			project.db.tokenHits = project.db.tokenHits + 1
+			return memo.value
+		end 'hit'
+	end 'memoized'
+	project.db.tokenMisses = project.db.tokenMisses + 1
 
 	// The `lex` phase is probed HERE, around `tokenize` alone — the leaf. `queryParseOps`
 	// calls this query BEFORE it opens its own `parse` probe, so the two phases are
 	// disjoint by construction and neither has to subtract the other out. A cache hit
 	// returned above does no lexing and is correctly billed nothing.
 	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
-	let tokens = try tokenize(content) otherwise (lexErr) 'lexFail'
+	let tokens = try tokenize(entry.content) otherwise (lexErr) 'lexFail'
 		reportLexerError(project, path: path, error: lexErr)
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and
 		// the next attempt must re-run against corrected source.
@@ -56,7 +56,6 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	end 'lexFail'
 	recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
 
-	let entry = try project.db.sourceFiles.get(path) otherwise panic("queryTokens: source entry for {path} vanished after querySourceFile")
 	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
 	return tokens
 end 'queryTokens'
@@ -78,12 +77,24 @@ end 'queryTokens'
 // A directive-free file — every file in the scale corpus, and all but four in `stdlib/` — is
 // returned untouched by `filterConditionalTokens`, so the two caches then hold the SAME array rather
 // than two copies of it.
+//
+// ⚠ **THE FILTERED STREAM IS TARGET-DEPENDENT AND THIS MEMO'S KEY IS NOT, WHICH IS SOUND ONLY
+// BECAUSE A `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is set once by
+// `Project.create` and has no other writer anywhere in the compiler (verified), and this cache lives
+// on `project.db` — so two targets are two `Project`s and two databases, and one cache can never be
+// asked a question about a target it was not filled for. Should a single `Project` ever be re-aimed
+// at a second target, THIS is the key that becomes wrong: mix the target into it, do not simply
+// invalidate.
 function queryActiveTokens(project Project, path FilePath) returns TokenArray throws CompileError
-	if activeTokensCacheValid(project, path: path) 'hit'
-		let memo = try project.db.activeTokenCache.get(path) otherwise panic("queryActiveTokens: activeTokensCacheValid true but activeTokenCache.get({path}) failed")
-		project.db.activeTokenHits = project.db.activeTokenHits + 1
-		return memo.value
-	end 'hit'
+	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
+	let entry = try sourceEntryOf(project, path: path)
+
+	if let memo = try project.db.activeTokenCache.get(path) 'memoized'
+		if memo.keyHash == entry.contentHash 'hit'
+			project.db.activeTokenHits = project.db.activeTokenHits + 1
+			return memo.value
+		end 'hit'
+	end 'memoized'
 	project.db.activeTokenMisses = project.db.activeTokenMisses + 1
 
 	// Outside the probe, exactly as `queryParseOps` keeps `queryTokens` outside its `parse` probe:
@@ -106,7 +117,6 @@ function queryActiveTokens(project Project, path FilePath) returns TokenArray th
 	let active = activeTokensOrReported(project, path: path, tokens: tokens)
 	recordPhase(project, phase: CompilePhase.directives, probe: probe)
 
-	let entry = try project.db.sourceFiles.get(path) otherwise panic("queryActiveTokens: source entry for {path} vanished after queryTokens")
 	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(active, keyHash: entry.contentHash))
 	return active
 end 'queryActiveTokens'
@@ -236,11 +246,17 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 	// elsewhere. The call is a memo hit for every file after the first.
 	let signatures = try queryProgramSignatures(project)
 
-	if parseCacheValid(project, path: path, signatureHash: signatures.hash) 'hit'
-		let memo = try project.db.parseCache.get(path) otherwise panic("queryParseOps: parseCacheValid true but parseCache.get({path}) failed")
-		project.db.parseHits = project.db.parseHits + 1
-		return memo.value
-	end 'hit'
+	// The key this parse must carry, computed ONCE: it validates the memo below and stamps the new one
+	// at the end of the query, so the check and the stamp are the same value rather than two
+	// computations that have to agree. See `currentParseMemoKey`.
+	let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash)
+
+	if let memo = try project.db.parseCache.get(path) 'memoized'
+		if memo.keyHash == keyHash 'hit'
+			project.db.parseHits = project.db.parseHits + 1
+			return memo.value
+		end 'hit'
+	end 'memoized'
 	project.db.parseMisses = project.db.parseMisses + 1
 
 	let tokens = try queryActiveTokens(project, path: path)
@@ -268,12 +284,12 @@ export function queryParseOps(project Project, path FilePath) returns FileParseA
 
 	// Only cache a clean parse — a parse that reported a diagnostic must re-run. The memo is
 	// stamped with BOTH inputs this parse read (the file's bytes and the signature index's
-	// declarations), through the same `parseMemoKey` that validated it — one function, both
-	// sides, so the stamp and the check can never disagree about what a parse depends on.
+	// declarations), through the VERY `keyHash` VALUE that failed to validate above — not a second
+	// computation of it, so the stamp and the check cannot disagree about what a parse depends on.
+	// Neither input can move while the parse runs: the parser is a pure function of the two.
 	let hadErrors = project.diagnostics.count() > errorCountBefore
 	if not hadErrors 'cacheOk'
 		artifact.module.assertAllBlocksTerminated()
-		let keyHash = try currentParseMemoKey(project, path: path, signatureHash: signatures.hash)
 		project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: keyHash))
 	end 'cacheOk'
 

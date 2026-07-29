@@ -38,39 +38,29 @@ export function fileChanged(project Project, path FilePath, content String)
 	project.db.compositeHashValid = false
 end 'fileChanged'
 
-// --- Content-hash cache validity ---
+// --- Source entries and content-hash memo keys ---
 
-// The current content hash of a registered file, or a sentinel that can never
-// equal a real stamped hash for an unregistered path. A memo whose `keyHash`
-// equals this is valid.
-function currentContentHash(project Project, path FilePath) returns ContentHash throws CompileError
-	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
-	return entry.contentHash
-end 'currentContentHash'
-
-// True iff the token memo for `path` was derived from the file's current bytes. Tokenizing reads
-// ONE input — the file — so its key is that file's content hash and nothing else. (Contrast the
-// parse memo below, which is the whole point of this rung.)
-export function tokensCacheValid(project Project, path FilePath) returns bool
-	let memo = try project.db.tokenCache.get(path) otherwise return false
-	let current = try currentContentHash(project, path: path) otherwise return false
-	return memo.keyHash == current
-end 'tokensCacheValid'
-
-// True iff the ACTIVE token memo for `path` was derived from the file's current bytes.
+// The registered source entry for `path` — its bytes AND the hash of those bytes, which is the key
+// every per-file memo is stamped with.
 //
-// ⚠ **THE FILTERED STREAM IS TARGET-DEPENDENT AND THIS KEY IS NOT, WHICH IS SOUND ONLY BECAUSE A
-// `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is set once by
-// `Project.create` and has no other writer anywhere in the compiler (verified), and this cache lives
-// on `project.db` — so two targets are two `Project`s and two databases, and one cache can never be
-// asked a question about a target it was not filled for. Should a single `Project` ever be
-// re-aimed at a second target, THIS is the line that becomes wrong: mix the target into the key,
-// do not simply invalidate.
-export function activeTokensCacheValid(project Project, path FilePath) returns bool
-	let memo = try project.db.activeTokenCache.get(path) otherwise return false
-	let current = try currentContentHash(project, path: path) otherwise return false
-	return memo.keyHash == current
-end 'activeTokensCacheValid'
+// ⚠ **THE QUERIES FETCH IT ONCE AND USE IT FOR BOTH HALVES OF THE MEMO PATTERN — the validity
+// compare AND the stamp — and that is not merely a saved lookup.** A `Map with (FilePath, _)` probe
+// is not free on Windows: `FilePath.hash` CLONES AND LOWER-CASES the path (`stdlib/FilePath.maxon`
+// `canonicalForCompare`) and `FilePath.equals` clones twice more, so every probe allocates several
+// Strings — the cost `Project.maxon`'s `RangedAliasByDeclaringFile` is keyed by a plain `String` to
+// avoid. Fetching once also removes the "entry vanished between the two lookups" panic that a second
+// probe has to carry, and makes it structurally impossible to validate against one hash and stamp
+// with another.
+export function sourceEntryOf(project Project, path FilePath) returns SourceFileEntry throws CompileError
+	return try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
+end 'sourceEntryOf'
+
+// The current content hash of a registered file, or a throw for an unregistered path. A memo whose
+// `keyHash` equals this is valid. Only the PARSE key needs it standalone (it mixes in a second
+// input); the token queries compare against `sourceEntryOf(...).contentHash` directly.
+function currentContentHash(project Project, path FilePath) returns ContentHash throws CompileError
+	return (try sourceEntryOf(project, path: path)).contentHash
+end 'currentContentHash'
 
 // **A PARSE MEMO IS KEYED ON TWO FACTS, BECAUSE A PARSE READS TWO INPUTS.**
 //
@@ -92,20 +82,17 @@ function parseMemoKey(contentHash ContentHash, signatureHash ContentHash) return
 	return mix(contentHash, value: signatureHash)
 end 'parseMemoKey'
 
-// The key a parse memo for `path` must carry to be valid right now.
+// The key a parse memo for `path` must carry to be valid right now. `signatureHash` is
+// `ProgramSignatures.hash` — the hash of the DECLARATIONS, not of the sources they were read from,
+// which is what keeps an edit to one file's function BODY from invalidating every other file's parse
+// (see ProgramSignatures.hash).
+//
+// `queryParseOps` computes it ONCE and uses that one value to both validate its memo and stamp the
+// new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
+// another `FilePath` map probe.
 export function currentParseMemoKey(project Project, path FilePath, signatureHash ContentHash) returns ContentHash throws CompileError
 	return parseMemoKey(try currentContentHash(project, path: path), signatureHash: signatureHash)
 end 'currentParseMemoKey'
-
-// True iff the parse memo for `path` was derived from BOTH the file's current bytes and the
-// current signature index. `signatureHash` is `ProgramSignatures.hash` — the hash of the
-// DECLARATIONS, not of the sources they were read from, which is what keeps an edit to one
-// file's function BODY from invalidating every other file's parse (see ProgramSignatures.hash).
-export function parseCacheValid(project Project, path FilePath, signatureHash ContentHash) returns bool
-	let memo = try project.db.parseCache.get(path) otherwise return false
-	let current = try currentParseMemoKey(project, path: path, signatureHash: signatureHash) otherwise return false
-	return memo.keyHash == current
-end 'parseCacheValid'
 
 // The composite whole-program hash: every source file's content hash folded in source-path order.
 // The whole-program memos (the signature index, the merged module) key on it, so any file changing —
