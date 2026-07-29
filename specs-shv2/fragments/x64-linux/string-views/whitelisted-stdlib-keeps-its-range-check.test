@@ -1,17 +1,52 @@
 // Test: whitelisted-stdlib-keeps-its-range-check
+typealias Wide = int(0 to u32.max)
+
+function widen(n Wide) returns Wide
+	return n * 1000000
+end 'widen'
+
 function main() returns ExitCode
-	let lead = utf16LeadSurrogate(1000000000)
+	let lead = utf16LeadSurrogate(widen(1000))
 	return 7 if lead > 65535 else 9
 end 'main'
 ---
 ExitCode: 1
 ---
+func @widen {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.imulRegRegImm32 r8, rcx, 1000000
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 1000000000
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect widen
+    x64.movRegReg rcx, r8
     x64.callDirect utf16LeadSurrogate
     x64.cmpRegImm32 r8, 65535
     x64.jcc greater, ternarytrue

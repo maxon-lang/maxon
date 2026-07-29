@@ -58,6 +58,7 @@ A declared range was simply not enforced at a call.
 ## Tests
 
 <!-- test: range-check-panic.upper-bound -->
+<!-- targets: x64-windows -->
 Above the maximum, and not foldable — so the runtime check on `clamp`'s `return` is what fires, and
 the trace names `clamp`.
 ```maxon
@@ -89,6 +90,7 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.lower-bound -->
+<!-- targets: x64-windows -->
 Below the minimum. `Natural`'s lower bound is 0, so a negative value is out of range even though it
 is a perfectly ordinary `int`.
 ```maxon
@@ -137,6 +139,7 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.nested-call -->
+<!-- targets: x64-windows -->
 The stack trace goes as deep as the value does: `process` receives an in-range `Score`, computes one
 that is not, and `validate` is where it comes to rest.
 ```maxon

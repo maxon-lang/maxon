@@ -1,38 +1,33 @@
-// Test: array-literal-of-unrelated-type-onto-declared-type
-typealias Num = int(0 to 100)
+// Test: in-range-at-every-position
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
 
-type Bar
-	export var n as Num
+type Box
+	export var v as Percent = 7
 
-	export static function create(v Num) returns Self
-		return Self{n: v}
+	static function create() returns Self
+		return Self{}
 	end 'create'
-end 'Bar'
 
-type Foo
-	export var n as Num
+	static function make(p Percent) returns Self
+		return Self{v: p}
+	end 'make'
+end 'Box'
 
-	export static function create(v Num) returns Self
-		return Self{n: v}
-	end 'create'
-end 'Foo'
-
-type Array_Foo
-	export var tag as Num
-
-	export static function create(v Num) returns Self
-		return Self{tag: v}
-	end 'create'
-end 'Array_Foo'
+function take(p Percent) returns Percent
+	return p
+end 'take'
 
 function main() returns ExitCode
-	let xs = [Bar.create(1), Bar.create(2)]
-	let m = Array_Foo.create(7)
-
-	return (xs.count() + m.tag) as ExitCode
+	var b = Box.create()
+	b.v = 42
+	var a = PA.create()
+	a.push(3)
+	let s = Box.make(5)
+	return take(b.v) + a.count() + s.v
 end 'main'
 ---
-ExitCode: 9
+ExitCode: 48
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -40,7 +35,24 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @Bar.create {
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 7
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.make {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -73,35 +85,28 @@ func @Bar.create {
     x64.ret
 }
 
-func @Array_Foo.create {
+func @take {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.cmpRegImm32 rbx, 0
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rbx, 100
+    x64.cmpRegImm32 rcx, 100
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
     x64.movRegImm32 rdi, 1
     x64.x64Syscall 231
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -113,35 +118,39 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
-    x64.movRegImm32 rcx, 1
-    x64.callDirect Bar.create
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect Box.create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.movRegImm32 rax, 42
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.movRegReg r12, r8
+    x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, r12
-    x64.movRegReg rdx, rbx
     x64.callDirect __arr_push
-    x64.movRegImm32 rcx, 2
-    x64.callDirect Bar.create
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __arr_push
-    x64.movRegImm32 rcx, 7
-    x64.callDirect Array_Foo.create
-    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect Box.make
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect take
+    x64.movRegReg r14, r8
     x64.movRegReg rcx, r12
     x64.callDirect __arr_count
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.leaRegRegReg r13, r8, rax
-    x64.movRegReg rcx, rbx
+    x64.leaRegRegReg rax, r14, r8
+    x64.loadRegBaseDisp.word64 rcx, [r13 + 0]
+    x64.leaRegRegReg r14, rax, rcx
+    x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r12
     x64.callDirect __arr_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 40
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
