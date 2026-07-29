@@ -1,0 +1,76 @@
+// Test: utf16-is-lead-surrogate
+function main() returns ExitCode
+	// 0xD83D = 55357 (high surrogate for 😀)
+	if utf16IsLeadSurrogate(55357) 'c1'
+		print("1\n")
+	end 'c1'
+	if utf16IsLeadSurrogate(56832) 'c2'
+		print("0\n")
+	end 'c2'
+	if utf16IsLeadSurrogate(65) 'c3'
+		print("0\n")
+	end 'c3'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 55357
+    x64.callDirect utf16IsLeadSurrogate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c1
+    x64.jmp ifcont
+  c1:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 56832
+    x64.callDirect utf16IsLeadSurrogate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c2
+    x64.jmp ifcont
+  c2:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 rcx, 65
+    x64.callDirect utf16IsLeadSurrogate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c3
+    x64.jmp ifcont
+  c3:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __print_string
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @utf16IsLeadSurrogate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 55296
+    x64.movRegImm32 r8, 0
+    x64.jcc greaterEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rcx, 56319
+    x64.setccReg lessEqual, r8
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.popReg rbp
+    x64.ret
+}

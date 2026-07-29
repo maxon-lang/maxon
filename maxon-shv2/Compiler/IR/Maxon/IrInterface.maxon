@@ -171,6 +171,13 @@ let FormatParamName = b"format"
 let OtherParamName = b"other"
 export let HashValueTypeName = b"HashValue"
 
+// `stdlib/Character.maxon`'s `export typealias Codepoint = int(0 to 1114111)` — the SECOND name
+// `isSynthesizedIntAliasName` answers for (see its header for why it cannot come from a registry). It sits
+// beside `HashValueTypeName` rather than in the parser or the whitelist because both readers of the
+// synthesized-alias set already live here, and a spelling kept anywhere else would be a second copy of the
+// name that only the day of a rename would show to be wrong.
+export let CodepointTypeName = b"Codepoint"
+
 // ⚠ There is deliberately no `StringTypeName`/`BoolTypeName` beside these: the rendered spelling of
 // `String` in `Stringable.toString() returns String` and of `bool` in `Equatable.equals(…) returns bool`
 // IS the CONFORMER NAME of that type (`StringConformerName` / `BoolConformerName` below) — one fact, "how
@@ -465,7 +472,7 @@ end 'requireBuiltinInterface'
 // `primitiveTypeTagName(ValueTypeTag.integer)` — the one place a resolved `integer` is rendered to a name.
 export let IntConformerName = b"int"
 
-// ⭐ **THE COMPILER'S OWN SYNTHESIZED RANGED INT ALIAS — the ONE name that erases to `integer` without
+// ⭐ **THE COMPILER'S OWN SYNTHESIZED RANGED INT ALIASES — the names that erase to `integer` without
 // appearing in ANY alias registry.** `HashValue` is the declared result type of the synthesized
 // `Hashable.hash()` (`builtinInterface`), and shv2 reads no stdlib, so its `typealias HashValue =
 // int(0 to u32.max)` is nowhere a reader can look it up: every reduction that goes THROUGH an alias
@@ -483,8 +490,26 @@ export let IntConformerName = b"int"
 // statement"** on a program the language has no rule against, while the header of `rangedAliasTag` named
 // `HashValue` as one of the four spellings that reduce to ONE conformer. The `→ integer` half of the fact
 // is stated in this function's NAME, which is what both readers now spell instead of the erasure.
+//
+// ⭐ **`Codepoint` JOINS IT AT P1.8 SLICE E, FOR EXACTLY THE STATED REASON AND NOT A NEW ONE.** It is
+// declared `export typealias Codepoint = int(0 to 1114111)` in `stdlib/Character.maxon` — a module shv2
+// CANNOT load, because it declares `type Character` and `Character` is a name this compiler owns
+// (`isCompilerOwnedTypeName`; measured: whitelisting it is one `E3005 Cannot return 'struct' from function
+// declared to return 'Character'` at its own `static function init`). So the alias is in no registry for
+// the same reason `HashValue` is in none, and the same two readers have to answer for it. It is what
+// `stdlib/helpers/string/utf16.maxon` — the module the whitelist DOES load for this slice — spells its
+// codepoint parameters and `utf16DecodeSurrogates`'s result as; without this it is `E3011 Unknown type
+// 'Codepoint'` five times over, which is the ONLY thing that stood between that file and compiling.
+//
+// ⚠ The erasure DROPS THE RANGE, and that costs nothing here because a REGISTRY alias's range is dropped
+// at this door too (`resolveNamedType`'s alias arm returns `alias.underlying`, width-free). MEASURED on
+// the unmodified compiler with a real `typealias Codepoint = int(0 to 1114111)` in scope:
+// `utf16Width(2000000)` compiles clean — shv2 does not range-check an argument against its parameter's
+// declared alias at all — so a synthesized alias and a declared one are indistinguishable to every check
+// that exists. A user's OWN `typealias Codepoint` keeps its range wherever ranges are enforced, because
+// those readers ask `aliasOf`, which still finds the declaration.
 export function isSynthesizedIntAliasName(name ByteArray) returns bool
-	return name.equals(HashValueTypeName)
+	return name.equals(HashValueTypeName) or name.equals(CodepointTypeName)
 end 'isSynthesizedIntAliasName'
 
 // The canonical conformer name of the managed concrete `String` — the twin of `IntConformerName` for the

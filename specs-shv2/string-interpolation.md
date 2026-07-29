@@ -540,8 +540,7 @@ Double of 5: 10
 
 ### Method Call in Interpolation
 
-<!-- disabled-test: method-call -->
-<!-- P1.8: string methods (.count()) -->
+<!-- test: method-call -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"

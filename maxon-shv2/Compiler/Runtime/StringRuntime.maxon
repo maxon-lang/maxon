@@ -196,6 +196,17 @@ export let StrMapCaseName = b"__str_map_case"
 export let StrReplaceName = b"__str_replace"
 export let StrSplitName = b"__str_split"
 
+// ⭐ **THE P1.8 SLICE E ENTRY POINTS.**
+//   * `__str_replace_first(self, old, with)` — the stdlib's `replaceFirst` (`:565-599`). A SEPARATE graph
+//     from `__str_replace` on the reference's own argument: with exactly one match the final size is known
+//     outright, so both of `replace`'s loops disappear. See `buildStrReplaceFirst`.
+//   * `__str_from_bytes(arr)` — `String.from(bytes)` (`:119-121`), the one exported `String` static. It
+//     COPIES where the reference shares a `__ManagedMemory`; see `buildStrFromBytes` for why shv2 cannot.
+// Both are `__`-prefixed compiler-internal (no E3004, no signature slotting) and neither is
+// `__mm_`-prefixed, so each declares its own transitive floor in `closeStringMethodNeeds`.
+export let StrReplaceFirstName = b"__str_replace_first"
+export let StrFromBytesName = b"__str_from_bytes"
+
 // ⭐ **`__str_find`/`__str_rfind`'s "no occurrence" answer, and it is a NEGATIVE INDEX rather than a thrown
 // error on purpose.** The stdlib spells both searches `throws StringError.notFound`, and a Std graph CAN
 // throw — `StdOp.errorReturn`'s dual-register flag is exactly that, and `__strix_first`/`__strix_last` use
@@ -463,6 +474,11 @@ export type RuntimeUsage
 	export var usesStrMapCase as bool
 	export var usesStrReplace as bool
 	export var usesStrSplit as bool
+	// The two P1.8 Slice E entry points, each with its OWN bit under this file's one-bit-per-entry-point
+	// discipline: a program that only calls `replaceFirst` must not carry `replace`'s two loops, and a
+	// program that only builds a String from bytes must carry neither.
+	export var usesStrReplaceFirst as bool
+	export var usesStrFromBytes as bool
 	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
 	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
 	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
@@ -506,6 +522,13 @@ export type RuntimeUsage
 	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
 	// (and the heap under it) exactly as `__str_split` declares them for its segments.
 	export var usesStrToBytes as bool
+	// `.codepoints()` and `.utf16()` (P1.8 Slice E) — `__str_to_bytes`'s two siblings, each with its OWN
+	// bit under this file's one-bit-per-entry-point discipline: a program that asks for the bytes must not
+	// carry a UTF-8 decoder, and a program that asks for the codepoints must not carry the surrogate
+	// encoder. Both push into a caller-created array and both decode, so each declares the array runtime
+	// and `usesUtf8Decode` in `closeGraphemeNeeds`.
+	export var usesStrToCodepoints as bool
+	export var usesStrToUtf16 as bool
 	// ⭐ **THE P1.8 SLICE B2 `StringIndex` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
 	// existing discipline: a program that only asks `s.startIndex()` must carry neither the searches nor
 	// the segmenter under them. Each is set TRANSITIVELY by `recordCallUsage` from whichever entry point
@@ -536,7 +559,7 @@ export type RuntimeUsage
 	export var usesStrTrim as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesStrReplaceFirst: false, usesStrFromBytes: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrToCodepoints: false, usesStrToUtf16: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -868,6 +891,12 @@ function recordGraphemeUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrToBytesName) 'tobytes'
 		usage.usesStrToBytes = true
 	end 'tobytes'
+	if callee.equals(StrToCodepointsName) 'tocodepoints'
+		usage.usesStrToCodepoints = true
+	end 'tocodepoints'
+	if callee.equals(StrToUtf16Name) 'toutf16'
+		usage.usesStrToUtf16 = true
+	end 'toutf16'
 	closeGraphemeNeeds(usage)
 end 'recordGraphemeUsage'
 
@@ -972,6 +1001,13 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 		usage.usesArray = true
 		usage.usesHeap = true
 	end 'pushesBytes'
+	// The two decoding views push into the caller's array as well, and each walks the source through the
+	// UTF-8 decoders — `__utf8_cp_at` for the value, `__utf8_len_at` for the step.
+	if usage.usesStrToCodepoints or usage.usesStrToUtf16 'pushesDecodedUnits'
+		usage.usesArray = true
+		usage.usesHeap = true
+		usage.usesUtf8Decode = true
+	end 'pushesDecodedUnits'
 end 'closeGraphemeNeeds'
 
 // The P1.8 Slice C family's own arm of the callee → usage-bit map, split out so `recordCallUsage` stays a
@@ -1005,6 +1041,12 @@ function recordStringMethodUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrSplitName) 'split'
 		usage.usesStrSplit = true
 	end 'split'
+	if callee.equals(StrReplaceFirstName) 'replacefirst'
+		usage.usesStrReplaceFirst = true
+	end 'replacefirst'
+	if callee.equals(StrFromBytesName) 'frombytes'
+		usage.usesStrFromBytes = true
+	end 'frombytes'
 	closeStringMethodNeeds(usage)
 end 'recordStringMethodUsage'
 
@@ -1015,7 +1057,7 @@ end 'recordStringMethodUsage'
 // cannot depend on the order in which the module happens to name its methods: `find`'s need for
 // `__str_range_eq` is stated once and reached whether `find` was named directly or pulled in by `contains`.
 function closeStringMethodNeeds(usage RuntimeUsage)
-	if usage.usesStrContains or usage.usesStrReplace or usage.usesStrSplit 'needsFind'
+	if usage.usesStrContains or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit 'needsFind'
 		usage.usesStrFind = true
 	end 'needsFind'
 	if usage.usesStrFind or usage.usesStrRFind or usage.usesStrStartsWith or usage.usesStrEndsWith 'needsRangeEq'
@@ -1023,7 +1065,7 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	end 'needsRangeEq'
 	// `replace` and `split` answer a degenerate (empty) needle/delimiter with a CLONE of the receiver — the
 	// one shape neither one's loop can produce, since an empty needle matches at every position.
-	if usage.usesStrReplace or usage.usesStrSplit 'clonesReceiver'
+	if usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit 'clonesReceiver'
 		usage.usesStrClone = true
 	end 'clonesReceiver'
 	// `split` PUSHES its segments into the array the parser created for it.
@@ -1032,7 +1074,7 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 	end 'pushesSegments'
 	// Every string-BUILDING method allocates a fused record and blits bytes into it (`emitBuildOwnedInlineString`
 	// ⇒ `__mm_alloc` + `__str_copy`), and `__str_clone` under them does the same.
-	if usage.usesStrMapCase or usage.usesStrReplace or usage.usesStrSplit 'buildsStrings'
+	if usage.usesStrMapCase or usage.usesStrReplace or usage.usesStrReplaceFirst or usage.usesStrSplit or usage.usesStrFromBytes 'buildsStrings'
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
@@ -1093,6 +1135,12 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrSplit 'strsplit'
 		buildStrSplit(module)
 	end 'strsplit'
+	if usage.usesStrReplaceFirst 'strreplacefirst'
+		buildStrReplaceFirst(module)
+	end 'strreplacefirst'
+	if usage.usesStrFromBytes 'strfrombytes'
+		buildStrFromBytes(module)
+	end 'strfrombytes'
 end 'installStringRuntime'
 
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
@@ -2217,6 +2265,146 @@ function buildStrReplace(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrReplace'
+
+// ⭐ **`__str_replace_first(self, old, with)` — the stdlib's `replaceFirst` (`stdlib/String.maxon:565-599`),
+// AND IT IS A SEPARATE GRAPH ON THE REFERENCE'S OWN ARGUMENT.** `replace` needs two passes because it does
+// not know how many matches there are until it has counted them; there is exactly ONE match here, so the
+// final size is known outright and the whole counting pass — and with it both loops — disappears. The
+// reference states that in as many words at its own `replaceFirst` ("`replace`'s three-piece build, with
+// the counting pass it does not need"), and the two share every primitive that matters: `__str_find` finds
+// the match, `__str_clone` answers both no-op cases, `emitAllocOwnedInlineString`/`emitInlineStringBuffer`
+// publish the box and `__str_copy` moves each piece. What is NOT shared is a loop neither would run.
+//
+// ⚠ **BOTH NO-OP CASES ANSWER WITH `__str_clone`, NOT WITH `self`.** An empty needle and a needle that is
+// absent are the two ways this method has nothing to do, and returning the receiver's own record would hand
+// the caller a second owner of a box it does not own — the caller drops the result, and the receiver's
+// bytes go with it. The reference refuses `return self` for the same reason at its own `clone()`, where the
+// note is the Stage 0 bug `let b = a.toLower()` lowercasing `a`.
+function buildStrReplaceFirst(module StdModule)
+	var func = IrFunction.createFromStd(StrReplaceFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var search = module.addBlock(func, label: b"search")
+	var cloneCase = module.addBlock(func, label: b"cloneCase")
+	var build = module.addBlock(func, label: b"build")
+
+	emitParams(module, block: entry, count: 3)
+	let selfPtr = 0 as ValueId
+	let old = 1 as ValueId
+	let replacement = 2 as ValueId
+
+	// entry: every field the blocks below read (entry dominates all of them), then the empty-needle split —
+	// `__str_replace`'s opening, for its reason: an empty needle matches at every position, so a search for
+	// it answers 0 and the "replacement" would be an insertion at the front rather than a replacement.
+	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
+	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
+	let selfAscii = emitLoadField(module, block: entry, record: selfPtr, offset: StringIsAsciiOffset, ids: ids)
+	let oldLen = emitLoadField(module, block: entry, record: old, offset: StringLengthOffset, ids: ids)
+	let withLen = emitLoadField(module, block: entry, record: replacement, offset: StringLengthOffset, ids: ids)
+	let withBuf = emitLoadField(module, block: entry, record: replacement, offset: StringBufferOffset, ids: ids)
+	let withAscii = emitLoadField(module, block: entry, record: replacement, offset: StringIsAsciiOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let oldIsEmpty = emitCmp(module, block: entry, a: oldLen, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(oldIsEmpty, thenBlockId: cloneCase.id, elseBlockId: search.id))
+
+	let idx = emitStrFindCall(module, block: search, hay: selfPtr, startPos: zero, needle: old, ids: ids)
+	let found = emitCmp(module, block: search, a: idx, b: zero, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(search, op: StdOp.condBranch(found, thenBlockId: build.id, elseBlockId: cloneCase.id))
+
+	let cloned = ids.mint()
+	module.appendOp(cloneCase, op: StdOp.call(cloned, callee: StrCloneName, args: argsOf(selfPtr)))
+	module.setTerminator(cloneCase, op: StdOp.ret(cloned))
+
+	// build: one match at `idx`, so the result is `[0, idx)` + the replacement + `[idx + oldLen, selfLen)`
+	// and its length is known before a byte is written. `isAscii` is the AND of the two contributing
+	// strings' flags, `__str_replace`'s rule and for its reason.
+	let sizeDelta = emitBin(module, block: build, a: withLen, b: oldLen, opcode: StdBinOpcode.sub, ids: ids)
+	let outLen = emitBin(module, block: build, a: selfLen, b: sizeDelta, opcode: StdBinOpcode.add, ids: ids)
+	let outAscii = emitBin(module, block: build, a: selfAscii, b: withAscii, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let newRec = emitAllocOwnedInlineString(module, block: build, ids: ids, byteLen: outLen, isAscii: outAscii)
+	let outBuf = emitInlineStringBuffer(module, block: build, ids: ids, record: newRec)
+
+	let headCopied = ids.mint()
+	module.appendOp(build, op: StdOp.call(headCopied, callee: StrCopyName, args: threeArgs(outBuf, second: selfBuf, third: idx)))
+
+	let afterHead = emitBin(module, block: build, a: outBuf, b: idx, opcode: StdBinOpcode.add, ids: ids)
+	let replacementCopied = ids.mint()
+	module.appendOp(build, op: StdOp.call(replacementCopied, callee: StrCopyName, args: threeArgs(afterHead, second: withBuf, third: withLen)))
+
+	let matchEnd = emitBin(module, block: build, a: idx, b: oldLen, opcode: StdBinOpcode.add, ids: ids)
+	let tailAddr = emitBin(module, block: build, a: selfBuf, b: matchEnd, opcode: StdBinOpcode.add, ids: ids)
+	let tailLen = emitBin(module, block: build, a: selfLen, b: matchEnd, opcode: StdBinOpcode.sub, ids: ids)
+	let afterReplacement = emitBin(module, block: build, a: afterHead, b: withLen, opcode: StdBinOpcode.add, ids: ids)
+	let tailCopied = ids.mint()
+	module.appendOp(build, op: StdOp.call(tailCopied, callee: StrCopyName, args: threeArgs(afterReplacement, second: tailAddr, third: tailLen)))
+	module.setTerminator(build, op: StdOp.ret(newRec))
+
+	module.functions.push(func)
+end 'buildStrReplaceFirst'
+
+// ⭐ **`__str_from_bytes(arr) -> newStr` — `String.from(bytes)` (`stdlib/String.maxon:119-121`).** The
+// array's buffer holds exactly the UTF-8 bytes the String is to have, so the whole of the work is the
+// ASCII classification and the same fused-record build every other owned String is born through.
+//
+// ⚠ **IT COPIES WHERE THE REFERENCE SHARES, AND THE DIVERGENCE IS FORCED.** The reference builds
+// `String{managed: bytes.managed, …}` — a zero-copy view of the array's own backing memory, sound there
+// because a `__ManagedMemory` is refcounted and the two records share ownership of one block. shv2 has no
+// shared-ownership relationship between an `Array` record and a `String` record: each is an independent
+// box whose drop reclaims its own allocation, so a view would be a second reclaimer of one block (a
+// double free) or a reader of a block the array's `__arr_decref` has already returned. Copying makes the
+// result an ordinary owned inline String, which is what every producer in this file hands back and what
+// `__str_decref` already knows how to reclaim.
+function buildStrFromBytes(module StdModule)
+	var func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var scan = module.addBlock(func, label: b"scan")
+	var scanBody = module.addBlock(func, label: b"scanBody")
+	var stillAscii = module.addBlock(func, label: b"stillAscii")
+	var sawHighByte = module.addBlock(func, label: b"sawHighByte")
+	var build = module.addBlock(func, label: b"build")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(scan.id))
+
+	// The `isAscii@40` classification, computed rather than guessed: it is a claim about these bytes, and
+	// the one place a String's is otherwise produced (`bytesAreAscii`) makes the identical claim at lower
+	// time for a literal. It is carried as an i64 0/1, the width the field is stored at, which is why the
+	// high-byte case is a BRANCH rather than an `and` of the `i1` a compare yields: the two are different
+	// Std types and the flag must be the record's.
+	let i = ids.mint()
+	let ascii = ids.mint()
+	scan.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	scan.blockArgs.push(IrBlockArg.create(ascii, argType: StdType.i64))
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	entry.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(zero, second: one)))
+
+	let scanned = emitCmp(module, block: scan, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(scan, op: StdOp.condBranch(scanned, thenBlockId: build.id, elseBlockId: scanBody.id))
+
+	let raw = emitLoadByteIndexed(module, block: scanBody, base: buf, index: i, ids: ids)
+	let highBit = emitConst(module, block: scanBody, value: AsciiHighBit, ids: ids)
+	let isLow = emitCmp(module, block: scanBody, a: raw, b: highBit, pred: StdCmpPred.lt, ids: ids)
+	let iNext = emitBin(module, block: scanBody, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(scanBody, op: StdOp.condBranch(isLow, thenBlockId: stillAscii.id, elseBlockId: sawHighByte.id))
+
+	module.setTerminator(stillAscii, op: StdOp.branch(scan.id))
+	stillAscii.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: ascii)))
+
+	module.setTerminator(sawHighByte, op: StdOp.branch(scan.id))
+	sawHighByte.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: zero)))
+
+	module.setTerminator(build, op: StdOp.ret(emitBuildOwnedInlineString(module, block: build, ids: ids, srcBuf: buf, srcLen: len, isAscii: ascii)))
+
+	module.functions.push(func)
+end 'buildStrFromBytes'
 
 // ⭐ **`__str_split(self, delim, arr)` — the stdlib's `split` (`:557-587`), filling a CALLER-CREATED array.**
 // The `Array with String` is built by the PARSER through `emitArrayCreateOp`, the one array-creation door, so

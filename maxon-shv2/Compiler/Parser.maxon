@@ -1763,14 +1763,29 @@ end 'requireAbiParamCount'
 // **THE BUILTIN STRING METHODS** (P1.2 wave D; the byte/ASCII family P1.8 Slice C). `append` grows a `var`
 // String in place; `byteLength` reads its byte count. String is the one non-struct type with methods at this
 // rung, dispatched by name in `parseStringMethodCall` off a String-typed receiver.
-let StringAppendMethod = b"append"
 let StringByteLengthMethod = b"byteLength"
 
 // ⭐ **THE P1.8 SLICE B METHOD NAMES.** `count`/`bytes` are String's; `bytes`/`byteLength`/`asciiValue`
 // are Character's. `bytes` is spelled ONCE and dispatched from both receivers to the same emitter — a
 // String's bytes and a Character's are the same question about the same record.
-let StringCountMethod = b"count"
 let ByteViewMethod = b"bytes"
+
+// ⭐ **THE P1.8 SLICE E METHOD NAMES.** `isEmpty`/`clone` are NOT here — two containers spell each, so they
+// live in the shared block beside `SliceMethod`.
+//
+// ⚠ **`toByteArray` REACHES `parseByteView`, THE SAME EMITTER `bytes` DOES, AND THAT IS THE MATERIALIZATION
+// DIVERGENCE PAYING OFF RATHER THAN A SHORTCUT.** The reference distinguishes them by LAZINESS and by
+// nothing else: `bytes()` is a lazy `ByteView` over the receiver's buffer and `toByteArray()` is an
+// independent `Array with Byte` copy (`stdlib/String.maxon:143-161` — it must `managed.slice`, because a
+// plain view onto an OWNED buffer is read-after-free the moment the owner appends). shv2 has no lazy view
+// at all, so `bytes()` ALREADY materializes an independent copy (`__str_to_bytes` blits byte by byte into a
+// fresh array) — which is exactly what `toByteArray()` promises. Two spellings of one answer here; giving
+// the second its own emitter would be two producers of one value, free to drift on the independence that
+// is the whole contract.
+let StringToByteArrayMethod = b"toByteArray"
+let StringReplaceFirstMethod = b"replaceFirst"
+let CodepointViewMethod = b"codepoints"
+let Utf16ViewMethod = b"utf16"
 
 // The `Character` BUILTIN's type name — the `String` twin (`StringBuiltinName`), recognized
 // syntactically in a type position. Also the name a `for c in s` element binds under in a diagnostic.
@@ -1922,9 +1937,7 @@ let ArrayCreateMethod = b"create"
 let ArrayPushMethod = b"push"
 let ArrayGetMethod = b"get"
 let ArraySetMethod = b"set"
-let ArrayCountMethod = b"count"
 let ArrayCapacityMethod = b"capacity"
-let ArrayIsEmptyMethod = b"isEmpty"
 let ArrayReserveMethod = b"reserve"
 let ArrayResizeMethod = b"resize"
 let ArrayFirstMethod = b"first"
@@ -1938,14 +1951,28 @@ let ArrayRemoveMethod = b"remove"
 // returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
 // receiver, borrowing and preserving its argument. TRIVIAL elements only — a managed element needs a deep-clone
 // primitive shv2 does not have (P1.2 deferred `.clone` for managed values), so the managed cases are rejected.
-// ⚠ `slice` is NOT prefixed `Array`, because `String` spells the same method (P1.8 Slice B2) and a method
-// NAME is a token spelling, not a container's property. Two constants over one spelling would be the
-// one-fact-written-twice this project keeps paying for — the two dispatchers reach the same name here and
-// diverge only in what they DO with it (an `Array`'s slice throws and copies elements; a `String`'s takes
-// two `StringIndex`es and copies bytes).
+// ⭐ **THE METHOD NAMES MORE THAN ONE CONTAINER SPELLS — ONE CONSTANT EACH, DELIBERATELY UNPREFIXED.** A
+// method NAME is a token spelling, not a container's property. Two constants over one spelling would be
+// the one-fact-written-twice this project keeps paying for: every dispatcher reaches the SAME name here
+// and they diverge only in what they DO with it (an `Array`'s `slice` throws and copies elements; a
+// `String`'s takes two `StringIndex`es and copies bytes; an `Array`'s `count` is a field load and a
+// `String`'s is the O(n) grapheme walk).
+//
+// ⚠ `count` and `append` were TWO constants each until P1.8 Slice E — an `Array`-prefixed one and a
+// `String`-prefixed one apiece — which is the exact shape this comment was already written against, one
+// line above them. `isEmpty` and `clone` joined the group at that slice rather than growing a fifth and
+// sixth `String`-prefixed twin.
+//
+// ⚠ **THE `Set` FAMILY IS NOT HERE, AND ITS `count`/`contains`/`create`/`insert`/`remove` ARE STILL
+// SEPARATE SPELLINGS** (`SetRuntime.maxon`'s `Set*Method` block). That is a design question rather than an
+// oversight: they are homed there deliberately, beside `setMethodMutatesReceiver`, "so adding a method
+// here and forgetting the rule is one edit away rather than two files away" — and moving them would trade
+// this duplication for that one. Left as found and reported.
 let SliceMethod = b"slice"
-let ArrayCloneMethod = b"clone"
-let ArrayAppendMethod = b"append"
+let CloneMethod = b"clone"
+let AppendMethod = b"append"
+let CountMethod = b"count"
+let IsEmptyMethod = b"isEmpty"
 
 // The label `slice`'s SECOND argument gives its end index: `arr.slice(1, endIndex: 4)`,
 // `s.slice(start, endIndex: idx)`. One label, both containers — `SliceMethod`'s reason.
@@ -1970,7 +1997,7 @@ let ArrayValueLabel = b"value"
 // "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
 // the ARGUMENT. This one is about the RECEIVER.
 function arrayMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(ArrayInsertMethod) or name.equals(ArrayAppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(ArrayInsertMethod) or name.equals(AppendMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ArrayClearMethod) or name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
 end 'arrayMethodMutatesReceiver'
 
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
@@ -4004,6 +4031,13 @@ export type Parser
 				hasByteViewCall = true
 			end 'bytesToken'
 
+			// A `.codepoints()`/`.utf16()` materializes the SAME `Array with integer` instance a bare `[…]`
+			// int literal does, so it sets the very flag that literal sets rather than a second one — one
+			// instance, one trigger. Over-interned exactly as `hasByteViewCall` is, and for its reason.
+			if self.atDecodedViewCall() 'decodedViewToken'
+				hasIntArrayLiteral = true
+			end 'decodedViewToken'
+
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
 				continue
@@ -4178,10 +4212,21 @@ export type Parser
 		return self.atBuiltinMethodCall(StringSplitMethod)
 	end 'atStringSplitCall'
 
-	// A `.bytes(` at the cursor — the P1.8 slice B byte view, whose `Array with Byte` the sweep interns.
+	// A `.bytes(` or `.toByteArray(` at the cursor — the TWO spellings of the byte view, whose one
+	// `Array with Byte` the sweep interns. Both are asked in ONE predicate because they are one question
+	// ("can this file materialize a byte array?"), which is the same reason `atStringIndexProducer` asks
+	// about its four methods together — and because they reach one emitter (`parseByteView`), so a
+	// predicate that knew only `bytes` would leave `toByteArray`'s instance to be interned mid-parse.
 	function atByteViewCall() returns bool
-		return self.atBuiltinMethodCall(ByteViewMethod)
+		return self.atBuiltinMethodCall(ByteViewMethod) or self.atBuiltinMethodCall(StringToByteArrayMethod)
 	end 'atByteViewCall'
+
+	// A `.codepoints(` or `.utf16(` at the cursor — the two DECODING views (P1.8 Slice E), which
+	// materialize into the plain `Array with integer` instance (`parseDecodedView`). `atByteViewCall`'s
+	// twin, one question apiece for the same reason.
+	function atDecodedViewCall() returns bool
+		return self.atBuiltinMethodCall(CodepointViewMethod) or self.atBuiltinMethodCall(Utf16ViewMethod)
+	end 'atDecodedViewCall'
 
 	// A `.startIndex` / `.endIndex` / `.findFirst` / `.findLast` at the cursor — the four methods that
 	// PRODUCE a `StringIndex` (P1.8 Slice B2), for whose compiler-owned layout the sweep is the write.
@@ -4828,7 +4873,7 @@ export type Parser
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
-		return name.equals(SliceMethod) or name.equals(ArrayCloneMethod) or name.equals(ArrayAppendMethod)
+		return name.equals(SliceMethod) or name.equals(CloneMethod) or name.equals(AppendMethod)
 	end 'arrayCopyMethodAt'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
@@ -19519,6 +19564,14 @@ export type Parser
 			return try self.parseCharacterSetStaticCall(func, typeTok: typeTok)
 		end 'characterSetStatic'
 
+		// `String.from(bytes)` — the one exported `String` static (P1.8 Slice E). Intercepted here for
+		// `CharacterSet`'s reason and not for a new one: `String` is a BUILTIN with no `type` declaration
+		// behind it, so the mangled `String.from` below would name a callee no file declares (E3004), and
+		// the value it builds comes out of the string runtime rather than out of a user method.
+		if typeTok.value.equals(StringBuiltinName) 'stringStatic'
+			return try self.parseStringStaticCall(func, typeTok: typeTok)
+		end 'stringStatic'
+
 		// `IntArray.create()` — a static call on an `Array` instance alias (P1.7 slice 1). Intercepted before
 		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
 		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
@@ -20139,7 +20192,7 @@ export type Parser
 		try self.requireBindingLive(binding, nameTok: baseTok)
 
 		let methodTok = try self.consume(TokenKind.identifier)
-		if methodTok.value.equals(StringAppendMethod) 'append'
+		if methodTok.value.equals(AppendMethod) 'append'
 			return try self.parseStringAppend(func, binding: binding, receiverOwner: receiverOwner, baseTok: baseTok, methodTok: methodTok, resultUsed: resultUsed)
 		end 'append'
 		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
@@ -20166,7 +20219,7 @@ export type Parser
 			return try self.parseStringCaseConversion(binding, lo: AsciiLowerA, hi: AsciiLowerZ, delta: AsciiToUpperDelta, range: range)
 		end 'toUpper'
 		if methodTok.value.equals(StringReplaceMethod) 'replace'
-			return try self.parseStringReplace(func, binding: binding, range: range)
+			return try self.parseStringReplace(func, binding: binding, callee: StrReplaceName, range: range)
 		end 'replace'
 		if methodTok.value.equals(StringSplitMethod) 'split'
 			return try self.parseStringSplit(func, binding: binding, range: range)
@@ -20174,13 +20227,48 @@ export type Parser
 
 		// ⭐ P1.8 Slice B. `count()` is the GRAPHEME count — O(n) per call, exactly as the reference's is
 		// (see `GraphemeRuntime.buildGraphemeCount`). `bytes()` is the byte view, shared with Character's.
-		if methodTok.value.equals(StringCountMethod) 'count'
+		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(GraphemeCountName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
 			return try self.parseByteView(binding.boundValue, range: range)
 		end 'bytes'
+
+		// ⭐ P1.8 Slice E — the leftovers, every one of them READING the receiver and writing a fresh value,
+		// so none takes `append`'s `noteReceiverWrite` path and a `let` receiver is fine throughout.
+		//
+		// `toByteArray()` is `bytes()`'s emitter verbatim; see `StringToByteArrayMethod` for why they are one
+		// answer here and two in the reference.
+		if methodTok.value.equals(StringToByteArrayMethod) 'toByteArray'
+			return try self.parseByteView(binding.boundValue, range: range)
+		end 'toByteArray'
+		if methodTok.value.equals(CodepointViewMethod) 'codepoints'
+			return try self.parseDecodedView(binding.boundValue, callee: StrToCodepointsName, range: range)
+		end 'codepoints'
+		if methodTok.value.equals(Utf16ViewMethod) 'utf16'
+			return try self.parseDecodedView(binding.boundValue, callee: StrToUtf16Name, range: range)
+		end 'utf16'
+		// `isEmpty()` is `byteLength() == 0` — the reference's own body (`stdlib/String.maxon:340-342`), which
+		// is why it is the field load this file already emits plus the ordinary integer compare, and not a
+		// runtime entry point of its own. A String with no bytes has no graphemes either, so asking the length
+		// rather than `count()` answers the same question without the O(n) walk.
+		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
+			try self.consumeEmptyArgList()
+			return try self.emitCompare(self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: range), rhs: self.emitLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, opTok: methodTok)
+		end 'isEmpty'
+		// `clone()` is `__str_clone`, the deep copy P1.7 slice 3b-vi-b already built for the managed-array
+		// element walk — a fresh OWNED inline record holding a copy of these bytes. It is emphatically NOT
+		// `return self`: that hands the caller a second owner of the receiver's box, and the caller's drop
+		// takes the receiver's bytes with it (the reference refuses it for the identical reason at its own
+		// `clone()`, where the note is the Stage 0 bug `let b = a.toLower()` lowercasing `a`).
+		if methodTok.value.equals(CloneMethod) 'clone'
+			try self.consumeEmptyArgList()
+			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		end 'clone'
+		if methodTok.value.equals(StringReplaceFirstMethod) 'replaceFirst'
+			return try self.parseStringReplace(func, binding: binding, callee: StrReplaceFirstName, range: range)
+		end 'replaceFirst'
 
 		// ⭐ P1.8 Slice B2 — the `StringIndex` family. Four producers and one consumer; every one of them
 		// READS the receiver and writes a fresh value, so none takes `append`'s `noteReceiverWrite` path and
@@ -20307,17 +20395,22 @@ export type Parser
 		return self.emitOwnedRuntimeResult(StrMapCaseName, args: args, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringCaseConversion'
 
-	// `s.replace(old, with: new)` — the one two-argument builtin String method, and the only one whose label
-	// is a KEYWORD (see `consumeWithArgLabel`). Both arguments are BORROWED (their bytes are read and copied),
-	// so neither is moved and an owned interpolation argument stays a pending temp that drops at statement
-	// end, after the copy — `append`'s rule for its argument, for the same reason.
-	function parseStringReplace(func IrFunction, binding VarInfo, range SourceRange) returns ValueId throws ParseError
+	// `s.replace(old, with: new)` / `s.replaceFirst(old, with: new)` — the two two-argument builtin String
+	// methods, and the only ones whose label is a KEYWORD (see `consumeWithArgLabel`). They differ ONLY in
+	// which runtime entry point they name — same receiver, same two String arguments, same fresh owned
+	// String result — so they share one home, `parseStringPredicate`'s arrangement and for its reason: a
+	// third replacement cannot arrive with a different idea of any of those.
+	//
+	// Both arguments are BORROWED (their bytes are read and copied), so neither is moved and an owned
+	// interpolation argument stays a pending temp that drops at statement end, after the copy — `append`'s
+	// rule for its argument, for the same reason.
+	function parseStringReplace(func IrFunction, binding VarInfo, callee ByteArray, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let old = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
 		try self.consumeWithArgLabel()
 		let replacement = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
 		try self.consume(TokenKind.rightParen)
-		return self.emitOwnedRuntimeResult(StrReplaceName, args: tripleArgs(binding.boundValue, second: old, third: replacement), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		return self.emitOwnedRuntimeResult(callee, args: tripleArgs(binding.boundValue, second: old, third: replacement), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringReplace'
 
 	// ⭐ **`s.split(delimiter)` — the first builtin method that CONSTRUCTS an `Array with String` at runtime.**
@@ -20356,12 +20449,36 @@ export type Parser
 	// `for b in x.bytes()` then work through machinery that already exists, at one allocation and one copy.
 	// The result is an OWNED temp whose `__arr_decref` frees the record and its buffer.
 	function parseByteView(record ValueId, range SourceRange) returns ValueId throws ParseError
-		try self.consumeEmptyArgList()
-		let bytes = self.emitArrayCreateOp(self.signatures.internArrayByteInstance(), range: range)
-		_ = self.emitRuntimeCall(StrToBytesName, args: pairArgs(record, second: bytes), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		self.trackOwnedTemp(bytes)
-		return bytes
+		return try self.parseMaterializedView(record, giid: self.signatures.internArrayByteInstance(), callee: StrToBytesName, range: range)
 	end 'parseByteView'
+
+	// ⭐ **`.codepoints()` AND `.utf16()` — the two DECODING views (P1.8 Slice E), `.bytes()`'s siblings.**
+	// They materialize for `parseByteView`'s reason, stated there: shv2 has no `Iterable`, no associated
+	// types and no cursor protocol, so the reference's lazy `CodepointView`/`Utf16View` have nothing to be
+	// built on and the answer goes into the one collection shv2 has.
+	//
+	// ⚠ **THE ELEMENT IS THE PLAIN `integer` INSTANCE, NOT `Codepoint`/`CodeUnit16`.** The obvious element
+	// names are a compiler-synthesized alias and a RANGED typealias in a whitelisted stdlib module, so an
+	// `Array with CodeUnit16` would take its stride from `arrayElementSize`'s registry probe — making the
+	// element size of a compiler-synthesized view a function of which stdlib modules the whitelist lists
+	// that day. `internBuiltinIntegerInstance` is the instance a `[…]` int literal already mints, so a
+	// decoded view and an int-array literal are the same type, exactly as `.bytes()` and a `b"…"` literal
+	// are (see `GraphemeRuntime.buildStrToUtf16`).
+	function parseDecodedView(record ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+		return try self.parseMaterializedView(record, giid: self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName), callee: callee, range: range)
+	end 'parseDecodedView'
+
+	// ⭐ **THE ONE SHAPE ALL THREE VIEWS ARE**: create the array HERE through `emitArrayCreateOp` — the one
+	// array-creation door — hand it to a push-only runtime walk, and enrol the array (not the void call's
+	// result) as the owned temporary. Three methods, one description of what a materialized view IS, so
+	// they cannot come to disagree about who creates the array or who owns it.
+	function parseMaterializedView(record ValueId, giid GenericInstanceId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+		try self.consumeEmptyArgList()
+		let units = self.emitArrayCreateOp(giid, range: range)
+		_ = self.emitRuntimeCall(callee, args: pairArgs(record, second: units), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.trackOwnedTemp(units)
+		return units
+	end 'parseMaterializedView'
 
 	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `parseStringMethodCall` twin, and a
 	// separate dispatcher for the reason the two types are separate: a Character has no `append`, no
@@ -20437,6 +20554,46 @@ export type Parser
 
 		throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` static '{String.from(methodTok.value)}' — shv2 provides the eleven predefined sets and `from(chars)`", line: methodTok.line, column: methodTok.column)
 	end 'parseCharacterSetStaticCall'
+
+	// ⭐ **`String.from(bytes)` — THE ONE `String` STATIC, AND THE CORPUS'S ONLY WAY BACK FROM BYTES (P1.8
+	// Slice E).** The reference exports exactly this overload (`stdlib/String.maxon:119-121`); its
+	// `fromOwnedBytes` sibling is deliberately NOT exported ("take these bytes and trust me about them" is
+	// not a promise the stdlib lets arbitrary code make), and there is no `String.from(codepoints)` at all.
+	// So one static, one arm, and an unknown one is a positioned reject rather than a mangled callee that
+	// would surface as E3004 against a name the author never wrote.
+	//
+	// ⚠ **`from` IS A KEYWORD, NOT AN IDENTIFIER** — it opens a `Set from […]` construction — so it is
+	// consumed by TOKEN KIND, exactly as `CharacterSet.from` is one function up. That is also what made this
+	// call fail to PARSE before this slice: `E2010 Expected 'identifier' but got 'from'`, from
+	// `parseQualifiedCall`'s ordinary method-name consume.
+	function parseStringStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		if not self.at(TokenKind.from) 'unknownStatic'
+			let methodTok = self.current()
+			throw ParseError.unsupported("`{String.from(StringBuiltinName)}` static '{String.from(methodTok.value)}' — the reference exports one, `from(bytes)`, and `fromOwnedBytes` is deliberately not exported", line: methodTok.line, column: methodTok.column)
+		end 'unknownStatic'
+
+		let fromTok = try self.consume(TokenKind.from)
+		let range = SourceRange.between(typeTok, last: fromTok)
+		try self.consume(TokenKind.leftParen)
+		let bytesTok = self.current()
+		let bytes = try self.parseExpression(func, block: self.currentBlock)
+		try self.requireByteArrayValue(bytes, anchor: bytesTok)
+		try self.consume(TokenKind.rightParen)
+		return self.emitOwnedRuntimeResult(StrFromBytesName, args: singletonArgs(bytes), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+	end 'parseStringStaticCall'
+
+	// The argument to `String.from` must be an `Array with Byte` — the instance a `b"…"` literal and a
+	// `.toByteArray()` both produce, and the one `__str_from_bytes` may read a byte at a time. Any other
+	// `Array` instance would be read at ITS element stride and give back a string of whichever bytes
+	// happened to fall on the byte boundaries: a silent wrong answer, so it is refused at the argument.
+	function requireByteArrayValue(value ValueId, anchor Token) throws ParseError
+		if self.tagOf(value) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(value)) and self.signatures.arrayElementSize(self.valueNameId(value)) == ByteStringElementSize 'isByteArray'
+			return
+		end 'isByteArray'
+
+		throw ParseError.builtinOperandType("{String.from(StringBuiltinName)}.from", required: "Array with Byte", got: self.giveTypeName(self.tagOf(value), aggregateName: self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))), line: anchor.line, column: anchor.column)
+	end 'requireByteArrayValue'
 
 	// ⭐ **BUILD ONE PREDEFINED SET: its explicit members into a fresh `Set with Character`, then the box.**
 	// Each member is a `Character` LITERAL the parser mints from the preset's bytes — the same immortal
@@ -20761,10 +20918,10 @@ export type Parser
 		try self.noteReceiverWrite(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: true)
 
 		if resultUsed 'voidResultUsed'
-			throw ParseError.voidCallResultUsed(String.from(StringAppendMethod), line: methodTok.line, column: methodTok.column)
+			throw ParseError.voidCallResultUsed(String.from(AppendMethod), line: methodTok.line, column: methodTok.column)
 		end 'voidResultUsed'
 
-		let arg = try self.parseStringArg(func, methodName: StringAppendMethod)
+		let arg = try self.parseStringArg(func, methodName: AppendMethod)
 		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(binding.boundValue, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(baseTok, last: methodTok))
 		// append is a statement (resultUsed false, checked above); the returned id is discarded by the
 		// caller. The receiver value is the honest thing to hand back -- it is what s still denotes.
@@ -21847,7 +22004,7 @@ export type Parser
 		end 'slice'
 
 		// Non-throwing value accessors.
-		if methodTok.value.equals(ArrayCountMethod) 'count'
+		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
@@ -21855,11 +22012,11 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'capacity'
-		if methodTok.value.equals(ArrayIsEmptyMethod) 'isEmpty'
+		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
-		if methodTok.value.equals(ArrayCloneMethod) 'clone'
+		if methodTok.value.equals(CloneMethod) 'clone'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			try self.consumeEmptyArgList()
 			if self.signatures.arrayElementIsOpaque(giid) 'opaqueClone'
@@ -21893,7 +22050,7 @@ export type Parser
 		if methodTok.value.equals(ArrayInsertMethod) 'insert'
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, range: range)
 		end 'insert'
-		if methodTok.value.equals(ArrayAppendMethod) 'append'
+		if methodTok.value.equals(AppendMethod) 'append'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
 		end 'append'
@@ -22192,12 +22349,25 @@ export type Parser
 	// monomorphizes — accepts. The managed instantiation's hazard is real and unclosed; it is the same
 	// descriptor-gated question `finishValueTry`'s opaque try-merge already defers.
 	function emitArrayElementAccessor(func IrFunction, callee ByteArray, args ValueIdArray, giid GenericInstanceId, owned bool, borrowSubjectName ByteArray, range SourceRange) returns ValueId
-		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing: the
-		// result is `integer` and is NEVER tracked owned, read or moved out (a decref of an integer would corrupt
-		// the count). An OPAQUE element is NOT trivial here — `typeIsManaged` is false for a `typeParameter`, but a
-		// managed instantiation's element DOES own heap — so it falls through to the opaque-aware path below.
+		// A TRIVIAL CONCRETE element (int / Byte / ranged-int / bool) is a bare inline word that owns nothing, so
+		// it is NEVER tracked owned, read or moved out (a decref of an integer would corrupt the count). An
+		// OPAQUE element is NOT trivial here — `typeIsManaged` is false for a `typeParameter`, but a managed
+		// instantiation's element DOES own heap — so it falls through to the opaque-aware path below.
+		//
+		// ⚠ **IT CARRIES THE ELEMENT'S DECLARED TYPE, NOT A BARE `integer`, AND THE DIFFERENCE IS A TYPE
+		// IDENTITY (P1.8 Slice E).** The rule this arm states is about OWNERSHIP, and typing the result
+		// `integer` was a second claim riding on it — that a `Byte` read out of an `Array with Byte` is
+		// indistinguishable from an `int`. It is not: an array LITERAL picks its instance from its first
+		// element's tag (`arrayLiteralInstanceFor`), so `[b.get(0), b.get(1)]` over a byte array built an
+		// `Array with integer` — an 8-byte stride over values that came out of a 1-byte one — and the byte
+		// array could not be rebuilt from its own elements. MEASURED before this line, on
+		// `String.from([x, y, z])` over a `b"Hi!"`: `E3005 requires a Array with Byte, but its argument is
+		// Array_int`, a false reject of a program both references accept. `arrayElementValueType` is the one
+		// function that answers "what type does an element READ as", and it answered here already for a
+		// managed element; a trivial one now asks the same question of the same function.
 		if not self.signatures.arrayElementIsManaged(giid) and not self.signatures.arrayElementIsOpaque(giid) 'trivial'
-			return self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			let trivialType = self.arrayElementValueType(giid)
+			return self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
 		end 'trivial'
 
 		let resultType = self.elementAccessorResultType(giid)
@@ -22367,6 +22537,34 @@ export type Parser
 	// `Array with float` are both E2062 at the type ARGUMENT, one gate earlier.
 	function arrayElementValueType(giid GenericInstanceId) returns MaxonType
 		let declared = self.signatures.declaredSlotType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
+		let tag = maxonTypeTag(declared)
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return declared
+		end 'instance'
+		if tag == ValueTypeTag.named 'named'
+			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("arrayElementValueType: an adopted `named` element type's id is not in this file's interner")
+			if self.signatures.isGenericAlias(name) 'genericAlias'
+				return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
+			end 'genericAlias'
+			// ⭐⭐ **A RANGED-ALIAS ELEMENT KEEPS ITS NAME, AND THAT IS A TYPE-IDENTITY FIX, NOT A REFINEMENT
+			// (P1.8 Slice E).** `classifyUnionPayload` below answers a STORAGE question — what width does this
+			// payload occupy — and its answer for a ranged int alias is the bare `integer` the alias erases
+			// to. That is right for a union payload and WRONG for an array element read, because the value it
+			// types is handed straight back to source, where the NAME is what decides an array literal's
+			// instance (`arrayLiteralInstanceFor` reads the tag): reading three `Byte`s out of an
+			// `Array with Byte` and writing `[x, y, z]` produced an `Array with integer` — an 8-byte stride
+			// over values that came out of a 1-byte one — so a byte read back through a literal was no longer
+			// a byte. MEASURED before this line, on `String.from([x, y, z])` over a `b"Hi!"`'s own elements:
+			// `E3005 requires a Array with Byte, but its argument is Array_int`, a false reject of a program
+			// both references accept. It is also what makes an array read AGREE with a function return, which
+			// never erased: `function pick(v Byte) returns Byte` already yields a `named`-tagged value, so
+			// `[pick(72)]` was an `Array with Byte` while `[bytes.get(0)]` was not.
+			if let underlying = try self.signatures.aliasUnderlyingInAnyFile(name) 'rangedAlias'
+				// A FLOAT-underlying alias resolves to `float` exactly as it does everywhere else
+				// (`resolveFloatAliasType`) — the `named` tag cannot carry a float VALUE, whose class is XMM.
+				return MaxonType.float if tagIsFloat(maxonTypeTag(underlying)) else declared
+			end 'rangedAlias'
+		end 'named'
 		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
 	end 'arrayElementValueType'
 
@@ -24449,28 +24647,41 @@ export type Parser
 	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		self.pos = decl.initStart
 
-		// ⚠ **ONE TOKEN IS THE WHOLE MANAGED TEST, and that is what keeps an INTERPOLATION out.** The
-		// lexer splits `"a{x}b"` into `stringLiteral("a") stringInterpStart … stringInterpEnd
-		// stringLiteral("b")`, so an interpolated string is never one token: it falls to the scalar walk,
-		// which rejects it — correctly, since its value is a heap String built from a runtime expression
-		// and no constant at all. The same test turns away `"a" as T` and every other trailing form, each
-		// of which would need a rule this slice does not have.
+		// ⭐ **THE OPENING TOKEN IS THE MANAGED TEST, and whatever FOLLOWS the literal is rejected by the one
+		// shared `requireInitializerConsumed`** — the array-literal arm's arrangement below, for its reason.
+		//
+		// ⚠ **IT USED TO REQUIRE THE INITIALIZER TO BE EXACTLY ONE TOKEN, AND THAT MISATTRIBUTED EVERY
+		// TRAILING FORM.** A longer initializer fell to the scalar walk, whose `evalConstPrimary` has no
+		// string-literal arm at all, so `let B = "critsplit".toByteArray()` was **E2004 "Expected expression
+		// but got 'string literal'" AT THE LITERAL** — blaming the one part of the line that IS a constant,
+		// for the fault of the part that is not. Measured identically on `"a" + 1`, `"a" "b"` and
+		// `"cs".byteLength()`. Now the literal folds and the tail is reported where it is, as the E2045 the
+		// canonical corpus pins (`specs/byte-string-literal.md`: *"is not a constant expression:
+		// '.toByteArray()' cannot be evaluated at compile time"*).
+		//
+		// An INTERPOLATION reaches the same answer by the same route rather than by a special test: the
+		// lexer splits `"a{x}b"` into `stringLiteral("a") stringInterpStart … stringInterpEnd`, so the
+		// leading chunk folds and the interpolation machinery is the non-constant tail — which is what it
+		// is, its value being a heap String built from a runtime expression.
 		//
 		// The two arms are written out HERE rather than behind a probe that answers "which kind?",
 		// because that probe's answer is a union and this walk runs once per top-level binding in the
 		// program: it would be a heap box per declaration, allocated only to be matched on one line
 		// later. The token test IS the kind test, read once.
-		if decl.initEnd == decl.initStart + 1 'singleTokenInitializer'
-			if self.at(TokenKind.stringLiteral) 'stringLiteral'
-				return ConstInitializerValue.managed(try self.decodeConstStringLiteral(self.consumeManagedLiteral()), kind: ManagedConstKind.string)
-			end 'stringLiteral'
-			if self.at(TokenKind.byteStringLiteral) 'byteStringLiteral'
-				let byteStringTok = self.consumeManagedLiteral()
-				try self.requireConstByteStringBlobStridesLikeItsType(byteStringTok)
+		if self.at(TokenKind.stringLiteral) 'stringLiteral'
+			let decoded = try self.decodeConstStringLiteral(self.consumeManagedLiteral())
+			try self.requireInitializerConsumed(decl)
 
-				return ConstInitializerValue.managed(try self.decodeConstByteStringLiteral(byteStringTok), kind: ManagedConstKind.byteArray)
-			end 'byteStringLiteral'
-		end 'singleTokenInitializer'
+			return ConstInitializerValue.managed(decoded, kind: ManagedConstKind.string)
+		end 'stringLiteral'
+		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteral'
+			let byteStringTok = self.consumeManagedLiteral()
+			try self.requireConstByteStringBlobStridesLikeItsType(byteStringTok)
+			let decoded = try self.decodeConstByteStringLiteral(byteStringTok)
+			try self.requireInitializerConsumed(decl)
+
+			return ConstInitializerValue.managed(decoded, kind: ManagedConstKind.byteArray)
+		end 'byteStringLiteral'
 
 		// ⭐ **AN ARRAY LITERAL IS THE THIRD ANSWER, AND IT IS DECIDED ON THE OPENING TOKEN** (P1.7 slice
 		// 2b). It cannot ride the single-token test above — `[1, 2]` is five tokens — and it must not fall
@@ -24617,9 +24828,22 @@ export type Parser
 		throw ConstEvalError.defective(ParseError.nonConstantInitializer(String.from(decl.name), leftover: self.tokenTextFrom(self.pos, endIndex: decl.initEnd), line: tok.line, column: tok.column))
 	end 'requireInitializerConsumed'
 
-	// The source text of a token range, as the diagnostic prints it. Space-joined rather than
-	// reconstructed from byte offsets: this is a COLD path (a rejected program), and the tokens are
-	// what the evaluator actually choked on.
+	// The source text of a token range, as the diagnostic prints it — **laid out at the COLUMNS the author
+	// wrote them at**, so `.toByteArray()` prints as `.toByteArray()` and `1 + 2` prints as `1 + 2`.
+	//
+	// ⚠ **IT USED TO SPACE-JOIN UNCONDITIONALLY, AND THAT IS NOT WHAT THE DIAGNOSTIC PROMISES.** The
+	// message names the text it could not evaluate, and `. toByteArray ( )` is not text anybody wrote —
+	// the canonical corpus pins `'.toByteArray()'` (`specs/byte-string-literal.md`), which the reference
+	// produces by slicing its source buffer. shv2's parser holds TOKENS and no source buffer, and its
+	// punctuation tokens carry no byte offsets (`Token.startByte` is 0 for every punctuator), so the
+	// column is the only positional fact available for every token — and it is enough: writing each
+	// token's spelling at its own column reproduces the line.
+	//
+	// ⚠ The cursor advances by the SPELLING's length, which is the source width for every token except a
+	// STRING LITERAL, whose `value` is the body without its quotes. A literal in a leftover therefore
+	// under-advances the cursor by two and the next gap is padded two spaces wider. That is a cosmetic
+	// inexactness on a COLD path (a rejected program) and it is bounded to the gap it occurs in; the
+	// alternative is threading the source buffer through the parser for a diagnostic.
 	//
 	// ⚠ **A TOKEN'S `value` IS ITS LEXEME ONLY WHERE THE KIND DOES NOT ALREADY IMPLY ONE.** The lexer
 	// fills it for identifiers and literals and leaves it EMPTY for punctuation and keywords, whose
@@ -24629,14 +24853,23 @@ export type Parser
 	// evaluate and then names nothing at all.
 	function tokenTextFrom(start TokenIndex, endIndex TokenIndex) returns String
 		var text = ""
+		var cursor = self.tokenAt(start).column
 		for i in start upto endIndex 'each'
 			let tok = self.tokenAt(i)
-			if i > start 'separator'
+			// A token on a LATER line restarts the layout: one space stands in for the newline, and the
+			// cursor is re-seeded from that token so the rest of its line lays out against its own columns.
+			if tok.column < cursor 'wrappedToANewLine'
 				text = "{text} "
-			end 'separator'
+				cursor = tok.column
+			end 'wrappedToANewLine'
+			while cursor < tok.column 'padToItsColumn'
+				text = "{text} "
+				cursor = cursor + 1
+			end 'padToItsColumn'
 
 			let spelling = tok.kind.rawValue if tok.value.isEmpty() else String.from(tok.value)
 			text = "{text}{spelling}"
+			cursor = cursor + spelling.count()
 		end 'each'
 
 		return text

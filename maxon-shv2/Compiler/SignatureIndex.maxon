@@ -2452,6 +2452,24 @@ export type ProgramSignatures
 	// every cached stdlib field arrives claiming it has no default. A hand-listed copy of a record's
 	// fields is a copy that can be short by one, silently. Keep the list in ONE function.
 	function recordStruct(layout StructLayout)
+		// ⭐⭐ **A DECLARED `type` UNDER A COMPILER-OWNED NAME IS NOT REGISTERED — `upsertDeclaredEnum`'s
+		// rule, one registry over (P1.8 Slice E).** The parse-time reject
+		// (`Parser.requireTypeNameNotCompilerOwned`, E2015) is what the AUTHOR sees, but it cannot be what
+		// keeps the registry honest: the declaration SWEEP is deliberately not a validator, so it folds the
+		// declaration in before the real parse gets to refuse it, and every reader that resolves the name
+		// through this registry then follows the user's declaration while `denotedNamedType` erases the name
+		// to the builtin's own type.
+		//
+		// ⚠ MEASURED, on `type Codepoint … end` with `stdlib/helpers/string/utf16.maxon` whitelisted: the
+		// E2015 was reported correctly AND `utf16Width`'s `codepoint < 65536` became
+		// **`E3005 cannot compare struct with int`, TWICE, positioned inside a stdlib file the author never
+		// opened** — the user's struct having captured the parameter type of a module they did not write.
+		// Dropping the declaration at the single write makes the collision unrepresentable rather than merely
+		// diagnosed, which is the property the enum registry already has and for the same stated reason.
+		if isCompilerOwnedTypeName(layout.name) 'compilerOwned'
+			return
+		end 'compilerOwned'
+
 		self.structTypes.upsert(layout.name, value: layout)
 
 		var state = mixBytes(mix(self.hash, value: DeclShapeStruct), bytes: layout.name)

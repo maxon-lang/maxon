@@ -39,8 +39,7 @@ contains no such literal (or S1 would already miscompile a self-compiled v-next)
 
 ## Tests
 
-<!-- disabled-test: array-literal-nonconstant-byte-stride -->
-<!-- P1.8 String.toByteArray() -->
+<!-- test: array-literal-nonconstant-byte-stride -->
 ### Non-constant Byte array literal has element_size 1, not pointer-width 8
 Builds a `Byte` array *literal* from runtime byte values (read out of a source
 string, so the elements are non-constant and cannot take the `.rdata` constant

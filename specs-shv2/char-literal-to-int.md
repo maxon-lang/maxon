@@ -142,7 +142,7 @@ end 'main'
 ```
 
 <!-- disabled-test: char-literal-codepoint-iteration -->
-<!-- A METHOD ON A NON-BINDING RECEIVER — `"a-b-c".codepoints()` calls a method on a string LITERAL, which shv2 refuses for every method (the filed, pre-existing gap: `"abc".toUpper()` is `E2015: Unsupported: . statement`). `String.codepoints()` is a second, smaller blocker behind it: P1.8 Slice B builds the grapheme segmenter and `.bytes()`, and a CODEPOINT view has no other consumer in the corpus -->
+<!-- A METHOD ON A NON-BINDING RECEIVER, and now the ONLY blocker — `"a-b-c".codepoints()` calls a method on a string LITERAL, which shv2 refuses for every String method (`parseStringMethodCall` dispatches off a `VarInfo`, not off a value: measured `E2015: Unsupported: . statement`, identically for `"abc".toUpper()` and for `s.clone().byteLength()`). `String.codepoints()` itself SHIPPED at P1.8 Slice E — bind the receiver and this program runs — so the second blocker this marker used to name is gone -->
 ### Character literal comparison during codepoint iteration
 
 ```maxon

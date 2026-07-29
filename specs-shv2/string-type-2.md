@@ -13,8 +13,7 @@ original 77-fragment spec so each batch stays under the per-worker test timeout.
 
 ## Tests
 
-<!-- disabled-test: heap-string-data-access -->
-<!-- P1.2 wave D String METHODS — and NOT the `for` gap, which this case never reaches. MEASURED: `E2015 Unsupported: String method 'bytes' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+`, raised on the RECEIVER before the `for` is parsed. String ITERATION (P1.8b/c, the cursor protocol) is a SECOND blocker behind it, and stays unmeasured until the method exists — do not read this marker as `for`-only -->
+<!-- test: heap-string-data-access -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)
@@ -123,8 +122,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: heap-string-iteration -->
-<!-- P1.2 wave D String METHODS — and NOT the `for` gap, which this case never reaches. MEASURED: `E2015 Unsupported: String method 'bytes' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+`, raised on the RECEIVER before the `for` is parsed. String ITERATION (P1.8b/c, the cursor protocol) is a SECOND blocker behind it, and stays unmeasured until the method exists — do not read this marker as `for`-only -->
+<!-- test: heap-string-iteration -->
 ```maxon
 function main() returns ExitCode
 	let s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
@@ -144,8 +142,7 @@ end 'main'
 1160
 ```
 
-<!-- disabled-test: string-double-iteration -->
-<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view / codepoint / grapheme source needs a cursor protocol (E2015 names the gap) -->
+<!-- test: string-double-iteration -->
 Iterating the same string twice yields the same count both times.
 ```maxon
 function main() returns ExitCode
@@ -168,8 +165,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: heap-string-byteview -->
-<!-- P1.8: byte view / .bytes() -->
+<!-- test: heap-string-byteview -->
 ```maxon
 function main() returns ExitCode
 	let s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
@@ -334,8 +330,7 @@ MIXEDCASE
 MixedCase
 ```
 
-<!-- disabled-test: bytes-count-method -->
-<!-- P1.8: byte view / .bytes() -->
+<!-- test: bytes-count-method -->
 ### bytes().count() Method
 ```maxon
 function main() returns ExitCode
@@ -351,8 +346,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: bytes-count-multibyte -->
-<!-- P1.8: byte view / .bytes() -->
+<!-- test: bytes-count-multibyte -->
 ### bytes().count() with Multi-byte Characters
 ```maxon
 function main() returns ExitCode
@@ -468,8 +462,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: codepoints-view -->
-<!-- P1.2 wave D String METHODS — and NOT the `for` gap, which this case never reaches. MEASURED: `E2015 Unsupported: String method 'codepoints' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+`, raised on the RECEIVER before the `for` is parsed. String ITERATION (P1.8b/c, the cursor protocol) is a SECOND blocker behind it, and stays unmeasured until the method exists — do not read this marker as `for`-only -->
+<!-- test: codepoints-view -->
 ### Codepoints View
 ```maxon
 function main() returns ExitCode
@@ -488,8 +481,7 @@ end 'main'
 233
 ```
 
-<!-- disabled-test: string-reassignment -->
-<!-- P1.8: string methods (.count()) -->
+<!-- test: string-reassignment -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -594,8 +586,7 @@ b
 c
 ```
 
-<!-- disabled-test: clone-isolates-string-mutation -->
-<!-- P1.8: string methods -->
+<!-- test: clone-isolates-string-mutation -->
 ### Clone Isolates String Mutation
 ```maxon
 function main() returns ExitCode
@@ -615,8 +606,7 @@ HELLO
 hello
 ```
 
-<!-- disabled-test: clone-preserves-original -->
-<!-- P1.8: string methods -->
+<!-- test: clone-preserves-original -->
 ### Clone Preserves Original
 ```maxon
 function main() returns ExitCode
@@ -739,8 +729,7 @@ end 'main'
 abcdef
 ```
 
-<!-- disabled-test: string-append-implicit-loop -->
-<!-- P1.8: string methods -->
+<!-- test: string-append-implicit-loop -->
 ### Implicit Append Optimization
 The pattern `s = "{s}..."` is automatically optimized to in-place buffer growth,
 equivalent to `s.append("...")`.
@@ -838,8 +827,7 @@ xy|2
 q|1
 ```
 
-<!-- disabled-test: tobytearray-is-independent-of-an-owned-source -->
-<!-- P1.8: string methods -->
+<!-- test: tobytearray-is-independent-of-an-owned-source -->
 `toByteArray()` returns a NEW INDEPENDENT `ByteArray`. Writing to it must not touch the string.
 The copy-on-write view behind it is an optimisation, not the contract.
 ```maxon
@@ -860,8 +848,7 @@ end 'main'
 s=Hello arr[0]=74
 ```
 
-<!-- disabled-test: tobytearray-is-independent-of-a-literal-source -->
-<!-- P1.8: string methods -->
+<!-- test: tobytearray-is-independent-of-a-literal-source -->
 The source can be ANYTHING and the rule does not change — including a static literal, where sharing
 for writes is not merely undesirable but impossible: literals are interned, so `a` and `b` here are
 ONE immortal object in read-only `.rodata`. A shared write would rewrite `b` too, and fault first.
@@ -884,7 +871,11 @@ a=Hello b=Hello arr[0]=74
 ```
 
 <!-- disabled-test: tobytearray-is-independent-through-the-raw-managed-door -->
-<!-- P1.8: string methods -->
+<!-- The `Array.managed` / `__ManagedMemory` DOOR, and not `toByteArray` — which SHIPPED at P1.8 Slice E,
+     along with its three sibling independence cases here. MEASURED: `arr.managed.set(0, 74)` is `E2015: a
+     field access on 'arr': \`Array\` is a BUILTIN whose runtime record shv2 synthesizes, not a \`type\` it
+     compiles`. shv2's `.toByteArray()` COPIES (`__str_to_bytes` blits byte by byte into a fresh array), so
+     the independence this case is about already holds — what is missing is the raw door to observe it -->
 The independence holds through the RAW door too, and that is what makes `s.toByteArray().managed` the
 sanctioned way for code outside the stdlib to hand a string's bytes to an intrinsic that wants a
 `__ManagedMemory`. `Array` still exports `managed`; `String` stopped exporting it in Stage 4c of the
@@ -912,8 +903,7 @@ end 'main'
 s=Hello arr[0]=74
 ```
 
-<!-- disabled-test: tobytearray-survives-the-source-growing -->
-<!-- P1.8: string methods -->
+<!-- test: tobytearray-survives-the-source-growing -->
 The independence runs both ways: growing the STRING after taking the bytes must not disturb them.
 `append` detaches the string to a fresh buffer, and the array keeps the bytes it was given.
 ```maxon

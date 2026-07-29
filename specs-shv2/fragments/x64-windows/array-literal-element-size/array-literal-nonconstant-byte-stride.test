@@ -1,0 +1,122 @@
+// Test: array-literal-nonconstant-byte-stride
+function main() returns ExitCode
+	let src = "Hi!"
+	let sb = src.toByteArray()
+	let x = try sb.get(0) otherwise 0
+	let y = try sb.get(1) otherwise 0
+	let z = try sb.get(2) otherwise 0
+	let bytes = [x, y, z]
+	let s = String.from(bytes)
+	return 0 if s == "Hi!" else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __str_to_bytes
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r13, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r14, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r14, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r14
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_from_bytes
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r13, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r13, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, r15
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -550,8 +550,19 @@ end 'resolveType'
 // registry. MEASURED: both readings coexist and each answers for its own syntax (a `CharSet from ['x']`
 // still builds the member set, `true`, exit 0). So the erasure argument above is replaced here by a
 // disjointness one, and the answer is the same — legal.
+// ⭐ **`Codepoint` JOINS THE LIST AT P1.8 SLICE E, AND IT JOINS FOR `HashValue`'S EXACT REASON.** It is the
+// second name `isSynthesizedIntAliasName` erases to `integer` without a registry entry, so
+// `denotedNamedType`'s synthesized-alias arm answers for it BEFORE `containsStruct` is consulted — which is
+// precisely the disagreement the `HashValue` measurement records: the AUTHORITY would erase a user
+// `type Codepoint` to `integer` while the PARSER's own `named` resolution followed the declaration and
+// tagged the value `structRef`. Adding the name to `isSynthesizedIntAliasName` without adding it here would
+// have re-opened that hole under a new name.
+//
+// The RANGED carve-out applies to it unchanged and is what the corpus needs: a user
+// `typealias Codepoint = int(0 to 1114111)` — the very declaration `stdlib/Character.maxon` makes — erases
+// to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it

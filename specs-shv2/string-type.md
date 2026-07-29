@@ -323,8 +323,7 @@ end 'main'
 hello world
 ```
 
-<!-- disabled-test: count-method -->
-<!-- P1.8: string methods -->
+<!-- test: count-method -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -339,8 +338,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: isEmpty-method -->
-<!-- P1.8: string methods -->
+<!-- test: isEmpty-method -->
 ```maxon
 function main() returns ExitCode
 	let empty = ""
@@ -643,8 +641,7 @@ end 'main'
 bb
 ```
 
-<!-- disabled-test: replaceFirst-single -->
-<!-- P1.8: string methods -->
+<!-- test: replaceFirst-single -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -660,8 +657,7 @@ end 'main'
 hell0 world
 ```
 
-<!-- disabled-test: replaceFirst-multiple-occurrences -->
-<!-- P1.8: string methods -->
+<!-- test: replaceFirst-multiple-occurrences -->
 ```maxon
 function main() returns ExitCode
 	let s = "aaa bbb aaa"
@@ -677,8 +673,7 @@ end 'main'
 x bbb aaa
 ```
 
-<!-- disabled-test: replaceFirst-no-match -->
-<!-- P1.8: string methods -->
+<!-- test: replaceFirst-no-match -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -694,8 +689,7 @@ end 'main'
 hello world
 ```
 
-<!-- disabled-test: for-in-string -->
-<!-- P1.8b/c STRING iteration — `for` itself lands in P1.8 slice A, which iterates an `Array` and the counted ranges; a String / byte-view source needs a cursor protocol (E2015 names the gap) -->
+<!-- test: for-in-string -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -714,8 +708,7 @@ b
 c
 ```
 
-<!-- disabled-test: byteview-iteration -->
-<!-- P1.2 wave D String METHODS — and NOT the `for` gap, which this case never reaches. MEASURED: `E2015 Unsupported: String method 'bytes' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+`, raised on the RECEIVER before the `for` is parsed. String ITERATION (P1.8b/c, the cursor protocol) is a SECOND blocker behind it, and stays unmeasured until the method exists — do not read this marker as `for`-only -->
+<!-- test: byteview-iteration -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -734,8 +727,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: utf16-ascii -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-ascii -->
 ```maxon
 function main() returns ExitCode
 	let s = "ABC"
@@ -754,8 +746,7 @@ end 'main'
 67
 ```
 
-<!-- disabled-test: utf16-bmp -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-bmp -->
 ```maxon
 function main() returns ExitCode
 	let s = "αβγ"
@@ -774,8 +765,7 @@ end 'main'
 947
 ```
 
-<!-- disabled-test: utf16-surrogate-pair -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-surrogate-pair -->
 ```maxon
 function main() returns ExitCode
 	let s = "😀"
@@ -793,8 +783,7 @@ end 'main'
 56832
 ```
 
-<!-- disabled-test: utf16-mixed -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-mixed -->
 ```maxon
 function main() returns ExitCode
 	let s = "A😀B"
@@ -814,8 +803,7 @@ end 'main'
 66
 ```
 
-<!-- disabled-test: utf16-length -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-length -->
 ```maxon
 function main() returns ExitCode
 	let s = "A😀B"
@@ -831,8 +819,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: utf16-is-lead-surrogate -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-is-lead-surrogate -->
 ```maxon
 function main() returns ExitCode
 	// 0xD83D = 55357 (high surrogate for 😀)
@@ -855,8 +842,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: utf16-is-trail-surrogate -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-is-trail-surrogate -->
 ```maxon
 function main() returns ExitCode
 	// 0xDE00 = 56832 (low surrogate for 😀)
@@ -879,8 +865,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: utf16-is-surrogate -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-is-surrogate -->
 ```maxon
 function main() returns ExitCode
 	if utf16IsSurrogate(55357) 'c7'
@@ -903,8 +888,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: utf16-width -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-width -->
 ```maxon
 function main() returns ExitCode
 	print("{utf16Width(65)}\n")      // ASCII 'A' = 1 code unit
@@ -922,8 +906,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: utf16-encode-surrogates -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-encode-surrogates -->
 ```maxon
 function main() returns ExitCode
 	// 😀 U+1F600 = 128512
@@ -940,8 +923,7 @@ end 'main'
 56832
 ```
 
-<!-- disabled-test: utf16-decode-surrogates -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-decode-surrogates -->
 ```maxon
 function main() returns ExitCode
 	// Decode surrogate pair back to codepoint
@@ -957,8 +939,7 @@ end 'main'
 128512
 ```
 
-<!-- disabled-test: utf16-is-bmp -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-is-bmp -->
 ```maxon
 function main() returns ExitCode
 	if utf16IsBmp(65) 'c10'
@@ -985,8 +966,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: utf16-valid-surrogate-pair -->
-<!-- P1.8: utf16 views / stdlib utf16 functions -->
+<!-- test: utf16-valid-surrogate-pair -->
 ```maxon
 function main() returns ExitCode
 	if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'

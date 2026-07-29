@@ -216,6 +216,10 @@ let GraphemeFalse = 0 as ParsedInt
 //   * `__str_to_bytes(strRec, arr)` — fill a caller-created `Array with Byte` with the record's bytes,
 //     i.e. `.bytes()`. The array is created by the PARSER through `emitArrayCreateOp` (the one
 //     array-creation door), exactly as `__str_split`'s is; this only pushes.
+//   * `__str_to_codepoints(strRec, arr)` / `__str_to_utf16(strRec, arr)` — `.codepoints()` and `.utf16()`
+//     (P1.8 Slice E), `__str_to_bytes`'s two siblings: the same caller-created array, the same
+//     push-only contract, one UTF-8 walk each. They fill an `Array with integer` rather than an
+//     `Array with Byte` — see `buildStrToUtf16` for why the element is the plain integer instance.
 export let GbpName = b"__gbp"
 export let ExtPictName = b"__ext_pict"
 export let Utf8CodepointAtName = b"__utf8_cp_at"
@@ -226,6 +230,18 @@ export let GraphemeEndName = b"__gr_end"
 export let GraphemeCountName = b"__gr_count"
 export let CharAtName = b"__char_at"
 export let StrToBytesName = b"__str_to_bytes"
+export let StrToCodepointsName = b"__str_to_codepoints"
+export let StrToUtf16Name = b"__str_to_utf16"
+
+// The UTF-16 encoding constants `__str_to_utf16` needs — `stdlib/helpers/string/utf16.maxon`'s own
+// numbers (`:49-60`), named here because a surrogate split written as four bare literals is four chances
+// to transpose a bound. `Utf16SupplementaryBase` is both the threshold a BMP codepoint sits below and the
+// bias subtracted before the split, which is why it is ONE constant and not two.
+let Utf16SupplementaryBase = 65536 as ParsedInt
+let Utf16LeadSurrogateBase = 55296 as ParsedInt
+let Utf16TrailSurrogateBase = 56320 as ParsedInt
+let Utf16SurrogateHalfBits = 10 as ParsedInt
+let Utf16SurrogateHalfMask = 1023 as ParsedInt
 
 // ⭐ **ONE ROW OF A CODEPOINT RANGE TABLE** — `lo <= cp <= hi` gives `value`. Both classifiers
 // (`graphemeBreakProperty`, `isExtendedPictographic`) are ordered lists of these plus a default, so they
@@ -324,6 +340,12 @@ export function installGraphemeRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrToBytes 'tobytes'
 		buildStrToBytes(module)
 	end 'tobytes'
+	if usage.usesStrToCodepoints 'tocodepoints'
+		buildStrToCodepoints(module)
+	end 'tocodepoints'
+	if usage.usesStrToUtf16 'toutf16'
+		buildStrToUtf16(module)
+	end 'toutf16'
 end 'installGraphemeRuntime'
 
 // ⭐ **THE ONE RANGE-TABLE EMITTER.** Emit `rows` as a first-hit-wins chain off `cur`, each hit returning
@@ -1019,3 +1041,126 @@ function buildStrToBytes(module StdModule)
 	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildStrToBytes'
+
+// ⭐ **`__str_to_codepoints(strRec, arr)` — `.codepoints()`, `__str_to_bytes`'s sibling one decoding level
+// up.** Same caller-created array, same push-only contract; the only difference is the STEP: the byte walk
+// advances one, this advances by the sequence length the lead byte declares (`__utf8_len_at`) and pushes
+// what the sequence decodes to (`__utf8_cp_at`). Both decoders take a raw ADDRESS, which is why the loop
+// carries a byte position and forms `buf + i` once.
+//
+// It materializes for `__str_to_bytes`'s reason, stated there in full: shv2 has no `Iterable`, no
+// associated types and no cursor protocol, so the reference's lazy `CodepointView` has nothing to be built
+// on and the one collection shv2 does have is where the answer goes.
+function buildStrToCodepoints(module StdModule)
+	var func = IrFunction.createFromStd(StrToCodepointsName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let arr = 1 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let addr = emitBin(module, block: body, a: buf, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let cp = ids.mint()
+	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: argsOf(addr)))
+	let pushed = ids.mint()
+	module.appendOp(body, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(arr, second: cp)))
+	let width = ids.mint()
+	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: argsOf(addr)))
+	let iNext = emitBin(module, block: body, a: i, b: width, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildStrToCodepoints'
+
+// ⭐ **`__str_to_utf16(strRec, arr)` — `.utf16()`.** `__str_to_codepoints`'s walk with the ENCODING step
+// the reference's `Utf16View` performs per codepoint (`stdlib/helpers/string/utf16.maxon:49-60`): a BMP
+// codepoint is one code unit, a supplementary one is the surrogate pair. That is the whole difference, and
+// it is why the two are separate functions rather than one with a flag — the flag would be tested once per
+// codepoint to choose between "push one number" and "push two", which is the loop body itself.
+//
+// ⚠ **THE ARRAY IS AN `Array with integer`, NOT AN `Array with CodeUnit16`, AND THAT IS DELIBERATE.** The
+// natural-looking element name is a RANGED TYPEALIAS declared in the whitelisted `utf16.maxon`, so an
+// `Array with CodeUnit16` would take its 2-byte stride from `arrayElementSize`'s registry probe — making
+// the emitted element size of a COMPILER-SYNTHESIZED view depend on which stdlib modules the whitelist
+// happens to list that day, and silently 8 bytes on the day the module leaves it. The plain integer
+// instance is the one shv2 already mints for a `[…]` int literal (`internBuiltinIntegerInstance`), so a
+// `.codepoints()`/`.utf16()` result and an int-array literal are the SAME type — the identity argument
+// `.bytes()` makes for `Array with Byte` against a `b"…"` literal, one element type over.
+function buildStrToUtf16(module StdModule)
+	var func = IrFunction.createFromStd(StrToUtf16Name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var bmp = module.addBlock(func, label: b"bmp")
+	var supplementary = module.addBlock(func, label: b"supplementary")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let record = 0 as ValueId
+	let arr = 1 as ValueId
+
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	// `body` dominates both encoding arms, so the advance is formed once here and each arm carries it back
+	// to the header — the cursor moves by the SOURCE sequence's width whichever encoding the codepoint took.
+	let addr = emitBin(module, block: body, a: buf, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let cp = ids.mint()
+	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: argsOf(addr)))
+	let width = ids.mint()
+	module.appendOp(body, op: StdOp.call(width, callee: Utf8LengthAtName, args: argsOf(addr)))
+	let iNext = emitBin(module, block: body, a: i, b: width, opcode: StdBinOpcode.add, ids: ids)
+	let supplementaryBase = emitConst(module, block: body, value: Utf16SupplementaryBase, ids: ids)
+	let isBmp = emitCmp(module, block: body, a: cp, b: supplementaryBase, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(isBmp, thenBlockId: bmp.id, elseBlockId: supplementary.id))
+
+	let bmpPushed = ids.mint()
+	module.appendOp(bmp, op: StdOp.call(bmpPushed, callee: ArrPushName, args: twoArgs(arr, second: cp)))
+	module.setTerminator(bmp, op: StdOp.branch(header.id))
+	bmp.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	let offset = emitBin(module, block: supplementary, a: cp, b: supplementaryBase, opcode: StdBinOpcode.sub, ids: ids)
+	let highBits = emitBin(module, block: supplementary, a: offset, b: emitConst(module, block: supplementary, value: Utf16SurrogateHalfBits, ids: ids), opcode: StdBinOpcode.shr, ids: ids)
+	let lead = emitBin(module, block: supplementary, a: emitConst(module, block: supplementary, value: Utf16LeadSurrogateBase, ids: ids), b: highBits, opcode: StdBinOpcode.add, ids: ids)
+	let lowBits = emitBin(module, block: supplementary, a: offset, b: emitConst(module, block: supplementary, value: Utf16SurrogateHalfMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let trail = emitBin(module, block: supplementary, a: emitConst(module, block: supplementary, value: Utf16TrailSurrogateBase, ids: ids), b: lowBits, opcode: StdBinOpcode.add, ids: ids)
+	let leadPushed = ids.mint()
+	module.appendOp(supplementary, op: StdOp.call(leadPushed, callee: ArrPushName, args: twoArgs(arr, second: lead)))
+	let trailPushed = ids.mint()
+	module.appendOp(supplementary, op: StdOp.call(trailPushed, callee: ArrPushName, args: twoArgs(arr, second: trail)))
+	module.setTerminator(supplementary, op: StdOp.branch(header.id))
+	supplementary.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildStrToUtf16'

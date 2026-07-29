@@ -53,7 +53,8 @@ runs, so an over-wide erase silently overwrites live data and the array's own
 ## Tests
 
 <!-- disabled-test: bytearray-slice-roundtrip -->
-<!-- P1.8 String.toByteArray() -->
+<!-- stdlib whitelist: `ByteArray.create()` — see `bytearray-slice-length` above for the measurement.
+     `toByteArray()` and `String.from` both SHIPPED at P1.8 Slice E -->
 ### Byte-by-byte slice reconstructs the correct substring
 Pushes a `[start, end)` byte slice of a source string into a fresh `ByteArray`
 one byte at a time, then rebuilds a `String`. With a wrong 8-byte stride the
@@ -78,7 +79,11 @@ end 'main'
 ```
 
 <!-- disabled-test: bytearray-slice-length -->
-<!-- P1.8 String.toByteArray() -->
+<!-- stdlib whitelist: `ByteArray` (`stdlib/File.maxon`'s `export typealias ByteArray = Array with Byte`)
+     is not a compiler builtin in any compiler, so `ByteArray.create()` has no type to name. ⚠ MEASURED at
+     P1.8 Slice E: `stdlib/File.maxon` cannot be listed yet either — it is `E2015 String method
+     'addressableBytes'` at its own line 60, the `__ManagedMemory` door. `toByteArray()` and `String.from`
+     both SHIPPED at that slice and are no longer blockers here -->
 ### Reconstructed byte-slice has the correct length and content
 Rebuilds the whole source string byte-by-byte and returns its byte length. A
 wrong stride would still push `count` bytes but pack them 8 apart, leaving a
@@ -145,10 +150,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bytearray-insert-preserves-tail -->
-<!-- P1.8 String statics: `String.from(ByteArray)`. shv2 has NO `String` static functions at all, and
-     `from` is a hard KEYWORD (Lexer TokenKind.from), so the call does not even parse: E2010 "Expected
-     'identifier' but got 'from'". -->
+<!-- test: bytearray-insert-preserves-tail -->
 ### `insert` into a byte-string literal keeps the elements it shifted
 `b"hey"` is backed by read-only rdata, so the insert COWs it to the heap first;
 the shift and the erase then run against a 1-byte stride. The erase must clear
@@ -169,11 +171,11 @@ end 'main'
 ```
 
 <!-- disabled-test: bytearray-insert-preserves-tail-heap-backed -->
-<!-- P1.8 String statics: `String.from(ByteArray)`. shv2 has NO `String` static functions at all, and
-     `from` is a hard KEYWORD (Lexer TokenKind.from), so the call does not even parse: E2010 "Expected
-     'identifier' but got 'from'". -->
 <!-- stdlib whitelist: `ByteArray` (`stdlib/File.maxon`'s `export typealias ByteArray = Array with Byte`)
-     is not a compiler builtin in any compiler, so `ByteArray.create()` has no type to name. -->
+     is not a compiler builtin in any compiler, so `ByteArray.create()` has no type to name. ⚠ MEASURED at
+     P1.8 Slice E: `stdlib/File.maxon` cannot be listed yet either — it is `E2015 String method
+     'addressableBytes'` at its own line 60, the `__ManagedMemory` door. `String.from(ByteArray)` SHIPPED
+     at that slice; its two sibling cases here, which build their bytes from a `b"…"` literal, now pass -->
 ### The same `insert`, on a `ByteArray` that was never a literal
 The twin of the test above with the bytes pushed one at a time, so the buffer is
 heap-owned from birth and no copy-on-write ever runs. It must give the identical
@@ -195,10 +197,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bytearray-insert-at-front-preserves-all -->
-<!-- P1.8 String statics: `String.from(ByteArray)`. shv2 has NO `String` static functions at all, and
-     `from` is a hard KEYWORD (Lexer TokenKind.from), so the call does not even parse: E2010 "Expected
-     'identifier' but got 'from'". -->
+<!-- test: bytearray-insert-at-front-preserves-all -->
 ### `insert(0, ...)` shifts the whole array and keeps all of it
 Inserting at the front shifts every element, so the erased slot is followed by
 the maximum number of live neighbours — five here, so an over-wide erase loses

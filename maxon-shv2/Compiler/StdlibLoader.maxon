@@ -238,6 +238,24 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	var listed = MaxonSourcePathSet.create()
 	try listWhitelistedModule(stdlibDir, relative: "Clock.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "Sleep.maxon", into: listed)
+	// ⭐ **P1.8 Slice E — the nine `utf16*` free functions**, which the corpus calls by BARE NAME
+	// (`utf16IsLeadSurrogate(55357)`). shv2 has no bare-name free-function BUILTIN door at all — every
+	// builtin is reached through a receiver-dot or a `Type.` qualifier — so a synthesized version of these
+	// would have needed a whole new dispatch mechanism to be callable. Listing the module needs none: the
+	// declarations flow through the ordinary signature index and the calls are ordinary calls.
+	//
+	// It clears every entry in this file's collision rule. Its nine function names are claimed by no bare
+	// builtin (`Parser.parseCallNamed`'s chain) and by no other listed module; its two type names
+	// (`CodeUnit16`, `Utf16UnitCount`) are RANGED typealiases, which are file-local per alias FORM and so
+	// reserve nothing from a user program; and it redeclares no builtin type. It has no imports.
+	//
+	// ⚠ **ITS ONE BLOCKER WAS `Codepoint`, AND THE FIX IS NOT ANOTHER ENTRY HERE.** The parameter type is
+	// declared in `stdlib/Character.maxon`, which shv2 cannot load: `Character` is a name the compiler owns,
+	// and MEASURED, listing it is `E3005 Cannot return 'struct' from function declared to return
+	// 'Character'` at that module's own `static function init`. So `Codepoint` is answered where the
+	// compiler already answers for `HashValue` — `isSynthesizedIntAliasName`, whose header carries the
+	// argument in full. With that, `maxon-shv2 build stdlib/helpers/string/utf16.maxon` compiles clean.
+	try listWhitelistedModule(stdlibDir, relative: "helpers/string/utf16.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

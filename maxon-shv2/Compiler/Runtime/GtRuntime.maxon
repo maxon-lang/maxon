@@ -3360,7 +3360,7 @@ end 'buildSubpYieldRead'
 // `__str_decref`. The raw-bytes twin of `__str_clone` (same fused-record encoding `emitStringInterp` publishes);
 // `isAscii@40` is left 0 (the slab zeroes it) — child output is arbitrary bytes, and false is always the safe
 // classification. Used by the line reader to hand a caller-droppable String back across the builtin boundary.
-function buildStrFromBytes(module StdModule)
+function buildSubpStrFromBytes(module StdModule)
 	var func = IrFunction.createFromStd(SubpStrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
@@ -3376,7 +3376,7 @@ function buildStrFromBytes(module StdModule)
 	module.setTerminator(entry, op: StdOp.ret(newRec))
 
 	module.functions.push(func)
-end 'buildStrFromBytes'
+end 'buildSubpStrFromBytes'
 
 // The cap-free twin of `emitEnsureSlotBuffer` — for the `bytesOut` out-param slot, a fixed 8 bytes with no grow, so
 // there is no capacity slot to write. Alloc-if-zero then reuse across the handle's life.
@@ -4016,7 +4016,7 @@ end 'buildSubpRelease'
 // `buildSubpYieldRead` is installed under `usesIocp` alongside `__gt_io_read`, and only the streaming API surface
 // lives here.
 function installSubpRuntime(module StdModule)
-	buildStrFromBytes(module)
+	buildSubpStrFromBytes(module)
 	buildSubpSpawn(module)
 	buildSubpReadLine(module, name: SubpReadLineName, streamBase: SubpStdoutBase)
 	buildSubpReadLine(module, name: SubpReadErrLineName, streamBase: SubpStderrBase)

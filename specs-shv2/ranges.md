@@ -275,7 +275,12 @@ end 'main'
 ```
 
 <!-- disabled-test: ranges.character-range-print -->
-<!-- P1.8b Character -->
+<!-- P1.8 CHARACTER RANGES — `'a' upto 'f'` is a range of INTEGERS in shv2: a single-byte character
+     literal materializes as an integer literal (`decodeCharLiteral`'s `byte` arm), so the loop variable
+     is an int and prints as one. ⚠ MEASURED at P1.8 Slice E, on the enabled case: `97 98 99 100 101`
+     where the spec wants `a b c d e`. Its twin `ranges.character-range` passes over the identical
+     construct because it only COUNTS the trips — see the note there. Unblocking needs a range whose
+     ELEMENT TYPE is `Character`, which is a range question and not a String-method one -->
 ```maxon
 function main() returns ExitCode
 		for c in 'a' to 'e' 'loop'

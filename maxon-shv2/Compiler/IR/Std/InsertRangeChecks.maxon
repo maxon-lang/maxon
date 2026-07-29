@@ -81,6 +81,28 @@ end 'RetBlockLookup'
 export function insertRangeChecks(project Project, module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
 	for func in module.functions 'eachFunc'
+		// ⭐⭐ **A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED, AND THE REASON IS NOT MERELY
+		// WASTED WORK — IT IS THE WHITELIST'S BYTE-NEUTRALITY INVARIANT (P1.8 Slice E).** Dead-function
+		// elimination drops such a function before the back end, so its guard blocks never reach isel; but
+		// this pass registers the guard's PANIC MESSAGE as an `.rdata` constant
+		// (`emitPanicBlock` → `registerStringBlob`), and DFE prunes FUNCTIONS, never `.rdata`. The blob
+		// therefore survives its own function — and `GlobalDataTable.nextStringId` is ONE counter shared by
+		// every rdata prefix, so a surviving blob RENUMBERS every later `__fconst_`/`__str_blob_`/jump-table
+		// label in the program.
+		//
+		// ⚠ MEASURED, and it is exactly what `StdlibLoader`'s "adding a module changes NOTHING for a program
+		// that does not use it" forbids: listing `helpers/string/utf16.maxon` — whose
+		// `utf16LeadSurrogate`/`utf16TrailSurrogate` each `return` a computed value through a ranged
+		// `CodeUnit16` — moved a two-float program from `__fconst_0`/`__fconst_1` to `__fconst_2`/`__fconst_3`
+		// and shifted **193 committed goldens** across the suite, for two functions nothing calls.
+		//
+		// It is the SAME reachability fact `SemanticCheck.checkCalls` skips on and `scanRuntimeUsage` is
+		// handed, stated the same way — never "is this whitelisted", which would not outlive the filter. A
+		// REACHABLE stdlib function is not in the set, so its guards and its compile-time E3005 are emitted
+		// exactly as before, and no user function is ever in it.
+		if project.stdlibFacts.unreachable.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
 		if not project.rangeChecks.contains(func.name) 'noChecks'
 			continue
 		end 'noChecks'

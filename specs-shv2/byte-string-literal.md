@@ -239,7 +239,7 @@ end 'main'
 ```
 
 <!-- disabled-test: byte-string-literal.tobytearray-ordered-compare -->
-<!-- P1.8 String.toByteArray() -->
+<!-- A METHOD ON A NON-BINDING RECEIVER — `"9223372036854775807".toByteArray()` calls a method on a string LITERAL, which shv2 refuses for every String method (`parseStringMethodCall` dispatches off a `VarInfo`, not off a value: measured `E2015: Unsupported: . statement`). `toByteArray()` itself SHIPPED at P1.8 Slice E — bind the literal to a `let` and this program runs -->
 
 A `let`-bound byte string literal has the same element type as `String.toByteArray()`, so bytes
 read out of the two can be ordered-compared.
@@ -281,8 +281,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: byte-string-literal.tobytearray-global-error -->
-<!-- P1.8 String.toByteArray() -->
+<!-- test: byte-string-literal.tobytearray-global-error -->
 
 A method call is not a constant expression, so it cannot initialize a global — it is rejected
 rather than silently folded back to a `String`.

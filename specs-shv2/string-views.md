@@ -1,0 +1,284 @@
+---
+feature: string-views
+status: experimental
+keywords: [string, bytes, toByteArray, codepoints, utf16, clone, isEmpty, replaceFirst, from]
+category: types
+---
+
+# String views, copies and the one `String` static
+
+## Documentation
+
+Five `String` methods hand back a COPY of what the receiver holds, and one `String` static builds a
+`String` out of one:
+
+```text
+toByteArray() returns Array with Byte
+codepoints()  returns Array with integer
+utf16()       returns Array with integer
+clone()       returns String
+isEmpty()     returns bool
+replaceFirst(old String, with String) returns String
+
+String.from(bytes Array with Byte) returns String
+```
+
+Four properties are what these tests pin, and each is a decision rather than an accident:
+
+- **⚠ A VIEW MATERIALIZES.** The reference returns a LAZY `ByteView` / `CodepointView` / `Utf16View` — an
+  `Iterable` with a cursor over the receiver's own buffer. shv2 has no `Iterable`, no associated types
+  and no cursor protocol (the same absence that makes `for x in <array>` an index counter rather than a
+  heap iterator), so each view copies into the one collection shv2 does have. `.count()` and
+  `for u in <view>` then work through machinery that already exists.
+- **`bytes()` and `toByteArray()` are ONE answer here**, and that follows from the point above rather
+  than being a shortcut: the reference distinguishes them by laziness alone — its `toByteArray()` must
+  copy, because a plain view onto an OWNED buffer is a read-after-free the moment the owner appends —
+  and shv2's `bytes()` already copies. Two spellings, one emitter.
+- **A copy is INDEPENDENT, and that is the CONTRACT.** `clone()` may not be `return self`: the receiver's
+  record would gain a second owner and the caller's drop would take the receiver's bytes with it.
+  `replaceFirst`'s two no-op cases — an empty needle, and a needle that is absent — answer with a clone
+  for exactly that reason.
+- **`String.from` COPIES the array's bytes** where the reference shares the array's `__ManagedMemory`.
+  shv2 has no shared-ownership relationship between an `Array` record and a `String` record: each box's
+  drop reclaims its own allocation, so a view would be a second reclaimer of one block.
+
+The nine `utf16*` FREE functions (`utf16Width`, `utf16IsLeadSurrogate`, `utf16IsTrailSurrogate`,
+`utf16IsSurrogate`, `utf16IsBmp`, `utf16LeadSurrogate`, `utf16TrailSurrogate`, `utf16DecodeSurrogates`,
+`utf16IsValidSurrogatePair`) are NOT compiler builtins: they are `stdlib/helpers/string/utf16.maxon`,
+reached through the stdlib whitelist as ordinary declarations. Their parameter type `Codepoint` is
+declared in `stdlib/Character.maxon`, which shv2 cannot load (`Character` is a name the compiler owns),
+so `Codepoint` is a COMPILER-SYNTHESIZED ranged int alias exactly as `HashValue` is — and, like every
+compiler-owned type name, a user declaration may not bind it to a nominal identity.
+
+## Tests
+
+<!-- test: codepoints-and-utf16-are-different-lengths -->
+### A supplementary codepoint is ONE codepoint and TWO UTF-16 code units
+The one string where all four counts differ, which is what tells a real UTF-16 encode from a
+codepoint list wearing its name: `A😀B` is 3 graphemes, 3 codepoints, 4 code units and 6 bytes.
+```maxon
+function main() returns ExitCode
+	let s = "A😀B"
+	print("{s.count()} {s.codepoints().count()} {s.utf16().count()} {s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 3 4 6
+```
+
+<!-- test: utf16-encodes-a-surrogate-pair-in-order -->
+### The lead surrogate precedes the trail, and the walk resumes past the whole sequence
+A four-byte UTF-8 sequence pushes TWO code units and then advances the source cursor by four — so a
+character after the emoji still lands in the right place.
+```maxon
+function main() returns ExitCode
+	let s = "😀A"
+	for u in s.utf16() 'each'
+		print("{u},")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+55357,56832,65,
+```
+
+<!-- test: empty-string-views-are-empty -->
+### Every view of an empty string is empty, and every copy of one is empty
+The zero-length walk of each of the three materializers, plus the two copies, in one program: a loop
+whose bound is `0` must push nothing, and a fresh record of zero bytes must still be a valid String.
+```maxon
+function main() returns ExitCode
+	let e = ""
+	let copy = e.clone()
+	let replaced = e.replaceFirst("x", with: "y")
+	print("{e.isEmpty()} {e.toByteArray().count()} {e.codepoints().count()} {e.utf16().count()} {copy.byteLength()} {replaced.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true 0 0 0 0 0
+```
+
+<!-- test: replacefirst-replaces-only-the-first -->
+### `replaceFirst` leaves every later occurrence alone
+```maxon
+function main() returns ExitCode
+	let s = "aXbXc"
+	print("{s.replaceFirst("X", with: "--")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a--bXc
+```
+
+<!-- test: replacefirst-no-match-and-empty-needle-clone -->
+### Both no-op cases answer with an independent copy, not with the receiver
+An empty needle matches at every position and an absent needle at none; both mean "nothing to do", and
+both must hand back a String the caller may own and drop without touching the receiver's bytes.
+```maxon
+function main() returns ExitCode
+	var s = "aXbXc"
+	let empty = s.replaceFirst("", with: "Q")
+	let missing = s.replaceFirst("zz", with: "Q")
+	s.append("!")
+	print("{empty} {missing} {s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+aXbXc aXbXc aXbXc!
+```
+
+<!-- test: from-round-trips-non-ascii-bytes -->
+### `String.from` rebuilds a multi-byte string from its own bytes
+The bytes go out through `toByteArray()` and back in through `String.from`, and the result must be
+EQUAL to the source and carry its grapheme count — which is the ASCII classification being computed
+from the bytes rather than assumed.
+```maxon
+function main() returns ExitCode
+	let src = "中文字"
+	let back = String.from(src.toByteArray())
+	print("{back} {back.count()} {back.byteLength()} {back == src}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+中文字 3 9 true
+```
+
+<!-- test: clone-outlives-a-growing-source -->
+### A clone of a heap String survives its source growing
+`append` may reallocate the receiver's buffer, so a clone that VIEWED it would read freed memory. The
+string is long enough to be heap-backed, which is the only case where the difference is observable.
+```maxon
+function main() returns ExitCode
+	var a = "HELLOWORLDLONGENOUGH"
+	let c = a.clone()
+	a.append("TAIL")
+	print("{a} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+HELLOWORLDLONGENOUGHTAIL HELLOWORLDLONGENOUGH
+```
+
+<!-- test: error.from-rejects-a-non-byte-array -->
+### `String.from`'s argument must be an `Array with Byte`
+An `Array with integer` strides EIGHT bytes per element, so reading it as bytes would hand back every
+eighth byte of a slot's worth of padding — a silent wrong answer, refused at the argument instead.
+```maxon
+function main() returns ExitCode
+	let s = String.from([1, 2, 3])
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:22: 'String.from' requires a Array with Byte, but its argument is Array_int
+```
+
+<!-- test: error.from-rejects-a-string -->
+### …and it is the ELEMENT TYPE that is checked, not merely "some container"
+```maxon
+function main() returns ExitCode
+	let s = String.from("abc")
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:22: 'String.from' requires a Array with Byte, but its argument is String
+```
+
+<!-- test: error.string-has-exactly-one-static -->
+### `String` has ONE static, and an unknown one is named where it is written
+`fromOwnedBytes` is deliberately not exported by the reference ("take these bytes and trust me about
+them" is not a promise the stdlib can let arbitrary code make), and there is no `String.from(codepoints)`.
+```maxon
+function main() returns ExitCode
+	let s = String.create()
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:3:17: Unsupported: `String` static 'create' — the reference exports one, `from(bytes)`, and `fromOwnedBytes` is deliberately not exported
+```
+
+<!-- test: error.codepoint-is-a-compiler-owned-type-name -->
+### A declaration may not bind `Codepoint` to a nominal identity
+`Codepoint` is the compiler's own synthesized ranged int alias — `stdlib/Character.maxon` declares it
+and shv2 cannot load that module — so a user `type Codepoint` would mean one thing to the parser and
+another to type resolution, which is the disagreement `HashValue` was measured to cause.
+```maxon
+type Codepoint
+	export var value as int
+end 'Codepoint'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — shv2 synthesizes that declaration rather than reading it from the stdlib, and has no namespace to tell a user declaration of the name apart from the builtin one
+```
+
+<!-- test: ranged-codepoint-alias-stays-legal -->
+### A RANGED `typealias Codepoint` is still legal, exactly as one over `ExitCode` is
+The carve-out is the same one every compiler-owned name gets: a ranged alias mints no nominal identity,
+it erases to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
+```maxon
+typealias Codepoint = int(0 to 1114111)
+
+function main() returns ExitCode
+	let c = 128512 as Codepoint
+	return c - 128512
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-byte-read-back-through-a-literal-is-still-a-byte -->
+### An element read out of an `Array with Byte` rebuilds an `Array with Byte`
+An array literal infers its instance from its first element's TYPE, so a `get` that erased its element
+to a bare `int` made `[b.get(0), …]` an eight-byte-strided `Array with integer` — and the byte array
+could not be rebuilt from its own elements. `String.from` is what makes the stride observable.
+```maxon
+function main() returns ExitCode
+	let src = b"Hi!"
+	let x = try src.get(0) otherwise 0
+	let y = try src.get(1) otherwise 0
+	let z = try src.get(2) otherwise 0
+	print("{String.from([x, y, z])}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Hi!
+```
