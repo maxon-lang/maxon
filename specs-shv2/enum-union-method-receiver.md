@@ -14,10 +14,10 @@ its **receiver** is, which that spec never exercises: an enum's `self` is its i6
 or a pointer to its box (a union with payloads), and it arrives as **parameter 0**, **borrowed** —
 exactly as an `enum`-typed parameter does.
 
-Every case below was a **hand probe first** (D1, 2026-07-29). Three of them found nothing, and they
-are here because a probe that found nothing is worth exactly as much as one that found something:
-next rung, only a committed case still runs. The refusals are here because a refusal nobody pinned is
-a refusal the next rung deletes by accident.
+Every case in this file was a **hand probe first** (D1, 2026-07-29; the second section's cases are the
+independent review's, same day). Some of them found nothing, and they are here because a probe that found
+nothing is worth exactly as much as one that found something: next rung, only a committed case still runs.
+The refusals are here because a refusal nobody pinned is a refusal the next rung deletes by accident.
 
 The three receiver cases each carry a payload long enough to force a heap allocation, so the leak gate
 has something to catch: `managed-payload-receiver-never-bound` is the `TestOutcome` shape (the payload
@@ -42,6 +42,35 @@ better answer, and it costs nothing: no `union`/`enum` in `stdlib/` declares a s
 the receiver's type as `` `int` ``, because a declared enum erases to `integer` in `TypeResolution`.
 It is confusing, never wrong at runtime, and its one-place cure is the same display-name funnel for
 compiler-owned and erased types that `__StringIndex` already needs.
+
+## An enum BODY now has two kinds of member, and THREE readers walk it
+
+Three separate walks read an `enum`/`union` body, and a method member is the first construct that makes
+them able to disagree: the **real parse** (`parseEnumDeclaration`), the **tolerant declaration sweep**
+(`recordScannedEnum`, which builds the whole-program layout and signature index), and the
+**sibling-receiver scan** (`ensureSiblingReceivers`, which resolves a bare `inner()` inside a method).
+The D1 review found all three wrong, each in its own way, and each case below is the measurement:
+
+- ⚠ **A method's closing `end` carries a LABEL, and the sweep read it as a member.** `end 'bump'` left the
+  sweep's cursor on the charLiteral, which `readEnumCaseInto` reports as a string-backed case and which
+  aborted the scan — so **only the FIRST method of any enum was ever scanned**, and every case declared
+  after a method was silently dropped from the whole-program layout. The second method's return type was
+  therefore `unresolved`: `e.weight()` **panicked in lowering** (`valueTagToStdType`) when it returned a
+  float, and typed its result `unknown` when it returned a String.
+- ⚠ **An enum case may be spelled with a KEYWORD, and a case list is not block structure.** The
+  sibling-receiver scan counted `end`, `while`, `if` and `match` case names as block openers and closers:
+  a case named `end` closed the walk early (a bare sibling call declared after it reported `E3004 call to
+  undefined function`), and a case named `while` over-counted so the walk ran PAST the enum's own `end`
+  and adopted a LATER type's method as a sibling. Both refused legal programs.
+- ⚠ **An `enum`/`union` has no FIELDS, and `self.x` used to take the compiler down.** `self.reason` on a
+  payload-bearing union — the first thing a reader tries — reached `enclosingLayout` and **panicked**,
+  blaming the declaration sweep for a disagreement that never happened. A case's payload is bound by a
+  pattern; the refusal is now positioned, and it is one door for both the read and the write.
+
+⚠ **A case declared AFTER a method is ACCEPTED by shv2 and refused by the oracle** (`E2010 Expected 'end'
+but got 'omega'` — the bootstrap ends an enum body at its first method). shv2's real parse always accepted
+it; making the sweep agree is what the fix is, and the permissive direction is deliberate — the two readers
+agreeing matters more than matching a restriction neither `stdlib/` nor the corpus relies on.
 
 ## Tests
 
@@ -187,4 +216,230 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:5:9: Unsupported: a `static function` on `enum Color` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)
+```
+
+<!-- test: two-methods-and-the-second-ones-return-type -->
+```maxon
+union Outcome
+	pass
+	fail(reason String)
+
+	export function isPass() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+		end 'p'
+	end 'isPass'
+
+	export function weight() returns float
+		return 2.5
+	end 'weight'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.fail("a rather long failure reason to force a heap allocation")
+	if o.isPass() 'y'
+		return 1
+	end 'y'
+	if o.weight() > 2.0 'w'
+		return 7
+	end 'w'
+	return 2
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-case-declared-after-a-method -->
+```maxon
+enum Order
+	alpha
+
+	export function bump() returns int
+		return 1
+	end 'bump'
+
+	omega
+end 'Order'
+
+function tagOf(k Order) returns int
+	return match k 'w'
+		alpha gives 1
+		omega gives 5
+	end 'w'
+end 'tagOf'
+
+function main() returns ExitCode
+	let e = Order.omega
+	return tagOf(e) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: keyword-named-cases-interleaved-with-methods -->
+```maxon
+enum Weird
+	alpha
+	function
+
+	export function mid() returns int
+		var total = 0
+		while total < 2 'spin'
+			total = total + 1
+		end 'spin'
+		return total
+	end 'mid'
+
+	end
+	export
+
+	export function two() returns int
+		return 20
+	end 'two'
+
+	export function three() returns int
+		return 30
+	end 'three'
+
+	omega
+
+	export function tag() returns int
+		return match self 'w'
+			alpha gives 1
+			function gives 2
+			end gives 3
+			export gives 4
+			omega gives 5
+		end 'w'
+	end 'tag'
+end 'Weird'
+
+function main() returns ExitCode
+	let a = Weird.alpha
+	let f = Weird.function
+	let e = Weird.end
+	let x = Weird.export
+	let o = Weird.omega
+	var acc = a.tag() + f.tag() * 10 + e.tag() * 100 + x.tag() * 1000 + o.tag() * 10000
+	if acc != 54321 'bad'
+		return 1
+	end 'bad'
+	if a.mid() != 2 'badMid'
+		return 2
+	end 'badMid'
+	if a.two() + a.three() != 50 'badTwo'
+		return 3
+	end 'badTwo'
+	return 7
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: sibling-call-past-a-case-named-end -->
+```maxon
+enum Sib
+	alpha
+	end
+	omega
+
+	export function outer() returns int
+		return inner() + 1
+	end 'outer'
+
+	export function inner() returns int
+		return 6
+	end 'inner'
+end 'Sib'
+
+function main() returns ExitCode
+	let a = Sib.alpha
+	return a.outer() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-free-call-beside-a-case-named-while -->
+```maxon
+enum Sib
+	alpha
+	while
+
+	export function outer() returns int
+		return helper() + 1
+	end 'outer'
+end 'Sib'
+
+type Later
+	export var n as int
+
+	export function helper() returns int
+		return 99
+	end 'helper'
+end 'Later'
+
+function helper() returns int
+	return 6
+end 'helper'
+
+function main() returns ExitCode
+	let a = Sib.alpha
+	return a.outer() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.field-read-through-an-enum-receiver -->
+```maxon
+union Outcome
+	pass
+	fail(reason String)
+
+	export function why() returns bool
+		return self.reason.byteLength() > 0
+	end 'why'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.fail("a rather long failure reason to force a heap allocation")
+	if o.why() 'y'
+		return 1
+	end 'y'
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:10: Unsupported: a field access through `self` in a method of `enum`/`union` `Outcome` — an enum/union declares no fields; a case's PAYLOAD is bound by a pattern (`match self 'k' … fail(reason) then …`), never read through the receiver
+```
+
+<!-- test: error.field-write-through-an-enum-receiver -->
+```maxon
+union Outcome
+	pass
+	fail(reason String)
+
+	export function clobber() returns bool
+		self.reason = "nope"
+		return true
+	end 'clobber'
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = Outcome.fail("a rather long failure reason to force a heap allocation")
+	if o.clobber() 'y'
+		return 1
+	end 'y'
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:3: Unsupported: a field access through `self` in a method of `enum`/`union` `Outcome` — an enum/union declares no fields; a case's PAYLOAD is bound by a pattern (`match self 'k' … fail(reason) then …`), never read through the receiver
 ```

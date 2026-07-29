@@ -6204,13 +6204,13 @@ export type Parser
 	// declaration's `end` — `recordScannedType`'s twin.
 	//
 	// TOLERANT, for `recordScannedType`'s reason: a malformed enum is the REAL parse's to report,
-	// with a position. It shares `readEnumCaseInto` and `atEnumBodyEnd` with `parseEnumDeclaration`,
+	// with a position. It shares `readEnumCaseInto` and `enumBodyEndsAt` with `parseEnumDeclaration`,
 	// so the sweep and the parse cannot drift on how a case's TAG is assigned — the fact the parser
 	// reads back at every `Color.red` and every `match`. `readEnumCaseInto` consumes the keyword
 	// before it can fail (below), so the cursor always advances and the caller's loop cannot spin.
 	//
 	// It walks the body ITSELF (like `recordScannedType`) rather than letting the caller's loop do
-	// it: a case named `end` means only `atEnumBodyEnd`'s label-lookahead rule can tell the
+	// it: a case named `end` means only `enumBodyEndsAt`'s label-lookahead rule can tell the
 	// terminator from a case, which the caller's generic `blockDepthAfter` cannot.
 	//
 	// ⭐ **A METHOD MEMBER IS SCANNED, NOT SKIPPED (D1)**, through the same `recordScannedSignature`
@@ -6218,7 +6218,7 @@ export type Parser
 	// any file is parsed, which is what types `d.isNorth()` at a call site in ANOTHER file.
 	//
 	// ⚠ **AND THAT IS WHY THIS WALK COUNTS BLOCK DEPTH.** A method's own `end 'isNorth'` is an `end`
-	// followed by a character literal — byte-for-byte what `atEnumBodyEnd` recognizes as the ENUM's
+	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
 	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
@@ -6233,7 +6233,7 @@ export type Parser
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
 			self.skipNewlines()
-			if depth == 0 and self.atEnumBodyEnd() 'closes'
+			if depth == 0 and self.enumBodyEndsAt(self.pos) 'closes'
 				self.advance()
 				self.skipOptionalLabel()
 				break
@@ -6260,6 +6260,20 @@ export type Parser
 
 			depth = self.blockDepthAfter(depth)
 			self.advance()
+
+			// ⚠ **A METHOD'S CLOSING `end` CARRIES ITS BLOCK LABEL, AND THIS WALK MUST EAT IT** — because the
+			// token right after it is read as a MEMBER, and `readEnumCaseInto` reports a charLiteral as a
+			// string-backed case and aborts the whole scan (the D1 review measured what that costs: with
+			// `end 'bump'` the sweep stopped at the label, so a SECOND method's signature never reached the
+			// whole-program index — `e.second()` typed `unresolved` and PANICKED in lowering — and every case
+			// declared after a method was silently dropped from the layout). `recordScannedType` needs no such
+			// step only because its depth-0 fall-through advances one token instead of reading a member.
+			//
+			// Only the return to the enum's OWN level matters: a label on an inner `end 'spin'` leaves the walk
+			// at depth > 0, where it is an ordinary token.
+			if depth == 0 'memberClosed'
+				self.skipOptionalLabel()
+			end 'memberClosed'
 		end 'body'
 
 		enums.push(layout)
@@ -8010,7 +8024,7 @@ export type Parser
 
 		while true 'members'
 			self.skipNewlines()
-			if self.atEnumBodyEnd() 'closes'
+			if self.enumBodyEndsAt(self.pos) 'closes'
 				break
 			end 'closes'
 			if self.isEof() 'eof'
@@ -8059,7 +8073,7 @@ export type Parser
 		try self.parseFunction(visibility, takesReceiver: true)
 	end 'parseEnumMethod'
 
-	// Is the cursor on the `end` that CLOSES an enum/union body — as opposed to a case NAMED `end`?
+	// Is the token at `index` the `end` that CLOSES an enum/union body — as opposed to a case NAMED `end`?
 	//
 	// ⚠ **`end` IS A LEGAL CASE NAME** (`keyword-as-case-name.md` declares one), so the terminator
 	// cannot be recognized by the `end` keyword alone. The rule, mirrored byte-for-byte from the
@@ -8068,13 +8082,19 @@ export type Parser
 	// another case — is the case named `end`. Every corpus enum closes with a labelled `end 'Name'`,
 	// which this recognizes; a bare unlabelled `end` mid-body would be read as a case, exactly as the
 	// bootstrap reads it.
-	function atEnumBodyEnd() returns bool
-		if not self.at(TokenKind.end) 'notEnd'
+	//
+	// ⚠ It takes an INDEX rather than reading the cursor because THREE walks ask it and only two of them
+	// are cursor-driven: the real parse and the tolerant sweep sit ON the token, while the sibling-receiver
+	// scan (`ensureSiblingReceivers`) walks an index of its own. Written twice, the third walk would read a
+	// case named `end` as the body's terminator — measured, before this took an index: a bare sibling call
+	// to a method declared after such a case reported `E3004 call to undefined function`.
+	function enumBodyEndsAt(index TokenIndex) returns bool
+		if self.kindAt(index) != TokenKind.end 'notEnd'
 			return false
 		end 'notEnd'
-		let next = self.kindAt(self.pos + 1)
+		let next = self.kindAt(index + 1)
 		return next == TokenKind.charLiteral or next == TokenKind.eof
-	end 'atEnumBodyEnd'
+	end 'enumBodyEndsAt'
 
 	// Does the cursor open a METHOD inside an enum/union body — `[export] [static] function <name>(`?
 	//
@@ -8330,11 +8350,13 @@ export type Parser
 	// for registry keys — `main` stays `main`. P1.0r adds the ONE qualification there is:
 	// a function declared inside a `type` body is `Point.create` (`declaredMethodName`).
 	//
-	// `takesReceiver` is set only by `parseTypeMember`, for a member with no `static`. It adds ONE
-	// thing — a leading parameter — and everything else about an instance method follows from
-	// that, through machinery that already existed: the call is an ordinary direct call, the
-	// receiver is an ordinary argument, `slotCallArgs` slots it at position 0 because it is
-	// positional, and the register ABI hands it to the callee in argument register 0.
+	// `takesReceiver` is set by the two doors that read a MEMBER declaration — `parseTypeMember` for a
+	// member with no `static`, and `parseEnumMethod` unconditionally (D1: an `enum`/`union` refuses a
+	// `static`, so its every method is an instance one). It adds ONE thing — a leading parameter — and
+	// everything else about an instance method follows from that, through machinery that already existed:
+	// the call is an ordinary direct call, the receiver is an ordinary argument, `slotCallArgs` slots it at
+	// position 0 because it is positional, and the register ABI hands it to the callee in argument
+	// register 0.
 	function parseFunction(visibility Visibility, takesReceiver bool) throws ParseError
 		try self.consume(TokenKind.function)
 		let nameTok = try self.consume(TokenKind.identifier)
@@ -8575,9 +8597,11 @@ export type Parser
 		// parameter would be in place first and the ALIAS would be the one refused, leaving the
 		// error to be reported against a field declaration that is not what needs to change.
 		// ⚠ An `enum`/`union` receiver contributes NO aliases: an enum has no fields, and
-		// `declareSelfFieldAliases` would panic in `enclosingLayout` resolving a `StructLayout` no enum
-		// declares. So a bare name in an enum method's body is an ordinary local or an undefined variable,
-		// never a field — which is also what makes the E3006 collision contract below vacuous here.
+		// `declareSelfFieldAliases` would ask `enclosingLayout` for a `StructLayout` no enum declares —
+		// which now REFUSES with a position (the D1 review found it panicking there through the explicit
+		// `self.x` spelling instead). So a bare name in an enum method's body is an ordinary local or an
+		// undefined variable, never a field — which is also what makes the E3006 collision contract below
+		// vacuous here.
 		if takesReceiver and not self.enclosingTypeIsEnum 'selfFieldAliases'
 			try self.declareSelfFieldAliases(nameTok)
 		end 'selfFieldAliases'
@@ -21145,6 +21169,16 @@ export type Parser
 	// exactly why it is named here rather than left to be re-derived. The absence of an incref on
 	// the receiver is correct; the reason previously written down was not the reason.
 	//
+	// ⚠ **AND THAT REFUSAL IS NOW A STRUCT'S ONLY (D1): AN `enum`/`union` RECEIVER *IS* A VALUE.** So the
+	// sentence above no longer covers every receiver, and what keeps a BOXED union's `self` from reaching a
+	// sink is not one refusal but the three the ordinary borrowed-aggregate rules already spend — measured,
+	// each by its own probe, in `specs-shv2/enum-union-method-receiver.md`: `return self` (and `let x = self`,
+	// and `match self … gives self`) hits the borrowed-RETURN refusal; `a.push(self)` and `Self{f: self}` hit
+	// "moving a borrowed struct/union value into durable storage"; `Cell.create(self)` hits "passing a
+	// borrowed struct/union value at a CONSUMING argument position". `self` is parameter 0, so every one of
+	// them reaches it as the ordinary parameter rule and not as an enum special case. **A rung that weakens
+	// any of those three re-opens this**, which is why they are named here rather than counted once.
+	//
 	// ⚠ **THE RUNG THAT MAKES THE SINK REPRESENTABLE MUST REVISIT THIS**, and it is the one that
 	// gives a field a struct or `String` type — a method that stores `self` into durable storage is
 	// real and the stdlib exercises it. It inherits TWO things, not one: this receiver-ownership
@@ -24871,6 +24905,20 @@ export type Parser
 			panic("enclosingLayout: asked for the enclosing type's layout at {anchor.line}:{anchor.column}, but the cursor is at file scope — every caller is inside an instance method, whose body only `parseTypeDeclaration` reaches")
 		end 'noEnclosingType'
 
+		// ⛔ **AN `enum`/`union` HAS NO LAYOUT TO ASK FOR (D1)** — and this is the ONE door that has to say
+		// so, because both spellings of a receiver field access come through it (`parseExplicitSelfFieldRead`
+		// and `parseExplicitSelfFieldAssignment`; the bare-name spellings cannot arrive, since `parseFunction`
+		// declares no self-field aliases for an enum). Without it, `self.reason` inside a `union` method — the
+		// first thing a reader tries on a payload-bearing case — reached the `undeclared` panic below and took
+		// the compiler down while blaming the declaration sweep for a disagreement that never happened.
+		//
+		// A positioned refusal, because the source can perfectly well write it: a case's PAYLOAD is a
+		// pattern binding, not a member. (The oracle answers `E4006 has no property or method named 'reason'`;
+		// shv2 says the same thing as the E2015 the rest of this rung refuses with, and names the cure.)
+		if self.enclosingTypeIsEnum 'enumHasNoFields'
+			throw ParseError.unsupported("a field access through `self` in a method of `enum`/`union` `{String.from(self.enclosingType)}` — an enum/union declares no fields; a case's PAYLOAD is bound by a pattern (`match self 'k' … fail(reason) then …`), never read through the receiver", line: anchor.line, column: anchor.column)
+		end 'enumHasNoFields'
+
 		match self.signatures.structOf(self.enclosingType) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("enclosingLayout: `type {String.from(self.enclosingType)}` is being parsed right now, but the declaration sweep never recorded it — `recordScannedType` and `parseTypeDeclaration` disagree about what opens a type declaration")
@@ -27035,11 +27083,22 @@ export type Parser
 	// forward reference resolves exactly as a backward one, and recursion sees the method itself. It is the ONE
 	// source of both "is this a sibling?" (`contains`) and "does it take a receiver?" (the value), so those two
 	// facts cannot drift apart.
+	//
+	// ⚠⚠ **AN `enum`/`union` BODY'S MEMBER LIST IS NOT BLOCK STRUCTURE, AND A CASE MAY BE SPELLED WITH A
+	// KEYWORD (D1).** `enum … end  while  if …` declares three cases, and `opensBlockAt`/`closesBlockAt`
+	// read those three tokens as an `end`, a `while` and an `if`. MEASURED, before the depth-0 arm below
+	// existed: a case named `end` closed the walk early, so a bare sibling call to a method declared after
+	// it reported `E3004 call to undefined function 'inner'`; a case named `while` did the opposite,
+	// over-counting so the walk ran PAST the enum's own `end` and adopted a LATER type's `helper` as a
+	// sibling — turning a bare call to a free `helper()` into `E3004 ... 'Sib.helper'`. Both are legal
+	// programs, refused.
 	function ensureSiblingReceivers()
 		if self.siblingReceiverScanType.equals(self.enclosingType) 'memoHit'
 			return
 		end 'memoHit'
 
+		// Read once: it names the DECLARATION this walk is over, and it cannot change while the walk runs.
+		let inEnumBody = self.enclosingTypeIsEnum
 		var map = SiblingReceiverMap.create()
 		var depth = 0 as BlockDepth
 		var q = self.enclosingTypeBodyStart
@@ -27054,6 +27113,19 @@ export type Parser
 				// the descriptor sweep uses (`functionDeclIsStatic`), so the two scans agree by construction.
 				map.upsert(self.tokenAt(q + 1).value, value: not self.functionDeclIsStatic(q))
 			end 'method'
+
+			// At an ENUM's OWN level every token that is not a method declaration belongs to a CASE — its name
+			// (possibly a keyword), its `= raw`, its payload parens, or the label of the method whose `end` just
+			// brought the depth back here. None of it is block structure, and the body's terminator is told from
+			// a case named `end` by the one shared rule the real parse and the sweep use.
+			if inEnumBody and depth == 0 and not isMethod 'enumMemberLevel'
+				if self.enumBodyEndsAt(q) 'typeEnd'
+					break
+				end 'typeEnd'
+
+				q = q + 1
+				continue
+			end 'enumMemberLevel'
 
 			if isMethod or self.opensBlockAt(q) 'opens'
 				depth = depth + 1
