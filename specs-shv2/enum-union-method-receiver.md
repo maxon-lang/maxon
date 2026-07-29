@@ -443,3 +443,61 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:7:3: Unsupported: a field access through `self` in a method of `enum`/`union` `Outcome` — an enum/union declares no fields; a case's PAYLOAD is bound by a pattern (`match self 'k' … fail(reason) then …`), never read through the receiver
 ```
+
+<!-- test: a-directive-selecting-between-two-methods -->
+```maxon
+enum Plat
+	alpha
+
+#if testing(true)
+	export function tag() returns int
+		return 3
+	end 'tag'
+#else
+	export function tag() returns int
+		return 7
+	end 'tag'
+#endif
+
+	omega
+end 'Plat'
+
+function main() returns ExitCode
+	let p = Plat.omega
+	match p 'k'
+		alpha then return 1
+		omega then return p.tag() as ExitCode
+	end 'k'
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-directive-inside-a-method-body -->
+```maxon
+enum Plat
+	alpha
+
+	export function tag() returns int
+#if testing(true)
+		return 3
+#else
+		return 7
+#endif
+	end 'tag'
+
+	omega
+end 'Plat'
+
+function main() returns ExitCode
+	let p = Plat.omega
+	match p 'k'
+		alpha then return 1
+		omega then return p.tag() as ExitCode
+	end 'k'
+end 'main'
+```
+```exitcode
+7
+```
