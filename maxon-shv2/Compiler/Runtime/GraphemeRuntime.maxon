@@ -1018,17 +1018,9 @@ function buildStrToBytes(module StdModule)
 	let record = 0 as ValueId
 	let arr = 1 as ValueId
 
-	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-
-	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	let walk = emitStringWalkSkeleton(module, entry: entry, header: header, body: body, done: done, record: record, ids: ids)
+	let i = walk.position
+	let buf = walk.buffer
 
 	let raw = emitLoadByteIndexed(module, block: body, base: buf, index: i, ids: ids)
 	let pushed = ids.mint()
@@ -1038,9 +1030,49 @@ function buildStrToBytes(module StdModule)
 	module.setTerminator(body, op: StdOp.branch(header.id))
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 
-	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildStrToBytes'
+
+// ⭐ **THE COUNTED BYTE WALK ALL THREE MATERIALIZING VIEWS ARE BUILT ON, EMITTED ONCE** (folded at the
+// P1.8 Slice E review). `__str_to_bytes`, `__str_to_codepoints` and `__str_to_utf16` differ ONLY in what
+// their `body` does with the cursor; everything around it — load the length and the buffer, enter the
+// header with a zero cursor, leave when the cursor reaches the length, return void from `done` — was
+// written out three times, byte for byte, in the same order.
+//
+// ⚠ **THE FAILURE MODE WAS A WRONG ANSWER AND NOT A COMPILE ERROR.** Nothing made the three agree that
+// the bound test is `>=` against the BYTE length: a `>` in one copy would run one iteration past the
+// end of that view alone, silently, and only for the view whose copy was edited. `parseMaterializedView`
+// already states the parser half of this shape ("one description of what a materialized view IS"); this
+// is its runtime half.
+//
+// The caller creates the blocks (so their creation ORDER, and with it every label, stays the caller's)
+// and this wires them — `emitUtf8LeadLadder`'s arrangement in this file, for its reason. `length` is not
+// handed back because no body reads it: it is consumed by the bound test here.
+type StringWalkCursor
+	export var position as ValueId
+	export var buffer as ValueId
+
+	static function create(position ValueId, buffer ValueId) returns StringWalkCursor
+		return Self{position: position, buffer: buffer}
+	end 'create'
+end 'StringWalkCursor'
+
+function emitStringWalkSkeleton(module StdModule, entry IrBlock, header IrBlock, body IrBlock, done IrBlock, record ValueId, ids ValueMinter) returns StringWalkCursor
+	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let position = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(position, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let atEnd = emitCmp(module, block: header, a: position, b: len, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	return StringWalkCursor.create(position, buffer: buf)
+end 'emitStringWalkSkeleton'
 
 // ⭐ **`__str_to_codepoints(strRec, arr)` — `.codepoints()`, `__str_to_bytes`'s sibling one decoding level
 // up.** Same caller-created array, same push-only contract; the only difference is the STEP: the byte walk
@@ -1064,19 +1096,10 @@ function buildStrToCodepoints(module StdModule)
 	let record = 0 as ValueId
 	let arr = 1 as ValueId
 
-	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
+	let walk = emitStringWalkSkeleton(module, entry: entry, header: header, body: body, done: done, record: record, ids: ids)
+	let i = walk.position
 
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-
-	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
-
-	let addr = emitBin(module, block: body, a: buf, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let addr = emitBin(module, block: body, a: walk.buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
 	let cp = ids.mint()
 	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: argsOf(addr)))
 	let pushed = ids.mint()
@@ -1087,7 +1110,6 @@ function buildStrToCodepoints(module StdModule)
 	module.setTerminator(body, op: StdOp.branch(header.id))
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 
-	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildStrToCodepoints'
 
@@ -1120,21 +1142,12 @@ function buildStrToUtf16(module StdModule)
 	let record = 0 as ValueId
 	let arr = 1 as ValueId
 
-	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	module.setTerminator(entry, op: StdOp.branch(header.id))
-
-	let i = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
-
-	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	let walk = emitStringWalkSkeleton(module, entry: entry, header: header, body: body, done: done, record: record, ids: ids)
+	let i = walk.position
 
 	// `body` dominates both encoding arms, so the advance is formed once here and each arm carries it back
 	// to the header — the cursor moves by the SOURCE sequence's width whichever encoding the codepoint took.
-	let addr = emitBin(module, block: body, a: buf, b: i, opcode: StdBinOpcode.add, ids: ids)
+	let addr = emitBin(module, block: body, a: walk.buffer, b: i, opcode: StdBinOpcode.add, ids: ids)
 	let cp = ids.mint()
 	module.appendOp(body, op: StdOp.call(cp, callee: Utf8CodepointAtName, args: argsOf(addr)))
 	let width = ids.mint()
@@ -1161,6 +1174,5 @@ function buildStrToUtf16(module StdModule)
 	module.setTerminator(supplementary, op: StdOp.branch(header.id))
 	supplementary.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 
-	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildStrToUtf16'
