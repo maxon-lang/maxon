@@ -278,8 +278,14 @@ enum SseMandatoryPrefix
 	none
 	// F2 — the SCALAR DOUBLE family: movsd, addsd, subsd, mulsd, divsd, and both converts.
 	scalarDouble
-	// 66 — the PACKED DOUBLE family: ucomisd, xorpd. This byte is ALSO the operand-size
-	// override prefix, which is exactly why no generic path may be left to guess at it.
+	// 66 — every SSE form in this file whose mandatory prefix is NOT F2. This byte is ALSO the
+	// operand-size override prefix, which is exactly why no generic path may be left to guess at it.
+	//
+	// ⚠ NO ROSTER, DELIBERATELY. This comment used to name its two members and went stale TWICE
+	// without anything noticing — `roundsd` joined at P1.0d.4-C and `movq r/m64, xmm` at P1.7a's last
+	// slice, and a reader who trusted the list would have concluded the 66 path had no encoder to
+	// share. Each site states its own prefix at the call, which is the fact that cannot drift; grep
+	// `packedDouble` for the current set rather than reading one here.
 	packedDouble
 end 'SseMandatoryPrefix'
 
