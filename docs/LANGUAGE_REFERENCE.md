@@ -2018,7 +2018,8 @@ A string-backed enum value compares with `==` / `!=` against a `String` (and a c
 
 ### Implicit Coercion to the Backing Primitive
 
-A simple or int/float-backed enum case coerces *implicitly* to a numeric primitive (`int`, `byte`, `short`, `float`) wherever that type is expected — a function argument, a collection element, or a `return` value. No `.rawValue` and no explicit cast are needed; the case's backing value is used directly. This is the same rule that lets a `byte` compare against an enum case (`b == Ascii.space`), extended to value positions.
+A simple or int/float-backed enum case coerces *implicitly* to a numeric primitive (`int`, `byte`, `short`, `float`) wherever that type is expected — a function argument, a collection element, a `return` value, or a
+struct-literal field initializer. No `.rawValue` and no explicit cast are needed; the case's backing value is used directly. This is the same rule that lets a `byte` compare against an enum case (`b == Ascii.space`), extended to value positions.
 
 ```maxon
 enum JsonByte

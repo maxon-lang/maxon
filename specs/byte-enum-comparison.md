@@ -200,3 +200,35 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: byte-enum-comparison.enum-coerces-to-struct-field -->
+The fourth position, and the one the rule's own list used to omit: a constants-enum case initializing
+a struct-literal field coerces to the field's numeric type, exactly as it does at an argument, a
+collection element and a `return`. A struct field is a place with a declared type like any other.
+```maxon
+
+typealias Byte = int(0 to u8.max)
+
+enum Punct
+	colon = 58
+end 'Punct'
+
+type Token
+	export var ch as Byte
+
+	static function create() returns Self
+		return Self{ch: Punct.colon}
+	end 'create'
+end 'Token'
+
+function main() returns ExitCode
+	let t = Token.create()
+	if t.ch == 58 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```

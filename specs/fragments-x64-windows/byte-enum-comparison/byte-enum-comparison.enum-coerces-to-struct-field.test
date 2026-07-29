@@ -1,0 +1,86 @@
+// Test: byte-enum-comparison.enum-coerces-to-struct-field
+
+typealias Byte = int(0 to u8.max)
+
+enum Punct
+	colon = 58
+end 'Punct'
+
+type Token
+	export var ch as Byte
+
+	static function create() returns Self
+		return Self{ch: Punct.colon}
+	end 'create'
+end 'Token'
+
+function main() returns ExitCode
+	let t = Token.create()
+	if t.ch == 58 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Token.create() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 58
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 58
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call Token.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 58
+    x64.cmp rcx, rdx
+    x64.jne main.ok_0.after
+  ok_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Token(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Token.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -19136,6 +19136,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
         }
 
+        value = CoerceStructLiteralField(field, value, typeName,
+          fieldNameToken.Line, fieldNameToken.Column);
+
         RejectCapturingClosureStoredInField(field, value, typeName, fieldNameToken.Line, fieldNameToken.Column);
 
         fieldValues.Add((fieldNameToken.Value, value));
@@ -19219,6 +19222,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);
         var defaultValue = EmitDefaultLiteral(field.DefaultValue, field.Type, errorToken,
           $"Unsupported default value type for field '{field.Name}'");
+        // A DEFAULT is the same store written at the declaration instead of at the literal, and it
+        // reaches the backend by the same path — so it needs the same rule. It is a SEPARATE door:
+        // `EmitDefaultLiteral` turns an integer attribute into an integer literal without consulting
+        // the declared type at all (only I1 is special-cased), so `var v as Float = 0` crashed
+        // identically to `Self{v: 0}` and independently of it.
+        defaultValue = CoerceStructLiteralField(field, defaultValue, typeName,
+          errorToken.Line, errorToken.Column);
         fieldValues.Add((field.Name, defaultValue));
         continue;
       }
@@ -21345,6 +21355,41 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
+  /// Applies the declared-type rule to a struct-literal field initializer — the FOURTH context of
+  /// specs/implicit-type-conversion.md's *"everywhere a value meets a declared type"*, and the one
+  /// that was missing.
+  ///
+  /// A literal's field initializer and a field ASSIGNMENT (`p.v = 3`) put the same value in the same
+  /// slot under the same declared type, so they are ONE rule: this delegates to
+  /// <see cref="CoerceAssignedValue"/> with the same call shape as the assignment site rather than
+  /// deciding anything itself. Respelling the widening table here is specifically named as the way
+  /// this bug returns — see the remark on <see cref="IsLossyFloatToInt"/>.
+  /// </summary>
+  /// <remarks>
+  /// Before this existed, <c>ParseStructLiteral</c> type-checked STRUCT-typed fields only, so a
+  /// primitive field accepted any kind at all. That cost both halves of the rule at once:
+  /// `Self{v: 3}` into a float field never had its widening inserted and died in the backend as
+  /// `E9001: RegisterManager: float value %0 has no FP register and no stack home`, while
+  /// `Self{v: 3.7}` into an int field died the mirror death instead of getting E3009 and the `trunc`
+  /// advice the same store gets one line later as an assignment.
+  ///
+  /// ⚠ THE NUMERIC-PRIMITIVE GATE IS LOAD-BEARING, not a narrowing for caution's sake. The
+  /// compiler-internal managed types (`__ManagedMemory` and friends) deliberately carry RAW INTEGER
+  /// HANDLES in struct-typed fields — <c>ParseStructLiteral</c> says so where it skips them — so an
+  /// assignment-shaped kind check over every field type would reject the handle the compiler itself
+  /// synthesises. Struct-typed fields also keep their own identity check at the call site, whose
+  /// wording is gated by specs. This owns exactly the numeric family the conversion rule is about.
+  /// </remarks>
+  private MaxonValue CoerceStructLiteralField(
+      IrStructField field, MaxonValue value, string typeName, int line, int column) {
+    var declaredKind = field.Type.ToValueKind();
+    if (!IsNumericPrimitiveKind(declaredKind)) return value;
+
+    return CoerceAssignedValue(value, declaredKind, DeclaredTypeNameOf(field.Type),
+      $"field '{field.Name}' of '{typeName}'", line, column);
+  }
+
+  /// <summary>
   /// A struct field, a global, a container element and a union payload are all HEAP stores:
   /// they outlive every frame, so any capturing closure reaching one escapes and the
   /// defining frame does not need consulting.
@@ -21606,11 +21651,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// each emitted a truncating cast, so `takeInt(3.7)` passed 3 and said nothing.
   ///
   /// It was ONE FACT WRITTEN DOWN TWICE, inside one compiler: `CoerceValueToExpectedKind` — which
-  /// decides the very same question for a `return` and for an assignment — gates on
-  /// `IsWideningCastSafe` and had ALWAYS rejected this ("Cannot return 'float' from function
-  /// declared to return 'int'"). So the same conversion was an error at a `return`, an error at an
-  /// assignment, and a silent truncation at a call argument, purely because the argument path had
-  /// its own table. The two now answer through one predicate.
+  /// decides the very same question for a `return`, for an assignment and (since the struct-literal
+  /// field fix) for a field initializer — gates on `IsWideningCastSafe` and had ALWAYS rejected this
+  /// ("Cannot return 'float' from function declared to return 'int'"). So the same conversion was an
+  /// error at a `return`, an error at an assignment, and a silent truncation at a call argument,
+  /// purely because the argument path had its own table.
+  ///
+  /// ⚠ ONLY THE LOSSY-NARROWING HALF IS SHARED. `IsLossyFloatToInt` and `LossyNarrowingError` are
+  /// called by both paths; the WIDENING tables are still two, and MEASUREMENT (2026-07-28) says they
+  /// DISAGREE on four pairs — this table permits `(Integer, Byte)`, `(Integer, Short)`,
+  /// `(Short, Byte)` and `(Float, Float32)`, each of which `IsWideningCast` answers `false` for.
+  /// An earlier version of this remark ended "the two now answer through one predicate", which reads
+  /// as though the whole rule were unified and is not true of the widening half.
+  ///
+  /// ⚠⚠ THAT DISAGREEMENT IS REACHABLE AND SILENT, and it is NOT cured by deleting the four arms.
+  /// With `typealias Byte = int(0 to u8.max)`, `takeByte(n)` for `let n = 300` compiles clean and
+  /// passes **300** — outside the parameter's declared range — while the identical conversion at a
+  /// `return` is refused with "Value 300 is outside the range of 'Byte' (int(0 to 255))". The
+  /// asymmetry is not the widening table at all: it is that `ValidateAndEmitRangeCheck` has four
+  /// callers (return, explicit `as`, array-literal element, and nothing else) and THE CALL PATH IS
+  /// NOT ONE OF THEM, so a ranged parameter's bounds are never enforced at a call. Deferring these
+  /// arms to `IsWideningCastSafe` would reject the in-range `takeByte(65)` too, with an "argument
+  /// type mismatch" that names the wrong problem — the cure is the missing range check, not fewer
+  /// arms. Filed on PLAN.md's bootstrap-oracle-bugs list; it carries codegen blast radius (runtime
+  /// checks at call sites) and is its own change.
   /// </remarks>
   private MaxonValue ConvertArgToParamType(MaxonValue arg, MaxonValueKind argKind, MaxonValueKind paramKind,
       string paramName, Token callToken) {

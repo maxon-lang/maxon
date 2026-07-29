@@ -3731,6 +3731,26 @@ against (user has ruled before: *fix the bootstrap so it stays a solid reference
 work). **shv2 does NOT inherit these** (it diverges deliberately, usually stricter); each needs the full C#
 suite as its gate:
 
+- **🔴⭐⭐ A RANGED PARAMETER'S BOUNDS ARE NEVER ENFORCED AT A CALL — `takeByte(300)` PASSES 300.**
+  Found 2026-07-28 by the review of the struct-literal fix below, while auditing whether that fix's
+  two widening tables should be collapsed. **The A/B is one conversion in two contexts**, with
+  `typealias Byte = int(0 to u8.max)` and `let n = 300`: at a `return` it is
+  `E3005: Value 300 is outside the range of 'Byte' (int(0 to 255))`; as an ARGUMENT it compiles clean
+  and the callee receives **300**. ⭐ **The cause is NOT the widening table, and that matters because
+  the obvious fix is wrong.** `ConvertArgToParamType`'s table and `IsWideningCast` disagree on four
+  pairs (`int→byte`, `int→short`, `short→byte`, `float→f32`), but deleting the argument table's arms
+  would also reject the IN-RANGE `takeByte(65)`, with an "argument type mismatch" naming the wrong
+  problem. The real gap is that **`ValidateAndEmitRangeCheck` has exactly four callers — `return`, an
+  explicit `as`, an array-literal element, and its own definition — and the CALL PATH IS NOT ONE OF
+  THEM.** ⚠⚠ **NOR IS THE STRUCT-LITERAL FIELD: `Self{b: 300}` into that same `Byte` field also
+  stores 300** (probed on the fixed binary — the kind coercion below and the range check are
+  DIFFERENT MECHANISMS, so fixing the first neither caused nor cured the second). Two positions
+  measured, both silent; the missing-caller list is the defect, not any one caller. ⚠ Its fix
+  carries **codegen blast radius** (a runtime range check emitted at call sites
+  that have none today), so it is its own change and not a review edit. ⇒ **Related to but wider than
+  `#103`** ("builtin array methods do not enforce their RANGED parameter types"), which is this same
+  hole seen from one caller: the enforcement is missing for *every* function, not only the builtins.
+
 - **🔴⭐ AN INT LITERAL IN A `float` STRUCT-LITERAL FIELD CRASHES THE ORACLE — `E9001: float value %0 has
   no FP register and no stack home`.** Filed 2026-07-28 by the bare-type-argument rung; **it is the reason
   P1.6 residual (2) needed a user ruling instead of a lookup** — the one case that would have settled

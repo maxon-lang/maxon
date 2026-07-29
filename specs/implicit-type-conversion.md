@@ -62,9 +62,20 @@ Everywhere a value meets a **declared type** — the rule is not special to argu
 - a call argument, against its parameter's type
 - a `return` value, against the function's declared return type
 - an assignment, against the binding's declared type
+- a **struct-literal field initializer**, against the field's declared type — `Self{v: 3}` where
+  `v` is a float field. This includes a field **default** (`var v as Float = 0`), which is the same
+  store written at the declaration instead of at the literal.
 
 The same E3009 is reported at each; a conversion that is refused as an argument is refused as a
 `return`.
+
+⚠ **This list was once a closed enumeration of three, and the fourth entry was the one that was
+broken.** Argument, `return` and assignment each coerced; a struct-literal field initializer was
+never type-checked against its field's declared type *at all*, so an `int` reached the backend
+where a `float` was expected and the compiler died `E9001: RegisterManager: float value %0 has no
+FP register and no stack home` — an internal error naming no source position, for the widening the
+three named contexts perform silently. The rule is *"everywhere a value meets a declared type"*;
+the bullets are examples of it, and a context missing from the list is still governed by it.
 
 ### Function Arguments
 
@@ -204,6 +215,109 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: int-literal-to-float-struct-field -->
+An `int` literal initializing a `float` field widens, exactly as it does at a parameter. This is the
+context the rule's own list used to omit: before it was fixed, this program did not produce a wrong
+answer, it crashed the compiler with an internal `E9001` from the register allocator.
+```maxon
+
+typealias Float = float(f64.min to f64.max)
+
+type P
+	export var v as Float
+
+	static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+end 'P'
+
+function main() returns ExitCode
+	let p = P.create()
+	return trunc(p.v)
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: int-var-to-float-struct-field -->
+Not special to literals: an `int`-typed *value* initializing a `float` field widens too. The literal
+form alone would leave the constant-folded path as the only one tested.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+type P
+	export var v as Float
+
+	static function create(n Integer) returns Self
+		return Self{v: n}
+	end 'create'
+end 'P'
+
+function main() returns ExitCode
+	let p = P.create(3)
+	return trunc(p.v)
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: int-default-to-float-struct-field -->
+A field DEFAULT is the same store, written at the declaration instead of at the literal, and it
+carries the same rule. `v` is never mentioned in the `Self{...}` below -- the widening has to happen
+on the path that synthesises the omitted field, which is a different door in the compiler from the
+two tests above and crashed independently of them.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+type P
+	export var v as Float = 3
+	export var w as Integer
+
+	static function create(w Integer) returns Self
+		return Self{w: w}
+	end 'create'
+end 'P'
+
+function main() returns ExitCode
+	let p = P.create(4)
+	return trunc(p.v) + p.w
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: float-to-int-struct-field-rejected -->
+The other direction, at the same context: a `float` into an `int` field is the same E3009 with the
+same `trunc` advice it gets as an argument, a `return` and an assignment. It too was an `E9001`
+crash before -- the missing check cost BOTH halves of the rule, not just the widening one.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type P
+	export var v as Integer
+
+	static function create() returns Self
+		return Self{v: 3.7}
+	end 'create'
+end 'P'
+
+function main() returns ExitCode
+	let p = P.create()
+	return p.v
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/implicit-type-conversion/float-to-int-struct-field-rejected.test:9:15: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: math-intrinsic-int-promotion -->
