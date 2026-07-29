@@ -1,0 +1,140 @@
+// Test: destructure-match-result-then-compare
+typealias Slot = int(0 to 100)
+
+union Thing
+	alpha(s Slot, flag bool)
+	beta
+end 'Thing'
+
+function pick(t Thing) returns ExitCode
+	let (slot, flag) = match t 'm'
+		alpha(s, f) gives (s, f)
+		beta gives (0, false)
+	end 'm'
+	if slot != 5 'notFive'
+		return 1
+	end 'notFive'
+	if flag != true 'notTrue'
+		return 3
+	end 'notTrue'
+	return 2
+end 'pick'
+
+function main() returns ExitCode
+	return pick(Thing.alpha(5, flag: true))
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.loadRegBaseDisp.byte r12, [rcx + 16]
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.byte [r8 + 8], r12
+    x64.movRegReg rcx, r8
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.byte [r8 + 8], r12
+    x64.movRegReg rcx, r8
+    x64.jmp matchcont
+  matchcont:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.byte rdx, [rcx + 8]
+    x64.cmpRegImm32 rax, 5
+    x64.jcc notEqual, notFive
+    x64.jmp ifcont
+  notFive:
+    x64.movRegImm32 rbx, 1
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc notEqual, notTrue
+    x64.jmp ifcont
+  notTrue:
+    x64.movRegImm32 rbx, 3
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 2
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 5
+    x64.movRegImm32 r12, 1
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.storeBaseDispReg.byte [r13 + 16], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

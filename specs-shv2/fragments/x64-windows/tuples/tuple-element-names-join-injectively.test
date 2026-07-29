@@ -1,0 +1,202 @@
+// Test: tuple-element-names-join-injectively
+type A_B
+	export let alpha as int
+
+	export static function create(alpha int) returns Self
+		return Self{alpha: alpha}
+	end 'create'
+end 'A_B'
+
+type A
+	export let gamma as int
+
+	export static function create(gamma int) returns Self
+		return Self{gamma: gamma}
+	end 'create'
+end 'A'
+
+type C
+	export let beta as int
+
+	export static function create(beta int) returns Self
+		return Self{beta: beta}
+	end 'create'
+end 'C'
+
+type B_C
+	export let delta as int
+
+	export static function create(delta int) returns Self
+		return Self{delta: delta}
+	end 'create'
+end 'B_C'
+
+function first(t (A_B, C)) returns int
+	return t.0.alpha + t.1.beta
+end 'first'
+
+function second(t (A, B_C)) returns int
+	return t.0.gamma * 10 + t.1.delta
+end 'second'
+
+function main() returns ExitCode
+	let p = (A_B.create(1), C.create(2))
+	let q = (A.create(3), B_C.create(4))
+	return first(p) + second(q)
+end 'main'
+---
+ExitCode: 37
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @A_B.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @A.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @C.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @B_C.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @first {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @second {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect A_B.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect C.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm32 rcx, 3
+    x64.callDirect A.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 4
+    x64.callDirect B_C.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.storeBaseDispReg.word64 [r14 + 0], rbx
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect first
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect second
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct___Tuple2.A.B_C
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct___Tuple2.A_B.C
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

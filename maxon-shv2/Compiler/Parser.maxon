@@ -868,6 +868,14 @@ end 'asyncReturnTypeTag'
 // both references' convention, so it is recorded here rather than taken unilaterally.
 export let SelfParamName = b"__self"
 
+// The name the HIDDEN binding of a destructuring `let (x, y) = …` takes, ahead of its source position
+// (P1.10) — `__destructure_12_3`. The position is what makes it unique per declaration; the `__` prefix is
+// what keeps it out of the source's reach, since `requireUnreservedName` refuses (E2051) every declaration
+// of a `__`-prefixed name and the binding is declared by the compiler rather than through that door. It is
+// v1's spelling verbatim (`__destructure_{line}_{col}`, `Parser.maxon:11036`), taken for `SelfParamName`'s
+// reason: the two compilers' IR should read the same way to anyone who has read either.
+let DestructureTempPrefix = "__destructure_"
+
 // The empty `MutatedParamMask` — this function writes none of its parameters, which is the overwhelmingly
 // common answer and the initial value of every function's mask.
 export let NoMutatedParams = 0 as MutatedParamMask
@@ -982,6 +990,13 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // parse fan-out — exactly the invariant `sharedEmptyDescriptorNeeds`/`sharedEmptyTypeParamFeeds` rely on.
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
+
+// The module-level shared EMPTY tuple-layout table (P1.10), held as the INITIAL value of `Parser.tupleLayouts`
+// AND as the COW anchor `internTupleLayout` keys on — `sharedEmptyInstanceAliasMap`'s pattern, for its reason
+// and with its invariant. A file that writes no tuple INCREFS this one rather than allocating a map of its
+// own, which is every file of the scale corpus and most of the compiler: the rung is then allocation-neutral
+// on a tuple-free program, and the doubling ladder can say so.
+let sharedEmptyTupleLayouts = StructLayoutMap.create()
 
 // The module-level shared EMPTY immutable-global-read set (P1.7 slice 2b), held as the initial value of
 // `immutableGlobalReads` AND as the COW anchor its reset points at — `sharedEmptyInstanceAliasMap`'s pattern,
@@ -4002,6 +4017,13 @@ export type Parser
 	// still walking this very type). Written by the `typealias` member arm and cleared in lockstep with
 	// `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingInnerAliases as InnerAliasNameSet
+	// ⭐ The TUPLE layouts this file has minted (P1.10), keyed by the tuple's mangled name — this file's OWN
+	// copies, whose field types are interned against `artifact.typeNames`. They cannot be the copies
+	// `ProgramSignatures` holds: `remapArtifact` REWRITES an artifact layout's field types IN PLACE on the
+	// multi-file path, so a shared object would rewrite the whole-program index's ids to one file's.
+	// Memoized so a tuple type written N times in a file adopts one layout and files ONE contribution, rather
+	// than N identical ones for `commitStructTypes` to upsert over. Empty for a file with no tuples.
+	var tupleLayouts as StructLayoutMap
 	// ⭐ **WHICH METHODS OF THE GENERIC TYPE CURRENTLY BEING DECLARED NEED THE LAYOUT-DESCRIPTOR PARAM**
 	// (P1.6-B1), keyed by bare method name. Computed ONCE by `computeTypeDescriptorNeeds` when the type
 	// declaration opens — a TRANSITIVE fixpoint over the type's own methods: a method needs the descriptor
@@ -4205,6 +4227,7 @@ export type Parser
 			lastWitnessDispatchName: EmptySourceText,
 			lastWitnessDispatchThrows: ThrowsClause.none,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
+			tupleLayouts: sharedEmptyTupleLayouts,
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			siblingReceivers: sharedEmptySiblingReceivers,
 			siblingReceiverScanType: EmptySourceText,
@@ -6871,6 +6894,17 @@ export type Parser
 			return TypeDeclKind.genericAlias
 		end 'genericAlias'
 
+		// A TUPLE typealias (P1.10) — `typealias Pair = (Num, Num)`. Its RHS is a tuple TYPE, read by the same
+		// `parseTupleTypeReference` a parameter or return annotation uses, so a tuple written as an alias and
+		// one written inline are ONE type. Like the RANGED form and unlike the function/generic ones it mints
+		// no nominal identity — a `Pair` reference resolves straight through to the tuple's `structRef` — so
+		// `requireTypeNameNotCompilerOwned` does not apply to it either.
+		if self.at(TokenKind.leftParen) 'tupleAlias'
+			let tupleType = try self.parseTupleTypeReference()
+			self.signatures.recordTupleAlias(nameTok.value, tupleName: try self.artifact.typeNames.nameOf(typeNameIdOf(tupleType)) otherwise panic("readTypeAliasDeclaration: the tuple type just minted for this alias carries an id that is not in this file's interner — `parseTupleTypeReference` interns its name into exactly that table"))
+			return TypeDeclKind.tupleAlias
+		end 'tupleAlias'
+
 		// `int(...)` or `float(...)`. A `bool` alias has no range and a generic alias (`Array with T`)
 		// is handled above — each remaining RHS is rejected here, naming its own gap, rather than
 		// being mapped onto a numeric path where it would silently mean something else. The two
@@ -6994,11 +7028,13 @@ export type Parser
 			return NestedAliasResult.genericInstance(entry)
 		end 'genericInstance'
 
-		// Every remaining form is unsupported nested — today that is the FUNCTION one, and the message
-		// names it; a nominal kind cannot reach here at all, `typealias` being the only keyword this
-		// reader consumes.
+		// Every remaining form is unsupported nested — today the FUNCTION one and the TUPLE one, and the
+		// message names both; a nominal kind cannot reach here at all, `typealias` being the only keyword
+		// this reader consumes. The enumeration is kept exhaustive deliberately: it is the reader's only
+		// statement of what a nested alias may be, so a form added to `readTypeAliasDeclaration` and not
+		// added here would be reported as if it did not exist.
 		if form != TypeDeclKind.rangedAlias 'notSupported'
-			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) or a generic-instance alias (`typealias ElementArray = Array with T`); a nested function alias is a later slice", line: aliasTok.line, column: aliasTok.column)
+			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) or a generic-instance alias (`typealias ElementArray = Array with T`); a nested function or TUPLE alias is a later slice", line: aliasTok.line, column: aliasTok.column)
 		end 'notSupported'
 
 		let alias = try ranged.get(0) otherwise panic("readNestedTypeAlias: the ranged form was read but ranged.get(0) failed")
@@ -8904,6 +8940,13 @@ export type Parser
 	// `struct-return` — still `disabled-test:`, deferred to P1.4's ownership ruling, which is what
 	// a struct crossing a call boundary needs before it can be right for any other reason.
 	function parseTypeReference() returns MaxonType throws ParseError
+		// A TUPLE TYPE (P1.10) — `(Integer, Integer)`. Asked first because `(` opens nothing else in a type
+		// position: the one other parenthesized type form, `function(…)`, is introduced by its own keyword and
+		// is read by `readFunctionTypeAlias` before this is ever reached.
+		if self.at(TokenKind.leftParen) 'tupleType'
+			return try self.parseTupleTypeReference()
+		end 'tupleType'
+
 		if self.at(TokenKind.selfType) 'selfType'
 			let tok = try self.consume(TokenKind.selfType)
 			return try self.enclosingStructType(tok)
@@ -8992,6 +9035,15 @@ export type Parser
 			if self.signatures.isGenericAlias(tok.value) 'genericAlias'
 				return MaxonType.genericInstance(self.signatures.genericAliasInstance(tok.value))
 			end 'genericAlias'
+
+			// A TUPLE typealias (P1.10) — `Pair` where `typealias Pair = (Num, Num)`. It resolves STRAIGHT
+			// THROUGH to the tuple's own `structRef`, minting no identity of its own, which is what makes a
+			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. The read canonicalizes
+			// (`tupleAliasTarget`), so an alias the SWEEP recorded under the source spelling and one the real
+			// parse recorded canonically answer alike.
+			if self.signatures.isTupleAlias(tok.value) 'tupleAlias'
+				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTarget(tok.value)))
+			end 'tupleAlias'
 
 			let id = self.artifact.typeNames.intern(tok.value)
 			// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
@@ -9357,11 +9409,19 @@ export type Parser
 	// harmless while every value was an int; it is not any more — `let flag = a > b` binds a
 	// `bool`, and `flag and other` short-circuits only if the parser knows so.
 	function parseBinding(func IrFunction, block IrBlock, mutable bool) throws ParseError
+		let keywordTok = self.current()
 		if mutable 'isVar'
 			try self.consume(TokenKind.var)
 		end 'isVar' else 'isLet'
 			try self.consume(TokenKind.let)
 		end 'isLet'
+
+		// ⭐ **`let (x, y) = <a tuple>` — DESTRUCTURING (P1.10).** Recognized by the `(` where a name belongs:
+		// no other binding form opens with one, so the two grammars are disjoint at the first token.
+		if self.at(TokenKind.leftParen) 'destructure'
+			try self.parseDestructuringBinding(func, block: block, mutable: mutable, keywordTok: keywordTok)
+			return
+		end 'destructure'
 
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -9373,6 +9433,17 @@ export type Parser
 		// poison never runs its owned-set scan on a consume (see `rhsWasBareLocalReference`).
 		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 
+		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal, mutable: mutable)
+	end 'parseBinding'
+
+	// ⭐ **BIND ONE NAME TO ONE ALREADY-PARSED INITIALIZER — the whole declaration half of a `let`/`var`.**
+	// Split out of `parseBinding` when destructuring landed (P1.10): `let (x, y) = t` declares N names from
+	// N field loads and every one of them owes exactly what a single binding owes — the borrowed-managed
+	// promotion, the self-field shadow check, the pending-borrow attachment, the mutable-var enrolment, the
+	// owned/promise enrolment and the move-on-bind poison. A second copy of that list is not a duplication
+	// risk in the abstract; it is the concrete way a destructured `String` element comes to be dropped twice
+	// or not at all.
+	function declareInitializedBinding(func IrFunction, nameTok Token, value ValueId, rhsWasBareLocal bool, mutable bool) throws ParseError
 		// ⭐ **A MUTABLE BORROWED MANAGED BINDING IS PROMOTED TO OWNED AT ITS DECLARATION.** A `var` whose
 		// initializer is a BORROWED managed value (a `"literal"` rdata String, or a struct/union PARAMETER —
 		// both hold a managed tag yet own nothing) is made to own a droppable value here, at ITS OWN scope:
@@ -9461,7 +9532,125 @@ export type Parser
 			self.ownedBindings.push(binding)
 			self.removeFromPendingTemps(boundValue)
 		end 'trackPromise'
-	end 'parseBinding'
+	end 'declareInitializedBinding'
+
+	// ⭐⭐ **`let (x, y) = <a tuple>` — DESTRUCTURING, DESUGARED TO A HIDDEN BINDING PLUS ONE FIELD LOAD PER
+	// NAME (P1.10).** Both references lower it exactly this way (v1 `parseTupleDestructureVarDecl`,
+	// `Parser.maxon:11004-11063`; bootstrap `2-Parser.cs:10165-10305`), and shv2 has no reason to differ:
+	// there is nothing here a `let tmp = t` followed by `let x = tmp._0` does not already mean.
+	//
+	// ⭐ **THE HIDDEN BINDING IS AN OWNERSHIP OBLIGATION, NOT A CONVENIENCE.** The RHS is a freshly built
+	// tuple BOX that some binding has to drop; the element names cannot, because a `_N` field read is a
+	// BORROW (`emitFieldLoad` never marks the loaded value owned-heap) and N of them would drop the same
+	// String N times. So the box is bound to a name the source cannot spell, that name enters the ordinary
+	// owned-binding list, and the box dies at scope exit exactly as `let t = (…)` makes it die — while the
+	// elements stay borrows that are valid for precisely as long.
+	//
+	// It runs the SAME `declareInitializedBinding` an ordinary `let` does — for the temp and for every
+	// element — so nothing about a destructured binding is special downstream.
+	function parseDestructuringBinding(func IrFunction, block IrBlock, mutable bool, keywordTok Token) throws ParseError
+		try self.consume(TokenKind.leftParen)
+		var nameToks = TokenArray.create()
+		while not self.at(TokenKind.rightParen) 'collectNames'
+			let nameTok = try self.consume(TokenKind.identifier)
+			try self.requireUnreservedName(nameTok)
+			nameToks.push(nameTok)
+			if not self.at(TokenKind.comma) 'lastName'
+				break
+			end 'lastName'
+			try self.consume(TokenKind.comma)
+		end 'collectNames'
+		try self.consume(TokenKind.rightParen)
+
+		// The arity is checked against the NAME LIST before the initializer is parsed, so `let (x) = …` is
+		// refused as the malformed destructure it is rather than as a type error about whatever follows.
+		if nameToks.count() < MinTupleArity 'tooFewNames'
+			throw ParseError.unsupported("a destructuring binding of {nameToks.count()} name(s) (a tuple has at least {MinTupleArity} elements, so `let (x) = …` names no destructurable shape — write `let x = …`)", line: keywordTok.line, column: keywordTok.column)
+		end 'tooFewNames'
+
+		try self.consume(TokenKind.equals)
+		let rhsStart = self.pos
+		let value = try self.parseExpression(func, block: block)
+		let layout = try self.requireDestructurableTuple(value, nameToks: nameToks, keywordTok: keywordTok)
+
+		// The hidden binding takes the SOURCE's keyword: a `var (x, y) = …` element may be reassigned, and a
+		// reassignment of an element rebinds only that name — the box itself is never written through, so the
+		// temp's mutability is inert and simply matches what the author wrote.
+		let tempTok = Token.create(TokenKind.identifier, line: keywordTok.line, column: keywordTok.column, value: "{DestructureTempPrefix}{keywordTok.line}_{keywordTok.column}".toByteArray())
+		try self.declareInitializedBinding(func, nameTok: tempTok, value: value, rhsWasBareLocal: self.rhsWasBareLocalReference(rhsStart), mutable: mutable)
+
+		for i in 0 upto nameToks.count() 'eachName'
+			let nameTok = try nameToks.get(i) otherwise panic("parseDestructuringBinding: nameToks.get OOB at {i} below count {nameToks.count()}")
+			let element = self.emitFieldLoad(value, layout: layout, index: i, range: SourceRange.between(keywordTok, last: nameTok))
+			// `rhsWasBareLocal: false` — a field load is a fresh borrowed value held by no binding, so there
+			// is no source to poison. It is the same answer a `let x = t.0` written out longhand gets.
+			try self.declareInitializedBinding(func, nameTok: nameTok, value: element, rhsWasBareLocal: false, mutable: mutable)
+		end 'eachName'
+	end 'parseDestructuringBinding'
+
+	// The tuple layout `value` must have for a destructuring binding of `nameToks` to mean anything: a tuple
+	// (never a declared struct — its fields have names the author would have to write) whose element count is
+	// the name count. Both refusals are positioned on the binding keyword, which is where the author decides
+	// how many names to write.
+	function requireDestructurableTuple(value ValueId, nameToks TokenArray, keywordTok Token) returns StructLayout throws ParseError
+		if not tagIsStructRef(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
+			throw ParseError.unsupported("a destructuring binding of a '{typeTagName(self.tagOf(value))}' initializer (only a TUPLE can be destructured — `let (x, y) = …` needs a right-hand side that is a tuple)", line: keywordTok.line, column: keywordTok.column)
+		end 'notATuple'
+
+		let layout = self.tupleLayoutOfValue(value)
+		if layout.fieldCount() != nameToks.count() 'arityMismatch'
+			throw ParseError.unsupported("a destructuring binding of {nameToks.count()} names against a tuple of {layout.fieldCount()} elements (every element must be named)", line: keywordTok.line, column: keywordTok.column)
+		end 'arityMismatch'
+		return layout
+	end 'requireDestructurableTuple'
+
+	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owns heap.
+	// THE one gate on the value-semantics copy, asked by both of its sites (the durable-storage move-in and
+	// the return), so they cannot come to disagree about which tuples have value semantics — a disagreement
+	// that would not be a missed case but a record freed twice or not at all.
+	//
+	// The managed probe is asked through `structHasManagedField`, the SAME predicate the destructor synthesis
+	// gates on, so "this tuple needs no deep clone" and "this tuple needs no drop cascade" are one answer.
+	function valueIsCopyableTuple(value ValueId) returns bool
+		if not tagIsStructRef(self.tagOf(value)) 'notAStruct'
+			return false
+		end 'notAStruct'
+
+		let name = self.valueTypeName(value)
+		return isTupleTypeName(name) and not self.signatures.structHasManagedField(name)
+	end 'valueIsCopyableTuple'
+
+	// A fresh record holding the same elements as `value` — the copy `valueIsCopyableTuple` licenses. It is
+	// `emitStructLiteral`'s box, filled from a load per element instead of from parsed values, so the
+	// allocation, the size and the per-slot offsets come from the one layout both routines read. The result
+	// is an OWNED temporary of the statement, like any freshly built box.
+	function copyTupleValue(value ValueId, range SourceRange) returns ValueId
+		let layout = self.tupleLayoutOfValue(value)
+		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
+		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.valueNameId(value), range: range)
+		self.trackOwnedTemp(box)
+
+		for i in 0 upto layout.fieldCount() 'eachElement'
+			self.emitFieldStore(box, layout: layout, index: i, value: self.emitFieldLoad(value, layout: layout, index: i, range: range), range: range)
+		end 'eachElement'
+		return box
+	end 'copyTupleValue'
+
+	// The layout of the tuple `value` is typed with. Precondition: the value carries a tuple `structRef`,
+	// which is why a miss is a panic — every tuple type in the compiler is registered by `internTupleLayout`
+	// before anything is typed with it.
+	function tupleLayoutOfValue(value ValueId) returns StructLayout
+		match self.signatures.structOf(self.valueTypeName(value)) 'registered'
+			declared(layout) then return layout
+			undeclared then panic("tupleLayoutOfValue: the tuple `{String.from(self.valueTypeName(value))}` a value carries is not registered — every tuple `structRef` was minted by `internTupleLayout`, which registers the layout before it hands the name back")
+		end 'registered'
+	end 'tupleLayoutOfValue'
+
+	// The interned TYPE NAME a `structRef`/`named`-tagged value carries — the pair `internedName` and
+	// `valueNameId` spell together, wherever a value's NOMINAL identity is what decides something.
+	function valueTypeName(value ValueId) returns ByteArray
+		return self.internedName(self.valueNameId(value))
+	end 'valueTypeName'
 
 	// Open a lexical block — an `if` / `else` / `while` body. THREE things are scoped to
 	// it and must be opened and closed TOGETHER: the Scope frame its declarations land
@@ -10607,6 +10796,16 @@ export type Parser
 		if tagIsByteRecord(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
 			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
+
+		// ⭐ **A BORROWED TUPLE IS COPIED, exactly as a borrowed String is PROMOTED one branch up (P1.10).** The
+		// caller adopts and frees whatever a `returns (…)` hands back, so `return t` on a tuple PARAMETER must
+		// give it a record of its own — and a tuple, unlike a struct, may simply be copied (see
+		// `moveManagedValueInto` for why, and for why the copy is limited to a trivial-element tuple). Without
+		// it, `function echo(t (Num, Num)) returns (Num, Num) return t end` is the borrowed-aggregate reject
+		// below, on a program that is not merely legal but is what a tuple is FOR.
+		if self.valueIsCopyableTuple(returned) and not self.valueIsOwnedHeap(returned) 'copyBorrowedTuple'
+			returned = self.copyTupleValue(returned, range: SourceRange.ofToken(anchor))
+		end 'copyBorrowedTuple'
 
 		let returnedTag = self.tagOf(returned)
 		if self.valueIsNonTextAggregate(returned) and not self.valueIsOwnedHeap(returned) 'borrowedAggregateReturn'
@@ -11954,7 +12153,7 @@ export type Parser
 		// (byte-identical), so only the managed case changes. The `containsStruct` gate keeps a `named` that
 		// names no declared struct (a ranged typealias) on the trivial path, where `managedFieldDropCallee`
 		// would otherwise panic (it classifies only struct/union/generic-alias fields).
-		let name = try self.artifact.typeNames.nameOf(self.valueNameId(value)) otherwise panic("decrefCalleeFor: a `named` value's type-name id is not in this file's interner — every `named` tag is minted with an id from it")
+		let name = self.valueTypeName(value)
 		if self.signatures.containsStruct(name) 'struct'
 			return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
 		end 'struct'
@@ -19072,12 +19271,140 @@ export type Parser
 	// groups a ternary), restoring every operator — `not (a or b)` is the `or` of two bools, `(x > 0)
 	// and (y > 0)` groups explicitly. It does NOT go through `parseExpression`, which would re-seed
 	// `currentBlock` and undo any short-circuit that moved it.
+	//
+	// ⭐ **A COMMA AFTER THE FIRST INNER EXPRESSION IS WHAT MAKES IT A TUPLE INSTEAD (P1.10)**, and that is the
+	// whole disambiguator — both reference compilers use exactly this rule (`2-Parser.cs:17119-17153`;
+	// v1 `Parser.maxon:17083-17089`). It is decided AFTER the first element is parsed rather than by a
+	// lookahead, because no bounded lookahead can find the comma: `(f(a, b), c)` has one at depth 1 first.
 	function parseParenthesizedExpression(func IrFunction) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
+		let openTok = try self.consume(TokenKind.leftParen)
+		// Captured before the element is parsed so `rhsWasBareLocalReference` can decide, afterwards, whether
+		// it was a bare local — which is what a MANAGED element's move-in poisons. The struct literal's
+		// discipline (`parseStructLiteralFields`), for the identical reason.
+		let firstStart = self.pos
 		let value = try self.parseValueExpression(func)
-		try self.consume(TokenKind.rightParen)
-		return value
+		if not self.at(TokenKind.comma) 'grouping'
+			try self.consume(TokenKind.rightParen)
+			return value
+		end 'grouping'
+
+		return try self.parseTupleLiteral(func, first: value, firstStart: firstStart, openTok: openTok)
 	end 'parseParenthesizedExpression'
+
+	// ⭐ **`(e0, e1, …)` — A TUPLE LITERAL, WHICH IS A STRUCT LITERAL OF A SYNTHESIZED TYPE.** The cursor sits
+	// on the comma after the first element, which the caller has already parsed.
+	//
+	// It ends at `emitStructLiteral` — the very routine `Self{…}` uses — so the box, its `__mm_alloc`, the
+	// per-element `storeIndirect` at `offsetOfField(i)` and the MOVE-IN of a managed element (`moveInPayload`,
+	// which promotes a borrowed String literal and transfers an owned value) are all the machinery that
+	// already exists. A tuple gets nothing of its own, which is the point of `TupleTypeNamePrefix`.
+	//
+	// ⚠ **THE ELEMENT TYPES ARE THE VALUES' OWN, so there is no declared type to coerce against** — the one
+	// step a struct literal takes that this cannot (`requireFieldType`). A tuple declares no field types; it
+	// ADOPTS them, which is what makes `(40, 2.5)` a `(int, float)` and not an ill-typed `(int, int)`.
+	function parseTupleLiteral(func IrFunction, first ValueId, firstStart TokenIndex, openTok Token) returns ValueId throws ParseError
+		var elementValues = ValueIdArray.create()
+		var elementBareLocal = BoolArray.create()
+		var elementTypes = MaxonTypeArray.create()
+		// ⭐ The values already MOVED into an owning slot of this literal — `parseStructLiteralFields`'
+		// `movedOwningValues`, for its reason: shv2 is move-only, so `(s, s)` over a String would drop one
+		// value twice. A second reference to a moved value at an owning slot is E3102.
+		var movedOwningValues = ValueIdArray.create()
+
+		try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: first, valueStart: firstStart)
+
+		while self.at(TokenKind.comma) 'eachElement'
+			try self.consume(TokenKind.comma)
+			let valueStart = self.pos
+			let value = try self.parseValueExpression(func)
+			try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: value, valueStart: valueStart)
+		end 'eachElement'
+
+		let closeTok = try self.consume(TokenKind.rightParen)
+		let layout = try self.internTupleLayout(elementTypes, anchor: openTok)
+
+		return try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
+	end 'parseTupleLiteral'
+
+	// Append one parsed element to the three lockstep columns a tuple literal builds, having first refused a
+	// repeated owning move. One writer, so a caller that pushed a value and forgot its type would be
+	// unrepresentable — `StructLayout.addField`'s discipline applied to the literal side — and one gate, so
+	// the first element (parsed by the caller before it knew this was a tuple) is checked exactly as the rest.
+	//
+	// The element's own type is what is passed as `fieldType`: a tuple ADOPTS its element types, so the slot
+	// a value moves into is owning iff the value itself owns heap.
+	function collectTupleElement(elementValues ValueIdArray, elementBareLocal BoolArray, elementTypes MaxonTypeArray, movedOwningValues ValueIdArray, value ValueId, valueStart TokenIndex) throws ParseError
+		try self.rejectDoubleOwningStore(movedOwningValues, value: value, fieldType: self.typeOf(value), valueStart: valueStart)
+		elementValues.push(value)
+		elementBareLocal.push(self.rhsWasBareLocalReference(valueStart))
+		elementTypes.push(self.typeOf(value))
+	end 'collectTupleElement'
+
+	// ⭐ **`(T0, T1, …)` IN A TYPE POSITION (P1.10)** — a parameter, a return type, a `typealias` RHS. It
+	// resolves to the SAME `structRef` a literal of those element types mints, which is what makes
+	// `sum(t (Integer, Integer))` accept the `(10, 32)` a caller built.
+	function parseTupleTypeReference() returns MaxonType throws ParseError
+		let openTok = try self.consume(TokenKind.leftParen)
+		// ⚠ `()` is not the empty tuple — shv2 has no unit type, and `void` is not a `MaxonType`
+		// (`MaxonReturnType.void` carries it). Reported before the element loop so the message names the
+		// construct rather than a missing type.
+		if self.at(TokenKind.rightParen) 'emptyTuple'
+			throw ParseError.unsupported("an empty tuple type '()' (a tuple has at least {MinTupleArity} elements; a function that returns nothing simply omits its `returns` clause)", line: openTok.line, column: openTok.column)
+		end 'emptyTuple'
+
+		var elements = MaxonTypeArray.create()
+		elements.push(try self.parseTypeReference())
+		while self.at(TokenKind.comma) 'eachElement'
+			try self.consume(TokenKind.comma)
+			elements.push(try self.parseTypeReference())
+		end 'eachElement'
+		try self.consume(TokenKind.rightParen)
+
+		// ⚠ **A ONE-ELEMENT TUPLE TYPE IS REFUSED, AND `(a)` STAYS GROUPING FOREVER** — see `MinTupleArity`.
+		// The EXPRESSION side needs no such check: a literal is only a tuple once a comma has been seen.
+		if elements.count() < MinTupleArity 'singleElement'
+			throw ParseError.unsupported("a one-element tuple type (a tuple has at least {MinTupleArity} elements, and parentheses around a single type would be indistinguishable from grouping)", line: openTok.line, column: openTok.column)
+		end 'singleElement'
+
+		return MaxonType.structRef(self.artifact.typeNames.intern((try self.internTupleLayout(elements, anchor: openTok)).name))
+	end 'parseTupleTypeReference'
+
+	// ⭐ **THE ONE DOOR A TUPLE TYPE IS MINTED THROUGH** — a literal, a type annotation, a `typealias` RHS.
+	// It interns the type whole-program (`ProgramSignatures.internTupleType`, which canonicalizes and keys the
+	// layout) and files THIS FILE's own copy of the layout as an artifact contribution, so `mergeArtifact`
+	// commits it to `project.structTypes` and `installStructDestructors` synthesizes the drop cascade for a
+	// tuple that owns a String. Both registrations happen here, together, because a layout in one and not the
+	// other is what makes the destructor installer ask a question the index cannot answer.
+	function internTupleLayout(elements MaxonTypeArray, anchor Token) returns StructLayout throws ParseError
+		let name = try self.signatures.internTupleType(elements, from: self.artifact.typeNames) otherwise (rejection) 'rejected'
+			throw self.tupleElementError(rejection, anchor: anchor)
+		end 'rejected'
+
+		if let known = try self.tupleLayouts.get(name) 'alreadyAdopted'
+			return known
+		end 'alreadyAdopted'
+
+		// Copy-on-write off the shared empty, keyed on its `is`-identity: a file that mints no tuple must
+		// never allocate a table (`sharedEmptyTupleLayouts`), and the shared one must never be written.
+		if self.tupleLayouts is sharedEmptyTupleLayouts 'firstTupleInThisFile'
+			self.tupleLayouts = StructLayoutMap.create()
+		end 'firstTupleInThisFile'
+
+		let layout = self.signatures.adoptTupleLayout(name, into: self.artifact.typeNames)
+		self.tupleLayouts.upsert(name, value: layout)
+		self.artifact.recordStructType(layout)
+		return layout
+	end 'internTupleLayout'
+
+	// Turn a whole-program tuple-element rejection into a POSITIONED diagnostic. The index raises it (only it
+	// knows what a canonical element is); the parser is the only party holding a token to anchor it on, which
+	// is why the two halves are split at all.
+	function tupleElementError(rejection TupleElementRejection, anchor Token) returns ParseError
+		return match rejection 'why'
+			unsupportedTag(position, tagName) gives ParseError.unsupported("a tuple whose element {position} is '{tagName}': a tuple's identity IS its element types, and neither a generic type parameter (whose concrete type the shared body does not know) nor an unresolved type can key one", line: anchor.line, column: anchor.column)
+			separatorInElementName(position, elementName) gives ParseError.unsupported("a tuple whose element {position} is named '{elementName}': a tuple type's name joins its elements with '{TupleElementSeparator}', so an element whose own name holds that character would make two different tuples spell one name", line: anchor.line, column: anchor.column)
+		end 'why'
+	end 'tupleElementError'
 
 	// `'a'`, `'\n'`, `'0'` — a character literal in operand position. It materializes as an
 	// ordinary INTEGER literal carrying the character's byte, which is exactly what
@@ -20339,6 +20666,29 @@ export type Parser
 	// to an owned copy (a fresh temp de-listed); an owned managed value is transferred (bare local poisoned,
 	// temp de-listed); a borrowed struct/union is refused (no clone). Precondition: the value is managed.
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is refused
+		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
+		// reference identity a program can observe (an alias, a mutation through one), so a second record
+		// would be a second thing. A tuple has none — the only way to obtain one is the expression that just
+		// produced it — so the durable slot takes its OWN record and the source keeps its own. That is what
+		// makes `xs.push(p)` followed by `return p` mean what `specs-shv2/tuples.md` says it means: the array
+		// owns one record and the return owns another, where a move would poison `p` and a share would free
+		// one record twice. The bootstrap states the same rule from the other end (`IrStructType.
+		// IsTwoRegisterValueTuple`: *"a tuple returned by value has no prior identity to break"*).
+		//
+		// ⚠ **ONLY A TRIVIAL-ELEMENT TUPLE, and the restriction is a soundness one rather than a scope one.**
+		// shv2 is move-only, so the copy of a MANAGED element would have to be a deep clone; a shallow one
+		// would leave two records pointing at one String and free it twice. A managed-element tuple therefore
+		// keeps the struct rules below — stricter, never wrong — until the rung that gives it the deep clone.
+		// The copy is de-listed from the statement's pending drops for the promoted String's reason one branch
+		// down: the durable slot owns it now, and a statement-end `__mm_decref` on it would free a record the
+		// box still holds.
+		if self.valueIsCopyableTuple(arg) 'copyTuple'
+			let copied = self.copyTupleValue(arg, range: range)
+			self.removeFromPendingTemps(copied)
+			return copied
+		end 'copyTuple'
+
 		if isString 'string'
 			if not self.valueIsOwnedHeap(arg) 'promoteBorrowed'
 				// A borrowed String literal/param — copy its bytes into a fresh owned record the box can drop.
@@ -22865,7 +23215,7 @@ export type Parser
 
 		var q = index + 1
 		var hops = 0
-		while self.kindAt(q) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.identifier 'hop'
+		while self.kindAt(q) == TokenKind.dot and self.namesMemberAt(q + 1) 'hop'
 			hops = hops + 1
 			q = q + 2
 		end 'hop'
@@ -23788,6 +24138,38 @@ export type Parser
 	// the owning struct's field, valid while the base binding lives, so no ownership is taken and nothing is
 	// dropped. The cursor is left on the token AFTER the last field name (the `=` of a write, or wherever the
 	// read's expression continues).
+	// ⭐ **`t.0` NAMES THE FIELD `_0` — THE ONE REWRITE FROM A POSITIONAL MEMBER TOKEN TO A FIELD-NAME TOKEN
+	// (P1.10).** A tuple's fields ARE ordinary struct fields, called `_0`, `_1`, … (`tupleFieldName`), so
+	// nothing downstream learns about tuples: the rewritten token flows into `requireFieldIndex` /
+	// `requireFieldAccessible` / `emitFieldLoad` exactly as `p.x`'s own token does, and `t._0` — which
+	// `specs-shv2/tuples.md` spells in five cases — resolves through the identical `indexOfField`.
+	//
+	// The synthesized token keeps the ORIGINAL's line and column, so a diagnostic still points at what the
+	// author wrote; it carries no source SPAN, because its text is not in the source buffer (`t.0` holds no
+	// `_0`) and a span is a slice of that buffer. It is `identifier`-kinded for the same reason: the token is
+	// a NAME now, and no later reader may re-decide it was a number.
+	//
+	// Both references perform the identical rewrite (v1 `computeFieldNameForMemberToken`,
+	// `Parser.maxon:14303-14312`; bootstrap `2-Parser.cs:17809-17819`).
+	function consumeMemberNameToken() returns Token throws ParseError
+		if not self.at(TokenKind.intLiteral) 'namedMember'
+			return try self.consume(TokenKind.identifier)
+		end 'namedMember'
+
+		let indexTok = try self.consume(TokenKind.intLiteral)
+		return Token.create(TokenKind.identifier, line: indexTok.line, column: indexTok.column, value: "_{String.from(indexTok.value)}".toByteArray())
+	end 'consumeMemberNameToken'
+
+	// **The token kinds that may NAME a member after a `.`** — an identifier, or the int literal of a tuple's
+	// positional access. Spelled once, so the dispatch predicates that decide a statement is a field store or
+	// a chained call (`fieldAssignsAt`, `fieldChainEndAfter`) and the consumer above cannot come to disagree
+	// about where a chain's hop ends. They already MUST agree: `fieldChainEndAfter`'s header states that a
+	// divergence between its two askers is a use-after-free rather than a compile error.
+	function namesMemberAt(index TokenIndex) returns bool
+		let kind = self.kindAt(index)
+		return kind == TokenKind.identifier or kind == TokenKind.intLiteral
+	end 'namesMemberAt'
+
 	// Consume a field-chain base token — the receiver `self` (a keyword) or a local identifier. `self` names the
 	// receiver parameter (resolved by `baseBindingName` to `SelfParamName`); every other base names itself.
 	function consumeChainBaseToken() returns Token throws ParseError
@@ -23844,7 +24226,7 @@ export type Parser
 	// policy (E3078), while each recursion binds a fresh `let`. Chains are a handful of hops deep.
 	function resolveFieldChainFrom(box ValueId, layout StructLayout, baseTok Token, baseBinding VarInfo) returns FieldChainStep throws ParseError
 		try self.consume(TokenKind.dot)
-		let fieldTok = try self.consume(TokenKind.identifier)
+		let fieldTok = try self.consumeMemberNameToken()
 		if not self.at(TokenKind.dot) 'lastField'
 			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
 		end 'lastField'
@@ -27988,7 +28370,7 @@ export type Parser
 		end 'notBase'
 		var q = index + 1
 		var hops = 0
-		while self.kindAt(q) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.identifier 'hop'
+		while self.kindAt(q) == TokenKind.dot and self.namesMemberAt(q + 1) 'hop'
 			hops = hops + 1
 			q = q + 2
 		end 'hop'

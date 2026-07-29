@@ -493,6 +493,18 @@ type Lexer
 		tokens.push(Token.create(kind, line: startLine, column: startCol, value: value, startByte: startByte, endByte: endByte))
 	end 'emitWithSource'
 
+	// The kind of the token emitted just before the one being scanned, or `eof` at the start of the file —
+	// the ONE piece of left context any scanner reads. `scanNumber` uses it, and only it, to tell a tuple
+	// INDEX (`t.0`) from the integer part of a float (`1.5`); see the rule stated there for why that one bit
+	// is exact rather than a heuristic. `eof` for an empty stream is not a sentinel: a file cannot open with
+	// a `.`, so "no previous token" and "the previous token is not a dot" are the same answer.
+	function lastTokenKind() returns TokenKind
+		if tokens.count() == 0 'startOfFile'
+			return TokenKind.eof
+		end 'startOfFile'
+		return (try tokens.get(tokens.count() - 1) otherwise panic("Lexer.lastTokenKind: get failed one below a non-zero count")).kind
+	end 'lastTokenKind'
+
 	// End byte offset for a number or identifier token: if tryAdvance() returned false
 	// at EOF the cursor still sits ON the last byte, so that byte is part of the token.
 	function sliceNumberEndByte() returns ByteOffset
@@ -966,9 +978,27 @@ type Lexer
 			end 'digitsEof'
 		end 'digits'
 
+		// ⭐⭐ **A NUMBER THAT FOLLOWS A `.` IS A TUPLE INDEX AND HAS NO FRACTION (P1.10).**
+		//
+		// `scanNumber` greedily takes a following `.` as the start of a fraction, which is right for `1.5`
+		// and WRONG for `t.0.1`: that lexed as `identifier(t)`, `dot`, `floatLiteral(0.1)` — a chained
+		// positional access silently becoming a float. Nothing downstream can undo it, because by then the
+		// two indices have been fused into one token's text.
+		//
+		// The rule is exact rather than a heuristic, because a number can follow a `dot` for exactly one
+		// reason: `.` is not an operator on numbers in Maxon (a range is `low to high`), a float literal
+		// always begins at its INTEGER part (there is no `.5` form — `scanNumber` is only entered on a
+		// digit), and every other dotted form (`u16.max`, `p.x`, `Point.create`) has an identifier on the
+		// right. So a digit after a `.` is a tuple index, always.
+		//
+		// ⚠ Neither reference compiler solves this: v1's `computeFieldNameForMemberToken` handles only an
+		// `intLiteral`, so `t.0.1` is a parse error there. shv2 lexes it correctly instead, because this rung
+		// ENABLES nested tuples and a construct it enables may not silently mean something else.
+		let followsMemberDot = lastTokenKind() == TokenKind.dot
+
 		// Check for decimal point (float literal)
 		var isFloat = false
-		if cursor.index() < len 'checkDot'
+		if cursor.index() < len and not followsMemberDot 'checkDot'
 			let dotCh = cursor.current()
 			if dotCh == Ascii.dot 'hasDot'
 				isFloat = true
@@ -1022,10 +1052,13 @@ type Lexer
 
 		// For decimal/float numbers, only include current byte if it's a digit or underscore
 		// (not alpha like 'e' which should start a separate identifier token)
+		// The `.` is admitted here only on the same terms it was admitted as a fraction opener above — a
+		// tuple index ends at its digits, and swallowing the following `.` would take the next hop's
+		// separator with it.
 		let cb = cursor.current()
 		var atEof = false
 		var endOfs = cursor.index()
-		if isDigit(cb) or cb == Ascii.underscore or cb == Ascii.dot 'includeDecLast'
+		if isDigit(cb) or cb == Ascii.underscore or (cb == Ascii.dot and not followsMemberDot) 'includeDecLast'
 			endOfs = cursor.index() + 1
 			atEof = true
 		end 'includeDecLast'

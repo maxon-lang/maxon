@@ -757,6 +757,10 @@ export enum TypeDeclKind
 	rangedAlias
 	functionAlias
 	genericAlias
+	// ⭐ `typealias Pair = (Num, Num)` (P1.10) — a name for a synthesized TUPLE type. Appended at the END of
+	// the alias band, which is the invariant that keeps `rangedAlias to …` range arms honest: an insertion
+	// between two endpoints is silently swallowed, so both arms below name the new endpoint explicitly.
+	tupleAlias
 end 'TypeDeclKind'
 
 // The SOURCE KEYWORD that introduced a declaration of this kind — the word a diagnostic must call it
@@ -780,7 +784,7 @@ export function typeDeclKeyword(kind TypeDeclKind) returns String
 		enumType gives "enum"
 		unionType gives "union"
 		interfaceType gives "interface"
-		rangedAlias to genericAlias gives "typealias"
+		rangedAlias to tupleAlias gives "typealias"
 	end 'k'
 end 'typeDeclKeyword'
 
@@ -790,7 +794,7 @@ end 'typeDeclKeyword'
 export function isTypeAliasDecl(kind TypeDeclKind) returns bool
 	return match kind 'k'
 		structType to interfaceType gives false
-		rangedAlias to genericAlias gives true
+		rangedAlias to tupleAlias gives true
 	end 'k'
 end 'isTypeAliasDecl'
 

@@ -1646,6 +1646,110 @@ function singletonInteger() returns MaxonTypeArray
 	return args
 end 'singletonInteger'
 
+// ⭐⭐ **A TUPLE IS A SYNTHESIZED STRUCT, NOT A STRUCTURAL TYPE VARIANT (P1.10).** `(10, 32)` mints a
+// `StructLayout` under a reserved, MANGLED name and the value is typed with the existing
+// `MaxonType.structRef(TypeNameId)` — so a tuple adds no `MaxonType.tuple` / `ValueTypeTag.tuple` arm, and
+// none of the ~25 exhaustive `match` sites over those two unions grows a case. Every tuple mechanism then
+// falls out of machinery that already exists and is already debugged: the box is `emitStructLiteral`'s
+// `__mm_alloc` plus one `storeIndirect` per element, `t.0` is `emitFieldLoad` at `offsetOfField(0)`, and a
+// tuple holding a `String` gets its whole drop cascade from `installStructDestructors`, which synthesizes one
+// for any layout in `project.structTypes` that owns a managed field.
+//
+// The bootstrap does exactly this (`IrStructType … isTuple: true`, positional fields `_0`/`_1`, mangled
+// `__Tuple_<elem>_<elem>` — `maxon-sharp/Compiler/MLIR/Core/MlirType.cs:282-295`). v1 instead mints a
+// `__TupleN` BASE struct plus a `genericInstance` over the element types (`Parser.maxon:17127`), and shv2
+// takes the bootstrap's MONOMORPHIC form for two reasons: `StructLayoutMap` is name-keyed and `structRef`
+// already resolves id → name → layout, so a mangled name drops straight in; and a generic instance's RANGED
+// argument is part of its identity (e4146cf8e), which would make `(Integer, Integer)` and `(int, int)` two
+// different tuple types — the very thing `specs-shv2/tuples.md`'s `tuple-as-param` requires them not to be.
+export let TupleTypeNamePrefix = b"__Tuple"
+
+// ⚠ **THE ARITY RIDES IN FRONT AND THE ELEMENTS JOIN WITH A CHARACTER NO ELEMENT NAME CAN HOLD** — the
+// injectivity rule the Architecture states for `witnessTableLabel`, spent here. An `_` join is NOT injective
+// (`_` is inside the identifier alphabet), so `(A_B, C)` and `(A, B_C)` would both spell `__Tuple_A_B_C` and
+// the second would silently BECOME the first: one layout, two element lists, and a drop cascade taken from
+// whichever registered last. `.` is outside the alphabet the lexer admits inside an identifier, and the
+// ARITY is what keeps a NESTED tuple decodable — without it the flattened element list is prefix notation
+// with variable arity, where `((i,i),i,i)` and `((i,i,i),i)` collide.
+//
+// ⚠ Deliberately its own constant rather than `IrInterface`'s `WitnessLabelSeparator` or the parser's
+// `MethodNameSeparator`, for the reason the first of those states at length: three joins whose admissible
+// sets differ are three facts, and one constant would couple them so a change to any moved the others.
+export let TupleElementSeparator = "."
+
+// The positional field name of tuple element `index` — `_0`, `_1`, … THE one speller, shared by the layout
+// builder here and the parser's `.N` → field-name rewrite, so the slot a literal fills and the slot `t.0`
+// reads cannot come to disagree. It is also the name the SOURCE may spell directly (`p._0`, which
+// `specs-shv2/tuples.md` writes in five cases): a tuple's fields are ordinary struct fields, so the
+// positional sugar and the bare name resolve through one `indexOfField`.
+export function tupleFieldName(index FieldIndex) returns ByteArray
+	return "_{index}".toByteArray()
+end 'tupleFieldName'
+
+// Is `name` a synthesized tuple type's name? The prefix is inside the `__` reserved space `E2051` bars every
+// declaration from (`Parser.requireUnreservedName`), so a user `type` can never contest one and this test can
+// never answer yes for a declared name.
+export function isTupleTypeName(name ByteArray) returns bool
+	return bytesStartWith(name, prefix: TupleTypeNamePrefix)
+end 'isTupleTypeName'
+
+// The layout of a tuple whose elements are `elements`, ALREADY canonical and already interned against the
+// table the caller wants the layout to live in. Fields are positional (`_0`, `_1`, …) in element order — which
+// IS the layout, since `StructLayout.offsetOfField` derives an offset from the index — and every one is
+// `export var`: a tuple has no encapsulation to enforce (`requireFieldAccessible` must let `t.0` through from
+// anywhere) and `t.0 = 20` is legal on a `var` binding.
+//
+// The ONE builder, called once per interner: `ProgramSignatures` builds its own copy against its own table and
+// the parser builds the artifact's against the file's, because `remapArtifact` REWRITES an artifact layout's
+// field types in place and a shared object would corrupt the index's copy.
+export function tupleStructLayout(name ByteArray, elements MaxonTypeArray) returns StructLayout
+	var layout = StructLayout.create(name)
+	for i in 0 upto elements.count() 'eachElement'
+		layout.addField(tupleFieldName(i), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, exported: true, defaultValue: FieldDefault.none)
+	end 'eachElement'
+	return layout
+end 'tupleStructLayout'
+
+// ⚠ **A TUPLE HAS AT LEAST TWO ELEMENTS, AND `(a)` STAYS GROUPING FOREVER.** `(2 + 3) * 4` means 20 because
+// the parentheses group; a one-element tuple would make that spelling ambiguous with nothing to disambiguate
+// it, so v1 rejects a 1-tuple at four separate sites and shv2 rejects it at the one place a tuple is minted.
+export let MinTupleArity = 2 as FieldIndex
+
+// Why a type cannot be a tuple ELEMENT — raised by `ProgramSignatures.internTupleType` and turned into a
+// positioned `E2015` by the parser, which is the only party holding a token to anchor it on.
+//
+// It is a THROW rather than a `panic` because every case is reachable from source: a `(T, int)` inside a
+// generic body, and a tuple built out of a value whose type the front end never resolved.
+export union TupleElementRejection
+	// The element's type tag has no place in a tuple's identity — a `typeParameter` (the shared body has no
+	// concrete type to key the layout on, and the drop cascade would be built against a borrow) or an
+	// `unresolved` (nothing to mangle).
+	unsupportedTag(position FieldIndex, tagName String)
+	// The element's canonical name holds the element SEPARATOR, so the join that spells the tuple's name
+	// would stop being injective (see `TupleElementSeparator`). Exactly one name form in the language can do
+	// this — a PER-INSTANCE qualified alias, `StrWrapper.Idx` — since the BASE-TEMPLATE form collapses to its
+	// underlying primitive in `canonicalTupleElement` and every other spelling is a bare identifier.
+	separatorInElementName(position FieldIndex, elementName String)
+end 'TupleElementRejection'
+
+// Is `element` a type a tuple can be keyed on? A `typeParameter` is not: the shared generic body has no
+// concrete type to build a layout or a drop cascade against, and `mangleTypeArg` would spell it by POSITION,
+// so two instantiations would silently share one layout. An `unresolved` is not: there is nothing to mangle.
+// Both are reachable from source, so both are a positioned rejection rather than a panic.
+// The name id `id` denotes in the interner it was MINTED against — `ProgramSignatures.nameOfId`'s twin for the
+// direction that reads a FOREIGN table (`adoptTypeFrom`). A miss is an invariant break, not a case: every id
+// handed to that door was minted by the caller's own `parseTypeReference` against exactly this table.
+function foreignNameOf(typeNames TypeNameInterner, id TypeNameId) returns ByteArray
+	return try typeNames.nameOf(id) otherwise panic("foreignNameOf: type-name id {id} is not in the interner it was passed with — a type crossing INTO the signature index must carry ids minted against the interner named alongside it")
+end 'foreignNameOf'
+
+function requireTupleElementType(element MaxonType, position FieldIndex) throws TupleElementRejection
+	let tag = maxonTypeTag(element)
+	if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'unsupported'
+		throw TupleElementRejection.unsupportedTag(position, tagName: typeTagName(tag))
+	end 'unsupported'
+end 'requireTupleElementType'
+
 // The composite-key index a `GenericInstanceRegistry` interns through, and the alias-name map that
 // resolves `IntBox` to its interned instance. Keyed on `ByteArray` — a cheap string key built from
 // the base id and the arg (tag, id) pairs — so interning is O(1) amortized (NOT v1's linear
@@ -1692,6 +1796,10 @@ export typealias CompiledInstanceNameMap = Map with (GenericInstanceId, ByteArra
 // separate from `CompiledInstanceNameMap`: that one names EMITTED symbols (`__destruct_…`, `__layout_…`) and
 // must not move, while this one exists only to answer "are these two values the same type?".
 export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArray)
+
+// ⭐ A tuple name ⇒ its CANONICAL tuple name (P1.10). Keyed by name rather than by an id because a tuple has
+// no id: it IS its name (`ProgramSignatures.tupleCanonicalNames`).
+export typealias TupleCanonicalNameMap = Map with (ByteArray, ByteArray)
 
 // The element type NAMES whose `Array with <name>` literal instance the sweep has ALREADY over-interned
 // (P1.7 slice 3). `internArrayLiteralAggregateInstances` runs once per file that materializes a
@@ -2067,6 +2175,21 @@ export type ProgramSignatures
 	// for the quadratic this removes. Empty for a program that instantiates no generic.
 	var compiledInstanceNames as CompiledInstanceNameMap
 	var canonicalInstanceNames as CanonicalInstanceNameMap
+	// ⭐ Every tuple name this index has seen ⇒ its CANONICAL one (P1.10). A name the DECLARATION SWEEP minted
+	// spells its elements the way the source wrote them (`__Tuple2.Integer.Integer`), because the alias
+	// registry that says what `Integer` means is still being built when the sweep runs; `adoptType` rewrites
+	// it to the canonical form (`__Tuple2.int.int`) at every read, and this memo is what makes that rewrite a
+	// map hit rather than a re-derivation. A canonical name maps to itself, so one probe answers both
+	// directions. Empty for a program with no tuples.
+	var tupleCanonicalNames as TupleCanonicalNameMap
+	// ⭐ A TUPLE typealias name ⇒ the tuple type it names (P1.10) — `Pair` ⇒ `__Tuple2.int.int`. The tuple
+	// twin of `genericAliases`, and it exists for the same reason: a tuple type has no source-spellable name,
+	// so `typealias Pair = (Num, Num)` is the only way to write one in a place that takes a bare identifier
+	// (`Array with Pair`). Like a RANGED alias and unlike a function/generic one it mints NO nominal identity
+	// — a `Pair` reference resolves straight through to the tuple's own `structRef` — so nothing downstream
+	// ever sees the alias name. Read through `tupleAliasTarget`, which canonicalizes: the sweep writes the
+	// spelling it saw and the real parse the canonical one, exactly as every other tuple name does.
+	var tupleAliases as TupleCanonicalNameMap
 	// The element type names whose `Array with <name>` managed-literal instance has already been over-interned
 	// by an earlier file's sweep (P1.7 slice 3) — the dedup that keeps `internArrayLiteralAggregateInstances`
 	// O(types) rather than O(files × types). See `ArrayLiteralElementNameSet`.
@@ -2198,7 +2321,7 @@ export type ProgramSignatures
 	var constCastTargets as ConstCastTargetSet
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleAliases: TupleCanonicalNameMap.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, constCastTargets: ConstCastTargetSet.create()}
 	end 'create'
 
 	// Could `name` denote a top-level MANAGED binding — `let` or `var` — anywhere in this program? A
@@ -3888,6 +4011,247 @@ export type ProgramSignatures
 		args.push(MaxonType.character)
 		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: args)
 	end 'setInstanceForCharacter'
+
+	// --- Synthesized TUPLE types (P1.10) ---
+	//
+	// ⭐ **THE PARSER IS THE ONLY PRODUCER, AND IT REGISTERS INTO THIS INDEX DIRECTLY.** Every other
+	// compiler-owned layout (`__StringIndex`, `__CharacterSet`) is registered by the declaration SWEEP,
+	// because a TOKEN scan can see the method that produces one. A tuple's identity is its ELEMENT TYPES, and
+	// those are known only where the expression is parsed — `let t = (10, 32)` is two `integer`s and a token
+	// scan cannot say so — so the sweep cannot pre-register the set. The registration is nevertheless safe on
+	// exactly the terms that make the sweep-then-read discipline work elsewhere: the layout is a PURE FUNCTION
+	// of the name (which is a pure function of the element types), and the write is idempotent, so no ordering
+	// between files, and no interleaving of a parallel fan-out, can produce two different answers.
+	//
+	// The parser records the SAME layout into its `FileParseArtifact` as well, so `mergeArtifact` commits it
+	// to `project.structTypes` — the registry `installStructDestructors` walks. Two registries, exactly as a
+	// DECLARED `type` lives in both and for the reason `StructLayout`'s header states.
+	//
+	// ⚠ **THE STANDING OBLIGATION THAT COMES WITH THAT, FOR WHOEVER BUILDS THE INCREMENTAL DRIVER.** The two
+	// registries are rebuilt on DIFFERENT triggers — `project.structTypes` at every merge (from artifacts
+	// that may be cache HITS), this index whenever any file's bytes change — and a tuple minted only inside a
+	// function BODY is registered here by the PARSE. So a rebuild in which a body-only edit to one file
+	// leaves another file's parse memoized would hand `installStructDestructors` a layout this index has
+	// never seen, and its `structHasManagedField(name)` would panic. A DECLARED tuple is never missing: the
+	// sweep re-runs `parseTypeReference` over every declaration on every rebuild.
+	//
+	// It is UNREACHABLE today and was measured so, not assumed: nothing runs the full pipeline twice on one
+	// `Project` — `build` and each spec-test worker construct a fresh one, and `verify-warm-rebuild` drives
+	// `queryAllModule` alone for its cache and invalidation probes (`compileColdOnce` takes its own
+	// `Project`). The fix when that changes is to derive the destructor installer's per-field questions from
+	// the layout it ALREADY HOLDS instead of re-asking this index by name; a restoration pass that no code
+	// path can exercise would be the unread-index shape the query spine's header warns about.
+
+	// ⭐ **INTERN THE TUPLE TYPE OF `elements`, and answer with its MANGLED NAME.** The one door a tuple type
+	// is minted through — a `(a, b)` literal, a `(T, U)` type annotation, a `typealias Pair = (…)` — so every
+	// spelling of one tuple type lands on ONE layout.
+	//
+	// ⭐⭐ **IT CANONICALIZES, AND ONLY ONCE THE WHOLE PROGRAM IS FOLDED.** A ranged alias collapses to its
+	// underlying primitive, which is what makes `sum(t (Integer, Integer))` accept the `(10, 32)` a caller
+	// built — the identity rule the bootstrap gets from `IrType.Resolve` (`MlirType.cs:292`). It cannot be
+	// done during the SWEEP: `Integer`'s own declaration may be below the function, or in a file not yet
+	// folded, so the alias registry has no answer yet. A sweep-minted name is therefore the SOURCE spelling
+	// (`__Tuple2.Integer.Integer`), and `adoptType` — the ONE door this index's types cross out of — rewrites
+	// it to the canonical one at every read. That is the identical arrangement `declaredSlotType`'s three
+	// re-tags already live under, and for the identical reason.
+	// ⚠ **THE ELEMENT REJECTIONS FIRE ONLY IN THE REAL PARSE, and that is the standing sweep discipline
+	// rather than a hole.** During the sweep a generic-instance / function / inner alias is still a bare
+	// `named` (its registry is being built), so the canonical form the rejections are asked about does not
+	// exist yet — a sweep-time verdict would be decided by file order. The sweep therefore records whatever
+	// spelling it sees, the real parse asks the question with the whole program in hand, and a program that
+	// fails it is rejected before anything downstream reads the tuple. The sweep's spelling is registered but
+	// never referenced, exactly like the instances `internArrayLiteralAggregateInstances` over-interns.
+	export function internTupleType(elements MaxonTypeArray, from TypeNameInterner) returns ByteArray throws TupleElementRejection
+		var interned = MaxonTypeArray.create()
+		for i in 0 upto elements.count() 'eachElement'
+			let adopted = self.adoptTypeFrom(try elements.get(i) otherwise panic("internTupleType: elements.get OOB at {i} below count {elements.count()}"), from: from)
+			if not self.allFilesFolded 'tolerantSweep'
+				interned.push(adopted)
+				continue
+			end 'tolerantSweep'
+
+			try requireTupleElementType(adopted, position: i)
+			let canonical = self.canonicalTupleElement(adopted)
+			try self.requireSeparatorFreeElementName(canonical, position: i)
+			interned.push(canonical)
+		end 'eachElement'
+
+		return self.registerTupleLayout(interned)
+	end 'internTupleType'
+
+	// ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT** — `witnessTableLabel`'s
+	// discipline, asked where it is spent rather than argued above it. A canonical element renders to a bare
+	// identifier for every tag but one, and the exception is the point: a NESTED tuple's own name holds the
+	// separator, and is exempt because the ARITY in front of it makes it self-delimiting (see
+	// `TupleElementSeparator`). Everything else holding a `.` would make two distinct element lists spell one
+	// name, so it is refused.
+	function requireSeparatorFreeElementName(element MaxonType, position FieldIndex) throws TupleElementRejection
+		if tagIsStructRef(maxonTypeTag(element)) and isTupleTypeName(self.nameOfId(typeNameIdOf(element))) 'nestedTuple'
+			return
+		end 'nestedTuple'
+
+		let rendered = self.tupleElementName(element)
+		if rendered.contains(TupleElementSeparator) 'separatorInName'
+			throw TupleElementRejection.separatorInElementName(position, elementName: rendered)
+		end 'separatorInName'
+	end 'requireSeparatorFreeElementName'
+
+	// Register the layout for an already-interned, already-canonical element list and answer its name.
+	// Idempotent — a second mint of the same tuple type is a `contains` hit that builds nothing.
+	function registerTupleLayout(elements MaxonTypeArray) returns ByteArray
+		let name = self.tupleTypeNameOf(elements)
+		if self.structTypes.contains(name) 'alreadyRegistered'
+			return name
+		end 'alreadyRegistered'
+
+		self.structTypes.upsert(name, value: tupleStructLayout(name, elements: elements))
+		return name
+	end 'registerTupleLayout'
+
+	// `__Tuple<N>.<e0>.<e1>…` — the mangled name of a tuple over `elements`. See `TupleElementSeparator` for
+	// why the arity leads and why the join is `.`.
+	function tupleTypeNameOf(elements MaxonTypeArray) returns ByteArray
+		var out = "{String.from(TupleTypeNamePrefix)}{elements.count()}"
+		for element in elements 'eachElement'
+			out.append(TupleElementSeparator)
+			out.append(self.tupleElementName(element))
+		end 'eachElement'
+		return out.toByteArray()
+	end 'tupleTypeNameOf'
+
+	// The mangled spelling of ONE canonical element. `mangleTypeArg` — the index's structural, build-stable
+	// renderer — answers every tag but one.
+	//
+	// ⚠ **A `function`-TYPED ELEMENT IS THE EXCEPTION, because `mangleTypeArg` renders every function type as
+	// the bare tag name `function`.** That is correct for a descriptor label (a code pointer is a code pointer)
+	// and WRONG for an identity: `(UnaryOp, int)` and `(BinaryOp, int)` would spell one name, and a value of
+	// one would then be accepted where the other is declared. A function type carries its governing alias
+	// NAME, so that is what rides here.
+	function tupleElementName(element MaxonType) returns String
+		if maxonTypeTag(element) == ValueTypeTag.function 'functionAlias'
+			return String.from(self.nameOfId(typeNameIdOf(element)))
+		end 'functionAlias'
+		return self.mangleTypeArg(element)
+	end 'tupleElementName'
+
+	// ⭐ **THE CANONICAL FORM OF ONE TUPLE ELEMENT — what a tuple's IDENTITY is keyed on.**
+	//
+	// It routes through `declaredSlotType`, the SAME door a struct FIELD's declared type comes out of, so a
+	// tuple element and a field of the same declared type can never be classified differently — a function
+	// alias becomes `function`, a generic-instance alias becomes `genericInstance`, a ranged float alias
+	// becomes `float`. Then a ranged INT alias collapses through `canonicalizeRangedAlias` (which
+	// `declaredSlotType` deliberately leaves alone, because a `named` int alias carries its range and
+	// signedness for the shift rule), and an INNER ranged alias (`Wrapper.Idx`) collapses the same way — the
+	// only name form in the language that can hold the element separator, so resolving it is what keeps the
+	// join injective rather than merely usually-injective.
+	//
+	// A `named` denoting a declared `type` is re-tagged `structRef`, matching what `Parser.resolveNamedStruct`
+	// does to a parameter, so the tuple's field type routes to the struct's own drop. A `named` denoting an
+	// enum/union stays `named`, which is the tag a union value carries.
+	function canonicalTupleElement(element MaxonType) returns MaxonType
+		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames))
+		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
+			return self.canonicalNestedTuple(resolved)
+		end 'notNamed'
+
+		let name = self.nameOfId(typeNameIdOf(resolved))
+		if self.isInnerAlias(name) 'innerRangedAlias'
+			match self.innerAliasOf(name) 'inner'
+				declared(alias) then return alias.underlying
+				undeclared then panic("canonicalTupleElement: `isInnerAlias('{String.from(name)}')` is true but `innerAliasOf` answered undeclared — the two read one registry")
+			end 'inner'
+		end 'innerRangedAlias'
+		if self.structTypes.contains(name) 'declaredStruct'
+			return MaxonType.structRef(typeNameIdOf(resolved))
+		end 'declaredStruct'
+		return resolved
+	end 'canonicalTupleElement'
+
+	// A NESTED tuple element carries a `structRef` whose name may itself be a sweep spelling, so it is
+	// canonicalized recursively — the layout it names is registered, so its element list is in hand.
+	// Terminates: each step strips one nesting level off a type written in finite source.
+	function canonicalNestedTuple(element MaxonType) returns MaxonType
+		if not tagIsStructRef(maxonTypeTag(element)) 'notStruct'
+			return element
+		end 'notStruct'
+		let name = self.nameOfId(typeNameIdOf(element))
+		if not isTupleTypeName(name) 'notTuple'
+			return element
+		end 'notTuple'
+		return MaxonType.structRef(self.typeNames.intern(self.canonicalTupleName(name)))
+	end 'canonicalNestedTuple'
+
+	// ⭐ **THE CANONICAL TUPLE NAME FOR A NAME THE SWEEP MINTED.** Re-canonicalizes the registered layout's
+	// element list now that every declaration is folded, registers the canonical layout if it is new, and
+	// MEMOIZES — so the rewrite `adoptType` performs at every read costs one map hit after the first.
+	// A name that is already canonical maps to itself, which is what makes the memo cover both directions.
+	export function canonicalTupleName(name ByteArray) returns ByteArray
+		if let memoized = try self.tupleCanonicalNames.get(name) 'alreadyDerived'
+			return memoized
+		end 'alreadyDerived'
+
+		let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.canonicalTupleName: `{String.from(name)}` is not registered — every tuple `structRef` in the compiler was minted by `internTupleType`, which registers the layout before it hands the name back")
+		var canonical = MaxonTypeArray.create()
+		for element in layout.fieldTypes 'eachElement'
+			canonical.push(self.canonicalTupleElement(element))
+		end 'eachElement'
+
+		let canonicalName = self.registerTupleLayout(canonical)
+		self.tupleCanonicalNames.upsert(name, value: canonicalName)
+		return canonicalName
+	end 'canonicalTupleName'
+
+	// Record `typealias <name> = (<elements>)` (P1.10). Written by BOTH the declaration sweep and the real
+	// parse from the same reader, exactly as every other alias registry is; the value is whichever spelling
+	// the writing pass could produce, and `tupleAliasTarget` canonicalizes on the way out.
+	export function recordTupleAlias(name ByteArray, tupleName ByteArray)
+		self.tupleAliases.upsert(name, value: tupleName)
+	end 'recordTupleAlias'
+
+	// Is `name` a TUPLE typealias? THE hot-path guard `parseTypeReference` asks of every bare type name, so
+	// it must allocate nothing (`Map.contains`) — the `isGenericAlias` twin.
+	export function isTupleAlias(name ByteArray) returns bool
+		return self.tupleAliases.contains(name)
+	end 'isTupleAlias'
+
+	// The tuple type `name` aliases, CANONICAL. Precondition: `isTupleAlias(name)`.
+	export function tupleAliasTarget(name ByteArray) returns ByteArray
+		return self.canonicalNameOfStruct(try self.tupleAliases.get(name) otherwise panic("ProgramSignatures.tupleAliasTarget: '{String.from(name)}' is not a tuple typealias — every caller asks `isTupleAlias` first"))
+	end 'tupleAliasTarget'
+
+	// A tuple's field type ADOPTED into `into` — `fieldTypeOf`'s answer for every element at once, which is
+	// what the parser needs to build the artifact's own copy of the layout (`remapArtifact` rewrites an
+	// artifact layout's field types in place, so the index's copy may never be shared with it).
+	export function adoptTupleLayout(name ByteArray, into TypeNameInterner) returns StructLayout
+		let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.adoptTupleLayout: `{String.from(name)}` is not registered — every caller reached here with a name `internTupleType` handed back")
+		var adopted = MaxonTypeArray.create()
+		for element in layout.fieldTypes 'eachElement'
+			adopted.push(self.adoptType(element, into: into))
+		end 'eachElement'
+		return tupleStructLayout(name, elements: adopted)
+	end 'adoptTupleLayout'
+
+	// ⭐ **THE MIRROR OF `adoptType`: re-intern an id-bearing type INTO this index's own table.** `adoptType`
+	// is the door this index's ids leave by; this is the one they arrive by, and the parser is its only caller
+	// (a tuple's element types are minted against the FILE's interner and the layout registered here must not
+	// carry a foreign id — the ID PROBLEM in this file's header). By NAME, never by raw id, exactly as its
+	// mirror is.
+	function adoptTypeFrom(t MaxonType, from TypeNameInterner) returns MaxonType
+		return match t 'r'
+			named(id) gives MaxonType.named(self.typeNames.intern(foreignNameOf(from, id: id)))
+			structRef(id) gives MaxonType.structRef(self.typeNames.intern(foreignNameOf(from, id: id)))
+			function(id) gives MaxonType.function(self.typeNames.intern(foreignNameOf(from, id: id)))
+			// Everything else carries no per-file interner id — a primitive, a `String`/`Character` (no name
+			// at all), a type-parameter POSITION and a whole-program `GenericInstanceId` — so it crosses
+			// unchanged, exactly as `adoptType`'s own arms state.
+			boolean to float gives t
+			exitCode to unresolved gives t
+			string gives t
+			typeParameter gives t
+			genericInstance gives t
+			character gives t
+		end 'r'
+	end 'adoptTypeFrom'
 
 	// --- Generic-instance queries (P1.6-A) ---
 
@@ -5588,7 +5952,14 @@ export type ProgramSignatures
 	export function adoptType(t MaxonType, into TypeNameInterner) returns MaxonType
 		return match t 'r'
 			named(id) gives MaxonType.named(into.intern(self.nameOfId(id)))
-			structRef(id) gives MaxonType.structRef(into.intern(self.nameOfId(id)))
+			// ⭐ **A TUPLE `structRef` IS CANONICALIZED ON THE WAY OUT (P1.10), and this door is where it has
+			// to be.** A tuple minted by the DECLARATION SWEEP names its elements the way the source spelled
+			// them, because the registries that say what those spellings MEAN are still being built when the
+			// sweep runs (see `internTupleType`). Every sweep-recorded type reaches a reader through here — a
+			// call RESULT via `adoptValueReturn`, a struct FIELD via `declaredSlotType` — so rewriting it once,
+			// here, is what makes `let t = makePair(…)` and a locally-built `(10, 32)` the same type. It is the
+			// same arrangement `declaredSlotType`'s three re-tags live under, one tier down.
+			structRef(id) gives MaxonType.structRef(into.intern(self.canonicalNameOfStruct(self.nameOfId(id))))
 			boolean to float gives t
 			exitCode to unresolved gives t
 			// A `String` carries no name id, so like a primitive it passes through unchanged.
@@ -5668,6 +6039,19 @@ export type ProgramSignatures
 		end 'eachArg'
 		return out
 	end 'mixGenericInstance'
+
+	// A struct name as a READER outside this index must see it: a TUPLE name is canonicalized (P1.10), every
+	// other name is itself. Split out of `adoptType`'s arm so the `__Tuple` prefix test — which every
+	// `structRef` crossing pays — is one `bytesStartWith` and states why it is there.
+	//
+	// The `allFilesFolded` gate is the same one every whole-program answer is behind: before it, a tuple's
+	// canonical form is not yet computable and the sweep's own reads must see the spelling the sweep minted.
+	function canonicalNameOfStruct(name ByteArray) returns ByteArray
+		if not self.allFilesFolded or not isTupleTypeName(name) 'notACanonicalizableTuple'
+			return name
+		end 'notACanonicalizableTuple'
+		return self.canonicalTupleName(name)
+	end 'canonicalNameOfStruct'
 
 	function nameOfId(id TypeNameId) returns ByteArray
 		return try self.typeNames.nameOf(id) otherwise panic("ProgramSignatures: type-name id {id} is not in this index's own interner — every id it stores was minted by foldFile's fold into that table")
