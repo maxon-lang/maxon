@@ -159,7 +159,7 @@ take its blocker instead)*
 
 | id | Slice | Lane | Status | Owner (branch) | Claimed (UTC) |
 |---|---|---|:--:|---|---|
-| **G1** | **Split `compilerExe` → compiler-under-test + WORKER exe.** §"⚠⚠ STEP 0" — unsplit, the gate passes while testing nothing | L-harness | ⬜ FREE | — | — |
+| **G1** | **Split `compilerExe` → compiler-under-test + WORKER exe.** §"⚠⚠ STEP 0" — unsplit, the gate passes while testing nothing | L-harness | 🔶 CLAIMED | `slice/G1-worker-exe-split` | 2026-07-29T18:22Z |
 | **S1** | **`__Builtins.*` QUALIFIED-call recognition** for the programs shv2 compiles (a qualified callee can never match the bare-name table). Step (2) of §"STDLIB WHITELIST"'s own sequence | L-stdlib | ⬜ FREE | — | — |
 | **S2** | **Whitelist entries 4…n** — `FilePath` · `File` · `Directory` · `Subprocess` · `Executable` · `StringArray`. **The dominant cost of the whole gate** | L-stdlib | ⛔ BLOCKED | on **S1**, and see the ⚠ below | — |
 | **D1** | **Methods on `union` / `enum`** (`Parser.maxon:7922`, already self-labelled *"arrive with a later rung"*). Unblocks **5 of the 13** harness files by itself | L-parser-decl | ⬜ FREE | — | — |
