@@ -441,16 +441,26 @@ error E5001: the loop at <fragment>:18 needs 1 more register(s) than are availab
   and the loop body no longer needs a register for each one.
 ```
 
-<!-- test: straight-line-overflow-names-no-loop -->
+<!-- test: straight-line-wide-signature-compiles -->
 <!-- targets: x64-windows, x64-linux -->
-**A FULL-POOL OVERFLOW NEED NOT BE IN A LOOP.** While a function was capped at six parameters, straight-line
-code could not hold more live values than the pool, and the anchor helper's line-0 fallback carried a comment
-saying it "cannot happen for a real loop overflow". Stack arguments removed the cap: twenty-one parameters,
-each read by both calls and again by the sum, are all live at the call and overflow the fourteen-GPR pool with
-no loop anywhere. The program is correctly REFUSED — what this pins is that the message says so truthfully.
-It must name `the code at`, not a loop that does not exist; it must anchor on a REAL source line, not `:0`;
-and the uses must be counted over the FUNCTION, because counting them over a loop that is not there ranked
-every candidate 0 and made "cheapest first" an empty promise.
+⚠⚠ **THIS CASE ASSERTED AN `E5001` UNTIL P1.9's CLOSE, AND THAT `E5001` WAS FALSE.** Twenty-one parameters,
+each read by both calls and again by the sum, are live across the calls and outnumber the fourteen-GPR pool
+with no loop anywhere — so the case was written to pin the STRAIGHT-LINE form of the message (`the code at`,
+not a loop that does not exist; a real source line, not `:0`; uses counted over the FUNCTION). The refusal
+itself was never examined.
+
+It does not survive examination. Every one of those values is ALREADY IN MEMORY by the time the full-pool
+peak is reached: each is confined at the two calls, and the forced bracket the ABI owes it puts it in a slot.
+Relieving the peak therefore costs NOTHING that has not already been paid — no new store, no new slot, only a
+reload before the uses that remain — and `isForcedBracketVictim` now offers exactly that at a COLD peak as
+well as a confined one. The program compiles, and returns 21 + 21 + 21.
+
+⚠ **THE `E5001` THE ARCHITECTURE ARGUES FOR IS UNTOUCHED, AND THAT IS THE LINE THIS CASE NOW SITS BESIDE.**
+The refusal is for *"a value the LOOP genuinely uses, when the working set exceeds the whole pool"* — the
+per-iteration cost of a reload at every use inside a loop body. A value used inside a loop is not
+cold-spillable, so the re-relief arm cannot reach it: `hot-loop-overflow`, `hot-loop-param-used` and every
+other loop case above still raise E5001, byte for byte. What changed is only the case the cost argument never
+covered — straight-line code, where there is no iteration and no per-iteration cost.
 ```maxon
 function sink(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int, p7 int, p8 int, p9 int, p10 int, p11 int, p12 int, p13 int, p14 int, p15 int, p16 int, p17 int, p18 int, p19 int, p20 int, p21 int) returns int
 	return p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 + p20 + p21
@@ -466,34 +476,8 @@ function main() returns ExitCode
 	return wide(1, p2: 1, p3: 1, p4: 1, p5: 1, p6: 1, p7: 1, p8: 1, p9: 1, p10: 1, p11: 1, p12: 1, p13: 1, p14: 1, p15: 1, p16: 1, p17: 1, p18: 1, p19: 1, p20: 1, p21: 1)
 end 'main'
 ```
-```maxoncstderr
-error E5001: the code at <fragment>:6 needs 1 more register(s) than are available
-  15 values must be held in registers at once at this point, but
-  only 14 registers are available. Every value that could be moved out of the
-  way already was; the ones listed below are all live across this point at the same
-  time, so no further spill can relieve it.
-
-  remove 1 of these 15 value(s) from this point, cheapest first (ranked by uses in the function):
-    <fragment>:6:23   used 2 times in the function
-    <fragment>:6:39   used 2 times in the function
-    <fragment>:6:55   used 2 times in the function
-    <fragment>:6:63   used 2 times in the function
-    <fragment>:6:87   used 2 times in the function
-    <fragment>:6:150   used 2 times in the function
-    <fragment>:6:168   used 2 times in the function
-    <fragment>:6:177   used 2 times in the function
-    <fragment>:6:79   used 3 times in the function
-    <fragment>:6:105   used 3 times in the function
-    <fragment>:6:114   used 3 times in the function
-    <fragment>:6:123   used 3 times in the function
-    <fragment>:6:132   used 3 times in the function
-    <fragment>:6:141   used 3 times in the function
-    <fragment>:6:186   used 3 times in the function
-
-  to fix: hold this working set in an array and index it, or split the function so
-  fewer of these values are live at the same time.
-  array elements are never promoted into registers, so the values stay in memory
-  and the code no longer needs a register for each one.
+```exitcode
+63
 ```
 
 <!-- test: hot-loop-param-used-arm64 -->

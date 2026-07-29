@@ -3644,15 +3644,20 @@ end 'zeroRow'
 //     a call inside a loop is live across the call around the BACK EDGE, so tier 1 cannot kill it; but
 //     re-emitting it before EVERY use can, and that is still free. Preferred over any spill for the
 //     same reason tier 1 is.
-//  4. THE FULL SPLIT (`SplitScope.everyUse`), or a RE-RELIEF of a value already in a slot — CONFINED
-//     peaks only. This is the forced bracket the amended Rule 2 owes a loop-invariant that a call
-//     inside the loop reads on both sides of itself: it fits the machine (14 registers, 6 values), the
-//     ABI merely denies it the 9 caller-saved ones, and the only placement that works is a load before
-//     each use. Nothing is searched. See `SplitScope` and `noVictimAtPeak`.
+//  4. THE FULL SPLIT (`SplitScope.everyUse`) at a CONFINED peak, or a RE-RELIEF of a value already in a
+//     slot at EITHER kind. The forced half is the bracket the amended Rule 2 owes a loop-invariant that
+//     a call inside the loop reads on both sides of itself: it fits the machine (14 registers, 6
+//     values), the ABI merely denies it the 9 caller-saved ones, and the only placement that works is a
+//     load before each use. The re-relief half is a value tier 2 already spilled at a LATER peak, whose
+//     pre-peak use kept the original alive here — see `isForcedBracketVictim` for the measurement.
+//     Nothing is searched. See `SplitScope` and `noVictimAtPeak`.
 //
-// Tiers 3 and 4 are CONFINED-only because a FULL-pool peak that tier 2 cannot relieve is precisely the
-// program E5001 exists to refuse: the loop's genuine working set is larger than the machine, and
-// reloading at every use inside the loop is the per-iteration cost this design will not silently pay.
+// Tier 3 is CONFINED-only, and so is tier 4's FULL-SPLIT half, because a FULL-pool peak that tier 2
+// cannot relieve by writing a NEW store is precisely the program E5001 exists to refuse: the loop's
+// genuine working set is larger than the machine, and reloading at every use inside the loop is the
+// per-iteration cost this design will not silently pay. That argument is about a LOOP, and it does not
+// reach a value whose def and every use are at depth 0 — which is why the re-relief half is not
+// confined to confined peaks.
 //
 // Within a tier the victim is the one with the FARTHEST next use (Belady/MIN). A spill additionally
 // needs its store to FIT the pool (`storeFitsPool`, `defLiveAfter[v] ≤ pool`): a value whose def-point
@@ -3929,29 +3934,52 @@ function isFullRematVictim(module TargetModule, index UseIndex, valueId ValueId,
 	return isForcedPlacement(placement) and isRematerializable(module, index: index, valueId: valueId)
 end 'isFullRematVictim'
 
-// Is `valueId` a TIER-4 victim — relievable by the FORCED bracket, whatever `killsValueAtPeak` says?
+// Is `valueId` a TIER-4 victim — relievable by the FORCED bracket, whatever `killsValueAtPeak` says,
+// or by a RE-RELIEF of a value memory ALREADY HOLDS?
 //
 // This is the tier that makes `noVictimAtPeak`'s confined panic unreachable, and it is deliberately
 // TOTAL over the confined values: given a store anchor and somewhere to put the store, EVERY value can
 // be made dead across the peak (`splitScopeAt` picks how). It refuses only what it structurally must:
 //
-//  • no store anchor — impossible for a value this function defines, but `hasStoreAnchor` is the one
-//    place that is stated, so it is asked rather than assumed;
+//  • the wrong SHAPE for the placement — `hasStoreAnchor` at a confined peak (impossible for a value
+//    this function defines, but this is the one place it is stated, so it is asked rather than
+//    assumed), and the full Rule 2 shape at a cold one, for the reason below;
 //  • a NEW store that does not fit the pool — a value memory already holds needs no new store at all,
-//    so that gate applies only to a spill that must write one.
+//    so that gate applies only to a spill that must write one;
+//  • at a COLD peak, a value with no slot yet — that is exactly what TIER 2 is, and tier 2 has already
+//    declined it.
 //
-// CONFINED peaks only, for the same reason tier 3 is: at a FULL-pool peak, reloading a value the loop
-// uses at every one of its uses is exactly the per-iteration cost E5001 refuses to pay silently.
+// ⭐⭐ **THE RE-RELIEF ARM SERVES BOTH KINDS OF PEAK, AND THE "CONFINED PEAKS ONLY" RULE THAT USED TO
+// COVER THIS WHOLE TIER WAS TOO WIDE BY ITS OWN ARGUMENT.** That rule's reason is tier 3's: *"at a
+// FULL-pool peak, reloading a value the LOOP uses at every one of its uses is exactly the
+// per-iteration cost E5001 refuses to pay silently."* A COLD-spillable value has its def and EVERY use
+// at loop depth 0 (`isColdSpillable`) — there is no loop and so no per-iteration cost, and Rule 2 holds
+// for the same reason it holds for tier 2. What the wider rule actually refused was a second split of a
+// value tier 2 had already spilled, which is not "the machine is too small" at all:
+//
+//   MEASURED (P1.9, 16 guarded values live across their own guard chain). `chooseVictim` resolves an
+//   exact pressure tie to the HIGHEST-INDEXED tying block (`peakOutranks`), so the driver relieved the
+//   LAST cascade first and walked backwards. Each `afterPeakUses` split rewrote only the uses after
+//   THAT peak, leaving the value's earlier guard `cmp` holding the original in a register — so every
+//   earlier peak still saw all 16 live, and by the time the FIRST cascade was reached 14 of them were
+//   `hasSpillStore` and tier 2 refused them all. E5001 on a program that fits the machine in two
+//   registers: every value could have sat in memory and been reloaded before each of its two uses.
+//
+// Re-relieving one of those at its earliest peak rewrites every use after it — which is all of them —
+// and the peak falls. It is STRICTLY ADDITIVE: tiers run in order, so this arm is reached only when
+// tiers 1 and 2 found nothing, which is precisely the state that used to raise E5001. No program that
+// compiles today can take a different decision because of it.
 function isForcedBracketVictim(index UseIndex, liveness LivenessResult, valueId ValueId, placement SpillPlacement, pressure PressureIndex, poolSize RegCount) returns bool
-	if not isForcedPlacement(placement) 'coldPeak'
+	if not isSpillable(index, valueId: valueId, placement: placement) 'wrongShape'
 		return false
-	end 'coldPeak'
-	if not hasStoreAnchor(index, valueId: valueId) 'noAnchor'
-		return false
-	end 'noAnchor'
+	end 'wrongShape'
 	if index.isSlotResident(valueId) 'alreadyInASlot'
 		return true
 	end 'alreadyInASlot'
+	if not isForcedPlacement(placement) 'coldPeakWithNoSlotIsTier2sToRefuse'
+		return false
+	end 'coldPeakWithNoSlotIsTier2sToRefuse'
+
 	return storeFitsPool(liveness, pressure: pressure, valueId: valueId, poolSize: poolSize)
 end 'isForcedBracketVictim'
 
