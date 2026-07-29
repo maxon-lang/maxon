@@ -3581,17 +3581,28 @@ export type ProgramSignatures
 	// shares, so they cannot come to disagree about when a per-instance value decays.
 	//
 	// A per-instance `Idx` is a NOMINAL wrapper over a SCALAR int, so it DECAYS to plain int wherever a
-	// non-per-instance numeric is expected — exactly as a per-instance argument into a plain-numeric parameter
-	// decays. So the per-instance conflict fires ONLY when the TARGET (`expected`) is itself a per-instance
-	// alias: a per-instance SOURCE (`got`) meeting a non-per-instance target is accepted (no conflict).
+	// value with NO nominal identity of its own is expected — exactly as a per-instance argument into a
+	// plain-numeric parameter decays. `expected.isEmpty()` IS that condition: an empty aggregate name is this
+	// file's one spelling of "carries no nominal identity" (`aggregateNameOf`, `aggregateNameFor` and
+	// `instanceArgAggregateName` all answer it for a scalar, a `String` and a ranged alias). There is nothing
+	// for an `Idx` to decay INTO when the target is a struct, a boxed union/enum or a generic instance, so
+	// against a NAMED target the conflict stands and `namedAggregatesConflict` reports it.
 	//
-	// ⚠ This does NOT loosen struct/union checks. A struct/union `got` is NOT a per-instance alias, so it
-	// never decays here — and a struct value into a plain-numeric target is caught by the TAG check that runs
-	// BEFORE every one of these sites (`structRef` != `int`), never reaching this rule. What is left for this
-	// rule is exactly the two overloaded-`named` scalars — a per-instance alias (decays) and a boxed union
-	// (a real conflict, deferred to the base rule) — the base `namedAggregatesConflict` cannot tell apart.
+	// ⚠ **THE DECAY USED TO BE SPELLED "the target is not ITSELF a per-instance alias", AND THAT WAS A
+	// REACHABLE WILD FREE.** It let an `Idx` — an int — decay into every named aggregate as well as into a
+	// scalar. The safety argument written here was that "a struct value into a plain-numeric target is caught
+	// by the TAG check that runs BEFORE every one of these sites", and that premise is a SECOND fact, held at
+	// six call sites, that nothing made agree with this one. It is FALSE at the sixth:
+	// `SemanticCheck.checkTypeParameterArgsAt` compares against `substitutedInstanceArg`, which returns the
+	// type argument AS INTERNED — a struct spelled by name is a `named` LEAF, never `structRef` — so its tag
+	// check is `checkDeclaredType(named, named)`, which AGREES. `Wrapper with Integer`'s `Idx` therefore
+	// passed into a `Box with Leaf`'s `T` formal, was stored in the box's `T` field, and was freed by
+	// `__destruct_Box_Leaf` as a `Leaf`: a wild free on the integer's value (MEASURED: exit 0xC0000005).
+	// Deciding it from `expected` alone needs no premise held anywhere else.
 	export function aggregatesConflict(expected ByteArray, got ByteArray) returns bool
-		if not got.isEmpty() and self.isPerInstanceAlias(got) and not self.isPerInstanceAlias(expected) 'perInstanceDecays'
+		// `not self.isPerInstanceAlias(expected)` is not spelled: an EMPTY name can never be one
+		// (`splitQualifiedName` answers `notQualified`), and a redundant clause is a fact stated twice.
+		if expected.isEmpty() and not got.isEmpty() and self.isPerInstanceAlias(got) 'perInstanceDecays'
 			return false
 		end 'perInstanceDecays'
 		return namedAggregatesConflict(expected, got: got)

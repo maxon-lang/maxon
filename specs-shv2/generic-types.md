@@ -1773,3 +1773,54 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: error.per-instance-alias-actual-at-opaque-formal -->
+The OTHER value door out of the same check, and the one the two float tests above do not reach: a
+per-instance alias actual (`IntWrapper.Idx` — a nominal wrapper over a plain `int`) meeting a
+`T`-typed formal whose instance substitutes a STRUCT. Both halves of the argument rule used to
+decline to judge it. The nominal half abstained because `aggregatesConflict` decayed any
+per-instance `got` against any target that was not itself per-instance, `Leaf` included; the scalar
+half never ran, because it runs only where the type argument carries no nominal identity and `Leaf`
+carries one. So an `int` was stored into the box's `T` field and freed by `__destruct_Box_Leaf` as a
+`Leaf`: a wild free, exit `0xC0000005`, from a program that compiled clean — the same failure mode
+the type-parameter argument check was opened on.
+
+The fix is in the decay rule itself, not in a new arm here: a per-instance alias decays only where
+the target carries NO nominal identity of its own, because there is nothing for it to decay into
+otherwise. The decay's old safety argument leaned on "a tag check runs before every one of these
+sites", which is a second fact held at six call sites — and false at this one, where the tag check
+compares `substitutedInstanceArg`'s AS-INTERNED `named` leaf against a `named` value and agrees.
+`per-instance-alias-decays-at-a-type-parameter-argument` above pins the decay that must survive.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Leaf
+	export var name as String
+end 'Leaf'
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+	export var value as T
+	export var tag as Idx
+	export static function create(v T, tag Idx) returns Self
+		return Self{value: v, tag: tag}
+	end 'create'
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+type Box uses T
+	export var item as T
+	export static function create(v T) returns Self
+		return Self{item: v}
+	end 'create'
+end 'Box'
+typealias IntWrapper = Wrapper with Integer
+typealias LeafBox = Box with Leaf
+function main() returns ExitCode
+	let w = IntWrapper.create(1, tag: 5)
+	let b = LeafBox.create(w.getTag())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:27:10: argument type mismatch for 'v': expected 'Leaf', got 'IntWrapper.Idx'
+```
