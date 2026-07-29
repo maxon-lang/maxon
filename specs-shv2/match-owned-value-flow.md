@@ -110,10 +110,14 @@ into first.
 
 ⚠ The break is LABELLED, and it must be. An unlabelled `break` in a match arm exits
 the MATCH, not the loop (`specs/match-statements.md`'s "## Break" section), so the
-loop-floor drop this case exists to pin is only reached by naming the loop — and the
-unlabelled spelling makes this very program an infinite loop, which is exactly what
-the reference oracle does with it. This case was written against a parser that had
-not yet implemented match targeting, so it read the unlabelled form as a loop exit.
+loop-floor drop this case exists to pin is only reached by naming the loop. Written
+unlabelled — as it was, against a parser that had not yet implemented match targeting
+and so read it as a loop exit — nothing in the body can ever change `result`, and the
+program is an INFINITE LOOP by inspection: its expected exit of 7 was only reachable
+via the bug. ⚠ The bootstrap is NOT an oracle for the unlabelled spelling and was not
+consulted as one: it refuses this program outright with `E3012 unused variable: 'n'`,
+a lint shv2 does not have. This case is `specs-shv2`-only; there is no canonical
+`specs/match-owned-value-flow.md` for it to have diverged from.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
