@@ -160,8 +160,9 @@ take its blocker instead)*
 | id | Slice | Lane | Status | Owner (branch) | Claimed (UTC) |
 |---|---|---|:--:|---|---|
 | **G1** | **Split `compilerExe` → compiler-under-test + WORKER exe.** §"⚠⚠ STEP 0" — unsplit, the gate passes while testing nothing. ✅ `9402d4620`..`20312151a`: two params + `--compiler=<path>` forwarded UNCONDITIONALLY (the worker used to re-derive it). Pinned by `scripts/worker-exe-split-gate.sh` — a **NEGATIVE control**, because a byte-identical copy distinguishes the two models not at all. Review found a second door to the same wrong answer (`--compiler=` empty read as "no flag") and closed it. **Moved NO committed goldens** — fragments empty after a full run | L-harness | ✅ DONE | `slice/G1-worker-exe-split` | 2026-07-29T18:22Z |
-| **S1** | **`__Builtins.*` QUALIFIED-call recognition** for the programs shv2 compiles (a qualified callee can never match the bare-name table). Step (2) of §"STDLIB WHITELIST"'s own sequence | L-stdlib | 🔶 CLAIMED | `slice/S1-builtins-qualified-calls` | 2026-07-29T19:08Z |
-| **S2** | **Whitelist entries 4…n** — `FilePath` · `File` · `Directory` · `Subprocess` · `Executable` · `StringArray`. **The dominant cost of the whole gate** | L-stdlib | ⛔ BLOCKED | on **S1**, and see the ⚠ below | — |
+| **S1** | ~~`__Builtins.*` QUALIFIED-call recognition~~ **✅ THE ROW WAS DRAWN STALE — THIS LANDED 2026-07-24** as §"STDLIB WHITELIST" step (2) (`1c36c1ba8`), which this board's own text says three lines further down. **Re-verified by RUNNING it 2026-07-29**, not by reading: `__Builtins.currentTimeNanos()` in an ordinary user program compiles and returns a live reading, and `__Builtins.noSuchIntrinsic()` gives a clean **E3004** (no panic). The arm is `Parser.maxon:26681`, gated on `isBuiltinsIntrinsicCallee`, recognizing 4 members (`currentTimeNanos`, `currentTimeMs`, `currentUnixTimeSeconds`, `sleep`). **Nothing in the S2 cone is blocked on it** — see the corrected blocker table below | L-stdlib | ✅ DONE | *(landed 2026-07-24)* | — |
+| **S2** | **Whitelist entries 4…n.** ⚠ **THE BLOCKER LIST BELOW WAS WRONG AND IS NOW MEASURED** (2026-07-29). **The dominant cost of the whole gate** | L-stdlib | ⛔ BLOCKED | on **D5 · D1 · D2/D4 · S3** — *not* on S1. See the measured table | — |
+| **S3** | **`String.addressableBytes`** — `stdlib/File.maxon:60`'s first blocker, and **it was on no row until 2026-07-29**. Not a whitelist question and not a parser one: a String method shv2 does not provide (its E2015 lists what it does). Needs its own contract | L-stdlib | ⬜ FREE | — | — |
 | **D1** | **Methods on `union` / `enum`** (`Parser.maxon:7922`, already self-labelled *"arrive with a later rung"*). Unblocks **5 of the 13** harness files by itself | L-parser-decl | ⬜ FREE | — | — |
 | **D2** | **The postfix / member walk**, all four symptoms as ONE slice: a method call on a struct FIELD · a field access on a non-struct base · a method call on a **literal** (`"a,b".split(",")`) · a static method on a primitive (`int.fromString`) | L-parser-postfix | ⬜ FREE | — | — |
 | **D4** | **`ByteArray` / `Byte` as a declared type** — today it resolves to `int`, which is why its symptom is D2's message. Blocks the 4 binary-image readers | L-types | ⬜ FREE | — | — |
@@ -169,6 +170,39 @@ take its blocker instead)*
 | **5d** | **RE-EXTRACT AND RE-MEASURE the runner.** A LOOP, not a slice | — | ⛔ BLOCKED | on ~~G1~~ ✅ · S2 · D1 · D2 · D4 · D5 | — |
 | **6b** | **The differential oracle** · `-j1==-jN` · clean `mm-trace` | — | ⛔ BLOCKED | on **5d** | — |
 
+> ### ⭐⭐ S2's BLOCKERS, MEASURED 2026-07-29 — THE ROW HAD NAMED THE WRONG ONE, AND TWO OF ITS SIX NAMES ARE NOT FILES
+>
+> Taken by claiming S1 and then *reproducing its premise before planning on it* — which is how the row
+> turned out to have no content left. **Every cell below is `maxon-shv2 build stdlib/<file>`, run on a
+> freshly built binary**, not read off the plan:
+>
+> | file | FIRST error today | owned by |
+> |---|---|---|
+> | `stdlib/FilePath.maxon` | `E2015 ... :3:1: Unsupported: top-level #if` | **D5** |
+> | `stdlib/File.maxon` | `E2015 ... :60:48: Unsupported: String method 'addressableBytes'` | **S3** *(new row — was on none)* |
+> | `stdlib/Directory.maxon` | `E2015 ... :17:19: a field access on 'path', which is declared 'int'` | **D2** / **D4** |
+> | `stdlib/Subprocess.maxon` | `E2015 ... :107:2: a method on \`union Executable\`` | **D1** |
+>
+> ⚠ **These are FIRST errors, so every row is a LOWER BOUND** — the driver gates at the first refusal
+> per file and nothing behind it has been reached.
+>
+> **⇒ S1 blocks NOTHING here, and S2's real blockers are D5, D1, D2/D4 and S3.** The old spelling
+> ("BLOCKED on S1") would have sent the next agent to implement a mechanism that has been live since
+> 2026-07-24 — the failure mode this board exists to prevent, arriving through the plan instead of
+> through a race.
+>
+> **⭐ TWO OF THE SIX NAMES IN S2's OWN LIST ARE NOT STDLIB FILES**, so a whitelist can never list them:
+> `Executable` is a **`union` inside `stdlib/Subprocess.maxon:89`** (which is *why* Subprocess's first
+> error is D1's), and `StringArray` is a **`typealias Array with String`** declared locally in five
+> different files (`Json.maxon:110`, `String.maxon:604`, `CommandLine.maxon:4`, `Build.maxon:6,20`) —
+> a generics question, not a loader one. The cone is **four files**, not six.
+>
+> ⚠ **And `FilePath`/`File`/`Directory` contain ZERO `__Builtins.*` calls** (grepped). Only
+> `Subprocess.maxon` does — **21 distinct members**, none of them recognized today. That is real S1-shaped
+> work, but it sits **behind D1**: the file cannot get past line 107 to reach any of them. ⇒ **Whoever
+> takes D1 should re-probe Subprocess afterwards and open the follow-on row then**, with the second
+> error measured rather than predicted.
+>
 > ### ⚠ S2 PROBABLY HAS A SECOND BLOCKER, AND IT IS NOT ON THIS BOARD YET
 > §"Future rungs" records that the whitelist's byte-neutrality *"holds today ONLY because none of
 > `Clock`/`Sleep`/`utf16` contains a string literal — that is a property of those three files, not of
