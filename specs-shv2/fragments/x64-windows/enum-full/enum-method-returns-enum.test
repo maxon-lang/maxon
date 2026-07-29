@@ -1,0 +1,75 @@
+// Test: enum-method-returns-enum
+enum Toggle
+	on
+	off
+
+	function flip() returns Toggle
+		let result = match self 'check'
+			on gives Toggle.off
+			off gives Toggle.on
+		end 'check'
+		return result
+	end 'flip'
+end 'Toggle'
+
+function main() returns ExitCode
+	let t = Toggle.on
+	let flipped = t.flip()
+	let result = match flipped 'check'
+		off gives 1
+		on gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @Toggle.flip {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Toggle.flip
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

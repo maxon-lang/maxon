@@ -1,0 +1,67 @@
+// Test: enum-return-type
+enum Result
+	success
+	failure
+end 'Result'
+
+function getResult(succeed bool) returns Result
+	if succeed 'check'
+		return Result.success
+	end 'check'
+	return Result.failure
+end 'getResult'
+
+function main() returns ExitCode
+	let r = getResult(true)
+	let result = match r 'handle'
+		success gives 1
+		failure gives 0
+	end 'handle'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @getResult {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect getResult
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 r8, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

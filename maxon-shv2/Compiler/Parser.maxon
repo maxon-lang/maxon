@@ -3978,8 +3978,20 @@ export type Parser
 	//
 	// Empty is not a sentinel: a type's name cannot be empty, and "no enclosing type" is the literal
 	// truth at file scope. It is NOT reset per function — a method's parse runs INSIDE the type body
-	// that set it (`parseTypeDeclaration` is the one writer, and clears it at the type's `end`).
+	// that set it (`enterTypeScope` is the one writer, and `closeTypeParamScope` clears it at the
+	// declaration's `end`).
 	var enclosingType as ByteArray
+	// ⭐ **IS THE ENCLOSING DECLARATION AN `enum`/`union` RATHER THAN A `type`? (D1)** — the KIND half of
+	// the fact `enclosingType` names, written and cleared by the very same two doors, because a receiver's
+	// TYPE cannot be derived from the name alone.
+	//
+	// A struct's `Self` is a `structRef` and an enum's is a `named` — an enum value IS its i64 tag (or a
+	// pointer to its box), which is why `TypeResolution` erases a declared enum to `integer` while it keeps
+	// a struct's nominal id. `enclosingSelfType` is the one reader that has to choose, and it cannot ask
+	// `signatures.containsEnum`: this field's whole point is that it answers DURING THE TOLERANT SWEEP,
+	// where the enum being declared has not been folded into the index yet — the identical argument that
+	// makes `Self` syntactic (see `parseTypeReference`).
+	var enclosingTypeIsEnum as bool
 	// The GENERIC TYPE PARAMETERS of the type currently being declared (P1.6-A) — `[T]` while parsing
 	// `type Box uses T`, empty otherwise. It is how `parseTypeReference` recognizes a bare `T` as a
 	// type parameter (by NAME, so the sweep and the real parse agree without a registry) and mints
@@ -4221,6 +4233,7 @@ export type Parser
 			rangeCheckParamAliases: sharedEmptyParamAliasNames,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
+			enclosingTypeIsEnum: false,
 			enclosingTypeParams: ByteArrayArray.create(),
 			enclosingWhereConstraints: sharedEmptyWhereConstraints,
 			lastWitnessDispatchIndex: 0,
@@ -4511,7 +4524,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -6082,7 +6095,7 @@ export type Parser
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
 	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
 		let nameTok = try self.readTypeHeader() otherwise return
-		self.enclosingType = nameTok.value
+		self.enterTypeScope(nameTok, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value)
 		// `uses T` (P1.6-A) — parsed here, in the tolerant sweep, exactly as `parseTypeDeclaration` does
@@ -6199,34 +6212,58 @@ export type Parser
 	// It walks the body ITSELF (like `recordScannedType`) rather than letting the caller's loop do
 	// it: a case named `end` means only `atEnumBodyEnd`'s label-lookahead rule can tell the
 	// terminator from a case, which the caller's generic `blockDepthAfter` cannot.
-	function recordScannedEnum(enums EnumLayoutArray, isUnion bool)
+	//
+	// ⭐ **A METHOD MEMBER IS SCANNED, NOT SKIPPED (D1)**, through the same `recordScannedSignature`
+	// `recordScannedType` uses — so `Direction.isNorth`'s return type is in the whole-program index before
+	// any file is parsed, which is what types `d.isNorth()` at a call site in ANOTHER file.
+	//
+	// ⚠ **AND THAT IS WHY THIS WALK COUNTS BLOCK DEPTH.** A method's own `end 'isNorth'` is an `end`
+	// followed by a character literal — byte-for-byte what `atEnumBodyEnd` recognizes as the ENUM's
+	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
+	// list and leaving the rest of the method's body to be read as top-level declarations.
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, isUnion bool)
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
 		try self.skipOptionalImplementsClause() otherwise return
+		self.enterTypeScope(nameTok, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
 		var state = EnumBackingState.create()
 
+		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
 			self.skipNewlines()
-			if self.atEnumBodyEnd() 'closes'
+			if depth == 0 and self.atEnumBodyEnd() 'closes'
 				self.advance()
 				self.skipOptionalLabel()
 				break
 			end 'closes'
 
-			// A method (`function <name>(`) — stop, tolerantly; the real parse rejects it with a
-			// position. `function` ALONE is a legal case name, so only a real method-start stops here.
-			if self.atEnumMethodStart() 'method'
-				break
+			// A method (`[export] [static] function <name>(`) at the enum's own level. `function` ALONE is a
+			// legal case name, so only a real method-start is one. The block it opens is counted BEFORE the
+			// signature is read, because reading it moves the cursor past the `function` keyword — exactly as
+			// `recordScannedType`'s method arm does, and for the same reason.
+			if depth == 0 and self.atEnumMethodStart() 'method'
+				self.pos = self.enumMethodKeywordIndex(self.pos)
+				depth = depth + 1
+				self.advance()
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
+				continue
 			end 'method'
 
-			// A case the sweep cannot read leaves the layout SHORT, which would misassign every later
-			// case's tag — so the scan stops rather than recording a layout it knows is wrong.
-			try self.readEnumCaseInto(layout, state: state) otherwise break
+			if depth == 0 'caseMember'
+				// A case the sweep cannot read leaves the layout SHORT, which would misassign every later
+				// case's tag — so the scan stops rather than recording a layout it knows is wrong.
+				try self.readEnumCaseInto(layout, state: state) otherwise break
+				continue
+			end 'caseMember'
+
+			depth = self.blockDepthAfter(depth)
+			self.advance()
 		end 'body'
 
 		enums.push(layout)
+		self.closeTypeParamScope()
 	end 'recordScannedEnum'
 
 	// `type <Name>` — the two tokens every type declaration opens with, read by BOTH the tolerant
@@ -6238,9 +6275,29 @@ export type Parser
 		return try self.consume(TokenKind.identifier)
 	end 'readTypeHeader'
 
+	// ⭐ **ENTER THE SCOPE OF A NAMED DECLARATION — ITS NAME AND ITS KIND, WRITTEN IN ONE PLACE.** The
+	// opening half of `closeTypeParamScope`, called by every door that reads a declaration's header: the
+	// real parse and the tolerant sweep of a `type` and of an `enum`/`union`, and the interface parse.
+	//
+	// ⭐ **THE KIND RIDES WITH THE NAME BECAUSE THE TWO ARE ONE FACT** — "which declaration encloses the
+	// cursor" — and a `structRef`-vs-`named` receiver type is decided from it (`enclosingSelfType`). Set
+	// apart, an enum door that remembered to write the name and forgot the kind would give an enum's `self`
+	// a struct's type: a receiver typed `structRef(Toggle)` against a `StructLayout` no file declares.
+	//
+	// It also resets the three PER-DECLARATION scopes, for the reason `closeTypeParamScope` restores them:
+	// a sibling declaration's `Idx`, `T` or `where` constraint must not leak into this one. All three point
+	// at their SHARED empty, so entering a scope allocates nothing.
+	function enterTypeScope(nameTok Token, isEnum bool)
+		self.enclosingType = nameTok.value
+		self.enclosingTypeIsEnum = isEnum
+		self.enclosingTypeParams = self.emptyTypeParams
+		self.enclosingInnerAliases = sharedEmptyInnerAliases
+		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
+	end 'enterTypeScope'
+
 	// ⭐ **OPEN A GENERIC TYPE'S PARAMETER SCOPE (P1.6-A)** — `type Box uses T` / `type Pair uses A, B`.
 	// Called by BOTH `parseTypeDeclaration` and the tolerant sweep `recordScannedType` right after
-	// `readTypeHeader`, so the two record the SAME parameter list (the one a field's `typeParameter(pos)`
+	// `enterTypeScope`, so the two record the SAME parameter list (the one a field's `typeParameter(pos)`
 	// is meaningful against). It sets `self.enclosingTypeParams` — how `parseTypeReference` recognizes a
 	// bare `T` — and stamps the names onto the layout so the whole-program arity check can read them off
 	// `structOf`. The cursor lands past the clause (at the type body); a type with no `uses` leaves the
@@ -6249,21 +6306,10 @@ export type Parser
 	// Commas separate the names (`uses A, B`), NO parentheses (the oracle's grammar). The loop stops at
 	// the first non-identifier (a newline opening the body), exactly as a top-level `uses` clause does.
 	function openTypeParamScope(layout StructLayout)
-		// The inner-alias name set is per-TYPE (P1.6-C) — reset here so a sibling type's `Idx` cannot leak into
-		// this one, and reset BEFORE the non-generic early return so every type body starts fresh. Points at the
-		// SHARED empty set until a nested typealias is recorded (`readNestedRangedAlias` copy-on-writes), so a
-		// type that declares none allocates nothing.
-		self.enclosingInnerAliases = sharedEmptyInnerAliases
-		// The `where`-constraint list is per-TYPE (P1.7a slice 2a), reset here for `enclosingInnerAliases`'
-		// reason: a sibling type's constraints must not leak into this one. Points at the SHARED empty until
-		// `readWhereClause` builds a real list, so an unconstrained type allocates nothing.
-		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
-
 		// A NON-GENERIC type allocates nothing: it keeps the layout's create-time empty `typeParamNames`
-		// and points the parser's enclosing scope at the shared empty list. Only a `uses` clause builds a
-		// real list — which is the rare case, and absent from the scale corpus entirely.
+		// and keeps the shared empty list `enterTypeScope` has just pointed the parser at. Only a `uses`
+		// clause builds a real list — which is the rare case, and absent from the scale corpus entirely.
 		if not self.at(TokenKind.uses) 'noUses'
-			self.enclosingTypeParams = self.emptyTypeParams
 			return
 		end 'noUses'
 
@@ -6282,12 +6328,15 @@ export type Parser
 		layout.recordTypeParams(names)
 	end 'openTypeParamScope'
 
-	// Close the enclosing-type scope (P1.6-A) — clears both `enclosingType` and `enclosingTypeParams`
+	// Close the enclosing-type scope (P1.6-A) — clears `enclosingType`, its KIND and `enclosingTypeParams`
 	// in lockstep, so a sibling type at file scope starts fresh and a bare `T` outside a generic body
 	// resolves as an ordinary named type, not a stale parameter. Restores the SHARED empty list rather
 	// than a fresh one, so closing a type scope allocates nothing.
 	function closeTypeParamScope()
 		self.enclosingType = EmptySourceText
+		// Cleared with the name it belongs to (see `enterTypeScope`): a stale `true` at file scope would tell
+		// `enclosingSelfType` a `Self` it can no longer resolve at all is an enum's.
+		self.enclosingTypeIsEnum = false
 		self.enclosingTypeParams = self.emptyTypeParams
 		// Restored to the SHARED empty in lockstep (P1.6-C) so a bare `Idx` at file scope, after a type that
 		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
@@ -7663,7 +7712,7 @@ export type Parser
 		// (see `recordScannedType`).
 		try self.requireUnreservedName(nameTok)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
-		self.enclosingType = nameTok.value
+		self.enterTypeScope(nameTok, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value)
 		// `uses T` (P1.6-A) — parsed here so `parseTypeReference` recognizes `T` in the fields and
@@ -7733,7 +7782,10 @@ export type Parser
 		try self.consume(TokenKind.interface)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
-		self.enclosingType = nameTok.value
+		// An interface is neither a struct nor an enum, and `isEnum: false` is the right answer for the one
+		// thing the kind decides: a `Self` in an interface method's signature is a `structRef`, which is what
+		// `checkConformance` substitutes the CONFORMING type into (and only a `type` may conform at this rung).
+		self.enterTypeScope(nameTok, isEnum: false)
 
 		var extendsInterfaces = ByteArrayArray.create()
 		var associatedTypeNames = ByteArrayArray.create()
@@ -7757,7 +7809,7 @@ export type Parser
 		self.skipOptionalLabel()
 
 		self.artifact.recordInterface(IrInterface.create(nameTok.value, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames))
-		self.enclosingType = EmptySourceText
+		self.closeTypeParamScope()
 	end 'parseInterfaceDeclaration'
 
 	// The optional `extends P1, P2` and `uses A, B` clauses of an interface header, in either order. A
@@ -7930,20 +7982,33 @@ export type Parser
 	// SET out of. `union` and `enum` share this routine entirely: only the diagnostic wording later
 	// differs, carried by `layout.isUnion`.
 	//
-	// PAYLOAD-FREE ONLY. A payload (`case foo(x Int)`), a string/char/struct/function backing, and a
-	// method inside the body each name their own later rung rather than being mapped onto the integer
-	// path where they would silently mean something else.
+	// A CASE MAY CARRY A PAYLOAD (`value(n Integer)`, P1.3 slice 1 — see `readEnumCaseInto`); a
+	// string/char/struct/function BACKING is what still names a later rung.
+	//
+	// ⭐ **A MEMBER MAY BE AN INSTANCE METHOD (D1)**, and it is built by the very same `parseFunction` a
+	// struct's method is: the receiver is `__self` at parameter 0, the method is declared under
+	// `Direction.isNorth` (`declaredMethodName`), and a call is an ordinary direct call with the receiver
+	// prepended. What differs from a `type` is only the RECEIVER'S TYPE — `named`, not `structRef`
+	// (`enclosingSelfType`) — and that there are no FIELDS, hence no self-field aliases. A `static
+	// function` stays refused (`parseEnumMethod`).
 	function parseEnumDeclaration(isUnion bool) throws ParseError
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
 		try self.skipOptionalImplementsClause()
+		self.enterTypeScope(nameTok, isEnum: true)
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
 		var state = EnumBackingState.create()
 
-		while true 'cases'
+		// The cursor sits at the enum body start; remember it so the lazy sibling-receiver walk (#65) can
+		// begin here once a method body's bare call needs it — exactly as `parseTypeDeclaration` does. It is
+		// not optional bookkeeping: left at the PREVIOUS declaration's body, a bare `isStop()` inside an enum
+		// method would resolve against another type's method list.
+		self.enclosingTypeBodyStart = self.pos
+
+		while true 'members'
 			self.skipNewlines()
 			if self.atEnumBodyEnd() 'closes'
 				break
@@ -7953,23 +8018,46 @@ export type Parser
 				throw ParseError.unexpectedEof(tok.line, column: tok.column)
 			end 'eof'
 
-			// A method inside an enum/union body — its whole surface (a receiver bound to an enum
-			// value, `match self`) is a later rung. Rejected here, positioned, rather than silently
-			// skipped (which would strand the method's `end` and misparse the rest). `function` alone
-			// is a legal CASE name, so only `function <name>(` is a method (`atEnumMethodStart`).
+			// A method — `[export] function <name>(`. `function` ALONE is a legal CASE name, so only
+			// `atEnumMethodStart`'s full shape is a method; everything else is a case.
 			if self.atEnumMethodStart() 'method'
-				let tok = self.current()
-				throw ParseError.unsupported("a method on `{layout.kindWord()} {String.from(nameTok.value)}` (methods on an enum/union — a receiver bound to an enum value, `match self` — arrive with a later rung)", line: tok.line, column: tok.column)
+				try self.parseEnumMethod(layout)
+				continue
 			end 'method'
 
 			try self.readEnumCaseInto(layout, state: state)
-		end 'cases'
+		end 'members'
 
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
 		self.artifact.recordEnumType(layout)
+		self.closeTypeParamScope()
 	end 'parseEnumDeclaration'
+
+	// ⛔ **ONE MEMBER METHOD OF AN `enum`/`union`, AND THE ONE THING IT REFUSES (D1).** The cursor sits on
+	// the optional `export`. An INSTANCE method goes straight to the shared `parseFunction`, which is the
+	// whole implementation: a method IS a function, plus a receiver at parameter 0.
+	//
+	// ⭐ **A `static function` STAYS REFUSED, AND SHV2 IS RIGHT WHERE THE ORACLE IS NOT.** Measured on the
+	// bootstrap: an `enum` static is a parse error there, while a `union` static is ACCEPTED and then
+	// misread — the modifier is silently dropped, so the call dies at `E3036 missing argument for parameter
+	// 'self'`, blaming the call site for a declaration the compiler mis-parsed. A positioned refusal at the
+	// declaration is strictly better, and it costs nothing: no `union`/`enum` in `stdlib/` declares one.
+	//
+	// It is not `parseTypeMember` widened, because an enum body's grammar is genuinely a different one: it
+	// has no FIELDS and no nested `typealias` (the two other members that routine reads), and `static` is
+	// an error here rather than the receiver switch it is there.
+	function parseEnumMethod(layout EnumLayout) throws ParseError
+		let visibility = self.consumeOptionalExport()
+
+		if self.at(TokenKind.static) 'staticMethod'
+			let tok = self.current()
+			throw ParseError.unsupported("a `static function` on `{layout.kindWord()} {String.from(layout.name)}` (an INSTANCE method is supported — a static one has no receiver to name the enum through, and no `enum`/`union` in the corpus declares one)", line: tok.line, column: tok.column)
+		end 'staticMethod'
+
+		try self.parseFunction(visibility, takesReceiver: true)
+	end 'parseEnumMethod'
 
 	// Is the cursor on the `end` that CLOSES an enum/union body — as opposed to a case NAMED `end`?
 	//
@@ -7988,21 +8076,36 @@ export type Parser
 		return next == TokenKind.charLiteral or next == TokenKind.eof
 	end 'atEnumBodyEnd'
 
-	// Does the cursor open a METHOD inside an enum/union body — `[export|static] function <name>(`?
+	// Does the cursor open a METHOD inside an enum/union body — `[export] [static] function <name>(`?
 	//
 	// ⚠ **`function` IS ALSO A LEGAL CASE NAME** (`keyword-as-case-name.md` declares one), so a bare
 	// `function` keyword does NOT open a method: a method is `function` followed by a NAME and a `(`
 	// — the shared `functionDeclarationAt`, which the declaration sweep reads for the same reason.
-	// Mirrors the bootstrap's `IsEnumMethodStart` (2-Parser.cs:3155). Methods on an enum are a later
-	// rung, so this predicate exists only to REJECT one cleanly rather than misparse it. All this adds
-	// is the leading modifier an enum body may carry before the keyword.
+	// Mirrors the bootstrap's `IsEnumMethodStart` (2-Parser.cs:3155). All this adds is the modifiers an
+	// enum body may carry before the keyword, and it spans BOTH of them in order (`parseTypeMember`
+	// accepts `export static` on a struct, so `export static` inside an enum must reach the refusal in
+	// `parseEnumMethod` rather than fall through to `readEnumCaseInto` and be blamed as a malformed case).
+	//
+	// ⚠ It is the shape gate for BOTH readers of an enum body — the real parse and the tolerant sweep — so
+	// the two cannot disagree about which members are cases, which is what a case's TAG depends on.
 	function atEnumMethodStart() returns bool
-		var p = self.pos
-		if self.kindAt(p) == TokenKind.export or self.kindAt(p) == TokenKind.static 'modifier'
-			p = p + 1
-		end 'modifier'
-		return self.functionDeclarationAt(p)
+		return self.functionDeclarationAt(self.enumMethodKeywordIndex(self.pos))
 	end 'atEnumMethodStart'
+
+	// The index the enum member starting at `index` declares its `function` keyword at, having stepped over
+	// the optional `export`/`static` modifiers. THE one spelling of that modifier list, read by the
+	// peek-only predicate above AND by the sweep's cursor step (`recordScannedEnum`) — taught to one and not
+	// the other, the sweep would count an `export` token as the method's block opener and mis-close the enum.
+	function enumMethodKeywordIndex(index TokenIndex) returns TokenIndex
+		var p = index
+		if self.kindAt(p) == TokenKind.export 'exported'
+			p = p + 1
+		end 'exported'
+		if self.kindAt(p) == TokenKind.static 'static'
+			p = p + 1
+		end 'static'
+		return p
+	end 'enumMethodKeywordIndex'
 
 	// Read ONE enum/union case into `layout`, threading the tag counter + backing through `state`.
 	// Reports the three declaration diagnostics: E3030 (duplicate case name), E3031 (duplicate raw
@@ -8262,9 +8365,11 @@ export type Parser
 		// after it — which also means the receiver is inside the ABI count `requireAbiParamCount`
 		// judges, correctly: it occupies an argument slot exactly like a declared parameter.
 		//
-		// It is typed `structRef(enclosingType)` — the same `Self` means here, through the same
-		// routine that resolves the `Self` keyword, so a receiver and a `returns Self` cannot come
-		// to disagree about which type encloses them.
+		// It is typed by `enclosingSelfType` — the same `Self` means here, through the same routine that
+		// resolves the `Self` keyword, so a receiver and a `returns Self` cannot come to disagree about
+		// which type encloses them, NOR about whether that type is a struct or an enum (D1): a struct's
+		// receiver is a `structRef` and an enum's is a `named`, which is what routes each to its own
+		// dispatch at the call site.
 		//
 		// Its span is the METHOD NAME, because no source token declares it. That is the choice
 		// `closeFunctionBody` makes for its synthetic `retVoid` and for E3013, and for the same
@@ -8272,7 +8377,7 @@ export type Parser
 		// at fault.
 		if takesReceiver 'receiverParam'
 			paramNames.push(SelfParamName)
-			paramTypes.push(try self.enclosingStructType(nameTok))
+			paramTypes.push(try self.enclosingSelfType(nameTok))
 			paramRanges.push(SourceRange.ofToken(nameTok))
 		end 'receiverParam'
 
@@ -8469,7 +8574,11 @@ export type Parser
 		// the collision, with its own token in hand to anchor the diagnostic on. Reversed, the
 		// parameter would be in place first and the ALIAS would be the one refused, leaving the
 		// error to be reported against a field declaration that is not what needs to change.
-		if takesReceiver 'selfFieldAliases'
+		// ⚠ An `enum`/`union` receiver contributes NO aliases: an enum has no fields, and
+		// `declareSelfFieldAliases` would panic in `enclosingLayout` resolving a `StructLayout` no enum
+		// declares. So a bare name in an enum method's body is an ordinary local or an undefined variable,
+		// never a field — which is also what makes the E3006 collision contract below vacuous here.
+		if takesReceiver and not self.enclosingTypeIsEnum 'selfFieldAliases'
 			try self.declareSelfFieldAliases(nameTok)
 		end 'selfFieldAliases'
 
@@ -8922,9 +9031,10 @@ export type Parser
 	// interned into the artifact's local interner) or a bare primitive keyword.
 	// Ranged/generic/qualified type syntax grows at M2+.
 	//
-	// ⭐ **`Self` — AND THE ENCLOSING TYPE'S OWN NAME — RESOLVE TO A `structRef` HERE, SYNTACTICALLY.**
-	// Every other identifier stays `named` and is resolved later, by `TypeResolution` against the
-	// project registry. The asymmetry is not a shortcut, it is the only thing that WORKS:
+	// ⭐ **`Self` — AND THE ENCLOSING TYPE'S OWN NAME — RESOLVE TO THE ENCLOSING DECLARATION'S OWN TYPE
+	// HERE, SYNTACTICALLY** (`enclosingSelfType`: a `structRef` inside a `type`, a `named` inside an
+	// `enum`/`union`). Every other identifier stays `named` and is resolved later, by `TypeResolution`
+	// against the project registry. The asymmetry is not a shortcut, it is the only thing that WORKS:
 	//
 	//   • **This routine runs in BOTH passes.** The tolerant declaration sweep reads a signature
 	//     through it (`recordScannedSignature`) while the whole-program index is still being BUILT,
@@ -8953,7 +9063,7 @@ export type Parser
 
 		if self.at(TokenKind.selfType) 'selfType'
 			let tok = try self.consume(TokenKind.selfType)
-			return try self.enclosingStructType(tok)
+			return try self.enclosingSelfType(tok)
 		end 'selfType'
 
 		if self.at(TokenKind.identifier) 'named'
@@ -8991,12 +9101,13 @@ export type Parser
 			if tok.value.equals(CharacterBuiltinName) 'characterBuiltin'
 				return MaxonType.character
 			end 'characterBuiltin'
-			// The type's own name inside its own body means what `Self` means. Both spellings are
-			// legal Maxon and they must not resolve differently — one `structRef`, one `named` —
-			// because the second would type `create`'s result as an integer and `p.x` would fail
-			// against the very type that declared it.
+			// The type's own name inside its own body means what `Self` means — for an `enum Toggle`'s
+			// `function flip() returns Toggle` exactly as for a `type Point`'s `returns Point`. Both
+			// spellings are legal Maxon and they must not resolve differently, because a struct's own name
+			// left `named` would type `create`'s result as an integer and `p.x` would fail against the very
+			// type that declared it.
 			if self.namesEnclosingType(tok.value) 'ownName'
-				return try self.enclosingStructType(tok)
+				return try self.enclosingSelfType(tok)
 			end 'ownName'
 
 			// A GENERIC TYPE PARAMETER (P1.6-A) — a bare `T` inside `type Box uses T`. Recognized by NAME
@@ -9078,18 +9189,29 @@ export type Parser
 		throw ParseError.unexpectedToken("a type", got: tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parseTypeReference'
 
-	// The `structRef` naming the type currently being declared, for `Self` and for its own name.
+	// The type naming the declaration currently being read, for `Self` and for its own name.
 	// `anchor` is only the token a diagnostic points at.
+	//
+	// ⭐ **A STRUCT'S IS `structRef`, AN ENUM'S IS `named` — the SAME split `TypeResolution` makes** (a
+	// declared `type` keeps its nominal id, a declared `enum`/`union` erases to `integer`, because an enum
+	// value IS its tag or its box pointer and nothing downstream needs to know which enum it was). The two
+	// must agree: a `named` receiver is what `dispatchMethodOnBinding` routes an enum method call on and
+	// what `parseMatchCommon` recognizes a `match self` scrutinee by, while a `structRef` one would be sent
+	// to `requireStructBase` to resolve a `StructLayout` no enum declares.
+	//
+	// The kind is read off `enclosingTypeIsEnum` rather than the signature index for that field's stated
+	// reason: this routine answers in the tolerant SWEEP too, where the enum being declared is not folded.
 	//
 	// A `Self` at FILE SCOPE has no type to refer to. It is a positioned `unsupported` rather than a
 	// panic because the source can perfectly well write one, and it is not `unexpectedToken` because
 	// `Self` is a type reference — it simply names nothing here.
-	function enclosingStructType(anchor Token) returns MaxonType throws ParseError
+	function enclosingSelfType(anchor Token) returns MaxonType throws ParseError
 		if self.enclosingType.isEmpty() 'outsideAType'
 			throw ParseError.unsupported("'{anchor.kind.rawValue}' outside a type declaration (`Self` names the type whose body encloses it, and there is none here)", line: anchor.line, column: anchor.column)
 		end 'outsideAType'
-		return MaxonType.structRef(self.artifact.typeNames.intern(self.enclosingType))
-	end 'enclosingStructType'
+		let id = self.artifact.typeNames.intern(self.enclosingType)
+		return MaxonType.named(id) if self.enclosingTypeIsEnum else MaxonType.structRef(id)
+	end 'enclosingSelfType'
 
 	// Does `name` name the type currently being declared? False at file scope, where there is no
 	// enclosing type for any name to be — which is what makes the `isEmpty` test load-bearing
@@ -21123,33 +21245,37 @@ export type Parser
 		// receiver to E3070's conflict check as the implicit ARGUMENT 0 it is, and the subject comes through
 		// the one shared derivation (`borrowSubjectNameAt`) like every other door's.
 		let baseIndex = self.pos
+		// Every arm below routes on the RECEIVER'S DECLARED TAG, so it is read once. It is the binding as it
+		// ARRIVED — `methodReceiverBinding` materializes a self-field alias into an ordinary value binding
+		// without changing its type, so the routing is unaffected by which arm materializes.
+		let receiverTag = maxonTypeTag(binding.varType)
 		// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
 		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
 		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
-		// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
+		// (self never names a String -- a receiver is a struct or an enum -- so baseBindingName is untouched.)
 		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `methodReceiverBinding` materializes
 		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
 		// that the record belongs to `self`. See `receiverOwnerMask`.
-		if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
+		if receiverTag == ValueTypeTag.string 'stringMethod'
 			return try self.parseStringMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
 		end 'stringMethod'
 		// A CHARACTER receiver (P1.8 slice B) — its own dispatcher, for the reason it is its own type.
 		// It takes no `receiverOwner`: no Character method writes its receiver (the type is immutable at
 		// this slice), so there is no mutation to attribute to an owning parameter.
-		if maxonTypeTag(binding.varType) == ValueTypeTag.character 'characterMethod'
+		if receiverTag == ValueTypeTag.character 'characterMethod'
 			return try self.parseCharacterMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
 		end 'characterMethod'
 
 		// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
 		// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
 		// split is on the binding's genericInstance TAG being an `Array` instance — the parser's type oracle.
-		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
+		if receiverTag == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
 			return try self.parseArrayMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
 		end 'arrayMethod'
 
 		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) is dispatched to the set runtime, like an array
 		// receiver — the split is on the binding's genericInstance TAG being a `Set` instance (P1.7b slice A).
-		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
+		if receiverTag == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
 			return try self.parseSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
 		end 'setMethod'
 
@@ -21158,7 +21284,7 @@ export type Parser
 		// IS registered) and then resolve the method name against `funcSignatures`, where no file declares
 		// `__StringIndex.charIndex`. It takes no `receiverOwner`: neither accessor writes its receiver, so
 		// there is no mutation to attribute to an owning parameter.
-		if self.isStringIndexType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType)) 'stringIndexMethod'
+		if self.isStringIndexType(receiverTag, nameId: typeNameIdOf(binding.varType)) 'stringIndexMethod'
 			return try self.parseStringIndexMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
 		end 'stringIndexMethod'
 
@@ -21166,7 +21292,7 @@ export type Parser
 		// rather than through `requireStructBase`, for the reason the `StringIndex` arm above is: the layout IS
 		// registered, so the struct path would accept the box and then resolve `__CharacterSet.contains` against
 		// `funcSignatures`, where no file declares it. It takes no `receiverOwner`: `contains` writes nothing.
-		if self.isCharacterSetType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType)) 'characterSetMethod'
+		if self.isCharacterSetType(receiverTag, nameId: typeNameIdOf(binding.varType)) 'characterSetMethod'
 			return try self.parseCharacterSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
 		end 'characterSetMethod'
 
@@ -21179,10 +21305,23 @@ export type Parser
 		// A receiver that is NOT a builtin conformer — a struct, a generic instance, or a type with no
 		// conformance at all — falls through to the struct path below, which resolves the first two and
 		// reports the third.
-		let receiverConformer = self.builtinConformerOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
+		let receiverConformer = self.builtinConformerOfType(receiverTag, nameId: typeNameIdOf(binding.varType))
 		if isBuiltinConformer(receiverConformer) 'builtinConformer'
 			return try self.parseBuiltinConformanceMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok, conformer: receiverConformer)
 		end 'builtinConformer'
+
+		// ⭐ **AN ENUM/UNION RECEIVER (D1)** — `d.isNorth()`, `s.action()`, `self.isStop()`. Its methods are
+		// ordinary functions carrying the SAME `Direction.isNorth` qualification a struct's do, so the arm
+		// exists for one reason only: the struct path resolves a `StructLayout` (for its field-vs-method
+		// split), and an enum declares none. The enum's own NAME is the whole of what the dispatch needs.
+		//
+		// Gated on the `named` TAG first, which allocates nothing and is false for every struct, String,
+		// Character, Array and Set receiver — so the interner read and the registry probe behind it are paid
+		// only by a receiver that is an enum or a ranged alias, and a ranged alias reaching here was already
+		// on its way to `requireStructBase`'s refusal.
+		if receiverTag == ValueTypeTag.named and self.signatures.containsEnum(self.internedName(typeNameIdOf(binding.varType))) 'enumMethod'
+			return try self.dispatchMethodOnEnumReceiver(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok, baseIndex: baseIndex, resultUsed: resultUsed)
+		end 'enumMethod'
 
 		// ⚠ The STRUCT arm alone is handed the ORIGINAL binding, unmaterialized. A struct-typed self field
 		// is REFUSED by `requireStructBase` (it has no constructible value at this rung, and that refusal
@@ -21192,6 +21331,35 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok, subjectName: self.borrowSubjectNameAt(baseIndex)), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
+
+	// ⭐ **DISPATCH A METHOD ON AN ENUM/UNION RECEIVER (D1).** The cursor sits ON the base token. The
+	// callee is mangled from the receiver's declared ENUM NAME and the member name — the very key
+	// `parseFunction` declared the method under (`declaredMethodName`) — and the receiver is prepended as
+	// argument 0 by the shared `parseCallNamed`. That is the whole dispatch; nothing below the parser
+	// learns that enums have methods.
+	//
+	// ⭐ **THE RECEIVER IS BORROWED, exactly as a struct's is** (`parseMethodCall`'s header argues it in
+	// full). A payload-free enum's receiver is a bare i64 tag with no ownership at all; a BOXED union's is
+	// a pointer the caller's binding owns, so no incref is emitted here and no drop there — and the callee
+	// cannot leak it either, because `return self` from a boxed union hits the SAME borrowed-return refusal
+	// a `returns Container` on a `c Container` parameter does (measured: `self` IS parameter 0, so it is
+	// not a special case, it is the ordinary parameter rule reaching it).
+	//
+	// The three facts it shares with the struct path — liveness, the E3019 blame name and the E3070 borrow
+	// subject — are asked through the same three functions, so an enum receiver and a struct receiver
+	// cannot come to disagree about a use-after-move, an immutable receiver or a borrow conflict.
+	function dispatchMethodOnEnumReceiver(func IrFunction, binding VarInfo, baseTok Token, baseIndex TokenIndex, resultUsed bool) returns ValueId throws ParseError
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
+		// The enum's name comes from the BINDING's declared type, never from the base token: the token is a
+		// variable's name (`d`), and `self` is not even an identifier.
+		let enumName = self.internedName(typeNameIdOf(binding.varType))
+
+		self.advance()
+		try self.consume(TokenKind.dot)
+		let memberTok = self.current()
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(enumName, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex)), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+	end 'dispatchMethodOnEnumReceiver'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
 	// MATERIALIZED first.** Every other binding already holds its value; a self-field alias holds NONE.
@@ -24447,9 +24615,22 @@ export type Parser
 		// be a SEPARATE `requireNotInSelfCapture` call on this line, which is precisely how the BARE
 		// self-field spelling escaped it; it now lives inside `requireReceiverValue`, the one door every
 		// spelling passes through. See that function.
-		_ = try self.requireReceiverValue(selfTok)
+		let receiver = try self.requireReceiverValue(selfTok)
 
 		if self.peekKind() != TokenKind.dot 'bareSelf'
+			// ⭐ **AN `enum`/`union` RECEIVER IS AN ORDINARY VALUE, AND `match self` NEEDS NO EXEMPTION TO SAY
+			// SO (D1).** The refusal below is about a STRUCT: a struct receiver is a heap box whose ownership
+			// across a call boundary is an unmade ruling. An enum's `self` is its i64 TAG (payload-free) or a
+			// pointer to its box, which is exactly what an `enum`-typed PARAMETER holds — and `self` IS
+			// parameter 0 — so handing it back here does not create a case, it stops hiding one. Every rule
+			// that governs a borrowed enum parameter then reaches it unchanged, the load-bearing one being the
+			// borrowed-RETURN refusal: `return self` from a boxed union is refused by the same check that
+			// refuses `return c` from a `c Container` parameter, so no borrowed box escapes as an owned one.
+			if self.enclosingTypeIsEnum 'enumReceiverIsAValue'
+				self.advance()
+				return receiver
+			end 'enumReceiverIsAValue'
+
 			throw ParseError.unsupported("'{selfTok.kind.rawValue}' as a value (a field can be read THROUGH the receiver — `self.x`, or a bare field name — but passing or returning the receiver itself hands a struct across a call boundary, which needs the ownership ruling struct-typed parameters and returns are deferred to)", line: selfTok.line, column: selfTok.column)
 		end 'bareSelf'
 

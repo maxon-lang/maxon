@@ -282,8 +282,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: enum-method -->
-<!-- instance methods on an enum receiver (later rung) -->
+<!-- test: enum-method -->
 ```maxon
 enum Direction
 	north
@@ -310,8 +309,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: enum-method-returns-enum -->
-<!-- instance methods on an enum receiver (later rung) -->
+<!-- test: enum-method-returns-enum -->
 ```maxon
 enum Toggle
 	on
