@@ -1695,3 +1695,73 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.float-actual-at-opaque-formal -->
+A `float` actual meeting a `T`-typed formal is refused by the type the INSTANCE substitutes for `T`,
+not by the formal's own spelling. `IntBox`'s `T` is `Integer`, so this is the identical E3009 the
+non-generic `takeInt(1.5)` gives -- one rule, both paths. Before the substitution existed the front
+end had nothing to check against and the float reached the x64 emitter, which died on a
+register-to-register move across register files (`X64Backend.maxon:751`) -- a compiler panic on a
+program whose only defect was an ordinary lossy conversion.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	let b = IntBox.create(1.5)
+	return b.value
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:10:17: argument 'v': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+```
+
+<!-- test: error.float-actual-at-opaque-formal-string -->
+The same rule where the substituted type is not numeric at all: `StrBox`'s `T` is `String`, so a
+float actual is a plain type mismatch (E3005), matching the non-generic `takeStr(1.5)`. This case
+exists because the panic was NOT specific to `Integer` -- it reproduced identically here, so a fix
+that only taught the numeric arm would leave half the defect live.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias StrBox = Box with String
+function main() returns ExitCode
+	let b = StrBox.create(1.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:17: argument type mismatch for 'v': expected 'String', got 'float'
+```
+
+<!-- test: int-actual-at-opaque-formal-still-works -->
+The regression guard the two refusals need: an `int` actual at a `T`-typed formal whose instance
+substitutes an integer type is ordinary, legal, and must stay that way. A substitution rule that
+refuses this would break every generic call in the corpus.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	let b = IntBox.create(7)
+	return b.value
+end 'main'
+```
+```exitcode
+7
+```
