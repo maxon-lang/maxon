@@ -1233,11 +1233,31 @@ type MethodReceiver
 	// Which PARAMETER's storage this receiver is, for the call-site half of E3019. `NoMutatedParams` for
 	// anything that is not a parameter's record.
 	export let owner as MutatedParamMask
+	// The FIELD NAME when this receiver was materialized out of a SELF-FIELD ALIAS, empty otherwise — the
+	// one fact the struct fallthrough still refuses on (`structBaseOfReceiver`, and
+	// `specs-shv2/self-field-struct-typed.md` for why). Every builtin arm serves such a receiver happily
+	// (`items.push(v)`, `name.append("!")`), so it cannot be a gate in front of the switch; it is the tag
+	// the fallthrough reads, exactly where `requireStructBase` reads `isSelfField`.
+	export let selfFieldName as ByteArray
 
-	export static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName ByteArray, subjectName ByteArray, owner MutatedParamMask) returns MethodReceiver
-		return Self{value: value, tag: tag, nameId: nameId, anchor: anchor, immutableName: immutableName, subjectName: subjectName, owner: owner}
+	export static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName ByteArray, subjectName ByteArray, owner MutatedParamMask, selfFieldName ByteArray) returns MethodReceiver
+		return Self{value: value, tag: tag, nameId: nameId, anchor: anchor, immutableName: immutableName, subjectName: subjectName, owner: owner, selfFieldName: selfFieldName}
 	end 'create'
 end 'MethodReceiver'
+
+// **THE ONE SENTENCE THAT REFUSES AN AGGREGATE-TYPED SELF-FIELD ALIAS AS A BASE**, asked by the two doors
+// that can reach one: `requireStructBase` (a chained READ or WRITE — `next.a`, `next.a = 99`) and
+// `structBaseOfReceiver` (a METHOD call — `next.readA()`). `specs-shv2/self-field-struct-typed.md` pins all
+// three cases against the identical text, so a second spelling would go red at whichever door it was not
+// updated at, and the two doors would then be free to disagree about a refusal whose sabotage note records
+// that the wrong answer is SILENT.
+//
+// It returns the STRING and each caller throws `ParseError.unsupported(…)` INLINE — never
+// `throw self.helperReturningAParseError(…)`, which leaks two allocations under the C#-emitted refcount
+// runtime (`nestedUnionPayloadMessage` records the family).
+function structTypedSelfFieldBaseMessage(fieldName ByteArray) returns String
+	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)"
+end 'structTypedSelfFieldBaseMessage'
 
 // The resolved END of a field-access chain `base.f1.…fN` (P1.4a wave 2): the `box` its LAST field lives in
 // (the base's box for a single field, an intermediate struct field's loaded box for a chain), the `layout`
@@ -21322,10 +21342,13 @@ export type Parser
 		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
 		// that the record belongs to `self`. See `receiverOwnerMask`.
 		let owner = self.receiverOwnerMask(func, binding: binding)
+		// Read BEFORE the materialization too: `methodReceiverBinding` hands back an ordinary value binding,
+		// which is exactly the fact the struct fallthrough still has to refuse on.
+		let selfFieldName = baseTok.value if binding.isSelfField else EmptySourceText
 		let held = try self.methodReceiverBinding(binding, baseTok: baseTok)
 
 		self.advance()
-		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(held.boundValue, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner), resultUsed: resultUsed)
+		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(held.boundValue, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
 	// ⭐ **THE RECEIVER A VALUE IS.** A temporary — a string literal, a call result, a parenthesised
@@ -21342,7 +21365,7 @@ export type Parser
 	// The anchor is the `.` — a temporary has no token of its own, and the dot is where the member access
 	// the diagnostic is about begins.
 	function valueReceiver(value ValueId, immutableName ByteArray, subjectName ByteArray) returns MethodReceiver
-		return MethodReceiver.create(value, tag: self.tagOf(value), nameId: self.valueNameId(value), anchor: self.current(), immutableName: immutableName, subjectName: subjectName, owner: NoMutatedParams)
+		return MethodReceiver.create(value, tag: self.tagOf(value), nameId: self.valueNameId(value), anchor: self.current(), immutableName: immutableName, subjectName: subjectName, owner: NoMutatedParams, selfFieldName: EmptySourceText)
 	end 'valueReceiver'
 
 	// ⭐⭐ **THE ONE TAG SWITCH A `.member` ROUTES THROUGH — cursor ON the `.`.** Both spellings of a
@@ -21441,6 +21464,17 @@ export type Parser
 			let memberTok = self.current()
 			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
+
+		// ⚠ **AN AGGREGATE-TYPED SELF-FIELD ALIAS IS REFUSED HERE, and this is the SAME refusal
+		// `requireStructBase` makes for the READ and the WRITE path** — `specs-shv2/self-field-struct-typed.md`
+		// pins all three, and its own sabotage note says the method case does not merely go red without it, it
+		// goes GREEN WITH THE WRONG CODE. It sits at the FALLTHROUGH and not in front of the switch because
+		// every builtin arm above serves such an alias correctly and by design (`items.push(v)`,
+		// `name.append("!")` — `methodReceiverBinding`'s header measures both); what has no ruling yet is a
+		// struct-typed field's OWNERSHIP, which is only what this arm would address.
+		if not recv.selfFieldName.isEmpty() 'structTypedSelfField'
+			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(recv.selfFieldName), line: recv.anchor.line, column: recv.anchor.column)
+		end 'structTypedSelfField'
 
 		return StructBase.create(try self.structLayoutOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor), box: recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName)
 	end 'structBaseOfReceiver'
@@ -21663,7 +21697,9 @@ export type Parser
 	// falls through to the method path, which reports it as an unknown method. `resultUsed` does not apply to
 	// the field load: the value/statement position is decided at the indirect call the postfix loop emits.
 	function dispatchMethodOnBase(func IrFunction, base StructBase, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		let memberTok = try self.consumeMemberNameToken()
+		// PEEKED, not consumed: the method path below hands the cursor to `parseCallNamed`, which consumes
+		// the name itself. Only the field-read branch advances.
+		let memberTok = try self.memberNameTokenAt(self.pos)
 		let fieldIndex = base.layout.indexOfField(memberTok.value)
 		if fieldIndex < base.layout.fieldCount() 'fieldMember'
 			// A member that is a FIELD is READ, in two cases: a FUNCTION-typed one however it is spelled (the
@@ -21674,7 +21710,8 @@ export type Parser
 			// A NON-function field WITH a `(` falls through to the method path deliberately: `p.count(…)` on
 			// an int field `count` is not a call through the field, and it must report the unknown method
 			// (E3004) rather than silently reading the field and applying parens to an integer.
-			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or not self.at(TokenKind.leftParen) 'fieldRead'
+			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or self.kindAt(self.pos + 1) != TokenKind.leftParen 'fieldRead'
+				self.advance()
 				try self.requireFieldAccessible(base.layout, index: fieldIndex, fieldTok: memberTok)
 				return self.emitFieldLoad(base.box, layout: base.layout, index: fieldIndex, range: SourceRange.between(baseTok, last: memberTok))
 			end 'fieldRead'
@@ -24355,13 +24392,28 @@ export type Parser
 	// Both references perform the identical rewrite (v1 `computeFieldNameForMemberToken`,
 	// `Parser.maxon:14303-14312`; bootstrap `2-Parser.cs:17809-17819`).
 	function consumeMemberNameToken() returns Token throws ParseError
-		if not self.at(TokenKind.intLiteral) 'namedMember'
-			return try self.consume(TokenKind.identifier)
-		end 'namedMember'
-
-		let indexTok = try self.consume(TokenKind.intLiteral)
-		return Token.create(TokenKind.identifier, line: indexTok.line, column: indexTok.column, value: tupleFieldName(indexTok.value))
+		let member = try self.memberNameTokenAt(self.pos)
+		self.advance()
+		return member
 	end 'consumeMemberNameToken'
+
+	// The member-name token at `index` WITHOUT moving the cursor — `consumeMemberNameToken` minus the
+	// advance, and the reason the rewrite above is not written inline there. `dispatchMethodOnBase` has to
+	// READ the member to decide whether it is a field or a method and may not consume it: the method path
+	// hands the cursor to `parseCallNamed`, which consumes the name itself. Peeking with the rewrite absent
+	// would make a tuple's positional member (`makePair().0`) invisible to the field lookup on the one door
+	// that cannot reach it through the chain walk.
+	function memberNameTokenAt(index TokenIndex) returns Token throws ParseError
+		let tok = self.tokenAt(index)
+		if tok.kind == TokenKind.identifier 'namedMember'
+			return tok
+		end 'namedMember'
+		if tok.kind != TokenKind.intLiteral 'notAMemberName'
+			throw ParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		end 'notAMemberName'
+
+		return Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: tupleFieldName(tok.value))
+	end 'memberNameTokenAt'
 
 	// **The token kinds that may NAME a member after a `.`** — an identifier, or the int literal of a tuple's
 	// positional access. Spelled once, so the dispatch predicates that decide a statement is a field store or
@@ -25155,7 +25207,7 @@ export type Parser
 		// arrives with the rung that gives a field a struct type, which is the rung that already
 		// owes this one its receiver-ownership analysis (see `parseMethodCall`).
 		if binding.isSelfField 'structTypedField'
-			throw ParseError.unsupported("a field access through '{String.from(baseTok.value)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)", line: baseTok.line, column: baseTok.column)
+			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
 		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)

@@ -1,0 +1,18 @@
+// Test: error.member-on-a-value-with-no-members
+typealias Wide = int(i64.min to i64.max)
+typealias UnaryOp = function(Wide) returns Wide
+
+function twice(v Wide) returns Wide
+	return v * 2
+end 'twice'
+
+function pickFn() returns UnaryOp
+	return twice
+end 'pickFn'
+
+function main() returns ExitCode
+	return pickFn().x
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here

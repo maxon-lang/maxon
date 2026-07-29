@@ -1,0 +1,74 @@
+// Test: char-literal-codepoint-iteration
+function main() returns ExitCode
+	var count = 0
+	for cp in "a-b-c".codepoints() 'chars'
+		if cp == '-' 'dash'
+			count = count + 1
+		end 'dash'
+	end 'chars'
+	return count
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.leaRegRdata r12, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __str_to_codepoints
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_count
+    x64.cmpRegReg r12, r8
+    x64.jcc less, chars
+    x64.jmp forexit
+  chars:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_get_unchecked
+    x64.cmpRegImm32 r8, 45
+    x64.jcc equal, dash
+    x64.jmp critsplit
+  dash:
+    x64.leaRegRegImm32 rax, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rbx, rax
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

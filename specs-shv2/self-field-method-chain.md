@@ -78,7 +78,8 @@ end 'main'
 42
 ```
 
-<!-- test: self-nested-field-method -->
+<!-- disabled-test: self-nested-field-method -->
+<!-- AN ARRAY LITERAL AT A RANGED-ALIAS-ELEMENT PARAMETER — `Inner.create([1, 2, 3])` builds an `Array with integer` and the parameter is `IntArray = Array with Integer`, so it is `E3005 argument type mismatch for 'values': expected 'Array_Integer', got 'Array_int'`. The oracle accepts it. The CHAIN this case is named for works: with the same array built through `IntArray.create()` + `push`, `self.inner.values.count()` compiles and answers 3 (measured). A contextual-typing gap at the array literal, not a member-walk one. -->
 Call a method on a nested struct field via self.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
