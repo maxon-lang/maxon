@@ -1205,6 +1205,40 @@ type StructBase
 	end 'create'
 end 'StructBase'
 
+// ⭐⭐ **THE RECEIVER OF A `.method(…)`, IN THE FORM THE ONE DISPATCHER READS** — everything
+// `dispatchMethodOnReceiver` needs and nothing about where the receiver came from. Two doors build one:
+// a BINDING receiver (`dispatchMethodOnBinding`, off a `VarInfo`) and a VALUE receiver (`parsePostfix`,
+// off a literal, a call result, a parenthesised expression or a field read).
+//
+// ⚠ **IT CARRIES THE TAG AND THE NAME ID, NOT A `MaxonType`.** The two are the columns a VALUE's type
+// lives in (`tagOf` / `valueNameId`), and every predicate the dispatcher routes on already takes exactly
+// that pair (`isStringIndexType`, `isCharacterSetType`, `builtinConformerOfType`). Rebuilding a
+// `MaxonType` from them to hand it over would box a union per member access for nothing.
+//
+// The three provenance fields are facts about the BINDING a receiver came from, and a temporary has none
+// of them — see `valueReceiver` for why each empty answer is the right one rather than a gap.
+type MethodReceiver
+	export let value as ValueId
+	export let tag as ValueTypeTag
+	export let nameId as TypeNameId
+	// The token a diagnostic blames and the range a dispatched call spans from — the base token for a
+	// binding receiver, the `.` for a temporary that has no token of its own.
+	export let anchor as Token
+	// The name an E3019 would blame for a write through this receiver, EMPTY when it may be written
+	// through (`immutableReceiverNameOf`).
+	export let immutableName as ByteArray
+	// E3070's parallel fact — the STORAGE this receiver denotes, empty when it denotes none. A DIFFERENT
+	// string from `immutableName`; see `StructBase`, which carries the same pair on to the call.
+	export let subjectName as ByteArray
+	// Which PARAMETER's storage this receiver is, for the call-site half of E3019. `NoMutatedParams` for
+	// anything that is not a parameter's record.
+	export let owner as MutatedParamMask
+
+	export static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName ByteArray, subjectName ByteArray, owner MutatedParamMask) returns MethodReceiver
+		return Self{value: value, tag: tag, nameId: nameId, anchor: anchor, immutableName: immutableName, subjectName: subjectName, owner: owner}
+	end 'create'
+end 'MethodReceiver'
+
 // The resolved END of a field-access chain `base.f1.…fN` (P1.4a wave 2): the `box` its LAST field lives in
 // (the base's box for a single field, an intermediate struct field's loaded box for a chain), the `layout`
 // that box has, the `lastFieldTok` naming the field still to read or write, and the `baseTok`/`baseBinding`
@@ -18340,36 +18374,25 @@ export type Parser
 				continue
 			end 'indirectCall'
 
-			// A `.method(…)` on an array-typed VALUE — a method on a fresh literal (`[10,20,30].get(0)`) or any
-			// array-valued expression, dispatched to the array runtime (P1.7 slice 1). Keyed on the value being
-			// an `Array` instance; a non-array `.method` in postfix position is left for the caller exactly as
-			// before (a plain struct's method call reaches the binding path, not this loop).
-			if self.at(TokenKind.dot) and self.tagOf(current) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(current)) 'arrayMethod'
-				// A postfix receiver is a VALUE the expression just built — a literal, a call result, a
-				// slice — so there is no binding for an iteration lock to name (the field-chain door is
-				// the one that has one, and it passes it).
-				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: resultUsed, immutableReceiverName: EmptySourceText, borrowSubjectName: EmptySourceText)
+			// ⭐⭐ **A `.member` ON A VALUE — ONE ARM, THE SAME SWITCH A BINDING RECEIVER GOES THROUGH.** The
+			// receiver is whatever the expression just built: a `"…"` / `[…]` / `b"…"` LITERAL, a CALL RESULT
+			// (`Inner.make(9).get()`), a PARENTHESISED expression (`(i).get()`), a FIELD read
+			// (`o.inner.get()`, whose chain stops one hop early exactly so the receiver arrives here), an
+			// array element, or a previous hop of this very loop.
+			//
+			// It used to be THREE arms — array, type-parameter, builtin-conformer — and the set was not a
+			// design: it was whichever receiver types someone had happened to need from a value. Everything
+			// else `break`ed with the cursor still on the `.`, which is how the nonsensical `E2015:
+			// Unsupported: . statement` was reached for `"abc".byteLength()`. Routing every tag through
+			// `dispatchMethodOnReceiver` means a type that gains a method gains it in BOTH spellings at once,
+			// and a receiver that genuinely has no members gets a positioned diagnostic naming it.
+			//
+			// A postfix receiver is bound to no name, so it carries no E3019 blame name and no E3070 subject
+			// — see `valueReceiver`.
+			if self.at(TokenKind.dot) 'memberAccess'
+				current = try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(current, immutableName: EmptySourceText, subjectName: EmptySourceText), resultUsed: resultUsed)
 				continue
-			end 'arrayMethod'
-
-			// A `.method(…)` on a CONSTRAINED TYPE-PARAMETER value (P1.7a slice 2a) — `self.item.digest()` where
-			// `item` is a `T` value and `T` is constrained `where T is Digest`. The concrete type is unknown in the
-			// shared body, so it dispatches through the runtime witness (`witnessDispatch`), NOT a direct call.
-			if self.at(TokenKind.dot) and self.tagOf(current) == ValueTypeTag.typeParameter 'witnessMethod'
-				current = try self.parseWitnessMethodOnValue(func, receiver: current, resultUsed: resultUsed)
-				continue
-			end 'witnessMethod'
-
-			// A `.method(…)` on a value with a BUILTIN CONFORMANCE (P1.7a direct dispatch) —
-			// `a.get().compare(b.get())`, where the receiver of `.compare` is the `Integer` a prior call
-			// RETURNED and so is no binding at all. Keyed on the value's conformer, the same classifier the
-			// binding path matches on, so both spellings dispatch the identical impl. It chains like every
-			// other hop (`i.hash().hash()` is legal — a `HashValue` is an `int`), which is why it rebinds the
-			// cursor and continues rather than returning.
-			if self.at(TokenKind.dot) and isBuiltinConformer(self.builtinConformerOfValue(current)) 'builtinConformanceMethod'
-				current = try self.parseBuiltinConformanceMethodOnValue(func, receiver: current)
-				continue
-			end 'builtinConformanceMethod'
+			end 'memberAccess'
 
 			break
 		end 'postfix'
@@ -21270,107 +21293,169 @@ export type Parser
 		return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: varType, mutable: mutable, boundValue: value), baseTok: baseTok, resultUsed: resultUsed)
 	end 'dispatchOnManagedReceiver'
 
-	// ⭐ **ROUTE A METHOD CALL BY ITS RECEIVER'S TYPE.** The cursor sits ON the base token; every arm
-	// consumes it and the `.` itself. Shared by a LOCAL receiver and a top-level MANAGED CONSTANT one,
-	// which differ only in where the binding came from — so the two spellings cannot come to disagree
-	// about which dispatch a `String`, an `Array`, a `Set` or a conformer receiver gets.
+	// ⭐ **BUILD THE RECEIVER A BINDING DENOTES AND HAND IT TO THE ONE DISPATCHER.** The cursor sits ON the
+	// base token; this consumes it and `dispatchMethodOnReceiver` consumes the `.`. Shared by a LOCAL
+	// receiver and a top-level MANAGED CONSTANT one, which differ only in where the binding came from — so
+	// the two spellings cannot come to disagree about which dispatch a `String`, an `Array`, a `Set` or a
+	// conformer receiver gets.
+	//
+	// ⭐⭐ **EVERYTHING BINDING-SPECIFIC HAPPENS HERE, AND NOTHING ELSE DOES.** This door owns exactly the
+	// four facts a NAME carries and a temporary cannot — the live-binding guard, the self-field
+	// materialization, the E3019 blame name and E3070 subject, and the owning-parameter mask — and then the
+	// receiver is just a value. That split is what lets `parsePostfix` serve a literal, a call result or a
+	// field read through the SAME switch instead of growing a parallel arm per type (the shape
+	// `IrInterface.maxon:570-573` already prescribes for the builtin-conformer door: "to keep the two
+	// dispatch spellings from disagreeing").
 	function dispatchMethodOnBinding(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		// The receiver's own token, captured before the cursor leaves it: a method call on a struct hands the
-		// receiver to E3070's conflict check as the implicit ARGUMENT 0 it is, and the subject comes through
-		// the one shared derivation (`borrowSubjectNameAt`) like every other door's.
+		// The receiver's own token, captured before the cursor leaves it: a method call on a container hands
+		// the receiver to E3070's conflict check as the implicit ARGUMENT 0 it is, and the subject comes
+		// through the one shared derivation (`borrowSubjectNameAt`) like every other door's.
 		let baseIndex = self.pos
-		// Every arm below routes on the RECEIVER'S DECLARED TAG, so it is read once. It is the binding as it
-		// ARRIVED — `methodReceiverBinding` materializes a self-field alias into an ordinary value binding
-		// without changing its type, so the routing is unaffected by which arm materializes.
-		let receiverTag = maxonTypeTag(binding.varType)
-		// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
-		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
-		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
-		// (self never names a String -- a receiver is a struct or an enum -- so baseBindingName is untouched.)
+
+		// The receiver must be LIVE (a moved-from String / Array / Set / struct touched through a method is
+		// use-after-move, E3102), checked before the method name is even resolved. It was written once per
+		// dispatcher and is asked ONCE here — the question is about the BINDING, and every arm past this
+		// point holds only a value.
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
 		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `methodReceiverBinding` materializes
 		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
 		// that the record belongs to `self`. See `receiverOwnerMask`.
-		if receiverTag == ValueTypeTag.string 'stringMethod'
-			return try self.parseStringMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
+		let owner = self.receiverOwnerMask(func, binding: binding)
+		let held = try self.methodReceiverBinding(binding, baseTok: baseTok)
+
+		self.advance()
+		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(held.boundValue, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner), resultUsed: resultUsed)
+	end 'dispatchMethodOnBinding'
+
+	// ⭐ **THE RECEIVER A VALUE IS.** A temporary — a string literal, a call result, a parenthesised
+	// expression, a field read — is bound to no name, and the three provenance fields are the empty answer
+	// for a REASON rather than by omission:
+	//   • `immutableName` — nothing may be blamed for a write through it. No `let` promises anything about a
+	//     value nobody named, so a mutating method on one is legal exactly as it is on a `var`.
+	//   • `subjectName` — it denotes no STORAGE a borrow could have been taken out of, so E3070 has nothing
+	//     to conflict with.
+	//   • `owner` — it is nobody's parameter, so a write through it mutates none.
+	// The FIELD-CHAIN door is the one caller that can still name something and passes its own two
+	// (`parseFieldChainCall`): the chain's base IS a name, and `for it in b.items` locks exactly it.
+	//
+	// The anchor is the `.` — a temporary has no token of its own, and the dot is where the member access
+	// the diagnostic is about begins.
+	function valueReceiver(value ValueId, immutableName ByteArray, subjectName ByteArray) returns MethodReceiver
+		return MethodReceiver.create(value, tag: self.tagOf(value), nameId: self.valueNameId(value), anchor: self.current(), immutableName: immutableName, subjectName: subjectName, owner: NoMutatedParams)
+	end 'valueReceiver'
+
+	// ⭐⭐ **THE ONE TAG SWITCH A `.member` ROUTES THROUGH — cursor ON the `.`.** Both spellings of a
+	// receiver reach it: a BINDING (`dispatchMethodOnBinding`) and a VALUE (`parsePostfix`,
+	// `parseFieldChainCall`). Before this existed the two were separate chains — eight arms keyed on a
+	// `VarInfo` and four keyed on a value — and the difference between them was not a design, it was
+	// whichever types someone had needed from a value so far: `[1,2].get(0)` worked and `"ab".byteLength()`
+	// was `E2015: Unsupported: . statement`, `a.get().compare(b)` worked and `Inner.make(9).get()` did not.
+	//
+	// ⚠ **THE ARM ORDER IS LOAD-BEARING IN ONE PLACE**: `String` is a builtin conformer too, so its arm must
+	// precede the conformer arm or `s.byteLength()` would be resolved against `String`'s intrinsic
+	// conformances instead of the String method table.
+	function dispatchMethodOnReceiver(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+
+		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
+		// it as not a struct. String is the one non-struct type carrying a method table of its own.
+		if recv.tag == ValueTypeTag.string 'stringMethod'
+			return try self.dispatchStringMethod(func, recv: recv, resultUsed: resultUsed)
 		end 'stringMethod'
-		// A CHARACTER receiver (P1.8 slice B) — its own dispatcher, for the reason it is its own type.
-		// It takes no `receiverOwner`: no Character method writes its receiver (the type is immutable at
-		// this slice), so there is no mutation to attribute to an owning parameter.
-		if receiverTag == ValueTypeTag.character 'characterMethod'
-			return try self.parseCharacterMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
+
+		// A CHARACTER RECEIVER (P1.8 slice B) — its own dispatcher, for the reason it is its own type.
+		if recv.tag == ValueTypeTag.character 'characterMethod'
+			return try self.dispatchCharacterMethod(recv)
 		end 'characterMethod'
 
-		// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
-		// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
-		// split is on the binding's genericInstance TAG being an `Array` instance — the parser's type oracle.
-		if receiverTag == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
-			return try self.parseArrayMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
+		// An ARRAY RECEIVER (`arr.push(x)`, `[10,20].get(0)`) goes to the array runtime rather than through
+		// the struct path (which would reject a generic instance as not a plain struct). The split is on the
+		// `genericInstance` tag being an `Array` instance — the parser's type oracle.
+		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(recv.nameId) 'arrayMethod'
+			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
 		end 'arrayMethod'
 
-		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) is dispatched to the set runtime, like an array
-		// receiver — the split is on the binding's genericInstance TAG being a `Set` instance (P1.7b slice A).
-		if receiverTag == ValueTypeTag.genericInstance and self.signatures.isSetInstance(typeNameIdOf(binding.varType)) 'setMethod'
-			return try self.parseSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), receiverOwner: self.receiverOwnerMask(func, binding: binding), baseTok: baseTok, resultUsed: resultUsed)
+		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) goes to the set runtime, like an array receiver
+		// (P1.7b slice A).
+		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isSetInstance(recv.nameId) 'setMethod'
+			return try self.dispatchSetMethod(func, set: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner)
 		end 'setMethod'
 
-		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) is dispatched to its
-		// own two accessors rather than through `requireStructBase` — which would accept the box (the layout
-		// IS registered) and then resolve the method name against `funcSignatures`, where no file declares
-		// `__StringIndex.charIndex`. It takes no `receiverOwner`: neither accessor writes its receiver, so
-		// there is no mutation to attribute to an owning parameter.
-		if self.isStringIndexType(receiverTag, nameId: typeNameIdOf(binding.varType)) 'stringIndexMethod'
-			return try self.parseStringIndexMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
+		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) takes its own two
+		// accessors rather than the struct path — which would accept the box (the layout IS registered) and
+		// then resolve the method name against `funcSignatures`, where no file declares
+		// `__StringIndex.charIndex`.
+		if self.isStringIndexType(recv.tag, nameId: recv.nameId) 'stringIndexMethod'
+			return try self.dispatchStringIndexMethod(recv)
 		end 'stringIndexMethod'
 
-		// A `CharacterSet` RECEIVER (`ws.contains(c)`, P1.8 Slice D) is dispatched to its own membership test
-		// rather than through `requireStructBase`, for the reason the `StringIndex` arm above is: the layout IS
-		// registered, so the struct path would accept the box and then resolve `__CharacterSet.contains` against
-		// `funcSignatures`, where no file declares it. It takes no `receiverOwner`: `contains` writes nothing.
-		if self.isCharacterSetType(receiverTag, nameId: typeNameIdOf(binding.varType)) 'characterSetMethod'
-			return try self.parseCharacterSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
+		// A `CharacterSet` RECEIVER (`ws.contains(c)`, P1.8 Slice D) takes its own membership test, for the
+		// reason the `StringIndex` arm above does.
+		if self.isCharacterSetType(recv.tag, nameId: recv.nameId) 'characterSetMethod'
+			return try self.dispatchCharacterSetMethod(func, recv: recv)
 		end 'characterSetMethod'
 
-		// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
-		// synthesized conformance impl rather than through `requireStructBase`, which would reject an
-		// `int` as not a struct. The split is on the binding's declared TYPE reduced to its conformer
-		// (`builtinConformerOfType` — the parser's type oracle again), and it must sit AFTER the String
-		// arm above: `String` is a conformer too, but a String receiver's methods are
-		// `parseStringMethodCall`'s (`s.hash()` direct dispatch is its own slice).
-		// A receiver that is NOT a builtin conformer — a struct, a generic instance, or a type with no
-		// conformance at all — falls through to the struct path below, which resolves the first two and
-		// reports the third.
-		let receiverConformer = self.builtinConformerOfType(receiverTag, nameId: typeNameIdOf(binding.varType))
+		// A CONSTRAINED TYPE-PARAMETER RECEIVER (P1.7a slice 2a) — `self.item.digest()` where `item` is a `T`
+		// and `T` is constrained `where T is Digest`. The concrete type is unknown in the shared body, so it
+		// dispatches through the runtime WITNESS, not a direct call.
+		if recv.tag == ValueTypeTag.typeParameter 'witnessMethod'
+			return try self.dispatchWitnessMethod(func, receiver: recv.value, resultUsed: resultUsed)
+		end 'witnessMethod'
+
+		// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the synthesized
+		// conformance impl rather than through the struct path, which would reject an `int` as not a struct.
+		// The split is on the receiver's TYPE reduced to its conformer (`builtinConformerOfType` — the
+		// parser's type oracle again). A receiver that is NOT a builtin conformer — a struct, a generic
+		// instance, or a type with no conformance at all — falls through to the struct path below, which
+		// resolves the first two and reports the third.
+		let receiverConformer = self.builtinConformerOfType(recv.tag, nameId: recv.nameId)
 		if isBuiltinConformer(receiverConformer) 'builtinConformer'
-			return try self.parseBuiltinConformanceMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok, conformer: receiverConformer)
+			return try self.dispatchBuiltinConformanceMethod(func, receiver: recv.value, conformer: receiverConformer, baseTok: recv.anchor)
 		end 'builtinConformer'
 
-		// ⭐ **AN ENUM/UNION RECEIVER (D1)** — `d.isNorth()`, `s.action()`, `self.isStop()`. Its methods are
-		// ordinary functions carrying the SAME `Direction.isNorth` qualification a struct's do, so the arm
-		// exists for one reason only: the struct path resolves a `StructLayout` (for its field-vs-method
-		// split), and an enum declares none. The enum's own NAME is the whole of what the dispatch needs.
+		// AN ENUM/UNION RECEIVER (D1) — `d.isNorth()`, `s.action()`, `self.isStop()`, and now also
+		// `pick().score()` and `Direction.south.score()`, which the oracle accepts (measured: 10) and which
+		// arrive here as VALUES because D1's arm was reached only from the binding door.
 		//
 		// Gated on the `named` TAG first, which allocates nothing and is false for every struct, String,
 		// Character, Array and Set receiver — so the interner read and the registry probe behind it are paid
 		// only by a receiver that is an enum or a ranged alias, and a ranged alias reaching here was already
-		// on its way to `requireStructBase`'s refusal.
-		if receiverTag == ValueTypeTag.named and self.signatures.containsEnum(self.internedName(typeNameIdOf(binding.varType))) 'enumMethod'
-			return try self.dispatchMethodOnEnumReceiver(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok, baseIndex: baseIndex, resultUsed: resultUsed)
+		// on its way to the struct fallthrough's refusal.
+		if recv.tag == ValueTypeTag.named and self.signatures.containsEnum(self.internedName(recv.nameId)) 'enumMethod'
+			return try self.dispatchEnumMethod(func, recv: recv, resultUsed: resultUsed)
 		end 'enumMethod'
 
-		// ⚠ The STRUCT arm alone is handed the ORIGINAL binding, unmaterialized. A struct-typed self field
-		// is REFUSED by `requireStructBase` (it has no constructible value at this rung, and that refusal
-		// documents its own unreachability); materializing it here would silently turn that refusal into a
-		// load nothing has ever exercised.
-		self.advance()
-		try self.consume(TokenKind.dot)
-		return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok, subjectName: self.borrowSubjectNameAt(baseIndex)), baseTok: baseTok, resultUsed: resultUsed)
-	end 'dispatchMethodOnBinding'
+		return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
+	end 'dispatchMethodOnReceiver'
 
-	// ⭐ **DISPATCH A METHOD ON AN ENUM/UNION RECEIVER (D1).** The cursor sits ON the base token. The
+	// The `StructBase` a receiver that reached the struct fallthrough denotes — the value form of
+	// `requireStructBase`, sharing its layout resolution and differing only in that a VALUE has no binding
+	// to prove live and no self-field alias to materialize (its producer already did both).
+	//
+	// A tag with no methods at all lands here, and this is where it is reported: a `float`, a `void` call
+	// result, an enum value, a function value. The message names the member rather than the type's fields,
+	// because reaching this point means a `.` followed a value the language gives no member access to.
+	function structBaseOfReceiver(recv MethodReceiver) returns StructBase throws ParseError
+		if recv.tag != ValueTypeTag.structRef and recv.tag != ValueTypeTag.genericInstance 'notAStruct'
+			let memberTok = self.current()
+			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
+		end 'notAStruct'
+
+		return StructBase.create(try self.structLayoutOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor), box: recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName)
+	end 'structBaseOfReceiver'
+
+	// ⭐ **DISPATCH A METHOD ON AN ENUM/UNION RECEIVER (D1).** The cursor sits on the member NAME. The
 	// callee is mangled from the receiver's declared ENUM NAME and the member name — the very key
 	// `parseFunction` declared the method under (`declaredMethodName`) — and the receiver is prepended as
 	// argument 0 by the shared `parseCallNamed`. That is the whole dispatch; nothing below the parser
 	// learns that enums have methods.
+	//
+	// ⭐ **D1 GAVE IT A BINDING RECEIVER ONLY; ROUTING IT THROUGH THE ONE SWITCH GIVES IT A VALUE ONE FOR
+	// FREE (D2).** `pick().score()` and `Direction.south.score()` are programs the oracle runs (measured:
+	// 10 for their sum) and shv2 answered `E2015: Unsupported: . statement` for both, because the arm was
+	// reachable only from `dispatchMethodOnBinding`. It needed nothing added — an enum value carries its
+	// name in the same column a binding's declared type does.
 	//
 	// ⭐ **THE RECEIVER IS BORROWED, exactly as a struct's is** (`parseMethodCall`'s header argues it in
 	// full). A payload-free enum's receiver is a bare i64 tag with no ownership at all; a BOXED union's is
@@ -21382,18 +21467,12 @@ export type Parser
 	// The three facts it shares with the struct path — liveness, the E3019 blame name and the E3070 borrow
 	// subject — are asked through the same three functions, so an enum receiver and a struct receiver
 	// cannot come to disagree about a use-after-move, an immutable receiver or a borrow conflict.
-	function dispatchMethodOnEnumReceiver(func IrFunction, binding VarInfo, baseTok Token, baseIndex TokenIndex, resultUsed bool) returns ValueId throws ParseError
-		try self.requireBindingLive(binding, nameTok: baseTok)
-
-		// The enum's name comes from the BINDING's declared type, never from the base token: the token is a
-		// variable's name (`d`), and `self` is not even an identifier.
-		let enumName = self.internedName(typeNameIdOf(binding.varType))
-
-		self.advance()
-		try self.consume(TokenKind.dot)
+	function dispatchEnumMethod(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
+		// The enum's name comes from the receiver's TYPE, never from the anchor token: the anchor is a
+		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
 		let memberTok = self.current()
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(enumName, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex)), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
-	end 'dispatchMethodOnEnumReceiver'
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: recv.anchor, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+	end 'dispatchEnumMethod'
 
 	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
 	// MATERIALIZED first.** Every other binding already holds its value; a self-field alias holds NONE.
@@ -21584,15 +21663,21 @@ export type Parser
 	// falls through to the method path, which reports it as an unknown method. `resultUsed` does not apply to
 	// the field load: the value/statement position is decided at the indirect call the postfix loop emits.
 	function dispatchMethodOnBase(func IrFunction, base StructBase, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		let memberTok = self.current()
+		let memberTok = try self.consumeMemberNameToken()
 		let fieldIndex = base.layout.indexOfField(memberTok.value)
 		if fieldIndex < base.layout.fieldCount() 'fieldMember'
-			let fieldType = self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)
-			if maxonTypeTag(fieldType) == ValueTypeTag.function 'functionField'
-				try self.consume(TokenKind.identifier)
+			// A member that is a FIELD is READ, in two cases: a FUNCTION-typed one however it is spelled (the
+			// `(args)` after it is an INDIRECT call the postfix loop applies, not a method dispatch), and ANY
+			// field with no `(` after it at all — `Inner.make(9).x`, `t.branch().tally`, a plain member access
+			// on a value the chain walk could not reach because its base was not a name.
+			//
+			// A NON-function field WITH a `(` falls through to the method path deliberately: `p.count(…)` on
+			// an int field `count` is not a call through the field, and it must report the unknown method
+			// (E3004) rather than silently reading the field and applying parens to an integer.
+			if maxonTypeTag(self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)) == ValueTypeTag.function or not self.at(TokenKind.leftParen) 'fieldRead'
 				try self.requireFieldAccessible(base.layout, index: fieldIndex, fieldTok: memberTok)
 				return self.emitFieldLoad(base.box, layout: base.layout, index: fieldIndex, range: SourceRange.between(baseTok, last: memberTok))
-			end 'functionField'
+			end 'fieldRead'
 		end 'fieldMember'
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
@@ -21709,25 +21794,21 @@ export type Parser
 		// method call on a CAPTURED receiver cannot reach a binding of the enclosing body, and a captured
 		// managed CONTAINER — the only thing a borrow could be taken out of — is refused outright at this rung
 		// (`capturedStructBase` admits only a struct). There is no storage here for a conflict to be about.
-		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
+		return StructBase.create(try self.structLayoutOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: try self.emitCaptureRead(baseTok, enclosing: enclosing), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
-	// carrying methods at this rung, so it has its own dispatch rather than riding requireStructBase.
-	// The receiver must be LIVE (a moved-from String touched through a method is use-after-move, E3102),
-	// checked here before the method name is even resolved -- the same guard requireStructBase gives a
-	// struct base.
-	function parseStringMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		self.advance()
-		try self.consume(TokenKind.dot)
-		try self.requireBindingLive(binding, nameTok: baseTok)
-
+	// carrying methods at this rung, so it has its own dispatch rather than riding the struct path.
+	// The cursor sits on the method NAME; the receiver's live-binding guard belongs to whichever door
+	// resolved it (`dispatchMethodOnBinding` — a temporary has no move state to check).
+	function dispatchStringMethod(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
+		let baseTok = recv.anchor
 		let methodTok = try self.consume(TokenKind.identifier)
 		if methodTok.value.equals(AppendMethod) 'append'
-			return try self.parseStringAppend(func, binding: binding, receiverOwner: receiverOwner, baseTok: baseTok, methodTok: methodTok, resultUsed: resultUsed)
+			return try self.parseStringAppend(func, recv: recv, methodTok: methodTok, resultUsed: resultUsed)
 		end 'append'
 		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
-			return try self.parseStringByteLength(binding, methodTok: methodTok)
+			return try self.parseStringByteLength(recv.value, methodTok: methodTok)
 		end 'byteLength'
 
 		// ⭐ The P1.8 Slice C byte/ASCII family. Every one of them READS the receiver and writes a fresh
@@ -21735,35 +21816,35 @@ export type Parser
 		// which is exactly what `case-conversion-on-let-binding` pins.
 		let range = SourceRange.between(baseTok, last: methodTok)
 		if methodTok.value.equals(StringStartsWithMethod) 'startsWith'
-			return try self.parseStringPredicate(func, binding: binding, callee: StrStartsWithName, methodName: StringStartsWithMethod, range: range)
+			return try self.parseStringPredicate(func, receiver: recv.value, callee: StrStartsWithName, methodName: StringStartsWithMethod, range: range)
 		end 'startsWith'
 		if methodTok.value.equals(StringEndsWithMethod) 'endsWith'
-			return try self.parseStringPredicate(func, binding: binding, callee: StrEndsWithName, methodName: StringEndsWithMethod, range: range)
+			return try self.parseStringPredicate(func, receiver: recv.value, callee: StrEndsWithName, methodName: StringEndsWithMethod, range: range)
 		end 'endsWith'
 		if methodTok.value.equals(ContainsMethod) 'contains'
-			return try self.parseStringPredicate(func, binding: binding, callee: StrContainsName, methodName: ContainsMethod, range: range)
+			return try self.parseStringPredicate(func, receiver: recv.value, callee: StrContainsName, methodName: ContainsMethod, range: range)
 		end 'contains'
 		if methodTok.value.equals(StringToLowerMethod) 'toLower'
-			return try self.parseStringCaseConversion(binding, lo: AsciiUpperA, hi: AsciiUpperZ, delta: AsciiToLowerDelta, range: range)
+			return try self.parseStringCaseConversion(recv.value, lo: AsciiUpperA, hi: AsciiUpperZ, delta: AsciiToLowerDelta, range: range)
 		end 'toLower'
 		if methodTok.value.equals(StringToUpperMethod) 'toUpper'
-			return try self.parseStringCaseConversion(binding, lo: AsciiLowerA, hi: AsciiLowerZ, delta: AsciiToUpperDelta, range: range)
+			return try self.parseStringCaseConversion(recv.value, lo: AsciiLowerA, hi: AsciiLowerZ, delta: AsciiToUpperDelta, range: range)
 		end 'toUpper'
 		if methodTok.value.equals(StringReplaceMethod) 'replace'
-			return try self.parseStringReplace(func, binding: binding, callee: StrReplaceName, range: range)
+			return try self.parseStringReplace(func, receiver: recv.value, callee: StrReplaceName, range: range)
 		end 'replace'
 		if methodTok.value.equals(StringSplitMethod) 'split'
-			return try self.parseStringSplit(func, binding: binding, range: range)
+			return try self.parseStringSplit(func, receiver: recv.value, range: range)
 		end 'split'
 
 		// ⭐ P1.8 Slice B. `count()` is the GRAPHEME count — O(n) per call, exactly as the reference's is
 		// (see `GraphemeRuntime.buildGraphemeCount`). `bytes()` is the byte view, shared with Character's.
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(GraphemeCountName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(GraphemeCountName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
-			return try self.parseByteView(binding.boundValue, range: range)
+			return try self.parseByteView(recv.value, range: range)
 		end 'bytes'
 
 		// ⭐ P1.8 Slice E — the leftovers, every one of them READING the receiver and writing a fresh value,
@@ -21772,13 +21853,13 @@ export type Parser
 		// `toByteArray()` is `bytes()`'s emitter verbatim; see `StringToByteArrayMethod` for why they are one
 		// answer here and two in the reference.
 		if methodTok.value.equals(StringToByteArrayMethod) 'toByteArray'
-			return try self.parseByteView(binding.boundValue, range: range)
+			return try self.parseByteView(recv.value, range: range)
 		end 'toByteArray'
 		if methodTok.value.equals(CodepointViewMethod) 'codepoints'
-			return try self.parseDecodedView(binding.boundValue, callee: StrToCodepointsName, range: range)
+			return try self.parseDecodedView(recv.value, callee: StrToCodepointsName, range: range)
 		end 'codepoints'
 		if methodTok.value.equals(Utf16ViewMethod) 'utf16'
-			return try self.parseDecodedView(binding.boundValue, callee: StrToUtf16Name, range: range)
+			return try self.parseDecodedView(recv.value, callee: StrToUtf16Name, range: range)
 		end 'utf16'
 		// `isEmpty()` is `byteLength() == 0` — the reference's own body (`stdlib/String.maxon:340-342`), which
 		// is why it is the field load this file already emits plus the ordinary integer compare, and not a
@@ -21786,7 +21867,7 @@ export type Parser
 		// rather than `count()` answers the same question without the O(n) walk.
 		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
 			try self.consumeEmptyArgList()
-			return try self.emitCompare(self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: range), rhs: self.emitLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, opTok: methodTok)
+			return try self.emitCompare(self.emitLoadStringField(recv.value, offset: StringLengthOffset, range: range), rhs: self.emitLiteral(0, valueType: MaxonType.integer, range: range), op: MaxonCmpOp.eq, opTok: methodTok)
 		end 'isEmpty'
 		// `clone()` is `__str_clone`, the deep copy P1.7 slice 3b-vi-b already built for the managed-array
 		// element walk — a fresh OWNED inline record holding a copy of these bytes. It is emphatically NOT
@@ -21795,10 +21876,10 @@ export type Parser
 		// `clone()`, where the note is the Stage 0 bug `let b = a.toLower()` lowercasing `a`).
 		if methodTok.value.equals(CloneMethod) 'clone'
 			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+			return self.emitOwnedRuntimeResult(StrCloneName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		end 'clone'
 		if methodTok.value.equals(StringReplaceFirstMethod) 'replaceFirst'
-			return try self.parseStringReplace(func, binding: binding, callee: StrReplaceFirstName, range: range)
+			return try self.parseStringReplace(func, receiver: recv.value, callee: StrReplaceFirstName, range: range)
 		end 'replaceFirst'
 
 		// ⭐ P1.8 Slice B2 — the `StringIndex` family. Four producers and one consumer; every one of them
@@ -21810,36 +21891,36 @@ export type Parser
 		end 'startIndex'
 		if methodTok.value.equals(StringEndIndexMethod) 'endIndex'
 			try self.consumeEmptyArgList()
-			return self.emitOwnedRuntimeResult(StrIndexEndName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
+			return self.emitOwnedRuntimeResult(StrIndexEndName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
 		end 'endIndex'
 		// The two searches are THROWING (`StringError.notFound`), so the runtime call must be the LAST op
 		// this arm emits — an enclosing `try` rewrites exactly that op (`rewriteLastCallToTryCall`).
 		// `emitOwnedRuntimeResult` emits nothing after the call, which is what makes it usable here.
 		if methodTok.value.equals(StringFindFirstMethod) 'findFirst'
-			return try self.parseStringSearch(func, binding: binding, callee: StrIndexFirstName, methodName: StringFindFirstMethod, range: range)
+			return try self.parseStringSearch(func, receiver: recv.value, callee: StrIndexFirstName, methodName: StringFindFirstMethod, range: range)
 		end 'findFirst'
 		if methodTok.value.equals(StringFindLastMethod) 'findLast'
-			return try self.parseStringSearch(func, binding: binding, callee: StrIndexLastName, methodName: StringFindLastMethod, range: range)
+			return try self.parseStringSearch(func, receiver: recv.value, callee: StrIndexLastName, methodName: StringFindLastMethod, range: range)
 		end 'findLast'
 		if methodTok.value.equals(SliceMethod) 'slice'
-			return try self.parseStringSlice(func, receiver: binding.boundValue, range: range)
+			return try self.parseStringSlice(func, receiver: recv.value, range: range)
 		end 'slice'
 
 		// ⭐ P1.8 Slice D — the three trims. Each takes an OPTIONAL `CharacterSet`; with none, the reference's
 		// own default is `CharacterSet.whitespacesAndNewlines()` (`stdlib/String.maxon:760-772`), built here.
 		// They differ only in which end they cut, which is what the two flags carry.
 		if methodTok.value.equals(StringTrimMethod) 'trim'
-			return try self.parseStringTrim(func, receiver: binding.boundValue, fromStart: true, fromEnd: true, range: range)
+			return try self.parseStringTrim(func, receiver: recv.value, fromStart: true, fromEnd: true, range: range)
 		end 'trim'
 		if methodTok.value.equals(StringTrimStartMethod) 'trimStart'
-			return try self.parseStringTrim(func, receiver: binding.boundValue, fromStart: true, fromEnd: false, range: range)
+			return try self.parseStringTrim(func, receiver: recv.value, fromStart: true, fromEnd: false, range: range)
 		end 'trimStart'
 		if methodTok.value.equals(StringTrimEndMethod) 'trimEnd'
-			return try self.parseStringTrim(func, receiver: binding.boundValue, fromStart: false, fromEnd: true, range: range)
+			return try self.parseStringTrim(func, receiver: recv.value, fromStart: false, fromEnd: true, range: range)
 		end 'trimEnd'
 
 		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`) and the three trims (`trim`, `trimStart`, `trimEnd`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
-	end 'parseStringMethodCall'
+	end 'dispatchStringMethod'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
 	// entry point they name**: same receiver, same single String argument, same `StringIndex` result, same
@@ -21848,9 +21929,9 @@ export type Parser
 	//
 	// The result is an OWNED `StringIndex` box on the SUCCESS path only; on the error path the callee's
 	// primary register is unread and the `otherwise` value takes its place, so nothing is dropped twice.
-	function parseStringSearch(func IrFunction, binding VarInfo, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
+	function parseStringSearch(func IrFunction, receiver ValueId, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
 		let needle = try self.parseStringArg(func, methodName: methodName)
-		return self.emitOwnedRuntimeResult(callee, args: pairArgs(binding.boundValue, second: needle), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
+		return self.emitOwnedRuntimeResult(callee, args: pairArgs(receiver, second: needle), resultTag: ValueTypeTag.structRef, resultNameId: self.stringIndexNameId(), range: range)
 	end 'parseStringSearch'
 
 	// ⭐⭐ **`s.slice(start, endIndex: e)` AND `s.slice(start, length: n)` — TWO OVERLOADS TOLD APART BY THE
@@ -21911,18 +21992,18 @@ export type Parser
 	// `s.startsWith(p)` / `s.endsWith(p)` / `s.contains(p)` — the three predicates, which differ ONLY in which
 	// runtime entry point they name: same receiver, same single String argument, same `bool` result. One home,
 	// so a fourth predicate cannot arrive with a different idea of any of those three.
-	function parseStringPredicate(func IrFunction, binding VarInfo, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
+	function parseStringPredicate(func IrFunction, receiver ValueId, callee ByteArray, methodName ByteArray, range SourceRange) returns ValueId throws ParseError
 		let arg = try self.parseStringArg(func, methodName: methodName)
-		return self.emitRuntimeCall(callee, args: pairArgs(binding.boundValue, second: arg), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(callee, args: pairArgs(receiver, second: arg), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringPredicate'
 
 	// `s.toLower()` / `s.toUpper()` — ONE runtime graph, the caller supplying the gated byte range and the
 	// shift, because that is the only thing the two methods differ in (`__str_map_case`). The result is a
 	// FRESH owned String and the receiver is untouched, so neither method needs `noteReceiverWrite` and both
 	// are legal on a `let`.
-	function parseStringCaseConversion(binding VarInfo, lo ParsedInt, hi ParsedInt, delta ParsedInt, range SourceRange) returns ValueId throws ParseError
+	function parseStringCaseConversion(receiver ValueId, lo ParsedInt, hi ParsedInt, delta ParsedInt, range SourceRange) returns ValueId throws ParseError
 		try self.consumeEmptyArgList()
-		let args = quadArgs(binding.boundValue, second: self.emitLiteral(lo, valueType: MaxonType.integer, range: range), third: self.emitLiteral(hi, valueType: MaxonType.integer, range: range), fourth: self.emitLiteral(delta, valueType: MaxonType.integer, range: range))
+		let args = quadArgs(receiver, second: self.emitLiteral(lo, valueType: MaxonType.integer, range: range), third: self.emitLiteral(hi, valueType: MaxonType.integer, range: range), fourth: self.emitLiteral(delta, valueType: MaxonType.integer, range: range))
 		return self.emitOwnedRuntimeResult(StrMapCaseName, args: args, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringCaseConversion'
 
@@ -21935,13 +22016,13 @@ export type Parser
 	// Both arguments are BORROWED (their bytes are read and copied), so neither is moved and an owned
 	// interpolation argument stays a pending temp that drops at statement end, after the copy — `append`'s
 	// rule for its argument, for the same reason.
-	function parseStringReplace(func IrFunction, binding VarInfo, callee ByteArray, range SourceRange) returns ValueId throws ParseError
+	function parseStringReplace(func IrFunction, receiver ValueId, callee ByteArray, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let old = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
 		try self.consumeWithArgLabel()
 		let replacement = try self.requireStringArgValue(func, methodName: StringReplaceMethod)
 		try self.consume(TokenKind.rightParen)
-		return self.emitOwnedRuntimeResult(callee, args: tripleArgs(binding.boundValue, second: old, third: replacement), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		return self.emitOwnedRuntimeResult(callee, args: tripleArgs(receiver, second: old, third: replacement), resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 	end 'parseStringReplace'
 
 	// ⭐ **`s.split(delimiter)` — the first builtin method that CONSTRUCTS an `Array with String` at runtime.**
@@ -21956,11 +22037,11 @@ export type Parser
 	// double-freed and nothing left behind. It is enrolled owned AFTER the fill rather than through
 	// `emitOwnedRuntimeResult`, because the value the caller owns is the array the PARSER created, not the
 	// void result of the call that filled it — the same order `finishArrayLiteral` uses for its pushes.
-	function parseStringSplit(func IrFunction, binding VarInfo, range SourceRange) returns ValueId throws ParseError
+	function parseStringSplit(func IrFunction, receiver ValueId, range SourceRange) returns ValueId throws ParseError
 		let delimiter = try self.parseStringArg(func, methodName: StringSplitMethod)
 		let giid = self.signatures.arrayInstanceForString()
 		let parts = self.emitArrayCreateOp(giid, range: range)
-		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(binding.boundValue, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(StrSplitName, args: tripleArgs(receiver, second: delimiter, third: parts), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(parts)
 		return parts
 	end 'parseStringSplit'
@@ -22011,33 +22092,28 @@ export type Parser
 		return units
 	end 'parseMaterializedView'
 
-	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `parseStringMethodCall` twin, and a
+	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `dispatchStringMethod` twin, and a
 	// separate dispatcher for the reason the two types are separate: a Character has no `append`, no
 	// `split` and no case conversion, and a String has no `asciiValue`. Sharing one dispatcher would make
 	// each type's method set the union of both, which is precisely the type-safety the distinct tag buys.
 	//
-	// The receiver must be LIVE (a moved-from Character touched through a method is use-after-move, E3102),
-	// checked before the method name is resolved — `parseStringMethodCall`'s guard, for its reason.
+	// The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`).
 	//
 	// It takes no `resultUsed`, unlike its String twin: every Character method RETURNS a value, so there is
 	// no void result for a value-position call to misuse (`append` is the String method that needs it).
-	function parseCharacterMethodCall(binding VarInfo, baseTok Token) returns ValueId throws ParseError
-		self.advance()
-		try self.consume(TokenKind.dot)
-		try self.requireBindingLive(binding, nameTok: baseTok)
-
+	function dispatchCharacterMethod(recv MethodReceiver) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(baseTok, last: methodTok)
+		let range = SourceRange.between(recv.anchor, last: methodTok)
 
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
-			return try self.parseByteView(binding.boundValue, range: range)
+			return try self.parseByteView(recv.value, range: range)
 		end 'bytes'
 		// `byteLength()` is `length@8` — the UTF-8 width of the whole cluster, which for an EGC is the sum
 		// of its codepoints' widths (a family emoji is 18). The same field load a String's `byteLength()`
 		// is, because it is the same field of the same record.
 		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
 			try self.consumeEmptyArgList()
-			return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: range)
+			return self.emitLoadStringField(recv.value, offset: StringLengthOffset, range: range)
 		end 'byteLength'
 		// ⚠ **`asciiValue()` IS ABSENT ON PURPOSE, NOT MISSING BY OVERSIGHT.** It is a THROWING method
 		// (`stdlib/Character.maxon:154-166` — `CharacterError.notAscii`), and its two corpus cases spell the
@@ -22047,7 +22123,7 @@ export type Parser
 		// machinery, not in this type. Shipping the method regardless would be vocabulary ahead of its
 		// consumer, and a non-throwing version would have to answer a non-ASCII cluster with a sentinel.
 		throw ParseError.unsupported("Character method '{String.from(methodTok.value)}' -- shv2 provides `bytes` and `byteLength`; `asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus", line: methodTok.line, column: methodTok.column)
-	end 'parseCharacterMethodCall'
+	end 'dispatchCharacterMethod'
 
 	// ============================================================================================
 	// `CharacterSet` (P1.8 Slice D) — the compiler-owned type, its statics, and its membership test
@@ -22229,13 +22305,9 @@ export type Parser
 	// character literal ADOPTS that type (`characterizedOperand`), which is what makes `cs.contains('x')`
 	// compile where `'x'` would otherwise be an int. The set BORROWS the character for the probe, so its
 	// owned temp drops at statement end as any other borrowed argument's does.
-	function parseCharacterSetMethodCall(func IrFunction, binding VarInfo, baseTok Token) returns ValueId throws ParseError
-		self.advance()
-		try self.consume(TokenKind.dot)
-		try self.requireBindingLive(binding, nameTok: baseTok)
-
+	function dispatchCharacterSetMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(baseTok, last: methodTok)
+		let range = SourceRange.between(recv.anchor, last: methodTok)
 		if not methodTok.value.equals(ContainsMethod) 'unknownMethod'
 			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `contains`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
 		end 'unknownMethod'
@@ -22243,8 +22315,8 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let character = try self.requireCharacterArgValue(func, methodName: methodTok.value)
 		try self.consume(TokenKind.rightParen)
-		return self.emitRuntimeCall(CharSetContainsName, args: pairArgs(binding.boundValue, second: character), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-	end 'parseCharacterSetMethodCall'
+		return self.emitRuntimeCall(CharSetContainsName, args: pairArgs(recv.value, second: character), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+	end 'dispatchCharacterSetMethod'
 
 	// Parse one argument expression and require it to be a `Character`, blaming the argument's own first
 	// token. The `requireStringArgValue` twin, and it characterizes a lone literal first for the reason
@@ -22321,29 +22393,23 @@ export type Parser
 	// any other way would be a second copy of the offsets (`StringIndexRuntime`'s constants are the third
 	// reader, and `stringIndexLayout` asserts the two agree).
 	//
-	// The receiver must be LIVE (a moved-from index touched through a method is use-after-move, E3102),
-	// checked before the method name is resolved — `parseStringMethodCall`'s guard, for its reason. It takes
-	// no `resultUsed`: both methods return a value, so there is no void result for a value position to
-	// misuse.
-	function parseStringIndexMethodCall(binding VarInfo, baseTok Token) returns ValueId throws ParseError
-		self.advance()
-		try self.consume(TokenKind.dot)
-		try self.requireBindingLive(binding, nameTok: baseTok)
-
+	// The cursor sits on the method NAME (`dispatchMethodOnReceiver` consumed the `.`). It takes no
+	// `resultUsed`: both methods return a value, so there is no void result for a value position to misuse.
+	function dispatchStringIndexMethod(recv MethodReceiver) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(baseTok, last: methodTok)
+		let range = SourceRange.between(recv.anchor, last: methodTok)
 
 		if methodTok.value.equals(StringIndexCharIndexMethod) 'charIndex'
 			try self.consumeEmptyArgList()
-			return self.emitStringIndexField(binding.boundValue, index: StringIndexCharIdxFieldIndex, range: range)
+			return self.emitStringIndexField(recv.value, index: StringIndexCharIdxFieldIndex, range: range)
 		end 'charIndex'
 		if methodTok.value.equals(StringIndexBytePosMethod) 'bytePos'
 			try self.consumeEmptyArgList()
-			return self.emitStringIndexField(binding.boundValue, index: StringIndexBytePosFieldIndex, range: range)
+			return self.emitStringIndexField(recv.value, index: StringIndexBytePosFieldIndex, range: range)
 		end 'bytePos'
 
 		throw ParseError.unsupported("`{String.from(StringIndexTypeName)}` method '{String.from(methodTok.value)}' -- shv2 provides `charIndex` and `bytePos`; the reference's `equals`/`compare` are reached through `==`/`<` instead, and `String.charAt`/`indexAfter`/`indexBefore` (the other consumers of an index) need a BACKWARD UAX#29 segmenter", line: methodTok.line, column: methodTok.column)
-	end 'parseStringIndexMethodCall'
+	end 'dispatchStringIndexMethod'
 
 	// ⭐ **MINT A `StringIndex` — the parser's half of the one door.** `startIndex()` is the only producer the
 	// PARSER builds directly (its answer is two constants, so a runtime call would be a graph that computes
@@ -22438,7 +22504,7 @@ export type Parser
 	// (parseBinding) -- so there is nothing to make writable here. t is BORROWED and COPIED (its bytes are
 	// blitted), so it is neither moved nor consumed: an owned interpolation argument stays a pending temp
 	// and drops at statement end, AFTER the copy. append is void, so a value-position call is rejected.
-	function parseStringAppend(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, methodTok Token, resultUsed bool) returns ValueId throws ParseError
+	function parseStringAppend(func IrFunction, recv MethodReceiver, methodTok Token, resultUsed bool) returns ValueId throws ParseError
 		// `append` IS the String's one receiver-writing method — the caller matched it to get here — so the
 		// per-container half of the rule is a constant `true` and everything else is the shared home's.
 		// It used to ask `not binding.mutable` on its own, which made a String PARAMETER receiver a false
@@ -22446,25 +22512,25 @@ export type Parser
 		// `receiverStorage: NoMutatedParams` is E3070's SCOPE, not an omission: only an ARRAY write can free
 		// an array element, so a `String` method writing its receiver cannot invalidate a borrow. Recording it
 		// would refuse `b.wipe()` while `b.items` is borrowed for a `wipe` that only appends to `b.name`.
-		try self.noteReceiverWrite(func, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: true)
+		try self.noteReceiverWrite(func, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner, receiverStorage: NoMutatedParams, methodTok: methodTok, mutatesReceiver: true)
 
 		if resultUsed 'voidResultUsed'
 			throw ParseError.voidCallResultUsed(String.from(AppendMethod), line: methodTok.line, column: methodTok.column)
 		end 'voidResultUsed'
 
 		let arg = try self.parseStringArg(func, methodName: AppendMethod)
-		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(binding.boundValue, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(baseTok, last: methodTok))
+		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(recv.value, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
 		// append is a statement (resultUsed false, checked above); the returned id is discarded by the
 		// caller. The receiver value is the honest thing to hand back -- it is what s still denotes.
-		return binding.boundValue
+		return recv.value
 	end 'parseStringAppend'
 
 	// s.byteLength() -- the String's byte count, length@8. A non-mutating accessor, so a let or var
 	// receiver alike, and it takes no arguments. The value is integer-tagged (a byte count), exactly as a
 	// field read is, and returns through the one String-field load site.
-	function parseStringByteLength(binding VarInfo, methodTok Token) returns ValueId throws ParseError
+	function parseStringByteLength(receiver ValueId, methodTok Token) returns ValueId throws ParseError
 		try self.consumeEmptyArgList()
-		return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
+		return self.emitLoadStringField(receiver, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
 	end 'parseStringByteLength'
 
 	// --- Direct builtin-conformance dispatch (P1.7a): `i.compare(j)` / `i.hash()` / `i.equals(j)` ---
@@ -22482,25 +22548,6 @@ export type Parser
 	// the program REFERENCES it, and a direct call creates no `.rdata` reloc — see that file's header for
 	// how the reference is found. A dispatch emitted here that the installer cannot see is a link-time
 	// panic (`resolveCallFixups: call to unknown function 'int.compare'`), never a silent wrong answer.
-
-	// `i.compare(j)` on a BINDING receiver. The cursor sits on the base token; the conformer has already
-	// been resolved from the binding's declared type by `parseMethodCall`.
-	function parseBuiltinConformanceMethodCall(func IrFunction, binding VarInfo, baseTok Token, conformer BuiltinConformer) returns ValueId throws ParseError
-		let receiver = binding.boundValue
-		self.advance()
-		try self.consume(TokenKind.dot)
-		return try self.dispatchBuiltinConformanceMethod(func, receiver: receiver, conformer: conformer, baseTok: baseTok)
-	end 'parseBuiltinConformanceMethodCall'
-
-	// The same dispatch on a VALUE that is not a binding — a call result (`a.get().compare(b.get())`), an
-	// indirect-call result, an array element. Reached from the postfix loop with the cursor on the `.`, which
-	// gated it on `isBuiltinConformer` — so re-reading the classifier here cannot answer `notAConformer`, and
-	// `builtinConformerName` panics rather than inventing a symbol if the two ever disagree.
-	function parseBuiltinConformanceMethodOnValue(func IrFunction, receiver ValueId) returns ValueId throws ParseError
-		let dotTok = self.current()
-		try self.consume(TokenKind.dot)
-		return try self.dispatchBuiltinConformanceMethod(func, receiver: receiver, conformer: self.builtinConformerOfValue(receiver), baseTok: dotTok)
-	end 'parseBuiltinConformanceMethodOnValue'
 
 	// Resolve the method name against the conformer's INTRINSIC conformances and emit the call. The cursor
 	// sits on the method NAME. A name no intrinsic conformance supplies is a clean positioned reject — never
@@ -22887,17 +22934,6 @@ export type Parser
 		throw ParseError.unsupported("`Set from […]` supports `int` and `String` keys — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
 	end 'setInstanceForArrayLiteral'
 
-	// ⭐ **DISPATCH A `Set` METHOD off a binding receiver (P1.7b slice A)** — the set twin of
-	// `parseArrayMethodCall`. `s.insert(e)` / `s.contains(e)` / `s.remove(e)` / `s.count()`; the receiver is a
-	// live `Set` instance (a moved-from set is use-after-move, E3102). The set record's address is stable across
-	// a grow (only its buffer pointers move), so a mutating method never rebinds the receiver.
-	function parseSetMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		self.advance()
-		try self.consume(TokenKind.dot)
-		try self.requireBindingLive(binding, nameTok: baseTok)
-		return try self.dispatchSetMethod(func, set: binding.boundValue, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), receiverOwner: receiverOwner)
-	end 'parseSetMethodCall'
-
 	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).
 	// `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator (rejected in
 	// value position, E3059) that returns the receiver — what the statement still denotes, like `emitArrayVoidCall`.
@@ -23024,27 +23060,6 @@ export type Parser
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
 	end 'moveKeyIntoSet'
 
-	// ⭐ **DISPATCH A BUILTIN `Array` METHOD off an instance receiver (P1.7 slice 1).** The array twin of
-	// `parseStringMethodCall`: the receiver is a live `Array` instance (a moved-from array touched here is
-	// use-after-move, E3102). `get`/`set`/`first`/`last`/`pop`/`remove` are THROWING — they emit a plain
-	// `call` that the enclosing `try …` rewrites to a `tryCall` (`rewriteLastCallToTryCall`), so they must be
-	// the last op emitted; the rest are non-throwing. A non-throwing VOID method (`push`/`reserve`/`resize`/
-	// `clear`/`insert`) in value position is E3059. The array record's ADDRESS is stable across a grow (only
-	// its `buffer@0` moves), so a mutating method never rebinds the receiver.
-	function parseArrayMethodCall(func IrFunction, binding VarInfo, receiverOwner MutatedParamMask, baseTok Token, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
-		// ⭐ The receiver's own token, captured before the cursor leaves it — the E3070 subject comes through
-		// the SAME derivation the iteration lock's does (`borrowSubjectNameAt`), never off `binding`: a bare
-		// self-field receiver arrives here as a `VarInfo` MINTED FRESH per access (`methodReceiverBinding`),
-		// so identity on it would key one storage under a new object at every write. The NAME resolves to the
-		// one alias installed at method entry.
-		let baseIndex = self.pos
-		self.advance()
-		try self.consume(TokenKind.dot)
-		try self.requireBindingLive(binding, nameTok: baseTok)
-		let subjectName = self.borrowSubjectNameAt(baseIndex)
-		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(binding, baseTok: baseTok), borrowSubjectName: subjectName, receiverOwner: receiverOwner, receiverStorage: self.subjectStorageMask(func, subjectName: subjectName))
-	end 'parseArrayMethodCall'
-
 	// ⭐ **THE NAME AN E3019 WOULD BLAME FOR THIS BINDING-BACKED RECEIVER — EMPTY when it may be
 	// written through.** The ONE place the `let` rule and the parameter exception meet, for EVERY
 	// container: `String`, `Array` and `Set` all ask through here (see `noteReceiverWrite`).
@@ -23079,24 +23094,8 @@ export type Parser
 		return baseTok.value
 	end 'immutableReceiverNameOf'
 
-	// A method on an array-typed VALUE that is not a plain local binding — a fresh literal (`[10,20,30].get(0)`)
-	// or any array-valued expression, reached from the postfix loop and the `try` target. The cursor sits on
-	// the `.`; the receiver `arr` is already parsed (and, for a literal, already an owned pending temp that
-	// drops at statement end).
-	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray) returns ValueId throws ParseError
-		try self.consume(TokenKind.dot)
-		// A receiver that is not a binding is WRITABLE: it is a fresh literal, a call result or a field
-		// read, and no `let` promises anything about it. There is also no name a rejection could blame,
-		// which is exactly what the empty answer says — so the callers that reach a genuinely anonymous
-		// receiver pass the empty name, and the FIELD-CHAIN caller passes the one name that can still
-		// refuse: the chain's base while a `for … in` is iterating through it (`iterationLockNameAt`).
-		// It denotes no PARAMETER either way, so a write through it mutates none: `NoMutatedParams`.
-		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed, immutableReceiverName: immutableReceiverName, borrowSubjectName: borrowSubjectName, receiverOwner: NoMutatedParams, receiverStorage: self.subjectStorageMask(func, subjectName: borrowSubjectName))
-	end 'parseArrayMethodOnValue'
-
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
-	// `typeParameter`-tagged value (`self.item`, a `T` field read) and the cursor sits on the `.` before the
-	// method name. The concrete type is UNKNOWN in the shared body, so it dispatches through the runtime WITNESS:
+	// `typeParameter`-tagged value (`self.item`, a `T` field read) and the cursor sits on the method name. The concrete type is UNKNOWN in the shared body, so it dispatches through the runtime WITNESS:
 	// the enclosing type's `where` constraint whose interface declares this method supplies the witness, and the
 	// method's decl-order slot in that interface is the table index. Emits `MaxonOp.witnessDispatch`, which
 	// `lowerMaxonToStd` turns into the fused `StdOp.witnessCall`. The receiver is BORROWED (arg 0); its user
@@ -23111,8 +23110,7 @@ export type Parser
 	// dispatch read an UNINITIALISED REGISTER as its missing actual and returned it (measured: exit
 	// 1073754132 from a clean compile; with a ranged return type, a spurious `Range check failed` panic on a
 	// correct program). `parseCallArgs` + `slotCallArgs` fix all of it by deleting the second spelling.
-	function parseWitnessMethodOnValue(func IrFunction, receiver ValueId, resultUsed bool) returns ValueId throws ParseError
-		try self.consume(TokenKind.dot)
+	function dispatchWitnessMethod(func IrFunction, receiver ValueId, resultUsed bool) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let receiverParamPos = self.valueNameId(receiver)
 		let target = try self.resolveWitnessDispatch(receiverParamPos, methodTok: methodTok)
@@ -23150,7 +23148,7 @@ export type Parser
 		let result = try self.mintWitnessDispatchResult(target, receiverParamPos: receiverParamPos, methodTok: methodTok, resultUsed: resultUsed)
 		self.emitWitnessDispatch(result, args: args, target: target, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName), range: range, siteTok: methodTok)
 		return result
-	end 'parseWitnessMethodOnValue'
+	end 'dispatchWitnessMethod'
 
 	// ⭐ **THE USER'S ARGUMENTS IN THE INTERFACE'S DECLARATION ORDER, WITH THE BORROWED RECEIVER BACK AT
 	// `args[0]` (P1.7a slice 2b-vi)** — or the first slotting failure, as the SAME code a direct call's
@@ -23438,39 +23436,28 @@ export type Parser
 		return q if hops >= minHops else index
 	end 'fieldChainEndAfter'
 
-	// Resolve a field chain to its final field and apply the trailing call, returning its result — an ARRAY
-	// field's METHOD (`b.ops.push(1)`, a borrowed load; the struct owns and drops it) or a FUNCTION-typed field's
-	// INDIRECT call (`o.inner.op()`, #97). Shared by the STATEMENT form (`resultUsed: false`) and the `try`-TARGET
-	// form (`try self.nodes.get(i) otherwise …`, P1.7 slice 3), which leaves the throwing `call __arr_get` as the
-	// last op for `rewriteLastCallToTryCall`.
+	// Resolve a field chain to the field the trailing call's RECEIVER is, and apply that call — an ARRAY
+	// field's method (`b.ops.push(1)`), a nested STRUCT field's method (`o.inner.get()`), a FUNCTION-typed
+	// field's indirect call (`o.inner.op()`, #97), an opaque `T` field's witness dispatch
+	// (`self.item.digest()`) or a builtin conformer's (`o.count.hash()`). Shared by the STATEMENT form
+	// (`resultUsed: false`) and the `try`-TARGET form (`try self.nodes.get(i) otherwise …`, P1.7 slice 3),
+	// which leaves the throwing `call __arr_get` as the last op for `rewriteLastCallToTryCall`.
 	//
-	// The dispatch is on the resolved receiver's TAG, exactly as expression position dispatches a postfix chain: an
-	// array receiver takes an array method; a `function` receiver takes the trailing `(args)` through `parsePostfix`
-	// (the #68/#78 indirect-call path). A `function` receiver reaches the `try`-target caller only through
-	// `try o.inner.op() otherwise`, whose indirect call is non-throwing and is cleanly rejected by
-	// `rewriteLastCallToTryCall` (`rejectTryTarget`), so both callers stay correct. Any other final field followed
-	// by `(` is neither an array method nor callable and is refused.
+	// ⭐ **IT ADDS EXACTLY ONE THING TO THE POSTFIX LOOP: THE CHAIN'S BASE NAME.** `resolveFieldChainFrom`
+	// stops before the `.member(`, so the receiver is an ordinary value and every dispatch decision is
+	// `dispatchMethodOnReceiver`'s — this door exists only because the chain's base IS a name, and
+	// `for it in b.items` locks exactly it against `b.items.clear()`. A postfix receiver in expression
+	// position has no such name and passes the empty one (`valueReceiver`). Further hops past the first
+	// (`o.inner.get().bump()`) are the postfix loop's, unnamed like every other temporary.
 	function parseFieldChainCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		// The chain's BASE token, captured before the chain is resolved — it is the only thing that can
 		// name the storage a write through this receiver reaches, and `for it in b.items` locks exactly it
-		// (`iterationLockNameAt`).
+		// (`iterationLockNameAt`). ONE derivation, read ONCE: handing `iterationLockNameOf` the answer keeps
+		// a chain from resolving its base through `Scope` twice per method call.
 		let baseIndex = self.pos
 		let receiver = try self.parseFieldAccess()
-		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
-			// ONE derivation, read ONCE: `iterationLockNameAt` opened with exactly this question, so handing it
-			// the answer keeps a chain from resolving its base through `Scope` twice per method call.
-			let subjectName = self.borrowSubjectNameAt(baseIndex)
-			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed, immutableReceiverName: self.iterationLockNameOf(subjectName), borrowSubjectName: subjectName)
-		end 'arrayReceiver'
-		// A `function`-typed field takes its trailing `(args)` and a TYPE-PARAMETER field takes its
-		// `.method(…)`, and BOTH are hops `parsePostfix` already knows how to apply — a function value through
-		// its indirect-call arm, an opaque `T` through its witness-dispatch arm. One arm for the two, because
-		// the answer is the same one: hand the resolved receiver back to the postfix loop.
-		if self.tagOf(receiver) == ValueTypeTag.function or self.tagOf(receiver) == ValueTypeTag.typeParameter 'postfixReceiver'
-			return try self.parsePostfix(func, value: receiver, resultUsed: resultUsed)
-		end 'postfixReceiver'
-		let tok = self.current()
-		throw ParseError.unsupported("a method call on a non-array field chain — a nested struct method (`o.inner.m()`) is a later slice", line: tok.line, column: tok.column)
+		let subjectName = self.borrowSubjectNameAt(baseIndex)
+		return try self.parsePostfix(func, value: try self.dispatchMethodOnReceiver(func, recv: self.valueReceiver(receiver, immutableName: self.iterationLockNameOf(subjectName), subjectName: subjectName), resultUsed: resultUsed), resultUsed: resultUsed)
 	end 'parseFieldChainCall'
 
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
@@ -24386,6 +24373,16 @@ export type Parser
 		return kind == TokenKind.identifier or kind == TokenKind.intLiteral
 	end 'namesMemberAt'
 
+	// **Is the `.member` at `index` a CALL — `. <member> (`?** The one question that tells a field-chain HOP
+	// from the chain's END: a member followed by `(` is a method (or a call through a function-typed field),
+	// which is not a field the walk may consume, and the value it is called ON is the chain's result.
+	// Spelled once, beside `namesMemberAt`, because `resolveFieldChainFrom` (which stops on it) and
+	// `fieldChainMethodCallAt` (which decides the statement IS such a call) must agree about where a chain
+	// ends — the divergence `fieldChainEndAfter`'s header describes.
+	function memberCallFollows(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.dot and self.namesMemberAt(index + 1) and self.kindAt(index + 2) == TokenKind.leftParen
+	end 'memberCallFollows'
+
 	// Consume a field-chain base token — the receiver `self` (a keyword) or a local identifier. `self` names the
 	// receiver parameter (resolved by `baseBindingName` to `SelfParamName`); every other base names itself.
 	function consumeChainBaseToken() returns Token throws ParseError
@@ -24450,31 +24447,27 @@ export type Parser
 		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
 		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
 
-		// ⭐ **AN ARRAY FIELD ENDS THE CHAIN (P1.7 slice 1).** `b.ops.push(1)` / `o.inner.items.count()` — the
-		// `.` after an array field opens a METHOD call on the array VALUE, not a further field access (an array
-		// has no addressable sub-fields). Stop here, returning the array field as the chain's last field: the
-		// caller loads it and the postfix loop / statement dispatch applies the method. A STRUCT field is an
-		// intermediate box and the walk recurses; any other non-struct followed by `.` is refused by
-		// `structLayoutOfField` below, exactly as before.
-		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(fieldType)) 'arrayField'
-			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
-		end 'arrayField'
-
-		// ⭐ **A TYPE-PARAMETER FIELD ENDS THE CHAIN TOO (P1.7a slice 2b-v)** — `self.item.digest()` where
-		// `item` is a `T` constrained `where T is Digest`. The `.` after it opens a WITNESS-dispatched method
-		// call on the opaque value, not a further field access: the concrete type is unknown in the shared
-		// body, so `T` has no addressable sub-fields the chain could walk. The same rule the array field above
-		// states, for the other kind of value whose members are reached by method rather than by offset.
+		// ⭐⭐ **A `.member(` AFTER THIS FIELD ENDS THE CHAIN — THIS FIELD IS THE RECEIVER.** The chain walks
+		// FIELDS; a member that opens a CALL is not one, so the walk stops here and returns this field as the
+		// chain's last, leaving the cursor on the `.`. The caller loads it and `dispatchMethodOnReceiver`
+		// decides what the member is, off the loaded value's own type — which is the same decision it makes
+		// for `[1,2].get(0)` and for `s.clone().byteLength()`, reached through the same door.
 		//
-		// It is not a nicety: without it, the ONLY spelling of a throwing witness dispatch — `try
-		// self.item.digest()`, which routes here because `fieldChainMethodCallAt` counts two hops — died on
-		// `structLayoutOfField`'s "not a struct" reject, so the feature was unusable in the very form the
-		// language requires for it.
-		if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'typeParameterField'
+		// ⭐ **IT REPLACES TWO SPECIAL CASES WITH THE RULE THEY WERE BOTH INSTANCES OF.** An ARRAY field
+		// (`b.ops.push(1)`, P1.7 slice 1) and a TYPE-PARAMETER field (`self.item.digest()`, P1.7a slice 2b-v)
+		// each had an arm here saying "this kind of field has no addressable sub-fields, so stop" — and both
+		// are only ever followed by a call, because that is the only thing the language lets you write after
+		// them. Every other field kind fell through to `structLayoutOfField`, which is why a STRUCT field's
+		// method (`o.inner.get()`) was `E3018 type 'Inner' has no field named 'get'` — the walk had consumed
+		// the METHOD NAME as a field — and a scalar field's (`o.count.hash()`) was "not a struct".
+		//
+		// A member with NO `(` after it is still a FIELD and the walk continues, so `o.inner.x` is unchanged
+		// and a chain THROUGH a non-struct field is still refused by `structLayoutOfField` below.
+		if self.memberCallFollows(self.pos) 'receiverField'
 			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
-		end 'typeParameterField'
+		end 'receiverField'
 
+		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
 		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
@@ -25165,14 +25158,14 @@ export type Parser
 			throw ParseError.unsupported("a field access through '{String.from(baseTok.value)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)", line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
-		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
+		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: typeNameIdOf(binding.varType), baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
 	end 'requireStructBase'
 
-	// The `StructLayout` a struct-typed binding names — the guarded layout half of `requireStructBase`,
-	// factored out so a CAPTURED struct base (whose box is the value read out of the env, not
-	// `binding.boundValue`) can resolve its layout the identical way (`resolveCapturedFieldChain`). The
-	// binding's `structRef` name keys the layout registry. Assumes the `structRef`/`genericInstance` gate
-	// above already held.
+	// The `StructLayout` a struct-typed (tag, nameId) pair names — the guarded layout half of
+	// `requireStructBase`, keyed on the TYPE rather than on a binding so all three base resolutions share it:
+	// a local binding (`requireStructBase`), a CAPTURED base (whose box is the value read out of the env, not
+	// `binding.boundValue` — `resolveCapturedFieldChain`), and a VALUE receiver bound to no name at all
+	// (`structBaseOfReceiver`). Assumes the `structRef`/`genericInstance` gate above already held.
 	//
 	// ⭐ **THE TWO TAGS THAT GATE REACH HERE DIFFER IN WHETHER A MISSING LAYOUT IS POSSIBLE, AND THAT IS THE
 	// WHOLE OF THIS FUNCTION.** A `structRef` was interned by the parser itself from a name the declaration
@@ -25187,8 +25180,8 @@ export type Parser
 	// instance half asks the SAME walk gate the four `SignatureIndex` field walks open with, for the reason
 	// the gate below states: a name being declared is not the same fact as this instance's fields living
 	// there, and where they came apart the compiler read a heap pointer out as user data.
-	function structLayoutOfBinding(binding VarInfo, baseTok Token) returns StructLayout throws ParseError
-		let typeName = self.baseStructNameOfBinding(binding, baseTok: baseTok)
+	function structLayoutOfType(tag ValueTypeTag, nameId TypeNameId, baseTok Token) returns StructLayout throws ParseError
+		let typeName = self.baseStructNameOfType(tag, nameId: nameId, baseTok: baseTok)
 
 		// ⚠⚠ **AN INSTANCE ASKS `genericInstanceHasBaseLayout`, NEVER `structOf` ALONE — THE TWO DISAGREE,
 		// AND THE DISAGREEMENT IS MEMORY-UNSAFE.** They answer different questions: `structOf` says "is a
@@ -25204,15 +25197,15 @@ export type Parser
 		//
 		// So the walk gate is the ONE door here too, exactly as it is at the four `SignatureIndex` walks: an
 		// instance whose base has no layout OF ITS OWN never reads fields, whoever else declares the name.
-		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and not self.signatures.genericInstanceHasBaseLayout(typeNameIdOf(binding.varType)) 'noBaseLayout'
+		if tag == ValueTypeTag.genericInstance and not self.signatures.genericInstanceHasBaseLayout(nameId) 'noBaseLayout'
 			throw self.missingBaseLayout(typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
 		match self.signatures.structOf(typeName) 'declared'
 			declared(layout) then return layout
-			undeclared then panic("structLayoutOfBinding: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference), and an INSTANCE base was gated by genericInstanceHasBaseLayout above")
+			undeclared then panic("structLayoutOfType: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference), and an INSTANCE base was gated by genericInstanceHasBaseLayout above")
 		end 'declared'
-	end 'structLayoutOfBinding'
+	end 'structLayoutOfType'
 
 	// Which of the two ways a generic instance's base has no `StructLayout` this one is, worded for a reader
 	// who needs opposite things from them — the diagnostic half of `ProgramSignatures.genericInstanceHasBaseLayout`,
@@ -25245,12 +25238,12 @@ export type Parser
 	// generic instance's base struct for a `genericInstance` (`Sizer with bool` ⇒ `Sizer`, P1.6-B1) — the
 	// SHARED body its methods were compiled once against. The caller's `requireStructBase` has already
 	// gated the tag to one of these two.
-	function baseStructNameOfBinding(binding VarInfo, baseTok Token) returns ByteArray
-		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance 'instance'
-			return self.signatures.genericInstanceBaseName(typeNameIdOf(binding.varType))
+	function baseStructNameOfType(tag ValueTypeTag, nameId TypeNameId, baseTok Token) returns ByteArray
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.signatures.genericInstanceBaseName(nameId)
 		end 'instance'
-		return try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("baseStructNameOfBinding: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
-	end 'baseStructNameOfBinding'
+		return try self.artifact.typeNames.nameOf(nameId) otherwise panic("baseStructNameOfType: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
+	end 'baseStructNameOfType'
 
 	// `loadIndirect <box> <offset>` — the one op a field read is.
 	//

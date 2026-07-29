@@ -4144,9 +4144,11 @@ export type ProgramSignatures
 	// only name form in the language that can hold the element separator, so resolving it is what keeps the
 	// join injective rather than merely usually-injective.
 	//
-	// A `named` denoting a declared `type` is re-tagged `structRef`, matching what `Parser.resolveNamedStruct`
-	// does to a parameter, so the tuple's field type routes to the struct's own drop. A `named` denoting an
-	// enum/union stays `named`, which is the tag a union value carries.
+	// A `named` denoting a declared `type` is re-tagged `structRef` by `declaredSlotType` itself, so the
+	// tuple's field type routes to the struct's own drop — and, unlike the copy of that rule that used to
+	// stand at the bottom of this function, it then reaches `canonicalTupleStructRef` and a NESTED-tuple
+	// element spelled by name canonicalizes like every other `structRef`. A `named` denoting an enum/union
+	// stays `named`, which is the tag a union value carries.
 	function canonicalTupleElement(element MaxonType) returns MaxonType
 		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames))
 		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
@@ -4160,9 +4162,6 @@ export type ProgramSignatures
 				undeclared then panic("canonicalTupleElement: `isInnerAlias('{String.from(name)}')` is true but `innerAliasOf` answered undeclared — the two read one registry")
 			end 'inner'
 		end 'innerRangedAlias'
-		if self.structTypes.contains(name) 'declaredStruct'
-			return MaxonType.structRef(typeNameIdOf(resolved))
-		end 'declaredStruct'
 		return resolved
 	end 'canonicalTupleElement'
 
@@ -5593,6 +5592,24 @@ export type ProgramSignatures
 			if self.isFloatAlias(name) 'floatAlias'
 				return MaxonType.float
 			end 'floatAlias'
+			// ⭐⭐ **A STRUCT-TYPED SLOT (`export var leaf as Leaf`) arrives as a `named` for the reason the
+			// three above do** — the SWEEP recorded the declaration before anything could say what the name
+			// denoted — and it is the re-tag that was MISSING, with exactly the consequence this header warns
+			// of: `named` reads as an INTEGER. MEASURED before this line, against the runnable oracle:
+			//   • `return self.leaf` from a `returns Leaf` method was `E3005 Cannot return 'int' from function
+			//     declared to return 'struct'` — a false reject of a program the oracle runs;
+			//   • `fieldStorageType` fell through to its undeclared-name recovery and typed the field's
+			//     `loadIndirect` `integer` (the same machine word, so no emitted byte moved — which is why it
+			//     went unnoticed);
+			//   • `emitFieldLoad` recorded the read as a BOXED-UNION candidate, a slot its own header says a
+			//     struct field never touches.
+			// Every other reader already resolved the name for itself — `classifyUnionPayload` re-tags it
+			// `structRef` for the construct/drop path, `structLayoutOfField` calls `resolveNamedStruct` for the
+			// chain walk — so the field's VALUE was the one place the answer was never given. Re-interned into
+			// `into` by NAME exactly as the function-alias arm is.
+			if self.structTypes.contains(name) 'structType'
+				return MaxonType.structRef(into.intern(name))
+			end 'structType'
 		end 'maybeAlias'
 
 		return self.adoptType(declared, into: into)

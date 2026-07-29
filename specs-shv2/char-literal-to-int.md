@@ -141,8 +141,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: char-literal-codepoint-iteration -->
-<!-- A METHOD ON A NON-BINDING RECEIVER, and now the ONLY blocker — `"a-b-c".codepoints()` calls a method on a string LITERAL, which shv2 refuses for every String method (`parseStringMethodCall` dispatches off a `VarInfo`, not off a value: measured `E2015: Unsupported: . statement`, identically for `"abc".toUpper()` and for `s.clone().byteLength()`). `String.codepoints()` itself SHIPPED at P1.8 Slice E — bind the receiver and this program runs — so the second blocker this marker used to name is gone -->
+<!-- test: char-literal-codepoint-iteration -->
 ### Character literal comparison during codepoint iteration
 
 ```maxon

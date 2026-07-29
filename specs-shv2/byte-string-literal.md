@@ -238,8 +238,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: byte-string-literal.tobytearray-ordered-compare -->
-<!-- A METHOD ON A NON-BINDING RECEIVER — `"9223372036854775807".toByteArray()` calls a method on a string LITERAL, which shv2 refuses for every String method (`parseStringMethodCall` dispatches off a `VarInfo`, not off a value: measured `E2015: Unsupported: . statement`). `toByteArray()` itself SHIPPED at P1.8 Slice E — bind the literal to a `let` and this program runs -->
+<!-- test: byte-string-literal.tobytearray-ordered-compare -->
 
 A `let`-bound byte string literal has the same element type as `String.toByteArray()`, so bytes
 read out of the two can be ordered-compared.
