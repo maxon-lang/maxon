@@ -518,9 +518,15 @@ export type RuntimeUsage
 	export var usesStrIndexFirst as bool
 	export var usesStrIndexLast as bool
 	export var usesStrIndexSlice as bool
+	// ⭐ **THE UNICODE `General_Category` TABLE (P1.8 Slice D, R2).** Its own bit, and DECOUPLED from every
+	// String bit: `__ucd_cat` is a LEAF that reads two `.rdata` blobs and does integer arithmetic — no heap,
+	// no copy loop, no segmenter — so a program that classifies a codepoint carries nothing else, and a
+	// program that never does carries neither the 65,536-byte BMP table nor the supplementary one. Set by
+	// `recordCallUsage` on a `__ucd_cat` reference, which is what `CharacterSet.contains` emits.
+	export var usesUcdCategory as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -732,6 +738,11 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'strclone'
+	// The `General_Category` lookup (P1.8 Slice D). It declares NOTHING else — see `usesUcdCategory` —
+	// which makes it the second family, beside `__clock_*`, whose body calls nothing this scan cannot see.
+	if callee.equals(UcdCategoryName) 'ucdcategory'
+		usage.usesUcdCategory = true
+	end 'ucdcategory'
 	// ⚠ FIRST of the three family closures: the `StringIndex` family's members call into the OTHER two
 	// (`__gr_end`, `__str_find`/`__str_rfind`), so the bits it turns on must themselves be closed over by
 	// the closures below — see `closeStringIndexNeeds`.
