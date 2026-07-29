@@ -37,6 +37,7 @@ opaque `scaleOpaque(a int)` the optimizer cannot see through, so the call is a r
 | `genfor.sh <loops> <depth> <accesses> <array\|range\|noloop> <out>` | `loops/depth` functions, each one NEST of `depth` `for` loops with `accesses` binding accesses per level | `for … in` (P1.8 slice A) and the four doors of its ITERATION LOCK. `ScaleCorpus` generates **no `for` at all** — the construct did not parse until that commit — so every column of a default run reads a flat Δ0 for it. **Its knobs are independent** (program size is `loops × accesses`, so `depth` moves alone) and `noloop` is the CONTROL: the same accesses through the same doors with not one `for` in the program. See below. |
 | `genstring.sh <n> <sites-*\|data-*> <out>` | ⚠ **TWO families, and `<n>` means a different thing in each**: `sites-*` is a COMPILE ladder (`<n>` = method CALL SITES, four per function); `data-*` is a RUN ladder (`<n>` = DOUBLINGS of the subject string, the program timing only the operation and printing a CSV line) | the seven byte/ASCII `String` methods (P1.8 Slice C). `ScaleCorpus` emits **not one** of `startsWith`/`endsWith`/`contains`/`toLower`/`toUpper`/`replace`/`split` at any rung — dump it and the complete method-call inventory is `create push count get append scaleBy probe byteLength slice reserve clone firstVal` — so the family is structurally invisible to a default run. ⚠ **It is NOT blind to `String`**, which is the trap: 756 `==` sites plus `append`/`byteLength`/interpolation across the six rungs mean a Slice C change to the SHARED `__str_eq` loop DOES read, and that non-zero looks like coverage of a rung it does not cover. `sites-control` is the CONTROL (the P1.2 surface only, no Slice C method), and `data-appendloop` measures the P1.2 `append` this generator has to route around. See below. |
 | `genfnval.sh <aliases> <sites> <arity> <indirect\|direct> <out>` | `aliases` function typealiases with a matching callee each, called through a function VALUE `sites` times per alias, plus a `return` door and an argument door per alias | FUNCTION VALUES and their DECLARED TYPES — `resolveFunctionAliasShapes`, `declaredFunctionShapeOf`, `checkIndirectCall`, `checkFunctionTypeDoors` and `indirectCalleeParamTypes`. `--emit-corpus` finds **ZERO `typealias = function(…)` and ZERO function references** in all 465 generated files, so every column of a default run reads a flat Δ0 for the whole mechanism. `direct` is the CONTROL: the same declarations, bodies and CALL COUNT, called by NAME. See below. |
+| `gentrim.sh <n> <sites-*\|data-*\|edge-*\|loop-*> <out>` | ⚠ **FOUR families, and `<n>` means a different thing in each**: `sites-*` is a COMPILE ladder (`<n>` = CALL SITES); `data-*` is a RUN ladder on the STRING LENGTH (`<n>` = DOUBLINGS of the subject); `edge-*` is a RUN ladder on the MATCHED RUN (`<n>` = doublings of a trimmed pad against a FIXED 8-byte body); `loop-*` is a RUN ladder on the TRIP COUNT | `CharacterSet`, the UCD `General_Category` table and the three `String` trims (P1.8 Slice D). `ScaleCorpus` emits **zero** of `trim`/`CharacterSet`/`CharSet`/`Set with Character`/`\uXXXX` at any rung — measured by `--emit-corpus`, and this is the SIXTH consecutive rung with that property — so the whole surface is structurally invisible to a default run. **It is the ladder that found `trimStart` walking the entire string to answer a question it settled at the first kept cluster** (56.2 ms and 45 MB to trim nothing off 512 KB). `sites-control` is the CONTROL and gave the rung's cost to a program that never uses it: **+14 allocations FLAT** over a 16× span. ⚠ `SITES_PER_FN` is an ENV OVERRIDE, and it is what separates a per-FUNCTION term from a per-SITE one — hold `<n>` and move it. ⚠ `data-trim-supp` is the ONLY mode that reaches `__ucd_cat`'s 806-entry binary search; the other seeds all take the direct BMP byte load. See below. |
 | `genscope.sh <constructs> <locals> <if\|ifelse\|while\|match\|straight> <out>` | ONE function with `locals` scope-filler `var`s in scope and `constructs` merging statements after them, each assigning a BOUNDED two of six accumulators | THE PARSER'S SCOPE DIMENSION — mutable bindings IN SCOPE (V) against the CONSTRUCTS that merge them (C), which `ScaleCorpus` doubles TOGETHER (`LocalsPerFunctionBase` and `LongIfsBase`/`DeepBlocksBase`) and therefore cannot tell apart. It is what separated the `phase:parse` bend of 2026-07-28: **linear in C alone, linear in V alone, quadratic in the two together** — an O(V×C) term, which the `straight` CONTROL (same V, same statement count, no merging construct) then pinned to the construct rather than to program size. See below. |
 | `genfloathash.sh <sites> <hash\|equals\|inthash\|control> <out>` | `sites` direct builtin-conformance call sites on a FLOAT receiver, eight per function so doubling `<sites>` doubles the FUNCTION COUNT and leaves each function's register pressure fixed | P1.7a's last slice (`float` is `Hashable`) and the parse-time lookup that routes `<float>.<method>()` — `builtinConformerMethod` -> `requireBuiltinInterface`. `ScaleCorpus` emits **not one** `.hash()`/`.equals()`/`.compare()` on a float receiver at any rung, so the install gate never fires, `buildFloatHash` is never built and `movqGprXmm` is never encoded: every column of a default run reads a Δ0 that means UNREACHED. ⭐⭐ **`equals` and `inthash` compile under the PRE-rung compiler too, so this is one of the few ladders that supports a true A/B on a byte-identical file** — and `equals` is the mode that found the +10 allocations/site this rung costs a surface it never touched. `inthash` and `control` are the controls. See below. |
 
@@ -371,6 +372,41 @@ available"*. `gennest.sh` evades exactly this by giving every `while` level the 
 **So the lock stack can never be deeper than ~10 in a program that compiles at all**, which bounds
 its linear scan by a constant the compiler itself enforces. Move the door count with `accesses` and
 `noloop` instead of reaching for depth.
+
+### `gentrim.sh` — four families, and the one that found a whole-string walk for a one-cluster answer
+
+`ScaleCorpus` contains **zero** `trim`, `CharacterSet`, `CharSet`, `Set with Character` and `\uXXXX`
+(measured, `--emit-corpus` at rung 5). That is the **sixth consecutive rung** the shared instrument
+cannot express, so every column of a default run reads a Δ0 that means *unreached*.
+
+**The four families answer four different questions**, and collapsing any two of them loses the finding:
+
+- **`data-*` doubles the UNMATCHED body** — the pure scan. All seeds ×2.00 per doubling in time and
+  peak RSS: **`__str_trim` is O(n), not O(n²)**. Per CLUSTER at 524,288 bytes: ASCII 102 ns, 2-byte BMP
+  150 ns, supplementary 190 ns — so `__gr_end`'s general scan is ~48 ns over its ASCII fast path and
+  `__ucd_cat`'s **806-entry binary search is ~40 ns over a direct BMP byte load**. Bounded constants.
+- **`edge-*` doubles the MATCHED pad against a fixed body** — the cost of *cutting* rather than of
+  *scanning past*. Also ×2.00, and at the same per-cluster cost, because both paths mint a `Character`
+  and probe the set.
+- **`loop-*` doubles the TRIP COUNT at a fixed 9-byte subject** — the slab trigger. ⭐ **`loop-trim` vs
+  `loop-trim-shared` is the A/B that isolates the per-call `CharacterSet`**: the same program but for
+  whether the set is built inside the loop or hoisted out, giving **~1,068 ns and ~1,155 bytes of
+  never-reclaimed slab per call**.
+- **`sites-*` doubles CALL SITES** — the compiler's own linearity. All modes ×1.9…×2.0.
+
+⭐⭐ **What it found.** `data-trimstart-clean` read the same curve *and the same absolute nanoseconds*
+as `data-trim-clean`, which is the tell: `trimStart` ran the scan to the end collecting a `keptEnd`
+that `emitTrimResult` discards (an untrimmed end takes `length`). Isolated to one call,
+`"abcdefgh"×65,536`.trimStart() — **nothing to cut** — cost **56.2 ms and 45.0 MB** to answer "byte 0".
+Fixed by exiting at the first kept cluster when `fromEnd` is clear; after, **0.46 ms and 4.8 MB**, and
+the remaining 0.46 ms is the result COPY, which is the floor. `trim`/`trimEnd` unchanged to the KB.
+
+⚠ **Two knobs exist because one reading was ambiguous without them.** `SITES_PER_FN` (env) moves the
+function count while `<n>` holds the site count, which is what proved the control-mode delta was
+**+16 bytes per FUNCTION** and not per site — at 256 sites, `SITES_PER_FN` 1/2/4/8 read 4,920 / 2,872 /
+1,848 / 1,336 bytes, tracking functions and ignoring sites. And `data-trim-supp` is the only mode whose
+seed reaches the supplementary-plane search at all; a ladder of ASCII and 2-byte seeds measures the
+direct table load twice and cannot claim to have measured `__ucd_cat`.
 
 ## Reading one
 

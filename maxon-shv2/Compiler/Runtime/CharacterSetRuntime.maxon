@@ -359,19 +359,34 @@ end 'buildCharSetContains'
 // segmenter, forward, and derives both bounds from it: the end of the last NON-matching cluster is recorded
 // as the walk passes it.
 //
-// ⚠ The cost of that choice, stated plainly: the reference's `trimEnd` on a string with no trailing match is
-// O(1) where this is O(n). It buys agreement between the two directions, and a trim already pays O(trimmed)
-// clusters of `__char_at` minting; a backward segmenter that agrees with the forward one is its own rung.
+// ⚠ The cost of that choice, stated plainly and MEASURED (`Testing/ladders/gentrim.sh`, `data-*`): a trim
+// that must know where the LAST non-matching cluster is has to reach the end, so `trim` and `trimEnd` are
+// O(n) in the whole string where the reference's backward `trimEnd` is O(trimmed suffix). That is the price
+// of one segmenter, and it is linear — measured ×2.00 per doubling out to 524,288 bytes, in every seed.
+//
+// ⭐⭐ **BUT `trimStart` IS NOT, AND MUST NOT BE, AND THAT IS WHAT `stopsAtFirstKept` IS FOR.** With
+// `fromEnd` clear the result's high bound is the byte LENGTH (see `emitTrimResult`) — `keptEnd` is never
+// read — so every cluster the walk visits after the first NON-matching one is pure waste: a `__gr_end`, a
+// `__char_at` MINT (an `__mm_alloc` + blit the slab never gives back), a `__cs_contains` and a
+// `__str_decref`, all to compute a bound that is then discarded. Measured before this exit existed:
+// `"abcdefgh"×65,536`.trimStart(), which has NOTHING to cut, cost **56.2 ms and 45 MB of peak RSS** to
+// answer "byte 0". The test is made on the `firstKept` arm, which runs AT MOST ONCE per trim, so it costs
+// nothing on the matched path, nothing on later kept clusters, and nothing to `trim`/`trimEnd` at all.
 function buildStrTrim(module StdModule)
 	var func = IrFunction.createFromStd(StrTrimName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(6)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var header = module.addBlock(func, label: b"scan")
+	// The string ran out. Its own block because the edge into `done` CARRIES the two bounds, and an edge
+	// with block args may not hang off a `condBranch` — the discipline noted at the `kept` arm below.
+	var scanned = module.addBlock(func, label: b"scanned")
 	var probe = module.addBlock(func, label: b"probe")
 	var matched = module.addBlock(func, label: b"matched")
 	var kept = module.addBlock(func, label: b"kept")
 	var firstKeptBlock = module.addBlock(func, label: b"firstKept")
+	var firstKeptCarry = module.addBlock(func, label: b"firstKeptCarry")
+	var firstKeptStop = module.addBlock(func, label: b"firstKeptStop")
 	var laterKeptBlock = module.addBlock(func, label: b"laterKept")
 	var keptJoin = module.addBlock(func, label: b"keptJoin")
 	var advance = module.addBlock(func, label: b"advance")
@@ -402,7 +417,18 @@ function buildStrTrim(module StdModule)
 	entry.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(firstPos, second: firstKeptStart, third: firstKeptEnd)))
 
 	let exhausted = emitCmp(module, block: header, a: pos, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: done.id, elseBlockId: probe.id))
+	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: scanned.id, elseBlockId: probe.id))
+
+	// ⭐ **THE WALK HAS TWO EXITS, SO `done` TAKES ITS TWO BOUNDS AS BLOCK ARGS** rather than reading the
+	// header's phis directly: the string ran out (`scanned`, carrying whatever the walk accumulated), or a
+	// `trimStart` settled at its first kept cluster and stopped there (`firstKeptStop`, carrying that
+	// cluster). Two predecessors cannot share one dominating definition, and the bounds differ between them.
+	let finalKeptStart = ids.mint()
+	let finalKeptEnd = ids.mint()
+	done.blockArgs.push(IrBlockArg.create(finalKeptStart, argType: StdType.i64))
+	done.blockArgs.push(IrBlockArg.create(finalKeptEnd, argType: StdType.i64))
+	module.setTerminator(scanned, op: StdOp.branch(done.id))
+	scanned.branchEdges.push(BranchEdge.create(done.id, argIds: twoArgs(keptStart, second: keptEnd)))
 
 	// One cluster: its end, the `Character` it spans, and whether the set holds it. The minted Character is
 	// OWNED by this frame and dropped on BOTH arms below — a trim over an all-matching string mints one per
@@ -430,12 +456,22 @@ function buildStrTrim(module StdModule)
 	let sentinel = emitConst(module, block: kept, value: TrimNoMatchYet, ids: ids)
 	let firstKept = emitCmp(module, block: kept, a: keptStart, b: sentinel, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(kept, op: StdOp.condBranch(firstKept, thenBlockId: firstKeptBlock.id, elseBlockId: laterKeptBlock.id))
-	module.setTerminator(firstKeptBlock, op: StdOp.branch(keptJoin.id))
+
+	// ⭐⭐ **THE FIRST KEPT CLUSTER IS WHERE A `trimStart` IS ALREADY FINISHED.** With `fromEnd` clear the
+	// high bound is the byte length and `keptEnd` is never read, so nothing after this cluster can change
+	// the answer — every further trip would mint and drop a `Character` to compute a discarded bound. This
+	// arm is reached AT MOST ONCE per trim (it is guarded by `keptStart == sentinel`, which this trip
+	// clears), so the test is O(1) for the whole call and no other path pays for it.
+	let cutsEnd = emitCmp(module, block: firstKeptBlock, a: fromEnd, b: emitConst(module, block: firstKeptBlock, value: TrimFlagClear, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(firstKeptBlock, op: StdOp.condBranch(cutsEnd, thenBlockId: firstKeptCarry.id, elseBlockId: firstKeptStop.id))
+	module.setTerminator(firstKeptCarry, op: StdOp.branch(keptJoin.id))
+	module.setTerminator(firstKeptStop, op: StdOp.branch(done.id))
+	firstKeptStop.branchEdges.push(BranchEdge.create(done.id, argIds: twoArgs(pos, second: clusterEnd)))
 	module.setTerminator(laterKeptBlock, op: StdOp.branch(keptJoin.id))
 
 	let nextKeptStart = ids.mint()
 	keptJoin.blockArgs.push(IrBlockArg.create(nextKeptStart, argType: StdType.i64))
-	firstKeptBlock.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(pos)))
+	firstKeptCarry.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(pos)))
 	laterKeptBlock.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(keptStart)))
 	module.setTerminator(keptJoin, op: StdOp.branch(advance.id))
 
@@ -448,7 +484,7 @@ function buildStrTrim(module StdModule)
 	module.setTerminator(advance, op: StdOp.branch(header.id))
 	advance.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(clusterEnd, second: carriedStart, third: carriedEnd)))
 
-	emitTrimResult(module, func: func, done: done, record: record, length: length, keptStart: keptStart, keptEnd: keptEnd, fromStart: fromStart, fromEnd: fromEnd, ids: ids)
+	emitTrimResult(module, func: func, done: done, record: record, length: length, keptStart: finalKeptStart, keptEnd: finalKeptEnd, fromStart: fromStart, fromEnd: fromEnd, ids: ids)
 	module.functions.push(func)
 end 'buildStrTrim'
 
