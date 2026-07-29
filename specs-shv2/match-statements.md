@@ -1632,6 +1632,109 @@ end 'main'
 error E2048: <fragment>:7:10: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
 ```
 
+A `break` reached by an `and fallthrough` edge must carry the FALLTHROUGH path's
+carried-variable values to the merge, not the match's entry values. The breaking
+arm's body block has two predecessors — its own match edge and the previous arm's
+fallthrough edge — so the values a break snapshots there are the fallthrough merge
+phis. A break that snapshotted the pre-match values instead would silently discard
+every assignment the fell-through arm made, and no existing case reaches a break
+through a fallthrough edge.
+
+<!-- test: match-break.fallthrough-into-break-arm -->
+```maxon
+function main() returns ExitCode
+	var r = 0
+	var n = 1
+	match n 'check'
+		1 then r = 5 and fallthrough
+		2 then break
+		default then r = 9
+	end 'check'
+	return r
+end 'main'
+```
+```exitcode
+5
+```
+
+⭐ **THE SEARCH ORDER IS MATCHES-BEFORE-LOOPS, AND IT IS OBSERVABLE.** When a match
+statement and an enclosing loop carry the SAME label, a labelled `break 'dup'` names
+the MATCH — the innermost construct wearing that label. Nothing else in the suite
+distinguishes the two search loops in `resolveControlTarget`, so reversing them would
+stay green everywhere else while changing this program from 32 to 10. Oracle-verified
+against the bootstrap, which resolves it the same way.
+
+<!-- test: match-break.match-label-shadows-loop-label -->
+```maxon
+function main() returns ExitCode
+	var n = 0
+	var trips = 0
+	while n < 3 'dup'
+		n = n + 1
+		match n 'dup'
+			1 then break 'dup'
+			default then trips = trips + 1
+		end 'dup'
+		trips = trips + 10
+	end 'dup'
+	return trips
+end 'main'
+```
+```exitcode
+32
+```
+
+CONTROL, and the RUNTIME half of the `continue` rule the E2048 case above only
+checks as a diagnostic. An UNLABELLED `continue` inside a match arm targets the
+`for`'s STEP block, so the counter still advances — routing it at the match instead
+does not merely pick the wrong destination, it spins forever (see `LoopContext`,
+which both reference compilers carry the same warning on). This is the one shape that
+fails if `resolveControlTarget` ever stops gating its match search on the keyword.
+
+<!-- test: match-break.continue-in-for-reaches-step -->
+```maxon
+function main() returns ExitCode
+	var seen = 0
+	var skipped = 0
+	for i in 0 upto 6 'each'
+		match i 'check'
+			2 then continue
+			4 then continue
+			default then seen = seen + 1
+		end 'check'
+		skipped = skipped + 10
+	end 'each'
+	return seen + skipped
+end 'main'
+```
+```exitcode
+44
+```
+
+A `String` scrutinee takes the per-arm compare CHAIN, not the interval-plan dispatch
+that every other break case here exercises — a structurally different lowering, with
+real `matchnext` test blocks the plan never mints. The break enrols its block as a
+reaching arm the same way on both paths, and nothing else pins that.
+
+<!-- test: match-break.string-scrutinee-chain-dispatch -->
+```maxon
+function main() returns ExitCode
+	var total = 0
+	let words = ["red", "green", "blue"]
+	for w in words 'each'
+		match w 'check'
+			"green" then break
+			default then total = total + 1
+		end 'check'
+		total = total + 10
+	end 'each'
+	return total
+end 'main'
+```
+```exitcode
+32
+```
+
 ### Default Throws on Non-Enum Match
 
 <!-- disabled-test: match-statements.default-throws-non-enum -->
