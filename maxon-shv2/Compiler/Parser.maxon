@@ -1807,6 +1807,12 @@ let StringReplaceMethod = b"replace"
 
 let StringSplitMethod = b"split"
 
+// The three trims (P1.8 Slice D). Each takes an OPTIONAL `CharacterSet`, and they differ only in which end
+// they cut — which is what makes them one runtime graph and two flags rather than three transcriptions.
+let StringTrimMethod = b"trim"
+let StringTrimStartMethod = b"trimStart"
+let StringTrimEndMethod = b"trimEnd"
+
 // ⭐ **THE P1.8 SLICE B2 `StringIndex` METHODS.** Four `String` methods PRODUCE a `StringIndex` — the two
 // ends and the two searches — `slice` CONSUMES two of them, and the index itself answers two accessors.
 // That producer/consumer split is not incidental: it is what the declaration sweep scans for
@@ -2096,6 +2102,14 @@ function comparisonOpSpelling(op MaxonCmpOp) returns String
 		ge gives ">="
 	end 'op'
 end 'comparisonOpSpelling'
+
+// What a whole-file token walk is looking for (`Parser.fileNamesAnyToken`). A payload-free enum for
+// `IrInterface.BuiltinConformer`'s measured reason: the question is asked once per token of every file, so
+// a union with an associated value would heap-box on that path.
+enum TokenProbe
+	stringIndexProducer
+	characterSetProducer
+end 'TokenProbe'
 
 // --- Character literals ---
 //
@@ -3956,6 +3970,8 @@ export type Parser
 		// at `managedNameDropCallee` ("neither a declared struct nor a declared enum/union"). So the probe
 		// gets its OWN complete walk of the token array, which nothing can skip.
 		let hasStringIndexProducer = self.fileNamesStringIndexProducer()
+		// The `CharacterSet` layout's own complete walk, for `hasStringIndexProducer`'s reason (P1.8 Slice D).
+		let hasCharacterSetProducer = self.fileNamesCharacterSetProducer()
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -4089,6 +4105,13 @@ export type Parser
 		if hasStringIndexProducer 'registerStringIndex'
 			index.registerStringIndexType()
 		end 'registerStringIndex'
+
+		// Register the compiler-owned `CharacterSet` type (and, with it, intern the `Set with Character` its
+		// members live in) if this file names a producer (P1.8 Slice D) — after `foldFile`, exactly as the
+		// `StringIndex` registration above is and for the same reasons.
+		if hasCharacterSetProducer 'registerCharacterSet'
+			index.registerCharacterSetType()
+		end 'registerCharacterSet'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -4170,21 +4193,62 @@ export type Parser
 	// A question about the whole file is therefore answered by reading the whole file. It restores the
 	// cursor, so it is invisible to the caller, and it stops at the first hit — the answer is a bool.
 	function fileNamesStringIndexProducer() returns bool
+		return self.fileNamesAnyToken(TokenProbe.stringIndexProducer)
+	end 'fileNamesStringIndexProducer'
+
+	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — the `StringIndex`
+	// twin, and it needs its OWN complete walk for the identical reason (see above): a `CharacterSet` built
+	// inside a `type`'s method body is invisible to the declaration loop, and an unregistered layout takes
+	// the compiler down at `characterSetLayoutOrPanic`.
+	//
+	// TWO producers, because there are two ways to make one: naming the type (`CharacterSet.letters()`,
+	// `CharacterSet.from(…)`) and calling a NO-ARGUMENT trim, which builds
+	// `CharacterSet.whitespacesAndNewlines()` for the caller. A trim that PASSES a set names the type
+	// anyway, so the second probe is exactly the no-argument case.
+	function fileNamesCharacterSetProducer() returns bool
+		return self.fileNamesAnyToken(TokenProbe.characterSetProducer)
+	end 'fileNamesCharacterSetProducer'
+
+	// ⭐ **ONE COMPLETE WALK OF THE TOKEN ARRAY, ASKING ONE PROBE** — the shared body of the two whole-file
+	// questions above. It restores the cursor, so it is invisible to the caller, and stops at the first hit
+	// because the answer is a bool. Written once so a third such question cannot arrive with its own idea of
+	// how to walk a file.
+	function fileNamesAnyToken(probe TokenProbe) returns bool
 		let resume = self.pos
 		self.pos = 0
 		var found = false
 
 		while not self.isEof() 'scan'
-			if self.atStringIndexProducer() 'producer'
+			if self.probeMatchesHere(probe) 'hit'
 				found = true
 				break
-			end 'producer'
+			end 'hit'
 			self.advance()
 		end 'scan'
 
 		self.pos = resume
 		return found
-	end 'fileNamesStringIndexProducer'
+	end 'fileNamesAnyToken'
+
+	// What `fileNamesAnyToken` is looking for at the cursor. A payload-free enum for
+	// `IrInterface.BuiltinConformer`'s measured reason — this is asked once per token of every file, and a
+	// closure or a union with an associated value would allocate on that path.
+	function probeMatchesHere(probe TokenProbe) returns bool
+		match probe 'probe'
+			stringIndexProducer then return self.atStringIndexProducer()
+			characterSetProducer then return self.atCharacterSetProducer()
+		end 'probe'
+	end 'probeMatchesHere'
+
+	// A `CharacterSet` identifier, or a `.trim`/`.trimStart`/`.trimEnd` — see
+	// `fileNamesCharacterSetProducer` for why those are the two. Deliberately TOLERANT, like every sweep
+	// probe: it sees tokens, not types, so it over-registers rather than missing.
+	function atCharacterSetProducer() returns bool
+		if self.at(TokenKind.identifier) and self.current().value.equals(CharacterSetBuiltinName) 'namesTheType'
+			return true
+		end 'namesTheType'
+		return self.atBuiltinMethodCall(StringTrimMethod) or self.atBuiltinMethodCall(StringTrimStartMethod) or self.atBuiltinMethodCall(StringTrimEndMethod)
+	end 'atCharacterSetProducer'
 
 	// Is the cursor on `. <name>`? The shape every "does this file call builtin method X?" sweep probe
 	// asks, written once so a second probe cannot arrive with its own idea of what a method call looks
@@ -19426,6 +19490,13 @@ export type Parser
 	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 
+		// `CharacterSet.letters()` / `CharacterSet.from(…)` — the compiler-owned type's statics (P1.8 Slice
+		// D). Intercepted before every alias rewrite below, because `CharacterSet` has no base struct: its
+		// statics BUILD a box out of the set runtime, they do not name a user method.
+		if typeTok.value.equals(CharacterSetBuiltinName) 'characterSetStatic'
+			return try self.parseCharacterSetStaticCall(func, typeTok: typeTok)
+		end 'characterSetStatic'
+
 		// `IntArray.create()` — a static call on an `Array` instance alias (P1.7 slice 1). Intercepted before
 		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
 		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
@@ -19686,6 +19757,14 @@ export type Parser
 		if self.isStringIndexType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType)) 'stringIndexMethod'
 			return try self.parseStringIndexMethodCall(try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
 		end 'stringIndexMethod'
+
+		// A `CharacterSet` RECEIVER (`ws.contains(c)`, P1.8 Slice D) is dispatched to its own membership test
+		// rather than through `requireStructBase`, for the reason the `StringIndex` arm above is: the layout IS
+		// registered, so the struct path would accept the box and then resolve `__CharacterSet.contains` against
+		// `funcSignatures`, where no file declares it. It takes no `receiverOwner`: `contains` writes nothing.
+		if self.isCharacterSetType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType)) 'characterSetMethod'
+			return try self.parseCharacterSetMethodCall(func, binding: try self.methodReceiverBinding(binding, baseTok: baseTok), baseTok: baseTok)
+		end 'characterSetMethod'
 
 		// A BUILTIN-CONFORMER RECEIVER (`i.compare(j)`, `i.hash()`) is dispatched DIRECTLY to the
 		// synthesized conformance impl rather than through `requireStructBase`, which would reject an
@@ -20105,7 +20184,20 @@ export type Parser
 			return try self.parseStringSlice(func, receiver: binding.boundValue, range: range)
 		end 'slice'
 
-		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`) and the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
+		// ⭐ P1.8 Slice D — the three trims. Each takes an OPTIONAL `CharacterSet`; with none, the reference's
+		// own default is `CharacterSet.whitespacesAndNewlines()` (`stdlib/String.maxon:760-772`), built here.
+		// They differ only in which end they cut, which is what the two flags carry.
+		if methodTok.value.equals(StringTrimMethod) 'trim'
+			return try self.parseStringTrim(func, receiver: binding.boundValue, fromStart: true, fromEnd: true, range: range)
+		end 'trim'
+		if methodTok.value.equals(StringTrimStartMethod) 'trimStart'
+			return try self.parseStringTrim(func, receiver: binding.boundValue, fromStart: true, fromEnd: false, range: range)
+		end 'trimStart'
+		if methodTok.value.equals(StringTrimEndMethod) 'trimEnd'
+			return try self.parseStringTrim(func, receiver: binding.boundValue, fromStart: false, fromEnd: true, range: range)
+		end 'trimEnd'
+
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- shv2 provides `append`, `byteLength`, `count`, `bytes`, the byte/ASCII family (`startsWith`, `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `split`), the `StringIndex` family (`startIndex`, `endIndex`, `findFirst`, `findLast`, `slice`) and the three trims (`trim`, `trimStart`, `trimEnd`); `charAt`/`indexAfter`/`indexBefore` need a BACKWARD UAX#29 segmenter, and `graphemes`/`utf16` have no consumer yet", line: methodTok.line, column: methodTok.column)
 	end 'parseStringMethodCall'
 
 	// ⭐ **`s.findFirst(n)` / `s.findLast(n)` — the two THROWING searches, which differ ONLY in which runtime
@@ -20286,6 +20378,187 @@ export type Parser
 		// consumer, and a non-throwing version would have to answer a non-ASCII cluster with a sentinel.
 		throw ParseError.unsupported("Character method '{String.from(methodTok.value)}' -- shv2 provides `bytes` and `byteLength`; `asciiValue` is throwing and its `if try …` call form does not exist yet, and `codepoint`/`codepoints`/`compare`/`hash`/`clone` and the static `fromCodepoint` have no consumer in the corpus", line: methodTok.line, column: methodTok.column)
 	end 'parseCharacterMethodCall'
+
+	// ============================================================================================
+	// `CharacterSet` (P1.8 Slice D) — the compiler-owned type, its statics, and its membership test
+	// ============================================================================================
+
+	// ⭐ **`CharacterSet.<accessor>()` / `CharacterSet.from(chars)` — the type's statics.** The eleven
+	// predefined sets are DATA (`CharacterSetRuntime.characterSetPresets`), so this dispatcher is one table
+	// walk and one bespoke arm rather than twelve near-identical ones.
+	//
+	// ⚠ **A PREDEFINED SET IS BUILT FRESH AT EVERY CALL, WHERE THE REFERENCE CACHES ONE** (`static let
+	// cachedWhitespaces`, `stdlib/CharacterSet.maxon:31-61`). The values are immutable and structurally
+	// equal, so nothing observable differs; what differs is COST — a `Set with Character` of at most seven
+	// members per call. shv2 has no module-level `static let` of a HEAP value to cache one in (a top-level
+	// managed `let` borrows a literal's own record and may not name another global), so caching is its own
+	// rung, and a wrong answer is not on the table either way.
+	function parseCharacterSetStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(typeTok, last: methodTok)
+
+		for preset in characterSetPresets() 'eachPreset'
+			if methodTok.value.equals(preset.method) 'match'
+				try self.consumeEmptyArgList()
+				return try self.emitPredefinedCharacterSet(preset, range: range)
+			end 'match'
+		end 'eachPreset'
+
+		if methodTok.value.equals(CharSetFromMethod) 'from'
+			return try self.parseCharacterSetFrom(func, range: range)
+		end 'from'
+
+		throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` static '{String.from(methodTok.value)}' — shv2 provides the eleven predefined sets and `from(chars)`", line: methodTok.line, column: methodTok.column)
+	end 'parseCharacterSetStaticCall'
+
+	// ⭐ **BUILD ONE PREDEFINED SET: its explicit members into a fresh `Set with Character`, then the box.**
+	// Each member is a `Character` LITERAL the parser mints from the preset's bytes — the same immortal
+	// `.rdata` record a source `'é'` mints — and `moveManagedValueInto` promotes it to an owned copy on the
+	// way in, exactly as a source `insert` does. So a predefined set's members are owned by the set and
+	// released by `__cs_decref` → `__set_decref`, with nothing aliased to `.rdata`.
+	function emitPredefinedCharacterSet(preset CharacterSetPreset, range SourceRange) returns ValueId throws ParseError
+		let chars = try self.emitCharacterMemberSet(preset.members, range: range)
+		return self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, range: range)
+	end 'emitPredefinedCharacterSet'
+
+	// A fresh `Set with Character` holding one member per byte sequence. The ONE door a compiler-built member
+	// set comes through, so the eleven presets cannot disagree about how a member is owned.
+	//
+	// The set is deliberately NOT enrolled as a pending temporary: it is handed straight to `__cs_make`,
+	// which becomes its sole owner, and the BOX is what gets tracked. Enrolling it too would drop it at
+	// statement end while the box still held it.
+	function emitCharacterMemberSet(members ByteArrayArray, range SourceRange) returns ValueId throws ParseError
+		let chars = self.emitSetCreateOp(self.signatures.setInstanceForCharacter(), range: range)
+		let anchor = self.current()
+		for bytes in members 'eachMember'
+			let owned = try self.moveManagedValueInto(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, isString: true, anchor: anchor, range: range)
+			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(chars, second: owned), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'eachMember'
+		return chars
+	end 'emitCharacterMemberSet'
+
+	// ⭐ **THE ONE DOOR A `CharacterSet` BOX IS BORN THROUGH** — `__cs_make(chars, categoryMask)`, whose
+	// result is an OWNED box tracked so an unbound one drops at statement end and a bound one at scope exit,
+	// through `__cs_decref` (`managedNameDropCallee`'s `CharacterSet` arm).
+	function emitCharacterSetBox(chars ValueId, categoryMask ParsedInt, range SourceRange) returns ValueId
+		let mask = self.emitLiteral(categoryMask, valueType: MaxonType.integer, range: range)
+		return self.emitOwnedRuntimeResult(CharSetMakeName, args: pairArgs(chars, second: mask), resultTag: ValueTypeTag.structRef, resultNameId: self.characterSetNameId(), range: range)
+	end 'emitCharacterSetBox'
+
+	// `CharacterSet.from(chars)` — a set of EXPLICIT members and nothing else, so its category mask is zero
+	// (`stdlib/CharacterSet.maxon:119-121`), which is what makes `contains` skip the codepoint decode and the
+	// table read entirely.
+	//
+	// The member set is MOVED into the box: it becomes the box's sole owner, so an owned temporary is
+	// de-listed and a bare local is poisoned — the SAME `moveManagedValueInto` a set key and an array element
+	// take, so a `CharSet` that reaches `from` cannot also be freed by its own scope.
+	function parseCharacterSetFrom(func IrFunction, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let argStart = self.pos
+		let chars = try self.parseExpression(func, block: self.currentBlock)
+		if not self.valueIsCharacterMemberSet(chars) 'notACharacterSet'
+			throw ParseError.builtinOperandType("{String.from(CharacterSetBuiltinName)}.{String.from(CharSetFromMethod)}", required: String.from(CharacterMemberSetDisplayName), got: typeTagName(self.tagOf(chars)), line: argTok.line, column: argTok.column)
+		end 'notACharacterSet'
+		let owned = try self.moveManagedValueInto(chars, argBareLocal: self.rhsWasBareLocalReference(argStart), isString: false, anchor: argTok, range: range)
+		try self.consume(TokenKind.rightParen)
+		return self.emitCharacterSetBox(owned, categoryMask: CharSetNoCategories, range: range)
+	end 'parseCharacterSetFrom'
+
+	// Is `value` a `Set with Character` — the one argument `CharacterSet.from` accepts? Asked of the VALUE's
+	// columns, since the argument is an expression bound to no name.
+	function valueIsCharacterMemberSet(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.genericInstance 'notAnInstance'
+			return false
+		end 'notAnInstance'
+		return self.valueNameId(value) == self.signatures.setInstanceForCharacter()
+	end 'valueIsCharacterMemberSet'
+
+	// ⭐ **`cs.contains(c)` — the type's one instance method.** The argument must be a `Character`; a lone
+	// character literal ADOPTS that type (`characterizedOperand`), which is what makes `cs.contains('x')`
+	// compile where `'x'` would otherwise be an int. The set BORROWS the character for the probe, so its
+	// owned temp drops at statement end as any other borrowed argument's does.
+	function parseCharacterSetMethodCall(func IrFunction, binding VarInfo, baseTok Token) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.between(baseTok, last: methodTok)
+		if not methodTok.value.equals(SetContainsMethod) 'unknownMethod'
+			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `contains`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
+		end 'unknownMethod'
+
+		try self.consume(TokenKind.leftParen)
+		let character = try self.requireCharacterArgValue(func, methodName: methodTok.value)
+		try self.consume(TokenKind.rightParen)
+		return self.emitRuntimeCall(CharSetContainsName, args: pairArgs(binding.boundValue, second: character), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+	end 'parseCharacterSetMethodCall'
+
+	// Parse one argument expression and require it to be a `Character`, blaming the argument's own first
+	// token. The `requireStringArgValue` twin, and it characterizes a lone literal first for the reason
+	// `parseSetKeyArg` does: `'x'` is one byte, so it materializes as an int unless a Character is expected.
+	function requireCharacterArgValue(func IrFunction, methodName ByteArray) returns ValueId throws ParseError
+		let argTok = self.current()
+		let argStart = self.pos
+		let arg = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: ValueTypeTag.character, start: argStart, pastEnd: self.pos)
+		if self.tagOf(arg) != ValueTypeTag.character 'argNotCharacter'
+			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
+		end 'argNotCharacter'
+		return arg
+	end 'requireCharacterArgValue'
+
+	// The compiler-owned `CharacterSet` name, adopted into THIS FILE's interner — which is what a value's
+	// name column holds (`mintValue`), so it must be the local id and not the whole-program one. Interning is
+	// idempotent, and it happens only in a file that actually builds one.
+	function characterSetNameId() returns TypeNameId
+		return self.artifact.typeNames.intern(CharacterSetTypeName)
+	end 'characterSetNameId'
+
+	// ⭐ **IS THIS THE `CharacterSet` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so
+	// it is the interned NAME behind the tag, exactly as `isStringIndexType` asks, and it takes the pair
+	// rather than a value for that function's reason: its askers read the two different records a type can
+	// live in (a BINDING's declared type, and a VALUE's columns).
+	function isCharacterSetType(tag ValueTypeTag, nameId TypeNameId) returns bool
+		if not tagIsStructRef(tag) 'notAStructBox'
+			return false
+		end 'notAStructBox'
+		return self.internedName(nameId).equals(CharacterSetTypeName)
+	end 'isCharacterSetType'
+
+	// ⭐ **`s.trim()` / `s.trimStart(cs)` / `s.trimEnd()` — all three, from one place.** The optional
+	// argument is the whole difference between the two forms: given one, it must be a `CharacterSet`; given
+	// none, the reference's own default is built here (`stdlib/String.maxon:760-772`).
+	//
+	// The result is an OWNED String; the `CharacterSet` is BORROWED by the scan, so a set built for a
+	// no-argument trim is an owned temp that drops at statement end.
+	function parseStringTrim(func IrFunction, receiver ValueId, fromStart bool, fromEnd bool, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let charSet = try self.parseTrimCharacterSet(func, range: range)
+		try self.consume(TokenKind.rightParen)
+
+		var args = ValueIdArray.create()
+		args.push(receiver)
+		args.push(charSet)
+		args.push(self.emitLiteral(trimFlagValue(fromStart), valueType: MaxonType.integer, range: range))
+		args.push(self.emitLiteral(trimFlagValue(fromEnd), valueType: MaxonType.integer, range: range))
+		return self.emitOwnedRuntimeResult(StrTrimName, args: args, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+	end 'parseStringTrim'
+
+	// The set a trim cuts against: the caller's, or the reference's default when the argument list is empty.
+	function parseTrimCharacterSet(func IrFunction, range SourceRange) returns ValueId throws ParseError
+		if self.at(TokenKind.rightParen) 'defaultSet'
+			return try self.emitPredefinedCharacterSet(defaultTrimPreset(), range: range)
+		end 'defaultSet'
+
+		let argTok = self.current()
+		let given = try self.parseExpression(func, block: self.currentBlock)
+		if not self.isCharacterSetType(self.tagOf(given), nameId: self.valueNameId(given)) 'notACharacterSet'
+			throw ParseError.builtinOperandType(String.from(StringTrimMethod), required: String.from(CharacterSetBuiltinName), got: typeTagName(self.tagOf(given)), line: argTok.line, column: argTok.column)
+		end 'notACharacterSet'
+		return given
+	end 'parseTrimCharacterSet'
 
 	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the reference's
 	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher for `parseCharacterMethodCall`'s
@@ -20804,8 +21077,8 @@ export type Parser
 	// `int` and a ranged-int alias both reduce to `int`; a `String` names itself).
 	function requireSetKeyType(giid GenericInstanceId, tok Token) throws ParseError
 		let keyType = self.signatures.conformerTypeArgName(giid, position: 0 as TypeParamId).toByteArray()
-		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName)) 'unsupportedKey'
-			throw ParseError.unsupported("`Set` supports `int` and `String` keys — a '{String.from(keyType)}' key (struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
+		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName)) 'unsupportedKey'
+			throw ParseError.unsupported("`Set` supports `int`, `String` and `Character` keys — a '{String.from(keyType)}' key (struct / ByteArray) is a later slice", line: tok.line, column: tok.column)
 		end 'unsupportedKey'
 	end 'requireSetKeyType'
 
@@ -20912,7 +21185,12 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let keyTok = self.current()
 		let valueStart = self.pos
-		let key = try self.parseExpression(func, block: self.currentBlock)
+		// ⭐ A LONE CHARACTER LITERAL ADOPTS THE SET'S KEY TYPE (P1.8 Slice D). `chars.contains('x')` on a
+		// `Set with Character` is the whole reason: `'x'` is one byte, so `parseCharLiteral` materialized it
+		// as an INT (shv2 types a character literal by its byte WIDTH), and the key check below would refuse
+		// a program the oracle runs. This is `characterizedOperand`'s existing rule reaching one more
+		// position — exactly the `let`/`return`/comparison positions it already serves.
+		let key = try self.characterizedOperand(try self.parseExpression(func, block: self.currentBlock), expected: maxonTypeTag(self.signatures.setKeyType(giid)), start: valueStart, pastEnd: self.pos)
 		try self.requireSetKeyMatchesType(key, giid: giid, keyTok: keyTok)
 		// The move-in MUST run before the `)` is consumed — `rhsWasBareLocalReference` reads `[valueStart, self.pos)`
 		// to decide whether the arg is a bare local to POISON, exactly as `parseArrayElementArg` moves before its `)`.
@@ -20939,7 +21217,16 @@ export type Parser
 	// the move-in asks `setKeyIsManaged` — the SET's key TYPE — and never this tag.
 	function requireSetKeyMatchesType(key ValueId, giid GenericInstanceId, keyTok Token) throws ParseError
 		let keyTag = self.tagOf(key)
-		if tagIsText(maxonTypeTag(self.signatures.setKeyType(giid))) 'stringKey'
+		let declared = maxonTypeTag(self.signatures.setKeyType(giid))
+		if declared == ValueTypeTag.character 'characterKey'
+			// The DEFINITELY question, not `tagIsByteRecord`: a `String` value is a byte record too, and
+			// hashing one as a Character key would put `"a"` and `'a'` in one bucket under two types.
+			if keyTag != ValueTypeTag.character 'notCharacter'
+				throw ParseError.unsupported("`Set with Character` requires a Character key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
+			end 'notCharacter'
+			return
+		end 'characterKey'
+		if tagIsText(declared) 'stringKey'
 			if not tagIsText(keyTag) 'notString'
 				throw ParseError.unsupported("`Set with String` requires a String key — got a '{typeTagName(keyTag)}' value", line: keyTok.line, column: keyTok.column)
 			end 'notString'
@@ -20963,9 +21250,9 @@ export type Parser
 		end 'trivial'
 		let anchor = self.tokenAt(valueStart)
 		// `tagIsByteRecord`, mirroring `moveElementIntoArray`: the flag names the fused-record COPY
-		// protocol, a question about the key's REPRESENTATION. It cannot yet see a Character — a
-		// `Set with Character` is refused where the instance is built, naming the gap — so this is a no-op
-		// today and spelled as the question it asks so the day that refusal lifts is not a leak.
+		// protocol, a question about the key's REPRESENTATION — and since P1.8 Slice D a `Set with Character`
+		// reaches it, which is exactly the day this spelling was written for. A borrowed `.rdata` Character
+		// literal is promoted to an owned copy here; an owned one is transferred.
 		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.setKeyType(giid)))
 		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
 	end 'moveKeyIntoSet'

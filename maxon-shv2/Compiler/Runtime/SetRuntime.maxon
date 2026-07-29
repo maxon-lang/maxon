@@ -159,6 +159,17 @@ export function isSetWitnessCallee(callee ByteArray) returns bool
 	return callee.equals(SetInsertName) or callee.equals(SetContainsName) or callee.equals(SetRemoveName) or callee.equals(SetFromName)
 end 'isSetWitnessCallee'
 
+// ⭐ **THE RUNTIME CALLEES THAT PROBE A `Set with Character` THEY DO NOT HOLD (P1.8 Slice D).** A
+// `CharacterSet` keeps its members in a `Set` FIELD, so `__cs_contains` and the trim above it need the
+// key's `Hashable`/`Equatable` tables as ordinary arguments — but there is no set among their arguments to
+// read a key type off. Their key is `Character` by construction (`SignatureIndex.characterSetLayout`), so
+// they take the SAME threading through the SAME `appendSetWitnessArgs`, with the type named rather than
+// derived. It lives here, beside its sibling, so "which callees carry witness tables?" is one question
+// asked in one file.
+export function isCharacterKeyedWitnessCallee(callee ByteArray) returns bool
+	return callee.equals(CharSetContainsName) or callee.equals(StrTrimName)
+end 'isCharacterKeyedWitnessCallee'
+
 // Install the set runtime into the lowered Std module — ALL of it, when the program touches any set
 // (`usesSet`). Golden-neutral: `__`-prefixed functions are excluded from the spec goldens
 // (`isRuntimeFunction`), so an all-or-nothing install costs nothing in the fragments and needs no per-helper

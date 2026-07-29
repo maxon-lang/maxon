@@ -411,6 +411,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// compilers read them.
 	try installUnicodeCategoryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, stdlibDir: project.stdlibDir)
 
+	// The `CharacterSet` runtime (`__cs_*` + `__str_trim`, P1.8 Slice D) — installed the same already-lowered
+	// way, keyed on its own per-entry-point bits. It sits after the category install because `__cs_contains`
+	// classifies a codepoint through `__ucd_cat`; as with every install above, the bit was settled by
+	// `scanRuntimeUsage` before any install ran, so the order is readability rather than a dependency.
+	installCharacterSetRuntime(pipeline.stdModule, usage: usage)
+
 	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
 	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers

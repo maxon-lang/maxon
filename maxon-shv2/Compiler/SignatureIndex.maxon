@@ -1336,6 +1336,16 @@ end 'managedFieldDropCallee'
 // `managedFieldDropCallee` so a `structRef` (which is always a struct) and a `named` (struct or union) reach
 // the same struct/union lookup once the name is in hand.
 function managedNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, name ByteArray) returns ByteArray
+	// ⭐ **A `CharacterSet` IS A COMPILER-OWNED AGGREGATE AND TAKES A COMPILER-OWNED DROP** (P1.8 Slice D),
+	// exactly as an `Array` takes `__arr_decref` and a `Set` takes `__set_decref`. Asked BEFORE the
+	// declared-struct lookup: its layout IS registered (it needs a nominal identity) and it DOES own a
+	// managed field, so the generic route below would answer `__destruct___CharacterSet` — a symbol
+	// `installStructDestructors` never builds, because it walks `project.structTypes` and a synthesized type
+	// is in no file's declarations. A link failure rather than a wrong answer, but the honest fix is to say
+	// which drop this type takes.
+	if name.equals(CharacterSetTypeName) 'characterSet'
+		return CharSetDecrefName
+	end 'characterSet'
 	if signatures.containsStruct(name) 'struct'
 		if signatures.structHasManagedField(name) 'managedStruct'
 			return destructorSymbol(name)
@@ -1595,6 +1605,30 @@ end 'stringIndexLayout'
 // against them is for.
 export let StringIndexCharIdxFieldIndex = 0 as FieldIndex
 export let StringIndexBytePosFieldIndex = 1 as FieldIndex
+
+// ⭐ **THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D).** Registered under the RESERVED name
+// `__CharacterSet` for the reason `__StringIndex` is (see that constant): a user `type CharacterSet` and
+// this synthesized layout would otherwise contest one bucket, and the loser's box would be read through
+// the winner's field table. `Parser.requireUnreservedName` refuses (E2051) every `__`-prefixed
+// declaration, so no source can spell this one.
+// ⇒ The consequence to know, and it is `StringIndex`'s: a `CharacterSet` cannot cross a function
+// boundary, because a parameter or return type would have to NAME it. Every corpus use is a value flowing
+// from a `CharacterSet.<accessor>()` straight into `contains`/`trim` or a local `let`, which names nothing.
+export let CharacterSetTypeName = b"__CharacterSet"
+
+// The user-visible spelling -- what a source `CharacterSet.letters()` writes, and the ONLY door the type
+// is reachable through. Distinct from the reserved registry name above, and deliberately so.
+export let CharacterSetBuiltinName = b"CharacterSet"
+
+// Its two fields, in the reference's own declaration ORDER — which IS the layout, since
+// `StructLayout.offsetOfField` derives an offset from the index (`stdlib/CharacterSet.maxon:23-24`). Both
+// are `let` and unexported there, and nothing reads them through a field access here: the front end never
+// loads either, and the runtime writes them through `CharacterSetRuntime`'s own constants. The layout
+// exists to give the type a NOMINAL identity and a size that the drift check below holds to the box.
+let CharacterSetCharsFieldName = b"chars"
+let CharacterSetMaskFieldName = b"categoryMask"
+export let CharacterSetCharsFieldIndex = 0 as FieldIndex
+export let CharacterSetMaskFieldIndex = 1 as FieldIndex
 
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
 // per call (a `MaxonTypeArray` is owned by the instance it is interned into).
@@ -3699,6 +3733,54 @@ export type ProgramSignatures
 	export function stringIndexLayoutOrPanic() returns StructLayout
 		return try self.structTypes.get(StringIndexTypeName) otherwise panic("ProgramSignatures.stringIndexLayoutOrPanic: `{String.from(StringIndexTypeName)}` is not registered — every StringIndex value is minted by a method the sweep's `atStringIndexProducer` scan sees, and that scan is what calls `registerStringIndexType`")
 	end 'stringIndexLayoutOrPanic'
+
+	// ⭐ **REGISTER THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D)** — the `StringIndex` twin, called
+	// by the declaration SWEEP when a file's tokens name a producer (`Parser.fileNamesCharacterSetProducer`).
+	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
+	//
+	// It also interns `Set with Character`, because the layout's first field IS that instance: a
+	// `CharacterSet` owns its member set, and the field's declared type is what routes the box's drop.
+	export function registerCharacterSetType()
+		let charsInstance = self.setInstanceForCharacter()
+		if self.structTypes.contains(CharacterSetTypeName) 'alreadyRegistered'
+			return
+		end 'alreadyRegistered'
+		self.structTypes.upsert(CharacterSetTypeName, value: characterSetLayout(charsInstance))
+	end 'registerCharacterSetType'
+
+	// ⭐ **THE LAYOUT, AND THE CHECK THAT IT MATCHES THE BOX THE RUNTIME BUILDS** — `stringIndexLayout`'s
+	// discipline, for the same reason: the front end states this type's shape here and `__cs_make` writes it
+	// through `CharacterSetRuntime`'s constants, and two readers of one shape is the pair that drifts.
+	function characterSetLayout(charsInstance GenericInstanceId) returns StructLayout
+		var layout = StructLayout.create(CharacterSetTypeName)
+		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, exported: false, defaultValue: FieldDefault.none)
+		layout.addField(CharacterSetMaskFieldName, declaredType: MaxonType.integer, mutable: false, exported: false, defaultValue: FieldDefault.none)
+
+		if layout.offsetOfField(CharacterSetCharsFieldIndex) != CharSetCharsOffset or layout.offsetOfField(CharacterSetMaskFieldIndex) != CharSetMaskOffset 'offsetDrift'
+			panic("characterSetLayout: the struct layout puts `chars`/`categoryMask` at {layout.offsetOfField(CharacterSetCharsFieldIndex)}/{layout.offsetOfField(CharacterSetMaskFieldIndex)} but `__cs_make` writes them at {CharSetCharsOffset}/{CharSetMaskOffset} — the front end's shape and the runtime's field writes have drifted")
+		end 'offsetDrift'
+		if layout.sizeBytes() as ParsedInt != CharSetBoxBytes 'sizeDrift'
+			panic("characterSetLayout: the struct layout is {layout.sizeBytes()} bytes but `__cs_make` allocates {CharSetBoxBytes} — the box the runtime builds and the shape the front end states have drifted")
+		end 'sizeDrift'
+		return layout
+	end 'characterSetLayout'
+
+	// The compiler-owned `CharacterSet` layout, for the front end's nominal identity. It PANICS rather than
+	// answering when the type is unregistered, for `stringIndexLayoutOrPanic`'s reason: every caller reaches
+	// it through a value the parser itself minted, which the sweep must already have registered.
+	export function characterSetLayoutOrPanic() returns StructLayout
+		return try self.structTypes.get(CharacterSetTypeName) otherwise panic("ProgramSignatures.characterSetLayoutOrPanic: `{String.from(CharacterSetTypeName)}` is not registered — every CharacterSet value is minted by a producer the sweep's `fileNamesCharacterSetProducer` scan sees, and that scan is what calls `registerCharacterSetType`")
+	end 'characterSetLayoutOrPanic'
+
+	// The `Set with Character` instance a `CharacterSet`'s explicit members live in, and the instance a
+	// `CharSet from [...]` constructs (P1.8 Slice D) — the `setInstanceForString` twin. Keyed as
+	// `MaxonType.character`, the SAME arg a `typealias CharSet = Set with Character` interns, so a
+	// compiler-built member set and a user-declared one share ONE gid and are type-identical. Idempotent.
+	export function setInstanceForCharacter() returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(MaxonType.character)
+		return self.genericInstances.intern(self.typeNames.intern(SetBuiltinBaseName), args: args)
+	end 'setInstanceForCharacter'
 
 	// --- Generic-instance queries (P1.6-A) ---
 

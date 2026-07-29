@@ -500,6 +500,20 @@ export let StringConformerName = b"String"
 // `primitiveTypeTagName(ValueTypeTag.float)`.
 export let FloatConformerName = b"float"
 
+// The canonical conformer name of the managed concrete `Character` (P1.8 Slice D) — the key of its
+// `__witness_Character.*` tables and its synthesized `Character.hash`/`Character.equals` impls, and, like
+// every sibling above, it MUST equal `primitiveTypeTagName(ValueTypeTag.character)`.
+//
+// ⚠ **IT IS A SEPARATE CONFORMER FROM `String` EVEN THOUGH THE TWO IMPLS ARE THE SAME GRAPH.** A
+// `Character` and a `String` share the fused byte record (`TypeRules.tagIsByteRecord`), so hashing and
+// comparing them is byte-for-byte the same work — and `installBuiltinConformanceRuntime` builds both
+// pairs from the SAME two builders for exactly that reason. What may not be shared is the SYMBOL: a
+// witness slot is stamped `qualifiedMethodName(<conformer>, <method>)` from the conformer the TYPE
+// ARGUMENT reduces to, and a `Set with Character` reduces to `Character`. Pointing it at `String.hash`
+// would mean a program using only Character keys links a symbol whose name says String, and the day the
+// two representations diverge the mistake would be silent.
+export let CharacterConformerName = b"Character"
+
 // The canonical conformer name of the primitive `bool` (P1.7a slice 2b-iii) — the key of its synthesized
 // `bool.compare` impl, and it MUST equal `primitiveTypeTagName(ValueTypeTag.boolean)`. It doubles as the
 // rendered spelling of `Equatable.equals`'s `bool` RESULT type (`builtinInterface`), which is the same fact
@@ -528,7 +542,8 @@ export let BoolConformerName = b"bool"
 //   • **`bool` is NEITHER `Hashable` NOR `Equatable`** — both reference compilers omit them (`bool` arrays
 //     bit-pack, `specs/primitive-hashable.md:13`), and the canonical corpus contains no `bool.hash`/
 //     `bool.equals` case at all, positive or negative.
-//   • **`Character` has no row** because no `Character` type exists yet.
+//   • **`Character` is NOT `Comparable`** — the reference's `Character` declares `Hashable, Equatable,
+//     Cloneable` and no ordering, the same hole `String` has above.
 //
 // ⭐ **DIRECT DISPATCH ON A CONCRETE VALUE (`i.compare(j)`, `i.hash()`, `f.equals(g)`) SHIPS**, and it is
 // gated on THIS predicate — see `builtinConformerMethod` below and `Parser.dispatchBuiltinConformanceMethod`.
@@ -546,6 +561,13 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	if typeName.equals(StringConformerName) 'string'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
 	end 'string'
+	// A `Character` conforms exactly where a `String` does, and for the same reason: both ARE the fused
+	// byte record, so both hash their bytes and compare them. It is NOT `Comparable` — the reference's
+	// `Character` declares `Hashable, Equatable, Cloneable` and no ordering (`stdlib/Character.maxon`), the
+	// same hole `String` has one line up.
+	if typeName.equals(CharacterConformerName) 'character'
+		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+	end 'character'
 	if typeName.equals(FloatConformerName) 'float'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'float'

@@ -120,6 +120,8 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	let boolCompare = candidateImplName(impls, conformerName: BoolConformerName, methodName: CompareMethodName)
 	let strHash = candidateImplName(impls, conformerName: StringConformerName, methodName: HashMethodName)
 	let strEquals = candidateImplName(impls, conformerName: StringConformerName, methodName: EqualsMethodName)
+	let charHash = candidateImplName(impls, conformerName: CharacterConformerName, methodName: HashMethodName)
+	let charEquals = candidateImplName(impls, conformerName: CharacterConformerName, methodName: EqualsMethodName)
 
 	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the answers independent of the order
 	// they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very function
@@ -170,6 +172,20 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	if referenced.contains(strEquals) 'strEquals'
 		buildStrEq(module, name: strEquals)
 	end 'strEquals'
+
+	// ⭐ **`Character.hash` IS `String.hash`'s GRAPH AND `Character.equals` IS `String.equals`'s, UNDER
+	// THEIR OWN SYMBOLS** (P1.8 Slice D) — the `bool.compare`/`int.compare` arrangement one type over. Both
+	// types ARE the fused byte record (`TypeRules.tagIsByteRecord`), so djb2 over `buffer@0`/`length@8` and
+	// `__str_eq`'s content compare answer for a Character exactly as they answer for a String; two
+	// transcriptions could only ever come to disagree about what equality MEANS for a pair that hashes alike.
+	// The SYMBOLS must still be Character's — see `CharacterConformerName` for why they may not be shared.
+	if referenced.contains(charHash) 'charHash'
+		buildStrHash(module, name: charHash)
+	end 'charHash'
+
+	if referenced.contains(charEquals) 'charEquals'
+		buildStrEq(module, name: charEquals)
+	end 'charEquals'
 end 'installBuiltinConformanceRuntime'
 
 // Mint one impl's symbol and enrol it as a candidate in ONE act — see the installer for the drift this

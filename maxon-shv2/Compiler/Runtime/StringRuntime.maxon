@@ -524,9 +524,19 @@ export type RuntimeUsage
 	// program that never does carries neither the 65,536-byte BMP table nor the supplementary one. Set by
 	// `recordCallUsage` on a `__ucd_cat` reference, which is what `CharacterSet.contains` emits.
 	export var usesUcdCategory as bool
+	// ⭐ **THE P1.8 SLICE D `CharacterSet` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
+	// existing discipline: a program that only builds a `CharacterSet` must not carry the trim scan, and a
+	// program that only trims must not carry a second copy of anything. Each is set TRANSITIVELY by
+	// `recordCharacterSetUsage` from whichever entry point the module actually names (a `__str_trim`
+	// reference turns on `__cs_contains`, which turns on `__set_contains` and `__ucd_cat`, and the segmenter
+	// and `__char_at` under the walk itself).
+	export var usesCharSetMake as bool
+	export var usesCharSetDecref as bool
+	export var usesCharSetContains as bool
+	export var usesStrTrim as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesSet: false, usesDropTypeParam: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRangeEq: false, usesStrFind: false, usesStrRFind: false, usesStrStartsWith: false, usesStrEndsWith: false, usesStrContains: false, usesStrMapCase: false, usesStrReplace: false, usesStrSplit: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesGbp: false, usesExtPict: false, usesUtf8Decode: false, usesGraphemeBreak: false, usesGraphemeEnd: false, usesGraphemeCount: false, usesCharAt: false, usesStrToBytes: false, usesStrIndexMake: false, usesStrIndexEnd: false, usesStrIndexByteToGrapheme: false, usesStrIndexAdvance: false, usesStrIndexFirst: false, usesStrIndexLast: false, usesStrIndexSlice: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesStrTrim: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -746,6 +756,11 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// ⚠ FIRST of the three family closures: the `StringIndex` family's members call into the OTHER two
 	// (`__gr_end`, `__str_find`/`__str_rfind`), so the bits it turns on must themselves be closed over by
 	// the closures below — see `closeStringIndexNeeds`.
+	// ⚠ The `CharacterSet` family closes into the THREE below it — `__str_trim` walks `__gr_end` and mints
+	// through `__char_at`, and `__cs_contains` decodes a codepoint — so it must record FIRST, exactly as the
+	// `StringIndex` family does and for the identical reason: a bit turned on after its family's closure has
+	// run installs an entry point without what it calls.
+	recordCharacterSetUsage(callee, usage: usage)
 	recordStringIndexUsage(callee, usage: usage)
 	recordStringMethodUsage(callee, usage: usage)
 	recordGraphemeUsage(callee, usage: usage)
@@ -772,6 +787,58 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.neededCloners.insert(callee)
 	end 'structcloner'
 end 'recordCallUsage'
+
+// ⭐ The P1.8 Slice D `CharacterSet` family's arm of the callee → usage-bit map — the
+// `recordGraphemeUsage` twin, split out for the same reason: `recordCallUsage` stays a readable list of
+// families. Direct references only; what each referenced body in turn needs is closed by
+// `closeCharacterSetNeeds`.
+function recordCharacterSetUsage(callee ByteArray, usage RuntimeUsage)
+	if callee.equals(CharSetMakeName) 'make'
+		usage.usesCharSetMake = true
+	end 'make'
+	if callee.equals(CharSetDecrefName) 'decref'
+		usage.usesCharSetDecref = true
+	end 'decref'
+	if callee.equals(CharSetContainsName) 'contains'
+		usage.usesCharSetContains = true
+	end 'contains'
+	if callee.equals(StrTrimName) 'trim'
+		usage.usesStrTrim = true
+	end 'trim'
+	closeCharacterSetNeeds(usage)
+end 'recordCharacterSetUsage'
+
+// ⭐ **WHAT EACH `CharacterSet` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
+// discovered, exactly as the three sibling closures declare their families'. Run as a CLOSURE after every
+// record so the answer cannot depend on the order in which the module happens to name its entry points.
+function closeCharacterSetNeeds(usage RuntimeUsage)
+	// The trim walks CLUSTERS (`__gr_end`), mints a `Character` per cluster (`__char_at`), drops each one
+	// (`__str_decref`), probes the set (`__cs_contains`) and builds its result through the shared slice
+	// producer (`__mm_alloc` + `__str_copy`).
+	if usage.usesStrTrim 'trims'
+		usage.usesCharSetContains = true
+		usage.usesGraphemeEnd = true
+		usage.usesCharAt = true
+		usage.usesStrDecref = true
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'trims'
+	// `__cs_contains` probes the member set, decodes the character's first codepoint, and classifies it.
+	if usage.usesCharSetContains 'probes'
+		usage.usesSet = true
+		usage.usesHeap = true
+		usage.usesUtf8Decode = true
+		usage.usesUcdCategory = true
+	end 'probes'
+	// The box is one `__mm_alloc`; its drop releases the member set and reclaims the box.
+	if usage.usesCharSetMake 'allocatesABox'
+		usage.usesHeap = true
+	end 'allocatesABox'
+	if usage.usesCharSetDecref 'dropsASet'
+		usage.usesSet = true
+		usage.usesHeap = true
+	end 'dropsASet'
+end 'closeCharacterSetNeeds'
 
 // ⭐ The P1.8 Slice B grapheme family's arm of the callee → usage-bit map — the `recordStringMethodUsage`
 // twin, split out for the same reason: `recordCallUsage` stays a readable list of families. Direct

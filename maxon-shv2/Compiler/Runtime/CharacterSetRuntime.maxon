@@ -1,0 +1,524 @@
+// Runtime/CharacterSetRuntime.maxon — the `CharacterSet` box, its membership test, and the three
+// `String` trims that consume one (P1.8 Slice D).
+//
+// ⭐ **PORTED FROM `stdlib/CharacterSet.maxon` AND `stdlib/String.maxon:674-772`, WHICH ARE THE ORACLE.**
+// Both reference compilers execute that same stdlib source — the bootstrap inlines no trim and v1 has no
+// CharacterSet-specific lowering — so there is no divergence between them to resolve. What changes is the
+// SHAPE: shv2 reads no stdlib, so the type is synthesized like `Array`/`Set`/`StringIndex` and each helper
+// is a hand-built `StdOp` graph.
+//
+// ⭐ **THE REPRESENTATION IS THE REFERENCE'S, FIELD FOR FIELD** (`stdlib/CharacterSet.maxon:22-24`): a
+// `Set with Character` of EXPLICIT members, plus a `categoryMask` of OR'd `General_Category` bits. A
+// predefined set carries both (`whitespaces()` is the `Zs` bit *plus* an explicit HT); a
+// `CharacterSet.from(…)` carries only the set, with a zero mask that skips the table read entirely.
+//
+// ⚠⚠ **PLAIN SPACE U+0020 IS NOT AN EXPLICIT MEMBER OF ANY PREDEFINED SET, AND THAT IS LOAD-BEARING.**
+// `whitespacesAndNewlines()` seeds only HT/LF/CR/CRLF/VT/FF/NEL (`stdlib/CharacterSet.maxon:36-37`);
+// U+0020 is whitespace ONLY through the mask's `Zs` bit. So **even `"  hello  ".trim()` goes through the
+// UCD table** — `specs/string-trim.md`'s very first case is exactly that, and the oracle passes it only
+// via that lookup. There is a dead `stdlib/Unicode.maxon:3-52` `isWhitespace` with zero callers anywhere
+// in the tree and an ASCII-only `stdlib/Ascii.maxon:32-41`; wiring trim to either would be a silent
+// divergence from the oracle and would make the whole UCD table look unnecessary. Do not.
+
+// ⭐ **THE BOX'S FIELD OFFSETS AND ITS SIZE** — asserted against the registered `StructLayout`
+// (`SignatureIndex.characterSetLayout`) rather than merely agreeing with it by inspection, exactly as
+// `StringIndexRuntime`'s are: the type's SHAPE is stated for the front end by that layout and written here
+// by these constants, and two readers of one shape is the pair this project keeps finding drifted.
+export let CharSetCharsOffset = 0 as ByteOffset
+export let CharSetMaskOffset = 8 as ByteOffset
+export let CharSetBoxBytes = 16 as ParsedInt
+
+// ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
+// signature slotting) but NOT `__mm_`-prefixed, so none widens the heap decision by its prefix; each
+// declares its own transitive floor in `recordCallUsage` exactly as the String and set families do.
+//
+//   * `__cs_make(charsRec, categoryMask)` — mint a `CharacterSet`. THE ONE DOOR the box is born through,
+//     so its two fields cannot be written in one order here and another there.
+//   * `__cs_decref(csRec)` — the box's DROP. A `CharacterSet` OWNS its member set, so the last owner
+//     drops that set before reclaiming the box. It is a compiler-owned aggregate's compiler-owned drop,
+//     exactly like `__set_decref` and `__arr_decref`, rather than a synthesized `__destruct_<T>` cascade:
+//     the type is not a DECLARED struct, so it is in no `project.structTypes` for `installStructDestructors`
+//     to walk.
+//   * `__cs_contains(csRec, charRec, hashWitness, eqWitness)` — the reference's `contains`
+//     (`stdlib/CharacterSet.maxon:124-136`): explicit membership first, then the category bit.
+//   * `__str_trim(strRec, csRec, fromStart, fromEnd, hashWitness, eqWitness)` — all THREE reference trims
+//     (`stdlib/String.maxon:714-757`) behind two flags; see `buildStrTrim`.
+export let CharSetMakeName = b"__cs_make"
+export let CharSetDecrefName = b"__cs_decref"
+export let CharSetContainsName = b"__cs_contains"
+export let StrTrimName = b"__str_trim"
+
+// The two verdicts `__cs_contains` returns, named for `StringRuntime`'s `StrPredicateTrue` reason: an
+// `i1`-declared graph materializes its bool as two `const`-returning blocks off a fused `cmp`+`jcc`, and a
+// bare 1/0 at a return site is exactly the magic value the no-magic-values rule is for.
+let CharSetContainsTrue = 1
+let CharSetContainsFalse = 0
+
+// The mask value that means "this set has NO category members" — `CharacterSet.from(…)`'s mask
+// (`stdlib/CharacterSet.maxon:120`). It is what lets a purely explicit set skip the codepoint decode and
+// the table read altogether, which is the reference's own short-circuit (`:128`). Exported because the
+// PARSER stamps it into a `from`-built box and this graph tests it — one number, two readers.
+export let CharSetNoCategories = 0
+
+// The two values `__str_trim`'s end flags take. A Std parameter is a machine word, so a source `bool` is
+// 1 or 0 here; named because a bare `1` at an argument site is exactly the magic value the rule is for.
+let TrimFlagSet = 1 as ParsedInt
+let TrimFlagClear = 0 as ParsedInt
+
+// One of a trim's two end flags, as the argument the parser passes.
+export function trimFlagValue(cut bool) returns ParsedInt
+	if cut 'cutThisEnd'
+		return TrimFlagSet
+	end 'cutThisEnd'
+	return TrimFlagClear
+end 'trimFlagValue'
+
+// How a `Set with Character` is SPELLED in a diagnostic — for the one message that has to say what
+// `CharacterSet.from` wanted. `typeTagName` cannot say it (a generic instance's tag names no arguments),
+// and the type has no user-visible alias in shv2 beyond the builtin `CharSet` one.
+export let CharacterMemberSetDisplayName = b"Set with Character"
+
+// The low bit a category test isolates: `(categoryMask shr cat) and 1` (`stdlib/CharacterSet.maxon:130`).
+let CharSetCategoryBit = 1
+
+// ⭐ **THE SENTINEL `__str_trim`'s FORWARD SCAN CARRIES FOR "NO NON-MATCHING CLUSTER SEEN YET".** A byte
+// position is non-negative, so `-1` cannot be one — this is a loop-carried STATE, not a returned sentinel
+// (the function returns a String), and it is the one value that distinguishes "every cluster matched" from
+// "the first non-matching cluster is at byte 0". Both answers are reachable and they are not the same
+// string.
+let TrimNoMatchYet = 0 - 1
+
+// ============================================================================================
+// THE ELEVEN PREDEFINED SETS — data, transcribed from `stdlib/CharacterSet.maxon:31-116`
+// ============================================================================================
+//
+// ⭐ **EACH PRESET IS ITS ACCESSOR NAME, ITS CATEGORY BITMASK AND ITS EXPLICIT MEMBERS**, and it is DATA
+// rather than eleven hand-written emitters: they differ in nothing else, and eleven copies of one
+// construction is eleven chances to pair a mask with the wrong seed list. The parser walks this table.
+//
+// ⚠ **THE MASKS ARE THE REFERENCE'S OWN NUMBERS AND THEY ARE NOT RE-DERIVED HERE.** Each is an OR of
+// `1 shl <General_Category code>` over the categories `specs/unicode-category.md:19-31` assigns the
+// accessor, with the codes fixed by the generated table (`stdlib/helpers/string/unicodeCategory.maxon:9-37`)
+// — the same table `__ucd_cat` reads. Recomputing them from a second transcription of that legend would be
+// the category codes written down twice.
+//
+// ⚠ **SEVERAL SEED LISTS LOOK REDUNDANT AND ARE KEPT ANYWAY** — `decimalDigits` seeds `'0'`, which its own
+// `Nd` bit already covers. They are the reference's, and dropping one would be a behaviour change argued
+// from this compiler's reading of the UCD rather than from the oracle.
+export type CharacterSetPreset
+	export var method as ByteArray
+	export var categoryMask as ParsedInt
+	export var members as ByteArrayArray
+
+	static function of(method ByteArray, categoryMask ParsedInt, members ByteArrayArray) returns CharacterSetPreset
+		return Self{method: method, categoryMask: categoryMask, members: members}
+	end 'of'
+end 'CharacterSetPreset'
+
+export typealias CharacterSetPresetArray = Array with CharacterSetPreset
+
+// The explicit members, by the UTF-8 BYTES each character literal in the reference decodes to. Named
+// rather than spelled as bare byte arrays at eleven use sites, and spelled as bytes rather than as source
+// escapes because this table IS the decode — there is no literal here for a decoder to read.
+let HorizontalTabBytes = b"\t"
+let LineFeedBytes = b"\n"
+let CarriageReturnBytes = b"\r"
+// CR+LF is ONE grapheme under UAX#29 GB3, and it is an explicit member in its own right — which is
+// precisely why `__str_trim` walks CLUSTERS: a byte walk would meet the CR alone and the LF alone.
+let CarriageReturnLineFeedBytes = b"\r\n"
+let VerticalTabBytes = b"\x0B"
+let FormFeedBytes = b"\x0C"
+// U+0085 NEL, in UTF-8. The one seed that is not a single byte apart from CRLF.
+let NextLineBytes = b"\xC2\x85"
+let DigitZeroBytes = b"0"
+let LowerABytes = b"a"
+let UpperABytes = b"A"
+let ExclamationBytes = b"!"
+let DollarBytes = b"$"
+let NulBytes = b"\x00"
+
+// The accessor NAMES, which are also what a source `CharacterSet.<name>()` spells.
+export let CharSetWhitespacesMethod = b"whitespaces"
+export let CharSetNewlinesMethod = b"newlines"
+export let CharSetWhitespacesAndNewlinesMethod = b"whitespacesAndNewlines"
+export let CharSetDecimalDigitsMethod = b"decimalDigits"
+export let CharSetLowercaseLettersMethod = b"lowercaseLetters"
+export let CharSetUppercaseLettersMethod = b"uppercaseLetters"
+export let CharSetLettersMethod = b"letters"
+export let CharSetAlphanumericsMethod = b"alphanumerics"
+export let CharSetPunctuationMethod = b"punctuation"
+export let CharSetSymbolsMethod = b"symbols"
+export let CharSetControlCharactersMethod = b"controlCharacters"
+export let CharSetFromMethod = b"from"
+
+// The eleven presets, in the reference's declaration order.
+export function characterSetPresets() returns CharacterSetPresetArray
+	var presets = CharacterSetPresetArray.create()
+	presets.push(CharacterSetPreset.of(CharSetWhitespacesMethod, categoryMask: 8388608, members: charactersOf(HorizontalTabBytes)))
+	presets.push(CharacterSetPreset.of(CharSetNewlinesMethod, categoryMask: 50331648, members: newlineMembers()))
+	presets.push(CharacterSetPreset.of(CharSetWhitespacesAndNewlinesMethod, categoryMask: 58720256, members: whitespaceAndNewlineMembers()))
+	presets.push(CharacterSetPreset.of(CharSetDecimalDigitsMethod, categoryMask: 512, members: charactersOf(DigitZeroBytes)))
+	presets.push(CharacterSetPreset.of(CharSetLowercaseLettersMethod, categoryMask: 4, members: charactersOf(LowerABytes)))
+	presets.push(CharacterSetPreset.of(CharSetUppercaseLettersMethod, categoryMask: 10, members: charactersOf(UpperABytes)))
+	presets.push(CharacterSetPreset.of(CharSetLettersMethod, categoryMask: 510, members: charactersOf(LowerABytes)))
+	presets.push(CharacterSetPreset.of(CharSetAlphanumericsMethod, categoryMask: 4094, members: charactersOf(LowerABytes)))
+	presets.push(CharacterSetPreset.of(CharSetPunctuationMethod, categoryMask: 520192, members: charactersOf(ExclamationBytes)))
+	presets.push(CharacterSetPreset.of(CharSetSymbolsMethod, categoryMask: 7864320, members: charactersOf(DollarBytes)))
+	presets.push(CharacterSetPreset.of(CharSetControlCharactersMethod, categoryMask: 201326592, members: charactersOf(NulBytes)))
+	return presets
+end 'characterSetPresets'
+
+// A one-member list — the shape eight of the eleven presets take.
+function charactersOf(only ByteArray) returns ByteArrayArray
+	var members = ByteArrayArray.create()
+	members.push(only)
+	return members
+end 'charactersOf'
+
+// `newlines()`'s six: LF, CR, CRLF, VT, FF, NEL (`stdlib/CharacterSet.maxon:34`).
+function newlineMembers() returns ByteArrayArray
+	var members = ByteArrayArray.create()
+	members.push(LineFeedBytes)
+	members.push(CarriageReturnBytes)
+	members.push(CarriageReturnLineFeedBytes)
+	members.push(VerticalTabBytes)
+	members.push(FormFeedBytes)
+	members.push(NextLineBytes)
+	return members
+end 'newlineMembers'
+
+// `whitespacesAndNewlines()`'s seven — the newline six with HT in front (`stdlib/CharacterSet.maxon:37`),
+// built FROM that list rather than beside it, so the two cannot come to disagree about the six they share.
+//
+// ⚠⚠ **U+0020 IS NOT IN IT.** See this file's header: plain space is whitespace only through the `Zs` bit,
+// which is what puts even `"  hello  ".trim()` through the UCD table.
+function whitespaceAndNewlineMembers() returns ByteArrayArray
+	var members = charactersOf(HorizontalTabBytes)
+	members.append(newlineMembers())
+	return members
+end 'whitespaceAndNewlineMembers'
+
+// ⭐ **THE SET A NO-ARGUMENT TRIM CUTS AGAINST** — `CharacterSet.whitespacesAndNewlines()`, the
+// reference's own default for all three (`stdlib/String.maxon:760-772`). Looked up IN the preset table
+// rather than declared beside it, so the default and the accessor of the same name are one row: a
+// correction to the mask or the seeds reaches both, and neither can be edited without the other.
+export function defaultTrimPreset() returns CharacterSetPreset
+	for preset in characterSetPresets() 'eachPreset'
+		if preset.method.equals(CharSetWhitespacesAndNewlinesMethod) 'match'
+			return preset
+		end 'match'
+	end 'eachPreset'
+	panic("defaultTrimPreset: `{String.from(CharSetWhitespacesAndNewlinesMethod)}` is not in `characterSetPresets` — the eleven accessors and the trim default are one table, and the default names a row of it")
+end 'defaultTrimPreset'
+
+// Install the `CharacterSet` runtime into the lowered Std module. Called AFTER the pipeline (like
+// `installStringRuntime`), so these are appended already-lowered and never re-optimized. Each is installed
+// ONLY when referenced — vocabulary does not ship ahead of its consumer.
+export function installCharacterSetRuntime(module StdModule, usage RuntimeUsage)
+	if usage.usesCharSetMake 'make'
+		buildCharSetMake(module)
+	end 'make'
+	if usage.usesCharSetDecref 'decref'
+		buildCharSetDecref(module)
+	end 'decref'
+	if usage.usesCharSetContains 'contains'
+		buildCharSetContains(module)
+	end 'contains'
+	if usage.usesStrTrim 'trim'
+		buildStrTrim(module)
+	end 'trim'
+end 'installCharacterSetRuntime'
+
+// `__cs_make(charsRec, categoryMask) -> CharacterSet` — one `__mm_alloc` of `CharSetBoxBytes`, then the two
+// fields. The destructor slot is the shared `TrivialDestructor`: shv2's drops are STATIC-dispatch (`__mm_free`
+// never calls the header pointer), so a `CharacterSet` is dropped by the callee the drop SITE names —
+// `__cs_decref`, which `managedNameDropCallee` answers for this type.
+function buildCharSetMake(module StdModule)
+	var func = IrFunction.createFromStd(CharSetMakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let chars = 0 as ValueId
+	let categoryMask = 1 as ValueId
+
+	let size = emitConst(module, block: entry, value: CharSetBoxBytes, ids: ids)
+	let dtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
+	let box = ids.mint()
+	module.appendOp(entry, op: StdOp.call(box, callee: MmAllocName, args: twoArgs(size, second: dtor)))
+	emitStoreField(module, block: entry, record: box, offset: CharSetCharsOffset, value: chars)
+	emitStoreField(module, block: entry, record: box, offset: CharSetMaskOffset, value: categoryMask)
+	module.setTerminator(entry, op: StdOp.ret(box))
+
+	module.functions.push(func)
+end 'buildCharSetMake'
+
+// `__cs_decref(csRec)` — one fewer owner; at the last, drop the member set and reclaim the box. The
+// refcount read-modify-write is the SHARED `emitRefcountCheckToLastOwner`, so this box counts owners exactly
+// as every other managed box does; only the last-owner path is this function's own.
+//
+// The member set needs no null guard, unlike a struct cascade's field: `chars@0` is written by `__cs_make`
+// from a set the parser has just built, and nothing can move it out — a `CharacterSet` has no field access
+// and no mutator (the reference's fields are unexported and immutable, `stdlib/CharacterSet.maxon:23-24`).
+function buildCharSetDecref(module StdModule)
+	var func = IrFunction.createFromStd(CharSetDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var release = module.addBlock(func, label: b"release")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: release, ids: ids)
+
+	let chars = emitLoadField(module, block: release, record: box, offset: CharSetCharsOffset, ids: ids)
+	let dropped = ids.mint()
+	module.appendOp(release, op: StdOp.call(dropped, callee: SetDecrefName, args: argsOf(chars)))
+	let freed = ids.mint()
+	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(box)))
+	module.setTerminator(release, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildCharSetDecref'
+
+// ⭐⭐ **`__cs_contains(csRec, charRec, hashWitness, eqWitness) -> bool` — the reference's `contains`
+// (`stdlib/CharacterSet.maxon:124-136`), rule for rule.**
+//
+// Explicit membership FIRST, so a set with no categories never decodes a codepoint; then, only when the
+// mask is non-zero, the character's first codepoint is classified and its category bit tested. Both
+// short-circuits are the reference's own.
+//
+// It BORROWS both records: the member probe reads the set and the classifier reads the character's bytes,
+// and neither is freed here. The two witness tables are the KEY's `Hashable`/`Equatable` — threaded in by
+// `LowerMaxonToStd.appendSetWitnessArgs`, whose key type for this callee is statically `Character` — and
+// are forwarded verbatim to `__set_contains`.
+function buildCharSetContains(module StdModule)
+	var func = IrFunction.createFromStd(CharSetContainsName, returnType: StdReturnType.value(StdType.i1), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkMask = module.addBlock(func, label: b"checkMask")
+	var classify = module.addBlock(func, label: b"classify")
+	var present = module.addBlock(func, label: b"present")
+	var absent = module.addBlock(func, label: b"absent")
+
+	emitParams(module, block: entry, count: 4)
+	let box = 0 as ValueId
+	let character = 1 as ValueId
+	let hashWitness = 2 as ValueId
+	let eqWitness = 3 as ValueId
+
+	let chars = emitLoadField(module, block: entry, record: box, offset: CharSetCharsOffset, ids: ids)
+	let explicit = ids.mint()
+	module.appendOp(entry, op: StdOp.call(explicit, callee: SetContainsName, args: fourArgs(chars, second: character, third: hashWitness, fourth: eqWitness)))
+	module.setTerminator(entry, op: StdOp.condBranch(explicit, thenBlockId: present.id, elseBlockId: checkMask.id))
+
+	let mask = emitLoadField(module, block: checkMask, record: box, offset: CharSetMaskOffset, ids: ids)
+	let noCategories = emitConst(module, block: checkMask, value: CharSetNoCategories, ids: ids)
+	let hasCategories = emitCmp(module, block: checkMask, a: mask, b: noCategories, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(checkMask, op: StdOp.condBranch(hasCategories, thenBlockId: classify.id, elseBlockId: absent.id))
+
+	// The character's FIRST codepoint decides its category — a cluster of several codepoints is classified
+	// by its base, which is what `Character.codepoint()` returns (`stdlib/Character.maxon:127-146`) and what
+	// the reference passes here (`:129`).
+	let buffer = emitLoadField(module, block: classify, record: character, offset: StringBufferOffset, ids: ids)
+	let codepoint = ids.mint()
+	module.appendOp(classify, op: StdOp.call(codepoint, callee: Utf8CodepointAtName, args: argsOf(buffer)))
+	let category = ids.mint()
+	module.appendOp(classify, op: StdOp.call(category, callee: UcdCategoryName, args: argsOf(codepoint)))
+	let shifted = emitBin(module, block: classify, a: mask, b: category, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let bit = emitBin(module, block: classify, a: shifted, b: emitConst(module, block: classify, value: CharSetCategoryBit, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let inCategory = emitCmp(module, block: classify, a: bit, b: emitConst(module, block: classify, value: CharSetCategoryBit, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(classify, op: StdOp.condBranch(inCategory, thenBlockId: present.id, elseBlockId: absent.id))
+
+	module.setTerminator(present, op: StdOp.ret(emitConst(module, block: present, value: CharSetContainsTrue, ids: ids)))
+	module.setTerminator(absent, op: StdOp.ret(emitConst(module, block: absent, value: CharSetContainsFalse, ids: ids)))
+
+	module.functions.push(func)
+end 'buildCharSetContains'
+
+// ⭐⭐ **`__str_trim(strRec, csRec, fromStart, fromEnd, hashWitness, eqWitness) -> String` — ALL THREE
+// REFERENCE TRIMS** (`stdlib/String.maxon:714-757`), behind two flags. The three differ only in which END
+// they cut, so they are one graph and two booleans rather than three transcriptions of one scan; the flags
+// are compile-time constants at every call site, which is what makes that free.
+//
+// ⭐ **IT IS A GRAPHEME-CLUSTER WALK, NOT A BYTE WALK, AND THE REFERENCE SAYS WHY** (`String.maxon:677-682`):
+// CR+LF is ONE cluster under UAX#29 GB3, so a byte-at-a-time trim SPLITS it — wrong for any whitespace set
+// holding one and not the other. Every cluster is minted as a real `Character` through `__char_at` (the one
+// door) and tested with `__cs_contains`, exactly as the reference tests `chars.contains(ch)`.
+//
+// ⚠⚠ **THE SCAN IS FORWARD-ONLY, AND THAT IS A DELIBERATE DIVERGENCE FROM THE REFERENCE'S SHAPE — BECAUSE
+// THE REFERENCE'S BACKWARD SEGMENTER CONTRADICTS ITS FORWARD ONE.** `scanTrimEnd` walks backwards through
+// `findGraphemeStart` (`stdlib/helpers/string/grapheme.maxon:144-260`), which is a SECOND implementation of
+// UAX#29 — and an incomplete one: it has **no GB12/GB13 rule at all**, so a regional-indicator pair that
+// `findGraphemeEnd` joins into one flag, `findGraphemeStart` splits into two. Porting it would mean shv2
+// answered "where does this cluster begin?" differently depending on which direction it was asked, which is
+// exactly the class of defect `GraphemeRuntime`'s header describes for the CRLF shortcut. shv2 has ONE
+// segmenter, forward, and derives both bounds from it: the end of the last NON-matching cluster is recorded
+// as the walk passes it.
+//
+// ⚠ The cost of that choice, stated plainly: the reference's `trimEnd` on a string with no trailing match is
+// O(1) where this is O(n). It buys agreement between the two directions, and a trim already pays O(trimmed)
+// clusters of `__char_at` minting; a backward segmenter that agrees with the forward one is its own rung.
+function buildStrTrim(module StdModule)
+	var func = IrFunction.createFromStd(StrTrimName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(6)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"scan")
+	var probe = module.addBlock(func, label: b"probe")
+	var matched = module.addBlock(func, label: b"matched")
+	var kept = module.addBlock(func, label: b"kept")
+	var firstKeptBlock = module.addBlock(func, label: b"firstKept")
+	var laterKeptBlock = module.addBlock(func, label: b"laterKept")
+	var keptJoin = module.addBlock(func, label: b"keptJoin")
+	var advance = module.addBlock(func, label: b"advance")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 6)
+	let record = 0 as ValueId
+	let charSet = 1 as ValueId
+	let fromStart = 2 as ValueId
+	let fromEnd = 3 as ValueId
+	let hashWitness = 4 as ValueId
+	let eqWitness = 5 as ValueId
+
+	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
+	let firstPos = emitConst(module, block: entry, value: 0, ids: ids)
+	let firstKeptStart = emitConst(module, block: entry, value: TrimNoMatchYet, ids: ids)
+	let firstKeptEnd = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	// Three loop-carried values: the byte position, the START of the first non-matching cluster
+	// (`TrimNoMatchYet` until one is seen), and the END of the last one.
+	let pos = ids.mint()
+	let keptStart = ids.mint()
+	let keptEnd = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(keptStart, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(keptEnd, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(firstPos, second: firstKeptStart, third: firstKeptEnd)))
+
+	let exhausted = emitCmp(module, block: header, a: pos, b: length, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(exhausted, thenBlockId: done.id, elseBlockId: probe.id))
+
+	// One cluster: its end, the `Character` it spans, and whether the set holds it. The minted Character is
+	// OWNED by this frame and dropped on BOTH arms below — a trim over an all-matching string mints one per
+	// cluster, so leaking it would leak per character trimmed.
+	let clusterEnd = ids.mint()
+	module.appendOp(probe, op: StdOp.call(clusterEnd, callee: GraphemeEndName, args: twoArgs(record, second: pos)))
+	let cluster = ids.mint()
+	module.appendOp(probe, op: StdOp.call(cluster, callee: CharAtName, args: threeArgs(record, second: pos, third: clusterEnd)))
+	let inSet = ids.mint()
+	module.appendOp(probe, op: StdOp.call(inSet, callee: CharSetContainsName, args: fourArgs(charSet, second: cluster, third: hashWitness, fourth: eqWitness)))
+	let releasedProbe = ids.mint()
+	module.appendOp(probe, op: StdOp.call(releasedProbe, callee: StrDecrefName, args: argsOf(cluster)))
+	module.setTerminator(probe, op: StdOp.condBranch(inSet, thenBlockId: matched.id, elseBlockId: kept.id))
+
+	// A MATCHED cluster changes neither bound — it is trimmable from whichever end it turns out to touch.
+	module.setTerminator(matched, op: StdOp.branch(advance.id))
+
+	// A KEPT cluster is the last one seen so far, and the FIRST one if none was seen before: `keptStart`
+	// takes its position only while still `TrimNoMatchYet`, `keptEnd` takes its end unconditionally.
+	//
+	// ⚠ **EVERY EDGE THAT CARRIES BLOCK ARGS LEAVES A PLAIN `branch`**, never a `condBranch` — the
+	// discipline every hand-built runtime graph in this compiler follows (`GraphemeRuntime.buildGraphemeState`
+	// splits into two `branch`-terminated arms for exactly this), so a two-way choice costs one extra block
+	// per arm rather than an edge hanging off a conditional terminator.
+	let sentinel = emitConst(module, block: kept, value: TrimNoMatchYet, ids: ids)
+	let firstKept = emitCmp(module, block: kept, a: keptStart, b: sentinel, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(kept, op: StdOp.condBranch(firstKept, thenBlockId: firstKeptBlock.id, elseBlockId: laterKeptBlock.id))
+	module.setTerminator(firstKeptBlock, op: StdOp.branch(keptJoin.id))
+	module.setTerminator(laterKeptBlock, op: StdOp.branch(keptJoin.id))
+
+	let nextKeptStart = ids.mint()
+	keptJoin.blockArgs.push(IrBlockArg.create(nextKeptStart, argType: StdType.i64))
+	firstKeptBlock.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(pos)))
+	laterKeptBlock.branchEdges.push(BranchEdge.create(keptJoin.id, argIds: argsOf(keptStart)))
+	module.setTerminator(keptJoin, op: StdOp.branch(advance.id))
+
+	let carriedStart = ids.mint()
+	let carriedEnd = ids.mint()
+	advance.blockArgs.push(IrBlockArg.create(carriedStart, argType: StdType.i64))
+	advance.blockArgs.push(IrBlockArg.create(carriedEnd, argType: StdType.i64))
+	matched.branchEdges.push(BranchEdge.create(advance.id, argIds: twoArgs(keptStart, second: keptEnd)))
+	keptJoin.branchEdges.push(BranchEdge.create(advance.id, argIds: twoArgs(nextKeptStart, second: clusterEnd)))
+	module.setTerminator(advance, op: StdOp.branch(header.id))
+	advance.branchEdges.push(BranchEdge.create(header.id, argIds: threeArgs(clusterEnd, second: carriedStart, third: carriedEnd)))
+
+	emitTrimResult(module, func: func, done: done, record: record, length: length, keptStart: keptStart, keptEnd: keptEnd, fromStart: fromStart, fromEnd: fromEnd, ids: ids)
+	module.functions.push(func)
+end 'buildStrTrim'
+
+// ⭐ **THE SLICE THE WALK'S TWO BOUNDS AND THE TWO FLAGS PICK OUT.**
+//
+// ⚠ **EVERY CLUSTER MATCHING THE SET IS ITS OWN ARM, AND THE FLAGS ARE NOT CONSULTED ON IT.** All three
+// trims answer `""` there — the reference states it twice, as `start >= len` (`stdlib/String.maxon:721-723`)
+// and as `endPos == 0` (`:751-753`) — and the flags cannot express it: with `keptStart`/`keptEnd` collapsed
+// to 0, an untrimmed END would reopen the range to the whole string and `"   ".trimStart()` would answer
+// `"   "`. So the all-matched path branches in with both bounds already 0 and takes no selection.
+//
+// On the other path each end is cut only if its flag says so — an untrimmed start is 0 and an untrimmed end
+// is the byte length — which is what makes ONE graph serve `trim`, `trimStart` and `trimEnd`.
+//
+// The result is built through `emitSliceSegment` — the same producer `__str_split`'s segments and
+// `__strix_slice`'s result come from — so a trimmed String is byte-for-byte the record every other slice
+// is, and is independently droppable through `__str_decref` with nothing aliased.
+function emitTrimResult(module StdModule, func IrFunction, done IrBlock, record ValueId, length ValueId, keptStart ValueId, keptEnd ValueId, fromStart ValueId, fromEnd ValueId, ids ValueMinter)
+	var allTrimmed = module.addBlock(func, label: b"allTrimmed")
+	var keepBounds = module.addBlock(func, label: b"keepBounds")
+	var build = module.addBlock(func, label: b"build")
+
+	let sentinel = emitConst(module, block: done, value: TrimNoMatchYet, ids: ids)
+	let nothingKept = emitCmp(module, block: done, a: keptStart, b: sentinel, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(done, op: StdOp.condBranch(nothingKept, thenBlockId: allTrimmed.id, elseBlockId: keepBounds.id))
+
+	let empty = emitConst(module, block: allTrimmed, value: 0, ids: ids)
+	module.setTerminator(allTrimmed, op: StdOp.branch(build.id))
+	allTrimmed.branchEdges.push(BranchEdge.create(build.id, argIds: twoArgs(empty, second: empty)))
+
+	let zero = emitConst(module, block: keepBounds, value: 0, ids: ids)
+	// The two joins are created HERE rather than inside `emitSelected`, because the second choice is emitted
+	// INTO the first one's join block: a callee that created its own would hand it back as a FIELD of its
+	// result, and a field of a `let` binding cannot be passed to a mutating parameter (E3019/E3078). Naming
+	// them here also puts their creation ORDER — which is their emission order — at one place.
+	var afterFrom = module.addBlock(func, label: b"trimFrom")
+	var afterTo = module.addBlock(func, label: b"trimTo")
+	let fromByte = emitSelected(module, func: func, cur: keepBounds, taken: fromStart, whenSet: keptStart, whenClear: zero, join: afterFrom, ids: ids)
+	let toByte = emitSelected(module, func: func, cur: afterFrom, taken: fromEnd, whenSet: keptEnd, whenClear: length, join: afterTo, ids: ids)
+	module.setTerminator(afterTo, op: StdOp.branch(build.id))
+	afterTo.branchEdges.push(BranchEdge.create(build.id, argIds: twoArgs(fromByte, second: toByte)))
+
+	let lowBound = ids.mint()
+	let highBound = ids.mint()
+	build.blockArgs.push(IrBlockArg.create(lowBound, argType: StdType.i64))
+	build.blockArgs.push(IrBlockArg.create(highBound, argType: StdType.i64))
+
+	let buffer = emitLoadField(module, block: build, record: record, offset: StringBufferOffset, ids: ids)
+	let isAscii = emitLoadField(module, block: build, record: record, offset: StringIsAsciiOffset, ids: ids)
+	module.setTerminator(build, op: StdOp.ret(emitSliceSegment(module, block: build, srcBuf: buffer, from: lowBound, endPos: highBound, isAscii: isAscii, ids: ids)))
+end 'emitTrimResult'
+
+// One value chosen by a runtime flag, as `join`'s block-arg phi. There is no `select` op at the Std tier,
+// so a choice is a branch and a phi; both of `__str_trim`'s ends need one, so the shape is written once.
+// The JOIN block is the caller's — see `emitTrimResult` for why it cannot be this function's.
+function emitSelected(module StdModule, func IrFunction, cur IrBlock, taken ValueId, whenSet ValueId, whenClear ValueId, join IrBlock, ids ValueMinter) returns ValueId
+	var setBlock = module.addBlock(func, label: b"selSet")
+	var clearBlock = module.addBlock(func, label: b"selClear")
+
+	// The flag arrives as a machine-word PARAMETER, not as a compare's verdict, so it is tested against 0
+	// rather than branched on directly — every `condBranch` in the hand-built runtime is fed by a `cmp` or by
+	// an `i1`-returning call, and the isel that fuses the two is what makes that the shape.
+	let isSet = emitCmp(module, block: cur, a: taken, b: emitConst(module, block: cur, value: TrimFlagClear, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isSet, thenBlockId: setBlock.id, elseBlockId: clearBlock.id))
+	module.setTerminator(setBlock, op: StdOp.branch(join.id))
+	module.setTerminator(clearBlock, op: StdOp.branch(join.id))
+
+	let chosen = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(chosen, argType: StdType.i64))
+	setBlock.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(whenSet)))
+	clearBlock.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(whenClear)))
+	return chosen
+end 'emitSelected'
